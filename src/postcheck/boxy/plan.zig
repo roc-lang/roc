@@ -986,22 +986,6 @@ pub const RuntimeCallableEvalUsePlan = struct {
     caller: WorkerPlanId,
     source: CheckedExprIdentity,
     callable_ty: CheckedTypeIdentity,
-    /// The use's instantiation of the binding's scheme: one entry per
-    /// quantified variable, from the checked use-site substitution. The
-    /// producer is lowered inline in the caller, and each variable takes its
-    /// descriptor from the caller's type at this use.
-    substitutions: Span = .{},
-    /// Checking rejected this use's instantiation of the binding's scheme;
-    /// the use lowers as the reported error instead of the producer.
-    checked_error: bool = false,
-};
-
-/// One quantified variable of a runtime-evaluated callable binding's scheme
-/// and the caller type its use substitutes for it.
-pub const RuntimeCallableEvalSubstitution = struct {
-    scheme_rep: TypeRepId,
-    site_type: CheckedTypeIdentity,
-    site_rep: TypeRepId,
 };
 
 /// Producer-selected value source for one capture of a finalized callable.
@@ -1179,7 +1163,6 @@ pub const ProgramPlan = struct {
     nested_callable_uses: std.ArrayList(NestedCallableUsePlan),
     callable_uses: std.ArrayList(CallableUsePlan),
     runtime_callable_eval_uses: std.ArrayList(RuntimeCallableEvalUsePlan),
-    runtime_callable_eval_substitutions: std.ArrayList(RuntimeCallableEvalSubstitution),
     stored_callable_capture_sources: std.ArrayList(StoredCallableCaptureSource),
     inspect_methods: std.ArrayList(InspectMethodPlan),
     const_eval_calls: std.ArrayList(ConstEvalCallPlan),
@@ -1256,7 +1239,6 @@ pub const ProgramPlan = struct {
             .nested_callable_uses = .empty,
             .callable_uses = .empty,
             .runtime_callable_eval_uses = .empty,
-            .runtime_callable_eval_substitutions = .empty,
             .stored_callable_capture_sources = .empty,
             .inspect_methods = .empty,
             .const_eval_calls = .empty,
@@ -1378,7 +1360,6 @@ pub const ProgramPlan = struct {
         self.inspect_methods.deinit(self.allocator);
         self.stored_callable_capture_sources.deinit(self.allocator);
         self.runtime_callable_eval_uses.deinit(self.allocator);
-        self.runtime_callable_eval_substitutions.deinit(self.allocator);
         self.callable_uses.deinit(self.allocator);
         self.nested_callable_uses.deinit(self.allocator);
         self.dictionary_dispatches.deinit(self.allocator);
@@ -1767,10 +1748,6 @@ pub const ProgramPlan = struct {
 
     pub fn schemeRepSubstitutionSlice(self: *const ProgramPlan, span: Span) []const SchemeRepSubstitution {
         return self.scheme_rep_substitutions.items[span.start .. span.start + span.len];
-    }
-
-    pub fn runtimeCallableEvalSubstitutionSlice(self: *const ProgramPlan, span: Span) []const RuntimeCallableEvalSubstitution {
-        return self.runtime_callable_eval_substitutions.items[span.start .. span.start + span.len];
     }
 
     pub fn callTypeSubstitutionSlice(self: *const ProgramPlan, span: Span) []const CallTypeSubstitution {
@@ -3674,9 +3651,6 @@ const Builder = struct {
     };
 
     allocator: Allocator,
-    /// Reusable scratch for inline-evaluated callable bindings' descriptor
-    /// images (`computeWorkerDescriptorLeaves`), cleared on each use.
-    inline_image_scratch: InlineImageScratch = .{},
     /// Reusable scratch for `appendStoredCallableCaptureSources`: one flag per
     /// persisted capture of the stored function being planned, set when that
     /// capture is accounted for.
@@ -3814,7 +3788,6 @@ const Builder = struct {
     }
 
     fn deinit(self: *Builder) void {
-        self.inline_image_scratch.deinit(self.allocator);
         self.stored_capture_consumed.deinit(self.allocator);
         var host_nominal_keys = self.host_nominals.keyIterator();
         while (host_nominal_keys.next()) |key| self.allocator.free(key.args);
@@ -3986,7 +3959,7 @@ const Builder = struct {
         numeral_conversion: ConversionSite,
         callable_lookup: ViewExpr,
         callable_lookup_after_const: ViewExpr,
-        callable_lookup_runtime: struct { view: ModuleView, expr: checked.CheckedExprId, source: WorkerSource, runtime_source: CheckedExprIdentity },
+        callable_lookup_runtime: struct { view: ModuleView, expr: checked.CheckedExprId, runtime_source: CheckedExprIdentity },
         callable_lookup_worker: struct { view: ModuleView, expr: checked.CheckedExprId, stored_fn: ?StoredFnSource },
         callable_lookup_use: struct { view: ModuleView, expr: checked.CheckedExprId, stored_fn: ?StoredFnSource, worker: WorkerPlanId },
         stored_fn_captures: struct { stored_fn: StoredFnSource, worker: WorkerPlanId },
@@ -4603,24 +4576,13 @@ const Builder = struct {
                 const use = CheckedExprIdentity{ .module = state.view.key, .expr = state.expr };
                 const caller = self.active_worker orelse
                     boxyPlanInvariant("boxy runtime callable evaluation was analyzed outside a worker body");
-                const checked_error = if (self.plan.runtimeCallableEvalUsePlan(use, caller)) |existing|
-                    existing.checked_error
-                else blk: {
-                    const substitutions = try self.runtimeCallableEvalSubstitutions(state.source, use);
+                if (self.plan.runtimeCallableEvalUsePlan(use, caller) == null) {
                     try self.plan.runtime_callable_eval_uses.append(self.allocator, .{
                         .use = use,
                         .caller = caller,
                         .source = state.runtime_source,
                         .callable_ty = typeRef(state.view, state.view.checked_bodies.expr(state.expr).ty),
-                        .substitutions = substitutions.span,
-                        .checked_error = substitutions.checked_error,
                     });
-                    break :blk substitutions.checked_error;
-                };
-                // A rejected instantiation lowers as the reported error, so
-                // its producer is not planned at it.
-                if (!checked_error) {
-                    try actions.append(self.allocator, exprAction(self.moduleForId(state.runtime_source.module), state.runtime_source.expr));
                 }
             },
             .callable_lookup_worker => |state| {
@@ -6336,9 +6298,11 @@ const Builder = struct {
         else
             self.workerSourceForProcedureValueRef(view, ref_id) orelse return;
         if (self.pendingCallableEvalExprForSource(source)) |runtime_source| {
-            // The use is recorded, with its scheme substitution, before its
-            // producer is planned at it.
-            return try actions.append(self.allocator, .{ .callable_lookup_runtime = .{ .view = view, .expr = site.expr, .source = source, .runtime_source = runtime_source } });
+            const source_view = self.moduleForId(runtime_source.module);
+            return try self.pushPlanActions(actions, &.{
+                exprAction(source_view, runtime_source.expr),
+                .{ .callable_lookup_runtime = .{ .view = view, .expr = site.expr, .runtime_source = runtime_source } },
+            });
         }
         // A lookup instantiates the callable boundary, not its worker body.
         // The body retains its declaration's variables and dictionary ABI.
@@ -11606,15 +11570,6 @@ const Builder = struct {
 
         var seen = collections.DenseMap(TypeRepId, void).init(self.allocator);
         defer seen.deinit();
-
-        // A runtime-evaluated callable binding's producer is lowered inline in
-        // the caller, at the use's instantiation of the binding's scheme. Each
-        // quantified variable is described by the caller type the use
-        // substitutes for it, so a caller that would need the variable needs
-        // the descriptor leaves of that type instead.
-        try self.buildInlineSchemeImages(&scopes, &seen);
-        const inline_images = &self.inline_image_scratch;
-
         var direct = WorkerDescriptorLeaves{ .set = collections.DenseMap(TypeRepId, void).init(self.allocator) };
         defer direct.deinit(self.allocator);
         var index: usize = 0;
@@ -11627,7 +11582,7 @@ const Builder = struct {
                 try self.collectDescriptorLeaves(body_types[index].rep, &direct, &seen);
             }
             for (direct.order.items) |leaf| {
-                if (scopes.allows(worker, leaf)) _ = try self.addWorkerDescriptorNeed(&needs[@intFromEnum(worker)], inline_images, worker, leaf);
+                if (scopes.allows(worker, leaf)) _ = try needs[@intFromEnum(worker)].add(self.allocator, leaf);
             }
         }
 
@@ -11731,12 +11686,12 @@ const Builder = struct {
                             // result values.
                             if (signature[callee].set.contains(leaf)) continue;
                             for (images.get(leaf) orelse &.{}) |image_leaf| {
-                                if (try self.addWorkerDescriptorNeed(caller, inline_images, edge.caller, image_leaf)) changed = true;
+                                if (try caller.add(self.allocator, image_leaf)) changed = true;
                             }
                             continue;
                         }
                         if (!scopes.allows(edge.caller, leaf)) continue;
-                        if (try self.addWorkerDescriptorNeed(caller, inline_images, edge.caller, leaf)) changed = true;
+                        if (try caller.add(self.allocator, leaf)) changed = true;
                     }
                 }
             }
@@ -11752,142 +11707,6 @@ const Builder = struct {
     }
 
     const WorkerEdge = struct { caller: WorkerPlanId, callee: WorkerPlanId };
-
-    const InlineSchemeKey = struct { worker: WorkerPlanId, rep: TypeRepId };
-
-    /// The descriptor images of every quantified variable a worker evaluates
-    /// inline: for `(worker, variable)`, the descriptor leaves of the caller
-    /// types the worker's uses substitute for it. Images are closed
-    /// transitively: a binding used inside another inline binding's producer
-    /// is substituted in terms of the outer binding's variables, which are
-    /// themselves replaced by their own images in the same worker.
-    const InlineImageScratch = struct {
-        /// Unclosed image leaves, one span of `raw_pool` per substitution.
-        /// Each key's substitutions form a list through `RawEntry.next`,
-        /// headed in `raw_by_key`.
-        raw_pool: std.ArrayList(TypeRepId) = .empty,
-        raw_entries: std.ArrayList(RawEntry) = .empty,
-        raw_by_key: std.AutoHashMapUnmanaged(InlineSchemeKey, u32) = .empty,
-        /// Closed images, one span per key, in `pool`.
-        pool: std.ArrayList(TypeRepId) = .empty,
-        images: std.AutoHashMapUnmanaged(InlineSchemeKey, Span) = .empty,
-        visited: std.AutoHashMapUnmanaged(TypeRepId, void) = .empty,
-        emitted: std.AutoHashMapUnmanaged(TypeRepId, void) = .empty,
-        stack: std.ArrayList(TypeRepId) = .empty,
-        leaves: std.ArrayList(TypeRepId) = .empty,
-
-        const RawEntry = struct { start: u32, len: u32, next: u32 };
-        const no_entry = std.math.maxInt(u32);
-
-        fn clear(self: *InlineImageScratch) void {
-            self.raw_pool.clearRetainingCapacity();
-            self.raw_entries.clearRetainingCapacity();
-            self.raw_by_key.clearRetainingCapacity();
-            self.pool.clearRetainingCapacity();
-            self.images.clearRetainingCapacity();
-        }
-
-        fn get(self: *const InlineImageScratch, key: InlineSchemeKey) ?[]const TypeRepId {
-            const span = self.images.get(key) orelse return null;
-            return self.pool.items[span.start .. span.start + span.len];
-        }
-
-        fn deinit(self: *InlineImageScratch, allocator: Allocator) void {
-            self.raw_pool.deinit(allocator);
-            self.raw_entries.deinit(allocator);
-            self.raw_by_key.deinit(allocator);
-            self.pool.deinit(allocator);
-            self.images.deinit(allocator);
-            self.visited.deinit(allocator);
-            self.emitted.deinit(allocator);
-            self.stack.deinit(allocator);
-            self.leaves.deinit(allocator);
-        }
-    };
-
-    fn buildInlineSchemeImages(
-        self: *Builder,
-        scopes: *const WorkerScopeChains,
-        seen: *collections.DenseMap(TypeRepId, void),
-    ) Allocator.Error!void {
-        const scratch = &self.inline_image_scratch;
-        const gpa = self.allocator;
-        scratch.clear();
-
-        var image = WorkerDescriptorLeaves{ .set = collections.DenseMap(TypeRepId, void).init(gpa) };
-        defer image.deinit(gpa);
-        for (self.plan.runtime_callable_eval_uses.items) |use| {
-            for (self.plan.runtimeCallableEvalSubstitutionSlice(use.substitutions)) |substitution| {
-                seen.clearRetainingCapacity();
-                image.set.clearRetainingCapacity();
-                image.order.clearRetainingCapacity();
-                try self.collectDescriptorLeaves(substitution.site_rep, &image, seen);
-                const start: u32 = @intCast(scratch.raw_pool.items.len);
-                for (image.order.items) |leaf| {
-                    if (scopes.allows(use.caller, leaf)) try scratch.raw_pool.append(gpa, leaf);
-                }
-                const entry_index: u32 = @intCast(scratch.raw_entries.items.len);
-                const head = try scratch.raw_by_key.getOrPut(gpa, .{ .worker = use.caller, .rep = substitution.scheme_rep });
-                try scratch.raw_entries.append(gpa, .{
-                    .start = start,
-                    .len = @as(u32, @intCast(scratch.raw_pool.items.len)) - start,
-                    .next = if (head.found_existing) head.value_ptr.* else InlineImageScratch.no_entry,
-                });
-                head.value_ptr.* = entry_index;
-            }
-        }
-
-        var keys = scratch.raw_by_key.keyIterator();
-        while (keys.next()) |key| {
-            scratch.visited.clearRetainingCapacity();
-            scratch.emitted.clearRetainingCapacity();
-            scratch.stack.clearRetainingCapacity();
-            scratch.leaves.clearRetainingCapacity();
-            try scratch.visited.put(gpa, key.rep, {});
-            try scratch.stack.append(gpa, key.rep);
-            while (scratch.stack.pop()) |variable| {
-                var entry_index = scratch.raw_by_key.get(.{ .worker = key.worker, .rep = variable }).?;
-                while (entry_index != InlineImageScratch.no_entry) {
-                    const entry = scratch.raw_entries.items[entry_index];
-                    entry_index = entry.next;
-                    for (scratch.raw_pool.items[entry.start .. entry.start + entry.len]) |leaf| {
-                        if (scratch.raw_by_key.contains(.{ .worker = key.worker, .rep = leaf })) {
-                            // Another inline binding's variable in this worker:
-                            // replace it by its own image.
-                            if ((try scratch.visited.getOrPut(gpa, leaf)).found_existing) continue;
-                            try scratch.stack.append(gpa, leaf);
-                            continue;
-                        }
-                        if ((try scratch.emitted.getOrPut(gpa, leaf)).found_existing) continue;
-                        try scratch.leaves.append(gpa, leaf);
-                    }
-                }
-            }
-            const start: u32 = @intCast(scratch.pool.items.len);
-            try scratch.pool.appendSlice(gpa, scratch.leaves.items);
-            try scratch.images.put(gpa, key.*, .{ .start = start, .len = @intCast(scratch.leaves.items.len) });
-        }
-    }
-
-    /// Add `leaf` to `worker`'s descriptor needs, replacing a quantified
-    /// variable of a callable binding the worker evaluates inline by its
-    /// closed image.
-    fn addWorkerDescriptorNeed(
-        self: *Builder,
-        needs: *WorkerDescriptorLeaves,
-        inline_images: *const InlineImageScratch,
-        worker: WorkerPlanId,
-        leaf: TypeRepId,
-    ) Allocator.Error!bool {
-        if (inline_images.get(.{ .worker = worker, .rep = leaf })) |images| {
-            var changed = false;
-            for (images) |image_leaf| {
-                if (try needs.add(self.allocator, image_leaf)) changed = true;
-            }
-            return changed;
-        }
-        return try needs.add(self.allocator, leaf);
-    }
 
     const ScopeKey = struct { module: checked.ModuleId, scope: u32 };
 
@@ -18304,97 +18123,6 @@ const Builder = struct {
                 break :blk root.payload == .pending;
             },
         };
-    }
-
-    /// The use's instantiation of a pending callable binding's scheme. The
-    /// binding's quantified variables are the scheme its compile-time root's
-    /// entry wrapper records, in the slot order of the checked use-site
-    /// substitution recorded at the lookup.
-    const RuntimeCallableEvalSubstitutions = struct {
-        span: Span,
-        checked_error: bool = false,
-    };
-
-    fn runtimeCallableEvalSubstitutions(
-        self: *Builder,
-        source: WorkerSource,
-        use: CheckedExprIdentity,
-    ) Allocator.Error!RuntimeCallableEvalSubstitutions {
-        const start: u32 = @intCast(self.plan.runtime_callable_eval_substitutions.items.len);
-        const empty: RuntimeCallableEvalSubstitutions = .{ .span = .{ .start = start, .len = 0 } };
-        const scheme = self.pendingCallableEvalSchemeVars(source) orelse return empty;
-        if (scheme.vars.len == 0) return empty;
-        const site_view = self.moduleForId(use.module);
-        // A recursive use is not skipped here, unlike a recursive direct call:
-        // a direct call takes its callee's descriptors from the checked call
-        // relation, while an inline producer has no call relation, so the
-        // site substitution is its only binding. Checking records an annotated
-        // recursive use against the binding's own scheme (in-flight or
-        // replayed), so its substitution is in that scheme's slot order.
-        const site_types = site_view.static_dispatch_plans.siteSubstitution(use.expr) orelse
-            boxyPlanInvariant("runtime callable evaluation use had no checked use-site substitution");
-        if (site_types.len != scheme.vars.len) {
-            boxyPlanInvariant("runtime callable evaluation use-site substitution disagreed with its binding scheme");
-        }
-        for (site_types) |site_type| {
-            // Checking rejected this instantiation: the use lowers as the
-            // reported error, and its producer is not planned at it.
-            if (site_view.checked_types.payload(site_type) == .err) return .{ .span = empty.span, .checked_error = true };
-        }
-        for (scheme.vars, site_types) |variable, site_type| {
-            const scheme_rep = try self.analyzeType(scheme.view, variable);
-            const site_rep = try self.analyzeType(site_view, site_type);
-            try self.plan.runtime_callable_eval_substitutions.append(self.allocator, .{
-                .scheme_rep = scheme_rep,
-                .site_type = typeRef(site_view, site_type),
-                .site_rep = site_rep,
-            });
-        }
-        return .{ .span = .{
-            .start = start,
-            .len = @intCast(self.plan.runtime_callable_eval_substitutions.items.len - start),
-        } };
-    }
-
-    fn pendingCallableEvalSchemeVars(self: *Builder, source: WorkerSource) ?WorkerSchemeVars {
-        return switch (source) {
-            .procedure_binding => |binding_ref| blk: {
-                const view = self.moduleForId(binding_ref.artifact);
-                break :blk self.pendingCallableEvalSchemeVarsForBody(view, view.top_level_procedure_bindings.get(binding_ref.binding).body);
-            },
-            .procedure_use => |procedure| switch (procedure.binding) {
-                .top_level => |binding_ref| blk: {
-                    const view = self.moduleForId(binding_ref.artifact);
-                    break :blk self.pendingCallableEvalSchemeVarsForBody(view, view.top_level_procedure_bindings.get(binding_ref.binding).body);
-                },
-                .platform_required => |required| blk: {
-                    const view = self.moduleForId(required.app_value.artifact);
-                    break :blk self.pendingCallableEvalSchemeVarsForBody(view, view.top_level_procedure_bindings.get(required.procedure_binding).body);
-                },
-                .imported => |imported| blk: {
-                    const view = self.moduleForId(imported.artifact);
-                    break :blk self.pendingCallableEvalSchemeVarsForBody(view, self.importedProcedureBinding(view, imported).body);
-                },
-                .hosted => null,
-            },
-            .procedure_template,
-            .nested_expr,
-            .generated_codec,
-            .generated_field_iterator,
-            .generated_interpolation_step,
-            => null,
-        };
-    }
-
-    fn pendingCallableEvalSchemeVarsForBody(self: *Builder, view: ModuleView, body: anytype) ?WorkerSchemeVars {
-        const template_id = switch (body) {
-            .direct_template, .checked_error => return null,
-            .callable_eval_template => |template| template,
-        };
-        const template = self.callableEvalTemplate(view, template_id);
-        const wrapper = view.entry_wrappers.lookupByRoot(template.root) orelse
-            boxyPlanInvariant("pending callable binding root had no checked entry wrapper scheme");
-        return self.templateSchemeVars(wrapper.template);
     }
 
     fn pendingCallableEvalExprForSource(
