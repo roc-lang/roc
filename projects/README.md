@@ -322,10 +322,17 @@ it now compares the declaration's module identity.
 
 ### Chain A—dispatch evidence, consumed everywhere
 
-1. [small/hoist-consumes-dispatch-evidence.md](small/hoist-consumes-dispatch-evidence.md)—
-   hoist selection reads the dispatch resolution instead of re-deriving
-   evidence-dependence from type-var content (the PR 10073 seam), and
-   recovers the hoisting its conservative gate gives up.
+The `hoist-consumes-dispatch-evidence` project is retired: its premise did
+not survive contact. Hoist selection cannot read the dispatch resolution,
+because `resolveTotalDispatchPlans` takes the pruned compile-time roots as
+input, so the plan does not exist yet when hoisting is decided. Nor would
+an outer `direct` plan prove a root hoistable: `e == e` with `e : List(a)`
+under a where clause on `a` resolves `List.is_eq` directly while its nested
+`a.is_eq` still needs the caller's evidence. The conservative gate is
+therefore not re-deriving a fact that exists elsewhere. Recovering what it
+gives up (for example `n = [].len()` in a function body, whose dispatcher is
+`List(flex)`) would need the checker to record, as solving decides it,
+which obligations bind to an enclosing scheme and which stay free.
 
 ### Chain B—the host/platform boundary
 
@@ -403,5 +410,4 @@ front-loads leverage and keeps prerequisites satisfied:
 
 1. `small/rceffect-conformance.md`
 2. `small/pin-deferred-spec-requests.md`
-3. `small/hoist-consumes-dispatch-evidence.md`
-4. `small/compact-constant-aggregates.md`
+3. `small/compact-constant-aggregates.md`
