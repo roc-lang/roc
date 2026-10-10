@@ -231,6 +231,15 @@ inspect_type_visits: std.AutoHashMap(Var, u8),
 /// slots it pushed and drains back to its entry length, so the walk may nest
 /// freely.
 type_visit_stack: std.ArrayListUnmanaged(Var),
+/// Scratch for `groundTypeHash`: its worklist and the visit order of every
+/// resolved var, direct-indexed by var. Both are cleared per call, in
+/// proportion to what the last call visited.
+ground_hash_pending: std.ArrayListUnmanaged(Var),
+ground_hash_seen: collections.DenseMap(Var, u32),
+/// Scratch for `groundTypesIdentical`: its worklist of var pairs and the pairs
+/// already compared.
+ground_identical_pending: std.ArrayListUnmanaged(GroundVarPair),
+ground_identical_seen: std.AutoHashMapUnmanaged(GroundVarPair, void),
 /// Explicit worklist for alias row validation, carrying both pending nodes and
 /// in-flight row frames so the whole walk—spines and rows alike—descends on
 /// the heap rather than the native stack. Base-relative, like the stack above.
@@ -703,7 +712,7 @@ call_operand_type_error_exprs: std.ArrayListUnmanaged(bool),
 /// `retired_operand_pool`: every operand before the first erroneous one, in
 /// evaluation order, then that erroneous operand. The erroneous-value sweep
 /// publishes them as the runtime error's `evaluated` operands.
-retired_operand_sequences: std.AutoHashMapUnmanaged(CIR.Expr.Idx, RetiredOperandSequence),
+retired_operand_sequences: collections.DenseMap(CIR.Expr.Idx, RetiredOperandSequence),
 retired_operand_pool: std.ArrayListUnmanaged(CIR.Expr.Idx),
 /// Annotations that describe host-boundary values (hosted lambdas and
 /// `provides` defs). Their rows are generated as written—implicit polarity
@@ -3657,6 +3666,10 @@ fn initAssumePrepared(
         .var_set = collections.DenseMap(Var, void).init(gpa),
         .inspect_type_visits = std.AutoHashMap(Var, u8).init(gpa),
         .type_visit_stack = .empty,
+        .ground_hash_pending = .empty,
+        .ground_hash_seen = collections.DenseMap(Var, u32).init(gpa),
+        .ground_identical_pending = .empty,
+        .ground_identical_seen = .empty,
         .alias_row_frames = .empty,
         .alias_row_names = .empty,
         .alias_row_name_set = .empty,
@@ -3716,7 +3729,7 @@ fn initAssumePrepared(
         .erroneous_statements = .empty,
         .rejected_destructure_defs = .empty,
         .call_operand_type_error_exprs = try initNodeSlots(bool, gpa, node_count, false),
-        .retired_operand_sequences = .empty,
+        .retired_operand_sequences = collections.DenseMap(CIR.Expr.Idx, RetiredOperandSequence).init(gpa),
         .retired_operand_pool = .empty,
         .host_boundary_annotations = .empty,
         .implicit_open_exts = .empty,
@@ -3887,7 +3900,7 @@ pub fn deinit(self: *Self) void {
     self.erroneous_statements.deinit(self.gpa);
     self.rejected_destructure_defs.deinit(self.gpa);
     self.call_operand_type_error_exprs.deinit(self.gpa);
-    self.retired_operand_sequences.deinit(self.gpa);
+    self.retired_operand_sequences.deinit();
     self.retired_operand_pool.deinit(self.gpa);
     self.host_boundary_annotations.deinit(self.gpa);
     var position_values = self.nominal_positions.valueIterator();
@@ -3973,6 +3986,10 @@ pub fn deinit(self: *Self) void {
     self.var_set.deinit();
     self.inspect_type_visits.deinit();
     self.type_visit_stack.deinit(self.gpa);
+    self.ground_hash_pending.deinit(self.gpa);
+    self.ground_hash_seen.deinit();
+    self.ground_identical_pending.deinit(self.gpa);
+    self.ground_identical_seen.deinit(self.gpa);
     self.alias_row_frames.deinit(self.gpa);
     self.alias_row_names.deinit(self.gpa);
     self.alias_row_name_set.deinit(self.gpa);
@@ -9393,10 +9410,10 @@ fn expectedTypeBackup(self: *Self, expected_var: Var, env: *Env) std.mem.Allocat
 /// decides equality.
 fn groundTypeHash(self: *Self, var_: Var) std.mem.Allocator.Error!?u64 {
     var hasher = std.hash.Wyhash.init(0);
-    var pending: std.ArrayListUnmanaged(Var) = .empty;
-    defer pending.deinit(self.gpa);
-    var seen = std.AutoHashMap(Var, u32).init(self.gpa);
-    defer seen.deinit();
+    const pending = &self.ground_hash_pending;
+    const seen = &self.ground_hash_seen;
+    pending.clearRetainingCapacity();
+    seen.clearRetainingCapacity();
     try pending.append(self.gpa, var_);
     while (pending.pop()) |raw| {
         const resolved = self.types.resolveVar(raw);
@@ -9472,17 +9489,19 @@ fn groundTypeHash(self: *Self, var_: Var) std.mem.Allocator.Error!?u64 {
 /// Whether `left` and `right` are ground types with identical structure and
 /// descriptor flags, compared node by node. Any variable leaf makes the
 /// answer false.
+/// A pair of vars compared by `groundTypesIdentical`.
+const GroundVarPair = struct { left: Var, right: Var };
+
 fn groundTypesIdentical(self: *Self, left: Var, right: Var) std.mem.Allocator.Error!bool {
-    const Pair = struct { left: Var, right: Var };
-    var pending: std.ArrayListUnmanaged(Pair) = .empty;
-    defer pending.deinit(self.gpa);
-    var seen = std.AutoHashMap(Pair, void).init(self.gpa);
-    defer seen.deinit();
+    const pending = &self.ground_identical_pending;
+    const seen = &self.ground_identical_seen;
+    pending.clearRetainingCapacity();
+    if (seen.count() != 0) seen.clearRetainingCapacity();
     try pending.append(self.gpa, .{ .left = left, .right = right });
     while (pending.pop()) |pair| {
         const l = self.types.resolveVar(pair.left);
         const r = self.types.resolveVar(pair.right);
-        if ((try seen.getOrPut(.{ .left = l.var_, .right = r.var_ })).found_existing) continue;
+        if ((try seen.getOrPut(self.gpa, .{ .left = l.var_, .right = r.var_ })).found_existing) continue;
         if (@as(u8, @bitCast(l.desc.flags)) != @as(u8, @bitCast(r.desc.flags))) return false;
         switch (l.desc.content) {
             .flex, .rigid, .field_presence, .err => return false,
@@ -29899,7 +29918,7 @@ fn recordRetiredOperandSequence(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.E
         return;
     };
     self.retired_operand_pool.shrinkRetainingCapacity(start + index + 1);
-    try self.retired_operand_sequences.put(self.gpa, expr_idx, .{ .start = start, .len = @intCast(index + 1) });
+    try self.retired_operand_sequences.put(expr_idx, .{ .start = start, .len = @intCast(index + 1) });
 }
 
 /// Whether an operand is an erroneous value, by the rule call-operand
