@@ -368,10 +368,21 @@ once—the name-keyed re-resolution and double publication are deleted.
 
 ### Chain C—specialization sealing
 
-1. [small/pin-deferred-spec-requests.md](small/pin-deferred-spec-requests.md)—
-   seal-time instrumentation, the snapshot-regime pin, and the
-   `unifyThroughBacking` decision; end state: `row_default` unreachable
-   for checker-constrained rows.
+The deferred-spec-request pinning project was retired: its premise no longer
+holds. The July rework of Monotype row sealing deleted the snapshot regime
+(`stableSpecializationRequestType`) along with the pin's early return, and
+every deferred procedure-template request now relates to a fresh instance of
+the callee's checked root when the request is created—generated-private
+requests included—so no regime seals a request without its checked
+counterpart, and a row that still takes its default shares its class with that
+counterpart. A seal-time "defaulted while checked-concrete" check would only
+re-test union-find, so none was added. A phantom-row repro whose request
+carries a minted iterator now pins the generated-private case
+(`test/cli/issue_9968_pin_deferred_spec_requests/private_iter_arg.roc`).
+`unifyThroughBacking` needs no named-argument pairing: a nominal keeps its
+arguments on the joined class, and an alias argument is either related through
+the backing or unused by it, which Monotype equality ignores; its doc comment
+records this.
 
 ### Independent—start any time, in any order
 
@@ -416,4 +427,3 @@ If one person or agent works through everything serially, this order
 front-loads leverage and keeps prerequisites satisfied:
 
 1. `small/rceffect-conformance.md`
-2. `small/pin-deferred-spec-requests.md`
