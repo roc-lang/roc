@@ -252,12 +252,20 @@ order. The rest are independent.
 
 ### Start here—enforcement layers, cheap and load-bearing
 
-1. [small/cross-phase-coverage-parity-tests.md](small/cross-phase-coverage-parity-tests.md)—
-   the divergence-classification parity suite; a regression net the big
-   lowering projects inherit.
-2. [small/rceffect-conformance.md](small/rceffect-conformance.md)—
+1. [small/rceffect-conformance.md](small/rceffect-conformance.md)—
    comptime validity plus a per-op refcount conformance harness for the
    central ownership table (the PR 10023 bug class).
+
+The divergence-classification parity suite has landed. Divergence is one
+classification, `checkedExprDivergence` in `checked_artifact.zig`; Monotype's
+and Boxy's never-divergent arms check it at compile time, and checked-artifact
+tests drive `DivergenceScan` over every expression kind against it, alongside
+pinned echo fixtures for a divergent nominal payload, call argument, and
+arithmetic operand. Correction: Boxy is a third consumer the doc missed, and
+both consumers lowered a divergent custom interpolation only through its
+operands although its dispatch plan can crash; it now lowers through its
+dispatch like the other plan-carrying kinds. The convention is written down in
+CONTRIBUTING/README.md.
 
 The cache-and-identity residuals project has landed. Its name-text
 auto-import fallback was already gone (auto-imports carry an explicit
@@ -344,10 +352,9 @@ choice is shared across backends via `base.LowLevelBuiltins`.
 If one person or agent works through everything serially, this order
 front-loads leverage and keeps prerequisites satisfied:
 
-1. `small/cross-phase-coverage-parity-tests.md`
-2. `small/rceffect-conformance.md`
-3. `small/pin-deferred-spec-requests.md`
-4. `small/hoist-consumes-dispatch-evidence.md`
-5. `small/hosted-extern-declared-abi.md`
-6. `small/frame-partitioned-checker-state.md`
-7. `small/compact-constant-aggregates.md`
+1. `small/rceffect-conformance.md`
+2. `small/pin-deferred-spec-requests.md`
+3. `small/hoist-consumes-dispatch-evidence.md`
+4. `small/hosted-extern-declared-abi.md`
+5. `small/frame-partitioned-checker-state.md`
+6. `small/compact-constant-aggregates.md`

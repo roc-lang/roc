@@ -21325,11 +21325,7 @@ pub fn divergentStep(view: anytype, expr_id: checked.CheckedExprId) DivergentSte
             boxyPlanInvariant("checked expression was marked divergent but no divergent child was found");
         }
         fn interpolation(b: @TypeOf(bodies), value: checked.CheckedInterpolation) DivergentStep {
-            if (b.exprDiverges(value.segments[0], .run)) return .{ .operand = value.segments[0] };
-            for (value.values, value.segments[1..]) |part, segment| {
-                if (b.exprDiverges(part, .run)) return .{ .operand = part };
-                if (b.exprDiverges(segment, .run)) return .{ .operand = segment };
-            }
+            if (firstDivergentInterpolationOperand(b, value)) |operand| return .{ .operand = operand };
             boxyPlanInvariant("checked interpolation was marked divergent but no divergent child was found");
         }
     };
@@ -21379,11 +21375,16 @@ pub fn divergentStep(view: anytype, expr_id: checked.CheckedExprId) DivergentSte
             }
             break :blk .normal;
         },
-        .interpolation => |interpolation| Scan.interpolation(bodies, interpolation),
+        // A custom interpolation's conversion is a dispatch, which can crash
+        // once its operands, the segments and values, have evaluated.
+        .interpolation => |interpolation| if (interpolation.plan) |plan|
+            divergentDispatchStep(view, plan)
+        else
+            Scan.interpolation(bodies, interpolation),
         .dispatch_call, .method_eq, .type_dispatch_call => |plan| divergentDispatchStep(view, plan),
         .numeral => |numeral| divergentDispatchStep(view, numeral.plan),
         .str_from_quote => |quote| divergentDispatchStep(view, quote.plan),
-        .pending,
+        inline .pending,
         .str_segment,
         .bytes_literal,
         .lookup_local,
@@ -21396,8 +21397,22 @@ pub fn divergentStep(view: anytype, expr_id: checked.CheckedExprId) DivergentSte
         .lambda,
         .anno_only,
         .hosted_lambda,
-        => boxyPlanInvariant("non-divergent checked expression form was marked divergent"),
+        => |_, kind| {
+            checked.assertCheckedExprNeverDiverges(kind);
+            boxyPlanInvariant("non-divergent checked expression form was marked divergent");
+        },
     };
+}
+
+/// The first of an interpolation's operands, its segments and values in
+/// evaluation order, that the checker marked divergent.
+fn firstDivergentInterpolationOperand(bodies: anytype, value: checked.CheckedInterpolation) ?checked.CheckedExprId {
+    if (bodies.exprDiverges(value.segments[0], .run)) return value.segments[0];
+    for (value.values, value.segments[1..]) |part, segment| {
+        if (bodies.exprDiverges(part, .run)) return part;
+        if (bodies.exprDiverges(segment, .run)) return segment;
+    }
+    return null;
 }
 
 /// The operands a divergent expression evaluates before `divergent`, the
@@ -21471,7 +21486,11 @@ fn divergentDispatchStep(view: anytype, maybe_plan: ?static_dispatch.StaticDispa
     const bodies = view.checked_bodies;
     for (plan.argsSlice(view.static_dispatch_plans)) |operand| switch (operand) {
         .checked_expr => |expr| if (bodies.exprDiverges(expr, .run)) return .{ .operand = expr },
-        .generated_interpolation_segments, .generated_numeral, .generated_quote => {},
+        .generated_interpolation_segments => |expr| switch (bodies.expr(expr).data) {
+            .interpolation => |value| if (firstDivergentInterpolationOperand(bodies, value)) |divergent| return .{ .operand = divergent },
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyPlanInvariant("dispatch interpolation segments referenced a non-interpolation expression"),
+        },
+        .generated_numeral, .generated_quote => {},
     };
     boxyPlanInvariant("checked dispatch expression was marked divergent but no divergent operand was found");
 }

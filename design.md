@@ -14193,6 +14193,18 @@ operand the divergence column marks divergent, and nothing after it
 Only the divergent path does this work: a value that does not diverge lowers
 through the ordinary operand lowering.
 
+Which expression kinds can be marked divergent is one classification,
+`checkedExprDivergence` in `checked_artifact.zig`: a kind diverges through its
+evaluation (it terminates, or an operand it evaluates diverges), through its
+static dispatch plan (the kinds that carry one: method and type dispatch,
+method equality, custom interpolation, and numeral and quote conversion), or
+never. Monotype's and Boxy's divergent lowerings check their never-divergent
+arms against it at compile time, and the checked-artifact parity tests drive
+`DivergenceScan` over every kind and compare its answer with it. A
+dispatch-plan kind lowers through its dispatch's callable-or-crash decision,
+so a custom interpolation whose conversion cannot run evaluates its segments
+and values and then crashes, like any other dispatch that cannot run.
+
 Record fields evaluate in source order in every lowering mode. A record
 literal evaluates its supplied field values in the order they are written; a
 record update evaluates its base first and then its updated fields in the

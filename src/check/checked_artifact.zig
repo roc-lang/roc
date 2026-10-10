@@ -14621,6 +14621,101 @@ pub fn dispatchDivergenceForEvidence(
     return result;
 }
 
+/// The kind of a checked expression.
+pub const CheckedExprKind = std.meta.Tag(CheckedExprData);
+
+/// How a checked expression of one kind can come to be marked divergent.
+///
+/// This is the one classification shared by the producer of the divergence
+/// columns (`DivergenceScan`) and every consumer that lowers an expression
+/// the columns mark divergent (Monotype's `divergentDataStep`, Boxy's
+/// `divergentStep`). Each consumer's arm for kinds that are never marked
+/// divergent checks this classification at compile time, and the parity
+/// tests below drive the producer over every kind and compare its answer
+/// with this classification, so the producer and the consumers cannot
+/// disagree about a kind without failing the build or the tests.
+pub const CheckedExprDivergence = struct {
+    /// Marked divergent by evaluating it: the kind always terminates, or an
+    /// operand it evaluates is marked divergent.
+    evaluation: bool,
+    /// Marked divergent when its static dispatch plan cannot run (a
+    /// `checked_error` or `unreachable` resolution, for the plan or under one
+    /// specialization's evidence). A consumer lowers such a kind through its
+    /// dispatch's callable-or-crash decision.
+    dispatch_plan: bool,
+
+    /// Whether no expression of this kind is ever marked divergent.
+    pub fn never(self: CheckedExprDivergence) bool {
+        return !self.evaluation and !self.dispatch_plan;
+    }
+};
+
+/// The divergence classification of a checked expression kind.
+pub fn checkedExprDivergence(kind: CheckedExprKind) CheckedExprDivergence {
+    return switch (kind) {
+        .crash,
+        .ellipsis,
+        .break_,
+        .return_,
+        .runtime_error,
+        .expect_err,
+        .str,
+        .list,
+        .tuple,
+        .match_,
+        .if_,
+        .call,
+        .record,
+        .block,
+        .tag,
+        .nominal,
+        .binop,
+        .unary_minus,
+        .unary_not,
+        .dbg,
+        .expect,
+        .field_access,
+        .structural_eq,
+        .structural_hash,
+        .tuple_access,
+        .for_,
+        .run_low_level,
+        => .{ .evaluation = true, .dispatch_plan = false },
+        .dispatch_call,
+        .method_eq,
+        .type_dispatch_call,
+        .interpolation,
+        => .{ .evaluation = true, .dispatch_plan = true },
+        .numeral,
+        .str_from_quote,
+        => .{ .evaluation = false, .dispatch_plan = true },
+        .pending,
+        .str_segment,
+        .bytes_literal,
+        .lookup_local,
+        .lookup_external,
+        .lookup_required,
+        .empty_list,
+        .empty_record,
+        .zero_argument_tag,
+        .closure,
+        .lambda,
+        .anno_only,
+        .hosted_lambda,
+        => .{ .evaluation = false, .dispatch_plan = false },
+    };
+}
+
+/// Compile-time check for a consumer's never-divergent arm: fails the build,
+/// naming the kind, when the shared classification says an expression of
+/// `kind` can be marked divergent.
+pub fn assertCheckedExprNeverDiverges(comptime kind: CheckedExprKind) void {
+    comptime if (!checkedExprDivergence(kind).never()) {
+        @compileError("checked expression kind ." ++ @tagName(kind) ++
+            " can be marked divergent (checkedExprDivergence) but this consumer lowers it as never divergent");
+    };
+}
+
 /// Decides whether checked expressions and statements always diverge,
 /// memoizing each one's answer. Evaluated on explicit stacks, so expression
 /// nesting never becomes native call depth.
@@ -40218,6 +40313,176 @@ test "checked divergence publishes both inline-expect runtime modes" {
     try std.testing.expectEqualSlices(bool, &.{true}, &run_statements);
     try std.testing.expectEqualSlices(bool, &.{ true, false, true, true, true, true, true }, &omit_exprs);
     try std.testing.expectEqualSlices(bool, &.{false}, &omit_statements);
+}
+
+/// A minimal expression of `kind` for the divergence parity tests: every
+/// operand it evaluates, branch, and dispatch operand is expression 0, and
+/// its block statement is statement 0, which evaluates expression 0.
+fn divergenceParityFixture(comptime kind: CheckedExprKind) CheckedExprData {
+    const op = testIndexId(CheckedExprId, 0);
+    const ops: []const CheckedExprId = &.{op};
+    const ty = testIndexId(CheckedTypeId, 0);
+    const pattern = testIndexId(CheckedPatternId, 0);
+    const string = testIndexId(CheckedStringLiteralId, 0);
+    const tag_label = testIndexId(canonical.TagLabelId, 0);
+    return switch (kind) {
+        .pending => .pending,
+        .numeral => .{ .numeral = .{ .literal = std.mem.zeroes(ModuleEnv.NumeralLiteral), .plan = null } },
+        .str_from_quote => .{ .str_from_quote = .{ .plan = null, .literal = string } },
+        .str_segment => .{ .str_segment = string },
+        .str => .{ .str = ops },
+        .bytes_literal => .{ .bytes_literal = string },
+        .lookup_local => .{ .lookup_local = .{ .pattern = pattern, .resolved = null } },
+        .lookup_external => .{ .lookup_external = null },
+        .lookup_required => .{ .lookup_required = null },
+        .list => .{ .list = ops },
+        .empty_list => .empty_list,
+        .tuple => .{ .tuple = ops },
+        .match_ => .{ .match_ = .{
+            .cond = op,
+            .branches = &.{.{ .value = op, .guard = null }},
+            .is_try_suffix = false,
+            .skip_exhaustiveness = false,
+            .comptime_site_kind = .match,
+        } },
+        .if_ => .{ .if_ = .{
+            .branches = &.{.{ .cond = op, .body = op }},
+            .final_else = op,
+            .warn_unused_branches = false,
+        } },
+        .call => .{ .call = .{ .func = op, .args = ops, .called_via = .apply, .source_fn_ty_payload = ty } },
+        .record => .{ .record = .{
+            .fields = &.{.{ .label = testIndexId(canonical.RecordFieldLabelId, 0), .value = op }},
+            .unsets = &.{},
+            .ext = op,
+        } },
+        .empty_record => .empty_record,
+        .block => .{ .block = .{ .statements = &.{testIndexId(CheckedStatementId, 0)}, .final_expr = op } },
+        .tag => .{ .tag = .{ .name = tag_label, .args = ops } },
+        .nominal => .{ .nominal = .{ .backing_expr = op, .backing_type = .tag } },
+        .zero_argument_tag => .{ .zero_argument_tag = .{ .closure_name = tag_label, .name = tag_label } },
+        .closure => .{ .closure = .{ .lambda = op, .captures = &.{}, .tag_name = tag_label } },
+        .lambda => .{ .lambda = .{ .args = &.{}, .body = op } },
+        .binop => .{ .binop = .{ .op = .add, .lhs = op, .rhs = op } },
+        .unary_minus => .{ .unary_minus = op },
+        .unary_not => .{ .unary_not = op },
+        .field_access => .{ .field_access = .{ .receiver = op, .segments = &.{} } },
+        .dispatch_call => .{ .dispatch_call = null },
+        .interpolation => .{ .interpolation = .{ .plan = null, .segments = ops, .values = &.{}, .assembler_ty = ty } },
+        .structural_eq => .{ .structural_eq = .{ .lhs = op, .rhs = op, .negated = false } },
+        .structural_hash => .{ .structural_hash = .{ .value = op, .hasher = op } },
+        .method_eq => .{ .method_eq = null },
+        .type_dispatch_call => .{ .type_dispatch_call = null },
+        .tuple_access => .{ .tuple_access = .{ .tuple = op, .elem_index = 0 } },
+        .runtime_error => .{ .runtime_error = .{} },
+        .crash => .{ .crash = string },
+        .dbg => .{ .dbg = op },
+        .expect_err => .{ .expect_err = .{ .expr = op, .snippet = string } },
+        .expect => .{ .expect = op },
+        .ellipsis => .ellipsis,
+        .anno_only => .anno_only,
+        .break_ => .break_,
+        .return_ => .{ .return_ = .{ .expr = op, .lambda = op, .context = .return_expr } },
+        .for_ => .{ .for_ = .{ .pattern = pattern, .expr = op, .body = op, .plan = null } },
+        .hosted_lambda => .{ .hosted_lambda = .{ .symbol_name = testIndexId(canonical.ExternalSymbolNameId, 0), .args = &.{} } },
+        .run_low_level => .{ .run_low_level = .{ .op = .str_is_eq, .args = ops } },
+    };
+}
+
+/// Whether the producer marks the `kind` fixture (expression 1) divergent
+/// when expression 0 has `operand` data and expression 1 has the given
+/// dispatch crash fact.
+fn divergenceParityProducerMarks(
+    comptime kind: CheckedExprKind,
+    operand: CheckedExprData,
+    dispatch_crashes: bool,
+    mode: InlineExpectMode,
+) Allocator.Error!bool {
+    var exprs = [_]CheckedExpr{
+        .{ .id = testIndexId(CheckedExprId, 0), .ty = testIndexId(CheckedTypeId, 0), .source_region = base.Region.zero(), .data = operand },
+        .{ .id = testIndexId(CheckedExprId, 1), .ty = testIndexId(CheckedTypeId, 0), .source_region = base.Region.zero(), .data = comptime divergenceParityFixture(kind) },
+    };
+    var statements = [_]CheckedStatement{.{
+        .id = testIndexId(CheckedStatementId, 0),
+        .source_region = base.Region.zero(),
+        .data = .{ .expr = testIndexId(CheckedExprId, 0) },
+    }};
+    // Only dispatch kinds read their dispatch operands.
+    const dispatch_operand = [_]CheckedExprId{testIndexId(CheckedExprId, 0)};
+    const dispatch_operands = [_][]const CheckedExprId{ &.{}, &dispatch_operand };
+    const crashes = [_]bool{ false, dispatch_crashes };
+    var expr_diverges = @as([exprs.len]bool, @splat(false));
+    var statement_diverges = @as([statements.len]bool, @splat(false));
+    try publishCheckedBodyDivergence(
+        std.testing.allocator,
+        &exprs,
+        &statements,
+        .{ .operands = &dispatch_operands, .crashes = &crashes },
+        &expr_diverges,
+        &statement_diverges,
+        mode,
+    );
+    return expr_diverges[1];
+}
+
+/// Whether a payload type holds a static dispatch plan, the only thing a
+/// dispatch crash fact can be recorded against.
+fn divergenceParityCarriesDispatchPlan(comptime T: type) bool {
+    if (T == StaticDispatchPlanId or T == ?StaticDispatchPlanId) return true;
+    const info = @typeInfo(T);
+    if (info != .@"struct") return false;
+    return inline for (info.@"struct".field_types) |field_type| {
+        if (divergenceParityCarriesDispatchPlan(field_type)) break true;
+    } else false;
+}
+
+test "checked divergence parity: the producer marks exactly the kinds classified as divergent through evaluation" {
+    const crash_data: CheckedExprData = .{ .crash = testIndexId(CheckedStringLiteralId, 0) };
+    inline for (comptime std.enums.values(CheckedExprKind)) |kind| {
+        const classified = checkedExprDivergence(kind).evaluation;
+        const run_marked = try divergenceParityProducerMarks(kind, crash_data, false, .run);
+        if (run_marked != classified) {
+            std.debug.print(
+                "producer drift: checked expression kind .{s} with a divergent operand is marked divergent={} but checkedExprDivergence classifies evaluation={}\n",
+                .{ @tagName(kind), run_marked, classified },
+            );
+            return error.DivergenceClassificationDrift;
+        }
+        // Omitted inline expects evaluate nothing, so an omitted `expect`
+        // never diverges; every consumer lowers it with the omitted column.
+        const omit_marked = try divergenceParityProducerMarks(kind, crash_data, false, .omit);
+        if (omit_marked != (classified and kind != .expect)) {
+            std.debug.print(
+                "producer drift: checked expression kind .{s} with a divergent operand and omitted inline expects is marked divergent={}\n",
+                .{ @tagName(kind), omit_marked },
+            );
+            return error.DivergenceClassificationDrift;
+        }
+    }
+}
+
+test "checked divergence parity: dispatch crash facts reach exactly the kinds classified as dispatch-plan divergent" {
+    const quiet_data: CheckedExprData = .empty_record;
+    inline for (comptime std.enums.values(CheckedExprKind)) |kind| {
+        const classified = checkedExprDivergence(kind).dispatch_plan;
+        const carries_plan = comptime divergenceParityCarriesDispatchPlan(@FieldType(CheckedExprData, @tagName(kind)));
+        if (carries_plan != classified) {
+            std.debug.print(
+                "classification drift: checked expression kind .{s} carries a static dispatch plan={} but checkedExprDivergence classifies dispatch_plan={}\n",
+                .{ @tagName(kind), carries_plan, classified },
+            );
+            return error.DivergenceClassificationDrift;
+        }
+        if (classified) {
+            if (!try divergenceParityProducerMarks(kind, quiet_data, true, .run)) {
+                std.debug.print(
+                    "producer drift: checked expression kind .{s} with a crashing dispatch plan is not marked divergent\n",
+                    .{@tagName(kind)},
+                );
+                return error.DivergenceClassificationDrift;
+            }
+        }
+    }
 }
 
 test "checked diagnostic-error fact propagates through body dependencies and types" {

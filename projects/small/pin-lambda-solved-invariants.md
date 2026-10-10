@@ -191,6 +191,7 @@ output on the corpus before/after, modulo the I3 caveat above).
 - [empty-tag-union-yield-provenance.md](./empty-tag-union-yield-provenance.md)—
   the same stage's other shape-keyed assumption, split out because it
   needs a carry-vs-verify design decision.
-- [cross-phase-coverage-parity-tests.md](./cross-phase-coverage-parity-tests.md)—
-  the same producer/consumer parity discipline; its harness is the
-  natural home for the I1 intake assert's corpus run.
+- The landed divergence parity suite (`checkedExprDivergence` and the
+  "checked divergence parity" tests in src/check/checked_artifact.zig)—the
+  same producer/consumer parity discipline, written down in
+  CONTRIBUTING/README.md.

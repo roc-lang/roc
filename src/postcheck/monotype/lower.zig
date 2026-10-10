@@ -30441,6 +30441,10 @@ const BodyContext = struct {
             },
             .dispatch_call => |plan| return try self.divergentDispatchStep(plan, ty),
             .interpolation => |interpolation| {
+                // A custom interpolation's conversion is a dispatch, which
+                // can crash once its operands, the segments and values, have
+                // evaluated.
+                if (interpolation.plan) |plan| return try self.divergentDispatchStep(plan, ty);
                 var operands: std.ArrayList(checked.CheckedExprId) = .empty;
                 defer operands.deinit(self.allocator);
                 try appendInterpolationOperands(self.allocator, &operands, interpolation);
@@ -30449,7 +30453,7 @@ const BodyContext = struct {
             .method_eq, .type_dispatch_call => |plan| return try self.divergentDispatchStep(plan, ty),
             .numeral => |numeral| return try self.divergentDispatchStep(numeral.plan, ty),
             .str_from_quote => |quote| return try self.divergentDispatchStep(quote.plan, ty),
-            .pending,
+            inline .pending,
             .str_segment,
             .bytes_literal,
             .lookup_local,
@@ -30462,7 +30466,10 @@ const BodyContext = struct {
             .lambda,
             .anno_only,
             .hosted_lambda,
-            => Common.invariant("non-divergent checked expression reached divergent lowering"),
+            => |_, kind| {
+                checked.assertCheckedExprNeverDiverges(kind);
+                Common.invariant("non-divergent checked expression reached divergent lowering");
+            },
         };
         return .{ .ret = .{ .data = data } };
     }

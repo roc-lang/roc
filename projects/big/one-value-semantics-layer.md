@@ -300,5 +300,6 @@ sharing.
   whichever lands first.
 - [../small/lambda-mono-oracle-fidelity.md](../small/lambda-mono-oracle-fidelity.md)—
   the differential-oracle pattern step 7 generalizes.
-- [../small/cross-phase-coverage-parity-tests.md](../small/cross-phase-coverage-parity-tests.md)—
-  the parity-suite discipline this project applies across strategies.
+- The landed divergence parity suite (`checkedExprDivergence` and the
+  "checked divergence parity" tests in src/check/checked_artifact.zig)—the
+  parity-suite discipline this project applies across strategies.
