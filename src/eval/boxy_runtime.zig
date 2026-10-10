@@ -6697,10 +6697,9 @@ pub const BoxyRuntime = struct {
         const size = self.helper.sizeOf(target_layout);
         if (size == 0) return Value.zst;
 
-        const storage = try hooks.allocValue(target_layout);
-        if (!value.isZst()) {
-            storage.copyFrom(value, size);
-        }
+        if (value.isZst()) return try hooks.allocValue(target_layout);
+        const storage = try hooks.allocValueUninit(target_layout);
+        storage.copyFrom(value, size);
         return storage;
     }
 

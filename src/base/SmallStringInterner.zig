@@ -118,6 +118,17 @@ const Policy = struct {
     pub fn textForId(self: *const SmallStringInterner, id: Id) []const u8 {
         return std.mem.sliceTo(self.bytes.items.items[@backingInt(id)..], 0);
     }
+    /// Whether the entry at `id` is exactly `text`. Entries are
+    /// null-terminated, so comparing `text.len` bytes and then the terminator
+    /// decides it without first scanning the entry for its length.
+    pub fn textEql(self: *const SmallStringInterner, id: Id, text: []const u8) bool {
+        // Entries end at their first zero byte, so no interned text holds one.
+        if (std.debug.runtime_safety) std.debug.assert(std.mem.findScalar(u8, text, 0) == null);
+        const stored = self.bytes.items.items[@backingInt(id)..];
+        if (stored.len <= text.len) return false;
+        if (stored[text.len] != 0) return false;
+        return std.mem.eql(u8, stored[0..text.len], text);
+    }
     pub fn appendEntry(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Id {
         assertSupportsInserts(self.supports_inserts);
         const new_offset: Idx = @fromBackingInt(@intCast(self.bytes.len()));

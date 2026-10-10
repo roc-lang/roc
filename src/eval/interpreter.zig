@@ -596,6 +596,8 @@ pub const Interpreter = struct {
         span: LIR.LocalSpan,
         base: u32,
         slot_of: []u32,
+        /// The slots of the frame's zero-sized locals.
+        zst_slots: []u32 = &.{},
 
         const none = std.math.maxInt(u32);
     };
@@ -997,7 +999,10 @@ pub const Interpreter = struct {
         }
         self.free_frame_slots.deinit(self.allocator);
         var slot_indexes = self.frame_slot_indexes.valueIterator();
-        while (slot_indexes.next()) |index| self.allocator.free(index.slot_of);
+        while (slot_indexes.next()) |index| {
+            self.allocator.free(index.slot_of);
+            self.allocator.free(index.zst_slots);
+        }
         self.frame_slot_indexes.deinit();
     }
 
@@ -1383,6 +1388,10 @@ pub const Interpreter = struct {
             return self.interp.alloc(layout_idx);
         }
 
+        pub fn allocValueUninit(self: BoxyFrameHooks, layout_idx: layout_mod.Idx) Error!Value {
+            return self.interp.allocUninit(layout_idx);
+        }
+
         pub fn allocRocDataWithRc(self: BoxyFrameHooks, data_bytes: usize, element_alignment: u32, elements_refcounted: bool) Error![*]u8 {
             return self.interp.allocRocDataWithRc(data_bytes, element_alignment, elements_refcounted);
         }
@@ -1431,8 +1440,22 @@ pub const Interpreter = struct {
         return Value.fromSlice(try self.allocAlignedByteSlice(size, alignment));
     }
 
+    /// Storage for a value of `layout_idx` whose every byte the caller writes
+    /// before reading, so it is not zeroed first.
+    fn allocUninit(self: *LirInterpreter, layout_idx: layout_mod.Idx) Error!Value {
+        const sa = self.helper.sizeAlignOf(layout_idx);
+        if (sa.size == 0) return Value.zst;
+        return Value.fromSlice(try self.allocAlignedByteSliceUninit(sa.size, sa.alignment));
+    }
+
     fn allocAlignedByteSlice(self: *LirInterpreter, size: usize, alignment: layout_mod.RocAlignment) Error![]u8 {
-        const slice = switch (alignment) {
+        const slice = try self.allocAlignedByteSliceUninit(size, alignment);
+        @memset(slice, 0);
+        return slice;
+    }
+
+    fn allocAlignedByteSliceUninit(self: *LirInterpreter, size: usize, alignment: layout_mod.RocAlignment) Error![]u8 {
+        return switch (alignment) {
             .@"1" => self.arena.allocator().alignedAlloc(u8, .@"1", size),
             .@"2" => self.arena.allocator().alignedAlloc(u8, .@"2", size),
             .@"4" => self.arena.allocator().alignedAlloc(u8, .@"4", size),
@@ -1440,8 +1463,6 @@ pub const Interpreter = struct {
             .@"16" => self.arena.allocator().alignedAlloc(u8, .@"16", size),
             _ => unreachable,
         } catch return error.OutOfMemory;
-        @memset(slice, 0);
-        return slice;
     }
 
     fn poisonUninitializedValue(self: *LirInterpreter, layout_idx: layout_mod.Idx) Error!Value {
@@ -2585,18 +2606,12 @@ pub const Interpreter = struct {
 
     fn initFrame(self: *LirInterpreter, proc_id: LirProcSpecId, proc_spec: LirProcSpec) Error!Frame {
         const locals = self.store.getLocalSpan(proc_spec.frame_locals);
+        const slot_index = try self.frameSlotIndex(proc_id, proc_spec.frame_locals, locals);
         const slots = try self.acquireFrameSlots(locals.len);
         @memset(slots, .{ .assigned = false, .val = Value.zst, .desc = null });
-        for (0..locals.len) |i| {
-            const slot = &slots[i];
-            const local_id = GuardedList.at(locals, i);
-            const layout_idx = self.store.getLocal(local_id).layout_idx;
-            if (self.layout_store.getLayout(layout_idx).tag == .zst) {
-                slot.assigned = true;
-            }
-        }
+        // A zero-sized local holds its only value from the start.
+        for (slot_index.zst_slots) |slot| slots[slot].assigned = true;
 
-        const slot_index = try self.frameSlotIndex(proc_id, proc_spec.frame_locals, locals);
         return .{
             .proc_id = proc_id,
             .ret_layout = proc_spec.ret_layout,
@@ -2620,6 +2635,7 @@ pub const Interpreter = struct {
         if (entry.found_existing) {
             if (entry.value_ptr.span.start == span.start and entry.value_ptr.span.len == span.len) return entry.value_ptr.*;
             self.allocator.free(entry.value_ptr.slot_of);
+            self.allocator.free(entry.value_ptr.zst_slots);
         }
         // Until the index is built, the entry names a span no procedure has,
         // so a failed build is rebuilt on the next entry.
@@ -2631,11 +2647,24 @@ pub const Interpreter = struct {
         const base_id = @backingInt(GuardedList.at(locals, 0));
         const last_id = @backingInt(GuardedList.at(locals, locals.len - 1));
         const slot_of = try self.allocator.alloc(u32, @as(usize, last_id - base_id) + 1);
+        errdefer self.allocator.free(slot_of);
         @memset(slot_of, FrameSlotIndex.none);
+        var zst_count: usize = 0;
         for (0..locals.len) |slot| {
-            slot_of[@backingInt(GuardedList.at(locals, slot)) - base_id] = @intCast(slot);
+            const local_id = GuardedList.at(locals, slot);
+            slot_of[@backingInt(local_id) - base_id] = @intCast(slot);
+            if (self.layout_store.getLayout(self.store.getLocal(local_id).layout_idx).tag == .zst) zst_count += 1;
         }
-        entry.value_ptr.* = .{ .span = span, .base = base_id, .slot_of = slot_of };
+        const zst_slots = try self.allocator.alloc(u32, zst_count);
+        var next_zst: usize = 0;
+        for (0..locals.len) |slot| {
+            const local_id = GuardedList.at(locals, slot);
+            if (self.layout_store.getLayout(self.store.getLocal(local_id).layout_idx).tag == .zst) {
+                zst_slots[next_zst] = @intCast(slot);
+                next_zst += 1;
+            }
+        }
+        entry.value_ptr.* = .{ .span = span, .base = base_id, .slot_of = slot_of, .zst_slots = zst_slots };
         return entry.value_ptr.*;
     }
 
@@ -3290,9 +3319,26 @@ pub const Interpreter = struct {
                 },
                 .assign_low_level => |assign| {
                     const arg_locals = self.store.getLocalSpan(assign.args);
-                    const arg_values = try self.collectLocalValues(frame, arg_locals);
-                    const arg_layouts = try self.localLayouts(arg_locals);
-                    const arg_descs = try self.localBoxyDescs(frame, arg_locals);
+                    // Low-level operations read their arguments only for the
+                    // duration of `evalLowLevel`, so short argument lists live
+                    // in stack buffers rather than in the evaluation arena,
+                    // which is not released until the evaluation ends.
+                    var value_buffer: [low_level_inline_args]Value = undefined;
+                    var layout_buffer: [low_level_inline_args]layout_mod.Idx = undefined;
+                    var desc_buffer: [low_level_inline_args]?*const LirProgram.BoxyTypeDesc = undefined;
+                    const inline_args = arg_locals.len <= low_level_inline_args;
+                    const arg_values = if (inline_args)
+                        try self.collectLocalValuesInto(frame, arg_locals, value_buffer[0..arg_locals.len])
+                    else
+                        try self.collectLocalValues(frame, arg_locals);
+                    const arg_layouts = if (inline_args)
+                        self.localLayoutsInto(arg_locals, layout_buffer[0..arg_locals.len])
+                    else
+                        try self.localLayouts(arg_locals);
+                    const arg_descs = if (inline_args)
+                        try self.localBoxyDescsInto(frame, arg_locals, desc_buffer[0..arg_locals.len])
+                    else
+                        try self.localBoxyDescs(frame, arg_locals);
                     const ret_layout = self.store.getLocal(assign.target).layout_idx;
                     const ret_desc = try self.resolveOptionalBoxyDescRef(frame, self.store.getLocal(assign.target).boxy_desc);
                     const observation = rc_conformance.beginStatement(assign.op, arg_values.len);
@@ -4095,9 +4141,16 @@ pub const Interpreter = struct {
         }
     }
 
+    /// Argument count up to which a low-level statement's argument arrays
+    /// live on the stack.
+    const low_level_inline_args = 8;
+
     fn collectLocalValues(self: *LirInterpreter, frame: *const Frame, locals: anytype) Error![]Value {
         if (locals.len == 0) return &.{};
-        const values = try self.arena.allocator().alloc(Value, locals.len);
+        return try self.collectLocalValuesInto(frame, locals, try self.arena.allocator().alloc(Value, locals.len));
+    }
+
+    fn collectLocalValuesInto(self: *LirInterpreter, frame: *const Frame, locals: anytype, values: []Value) Error![]Value {
         for (0..locals.len) |i| {
             const local_id = GuardedList.at(locals, i);
             values[i] = try self.getLocalChecked(frame, local_id);
@@ -4107,7 +4160,10 @@ pub const Interpreter = struct {
 
     fn localLayouts(self: *LirInterpreter, locals: anytype) Error![]layout_mod.Idx {
         if (locals.len == 0) return &.{};
-        const layouts = try self.arena.allocator().alloc(layout_mod.Idx, locals.len);
+        return self.localLayoutsInto(locals, try self.arena.allocator().alloc(layout_mod.Idx, locals.len));
+    }
+
+    fn localLayoutsInto(self: *LirInterpreter, locals: anytype, layouts: []layout_mod.Idx) []layout_mod.Idx {
         for (0..locals.len) |i| {
             const local_id = GuardedList.at(locals, i);
             layouts[i] = self.store.getLocal(local_id).layout_idx;
@@ -4117,7 +4173,15 @@ pub const Interpreter = struct {
 
     fn localBoxyDescs(self: *LirInterpreter, frame: *const Frame, locals: anytype) Error![]?*const LirProgram.BoxyTypeDesc {
         if (locals.len == 0) return &.{};
-        const descs = try self.arena.allocator().alloc(?*const LirProgram.BoxyTypeDesc, locals.len);
+        return try self.localBoxyDescsInto(frame, locals, try self.arena.allocator().alloc(?*const LirProgram.BoxyTypeDesc, locals.len));
+    }
+
+    fn localBoxyDescsInto(
+        self: *LirInterpreter,
+        frame: *const Frame,
+        locals: anytype,
+        descs: []?*const LirProgram.BoxyTypeDesc,
+    ) Error![]?*const LirProgram.BoxyTypeDesc {
         for (0..locals.len) |i| {
             const local_id = GuardedList.at(locals, i);
             descs[i] = frame.localDesc(local_id) orelse

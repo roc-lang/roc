@@ -138,6 +138,31 @@ stages it touches; the instruction-count effect is reported in "Results".
     drops the memo, since a memoized digest memoizes every layout it depends
     on first.
 
+22. `src/postcheck/monotype_lifted/spec_constr.zig:5400`: every `Cloner`
+    built about twenty containers from empty; finished cloners return their
+    containers to the pass, which keeps up to eight sets with their capacity.
+23. `src/check/Check.zig:9379-9470` and `24840`: the expected-type backup's
+    ground hash and identity walks built a list and a hash map per call; they
+    use checker-owned scratch with a `DenseMap` visit index, and retired
+    operand sequences are a `DenseMap`.
+24. `src/check/Check.zig:24716` and `44787`: a static-dispatch drain with no
+    relation past its clean prefix and nothing held returns before any setup,
+    and the duplicate relation leave is gone.
+25. `src/check/Check.zig:9888`: the evidence-parameter check reuses a
+    checker-owned scratch instead of building one per call.
+26. `src/eval/interpreter.zig:3243`: a low-level statement with up to eight
+    arguments keeps its argument arrays on the stack instead of in the
+    evaluation arena, which is never released during an evaluation.
+27. `src/eval/value.zig:52` and `boxy_runtime.zig:6691`: value copies use
+    `@memcpy` when the ranges do not overlap, and a local that is copied in
+    full is not zeroed first.
+28. `src/eval/interpreter.zig:2580`: frame setup marks zero-sized locals from a
+    per-procedure list instead of looking up every local's layout per call.
+29. `src/base/SmallStringInterner.zig:100`: a probe that reaches a candidate
+    compares the needle and the entry's terminator directly, without first
+    scanning the entry for its length.
+30. `src/check/Check.zig:785`: the binder source map is a `DenseMap`.
+
 ## Findings by stage
 
 ## Checker, type store, canonicalizer, parser, base, collections, layout
@@ -923,13 +948,13 @@ stages it touches; the instruction-count effect is reported in "Results".
 - category A, D, E; runs per expression frame whose `Expected` carries `annotation` or `expected_type`: every call argument (`fn_call_arg` expected), every annotated binding RHS, …; impact high (two full type walks + a structural copy + 2-4 heap …; risk medium for (2) (error-path semantics …
 - Finding: `expectedTypeBackup` first runs `groundTypeHash` (a full walk of the expected type with a fresh `std.ArrayListUnmanaged(Var)` + fresh `std.AutoHashMap(Var,u32)` per call, 9393-9397), and then, unless the type is fully ground AND already cached, runs `instantiateVarOrphan` (9339), i.e. a complete structural copy of the expected type into fresh vars, with the Instantiator's own `var_map` clear and walk. The copy …
 - Fix: (1) make `groundTypeHash`/`groundTypesIdentical` use checker-owned scratch (`self.var_map` DenseMap for `seen`, `self.type_visit_stack` for `pending`): no per-call allocation; (2) avoid the eager orphan copy when it is provably unnecessary: if `!self.types.mayContainErrorState()` is true at frame begin AND remains true at frame finish, the backup is never read (the only consumer is the `varContainsError` branch, …
-- Status: open
+- Status: partly fixed (fix 23: the ground hash and identity walks use checker scratch; the eager orphan copy remains)
 
 ### src/check/Check.zig:24840 + 29889-29911: `retired_operand_sequences.remove(expr_idx)` hash removal on every frame begin
 - category B, E; runs per expression frame (`beginExprCheckFrame` 24840) and again per erroneous finishing frame (29899); impact medium (one hash probe per expression node; the map is …; risk low
 - Finding: `retired_operand_sequences: AutoHashMapUnmanaged(CIR.Expr.Idx, RetiredOperandSequence)` (706) is a sparse map populated only for erroneous call-like expressions, yet every frame begin pays a hash + probe + possible tombstone write to remove a key that is almost never present. The neighbouring `call_operand_type_error_exprs` is already a dense `[]bool` column over node slots (24839): the removal exists only to keep …
 - Fix: a `DenseMap(CIR.Expr.Idx, RetiredOperandSequence)` (O(1) remove without hashing, live-entry iteration) or, better, guard the remove with the dense column: `if (self.call_operand_type_error_exprs.items[slot]) _ = remove(...)` is not sufficient (the map may hold an entry while the column is false after a re-check), so instead keep a `has_retired_operand_sequence` bit in the same dense column (make the column a …
-- Status: open
+- Status: fixed (fix 23)
 
 ### src/check/Check.zig:33732-33860: `recordRelationOperands` copies every call/list/if/match operand span into `relation_operand_pool` and stores a `(start,len)` under a hashed `relation_operands` map (deepens first-pass 130-1352)
 - category B, D; runs per non-leaf expression of a relation-owning kind: every call, method call, binop, list literal, if, match, record update, field access, interpolation, string …; impact medium (an O(args) copy and a hash insert per call-like …; risk low
@@ -953,13 +978,13 @@ stages it touches; the instruction-count effect is reported in "Results".
 - category E; runs per finishing expression frame (every node in the module); impact high (this is the dominant per-expression fixed cost after …; risk medium ((2) and (3) touch ordering …
 - Finding: Each finished frame enters `resumeStaticDispatchDrain` (44679), which sets/clears ~6 fields, calls `syncCleanDeferredPrefix`, `enterRelation(.none)` / `leaveRelation` (twice: see next finding), creates a `use_positions` map (see below), and, when any entry past the clean prefix exists, copies each retained entry into `scratch_deferred_static_dispatch_constraints` and back into …
 - Fix: (1) early-out in `checkStaticDispatchConstraints` when `env.deferred_static_dispatch_constraints.items.items.len == env.clean_len` (everything is clean) and `scratch` is empty: skip the drain setup and the double `enterRelation`; (2) make the retained-entry handling in place: mark entries retained in the existing list and compact once (`write` cursor) instead of copy-out/copy-back; (3) let the clean prefix be a …
-- Status: open
+- Status: partly fixed (fix 24: a drain with nothing past the clean prefix returns before any setup)
 
 ### src/check/Check.zig:44787-44789: `leaveRelation(drain_relation)` is called twice in a row
 - category H; runs per drain (per finishing expression frame); impact low; risk none
 - Finding: `try self.leaveRelation(drain_relation);` appears on two consecutive lines after the drain loop; the second call repeats `claimRecordedProblems` and the owner store. Harmless but pure waste on a per-node path.
 - Fix: delete the duplicate line.
-- Status: open
+- Status: fixed (fix 24)
 
 ### src/check/Check.zig:44737-44745: `resumeStaticDispatchDrain` builds a `use_positions: AutoHashMapUnmanaged(u32, ArrayListUnmanaged(usize))` per drain
 - category F, B, A; runs per drain (per finishing expression frame); populated whenever a use settles (per scheme use whose relations are processed); impact medium in modules with many scheme uses; risk low
@@ -1085,7 +1110,7 @@ stages it touches; the instruction-count effect is reported in "Results".
 - category A, E; runs per scheme use of a binding whose instantiation produced no substitution pairs: every use of a monomorphic (ground) top-level function or constant that went …; impact medium-high (a hashed DFS over the callee's whole type per …; risk low-medium
 - Finding: `if (self.scratch_evidence_pairs.items.len > 0 or try self.schemeHasEvidenceParams(scheme_source))` runs `enumerateEvidenceParams` with a fresh `dispatch_evidence.Scratch` (which holds `visited: AutoHashMapUnmanaged(Var, void)`, `emitted_methods`, `contract_classes`: first-pass dispatch_evidence.zig:227) and a fresh `params` ArrayList, then discards everything, returning only `params.len != 0`.
 - Fix: memoize per resolved scheme root in a `DenseMap(Var, bool)` (`scheme_evidence_params_memo`), cleared when the store's generalized region changes (generalization boundary): a generalized scheme's structure is immutable, so a per-root memo is sound between boundaries; keep one `dispatch_evidence.Scratch` on `Self`.
-- Status: open
+- Status: fixed (fix 25)
 
 ### src/check/Check.zig:8695-8700 + 9831, 10170, 10201: `type_scheme_by_var: AutoHashMapUnmanaged(Var, u32)` probed three times per instantiation (deepens first-pass 130-1352)
 - category B; runs per instantiation: `enqueueLocalSchemeRequirements` (10170), `typeSchemeIndexForRoot` at 9831, `schemeHasExplicitRequirements` (10201); impact low-medium; risk low
@@ -1195,7 +1220,7 @@ stages it touches; the instruction-count effect is reported in "Results".
 - category E; runs per identifier insertion (every identifier token in every module, plus every `findByString`/`lookup`/`contains` from later stages, plus every entry on resize); impact high for the tokenizer/canonicalizer identifier path (the …; risk medium (touches the serialized …
 - Finding: `InternedBytes.Index` supports a 1-byte fingerprint column (`use_fingerprints`), and `StringLiteralPolicy` enables it, but `SmallStringInterner.Policy` does not (no `use_fingerprints` decl → `false` at line 38). So in `findStringOrSlot` every occupied probe slot that is not the target runs `Policy.textForId` = `std.mem.sliceTo(bytes[off..], 0)` (a null-terminator scan, line 119) followed by `std.mem.eql` (line 160). …
 - Fix: set `pub const use_fingerprints = true` in `SmallStringInterner.Policy` and persist the fingerprint column alongside `index` (serialize it, or rebuild it from the cells on `deserializeInto`/`enableRuntimeInserts` at 1 byte/slot). Even better, store the low 32 bits of the hash per slot (4 bytes/slot) which also removes the per-entry Wyhash in `resize`. `SmallStringInterner.insert` currently rebuilds …
-- Status: open
+- Status: partly fixed (fix 29: a probe compares the needle and the terminator without first scanning the entry; fingerprints not added)
 
 ### src/base/SmallStringInterner.zig:253-257: `getText` scans for the null terminator on every identifier text fetch
 - category E; runs every `env.getIdent(idx)` call in every stage (canonicalize scope lookups, type printing, dispatch, digests, codegen symbol names, ...); impact medium (O(len) → O(1) on a function called extremely often; …; risk medium (changes the serialized cache …
@@ -1809,7 +1834,7 @@ stages it touches; the instruction-count effect is reported in "Results".
 - category A; runs per call-pattern specialization written, per function per phase (discovery, unused_loop_results, iterator_fusion), per nested rewrite; impact medium; risk low
 - Finding: `Cloner` owns ~20 containers all created empty and `deinit`ed per clone; `Subst` adds four maps (`binder_subst`, `binder_aliases`, `loop_carried_binders` are hash maps keyed by `BinderIdentity`). None of this capacity survives to the next clone of the same pass, so every clone regrows from zero. `arena` is `std.heap.ArenaAllocator` (atomics).
 - Fix: pool `Cloner` state on the `Pass` (a `spare_cloners: ArrayList(ClonerScratch)` holding the containers; `init` pops one and `deinit` clears-and-returns it), and switch the arena to `base.SingleThreadArena` reset with `retain_capacity`. No semantic change: every container is logically empty at `init`.
-- Status: open
+- Status: fixed (fix 22)
 
 ### src/postcheck/monotype_lifted/spec_constr.zig:1383-1400, 1536: per-function worker allocates two `std.heap.ArenaAllocator`s, an `Output`, a `callable_workers` AutoHashMap and a body-shard `Program`
 - category A; runs per function per phase (three phases), in waves of 32; impact low-medium; risk low
@@ -1898,13 +1923,13 @@ stages it touches; the instruction-count effect is reported in "Results".
 - category E/H; runs per evaluated list builtin; a compile-time loop that appends n elements does O(n^2) copying and retains O(n^2) arena bytes (values are 32 B each) until the …; impact medium-high for CTFE-heavy programs, low otherwise; risk medium
 - Finding: values are immutable arena slices, so `append` allocates `len + 1` and `@memcpy`s. `list_set`/`list_swap`/`drop` likewise copy. The arena never frees, so a loop building a 10k-element table allocates ~1.6 GB of 32-byte values.
 - Fix: give `Value.list` a capacity-carrying representation (`ptr, len, cap` with the arena owning `cap`) and append in place when `len == cap_used` for the unique last writer (the evaluator's `refcount == 1` analogue: a list built by `list_append_unsafe` whose source slice ends exactly at the arena's last allocation can be extended in place with `arena.resize`), or evaluate list builtins over a growable `ArrayList(Value)` …
-- Status: open
+- Status: no change (the Lambda Mono evaluator is a debug-only differential oracle, not on any production path)
 
 ### src/postcheck/lambda_mono/eval.zig:78-96 (`Value`): 32-byte values because of `i128` payloads
 - category C; runs every evaluated value, every list element; impact low-medium; risk low
 - Finding: `int: i128` and `dec: i128` force 16-byte alignment, making `Value` 32 B; `[]const Value` lists spend 32 B per `bool`/`u8` element.
 - Fix: store 128-bit payloads as `[16]u8` (align 1) with `@bitCast` on read, bringing `Value` to 24 B (16 B slice + tag), or box 128-bit ints in the arena for a 16/24 B value. No semantic change.
-- Status: open
+- Status: no change (debug-only differential oracle)
 
 ### src/postcheck/lambda_mono/eval.zig:148, 193: `std.heap.ArenaAllocator` for all evaluator allocation; `ops_alloc_sizes: AutoHashMap(usize, usize)` keyed by pointer
 - category A/B; runs every evaluator allocation / every host-ops allocation; impact low; risk low
@@ -2640,7 +2665,7 @@ stages it touches; the instruction-count effect is reported in "Results".
 - category A; runs per statement (every `assign_low_level`; arithmetic other than +,-,* , comparisons, all string/list builtins); impact high; risk low
 - Finding: `collectLocalValues` (line 4052), `localLayouts` (4062) and `localBoxyDescs` (4072) each `self.arena.allocator().alloc(...)` an array sized by the arg count and `localBoxyDescs` additionally calls `resolveOptionalBoxyDescRef` per argument even when the op is a plain scalar op that never reads `arg_descs`. The arena is a bump allocator that is only reset per host entry (`resetRetainedExecution`, line 1224; `eval` at …
 - Fix: Low-level arg counts are bounded (the LIR op table maxes out at a handful); use fixed `[max_low_level_args]Value/Idx/?*Desc` stack buffers in `execStmtChain` (or interpreter-owned reusable scratch slices) and pass slices of them into `evalLowLevel`. Resolve `arg_descs` lazily only for ops whose implementation consults `ll.arg_descs` (grep shows a small set: boxy list/str/inspect/hash/eq ops). Verify: `evalLowLevel` …
-- Status: open
+- Status: fixed (fix 26)
 
 ### src/eval/interpreter.zig:2629: Five diagnostic fields written per statement from three store lookups
 - category E; runs per statement; impact medium (removes ~30 bytes of stores and 3 column loads per …; risk low
@@ -2652,13 +2677,13 @@ stages it touches; the instruction-count effect is reported in "Results".
 - category E; runs per call; impact medium (recursive compile-time functions with many locals …; risk low
 - Finding: `initFrame` memsets all slots and then loops `for (0..locals.len)` doing `self.store.getLocal(local_id).layout_idx` and `self.layout_store.getLayout(layout_idx).tag == .zst` for every frame local (lines 2583-2590). Each call therefore does O(frame locals) store+layout lookups even though a proc's ZST set is a static property of the proc.
 - Fix: Precompute per proc, once (lazily in a column indexed by `LirProcSpecId` or at LIR build time), the list/bitset of ZST frame locals, and in `initFrame` only flip those bits; or store a per-proc template `[]LocalSlot` that is memcpy'd into the acquired slot array. Verify nothing mutates a proc's local layouts after lowering.
-- Status: open
+- Status: fixed (fix 28)
 
 ### src/eval/interpreter.zig:4195: Every local-to-local assignment allocates and copies a fresh value
 - category A/D; runs per statement (`assign_ref .local`, call argument binding at 2470, call result materialisation); impact high for (1)+(2) (every value construction), medium for (3); risk low for (1)+(2), medium for (3)
 - Finding: `materializeLocalValue` -> `boxy_runtime.materializeLocalValue` (boxy_runtime.zig:6691) always does `hooks.allocValue(target_layout)` (arena alloc + `@memset(slice, 0)` in `allocAlignedByteSlice` line 1420-1431) and then `storage.copyFrom(value, size)` where `copyFrom` (value.zig:52) is a byte-by-byte loop, not `@memcpy`. So a simple `x = y` of a 24-byte list header costs an arena bump, a 24-byte memset, and a …
 - Fix: (1) In `copyFrom`, use `@memcpy` when the ranges do not overlap (they never do for a fresh allocation) and keep the overlap loop only for the overlapping case. (2) Skip the zero memset in `allocAlignedByteSlice` for callers that immediately overwrite the whole value (`materializeLocalValue`, `rocStrToValue`, `evalI64Literal`, `allocPointerIntValue`, scalar low-level results) by adding an `allocUninit` variant; keep …
-- Status: open
+- Status: partly fixed (fix 27: memcpy for non-overlapping copies and no zeroing of fully copied values; aliasing not done)
 
 ### src/eval/interpreter.zig:1420: Evaluation arena is never released within an evaluation
 - category A/H; runs per eval (memory growth proportional to total statements executed, not live values); impact high (memory) / medium (CPU: better cache locality, fewer …; risk medium

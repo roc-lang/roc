@@ -782,7 +782,7 @@ erroneous_value_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
 /// iterable). A value can be rejected after the names bound from it were
 /// checked (a literal whose conversion a later relation decides), and
 /// `valueIsErroneous` follows these links to find that out.
-binder_source_exprs: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty,
+binder_source_exprs: collections.DenseMap(CIR.Pattern.Idx, CIR.Expr.Idx),
 /// Scratch for the binders `valueIsErroneous` walks through.
 binder_source_path: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty,
 /// The relation being checked (`problem.RelationOwner`). Every problem
@@ -1135,6 +1135,10 @@ method_mint_names: canonical_names.CanonicalNameStore,
 /// collected on first use.
 method_binding_envs: ?[]const *const ModuleEnv = null,
 scratch_method_mint_evidence: dispatch_evidence.Scratch = .{},
+/// Scratch for `schemeHasEvidenceParams`, which reads its parameters only
+/// to count them and calls nothing that re-enters it.
+scratch_evidence_probe: dispatch_evidence.Scratch = .{},
+scratch_evidence_probe_params: std.ArrayListUnmanaged(dispatch_evidence.EvidenceParam) = .empty,
 scratch_method_mint_params: std.ArrayListUnmanaged(dispatch_evidence.EvidenceParam) = .empty,
 scratch_method_mint_requirements: std.ArrayListUnmanaged(dispatch_evidence.SchemeRequirement) = .empty,
 scratch_scheme_mint_names: std.ArrayListUnmanaged(MethodNameId) = .empty,
@@ -3737,6 +3741,7 @@ fn initAssumePrepared(
         .weak_value_implicit_open_ext_ranges = .empty,
         .late_implicit_open_ext_audits = .empty,
         .erroneous_value_patterns = .empty,
+        .binder_source_exprs = collections.DenseMap(CIR.Pattern.Idx, CIR.Expr.Idx).init(gpa),
         .rejected_value_annotations = .empty,
         .rejected_default_exprs = .empty,
         .accepted_nominal_constructor_backings = .empty,
@@ -3915,7 +3920,7 @@ pub fn deinit(self: *Self) void {
     self.codec_row_demand_tags.deinit(self.gpa);
     self.implicit_parse_requests.deinit(self.gpa);
     self.erroneous_value_patterns.deinit(self.gpa);
-    self.binder_source_exprs.deinit(self.gpa);
+    self.binder_source_exprs.deinit();
     self.binder_source_path.deinit(self.gpa);
     self.problem_owners.deinit(self.gpa);
     self.relation_operands.deinit(self.gpa);
@@ -4118,6 +4123,8 @@ pub fn deinit(self: *Self) void {
     }
     if (self.method_binding_envs) |envs| self.gpa.free(envs);
     self.scratch_method_mint_evidence.deinit(self.gpa);
+    self.scratch_evidence_probe.deinit(self.gpa);
+    self.scratch_evidence_probe_params.deinit(self.gpa);
     self.scratch_method_mint_params.deinit(self.gpa);
     self.scratch_method_mint_requirements.deinit(self.gpa);
     self.scratch_scheme_mint_names.deinit(self.gpa);
@@ -10207,11 +10214,9 @@ fn enqueueLocalSchemeRequirements(self: *Self, root: Var, env: *Env) Allocator.E
 
 fn schemeHasEvidenceParams(self: *Self, root: Var) std.mem.Allocator.Error!bool {
     if (self.schemeHasExplicitRequirements(root)) return true;
-    var scratch: dispatch_evidence.Scratch = .{};
-    defer scratch.deinit(self.gpa);
-    var params = std.ArrayListUnmanaged(dispatch_evidence.EvidenceParam).empty;
-    defer params.deinit(self.gpa);
-    try dispatch_evidence.enumerateEvidenceParams(self.gpa, self.types, root, &scratch, &params);
+    const params = &self.scratch_evidence_probe_params;
+    params.clearRetainingCapacity();
+    try dispatch_evidence.enumerateEvidenceParams(self.gpa, self.types, root, &self.scratch_evidence_probe, params);
     return params.items.len != 0;
 }
 
@@ -34063,7 +34068,7 @@ fn settledCauseSources(self: *const Self, expr_idx: CIR.Expr.Idx, settled: *cons
         break :lookup if (expr == .e_lookup_local) expr.e_lookup_local.pattern_idx else null;
     };
     if (pattern) |binder| {
-        if (self.binder_source_exprs.getPtr(binder)) |source| {
+        if (self.binder_source_exprs.getPtrConst(binder)) |source| {
             return .{ .values = @as(*const [1]CIR.Expr.Idx, source), .is_name = true, .unlinked_pattern = null };
         }
         return .{ .values = &.{}, .is_name = true, .unlinked_pattern = binder };
@@ -34091,7 +34096,7 @@ fn markPatternBindingsErroneous(self: *Self, pattern_idx: CIR.Pattern.Idx) Alloc
 /// unannotated assignment's own name, and every name a destructure binds.
 fn recordBinderSources(self: *Self, pattern: CIR.Pattern.Idx, source: CIR.Expr.Idx, annotated: bool) Allocator.Error!void {
     if (self.cir.store.getPattern(pattern) == .assign) {
-        if (!annotated) try self.binder_source_exprs.put(self.gpa, pattern, source);
+        if (!annotated) try self.binder_source_exprs.put(pattern, source);
         return;
     }
     try self.recordPatternBinderSources(pattern, source);
@@ -34105,7 +34110,7 @@ fn recordPatternBinderSources(self: *Self, pattern: CIR.Pattern.Idx, source: CIR
     try self.collectPatternBindings(pattern, &bindings);
     for (bindings.items) |binding| {
         if (self.cir.store.getPattern(binding.pattern_idx) == .var_assign) continue;
-        try self.binder_source_exprs.put(self.gpa, binding.pattern_idx, source);
+        try self.binder_source_exprs.put(binding.pattern_idx, source);
     }
 }
 
@@ -44729,6 +44734,18 @@ fn resumeStaticDispatchDrain(
             drain.index = env.clean_len;
         }
     }
+    // A fresh drain with no relation past its start and nothing held for a
+    // later pass processes nothing: the queue, the clean prefix, and the
+    // settled set are left exactly as they are. Problems recorded so far are
+    // still attributed to the relation the caller is in, as entering the
+    // drain's relation would.
+    if (drain.index == drain.start and drain.stopped_children == null and
+        drain.start >= env.deferred_static_dispatch_constraints.items.items.len and
+        self.scratch_deferred_static_dispatch_constraints.top() == drain.scratch_top)
+    {
+        try self.claimRecordedProblems();
+        return .done;
+    }
     const start = drain.start;
     const scratch_deferred_top = drain.scratch_top;
     errdefer self.abandonStaticDispatchDrain(drain);
@@ -44812,8 +44829,6 @@ fn resumeStaticDispatchDrain(
             },
         }
     }
-    try self.leaveRelation(drain_relation);
-
     try self.leaveRelation(drain_relation);
 
     // Preserve the enclosing drain's prefix, if this is a method-local drain.
