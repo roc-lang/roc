@@ -8331,10 +8331,10 @@ return path constructed.
 The extension is an ordinary flex during the body check, so a closed value
 still CLOSES the row there: a definition returning a value from a closed
 source (an input-position parameter, a nominal field, a hosted result)
-publishes a closed row. Each direct call of such a definition widens its own
+has a closed row in its own type. Each direct call of such a definition widens its own
 copy of the result instead (Row Subsumption), so two identically annotated
 definitions behave the same for a caller that calls them; a definition used
-as a function value keeps its published row.
+as a function value keeps its own result row.
 `test/fx-open/issue_9963_hosted_try_question_mark.roc` carries both halves of
 that witness in one platform module. `Fallible.via_match!` and
 `Fallible.via_question!` are annotated `{} => Try(Str, [HostErr(Str)])`
@@ -8344,7 +8344,7 @@ is never bound, and the function's row stays open. The second forwards the
 hosted error with `?`; the host's row is closed, so unifying it into the
 annotation's extension would bind that extension to `[]` and close the row.
 With the hosted widening exception removed, that forwarding closes the
-definition's published row, and a call of `Fallible.via_question!` widens its
+definition's own result row, and a call of `Fallible.via_question!` widens its
 result at the call (Row Subsumption). The match-reconstructing case keeps its
 open row.
 
@@ -8664,8 +8664,8 @@ while a definition that FORWARDS a value out of a closed source—an
 input-position parameter, a nominal field, a hosted result—binds that
 extension to `[]`. The bodies differ; the signatures do not.
 
-The body still closes the row, so such a definition publishes, and is
-specialized at, the closed row its body produces. The coercion happens at each
+The body still closes the row, so such a definition's own type, which it is
+specialized at, has the closed row its body produces. The coercion happens at each
 call. A direct call whose callee names an annotated function whose body closed
 a result row its annotation implicitly opens
 (`Check.defClosedAnnotatedResultRow`; imported through
@@ -8682,7 +8682,7 @@ function's own definition relates to the type the body is still producing and
 is not widened.
 
 A definition used as a function value rather than called directly keeps its
-published row: widening it would need an adapter closure around the function,
+own result row: widening it would need an adapter closure around the function,
 which is not built. An author who wants a genuinely closed output row would
 write the closure explicitly, in the shape of `[MyErr, ..[]]`; that spelling
 does not exist and is not designed.
@@ -8976,7 +8976,7 @@ calls. A hosted result keeps its declared closed error row, and `?` relates
 that row to the enclosing return through ordinary return-row composition and
 unification. Matching rows can still relate; a wider incompatible row is a
 type error. Forwarding into an implicitly open annotation closes that
-definition's published row, just as forwarding any other closed value does,
+definition's own result row, just as forwarding any other closed value does,
 and a call of the definition widens its result (Row Subsumption).
 
 This removes the use-site redirect and its subset/payload probes. There is no

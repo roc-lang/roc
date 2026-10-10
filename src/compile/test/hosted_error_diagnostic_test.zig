@@ -1,4 +1,10 @@
 //! Host provenance supplements, rather than replaces, closed-row diagnostics.
+//!
+//! A wrapper defined as a function whose body forwards a host's closed error
+//! row closes the open row its annotation states, and a caller's call widens
+//! that row (design.md "Row Subsumption"), so such wrappers are accepted. An
+//! alias of a hosted function is not a function definition and keeps the
+//! host's fixed row, so its mismatch still names the host function.
 const std = @import("std");
 const roc_target = @import("roc_target");
 const compile_build = @import("../compile_build.zig");
@@ -10,51 +16,44 @@ const DiagnosticTestError = compile_build.InitError ||
     std.Io.Writer.Error ||
     error{ TestUnexpectedResult, TestExpectedEqual };
 
-test "a wrapper forwarding a host error is widened at its caller's call" {
-    // The wrapper declares the host's own row, so its body closes the row its
-    // annotation leaves open; the app's call uses the result at a wider union
-    // (design.md "Row Subsumption").
-    try checkWrapperDiagnostic("line! = |s| Host.stdout_line!(s)", "[StdoutErr(Str)]", .accepted);
-}
-
 test "host error diagnostic follows imported function aliases" {
     try checkHostErrorDiagnostic("line! = Host.stdout_line!", .hosted);
 }
 
-test "host error diagnostic follows unchanged function results" {
-    try checkHostErrorDiagnostic("line! = |s| Host.stdout_line!(s)", .hosted);
+test "a wrapper returning a host result unchanged is widened at its caller's call" {
+    try checkHostErrorDiagnostic("line! = |s| Host.stdout_line!(s)", .accepted);
 }
 
-test "host error diagnostic follows a question forwarding wrapper" {
+test "a question forwarding wrapper is widened at its caller's call" {
     try checkHostErrorDiagnostic(
         \\line! = |s| {
         \\    Stdout.alias!(s)?
         \\    Ok({})
         \\}
         \\alias! = Host.stdout_line!
-    , .hosted);
+    , .accepted);
 }
 
-test "host error diagnostic rejects implicit widening through a direct hosted question" {
+test "a wrapper forwarding a direct hosted question is widened at its caller's call" {
     try checkHostErrorDiagnostic(
         \\line! = |s| {
         \\    Host.stdout_line!(s)?
         \\    Ok({})
         \\}
-    , .hosted);
+    , .accepted);
 }
 
-test "host error diagnostic follows a saved result in an imported question wrapper" {
+test "a wrapper forwarding a saved host result is widened at its caller's call" {
     try checkHostErrorDiagnostic(
         \\line! = |s| {
         \\    result = Host.stdout_line!(s)
         \\    result?
         \\    Ok({})
         \\}
-    , .hosted);
+    , .accepted);
 }
 
-test "host error diagnostic does not blame a saved unrelated host result" {
+test "a wrapper forwarding an unrelated closed result is widened at its caller's call" {
     try checkHostErrorDiagnostic(
         \\line! = |s| {
         \\    hosted_result = Host.stdout_line!(s)
@@ -65,7 +64,7 @@ test "host error diagnostic does not blame a saved unrelated host result" {
         \\    result?
         \\    Ok({})
         \\}
-    , .ordinary);
+    , .accepted);
 }
 
 test "host error diagnostic stops at explicit reconstruction" {
@@ -77,7 +76,7 @@ test "host error diagnostic stops at explicit reconstruction" {
     , .accepted);
 }
 
-test "host error diagnostic does not blame an unrelated host call" {
+test "a wrapper returning an unrelated closed result is widened at its caller's call" {
     try checkHostErrorDiagnostic(
         \\line! = |s| {
         \\    close : Try({}, [StdoutErr(Str)]) -> Try({}, [StdoutErr(Str)])
@@ -85,19 +84,12 @@ test "host error diagnostic does not blame an unrelated host call" {
         \\    _ = Host.stdout_line!(s)
         \\    close(Err(StdoutErr("local")))
         \\}
-    , .ordinary);
+    , .accepted);
 }
 
 const Expected = enum { hosted, ordinary, accepted };
 
-/// Each wrapper declares an error row wider than the host's, so the wrapper's
-/// own body forwards the host's closed row into it: a direct forward is never
-/// widened, and its mismatch is what these diagnostics describe.
 fn checkHostErrorDiagnostic(wrapper: []const u8, expected: Expected) DiagnosticTestError!void {
-    return checkWrapperDiagnostic(wrapper, "[StdoutErr(Str), Closed]", expected);
-}
-
-fn checkWrapperDiagnostic(wrapper: []const u8, wrapper_row: []const u8, expected: Expected) DiagnosticTestError!void {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -107,7 +99,7 @@ fn checkWrapperDiagnostic(wrapper: []const u8, wrapper_row: []const u8, expected
             "app.roc",
             \\app [main!] { pf: platform "./platform.roc" }
             \\import pf.Stdout
-            \\main! : List(Str) => Try({}, [Closed, Exit(I32), StdoutErr(Str)])
+            \\main! : List(Str) => Try({}, [Exit(I32), StdoutErr(Str)])
             \\main! = |_args| {
             \\    Stdout.line!("Hello,World!")?
             \\    Ok({})
@@ -141,10 +133,10 @@ fn checkWrapperDiagnostic(wrapper: []const u8, wrapper_row: []const u8, expected
     const stdout_source = try std.fmt.allocPrint(gpa,
         \\import Host
         \\Stdout := [].{{
-        \\    line! : Str => Try({{}}, {s})
+        \\    line! : Str => Try({{}}, [StdoutErr(Str)])
         \\    {s}
         \\}}
-    , .{ wrapper_row, wrapper });
+    , .{wrapper});
     defer gpa.free(stdout_source);
     try tmp.dir.writeFile(io, .{ .sub_path = "Stdout.roc", .data = stdout_source });
 
