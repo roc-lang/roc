@@ -1164,20 +1164,33 @@ pub fn mergeIdenticalNodes(allocator: Allocator, exports: []StaticDataExport) Al
     for (canonical, 0..) |*kept, index| kept.* = @intCast(index);
     const hashes = try allocator.alloc(u64, exports.len);
     defer allocator.free(hashes);
-    for (exports, hashes) |item, *hash| hash.* = nodeContentHash(item);
+    // Each pass compares a node only with the earlier kept nodes that share
+    // its hash, so a pass costs time proportional to the image rather than
+    // to the square of its node count.
+    var buckets: std.AutoHashMapUnmanaged(u64, std.ArrayList(u32)) = .empty;
+    defer {
+        var values = buckets.valueIterator();
+        while (values.next()) |bucket| bucket.deinit(allocator);
+        buckets.deinit(allocator);
+    }
 
     var merged_any = true;
     while (merged_any) {
         merged_any = false;
+        for (exports, hashes) |item, *hash| hash.* = nodeContentHash(item);
+        var values = buckets.valueIterator();
+        while (values.next()) |bucket| bucket.clearRetainingCapacity();
         for (exports, 0..) |item, index| {
             if (canonical[index] != index or !isMergeableNode(item)) continue;
-            for (exports[0..index], 0..) |other, candidate| {
-                if (canonical[candidate] != candidate or !isMergeableNode(other)) continue;
-                if (hashes[index] != hashes[candidate] or !nodesIdentical(item, other, canonical)) continue;
-                canonical[index] = @intCast(candidate);
+            const bucket = try buckets.getOrPut(allocator, hashes[index]);
+            if (!bucket.found_existing) bucket.value_ptr.* = .empty;
+            const merged_into = for (bucket.value_ptr.items) |candidate| {
+                if (nodesIdentical(item, exports[candidate], canonical)) break candidate;
+            } else null;
+            if (merged_into) |candidate| {
+                canonical[index] = candidate;
                 merged_any = true;
-                break;
-            }
+            } else try bucket.value_ptr.append(allocator, @intCast(index));
         }
         if (!merged_any) break;
         for (exports) |*item| for (@constCast(item.relocations)) |*relocation| {
@@ -1233,8 +1246,9 @@ fn resolveCanonical(canonical: []const u32, index: u32) u32 {
     return current;
 }
 
-/// A hash of everything `nodesIdentical` compares except relocation
-/// targets, which change as nodes merge.
+/// A hash of what `nodesIdentical` compares, relocation targets included as
+/// the symbols they name; a merge pass recomputes it after relocations are
+/// redirected to the nodes they resolve to.
 fn nodeContentHash(item: StaticDataExport) u64 {
     var hasher = std.hash.Wyhash.init(0);
     hasher.update(item.bytes);
@@ -1247,6 +1261,13 @@ fn nodeContentHash(item: StaticDataExport) u64 {
     for (item.relocations) |relocation| {
         hasher.update(std.mem.asBytes(&relocation.offset));
         hasher.update(std.mem.asBytes(&relocation.addend));
+        switch (relocation.target) {
+            .named => hasher.update(relocation.target_symbol_name),
+            .data_symbol => |symbol| {
+                const index: u32 = @backingInt(symbol);
+                hasher.update(std.mem.asBytes(&index));
+            },
+        }
     }
     return hasher.final();
 }
@@ -1330,6 +1351,38 @@ test "frozen nodes with different contents or different targets stay separate" {
     try std.testing.expectEqual(@as(usize, 7), merged.len);
     try std.testing.expectEqual(@as(u32, 4), @backingInt(merged[2].relocations[0].target.data_symbol));
     try std.testing.expectEqual(@as(u32, 5), @backingInt(merged[3].relocations[0].target.data_symbol));
+}
+
+test "merging a large image keeps distinct nodes and folds every copy into its first" {
+    // Each pass compares a node only with earlier nodes of its hash; a pass
+    // comparing every pair of nodes is quadratic, which at this size runs
+    // for minutes.
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const distinct = 100_000;
+    const nodes = try arena.allocator().alloc(StaticDataExport, 2 * distinct + 1);
+    // A root whose pointers name the copies, then distinct nodes, then one
+    // copy of each distinct node.
+    const root_relocations = try arena.allocator().alloc(StaticDataRelocation, distinct);
+    for (root_relocations, 0..) |*relocation, index| {
+        relocation.* = .{ .offset = index * 8, .target_symbol_name = "copy", .target = .{ .data_symbol = @fromBackingInt(@intCast(1 + distinct + index)) } };
+    }
+    nodes[0] = .{ .symbol_name = "root", .bytes = try arena.allocator().alloc(u8, distinct * 8), .alignment = 8, .is_exported = false, .relocations = root_relocations };
+    @memset(@constCast(nodes[0].bytes), 0);
+    for (0..distinct) |index| {
+        const bytes = try std.fmt.allocPrint(arena.allocator(), "{d}", .{index});
+        nodes[1 + index] = .{ .symbol_name = try std.fmt.allocPrint(arena.allocator(), "node_{d}", .{index}), .bytes = bytes, .alignment = 1, .is_exported = false };
+        nodes[1 + distinct + index] = .{ .symbol_name = try std.fmt.allocPrint(arena.allocator(), "copy_{d}", .{index}), .bytes = bytes, .alignment = 1, .is_exported = false };
+    }
+    const owned = try cloneStaticData(allocator, nodes);
+    owned[0].value_id = @fromBackingInt(0);
+    const merged = try mergeIdenticalNodes(allocator, owned);
+    defer deinitStaticData(allocator, merged);
+    try std.testing.expectEqual(@as(usize, 1 + distinct), merged.len);
+    for (merged[0].relocations, 0..) |relocation, index| {
+        try std.testing.expectEqual(@as(u32, @intCast(1 + index)), @backingInt(relocation.target.data_symbol));
+    }
 }
 
 const StaticDataBuilder = struct {

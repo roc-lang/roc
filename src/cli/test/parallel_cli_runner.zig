@@ -1973,6 +1973,16 @@ const non_exhaustive_destructure_needles = [_]OutputNeedle{
     .{ .stream = .stderr, .text = "[]" },
 };
 
+const constant_aggregate_conformance_stdout =
+    "scalars: 7000 21000\n" ++
+    "nested: 300 78000\n" ++
+    "runtime: 4000 20000\n" ++
+    "words: 3000 111000 2\n" ++
+    "table: [\"alpha is longer than a small string\", \"beta is longer than a small string\", \"gamma\", \"delta is longer than a small string too\"]\n" ++
+    "replaced: [\"a replacement string longer than small\", \"beta is longer than a small string\", \"gamma\"]\n" ++
+    "original: [\"alpha is longer than a small string\", \"beta is longer than a small string\", \"gamma\"]\n" ++
+    "records: 500 23500\n";
+
 const warning_needles = [_]OutputNeedle{
     .{ .stream = .stderr, .text = "unused variable" },
     .{ .stream = .stderr, .text = "warning" },
@@ -2502,6 +2512,10 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11784: Iter.sum and Iter.map over a range run within the perf guard", .backend = .speed, .timeout_ms = 10_000, .body = .{ .command = .{ .args = &.{ "run", "--opt=speed", "--no-cache" }, .roc_file = "test/fx-open/issue_11784_range_iter_sum_perf.roc", .exit = .success, .stdout_exact = "all sums correct\n" } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10529: open Try ? chain builds in dev within the perf guard", .backend = .dev, .timeout_ms = 30_000, .body = .{ .command = .{ .args = &.{ "build", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/Issue10529OpenTryChainBuildTime.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "segmentation fault" }, .{ .stream = .stderr, .text = "reached unreachable code" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11072: hooks chain interns its interchangeable closure layouts once and builds in dev within the perf guard", .backend = .dev, .timeout_ms = 60_000, .body = .{ .command = .{ .args = &.{ "build", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/Issue11072HooksChainBuildTime.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "segmentation fault" }, .{ .stream = .stderr, .text = "reached unreachable code" } } } } },
+    // Freezing, node merging, and runtime re-encoding of a constant list must
+    // not scan every relocation or node per pointer: with a million
+    // heap-string pointers such a scan runs for hours.
+    .{ .id = 0, .suite = .subcommands, .name = "large constant string lists build in dev within the perf guard", .backend = .dev, .timeout_ms = 120_000, .body = .{ .command = .{ .args = &.{ "build", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/LargeConstantStringListsBuildTime.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "reached unreachable code" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "spec-constr re-cloning keeps the inline scope chain bounded", .backend = .speed, .timeout_ms = 60_000, .body = .{ .command = .{ .args = &.{ "build", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/SpecConstrInlineScopeRebaseGrowth.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "overflowed its stack memory" }, .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "segmentation fault" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11133: LLVM Optimize + Emit stays proportional to procedure count", .backend = .speed, .timeout_ms = 600_000, .scheduling = .exclusive, .body = .{ .custom = .issue_11133_llvm_emit_scaling } },
     // Repro for https://github.com/roc-lang/roc/issues/11783: a Stream pipeline
@@ -3167,6 +3181,11 @@ const subcommand_cases = [_]CliCase{
     // host to link); execution coverage on the fifth executor awaits a wasm
     // run harness.
     .{ .id = 0, .suite = .subcommands, .name = "exact numeral conformance program builds for wasm32", .backend = .size, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=size", "--no-cache" }, .roc_file = "test/cli/exact_numeral_conformance.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic:" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "constant aggregate cross-engine conformance (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/constant_aggregate_conformance.roc", .exit = .success, .stdout_exact = constant_aggregate_conformance_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "constant aggregate cross-engine conformance (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/constant_aggregate_conformance.roc", .exit = .success, .stdout_exact = constant_aggregate_conformance_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "constant aggregate cross-engine conformance (llvm speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/cli/constant_aggregate_conformance.roc", .exit = .success, .stdout_exact = constant_aggregate_conformance_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "constant aggregate cross-engine conformance (llvm size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--no-cache" }, .roc_file = "test/cli/constant_aggregate_conformance.roc", .exit = .success, .stdout_exact = constant_aggregate_conformance_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "constant aggregate conformance program builds for wasm32", .backend = .size, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=size", "--no-cache" }, .roc_file = "test/cli/constant_aggregate_conformance.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic:" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc returns exit code 2 for warnings (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/fx/run_warning_only.roc", .exit = .{ .code = 2 }, .contains_any = &.{.{ .needles = &warning_needles }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc --opt=dev returns exit code 2 for warnings", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/fx/run_warning_only.roc", .exit = .{ .code = 2 }, .contains_any = &.{.{ .needles = &warning_needles }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc rejects the reserved 0.0.0 platform URL", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/reserved_version_platform.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "uses the reserved version 0.0.0" }} } } },

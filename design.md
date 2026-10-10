@@ -1580,7 +1580,13 @@ contents, and both the evaluation's image and the runtime program's
 transcoded image merge such nodes to a fixed point (`mergeIdenticalNodes`),
 so a program's static data does not depend on whether its values were
 completed by this compilation or restored from the constant store, which
-already names one value once. A build that restores its compile-time values from a checked
+already names one value once. Each merge pass compares a node only with the
+earlier kept nodes of the same content hash, relocation targets included,
+and transcoding resolves a source pointer through a per-symbol index of its
+relocations, as linking the evaluation image resolves a data name through an
+index of its items; a frozen list of a million string pointers therefore
+costs work proportional to the image at every one of these steps, never a
+scan per pointer. A build that restores its compile-time values from a checked
 module's const store rather than from a completed host program, as every
 build after the first does, reaches the same constructions: the const
 store keeps an empty list's evaluated capacity and restores it as the
