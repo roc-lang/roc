@@ -716,6 +716,9 @@ coercion_outside_stack: std.ArrayListUnmanaged(Var) = .empty,
 coercion_outside_seen: std.AutoHashMapUnmanaged(Var, void) = .empty,
 /// Scratch for `widenedValueUseVar`: each reached variable's copy.
 widened_use_copies: std.AutoHashMapUnmanaged(Var, Var) = .empty,
+/// Whether the copy in progress re-opens only rows whose tail is closed
+/// (`widenedFunctionResultUseVar`), leaving every open row shared.
+widen_closed_rows_only: bool = false,
 /// Scratch for `widenedValueUseVar`: one row's tags, gathered along its
 /// extension chain.
 widened_use_tags: std.ArrayListUnmanaged(types_mod.Tag) = .empty,
@@ -20174,7 +20177,12 @@ fn widenedRowCopy(self: *Self, row: Var, env: *Env, region: Region) std.mem.Allo
                 .empty_tag_union => break,
                 .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return self.types.resolveVar(row).var_,
             },
-            .flex => break,
+            .flex => {
+                // A function result row that is still open is quantified with
+                // the rest of the function's scheme; it stays linked to it.
+                if (self.widen_closed_rows_only) return self.types.resolveVar(row).var_;
+                break;
+            },
             .rigid, .err, .field_presence => return self.types.resolveVar(row).var_,
         }
     }
@@ -20196,6 +20204,110 @@ fn widenedRowCopy(self: *Self, row: Var, env: *Env, region: Region) std.mem.Allo
     const copy = try self.freshFromContent(try self.types.mkTagUnion(tags, ext), env, region);
     try self.widened_use_rows.append(self.gpa, .{ .value_row = self.types.resolveVar(row).var_, .use_row = copy });
     return copy;
+}
+
+/// The type a use of an annotated function relates to when the function's
+/// body closed a result row its annotation leaves open (design.md "Deferred:
+/// Row Subsumption"): the instantiated function type with each such closed
+/// row in its result re-opened, its arguments and every still-open row shared.
+/// A forwarder's argument and result rows can be one class, so only the
+/// result's spine down to a re-opened row is copied, and the argument stays
+/// closed. Null when nothing in the result re-opens.
+fn widenedFunctionResultUseVar(self: *Self, fn_var: Var, env: *Env, region: Region) std.mem.Allocator.Error!?Var {
+    const resolved = self.types.resolveVar(fn_var);
+    const flat = switch (resolved.desc.content) {
+        .structure => |flat| flat,
+        .alias, .flex, .rigid, .err, .field_presence => return null,
+    };
+    const func = switch (flat) {
+        .fn_pure, .fn_effectful, .fn_unbound => |func| func,
+        .tag_union, .record, .tuple, .nominal_type, .empty_record, .empty_tag_union => return null,
+    };
+    try self.computeCoercionReach(func.ret);
+    self.widened_use_copies.clearRetainingCapacity();
+    self.widen_closed_rows_only = true;
+    defer self.widen_closed_rows_only = false;
+    const ret_copy = try self.widenedReachCopy(func.ret, env, region);
+    if (ret_copy == self.types.resolveVar(func.ret).var_) return null;
+    var widened = func;
+    widened.ret = ret_copy;
+    const widened_flat: FlatType = switch (flat) {
+        .fn_pure => .{ .fn_pure = widened },
+        .fn_effectful => .{ .fn_effectful = widened },
+        .fn_unbound => .{ .fn_unbound = widened },
+        .tag_union, .record, .tuple, .nominal_type, .empty_record, .empty_tag_union => unreachable,
+    };
+    return try self.freshFromContent(.{ .structure = widened_flat }, env, region);
+}
+
+/// The type the immediate callee of a call relates to when it names an
+/// annotated function whose body closed a result row its annotation leaves open
+/// (design.md "Deferred: Row Subsumption"): the function's type with that row
+/// re-opened in the result (`widenedFunctionResultUseVar`). Checking records
+/// the function's own type and result for the call (`ModuleEnv.RowCoercedCallee`),
+/// which checked-body construction lowers at that type and widens by a row
+/// coercion. A use that is not a call's callee keeps the function's own type.
+fn widenedCalleeUseVar(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    processing_def: DefProcessed,
+    fn_var: Var,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!?Var {
+    if (!self.instantiation_is_immediate_callee) return null;
+    if (processing_def.status != .processed) return null;
+    if (!try self.defClosedAnnotatedResultRow(processing_def.def_idx)) return null;
+    const widened = try self.widenedFunctionResultUseVar(fn_var, env, region) orelse return null;
+    const ret = switch (self.types.resolveVar(fn_var).desc.content) {
+        .structure => |flat| switch (flat) {
+            .fn_pure, .fn_effectful, .fn_unbound => |func| func.ret,
+            .tag_union, .record, .tuple, .nominal_type, .empty_record, .empty_tag_union => unreachable,
+        },
+        .alias, .flex, .rigid, .err, .field_presence => unreachable,
+    };
+    try self.cir.recordRowCoercedCallee(ModuleEnv.nodeIdxFrom(expr_idx), fn_var, ret);
+    return widened;
+}
+
+/// Whether `var_` resolves to a function type.
+fn isFunctionTypeVar(self: *const Self, var_: Var) bool {
+    return switch (self.types.resolveVar(var_).desc.content) {
+        .structure => |flat| switch (flat) {
+            .fn_pure, .fn_effectful, .fn_unbound => true,
+            .tag_union, .record, .tuple, .nominal_type, .empty_record, .empty_tag_union => false,
+        },
+        .alias, .flex, .rigid, .err, .field_presence => false,
+    };
+}
+
+/// Whether an annotated function definition's body closed a row its
+/// annotation implicitly opens in the function's result: some extension the
+/// annotation's generation minted is now the empty row and sits in the
+/// result within the row coercion's reach. Such a definition publishes the
+/// closed row, and each use re-opens its own copy
+/// (`widenedFunctionResultUseVar`).
+fn defClosedAnnotatedResultRow(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!bool {
+    const def = self.cir.store.getDef(def_idx);
+    const annotation_idx = self.appliedAnnotation(def.pattern, def.annotation) orelse return false;
+    if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr))) return false;
+    const range = self.annotation_implicit_open_exts.get(annotation_idx) orelse return false;
+    if (range.len == 0) return false;
+    const fn_resolved = self.types.resolveVar(ModuleEnv.varFrom(def.pattern));
+    const ret = switch (fn_resolved.desc.content) {
+        .structure => |flat| switch (flat) {
+            .fn_pure, .fn_effectful, .fn_unbound => |func| func.ret,
+            .tag_union, .record, .tuple, .nominal_type, .empty_record, .empty_tag_union => return false,
+        },
+        .alias, .flex, .rigid, .err, .field_presence => return false,
+    };
+    try self.computeCoercionReach(ret);
+    for (self.implicit_open_exts.items[range.start..][0..range.len]) |entry| {
+        const ext = self.types.resolveVar(entry.var_);
+        if (ext.desc.content != .structure or ext.desc.content.structure != .empty_tag_union) continue;
+        if (self.coercionMayWiden(ext.var_)) return true;
+    }
+    return false;
 }
 
 /// One row a use's widening copy re-opened (`widened_use_rows`).
@@ -26171,7 +26283,14 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
             const resolved_pat = self.types.resolveVar(pat_var);
             if (resolved_pat.desc.rank == Rank.generalized or self.isBindingSchemeVar(pat_var)) {
                 const instantiated = try self.instantiateBindingVar(pat_var, env, .use_last_var, .{ .value_use = expr_idx });
-                _ = try self.unify(expr_var, instantiated, env);
+                // A use of an annotated function whose body closed a result
+                // row its annotation leaves open re-opens that row in its own
+                // copy (design.md "Deferred: Row Subsumption").
+                const widened_fn = if (mb_processing_def) |processing_def|
+                    try self.widenedCalleeUseVar(expr_idx, processing_def, instantiated, env, expr_region)
+                else
+                    null;
+                _ = try self.unify(expr_var, widened_fn orelse instantiated, env);
             } else {
                 // A fully checked top-level definition whose type is ground
                 // is copied at each use. Sharing its var would merge every
@@ -26191,11 +26310,27 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                 // copy of the value's type, and reads the value through a
                 // row coercion (design.md "Value Rows: Local Values Share,
                 // Top-Level Values Widen At Each Use").
-                const widened_use_var = if (mb_processing_def) |processing_def|
-                    if (processing_def.status == .processed) try self.widenedValueUseVar(use_var, env, expr_region) else null
+                const processed_def: ?CIR.Def.Idx = if (mb_processing_def) |processing_def|
+                    if (processing_def.status == .processed) processing_def.def_idx else null
                 else
                     null;
-                if (widened_use_var) |widened| {
+                // An annotated function whose body closed a result row its
+                // annotation leaves open (design.md "Deferred: Row
+                // Subsumption"): the use re-opens that row in its own copy,
+                // and lowering adapts the call's result.
+                const widened_fn_var = if (mb_processing_def) |processing_def|
+                    try self.widenedCalleeUseVar(expr_idx, processing_def, use_var, env, expr_region)
+                else
+                    null;
+                const widened_use_var = if (widened_fn_var != null)
+                    null
+                else if (processed_def != null and !self.isFunctionTypeVar(use_var))
+                    try self.widenedValueUseVar(use_var, env, expr_region)
+                else
+                    null;
+                if (widened_fn_var) |widened| {
+                    _ = try self.unify(expr_var, widened, env);
+                } else if (widened_use_var) |widened| {
                     _ = try self.unify(expr_var, widened, env);
                     try self.cir.recordRowCoercedUse(ModuleEnv.nodeIdxFrom(expr_idx), pat_var);
                 } else {
