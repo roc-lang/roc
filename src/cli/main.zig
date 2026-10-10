@@ -16779,6 +16779,9 @@ fn recordLoweringCounters(
     comptime prefix: []const u8,
 ) void {
     if (strategy == .lss) {
+        if (!std.meta.eql(snapshot.demand, lir.CheckedPipeline.DemandMetrics{})) {
+            reporter.recordCounters(prefix ++ "Demand-driven specialization", &demandCounters(snapshot.demand));
+        }
         reporter.recordCounters(prefix ++ "Monotype specialization", &monotypeSpecializationCounters(snapshot.monotype_diagnostics));
         reporter.recordCounters(prefix ++ "Monotype type graph", &monotypeGraphCounters(snapshot.monotype_diagnostics));
         reporter.recordCounters(prefix ++ "Monotype body + dispatch", &monotypeBodyCounters(snapshot.monotype_diagnostics));
@@ -16852,6 +16855,23 @@ fn recordDevTestExecution(reporter: *progress.Reporter, timing: *const eval.test
         .{},
         &devTestExecutionBreakdown(snapshot),
     );
+}
+
+fn demandCounters(demand: lir.CheckedPipeline.DemandMetrics) [12]progress.Counter {
+    return .{
+        .{ .name = "Program roots", .count = demand.program_roots },
+        .{ .name = "Discovery roots", .count = demand.discovery_roots },
+        .{ .name = "Checked modules", .count = demand.modules },
+        .{ .name = "Literal source modules", .count = demand.source_modules },
+        .{ .name = "Literal reaching modules", .count = demand.reaching_modules },
+        .{ .name = "Custom literal types", .count = demand.custom_literal_types },
+        .{ .name = "Discovery roots lowered", .count = demand.monotype.discovery_roots },
+        .{ .name = "Discovery bodies", .count = demand.monotype.discovery_bodies },
+        .{ .name = "Parked requests", .count = demand.monotype.parked },
+        .{ .name = "Unparked requests", .count = demand.monotype.unparked },
+        .{ .name = "Upgraded bodies", .count = demand.monotype.upgraded },
+        .{ .name = "Never-run stubs", .count = demand.monotype.stubs },
+    };
 }
 
 fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [29]progress.Counter {
