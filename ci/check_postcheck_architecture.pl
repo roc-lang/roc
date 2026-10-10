@@ -648,7 +648,7 @@ sub check_monotype_same_type_assertions_debug_only {
         next unless $code =~ /\bif\s*\(!(?:try\s+)?[A-Za-z0-9_.()]*\b(?:sameType|typeEql)\(/;
         next if $code =~ /\bmode\s*==\s*\.debug\s+and\b/;
         my $next = $index < $#lines ? zig_code_line($lines[$index + 1]) : '';
-        if ($code =~ /\bCommon\.invariant\b/ || ($code =~ /\{\s*$/ && $next =~ /^\s*Common\.invariant\b/)) {
+        if ($code =~ /\bCommon\.(?:invariant|compilerBug)\b/ || ($code =~ /\{\s*$/ && $next =~ /^\s*Common\.(?:invariant|compilerBug)\b/)) {
             push @violations, "$rel:" . ($index + 1) . ": release-computed-type-equality-invariant: $lines[$index]";
         }
     }

@@ -45338,13 +45338,8 @@ const BodyContext = struct {
             );
         };
         const parsed_ty = try self.exprTypeCell(parsed).seal(self.graph, sealer);
-        if (!try self.typeStore().typeEql(self.nameStore(), parsed_ty, ret_ty)) {
-            // compilerBug, not invariant: the next statement retypes this
-            // expression to the sealed return cell. `invariant` is
-            // `unreachable` outside Debug, so a real divergence would
-            // silently reinterpret the emitted body's layout in a release
-            // build instead of reporting.
-            Common.compilerBug("stored parser runtime body differed from its sealed return type");
+        if (@import("builtin").mode == .debug and !try self.typeStore().typeEql(self.nameStore(), parsed_ty, ret_ty)) {
+            Common.invariant("stored parser runtime body differed from its sealed return type");
         }
         self.draft.exprs.items[@backingInt(parsed)].ty = ret_cell;
 
@@ -45478,13 +45473,8 @@ const BodyContext = struct {
             );
         };
         const encoded_ty = try self.exprTypeCell(encoded).seal(self.graph, sealer);
-        if (!try self.typeStore().typeEql(self.nameStore(), encoded_ty, ret_ty)) {
-            // compilerBug, not invariant: the next statement retypes this
-            // expression to the sealed return cell. `invariant` is
-            // `unreachable` outside Debug, so a real divergence would
-            // silently reinterpret the emitted body's layout in a release
-            // build instead of reporting.
-            Common.compilerBug("stored encoder_for runtime body differed from its sealed return type");
+        if (@import("builtin").mode == .debug and !try self.typeStore().typeEql(self.nameStore(), encoded_ty, ret_ty)) {
+            Common.invariant("stored encoder_for runtime body differed from its sealed return type");
         }
         self.draft.exprs.items[@backingInt(encoded)].ty = ret_cell;
 
