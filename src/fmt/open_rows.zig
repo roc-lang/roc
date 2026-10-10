@@ -14,9 +14,8 @@
 //! the application's polarity composed with the positions of the declaration
 //! formal it is substituted for; a where-method signature opens only the rows
 //! the result-row widening adapter can re-tag. Which annotations qualify at all
-//! mirrors where `Check.checkDef` and the local statement check report a
-//! redundant `..` (every top-level definition, and a local function), together
-//! with `Check.collectHostBoundaryAnnotations`.
+//! mirrors `Check.bindingRhsGeneralizes` together with
+//! `Check.collectHostBoundaryAnnotations`.
 //!
 //! The checker reads resolved names; the parse AST has only spellings. So every
 //! application root is checked against every declaration its spelling could
@@ -141,7 +140,7 @@ pub const OpenRows = struct {
             const is_type_decl = tag == .type_decl or tag == .type_decl_nominal or
                 tag == .type_decl_opaque or tag == .type_decl_where_alias;
             if (is_type_decl) {
-                const stmt_idx: AST.Statement.Idx = @enumFromInt(node_index);
+                const stmt_idx: AST.Statement.Idx = @fromBackingInt(@intCast(node_index));
                 const decl = ast.store.getStatement(stmt_idx).type_decl;
                 const header = ast.store.getTypeHeader(decl.header) catch continue;
                 const name = self.tokenName(header.name);
@@ -153,7 +152,7 @@ pub const OpenRows = struct {
                 if (!entry.found_existing) entry.value_ptr.* = .empty;
                 try entry.value_ptr.append(gpa, stmt_idx);
             } else if (tag == .import) {
-                const stmt_idx: AST.Statement.Idx = @enumFromInt(node_index);
+                const stmt_idx: AST.Statement.Idx = @fromBackingInt(@intCast(node_index));
                 const import = ast.store.getStatement(stmt_idx).import;
                 try self.addUpperNamesIn(import.region);
                 for (ast.store.exposedItemSlice(import.exposes)) |item_idx| {
@@ -206,7 +205,7 @@ pub const OpenRows = struct {
 
     /// Whether the anonymous `..` of this tag union is redundant.
     pub fn isRedundant(self: *const OpenRows, anno_idx: AST.TypeAnno.Idx) bool {
-        return self.redundant.isSet(@intFromEnum(anno_idx));
+        return self.redundant.isSet(@backingInt(anno_idx));
     }
 
     /// Mark the redundant `..` in every type annotation statement of one
@@ -224,12 +223,10 @@ pub const OpenRows = struct {
     }
 
     /// Whether the definition this annotation belongs to generalizes whatever
-    /// its annotation writes (`Check.checkDef` and the local statement check
-    /// warn on exactly these) and is not a host boundary
-    /// (`Check.collectHostBoundaryAnnotations`). Every top-level or associated
-    /// definition does: a value's implicitly opened rows generalize exactly
-    /// like written ones. A block's value binding does not: on a local value,
-    /// `..` is the opt-in to a quantified row.
+    /// its annotation writes (`Check.bindingRhsGeneralizes`) and
+    /// is not a host boundary (`Check.collectHostBoundaryAnnotations`). A
+    /// value binding does not: on a weak value the checker rejects `..`
+    /// rather than reporting it redundant.
     fn annotationGeneralizesRegardless(self: *OpenRows, name_tok: Token.Idx, next: ?AST.Statement.Idx, scope: StatementScope) Allocator.Error!bool {
         const name = self.tokenName(name_tok);
         // A platform's provided definitions are host-boundary annotations.
@@ -241,24 +238,20 @@ pub const OpenRows = struct {
                 const decl = next_stmt.decl;
                 const pattern = self.ast.store.getPattern(decl.pattern);
                 if (pattern == .ident and std.mem.eql(u8, self.tokenName(pattern.ident.ident_tok), name)) {
-                    return switch (scope) {
-                        // Every definition at these scopes generalizes.
-                        .file, .associated => true,
-                        // A local function definition. Every other local
-                        // body, including a lookup whose canonical form this
-                        // AST cannot tell, keeps its `..`.
-                        .block => self.ast.store.getExpr(decl.body) == .lambda,
-                    };
+                    // A function definition. Every other body, including a
+                    // lookup whose canonical form this AST cannot tell, keeps
+                    // its `..`.
+                    return self.ast.store.getExpr(decl.body) == .lambda;
                 }
                 // At the top level, Can attaches the annotation to the def a
-                // destructured literal splits off for that name: a top-level
-                // definition, which generalizes. Associated and block scopes
+                // destructured literal splits off for that name, which may be
+                // a value, so the `..` stays. Associated and block scopes
                 // attach only to a same-named ident; any other declaration
                 // leaves the annotation annotation-only.
                 if (scope == .file and self.destructuredLiteralShapesMatch(decl.pattern, decl.body) and
                     try self.destructuredLiteralPatternBindsName(decl.pattern, name))
                 {
-                    return true;
+                    return false;
                 }
             }
         }
@@ -496,7 +489,7 @@ pub const OpenRows = struct {
                 }
                 switch (tag_union.ext) {
                     .open => if (tags.len > 0 and polarity == .pos and outputOpens(ctx)) {
-                        self.redundant.set(@intFromEnum(anno_idx));
+                        self.redundant.set(@backingInt(anno_idx));
                     },
                     .named => |named| try pending.append(self.gpa, .{ .anno = named.anno, .ctx = ctx.withReach(.nested), .polarity = polarity }),
                     .closed => {},
@@ -877,7 +870,7 @@ const ReachAnalysis = struct {
     invalid: bool = false,
 
     fn bit(reach: Reach) u4 {
-        return @as(u4, 1) << @as(u2, @intCast(@intFromEnum(reach)));
+        return @as(u4, 1) << @as(u2, @intCast(@backingInt(reach)));
     }
 
     fn register(self: *ReachAnalysis, key: Key) Allocator.Error!?usize {
@@ -935,8 +928,8 @@ const ReachAnalysis = struct {
                 .@"fn" => |func| {
                     try self.pushSlice(ast.store.typeAnnoSlice(func.args), bit(.nested));
                     var returns: u4 = 0;
-                    inline for (std.meta.fields(Reach)) |field| {
-                        const reach: Reach = @enumFromInt(field.value);
+                    inline for (@typeInfo(Reach).@"enum".field_names) |field_name| {
+                        const reach: Reach = @fromBackingInt(@intCast(@backingInt(@field(Reach, field_name))));
                         if (item.reaches & bit(reach) != 0) returns |= bit(base.annotation_positions.functionReturnReach(reach));
                     }
                     try self.push(func.ret, returns);
@@ -967,8 +960,8 @@ const ReachAnalysis = struct {
                         .invalid => self.invalid = true,
                         .builtin => try self.pushSlice(args, bit(.nested)),
                         .declaration => |target| {
-                            inline for (std.meta.fields(Reach)) |field| {
-                                const reach: Reach = @enumFromInt(field.value);
+                            inline for (@typeInfo(Reach).@"enum".field_names) |field_name| {
+                                const reach: Reach = @fromBackingInt(@intCast(@backingInt(@field(Reach, field_name))));
                                 if (item.reaches & bit(reach) != 0) {
                                     const target_index = (try self.register(.{ .declaration = target, .reach = reach })) orelse {
                                         self.invalid = true;
@@ -1011,7 +1004,7 @@ const ReachAnalysis = struct {
         if (self.invalid) return null;
         const result = try allocator.alloc(Reach, self.states.items[root].results.len);
         for (result, self.states.items[root].results) |*value, mask| {
-            value.* = if (mask == 0 or mask & bit(.nested) != 0) .nested else if (@popCount(mask) > 1) .try_row else @enumFromInt(@ctz(mask));
+            value.* = if (mask == 0 or mask & bit(.nested) != 0) .nested else if (@popCount(mask) > 1) .try_row else @fromBackingInt(@intCast(@ctz(mask)));
         }
         return result;
     }

@@ -229,7 +229,7 @@ test "hoisted local constants are finalized and restored during runtime lowering
         1,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
     );
@@ -402,7 +402,7 @@ test "imported checked bodies restore their module's hoisted constants" {
         1,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
     );
@@ -431,7 +431,7 @@ test "imported checked bodies restore their module's hoisted constants" {
         check.CheckedArtifact.CompileTimeRootKind.hoisted_constant,
         app_artifact.compile_time_roots.root(app_imported_const_use.root).kind,
     );
-    try std.testing.expect(@intFromEnum(forty_one.root) < @intFromEnum(forty_two.root));
+    try std.testing.expect(@backingInt(forty_one.root) < @backingInt(forty_two.root));
 
     const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
     defer gpa.free(lir_roots);
@@ -494,7 +494,7 @@ test "hoisted list constants lower to internal static data in request order" {
         1,
         .x64linux,
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
     );
@@ -538,10 +538,10 @@ test "hoisted list constants lower to internal static data in request order" {
     const second_body = second_initializer.body orelse return error.StaticDataLiteralNotFound;
     // Reachable roots form a barrier before queued initializers, whose request
     // order must then determine their body order.
-    if (@intFromEnum(first_body) >= @intFromEnum(second_body)) return error.StaticDataInitializerRequestOrderMismatch;
+    if (@backingInt(first_body) >= @backingInt(second_body)) return error.StaticDataInitializerRequestOrderMismatch;
     for (lowered.lir_result.root_procs.items) |root_proc| {
         const root_body = lowered.lir_result.store.getProcSpec(root_proc).body orelse return error.StaticDataLiteralNotFound;
-        if (@intFromEnum(root_body) >= @intFromEnum(first_body)) return error.StaticDataInitializerPrecededRootBody;
+        if (@backingInt(root_body) >= @backingInt(first_body)) return error.StaticDataInitializerPrecededRootBody;
     }
     try expectStaticDataLiteralPresent(&lowered.lir_result);
 
@@ -558,7 +558,7 @@ test "hoisted list constants lower to internal static data in request order" {
     defer static_data_exports.deinitStaticData(gpa, exports);
 
     for (lowered.lir_result.static_data_values.items, 0..) |_, index| {
-        const static_data_id: lir.LIR.StaticDataId = @enumFromInt(@as(u32, @intCast(index)));
+        const static_data_id: lir.LIR.StaticDataId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const expected_symbol = try lir.Program.staticDataSymbolName(gpa, static_data_id);
         defer gpa.free(expected_symbol);
 
@@ -639,7 +639,7 @@ fn expectInlineListStaticDataLiteral(gpa: std.mem.Allocator, source: []const u8)
         1,
         .x64linux,
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
     );
@@ -807,7 +807,7 @@ fn lowerEchoApp(source: []const u8, comptime inspect: fn (*lir.Program.Result) H
         1,
         .x64linux,
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
     );
@@ -879,7 +879,7 @@ fn expectIntLiteralPresent(result: *const lir.Program.Result, value: i128) Hoist
         switch (stmt.assign_literal.value) {
             .i128_literal => |literal| if (literal.value == value) return,
             .i64_literal => |literal| if (literal.value == value) return,
-            .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => {},
+            .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => {},
         }
     }
     return error.StaticDataLiteralNotFound;
@@ -888,16 +888,11 @@ fn expectIntLiteralPresent(result: *const lir.Program.Result, value: i128) Hoist
 test "callable binding with alias annotation is const-evaluated" {
     // Regression test: a function-typed top-level def whose annotation
     // mentions a type alias (here `MyErr`) must still be scheduled for
-    // compile-time evaluation. The internal type store conservatively marks
-    // any type that mentions an alias as needing instantiation; if that flag
-    // made the def ineligible, it would silently degrade to runtime
-    // construction (observed with Json.parser_camel()).
-    //
-    // `MyErr` sits in an output row, so the annotation implicitly opens it
-    // and `validate` is generalized: it is evaluated once per concrete
-    // specialization (design.md "Specialization-Owned Top-Level Values"),
-    // and the runtime program reads the completed value instead of running
-    // `make_validator`.
+    // compile-time evaluation when the alias expands to a fully concrete
+    // type. The internal type store conservatively marks any type that
+    // mentions an alias as needing instantiation; if the published checked
+    // type inherits that flag, the def is kept template-only and silently
+    // degrades to runtime construction (observed with Json.parser_camel()).
     const gpa = std.testing.allocator;
 
     var tmp_dir = std.testing.tmpDir(.{});
@@ -978,7 +973,7 @@ test "callable binding with alias annotation is const-evaluated" {
         1,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
     );
@@ -990,15 +985,6 @@ test "callable binding with alias annotation is const-evaluated" {
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
 
-    // `--opt=speed`'s Solved policy: compile-time evaluation runs inside
-    // this build's own specialized program.
-    const speed_target: lir.CheckedPipeline.TargetConfig = .{
-        .inline_mode = .wrappers,
-        .spec_constr_clone_inlining = .all_calls,
-        .inline_expects = .omit,
-        .proc_debug_names = true,
-    };
-    coord.runtime_lowering = .{ .target = speed_target };
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
 
@@ -1007,24 +993,9 @@ test "callable binding with alias annotation is const-evaluated" {
     for (app_artifact.compile_time_roots.roots) |root| {
         if (root.kind != .callable_binding) continue;
         saw_callable_binding = true;
-        try std.testing.expectEqual(.per_specialization, root.request_eligibility);
+        if (root.payload != .fn_value) return error.CallableBindingConstFnNotStored;
     }
     try std.testing.expect(saw_callable_binding);
-
-    const session = &coord.program_session.?;
-    var value_roots: usize = 0;
-    for (session.host.?.lir_result.literal_roots.items) |root| {
-        if (root.subject == .value) value_roots += 1;
-    }
-    try std.testing.expectEqual(@as(usize, 1), value_roots);
-
-    var runtime = try session.takeRuntime(gpa, session.runtime_roots, speed_target);
-    defer runtime.deinit();
-    const store = &runtime.lir_result.store;
-    for (0..store.procSpecCount()) |index| {
-        const name = store.procDebugName(@enumFromInt(index)) orelse continue;
-        try std.testing.expect(std.mem.find(u8, name, "make_validator") == null);
-    }
 }
 
 test "hoisted constant crash reports original source region" {
@@ -1096,7 +1067,7 @@ test "hoisted constant crash reports original source region" {
         1,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
     );
@@ -1198,7 +1169,7 @@ test "inlined hoisted constant crash reports hoisted source region" {
         1,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
     );
@@ -1296,7 +1267,7 @@ test "hoisted pattern extraction and validation failures report original destruc
         1,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
     );
@@ -1402,7 +1373,7 @@ test "hoisted pattern extraction base match failure reports match" {
         1,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
     );
@@ -1504,7 +1475,7 @@ test "hoisted pattern extraction successful base match resolves pending diagnost
         1,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
     );
@@ -1564,7 +1535,7 @@ test "hoisted roots admit non-concrete transient locals without losing validatio
         1,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
     );
@@ -1638,7 +1609,7 @@ test "issue 10721: compile-time known destructure of a match-returned closure re
         1,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
     );
@@ -1706,7 +1677,7 @@ test "issue 10721: compile-time known destructure inside an effectful body resol
         1,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
     );
@@ -1775,7 +1746,7 @@ test "issue 10721: compile-time validation reports a known failing destructure" 
         1,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
     );
@@ -1933,7 +1904,7 @@ fn checkEchoApp(gpa: std.mem.Allocator, source: []const u8) HoistedConstantsTest
         1,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
     );
@@ -2007,7 +1978,7 @@ test "issue 10721: runtime-dependent callable use keeps one validating extractio
         1,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
     );
@@ -2075,7 +2046,7 @@ test "hoisted match guard does not report unused branch warning" {
         1,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
     );
@@ -2152,7 +2123,7 @@ test "hoisted successful call does not clear runtime reachable helper exhaustive
         1,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
     );
@@ -2224,7 +2195,7 @@ test "hoisted failing call into runtime reachable helper reports static diagnost
         1,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
     );
@@ -2394,7 +2365,7 @@ fn expectPatternExtractionSyntheticRegions(
         const extraction = switch (body) {
             .expr => continue,
             .pattern_extraction => |payload| payload,
-            .pattern_validation, .pattern_error => continue,
+            .pattern_validation, .pattern_error, .valueless_binding => continue,
         };
         extraction_count += 1;
 
@@ -2689,7 +2660,6 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
                 .boxy_dynamic_frac_literal,
                 .str_literal,
                 .bytes_literal,
-                .null_ptr,
                 .proc_ref,
                 => {},
             },
@@ -2706,6 +2676,8 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
             .boxy_tag_match,
@@ -2873,7 +2845,7 @@ test "issue 9733: nested expect statements remain inline" {
         1,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
     );

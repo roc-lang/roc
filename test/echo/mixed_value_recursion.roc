@@ -1,7 +1,6 @@
-# A monomorphic callable value mutually recursive with a generalized one.
-# `is_even` is context-free and compile-time evaluated once; `is_odd` is
-# generalized (its output row is implicitly open). Each value's producer is a
-# block whose lambda captures a local, and each lambda refers to the other.
+# Two callable values, each compile-time evaluated once, that are mutually
+# recursive. Each value's producer is a block whose lambda captures a local,
+# and each lambda refers to the other.
 is_even : U64 -> Bool
 is_even = {
     z = 0

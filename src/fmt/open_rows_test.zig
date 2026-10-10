@@ -93,39 +93,26 @@ test "open rows - function argument keeps its `..`" {
     );
 }
 
-test "open rows - top-level value binding drops its `..`" {
-    // A top-level value's implicitly opened row counts as a type variable,
-    // so the value generalizes without the `..`.
-    try expectFormatsTo(
+test "open rows - value binding keeps its `..`" {
+    // On a value, `..` is the opt-in to a quantified row.
+    try expectUnchanged(
         \\boom : [Boom, ..]
         \\boom = Boom
         \\
-    ,
-        \\boom : [Boom]
-        \\boom = Boom
-        \\
     );
 }
 
-test "open rows - function annotation on a non-lambda body drops its `..`" {
-    try expectFormatsTo(
+test "open rows - function annotation on a non-lambda body keeps its `..`" {
+    try expectUnchanged(
         \\parse : Str -> [Fail, Ok, ..]
-        \\parse = make_parser(1)
-        \\
-    ,
-        \\parse : Str -> [Fail, Ok]
         \\parse = make_parser(1)
         \\
     );
 }
 
-test "open rows - value alias drops its `..`" {
-    try expectFormatsTo(
+test "open rows - value alias keeps its `..`" {
+    try expectUnchanged(
         \\parse : Str -> [Fail, Ok, ..]
-        \\parse = other_parse
-        \\
-    ,
-        \\parse : Str -> [Fail, Ok]
         \\parse = other_parse
         \\
     );
@@ -449,45 +436,19 @@ test "open rows - annotation-only definition drops its `..` in an app" {
     );
 }
 
-test "open rows - destructured top-level value drops its `..` in a platform" {
+test "open rows - destructured top-level value keeps its `..` in an app" {
     // Can attaches the annotation to the def the destructured literal splits
-    // off for `e`: a top-level value, which generalizes, not an
-    // annotation-only definition (which a platform may host). (The formatter
-    // separates the two statements with a blank line, which does not change
-    // that attachment.)
-    try expectFormatsTo(
-        \\platform ""
-        \\    requires {
-        \\        main! : () => {}
-        \\    }
-        \\    exposes []
-        \\    packages {}
-        \\    provides { "roc_main": main_for_host! }
+    // off for `e`: a value, not an annotation-only definition. (The
+    // formatter separates the two statements with a blank line, which does
+    // not change that attachment.)
+    try expectUnchanged(
+        \\app [main!] { pf: platform "platform/main.roc" }
         \\
         \\e : [Boom, ..]
         \\
         \\(e, n) = (Boom, 1)
         \\
-        \\todo : Str -> [A, ..]
-        \\
-        \\(x, y) = (1, 2)
-        \\
-    ,
-        \\platform ""
-        \\    requires {
-        \\        main! : () => {}
-        \\    }
-        \\    exposes []
-        \\    packages {}
-        \\    provides { "roc_main": main_for_host! }
-        \\
-        \\e : [Boom]
-        \\
-        \\(e, n) = (Boom, 1)
-        \\
-        \\todo : Str -> [A, ..]
-        \\
-        \\(x, y) = (1, 2)
+        \\main! = |_| {}
         \\
     );
 }
@@ -551,14 +512,9 @@ test "open rows - platform provided definitions keep their `..`" {
     );
 }
 
-test "open rows - associated annotations and block-local function annotations drop their `..`" {
-    // An associated value is a top-level definition; a block-local value
-    // keeps `..` as its opt-in to a quantified row.
+test "open rows - associated and block-local function annotations drop their `..`" {
     try expectFormatsTo(
         \\Thing := [T].{
-        \\    fallback : [Bad, ..]
-        \\    fallback = Bad
-        \\
         \\    parse : Str -> [Bad, ..]
         \\    parse = |_| {
         \\        helper : Str -> [Worse, ..]
@@ -573,9 +529,6 @@ test "open rows - associated annotations and block-local function annotations dr
         \\
     ,
         \\Thing := [T].{
-        \\    fallback : [Bad]
-        \\    fallback = Bad
-        \\
         \\    parse : Str -> [Bad]
         \\    parse = |_| {
         \\        helper : Str -> [Worse]

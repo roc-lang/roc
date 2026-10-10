@@ -66,7 +66,7 @@ test "canonical where ownership follows rigid declarations through signatures" {
 
     for (owners) |owner| {
         try testing.expect(owner.owned_by_annotation);
-        const owner_idx: CIR.TypeAnno.Idx = @enumFromInt(owner.rigid_var);
+        const owner_idx: CIR.TypeAnno.Idx = @fromBackingInt(@intCast(owner.rigid_var));
         try testing.expectEqual(.rigid_var, std.meta.activeTag(test_env.module_env.store.getTypeAnno(owner_idx)));
         for (test_env.module_env.store.sliceWhereClausesForOwner(owner)) |where_idx| {
             const method = test_env.module_env.store.getWhereClause(where_idx).w_method;
@@ -111,7 +111,7 @@ test "inner where lookup does not take ownership of enclosing rigid" {
     const method_idx = test_env.module_env.store.sliceWhereClausesForOwner(owners[0])[0];
     const method = test_env.module_env.store.getWhereClause(method_idx).w_method;
     const lookup = test_env.module_env.store.getTypeAnno(method.var_).rigid_var_lookup;
-    try testing.expectEqual(owners[0].rigid_var, @intFromEnum(lookup.ref));
+    try testing.expectEqual(owners[0].rigid_var, @backingInt(lookup.ref));
 }
 
 test "detached where receiver does not introduce itself" {

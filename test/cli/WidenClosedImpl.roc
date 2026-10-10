@@ -10,15 +10,8 @@ WidenClosedImpl := {}
 describe : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]
 describe = |x| x.status()
 
-# `seal` forwards its closed input, which closes its output row, and so the
-# row of every value built from it (design.md "Deferred: Row Subsumption").
-# This depends on that known limitation (forwarding closes the row): once
-# row subsumption lands, this fixture must close its impl row another way.
-seal : [Ok(Str), Err(Str)] -> [Ok(Str), Err(Str)]
-seal = |v| v
-
 closed_value : [Ok(Str), Err(Str)]
-closed_value = seal(Ok("cv"))
+closed_value = Ok("cv")
 
 Job := [Pending].{
     status : Job -> [Ok(Str), Err(Str)]

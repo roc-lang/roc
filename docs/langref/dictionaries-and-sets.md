@@ -117,3 +117,44 @@ Hash tables which use a predictable hashing function can be vulnerable to [hash 
 attacks, where an attacker sends many keys which are known to have the same hash in order to slow down
 the program. To prevent this, dictionaries which are built at runtime use a hash seed which is
 randomly chosen each time the program runs.
+
+## Performance
+
+### Memory Layout
+
+A dictionary stores its key-value pairs in a [list](../List) of `(key, value)` tuples, in
+iteration order. That's why iterating over a dictionary is just as fast as iterating over a list:
+it _is_ iterating over a list.
+
+To find keys quickly, the dictionary also has a second list, of _buckets_. Each bucket is 8
+bytes: 4 bytes saying which entry it points to, and 4 bytes containing some bookkeeping along
+with a few bits of that entry's key's hash (so that most of the time, a lookup can tell that a bucket isn't the one it's looking for
+without having to compare the actual keys). Looking up a key means hashing it, finding its
+bucket, and then comparing the key against the entry the bucket points to.
+
+Since a [set](#sets) is a dictionary whose values are all `{}`, which takes up no memory, a set's
+entries list holds only the set's values.
+
+### Growing
+
+When a dictionary gets full enough, inserting another key makes it allocate a bigger buckets list
+and recompute which bucket each key goes in. This happens less and less often as the dictionary
+grows, but if you know how many keys you'll be inserting, you can start with
+[`Dict.with_capacity`](../Dict#with_capacity) and skip all of that.
+
+As with other collections, inserting into or removing from a dictionary that nothing else refers
+to updates it [in place](expressions#opportunistic-mutation). If something else does refer to it,
+the dictionary gets copied first, so the same advice applies as with lists: when you're building
+up a dictionary in a loop, don't hold onto old versions of it.
+
+### Dictionaries Built at Compile Time
+
+A dictionary that's [built at compile time](compile-time) can't use the random hash seed that
+protects against [hash flooding](#keys-and-hashing), because the seed isn't chosen until the
+program runs. So it uses a fixed seed instead. That's fine for looking up keys, since the keys
+were all chosen at compile time and can't have been picked by an attacker.
+
+However, the first time you insert a key into one of these dictionaries at runtime, it switches
+over to the random seed, which means recomputing the bucket for every key it already has. If a
+program inserts into a large compile-time dictionary, it pays that cost once (per copy of the
+dictionary).

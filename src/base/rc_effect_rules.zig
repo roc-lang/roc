@@ -263,7 +263,7 @@ test "each rule rejects the row it names, and every rule is reachable" {
     };
 
     // A rule with no row that breaks it is a rule that is not doing anything.
-    var seen = std.EnumSet(Rule).initEmpty();
+    var seen = std.EnumSet(Rule).empty;
     for (cases) |case| {
         try std.testing.expectEqual(case.rule, violation(case.effect).?);
         seen.insert(case.rule);

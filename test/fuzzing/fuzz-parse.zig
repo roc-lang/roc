@@ -33,8 +33,9 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
 
     const result = fmt.moduleFmtsStable(gpa, input, debug) catch |err|
         switch (err) {
-            error.ParseFailed => {
-                // No issue. Just bad input we couldn't parse.
+            error.ParseFailed, error.ParsingFailed => {
+                // No issue. Just bad input we couldn't parse, or that the
+                // formatter deliberately refuses to rewrite.
                 return;
             },
             error.SecondParseFailed => {
