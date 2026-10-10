@@ -108,7 +108,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call (constraint-fn-var 290)
+			(e-call (constraint-fn-var 283)
 				(e-lookup-local
 					(p-assign (ident "getUser")))
 				(e-num (value "100")))))

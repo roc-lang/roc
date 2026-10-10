@@ -156,7 +156,6 @@ pub const Error = error{
     /// LLVM could not write the object file.
     LlvmObjectEmitFailed,
     LinkFailed,
-    WindowsSDKNotFound,
 };
 
 /// Carries the text LLVM produces for a failure back to the caller, so a

@@ -52,6 +52,10 @@ pub const VTable = struct {
     /// truncating it if it does.
     writeFile: *const fn (?*anyopaque, std.Io, []const u8, []const u8) WriteError!void,
 
+    /// Produce a file incrementally. Implementations must consume the stream
+    /// before returning; no producer or buffer pointers escape this call.
+    writeFileStream: *const fn (?*anyopaque, std.Io, []const u8, FileStream) WriteError!void = &missingWriteFileStream,
+
     /// Return `true` if a file or directory exists at `path`.
     fileExists: *const fn (?*anyopaque, std.Io, []const u8) bool,
 
@@ -193,6 +197,17 @@ pub fn readFileInto(self: Self, path: []const u8, buffer: []u8) ReadError!usize 
 /// Write `data` to `path`, creating or truncating the file.
 pub fn writeFile(self: Self, path: []const u8, data: []const u8) WriteError!void {
     return self.vtable.writeFile(self.ctx, self.std_io, path, data);
+}
+
+/// A borrowed producer for a file's complete contents.
+pub const FileStream = struct {
+    context: *const anyopaque,
+    write: *const fn (*const anyopaque, *std.Io.Writer) std.Io.Writer.Error!void,
+};
+
+/// Write a producer's bytes without allocating a complete file-sized buffer.
+pub fn writeFileStream(self: Self, path: []const u8, stream: FileStream) WriteError!void {
+    return self.vtable.writeFileStream(self.ctx, self.std_io, path, stream);
 }
 
 /// Return `true` if a file (or directory) exists at `path`.
@@ -505,6 +520,7 @@ const os_vtable = VTable{
     .readFile = &osReadFile,
     .readFileInto = &osReadFileInto,
     .writeFile = &osWriteFile,
+    .writeFileStream = &osWriteFileStream,
     .fileExists = &osFileExists,
     .stat = &osStat,
     .listDir = &osListDir,
@@ -724,11 +740,15 @@ fn fileWriteRequestLimit(comptime os_tag: std.Target.Os.Tag, page_size: usize) u
     };
 }
 
+fn hostFileWriteRequestLimit() usize {
+    return fileWriteRequestLimit(builtin.os.tag, if (builtin.os.tag == .linux) std.heap.pageSize() else 0);
+}
+
 fn osWriteFile(_: ?*anyopaque, std_io: std.Io, path: []const u8, data: []const u8) WriteError!void {
     const file = try std.Io.Dir.cwd().createFile(std_io, path, .{ .permissions = private_file_permissions });
     defer file.close(std_io);
 
-    const limit = fileWriteRequestLimit(builtin.os.tag, if (builtin.os.tag == .linux) std.heap.pageSize() else 0);
+    const limit = hostFileWriteRequestLimit();
     // Bound each submission to the host limit; writeStreamingAll still handles
     // partial progress below that limit. No copying or repeated truncation.
     var remaining = data;
@@ -737,6 +757,60 @@ fn osWriteFile(_: ?*anyopaque, std_io: std.Io, path: []const u8, data: []const u
         try file.writeStreamingAll(std_io, remaining[0..count]);
         remaining = remaining[count..];
     }
+}
+
+fn missingWriteFileStream(_: ?*anyopaque, _: std.Io, _: []const u8, _: FileStream) WriteError!void {
+    return error.IoError;
+}
+
+/// A buffered file writer whose every submission respects the host's
+/// per-request limit, so a producer may hand it a borrowed slice of any size.
+const BoundedFileWriter = struct {
+    file: std.Io.File,
+    io: std.Io,
+    limit: usize,
+    err: ?std.Io.File.Writer.Error = null,
+    interface: std.Io.Writer,
+
+    fn init(file: std.Io.File, io: std.Io, buffer: []u8) BoundedFileWriter {
+        return .{
+            .file = file,
+            .io = io,
+            .limit = hostFileWriteRequestLimit(),
+            .interface = .{ .vtable = &.{ .drain = drain }, .buffer = buffer },
+        };
+    }
+
+    fn drain(interface: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
+        const self: *BoundedFileWriter = @alignCast(@fieldParentPtr("interface", interface));
+        // The buffer is far below every host limit, so it is one submission.
+        self.file.writeStreamingAll(self.io, interface.buffered()) catch |err| return self.fail(err);
+        interface.end = 0;
+        // Submit one bounded prefix of the first non-empty slice; the caller
+        // resubmits the remainder, exactly as after a short write.
+        for (data, 0..) |bytes, index| {
+            if (bytes.len == 0) continue;
+            if (index == data.len - 1 and splat == 0) break;
+            return self.file.writeStreaming(self.io, &.{}, &.{bytes[0..@min(bytes.len, self.limit)]}, 1) catch |err| return self.fail(err);
+        }
+        return 0;
+    }
+
+    fn fail(self: *BoundedFileWriter, err: std.Io.File.Writer.Error) std.Io.Writer.Error {
+        self.err = err;
+        return error.WriteFailed;
+    }
+};
+
+fn osWriteFileStream(_: ?*anyopaque, std_io: std.Io, path: []const u8, stream: FileStream) WriteError!void {
+    const file = try std.Io.Dir.cwd().createFile(std_io, path, .{ .permissions = private_file_permissions });
+    defer file.close(std_io);
+
+    var buffer: [8192]u8 = undefined;
+    var writer = BoundedFileWriter.init(file, std_io, &buffer);
+    // A producer that fails without a file error has no native cause to preserve.
+    stream.write(stream.context, &writer.interface) catch return writer.err orelse error.IoError;
+    writer.interface.flush() catch return writer.err orelse error.IoError;
 }
 
 fn osFileExists(_: ?*anyopaque, std_io: std.Io, path: []const u8) bool {
@@ -1577,6 +1651,33 @@ test "OS writeFile propagates a later chunk error and closes the file" {
     var mock = BoundedWriteTestIo{ .data = bytes, .limit = limit, .fail_on_call = 2 };
     try std.testing.expectError(error.DiskQuota, mock.run());
     try std.testing.expectEqual(limit, mock.written);
+    try std.testing.expectEqual(@as(usize, 2), mock.calls);
+    try std.testing.expectEqual(@as(usize, 1), mock.creates);
+    try std.testing.expectEqual(@as(usize, 1), mock.closes);
+}
+
+test "OS writeFileStream bounds a producer's large borrowed slice" {
+    if (comptime (builtin.os.tag != .linux and !builtin.os.tag.isDarwin()) or @bitSizeOf(usize) < 64) return error.SkipZigTest;
+    const limit = fileWriteRequestLimit(builtin.os.tag, std.heap.pageSize());
+    const bytes = try std.posix.mmap(null, 2 * limit, .{}, .{ .TYPE = .PRIVATE, .ANONYMOUS = true }, -1, 0);
+    defer std.posix.munmap(bytes);
+    const Producer = struct {
+        fn write(raw: *const anyopaque, destination: *std.Io.Writer) std.Io.Writer.Error!void {
+            const data: *const []const u8 = @ptrCast(@alignCast(raw));
+            try destination.writeAll(data.*);
+        }
+    };
+    // Both submissions exceed the writer's buffer, so the reserved bytes are
+    // never read and each request is the producer's own borrowed memory.
+    var mock = BoundedWriteTestIo{ .data = bytes, .limit = limit };
+    var vtable = std.testing.io.vtable.*;
+    vtable.dirCreateFile = BoundedWriteTestIo.createFile;
+    vtable.fileClose = BoundedWriteTestIo.close;
+    vtable.operate = BoundedWriteTestIo.operate;
+    const fs = os(std.testing.allocator, std.testing.allocator, .{ .userdata = &mock, .vtable = &vtable });
+    const data: []const u8 = bytes;
+    try fs.writeFileStream("bounded-stream", .{ .context = @ptrCast(&data), .write = Producer.write });
+    try std.testing.expectEqual(bytes.len, mock.written);
     try std.testing.expectEqual(@as(usize, 2), mock.calls);
     try std.testing.expectEqual(@as(usize, 1), mock.creates);
     try std.testing.expectEqual(@as(usize, 1), mock.closes);
