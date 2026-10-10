@@ -841,13 +841,6 @@ pub const RecordOmittedDefault = extern struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
-/// A source node whose checked value is a rank-1 polymorphic type scheme.
-///
-/// Generalization records this explicitly because a partially generalized
-/// scheme can have a monomorphic structural root with quantified descendants.
-/// Consumers must therefore not infer scheme-ness from the root variable's
-/// rank. The table is kept sorted by `node_idx` for allocation-free imported
-/// lookup.
 /// One use of a top-level value whose checked type is a widening copy of the
 /// value's own type: every tag union the row coercion reaches from the root
 /// has a fresh extension (design.md "Value Rows: Local Values Share, Top-Level
@@ -865,6 +858,13 @@ pub const RowCoercedUse = extern struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
+/// A source node whose checked value is a rank-1 polymorphic type scheme.
+///
+/// Generalization records this explicitly because a partially generalized
+/// scheme can have a monomorphic structural root with quantified descendants.
+/// Consumers must therefore not infer scheme-ness from the root variable's
+/// rank. The table is kept sorted by `node_idx` for allocation-free imported
+/// lookup.
 pub const BindingScheme = extern struct {
     node_idx: u32,
 
