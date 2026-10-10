@@ -1,8 +1,8 @@
 //! Zig's stock test runner with stack-trace capture controlled by Roc's
 //! `-Ddebug-gpa-traces` option.
 //!
-//! `std.testing.allocator` always uses a leak-checking DebugAllocator with ten
-//! stack frames. Capturing those frames through Mach-O/DWARF dominates
+//! `std.testing.allocator` uses Zig's leak-checking SafeAllocator. Capturing
+//! allocation stack traces through Mach-O/DWARF can dominate
 //! allocation-heavy test runtime on macOS arm64. The default remains traceless
 //! while preserving leak, double-free, and safety checks; pass
 //! `-Ddebug-gpa-traces` when allocation sites are needed for diagnosis.

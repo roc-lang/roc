@@ -139,8 +139,8 @@ test "interface summaries stay verified for mutually recursive methods of an imp
     defer tmp_dir.cleanup();
     try tmp_dir.dir.writeFile(io, .{ .sub_path = "Index.roc", .data =
         \\Index(a) :: [Empty, Branch(List(Box(Index(a)))), Value(U64, a)].{
-        \\    empty : Index(a)
-        \\    empty = Empty
+        \\    empty : {} -> Index(a)
+        \\    empty = |{}| Empty
         \\    get : Index(a), U64 -> Try(a, [Missing])
         \\    get = |index, key| match index {
         \\        Empty => Err(Missing)
@@ -184,7 +184,7 @@ test "interface summaries stay verified for mutually recursive methods of an imp
         \\main! = |args| {
         \\    key = List.len(args)
         \\    counts : Index(Route({ count : U64 }))
-        \\    counts = register!([{ id: key, fire: |model| Update({ count: model.count + 1.U64 }) }, { id: key + 16, fire: |_| Done }], Index.empty)
+        \\    counts = register!([{ id: key, fire: |model| Update({ count: model.count + 1.U64 }) }, { id: key + 16, fire: |_| Done }], Index.empty({}))
         \\    if Index.get(counts, key).is_ok() Ok({}) else Err(Exit(1))
         \\}
     });

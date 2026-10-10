@@ -15,19 +15,19 @@ const LIR = @import("lir_core").LIR;
 const names = check.CheckedNames;
 
 fn unionFieldCount(comptime T: type) comptime_int {
-    return @typeInfo(T).@"union".fields.len;
+    return @typeInfo(T).@"union".field_names.len;
 }
 
 fn structFieldType(comptime T: type, comptime name: []const u8) type {
-    inline for (@typeInfo(T).@"struct".fields) |field| {
-        if (std.mem.eql(u8, field.name, name)) return field.type;
+    inline for (@typeInfo(T).@"struct".field_names, @typeInfo(T).@"struct".field_types) |field_name, field_type| {
+        if (std.mem.eql(u8, field_name, name)) return field_type;
     }
     @compileError("missing struct field: " ++ name);
 }
 
 fn unionPayloadType(comptime T: type, comptime name: []const u8) type {
-    inline for (@typeInfo(T).@"union".fields) |field| {
-        if (std.mem.eql(u8, field.name, name)) return field.type;
+    inline for (@typeInfo(T).@"union".field_names, @typeInfo(T).@"union".field_types) |field_name, field_type| {
+        if (std.mem.eql(u8, field_name, name)) return field_type;
     }
     @compileError("missing union field: " ++ name);
 }
@@ -276,13 +276,13 @@ fn assertNoPostCheckType(comptime T: type, comptime path: []const u8) void {
         .optional => |optional| assertNoPostCheckType(optional.child, path ++ "?"),
         .pointer => |pointer| assertNoPostCheckType(pointer.child, path ++ ".*"),
         .@"struct" => |info| {
-            inline for (info.fields) |field| {
-                assertNoPostCheckType(field.type, path ++ "." ++ field.name);
+            inline for (info.field_names, info.field_types) |field_name, field_type| {
+                assertNoPostCheckType(field_type, path ++ "." ++ field_name);
             }
         },
         .@"union" => |info| {
-            inline for (info.fields) |field| {
-                assertNoPostCheckType(field.type, path ++ "." ++ field.name);
+            inline for (info.field_names, info.field_types) |field_name, field_type| {
+                assertNoPostCheckType(field_type, path ++ "." ++ field_name);
             }
         },
         .type,
@@ -304,6 +304,7 @@ fn assertNoPostCheckType(comptime T: type, comptime path: []const u8) void {
         .@"anyframe",
         .vector,
         .enum_literal,
+        .spirv,
         => {},
     }
 }
@@ -942,16 +943,16 @@ test "Monotype runtime demands snapshot pass-local compositional impossibility p
         "fn addExpr(self: *BodyContext",
         "fn addFieldExprSpan(",
     );
-    try expectContains(producers, "expr_impossibility_proofs.items[@intFromEnum(id)] = try self.exprDataImpossibilityProof");
-    try expectContains(producers, "pat_impossibility_proofs.items[@intFromEnum(id)] = try self.patDataImpossibilityProof");
-    try expectContains(producers, "stmt_impossibility_proofs.items[@intFromEnum(id)] = try self.stmtDataImpossibilityProof(stmt)");
+    try expectContains(producers, "expr_impossibility_proofs.items[@backingInt(id)] = try self.exprDataImpossibilityProof");
+    try expectContains(producers, "pat_impossibility_proofs.items[@backingInt(id)] = try self.patDataImpossibilityProof");
+    try expectContains(producers, "stmt_impossibility_proofs.items[@backingInt(id)] = try self.stmtDataImpossibilityProof(stmt)");
 
     const statement_frames = sourceSliceBetween(
         lower_source,
         "fn withStatementSuccessRuntimeDemandGuardFrame(",
         "fn runtimeDemandGuardFrameAddresses(",
     );
-    try expectContains(statement_frames, "runtimeDemandGuardFrameAddressRaw(@intFromEnum(statement_id), .statement_success)");
+    try expectContains(statement_frames, "runtimeDemandGuardFrameAddressRaw(@backingInt(statement_id), .statement_success)");
     try expectContains(statement_frames, "try pushRuntimeDemandGuardFrame(");
     try expectContains(lower_source, "body_ctx.runtime_demand_guard_frames = source_ctx.runtime_demand_guard_frames");
     try expectContains(lower_source, "runtimeDemandGuardFrameStackContains(self.draft, self.runtime_demand_guard_frames, address)");
@@ -1162,16 +1163,24 @@ test "Monotype inspect-only unresolved values defer until final graph sealing" {
         "fn typeIsProvenUninhabited(self: *BodyContext",
         "fn checkedPatternIsProvenUninhabited(",
     );
-    try expectContains(durable_inhabitation, "self.draft.uninhabited_type_cache.get(ty)");
+    try expectContains(durable_inhabitation, "self.graph.typeProvenUninhabited(ty,");
     try expectNotContains(durable_inhabitation, "activeNodeFromType");
-    const durable_scan = sourceSliceBetween(
-        lower_source,
-        "const TypeUninhabitedScan = struct {",
-        "const ImpossibilityProofScan = struct {",
+    const graph_source = @embedFile("monotype/solve.zig");
+    const durable_answers = sourceSliceBetween(
+        graph_source,
+        "pub fn typeProvenUninhabited(self: *InstGraph",
+        "pub fn acquireArena(self: *InstGraph",
     );
-    try expectContains(durable_scan, "const types_ = self.body.typeStore()");
+    try expectContains(durable_answers, "if (answers.get(ty)) |cached| return cached;");
+    const durable_scan = sourceSliceBetween(
+        graph_source,
+        "const TypeUninhabitedScan = struct {",
+        "pub const GraphTypeFinals = struct {",
+    );
+    try expectContains(durable_scan, "const types = self.graph.types;");
     try expectContains(durable_scan, "self.visiting.fetchRemove(ty)");
     try expectNotContains(durable_scan, "activeNodeFromType");
+    try expectNotContains(durable_scan, "self.graph.content(");
     const inspect_call = sourceSliceBetween(
         lower_source,
         "fn inspectCall(self: *BodyContext",
@@ -1453,10 +1462,10 @@ test "Monotype generated-private call requests retain separate request nodes" {
 
 test "hosted Try adaptation consumes checker-recorded nominal provenance" {
     const lower_source = @embedFile("monotype/lower.zig");
-    const graph_relation = sourceSliceBetween(
+    const nominal_provenance = sourceSliceBetween(
         lower_source,
-        "fn graphHostedTryInfoOrNull(",
-        "const Builder = struct",
+        "fn hostedTryNamedOrNull(",
+        "fn hostedTryTypeLike(",
     );
     // The hosted `Try` adapter is now one instance of the general result-row
     // widening adapter (design.md "Result-Row Widening Adapter"), so the two
@@ -1472,9 +1481,9 @@ test "hosted Try adaptation consumes checker-recorded nominal provenance" {
     );
     try std.testing.expect(@hasField(check.CheckedModule.CheckedProcedureTemplate, "hosted_try_adapter"));
     try expectContains(lower_source, "template.hosted_try_adapter");
-    try expectContains(graph_relation, "capability.def");
-    try expectContains(graph_relation, "capability.ok_type_arg_index");
-    try expectContains(graph_relation, "capability.err_type_arg_index");
+    try expectContains(nominal_provenance, "capability.def");
+    try expectContains(nominal_provenance, "capability.ok_type_arg_index");
+    try expectContains(nominal_provenance, "capability.err_type_arg_index");
     try expectContains(adapter_source, "self.hostedTryInfoOrNull(try_capability, requested.ret)");
     try expectContains(adapter_source, "self.hostedTryInfoOrNull(try_capability, declared.ret)");
     try expectContains(lower_source, "sameTypeDef(named.def, capability.def)");
@@ -1601,8 +1610,8 @@ test "each primitive mapping has exactly one definition" {
         try expectNotContains(source, "fn builtinOwnerFromPrimitive(");
     }
     const owner_fn = @typeInfo(@TypeOf(check.CheckedModule.builtinOwnerForPrimitive)).@"fn";
-    try std.testing.expect(owner_fn.params.len == 1);
-    try std.testing.expect(owner_fn.params[0].type.? == check.CheckedModule.CheckedPrimitive);
+    try std.testing.expect(owner_fn.param_types.len == 1);
+    try std.testing.expect(owner_fn.param_types[0].? == check.CheckedModule.CheckedPrimitive);
     try std.testing.expect(owner_fn.return_type.? == check.StaticDispatchRegistry.BuiltinOwner);
 }
 

@@ -159,7 +159,22 @@ NO CHANGE
 						(e-lambda
 							(args
 								(p-assign (ident "line")))
-							(e-runtime-error (tag "erroneous_value_expr"))))))))
+							(e-dispatch-call (method "join_map") (constraint-fn-var 270)
+								(receiver
+									(e-lookup-local
+										(p-assign (ident "functions"))))
+								(args
+									(e-closure
+										(captures
+											(capture (ident "line")))
+										(e-lambda
+											(args
+												(p-assign (ident "f")))
+											(e-call (constraint-fn-var 269)
+												(e-lookup-local
+													(p-assign (ident "f")))
+												(e-lookup-local
+													(p-assign (ident "line"))))))))))))))
 	(d-let
 		(p-assign (ident "pure_one"))
 		(e-lambda
@@ -188,8 +203,7 @@ NO CHANGE
 			(e-lookup-external
 				(builtin))
 			(e-call (constraint-fn-var 323)
-				(e-lookup-local
-					(p-assign (ident "apply")))
+				(e-runtime-error (tag "erroneous_value_expr"))
 				(e-list
 					(elems
 						(e-string

@@ -1,10 +1,19 @@
 //! Command line argument parsing for the CLI
+//!
+//! Each subcommand is one `Command` declaration: the flags and positional
+//! arguments that fill its args struct, and the prose of its help. The parser
+//! and the help text are both generated from that declaration.
 const std = @import("std");
 const base = @import("base");
 const Allocator = std.mem.Allocator;
 const testing = std.testing;
 const mem = std.mem;
 const install = @import("install.zig");
+const linker = @import("linker.zig");
+const RocTarget = @import("target.zig").RocTarget;
+const ResolutionConfig = @import("compile").package_resolution.Config;
+
+const bytes_per_mb = 1024 * 1024;
 
 const SpecializationStrategy = base.SpecializationStrategy;
 
@@ -68,17 +77,19 @@ pub const ArgProblem = union(enum) {
 
 /// The optimization strategy for the compilation of a Roc program
 pub const OptLevel = enum {
-    size, // binary size (LLVM)
-    speed, // execution speed (LLVM)
-    dev, // speed of compilation (dev backend)
+    dev,
     interpreter,
+    speed,
+    size,
 
-    pub fn from_str(str: []const u8) ?OptLevel {
-        if (mem.eql(u8, str, "speed")) return .speed;
-        if (mem.eql(u8, str, "size")) return .size;
-        if (mem.eql(u8, str, "dev")) return .dev;
-        if (mem.eql(u8, str, "interpreter")) return .interpreter;
-        return null;
+    /// What choosing the level means, for the help of flags that take one.
+    fn description(self: OptLevel) []const u8 {
+        return switch (self) {
+            .dev => "native dev backend, fast compilation",
+            .interpreter => "interpreted, no code generation",
+            .speed => "LLVM, optimized for execution speed",
+            .size => "LLVM, optimized for binary size",
+        };
     }
 
     /// Convert to the backend evaluation enum used by internal modules
@@ -102,8 +113,8 @@ pub const default_build_opt: OptLevel = .speed;
 /// Package download size limits for commands that resolve dependencies.
 /// Values are in megabytes; 0 means unlimited; null uses the default.
 pub const ResolveLimitArgs = struct {
-    max_package_mb: ?u32 = null, // per-package decompressed size limit (default 10)
-    max_transitive_mb: ?u32 = null, // overrides both transitive limits (defaults: packages 100, platforms 512)
+    max_package_mb: ?u32 = null, // per-package decompressed size limit
+    max_transitive_mb: ?u32 = null, // overrides both transitive limits (packages and platforms) and the platform bundle cap
     replace_deps: ReplaceDepArgs = .{}, // `--replace-dep OLD NEW` occurrences, in command-line order
 };
 
@@ -116,7 +127,12 @@ pub const ReplaceDepArg = struct {
 /// The `--replace-dep` occurrences of one invocation. Held by value so
 /// argument structs stay copyable without owning an allocation.
 pub const ReplaceDepArgs = struct {
-    items: [max]ReplaceDepArg = [_]ReplaceDepArg{.{ .old = "", .new = "" }} ** max,
+    items: [max]ReplaceDepArg = repeated: {
+        const pattern = [_]ReplaceDepArg{.{ .old = "", .new = "" }};
+        var result: [pattern.len * (max)]@TypeOf(pattern[0]) = undefined;
+        for (0..(max)) |i| @memcpy(result[i * pattern.len ..][0..pattern.len], &pattern);
+        break :repeated result;
+    },
     len: usize = 0,
 
     pub const max: usize = 32;
@@ -184,81 +200,12 @@ fn extractReplaceDeps(alloc: mem.Allocator, args: []const []const u8) mem.Alloca
     return .{ .args = try rest.toOwnedSlice(), .replace_deps = replace_deps, .problem = problem };
 }
 
-const ResolveLimitParse = union(enum) {
-    not_matched,
-    ok,
-    problem: ArgProblem,
-};
-
-const SpecializeParse = union(enum) {
-    not_matched,
-    ok: SpecializationStrategy,
-    problem: ArgProblem,
-};
-
-fn parseResolveLimitFlag(arg: []const u8, limits: *ResolveLimitArgs) ResolveLimitParse {
-    const flags = .{
-        .{ "--max-package-mb", &limits.max_package_mb },
-        .{ "--max-transitive-mb", &limits.max_transitive_mb },
-    };
-    inline for (flags) |flag| {
-        if (mem.startsWith(u8, arg, flag[0])) {
-            if (getFlagValue(arg)) |value| {
-                flag[1].* = std.fmt.parseInt(u32, value, 10) catch {
-                    return .{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = flag[0], .value = value, .valid_options = "size in MB (0 for unlimited)" } } };
-                };
-                return .ok;
-            }
-            return .{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = flag[0] } } };
-        }
-    }
-    return .not_matched;
-}
-
-fn parseSpecializeFlag(arg: []const u8) SpecializeParse {
-    const flag = "--specialize";
-    if (!mem.startsWith(u8, arg, flag)) return .not_matched;
-
-    if (getFlagValue(arg)) |value| {
-        if (SpecializationStrategy.fromCliValue(value)) |strategy| {
-            return .{ .ok = strategy };
-        }
-        return .{ .problem = ArgProblem{ .invalid_flag_value = .{
-            .flag = flag,
-            .value = value,
-            .valid_options = SpecializationStrategy.cliOptions(),
-        } } };
-    }
-
-    return .{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = flag } } };
-}
-
-fn parseResolveLimitProblem(arg: []const u8, limits: *ResolveLimitArgs) ?ArgProblem {
-    const result = parseResolveLimitFlag(arg, limits);
-    if (std.meta.activeTag(result) == .problem) return result.problem;
-    return null;
-}
-
-const replace_dep_help =
-    \\      --replace-dep OLD NEW    Load NEW wherever a dependency declares exactly OLD, for this invocation only.
-    \\                               Each is a complete package URL or a path to a root .roc file; repeatable.
-    \\                               Run `roc deps` to see the declared sources
-;
-
-const resolve_limit_help = replace_dep_help ++ "\n" ++ resolve_limit_core_help;
-
-/// For commands that resolve dependencies but do not accept replacements.
-const install_resolve_limit_help = resolve_limit_core_help;
-
-const resolve_limit_core_help =
-    \\      --max-package-mb=<N>     Per-package decompressed size limit in MB (default: 10, 0 for unlimited)
-    \\      --max-transitive-mb=<N>  Combined size limit in MB for each direct dependency's transitive packages
-    \\                               (defaults: packages 100, platforms 512; 0 for unlimited)
-;
+/// The file a command reads when no path is given.
+const default_roc_file = "main.roc";
 
 /// Arguments for the default `roc` command
 pub const RunArgs = struct {
-    path: []const u8, // the path of the roc file to be executed
+    path: []const u8 = default_roc_file, // the path of the roc file to be executed
     opt: OptLevel = default_dev_opt, // the optimization level (dev, interpreter, size, speed)
     specialization_strategy: ?SpecializationStrategy = null, // explicit --specialize override, if provided
     target: ?[]const u8 = null, // the target to compile for (e.g., x64musl, x64glibc)
@@ -284,8 +231,8 @@ pub const InstallArgs = struct {
 
 /// Arguments for `roc check`
 pub const CheckArgs = struct {
-    path: []const u8, // the path of the roc file to be checked
-    main: ?[]const u8, // the path to a roc file with an app header to be used to resolved dependencies
+    path: []const u8 = default_roc_file, // the path of the roc file to be checked
+    main: ?[]const u8 = null, // the path to a roc file with an app header to be used to resolved dependencies
     time: bool = false, // whether to print timing information
     timings: bool = false, // always show the per-phase timing breakdown
     no_cache: bool = false, // disable cache
@@ -300,8 +247,8 @@ pub const CheckArgs = struct {
 
 /// Arguments for `roc build`
 pub const BuildArgs = struct {
-    path: []const u8, // the path to the roc file to be built
-    opt: OptLevel, // the optimization level (dev, interpreter, size, speed)
+    path: []const u8 = default_roc_file, // the path to the roc file to be built
+    opt: OptLevel = default_build_opt, // the optimization level (dev, interpreter, size, speed)
     specialization_strategy: ?SpecializationStrategy = null, // explicit --specialize override, if provided
     target: ?[]const u8 = null, // the target to compile for (e.g., x64musl, x64glibc)
     output: ?[]const u8 = null, // the path where the output binary should be created
@@ -332,10 +279,10 @@ pub const BuildArgs = struct {
 
 /// Arguments for `roc test`
 pub const TestArgs = struct {
-    path: []const u8, // the path to the file to be tested
-    opt: OptLevel, // the optimization level (dev, interpreter, size, speed)
+    path: []const u8 = default_roc_file, // the path to the file to be tested
+    opt: OptLevel = default_dev_opt, // the optimization level (dev, interpreter, size, speed)
     specialization_strategy: ?SpecializationStrategy = null, // explicit --specialize override, if provided
-    main: ?[]const u8, // the path to a roc file with an app header to be used to resolve dependencies
+    main: ?[]const u8 = null, // the path to a roc file with an app header to be used to resolve dependencies
     verbose: bool = false, // enable verbose output showing individual test results
     timings: bool = false, // always show the per-phase timing breakdown
     no_cache: bool = false, // disable compilation caching, force re-run all tests
@@ -358,7 +305,7 @@ pub const FormatArgs = struct {
 pub const BundleArgs = struct {
     paths: []const []const u8, // the paths of roc files to bundle
     output_dir: ?[]const u8 = null, // the directory to output the bundle to
-    compression_level: i32 = 3, // zstd compression level (1-22, default 3)
+    compression_level: i32 = 3, // zstd compression level
 };
 
 /// Arguments for `roc unbundle`
@@ -368,7 +315,7 @@ pub const UnbundleArgs = struct {
 
 /// Arguments for `roc docs`
 pub const DocsArgs = struct {
-    path: []const u8, // the path of the roc file to generate docs for
+    path: []const u8 = default_roc_file, // the path of the roc file to generate docs for
     main: ?[]const u8 = null, // the path to a roc file with an app header to be used to resolved dependencies
     output: []const u8 = "generated-docs", // the output directory for generated documentation
     time: bool = false, // whether to print timing information
@@ -382,16 +329,15 @@ pub const DocsArgs = struct {
     main_source_url: ?[]const u8 = null, // internal: bundle URL provenance when --main was a URL or installed shorthand
 };
 
-/// Arguments for `roc bump`
 /// Arguments for `roc deps`
 pub const DepsArgs = struct {
-    path: []const u8, // the root .roc file whose dependency graph to print
+    path: []const u8 = default_roc_file, // the root .roc file whose dependency graph to print
     resolve_limits: ResolveLimitArgs = .{}, // package download size limits and dependency replacements
 };
 
 /// Arguments for `roc bump`
 pub const BumpArgs = struct {
-    path: []const u8, // the new package's main .roc file
+    path: []const u8 = default_roc_file, // the new package's main .roc file
     old: []const u8, // the old package: URL, .tar.zst bundle, directory, or .roc file (REQUIRED)
     old_version: ?[]const u8 = null, // the old version (required unless `old` is a versioned URL)
     expect: ?[]const u8 = null, // fail unless this version is a sufficient bump
@@ -419,10 +365,758 @@ pub const ReplArgs = struct {
 pub const GlueArgs = struct {
     glue_spec: []const u8, // path to the glue spec .roc file (REQUIRED)
     output_dir: []const u8, // path to the output directory for generated glue files (REQUIRED)
-    platform_path: []const u8, // path to the platform .roc file (default: main.roc)
+    platform_path: []const u8 = default_roc_file, // path to the platform .roc file
     opt: OptLevel = default_dev_opt,
     specialization_strategy: ?SpecializationStrategy = null,
     no_cache: bool = false, // disable compilation caching
+};
+
+/// How a flag is written on the command line, which is also the comparison
+/// that recognizes it.
+const FlagForm = enum {
+    /// `--name`, matched exactly. Sets a `bool` field; a flag with no field is
+    /// accepted and changes nothing.
+    toggle,
+    /// `--name=<value>`, matched by prefix.
+    attached,
+    /// `--name <value>`, matched exactly, taking the next argument as its value.
+    separate,
+    /// `--`: every later argument is positional.
+    terminator,
+    /// Matched exactly; the command answers with the compiler's version.
+    version,
+    /// Matched by prefix and refused as an unexpected argument.
+    rejected,
+    /// Listed in help only; another part of argument parsing consumes it.
+    documented,
+};
+
+/// One flag of a command: how it is written, which field of the command's args
+/// struct it sets, and its line in the command's help.
+const Flag = struct {
+    name: []const u8,
+    /// Single-dash spelling. An `attached` flag's value follows it directly.
+    short: ?[]const u8 = null,
+    form: FlagForm = .toggle,
+    /// The args-struct field the flag sets, as a dotted path. The field's type
+    /// decides how the value is parsed, and a field with no default makes the
+    /// flag required.
+    field: ?[]const u8 = null,
+    /// A `bool` field set whenever the flag is given.
+    marks: ?[]const u8 = null,
+    /// How help spells the flag's value.
+    value_name: []const u8 = "",
+    /// The flag's description in help. Null keeps the flag out of help. Help
+    /// appends what the declaration already states: the accepted `levels`,
+    /// the `range`, and the field's default.
+    help: ?[]const u8 = null,
+    /// What an integer value must be, for the problem reported when it is not.
+    valid: []const u8 = "",
+    /// Inclusive bounds of an integer value.
+    range: ?[2]i32 = null,
+    /// The optimization levels an `OptLevel` field accepts.
+    levels: []const OptLevel = std.enums.values(OptLevel),
+
+    /// The flag as the left column of its help line.
+    fn spelling(comptime flag: Flag) []const u8 {
+        const value = switch (flag.form) {
+            .attached => "=" ++ flag.value_name,
+            .separate => " " ++ flag.value_name,
+            .toggle, .terminator, .version, .rejected, .documented => "",
+        };
+        return (if (flag.short) |short| "  " ++ short ++ ", " else "      ") ++ flag.name ++ value;
+    }
+
+    /// The flag's description for the help of a command whose args struct is `Parsed`.
+    fn description(comptime flag: Flag, comptime Parsed: type) []const u8 {
+        var text: []const u8 = flag.help.?;
+        const path = flag.field orelse return text;
+        const field = fieldInfoAt(Parsed, path);
+        if (field.type == OptLevel) text = text ++ " " ++ optLevelList(flag.levels, .described);
+        if (flag.range) |range| text = text ++ std.fmt.comptimePrint(" ({d}-{d})", .{ range[0], range[1] });
+        const default = field.defaultValue() orelse return text;
+        if (field.type == OptLevel) return text ++ " [default: " ++ @tagName(default) ++ "]";
+        if (field.type == []const u8) return text ++ " [default: " ++ default ++ "]";
+        if (@typeInfo(field.type) == .int) return text ++ std.fmt.comptimePrint(" [default: {d}]", .{default});
+        return text;
+    }
+};
+
+/// `levels` by name: comma-separated for a problem's valid options, or each
+/// with its description for help.
+fn optLevelList(comptime levels: []const OptLevel, comptime style: enum { names, described }) []const u8 {
+    var text: []const u8 = "";
+    for (levels, 0..) |level, index| {
+        text = text ++ switch (style) {
+            .names => (if (index == 0) "" else ",") ++ @tagName(level),
+            .described => (if (index == 0) "" else if (index + 1 == levels.len) ", or " else ", ") ++
+                @tagName(level) ++ " (" ++ level.description() ++ ")",
+        };
+    }
+    return text;
+}
+
+/// A struct field's name, type and default, in the shape the argument checks read.
+const FieldInfo = struct {
+    name: [:0]const u8,
+    type: type,
+    default_value_ptr: ?*const anyopaque,
+
+    fn defaultValue(comptime self: FieldInfo) ?self.type {
+        const pointer: *const self.type = @ptrCast(@alignCast(self.default_value_ptr orelse return null));
+        return pointer.*;
+    }
+};
+
+fn structFieldInfos(comptime T: type) [@typeInfo(T).@"struct".field_names.len]FieldInfo {
+    const info = @typeInfo(T).@"struct";
+    var fields: [info.field_names.len]FieldInfo = undefined;
+    for (info.field_names, info.field_types, info.field_attrs, 0..) |name, field_type, attrs, index| {
+        fields[index] = .{ .name = name, .type = field_type, .default_value_ptr = attrs.default_value_ptr };
+    }
+    return fields;
+}
+
+/// The declaration of the struct field at a dotted `path` under `Parsed`.
+fn fieldInfoAt(comptime Parsed: type, comptime path: []const u8) FieldInfo {
+    if (mem.findScalar(u8, path, '.')) |dot| {
+        return fieldInfoAt(@FieldType(Parsed, path[0..dot]), path[dot + 1 ..]);
+    }
+    for (structFieldInfos(Parsed)) |field| {
+        if (mem.eql(u8, field.name, path)) return field;
+    }
+    @compileError(@typeName(Parsed) ++ " has no field `" ++ path ++ "` for a flag or argument to set");
+}
+
+/// The struct field at a dotted `path` under `parsed`.
+fn fieldAt(parsed: anytype, comptime path: []const u8) *fieldInfoAt(@TypeOf(parsed.*), path).type {
+    if (comptime mem.findScalar(u8, path, '.')) |dot| {
+        return fieldAt(&@field(parsed, path[0..dot]), path[dot + 1 ..]);
+    }
+    return &@field(parsed, path);
+}
+
+/// A struct field filled by a positional argument.
+const Positional = struct {
+    field: []const u8,
+    /// Set for an argument the command cannot run without: leaving it out
+    /// prints this text followed by the command's help.
+    missing: ?[]const u8 = null,
+};
+
+/// One subcommand: the `CliArgs` variant it parses into, the flags and
+/// positional arguments that fill that variant's struct, and the prose of its
+/// help. `parseArgsFor` and `helpText` are both generated from it, so the
+/// accepted arguments and the documented ones cannot differ.
+const Command = struct {
+    /// The word after `roc`; empty for the command that runs with no word.
+    name: []const u8,
+    tag: std.meta.Tag(CliArgs),
+    /// The command in one line, as `roc help` lists it.
+    summary: []const u8,
+    /// The opening of the command's own help, when that is not the summary.
+    about: ?[]const u8 = null,
+    /// The usage line after `roc <name>`.
+    usage: []const u8 = "",
+    /// A paragraph of help after the usage line.
+    details: ?[]const u8 = null,
+    /// The lines of help describing the positional arguments.
+    arguments: ?[]const u8 = null,
+    /// A paragraph of help after the options.
+    footer: ?[]const u8 = null,
+    flags: []const Flag = &.{},
+    /// Whether the command shares the package size limit flags of dependency
+    /// resolution, and whether it also accepts `--replace-dep`.
+    resolve: enum { none, limits, limits_and_replace_deps } = .none,
+    /// The leftmost column the option descriptions may start at.
+    min_column: usize = 0,
+    /// The fields positional arguments fill, in order.
+    positionals: []const Positional = &.{},
+    /// The slice field collecting every argument after `positionals` are filled.
+    rest: ?[]const u8 = null,
+    /// The one element `rest` holds when no argument reached it.
+    rest_default: ?[]const u8 = null,
+    /// Which unrecognized arguments are problems rather than positional arguments.
+    refuses: enum { nothing, dashed, double_dashed } = .nothing,
+    /// The fields no argument sets: the command's implementation fills them.
+    derived: []const []const u8 = &.{},
+
+    /// The payload of the `CliArgs` variant the command parses into.
+    fn Args(comptime cmd: Command) type {
+        return @FieldType(CliArgs, @tagName(cmd.tag));
+    }
+
+    /// The command's own flags followed by the shared ones it accepts.
+    fn allFlags(comptime cmd: Command) []const Flag {
+        const shared: []const Flag = switch (cmd.resolve) {
+            .none => &.{},
+            .limits => &limit_flags,
+            .limits_and_replace_deps => &replace_dep_and_limit_flags,
+        };
+        return cmd.flags ++ shared;
+    }
+
+    /// Whether leaving `flag` out is a problem: it sets a field that has no default.
+    fn requires(comptime cmd: Command, comptime flag: Flag) bool {
+        const path = flag.field orelse return false;
+        if (fieldInfoAt(cmd.Args(), path).defaultValue() != null) return false;
+        if (flag.form != .attached and flag.form != .separate) {
+            @compileError(flag.name ++ " cannot be required: only a flag with a value can set a field with no default");
+        }
+        return true;
+    }
+
+    /// Compile error unless the command and its args struct account for each
+    /// other: every struct field is set by exactly one of a flag, a positional
+    /// argument, `rest`, or the implementation (`derived`); a field with no
+    /// default is always set; and no prefix-matched flag shadows another.
+    fn check(comptime cmd: Command) void {
+        @setEvalBranchQuota(100_000);
+        const flags = cmd.allFlags();
+        for (flags, 0..) |flag, index| {
+            if (flag.form != .attached and flag.form != .rejected) continue;
+            for (flags, 0..) |other, other_index| {
+                if (index != other_index and other.form != .documented and mem.startsWith(u8, other.name, flag.name)) {
+                    @compileError(flag.name ++ " is matched by prefix, so it would also match " ++ other.name);
+                }
+            }
+        }
+
+        const Parsed = cmd.Args();
+        if (Parsed == void) return;
+        for (cmd.derived) |name| {
+            if (fieldInfoAt(Parsed, name).defaultValue() == null) {
+                @compileError(@typeName(Parsed) ++ "." ++ name ++ " is derived, so it needs a default");
+            }
+        }
+        for (structFieldInfos(Parsed)) |field| {
+            var setters: usize = 0;
+            for (cmd.derived) |name| setters += @intFromBool(mem.eql(u8, name, field.name));
+            if (cmd.rest) |name| setters += @intFromBool(mem.eql(u8, name, field.name));
+            for (cmd.positionals) |positional| {
+                if (!mem.eql(u8, positional.field, field.name)) continue;
+                setters += 1;
+                if ((positional.missing == null) != (field.defaultValue() != null)) {
+                    @compileError(@typeName(Parsed) ++ "." ++ field.name ++ " must have a default exactly when the argument may be left out");
+                }
+            }
+            var flagged = false;
+            for (flags) |flag| {
+                if (flag.marks) |name| flagged = flagged or mem.eql(u8, name, field.name);
+                if (flag.field) |path| flagged = flagged or mem.eql(u8, mem.sliceTo(path, '.'), field.name);
+            }
+            if (setters + @intFromBool(flagged) != 1) {
+                @compileError(@typeName(Parsed) ++ "." ++ field.name ++
+                    " must be set by exactly one of: a flag, a positional argument, `rest`, or `derived`");
+            }
+        }
+    }
+
+    /// The text `roc <name> --help` prints.
+    fn helpText(comptime cmd: Command) []const u8 {
+        @setEvalBranchQuota(100_000);
+        const Parsed = cmd.Args();
+        const help_flag = [_]Flag{.{ .name = "--help", .short = "-h", .help = "Print help" }};
+        const column = optionColumn(cmd.flags ++ help_flag, cmd.min_column);
+
+        var text: []const u8 = (cmd.about orelse cmd.summary) ++ "\n\nUsage: roc" ++
+            (if (cmd.name.len > 0) " " ++ cmd.name else "") ++ cmd.usage ++ "\n";
+        if (cmd.details) |details| text = text ++ "\n" ++ details ++ "\n";
+        if (cmd.arguments) |arguments| text = text ++ "\nArguments:\n" ++ arguments ++ "\n";
+        text = text ++ "\nOptions:\n" ++ optionLines(Parsed, cmd.flags, column);
+        const shared = cmd.allFlags()[cmd.flags.len..];
+        text = text ++ optionLines(Parsed, shared, optionColumn(shared, 0)) ++ optionLines(Parsed, &help_flag, column);
+        if (cmd.footer) |footer| text = text ++ "\n" ++ footer ++ "\n";
+        return text;
+    }
+};
+
+/// The column the descriptions of `flags` start at in help: two spaces past
+/// the longest listed flag, and no further left than `min_column`.
+fn optionColumn(comptime flags: []const Flag, comptime min_column: usize) usize {
+    var column = min_column;
+    for (flags) |flag| {
+        if (flag.help != null) column = @max(column, flag.spelling().len + 2);
+    }
+    return column;
+}
+
+/// The help lines of the listed `flags`, with descriptions starting at `column`.
+fn optionLines(comptime Parsed: type, comptime flags: []const Flag, comptime column: usize) []const u8 {
+    var text: []const u8 = "";
+    for (flags) |flag| {
+        if (flag.help == null) continue;
+        var lines = mem.splitScalar(u8, flag.description(Parsed), '\n');
+        text = text ++ flag.spelling() ++ &@as([column - flag.spelling().len]u8, @splat(' ')) ++ lines.first() ++ "\n";
+        while (lines.next()) |line| text = text ++ &@as([column]u8, @splat(' ')) ++ line ++ "\n";
+    }
+    return text;
+}
+
+const limit_flags = [_]Flag{
+    .{
+        .name = "--max-package-mb",
+        .form = .attached,
+        .field = "resolve_limits.max_package_mb",
+        .value_name = "<N>",
+        .valid = "size in MB (0 for unlimited)",
+        .help = std.fmt.comptimePrint("Per-package decompressed size limit in MB (default: {d}, 0 for unlimited)", .{
+            ResolutionConfig.default_max_package_expanded_bytes / bytes_per_mb,
+        }),
+    },
+    .{
+        .name = "--max-transitive-mb",
+        .form = .attached,
+        .field = "resolve_limits.max_transitive_mb",
+        .value_name = "<N>",
+        .valid = "size in MB (0 for unlimited)",
+        .help = std.fmt.comptimePrint(
+            \\Combined size limit in MB for each direct dependency's transitive packages
+            \\(defaults: packages {d}, platforms {d}; 0 for unlimited)
+            \\Also caps each platform bundle during extraction
+        , .{
+            ResolutionConfig.default_max_transitive_expanded_bytes / bytes_per_mb,
+            ResolutionConfig.default_max_platform_transitive_expanded_bytes / bytes_per_mb,
+        }),
+    },
+};
+
+/// `extractReplaceDeps` consumes `--replace-dep` before any command parses, so
+/// the commands that accept it only document it.
+const replace_dep_and_limit_flags = [_]Flag{.{
+    .name = replace_dep_flag ++ " OLD NEW",
+    .form = .documented,
+    .help =
+    \\Load NEW wherever a dependency declares exactly OLD, for this invocation only.
+    \\Each is a complete package URL or a path to a root .roc file; repeatable.
+    \\Run `roc deps` to see the declared sources
+    ,
+}} ++ limit_flags;
+
+const specialize_flag: Flag = .{
+    .name = "--specialize",
+    .form = .attached,
+    .field = "specialization_strategy",
+    .value_name = "<yes|no>",
+    .help = "Use lambda-set specialization (yes, default) or experimental boxy lowering (no)",
+};
+
+const target_flag: Flag = .{
+    .name = "--target",
+    .form = .attached,
+    .field = "target",
+    .value_name = "<target>",
+    .help = "Target to compile for. A v1 in the name (" ++ @tagName(RocTarget.x64v1musl) ++
+        ") targets the oldest CPUs of that architecture. Defaults to native target with musl for static linking. One of:" ++
+        target_roster: {
+            var lines: []const u8 = "";
+            for (RocTarget.roster) |line| lines = lines ++ "\n" ++ line;
+            break :target_roster lines;
+        },
+};
+
+/// Internal: names the file a watched command writes its input paths and byte states to.
+const watch_inputs_file_flag: Flag = .{ .name = "--watch-inputs-file", .form = .attached, .field = "watch_inputs_file" };
+
+fn jobsFlag(comptime help: []const u8) Flag {
+    return .{ .name = "--jobs", .short = "-j", .form = .attached, .field = "max_threads", .value_name = "<N>", .valid = "positive integer", .help = help };
+}
+
+const jobs_flag = jobsFlag("Max worker threads for parallel compilation (default: auto-detect CPU count)");
+
+const run_flags = [_]Flag{
+    .{ .name = "--", .form = .terminator },
+    .{ .name = "--version", .short = "-v", .form = .version },
+    .{ .name = "--opt", .form = .attached, .field = "opt", .marks = "explicit_opt", .value_name = "<opt>", .help = "Execution mode:" },
+    specialize_flag,
+    target_flag,
+    .{ .name = "--no-cache", .field = "no_cache", .help = "Disable compilation and executable caches (useful for compiler and platform developers)" },
+    .{ .name = "--no-color", .form = .documented, .help = "Do not use ANSI escape codes in CLI output" },
+    .{ .name = "--watch", .field = "explicit_watch" },
+    .{ .name = "--timings", .field = "timings" },
+    jobs_flag,
+};
+
+const run_derived = [_][]const u8{ "watch", "via_run_subcommand", "root_source_url" };
+
+/// Every subcommand, in the order `roc help` lists them.
+const commands = [_]Command{
+    .{
+        .name = "run",
+        .tag = .run,
+        .summary = "Run a .roc file, a bundle URL, or an installed shorthand",
+        .about = "Run a Roc application",
+        .usage = " [OPTIONS] [SOURCE] [-- [ARGS_FOR_APP]...]",
+        .details =
+        \\SOURCE may be:
+        \\  a .roc file path        roc run main.roc
+        \\  a bundle URL            roc run https://example.com/tool/1.2.3/<hash>.tar.zst
+        \\  an installed shorthand  roc run tokei      (see `roc install`)
+        \\
+        \\Running an installed shorthand executes the optimized binary that was
+        \\built at install time; no compilation or network access is needed.
+        \\File and URL sources accept the same options as the default `roc` command.
+        ,
+        .flags = &run_flags,
+        .resolve = .limits_and_replace_deps,
+        .min_column = 33,
+        .positionals = &.{.{ .field = "path" }},
+        .rest = "app_args",
+        .derived = &run_derived,
+    },
+    .{
+        .name = "install",
+        .tag = .install,
+        .summary = "Install a Roc app or glue spec from a bundle URL under a shorthand name",
+        .usage = " [OPTIONS] <SHORTHAND> <URL>",
+        .details =
+        \\Downloads the bundle, verifies its content hash, and builds it with
+        \\--opt=speed. An app becomes an optimized binary that `roc run
+        \\<SHORTHAND>` executes with no compile step; a glue spec becomes an
+        \\optimized plugin dylib that `roc glue <SHORTHAND> ...` loads directly.
+        \\Installations persist outside the cache and are scoped to the compiler
+        \\version that installed them.
+        ,
+        .arguments =
+        \\  <SHORTHAND>  A name of your choice: a lowercase letter followed by
+        \\               lowercase letters, digits, or underscores
+        \\  <URL>        A .tar.zst bundle URL ending in a base58-encoded BLAKE3 hash
+        ,
+        .flags = &.{jobsFlag("Max worker threads for the install-time build")},
+        .resolve = .limits,
+        .min_column = 33,
+        .positionals = &.{ .{ .field = "shorthand", .missing = "" }, .{ .field = "url", .missing = "" } },
+    },
+    .{
+        .name = "build",
+        .tag = .build,
+        .summary = "Build a binary from the given .roc file, but don't run it",
+        .usage = " [OPTIONS] [ROC_FILE]",
+        .arguments = "  [ROC_FILE] The .roc file to build [default: " ++ default_roc_file ++ "]",
+        .flags = &.{
+            .{ .name = "--output", .form = .attached, .field = "output", .value_name = "<output>", .help = "The full path to the output binary, including filename. To specify directory only, specify a path that ends in a directory separator (e.g. a slash)" },
+            .{ .name = "--opt", .form = .attached, .field = "opt", .value_name = "<opt>", .help = "Build mode:" },
+            specialize_flag,
+            target_flag,
+            .{ .name = "--debug", .field = "debug", .help = "Include debug information in the output binary" },
+            .{ .name = "--fuzz", .field = "fuzz", .help = "Add libFuzzer no-link coverage instrumentation; final linkage must provide the runtime" },
+            .{ .name = "--keep-temp", .field = "keep_temp", .help = "Keep all temporary directories created during build" },
+            .{ .name = "--verbose", .field = "verbose", .help = "Enable verbose output including cache statistics" },
+            .{ .name = "--timings", .field = "timings", .help = "Show how long each compilation phase took (shown automatically when a build is slow)" },
+            .{ .name = "--no-cache", .field = "no_cache", .help = "Disable compilation caching" },
+            .{ .name = "--watch", .field = "watch", .help = "Rebuild when source inputs change" },
+            watch_inputs_file_flag,
+            jobs_flag,
+            .{ .name = "--wasm-memory", .form = .attached, .field = "wasm_memory", .value_name = "<bytes>", .valid = "positive integer (bytes)", .help = "Initial memory size for WASM targets in bytes (default: sized from data segments plus the stack)" },
+            .{ .name = "--wasm-stack-size", .form = .attached, .field = "wasm_stack_size", .value_name = "<bytes>", .valid = "positive integer (bytes)", .help = std.fmt.comptimePrint("Stack size for WASM targets in bytes (default: {d} = {d}MB)", .{ linker.DEFAULT_WASM_STACK_SIZE, linker.DEFAULT_WASM_STACK_SIZE / bytes_per_mb }) },
+        },
+        .resolve = .limits_and_replace_deps,
+        .min_column = 37,
+        .positionals = &.{.{ .field = "path" }},
+        .derived = &.{
+            "require_executable_output",
+            "require_host_runnable_output",
+            "suppress_build_status",
+            "synthetic_output_basename",
+            "root_source_url",
+            "synthetic_default_platform",
+            "source_dir_override",
+            "synthetic_root_original_path",
+            "synthetic_root_original_source",
+            "synthetic_root_header_len",
+            "synthetic_root_header_lines",
+        },
+    },
+    .{
+        .name = "bundle",
+        .tag = .bundle,
+        .summary = "Bundle .roc files into a compressed archive",
+        .usage = " [OPTIONS] [ROC_FILES]...",
+        .arguments = "  [ROC_FILES]...  The .roc files to bundle [default: " ++ default_roc_file ++ "]",
+        .flags = &.{
+            .{ .name = "--output-dir", .form = .separate, .field = "output_dir", .value_name = "<PATH>", .help = "Directory to output the bundle to [default: current directory]" },
+            .{ .name = "--compression", .form = .separate, .field = "compression_level", .value_name = "<N>", .range = .{ 1, 22 }, .help = "Compression level" },
+        },
+        .rest = "paths",
+        .rest_default = default_roc_file,
+        .refuses = .double_dashed,
+    },
+    .{
+        .name = "unbundle",
+        .tag = .unbundle,
+        .summary = "Extract files from compressed .tar.zst archives",
+        .usage = " [OPTIONS] [ARCHIVE_FILES]...",
+        .arguments =
+        \\  [ARCHIVE_FILES]...  The .tar.zst files to unbundle
+        \\                      [default: all .tar.zst files in current directory]
+        ,
+        .rest = "paths",
+        .refuses = .dashed,
+    },
+    .{
+        .name = "test",
+        .tag = .test_cmd,
+        .summary = "Run all top-level `expect`s in a module, and in the modules and path dependencies it imports",
+        .about =
+        \\Run all top-level `expect`s in a main module and any modules it imports
+        \\
+        \\Dependencies reached through a filesystem path are tested too, because
+        \\they are yours to edit. Dependencies downloaded from a URL are not: their
+        \\`expect`s belong to whoever published them.
+        ,
+        .usage = " [OPTIONS] [ROC_FILE]",
+        .arguments = "  [ROC_FILE] The .roc file to test [default: " ++ default_roc_file ++ "]",
+        .flags = &.{
+            .{ .name = "--opt", .form = .attached, .field = "opt", .value_name = "<opt>", .help = "Execution mode:" },
+            specialize_flag,
+            .{ .name = "--main", .form = .attached, .field = "main", .value_name = "<main>", .help = "The .roc file of the main app/package module to resolve dependencies from" },
+            .{ .name = "--verbose", .field = "verbose", .help = "Enable verbose output showing individual test results" },
+            .{ .name = "--timings", .field = "timings", .help = "Show how long each compilation and test phase took" },
+            .{ .name = "--no-cache", .field = "no_cache", .help = "Disable compilation caching, force re-run all tests" },
+            .{ .name = "--watch", .field = "watch", .help = "Re-run when source inputs change" },
+            watch_inputs_file_flag,
+            jobs_flag,
+        },
+        .resolve = .limits_and_replace_deps,
+        .min_column = 38,
+        .positionals = &.{.{ .field = "path" }},
+        .refuses = .dashed,
+        .derived = &.{ "root_source_url", "main_source_url" },
+    },
+    .{
+        .name = "repl",
+        .tag = .repl,
+        .summary = "Launch the interactive Read Eval Print Loop (REPL)",
+        .usage = " [OPTIONS]",
+        .flags = &.{
+            .{ .name = "--opt", .form = .attached, .field = "opt", .value_name = "<opt>", .help = "Execution mode:" },
+            specialize_flag,
+        },
+    },
+    .{
+        .name = "fmt",
+        .tag = .fmt,
+        .summary = "Format a .roc file or the .roc files contained in a directory using standard Roc formatting",
+        .usage = " [OPTIONS] [DIRECTORY_OR_FILES]",
+        .arguments = "  [DIRECTORY_OR_FILES]",
+        .footer = "If DIRECTORY_OR_FILES is omitted, the .roc files in the current working directory are formatted.",
+        .flags = &.{
+            .{
+                .name = "--check",
+                .field = "check",
+                .help =
+                \\Checks that specified files are formatted
+                \\(If formatting is needed, return a non-zero exit code.)
+                ,
+            },
+            .{ .name = "--stdin", .field = "stdin", .help = "Format code from stdin; output to stdout" },
+            .{ .name = "--", .form = .terminator, .help = "Treat all remaining arguments as paths" },
+        },
+        .rest = "paths",
+        .rest_default = default_roc_file,
+        .refuses = .dashed,
+    },
+    .{
+        .name = "glue",
+        .tag = .glue,
+        .summary = "Generate native glue code from a Roc platform using a language-specific glue spec",
+        .about = "Generate glue code from a platform using a glue spec",
+        .usage = " [OPTIONS] <GLUE_SPEC> <GLUE_DIR> [ROC_FILE]",
+        .arguments = "  <GLUE_SPEC>  The glue spec .roc file that defines how to generate glue code\n" ++
+            "  <GLUE_DIR>   The output directory for generated glue files\n" ++
+            "  [ROC_FILE]   The platform .roc file to analyze [default: " ++ default_roc_file ++ "]",
+        .flags = &.{
+            .{ .name = "--opt", .form = .attached, .field = "opt", .value_name = "<opt>", .levels = &.{ .dev, .size, .speed }, .help = "Compile and run the glue spec with" },
+            specialize_flag,
+            .{ .name = "--no-cache", .field = "no_cache", .help = "Disable compilation caching" },
+        },
+        .positionals = &.{
+            .{ .field = "glue_spec", .missing = "Error: Missing required argument <GLUE_SPEC>\n\n" },
+            .{ .field = "output_dir", .missing = "Error: Missing required argument <GLUE_DIR>\n\n" },
+            .{ .field = "platform_path" },
+        },
+    },
+    .{
+        .name = "version",
+        .tag = .version,
+        .summary = "Print the Roc compiler's version",
+        .about = "Print the Roc compiler’s version",
+    },
+    .{
+        .name = "check",
+        .tag = .check,
+        .summary = "Check the code for problems, but don't build or run it",
+        .usage = " [OPTIONS] [ROC_FILE]",
+        .arguments = "  [ROC_FILE]  The .roc file to check [default: " ++ default_roc_file ++ "]",
+        .flags = &.{
+            .{ .name = "--specialize", .form = .rejected },
+            .{ .name = "--main", .form = .attached, .field = "main", .value_name = "<main>", .help = "The .roc file of the main app/package module to resolve dependencies from" },
+            .{ .name = "--time", .field = "time", .help = "Print timing information for each compilation phase. Will not print anything if everything is cached." },
+            .{ .name = "--timings", .field = "timings", .help = "Show how long each compilation phase took (shown automatically when checking is slow)" },
+            .{ .name = "--no-cache", .field = "no_cache", .help = "Disable caching" },
+            .{ .name = "--verbose", .field = "verbose", .help = "Enable verbose output including cache statistics" },
+            .{ .name = "--watch", .field = "watch", .help = "Re-run when source inputs change" },
+            watch_inputs_file_flag,
+            jobs_flag,
+        },
+        .resolve = .limits_and_replace_deps,
+        .positionals = &.{.{ .field = "path" }},
+        .derived = &.{ "root_source_url", "main_source_url" },
+    },
+    .{
+        .name = "docs",
+        .tag = .docs,
+        .summary = "Generate documentation for a Roc package or platform",
+        .about = "Generate documentation for a Roc package",
+        .usage = " [OPTIONS] [ROC_FILE]",
+        .arguments = "  [ROC_FILE]  The .roc file to generate docs for [default: " ++ default_roc_file ++ "]",
+        .flags = &.{
+            .{ .name = "--main", .form = .attached, .field = "main", .value_name = "<main>", .help = "The .roc file of the main app/package module to resolve dependencies from" },
+            .{ .name = "--output", .form = .attached, .field = "output", .value_name = "<dir>", .help = "Output directory for generated documentation" },
+            .{ .name = "--serve", .field = "serve", .help = "Start an HTTP server to view the documentation" },
+            .{ .name = "--with-lang-ref", .field = "with_lang_ref", .help = "Include the language reference articles from docs/langref" },
+            .{ .name = "--builtins", .field = "builtins", .help = "Document the builtins of this roc compiler instead of a .roc file" },
+            .{ .name = "--time", .field = "time", .help = "Print timing information for each compilation phase. Will not print anything if everything is cached." },
+            .{ .name = "--no-cache", .field = "no_cache", .help = "Disable caching" },
+            .{ .name = "--verbose", .field = "verbose", .help = "Enable verbose output including cache statistics" },
+        },
+        .resolve = .limits_and_replace_deps,
+        .positionals = &.{.{ .field = "path" }},
+        .derived = &.{ "root_source_url", "main_source_url" },
+    },
+    .{
+        .name = "deps",
+        .tag = .deps,
+        .summary = "Print the dependency tree of a Roc app, package, or platform",
+        .about =
+        \\Print the dependency tree of a Roc app, package, or platform
+        \\
+        \\Resolves the dependency graph and prints every declared source in full,
+        \\ready to copy into --replace-dep. Nothing is compiled or run. Packages
+        \\that are not cached yet are downloaded so their headers can be read.
+        ,
+        .usage = " [OPTIONS] [ROC_FILE]",
+        .arguments = "  [ROC_FILE]  The root .roc file of the app, package, or platform [default: " ++ default_roc_file ++ "]",
+        .resolve = .limits_and_replace_deps,
+        .min_column = 31,
+        .positionals = &.{.{ .field = "path" }},
+        .refuses = .dashed,
+    },
+    .{
+        .name = "bump",
+        .tag = .bump,
+        .summary = "Compare a package's public API against a previous version and report the required semver bump",
+        .about =
+        \\Compare a package's public API against a previous version and report the
+        \\required semver bump (patch, minor, or major) plus the next version.
+        ,
+        .usage = " --old <OLD> [OPTIONS] [ROC_FILE]",
+        .arguments = "  [ROC_FILE]  The new package's main .roc file [default: " ++ default_roc_file ++ "]",
+        .footer =
+        \\Both the old and new package must compile with this compiler. Only the
+        \\modules exposed by the package header are compared; platform
+        \\provides/requires are not yet part of the comparison.
+        \\
+        \\If this is the package's first release, there is nothing to compare—
+        \\publish it as 1.0.0.
+        ,
+        .flags = &.{
+            .{
+                .name = "--old",
+                .form = .separate,
+                .field = "old",
+                .value_name = "<OLD>",
+                .help =
+                \\The previous package version: a package URL, a
+                \\.tar.zst bundle, a directory, or a main .roc file
+                ,
+            },
+            .{
+                .name = "--old-version",
+                .form = .separate,
+                .field = "old_version",
+                .value_name = "<X.Y.Z>",
+                .help =
+                \\The previous version number (required unless
+                \\--old is a URL with a version path segment)
+                ,
+            },
+            .{
+                .name = "--expect",
+                .form = .separate,
+                .field = "expect",
+                .value_name = "<X.Y.Z>",
+                .help =
+                \\Fail unless this version bumps at least as far
+                \\as the API diff requires (for release CI)
+                ,
+            },
+            .{ .name = "--no-cache", .field = "no_cache", .help = "Disable caching" },
+            .{ .name = "--verbose", .field = "verbose", .help = "Enable verbose output" },
+        },
+        .resolve = .limits,
+        .positionals = &.{.{ .field = "path" }},
+        .refuses = .double_dashed,
+        .derived = &.{"root_source_url"},
+    },
+    .{
+        .name = "experimental-lsp",
+        .tag = .experimental_lsp,
+        .summary = "Start the experimental language server (LSP) implementation",
+        .about = "Start the experimental Roc language server (LSP)",
+        .usage = " [OPTIONS]",
+        .flags = &.{
+            .{
+                // LSP clients (e.g. vscode-languageclient) append a transport
+                // flag to the server command line.
+                .name = "--stdio",
+                .help =
+                \\Communicate over stdio (the default and only
+                \\transport; accepted for compatibility with LSP
+                \\clients that pass it explicitly)
+                ,
+            },
+            .{ .name = "--debug-transport", .field = "debug_io", .help = "Mirror all JSON-RPC traffic to a temp log file" },
+            .{ .name = "--debug-build", .field = "debug_build", .help = "Log build environment actions to the debug log" },
+            .{ .name = "--debug-syntax", .field = "debug_syntax", .help = "Log syntax/type checking steps to the debug log" },
+            .{ .name = "--debug-server", .field = "debug_server", .help = "Log server lifecycle details to the debug log" },
+        },
+    },
+    .{
+        .name = "help",
+        .tag = .help,
+        .summary = "Print this message",
+    },
+    .{
+        .name = "licenses",
+        .tag = .licenses,
+        .summary = "Prints license info for Roc as well as attributions to other projects used by Roc",
+    },
+};
+
+/// The command `roc` runs when its first argument names no subcommand. Its
+/// help is the top-level help.
+const default_command: Command = .{
+    .name = "",
+    .tag = .run,
+    .summary = "Run the given .roc file\nYou can use one of the COMMANDS below to do something else!",
+    .usage = " [OPTIONS] [ROC_FILE] [ARGS_FOR_APP]...\n       roc <COMMAND>",
+    .details = "Commands:" ++ command_roster: {
+        var width: usize = 0;
+        for (commands) |cmd| width = @max(width, cmd.name.len + 1);
+        var lines: []const u8 = "";
+        for (commands) |cmd| lines = lines ++ "\n  " ++ cmd.name ++ &@as([width - cmd.name.len]u8, @splat(' ')) ++ cmd.summary;
+        break :command_roster lines;
+    },
+    .arguments = "  [ROC_FILE]         The .roc file of an app to run [default: " ++ default_roc_file ++ "]\n" ++
+        "  [ARGS_FOR_APP]...  Arguments to pass into the app being run\n" ++
+        "                     e.g. `roc app.roc -- arg1 arg2`",
+    .flags = &run_flags,
+    .resolve = .limits_and_replace_deps,
+    .min_column = 37,
+    .positionals = &.{.{ .field = "path" }},
+    .rest = "app_args",
+    .derived = &run_derived,
 };
 
 /// Parse a list of arguments.
@@ -458,1293 +1152,264 @@ pub fn parseWithGlobalOptions(alloc: mem.Allocator, std_io: std.Io, args: []cons
     };
 }
 
-/// Subcommands that never load a dependency graph, so `--replace-dep` is an
-/// unexpected argument for them however the rest of the line parses.
-const commands_without_dependency_graph = [_][]const u8{
-    "install", "bundle", "unbundle", "fmt", "repl", "glue", "version", "bump", "experimental-lsp", "help", "licenses",
-};
-
 fn parseCommand(alloc: mem.Allocator, std_io: std.Io, all_args: []const []const u8) ParseError!CliArgs {
     const extraction = try extractReplaceDeps(alloc, all_args);
     defer alloc.free(extraction.args);
     if (extraction.problem) |problem| return CliArgs{ .problem = problem };
+    const args = extraction.args;
+    const replace_deps = extraction.replace_deps;
 
-    // Reject the flag by command name before command-specific parsing, so a
-    // `--help` or a missing-argument problem in that command cannot hide it.
-    if (extraction.replace_deps.len > 0 and extraction.args.len > 0) {
-        for (commands_without_dependency_graph) |cmd| {
-            if (mem.eql(u8, extraction.args[0], cmd)) {
-                return CliArgs{ .problem = .{ .unexpected_argument = .{ .cmd = cmd, .arg = replace_dep_flag } } };
+    if (args.len > 0) {
+        inline for (commands) |cmd| {
+            if (mem.eql(u8, args[0], cmd.name)) {
+                // Only commands that load a dependency graph acquire replacement
+                // behavior. The others reject the flag by command name before
+                // command-specific parsing, so a `--help` or a missing-argument
+                // problem in that command cannot hide it.
+                if (cmd.resolve != .limits_and_replace_deps and replace_deps.len > 0) {
+                    return unexpectedArgument(cmd.name, replace_dep_flag);
+                }
+                const parsed = if (cmd.tag == .help)
+                    CliArgs{ .help = main_help }
+                else if (cmd.tag == .run)
+                    // `roc run` accepts everything the default run accepts, plus
+                    // installed shorthands (which the default run rejects to keep
+                    // the subcommand namespace separate from the shorthand namespace).
+                    try parseRun(cmd, alloc, args[1..])
+                else if (cmd.tag == .unbundle)
+                    try parseUnbundle(cmd, alloc, std_io, args[1..])
+                else if (cmd.tag == .docs)
+                    try parseDocs(cmd, alloc, args[1..])
+                else
+                    try parseArgsFor(cmd, alloc, args[1..]);
+                return withReplaceDeps(cmd, alloc, parsed, replace_deps, all_args[0]);
             }
         }
     }
+    const parsed = try parseRun(default_command, alloc, args);
+    return withReplaceDeps(default_command, alloc, parsed, replace_deps, if (all_args.len > 0) all_args[0] else "");
+}
 
-    var parsed = try parseCommandWithoutReplaceDeps(alloc, std_io, extraction.args);
-    if (extraction.replace_deps.len == 0) return parsed;
+/// Hands a parsed command the invocation's `--replace-dep` occurrences. Help
+/// and problems pass through; any other outcome that is not the command's own
+/// variant has nowhere to put them, so the flag is unexpected there.
+fn withReplaceDeps(comptime cmd: Command, alloc: mem.Allocator, parsed: CliArgs, replace_deps: ReplaceDepArgs, first_arg: []const u8) CliArgs {
+    if (replace_deps.len == 0 or parsed == .help or parsed == .problem) return parsed;
+    if (cmd.resolve == .limits_and_replace_deps and parsed == cmd.tag) {
+        var result = parsed;
+        @field(result, @tagName(cmd.tag)).resolve_limits.replace_deps = replace_deps;
+        return result;
+    }
+    parsed.deinit(alloc);
+    return unexpectedArgument(first_arg, replace_dep_flag);
+}
 
-    // Only commands that load a dependency graph acquire replacement
-    // behavior. The name check above already rejected everything else, so
-    // the remaining arms only keep this switch exhaustive.
-    switch (parsed) {
-        .run => |*run| run.resolve_limits.replace_deps = extraction.replace_deps,
-        .check => |*check| check.resolve_limits.replace_deps = extraction.replace_deps,
-        .build => |*build| build.resolve_limits.replace_deps = extraction.replace_deps,
-        .test_cmd => |*test_cmd| test_cmd.resolve_limits.replace_deps = extraction.replace_deps,
-        .docs => |*docs| docs.resolve_limits.replace_deps = extraction.replace_deps,
-        .deps => |*deps| deps.resolve_limits.replace_deps = extraction.replace_deps,
-        .help, .problem => {},
-        .fmt, .bundle, .unbundle, .repl, .glue, .version, .bump, .install, .experimental_lsp, .licenses => {
-            const cmd = all_args[0];
+const main_help = default_command.helpText();
+
+/// `roc docs`. `--builtins` documents the compiler's embedded builtin module,
+/// so there is no file to document and no main file to resolve packages from.
+fn parseDocs(comptime cmd: Command, alloc: mem.Allocator, args: []const []const u8) mem.Allocator.Error!CliArgs {
+    const parsed = try parseArgsFor(cmd, alloc, args);
+    if (parsed != .docs or !parsed.docs.builtins) return parsed;
+    for (args) |arg| {
+        if (arg.len == 0 or arg[0] != '-') {
             parsed.deinit(alloc);
-            return CliArgs{ .problem = .{ .unexpected_argument = .{ .cmd = cmd, .arg = replace_dep_flag } } };
-        },
+            return unexpectedArgument(cmd.name, arg);
+        }
+    }
+    if (parsed.docs.main != null) {
+        parsed.deinit(alloc);
+        return unexpectedArgument(cmd.name, "--main");
     }
     return parsed;
 }
 
-fn parseCommandWithoutReplaceDeps(alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) ParseError!CliArgs {
-    if (args.len == 0) return try parseRun(alloc, args, .default);
-
-    // `roc run` accepts everything the default run accepts, plus installed
-    // shorthands (which the default run rejects to keep the subcommand
-    // namespace separate from the shorthand namespace).
-    if (mem.eql(u8, args[0], "run")) return try parseRun(alloc, args[1..], .run_subcommand);
-    if (mem.eql(u8, args[0], "install")) return parseInstall(args[1..]);
-    if (mem.eql(u8, args[0], "check")) return parseCheck(args[1..]);
-    if (mem.eql(u8, args[0], "build")) return parseBuild(args[1..]);
-    if (mem.eql(u8, args[0], "bundle")) return try parseBundle(alloc, args[1..]);
-    if (mem.eql(u8, args[0], "unbundle")) return try parseUnbundle(alloc, std_io, args[1..]);
-    if (mem.eql(u8, args[0], "fmt")) return try parseFormat(alloc, args[1..]);
-    if (mem.eql(u8, args[0], "test")) return parseTest(args[1..]);
-    if (mem.eql(u8, args[0], "repl")) return parseRepl(args[1..]);
-    if (mem.eql(u8, args[0], "glue")) return parseGlue(args[1..]);
-    if (mem.eql(u8, args[0], "version")) return parseVersion(args[1..]);
-    if (mem.eql(u8, args[0], "docs")) return parseDocs(args[1..]);
-    if (mem.eql(u8, args[0], "deps")) return parseDeps(args[1..]);
-    if (mem.eql(u8, args[0], "bump")) return parseBump(args[1..]);
-    if (mem.eql(u8, args[0], "experimental-lsp")) return parseExperimentalLsp(args[1..]);
-    if (mem.eql(u8, args[0], "help")) return CliArgs{ .help = main_help };
-    if (mem.eql(u8, args[0], "licenses")) return parseLicenses(args[1..]);
-
-    return try parseRun(alloc, args, .default);
+fn unexpectedArgument(cmd: []const u8, arg: []const u8) CliArgs {
+    return .{ .problem = .{ .unexpected_argument = .{ .cmd = cmd, .arg = arg } } };
 }
 
-const main_help =
-    \\Run the given .roc file
-    \\You can use one of the COMMANDS below to do something else!
-    \\
-    \\Usage: roc [OPTIONS] [ROC_FILE] [ARGS_FOR_APP]...
-    \\       roc <COMMAND>
-    \\
-    \\Commands:
-    \\  run              Run a .roc file, a bundle URL, or an installed shorthand
-    \\  install          Install a Roc app or glue spec from a bundle URL under a shorthand name
-    \\  build            Build a binary from the given .roc file, but don't run it
-    \\  bundle           Bundle .roc files into a compressed archive
-    \\  unbundle         Extract files from compressed .tar.zst archives
-    \\  test             Run all top-level `expect`s in a module, and in the modules and path dependencies it imports
-    \\  repl             Launch the interactive Read Eval Print Loop (REPL)
-    \\  fmt              Format a .roc file or the .roc files contained in a directory using standard Roc formatting
-    \\  glue             Generate native glue code from a Roc platform using a language-specific glue spec
-    \\  version          Print the Roc compiler's version
-    \\  check            Check the code for problems, but don't build or run it
-    \\  docs             Generate documentation for a Roc package or platform
-    \\  deps             Print the dependency tree of a Roc app, package, or platform
-    \\  bump             Compare a package's public API against a previous version and report the required semver bump
-    \\  experimental-lsp Start the experimental language server (LSP) implementation
-    \\  help             Print this message
-    \\  licenses         Prints license info for Roc as well as attributions to other projects used by Roc
-    \\
-    \\Arguments:
-    \\  [ROC_FILE]         The .roc file of an app to run [default: main.roc]
-    \\  [ARGS_FOR_APP]...  Arguments to pass into the app being run
-    \\                     e.g. `roc app.roc -- arg1 arg2`
-    \\Options:
-    \\      --opt=<opt>                    Execution mode: dev (default, fast compilation), interpreter, size (LLVM) or speed (LLVM)
-    \\      --specialize=<yes|no>          Use lambda-set specialization (yes, default) or experimental boxy lowering (no)
-    \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). A v1 in the name (x64v1musl) targets the oldest CPUs of that architecture. Defaults to native target with musl for static linking
-    \\      --no-cache                     Disable compilation and executable caches (useful for compiler and platform developers)
-    \\      --no-color                     Do not use ANSI escape codes in CLI output
-    \\  -j, --jobs=<N>                     Max worker threads for parallel compilation (default: auto-detect CPU count)
-++ "\n" ++ resolve_limit_help ++ "\n";
+/// Parses the arguments after a command's name from its `Command` declaration.
+/// Each flag is recognized by the comparison its form names; an argument no
+/// flag recognizes is positional unless the command refuses it.
+fn parseArgsFor(comptime cmd: Command, alloc: mem.Allocator, args: []const []const u8) mem.Allocator.Error!CliArgs {
+    comptime cmd.check();
+    const Parsed = cmd.Args();
+    const flags = comptime cmd.allFlags();
+    const help = comptime cmd.helpText();
 
-const run_help =
-    \\Run a Roc application
-    \\
-    \\Usage: roc run [OPTIONS] [SOURCE] [-- [ARGS_FOR_APP]...]
-    \\
-    \\SOURCE may be:
-    \\  a .roc file path        roc run main.roc
-    \\  a bundle URL            roc run https://example.com/tool/1.2.3/<hash>.tar.zst
-    \\  an installed shorthand  roc run tokei      (see `roc install`)
-    \\
-    \\Running an installed shorthand executes the optimized binary that was
-    \\built at install time; no compilation or network access is needed.
-    \\File and URL sources accept the same options as the default `roc` command.
-    \\Options:
-++ "\n" ++ resolve_limit_help ++ "\n" ++
-    \\  -h, --help                     Print help
-    \\
-;
-
-const install_help =
-    \\Install a Roc app or glue spec from a bundle URL under a shorthand name
-    \\
-    \\Usage: roc install [OPTIONS] <SHORTHAND> <URL>
-    \\
-    \\Downloads the bundle, verifies its content hash, and builds it with
-    \\--opt=speed. An app becomes an optimized binary that `roc run
-    \\<SHORTHAND>` executes with no compile step; a glue spec becomes an
-    \\optimized plugin dylib that `roc glue <SHORTHAND> ...` loads directly.
-    \\Installations persist outside the cache and are scoped to the compiler
-    \\version that installed them.
-    \\
-    \\Arguments:
-    \\  <SHORTHAND>  A name of your choice: a lowercase letter followed by
-    \\               lowercase letters, digits, or underscores
-    \\  <URL>        A .tar.zst bundle URL ending in a base58-encoded BLAKE3 hash
-    \\
-    \\Options:
-    \\  -j, --jobs=<N>                 Max worker threads for the install-time build
-;
-
-const install_help_with_limits = install_help ++ "\n" ++ install_resolve_limit_help ++ "\n";
-
-fn parseCheck(args: []const []const u8) CliArgs {
-    var path: ?[]const u8 = null;
-    var main: ?[]const u8 = null;
-    var time: bool = false;
-    var timings: bool = false;
-    var no_cache: bool = false;
-    var verbose: bool = false;
-    var watch: bool = false;
-    var watch_inputs_file: ?[]const u8 = null;
-    var max_threads: ?usize = null;
-    var resolve_limits: ResolveLimitArgs = .{};
-
-    for (args) |arg| {
-        if (isHelpFlag(arg)) {
-            return CliArgs{ .help =
-            \\Check the code for problems, but don't build or run it
-            \\
-            \\Usage: roc check [OPTIONS] [ROC_FILE]
-            \\
-            \\Arguments:
-            \\  [ROC_FILE]  The .roc file to check [default: main.roc]
-            \\
-            \\Options:
-            \\      --main=<main>  The .roc file of the main app/package module to resolve dependencies from
-            \\      --time         Print timing information for each compilation phase. Will not print anything if everything is cached.
-            \\      --timings      Show how long each compilation phase took (shown automatically when checking is slow)
-            \\      --no-cache     Disable caching
-            \\      --verbose      Enable verbose output including cache statistics
-            \\      --watch        Re-run when source inputs change
-            \\  -j, --jobs=<N>     Max worker threads for parallel compilation (default: auto-detect CPU count)
-            ++ "\n" ++ resolve_limit_help ++ "\n" ++
-                \\  -h, --help         Print help
-                \\
-            };
-        } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
-            if (parseResolveLimitProblem(arg, &resolve_limits)) |problem| return CliArgs{ .problem = problem };
-        } else if (mem.startsWith(u8, arg, "--specialize")) {
-            return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "check", .arg = arg } } };
-        } else if (mem.startsWith(u8, arg, "--main")) {
-            if (getFlagValue(arg)) |value| {
-                main = value;
-            } else {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--main" } } };
-            }
-        } else if (mem.eql(u8, arg, "--time")) {
-            time = true;
-        } else if (mem.eql(u8, arg, "--timings")) {
-            timings = true;
-        } else if (mem.eql(u8, arg, "--no-cache")) {
-            no_cache = true;
-        } else if (mem.eql(u8, arg, "--verbose")) {
-            verbose = true;
-        } else if (mem.eql(u8, arg, "--watch")) {
-            watch = true;
-        } else if (mem.startsWith(u8, arg, "--watch-inputs-file")) {
-            if (getFlagValue(arg)) |value| {
-                watch_inputs_file = value;
-            } else {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--watch-inputs-file" } } };
-            }
-        } else if (mem.startsWith(u8, arg, "--jobs")) {
-            if (getFlagValue(arg)) |value| {
-                max_threads = std.fmt.parseInt(usize, value, 10) catch {
-                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--jobs", .value = value, .valid_options = "positive integer" } } };
-                };
-            } else {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--jobs" } } };
-            }
-        } else if (mem.startsWith(u8, arg, "-j")) {
-            // Handle -jN format (e.g., -j4)
-            const value = arg[2..];
-            if (value.len == 0) {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "-j" } } };
-            }
-            max_threads = std.fmt.parseInt(usize, value, 10) catch {
-                return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "-j", .value = value, .valid_options = "positive integer" } } };
-            };
-        } else {
-            if (path != null) {
-                return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "check", .arg = arg } } };
-            }
-            path = arg;
+    var parsed: Parsed = undefined;
+    if (Parsed != void) {
+        inline for (structFieldInfos(Parsed)) |field| {
+            if (comptime field.defaultValue()) |default| @field(parsed, field.name) = default;
         }
     }
-
-    return CliArgs{ .check = CheckArgs{ .path = path orelse "main.roc", .main = main, .time = time, .timings = timings, .no_cache = no_cache, .verbose = verbose, .watch = watch, .watch_inputs_file = watch_inputs_file, .max_threads = max_threads, .resolve_limits = resolve_limits } };
-}
-
-fn parseBuild(args: []const []const u8) CliArgs {
-    var path: ?[]const u8 = null;
-    var opt: OptLevel = default_build_opt;
-    var specialization_strategy: ?SpecializationStrategy = null;
-    var target: ?[]const u8 = null;
-    var output: ?[]const u8 = null;
-    var debug: bool = false;
-    var fuzz: bool = false;
-    var keep_temp: bool = false;
-    var verbose: bool = false;
-    var timings: bool = false;
-    var no_cache: bool = false;
-    var max_threads: ?usize = null;
-    var wasm_memory: ?usize = null;
-    var wasm_stack_size: ?usize = null;
-    var watch: bool = false;
-    var watch_inputs_file: ?[]const u8 = null;
-    var resolve_limits: ResolveLimitArgs = .{};
-    for (args) |arg| {
-        if (isHelpFlag(arg)) {
-            return CliArgs{ .help =
-            \\Build a binary from the given .roc file, but don't run it
-            \\
-            \\Usage: roc build [OPTIONS] [ROC_FILE]
-            \\
-            \\Arguments:
-            \\  [ROC_FILE] The .roc file to build [default: main.roc]
-            \\
-            \\Options:
-            \\      --output=<output>              The full path to the output binary, including filename. To specify directory only, specify a path that ends in a directory separator (e.g. a slash)
-            \\      --opt=<opt>                    Build mode: speed (default LLVM optimized), size (LLVM optimized for binary size), dev (native dev backend), or interpreter (embedded interpreter backend)
-            \\      --specialize=<yes|no>          Use lambda-set specialization (yes, default) or experimental boxy lowering (no)
-            \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). A v1 in the name (x64v1musl) targets the oldest CPUs of that architecture. Defaults to native target with musl for static linking
-            \\      --debug                        Include debug information in the output binary
-            \\      --fuzz                         Add libFuzzer no-link coverage instrumentation; final linkage must provide the runtime
-            \\      --keep-temp                    Keep all temporary directories created during build
-            \\      --verbose                      Enable verbose output including cache statistics
-            \\      --timings                      Show how long each compilation phase took (shown automatically when a build is slow)
-            \\      --no-cache                     Disable compilation caching
-            \\      --watch                        Rebuild when source inputs change
-            \\  -j, --jobs=<N>                     Max worker threads for parallel compilation (default: auto-detect CPU count)
-            \\      --wasm-memory=<bytes>          Initial memory size for WASM targets in bytes (default: sized from data segments plus the stack)
-            \\      --wasm-stack-size=<bytes>      Stack size for WASM targets in bytes (default: 8388608 = 8MB)
-            ++ "\n" ++ resolve_limit_help ++ "\n" ++
-                \\      -h, --help                     Print help
-                \\
-            };
-        } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
-            if (parseResolveLimitProblem(arg, &resolve_limits)) |problem| return CliArgs{ .problem = problem };
-        } else if (mem.startsWith(u8, arg, "--specialize")) {
-            switch (parseSpecializeFlag(arg)) {
-                .ok => |strategy| specialization_strategy = strategy,
-                .problem => |problem| return CliArgs{ .problem = problem },
-                .not_matched => unreachable,
-            }
-        } else if (mem.startsWith(u8, arg, "--target")) {
-            if (getFlagValue(arg)) |value| {
-                target = value;
-            } else {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--target" } } };
-            }
-        } else if (mem.startsWith(u8, arg, "--output")) {
-            if (getFlagValue(arg)) |value| {
-                output = value;
-            } else {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--output" } } };
-            }
-        } else if (mem.startsWith(u8, arg, "--opt")) {
-            if (getFlagValue(arg)) |value| {
-                if (OptLevel.from_str(value)) |level| {
-                    opt = level;
-                } else {
-                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--opt", .value = value, .valid_options = "dev,interpreter,speed,size" } } };
-                }
-            } else {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--opt" } } };
-            }
-        } else if (mem.eql(u8, arg, "--debug")) {
-            debug = true;
-        } else if (mem.eql(u8, arg, "--fuzz")) {
-            fuzz = true;
-        } else if (mem.eql(u8, arg, "--keep-temp")) {
-            keep_temp = true;
-        } else if (mem.startsWith(u8, arg, "--wasm-memory")) {
-            if (getFlagValue(arg)) |value| {
-                wasm_memory = std.fmt.parseInt(usize, value, 10) catch {
-                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--wasm-memory", .value = value, .valid_options = "positive integer (bytes)" } } };
-                };
-            } else {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--wasm-memory" } } };
-            }
-        } else if (mem.startsWith(u8, arg, "--wasm-stack-size")) {
-            if (getFlagValue(arg)) |value| {
-                wasm_stack_size = std.fmt.parseInt(usize, value, 10) catch {
-                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--wasm-stack-size", .value = value, .valid_options = "positive integer (bytes)" } } };
-                };
-            } else {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--wasm-stack-size" } } };
-            }
-        } else if (mem.eql(u8, arg, "--verbose")) {
-            verbose = true;
-        } else if (mem.eql(u8, arg, "--timings")) {
-            timings = true;
-        } else if (mem.eql(u8, arg, "--no-cache")) {
-            no_cache = true;
-        } else if (mem.eql(u8, arg, "--watch")) {
-            watch = true;
-        } else if (mem.startsWith(u8, arg, "--watch-inputs-file")) {
-            if (getFlagValue(arg)) |value| {
-                watch_inputs_file = value;
-            } else {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--watch-inputs-file" } } };
-            }
-        } else if (mem.startsWith(u8, arg, "--jobs")) {
-            if (getFlagValue(arg)) |value| {
-                max_threads = std.fmt.parseInt(usize, value, 10) catch {
-                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--jobs", .value = value, .valid_options = "positive integer" } } };
-                };
-            } else {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--jobs" } } };
-            }
-        } else if (mem.startsWith(u8, arg, "-j")) {
-            // Handle -j<N> (no space) or -j <N> (with space handled by next iteration)
-            const value = arg[2..];
-            if (value.len > 0) {
-                max_threads = std.fmt.parseInt(usize, value, 10) catch {
-                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "-j", .value = value, .valid_options = "positive integer" } } };
-                };
-            } else {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "-j" } } };
-            }
-        } else {
-            if (path != null) {
-                return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "build", .arg = arg } } };
-            }
-            path = arg;
-        }
-    }
-    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .specialization_strategy = specialization_strategy, .target = target, .output = output, .debug = debug, .fuzz = fuzz, .keep_temp = keep_temp, .verbose = verbose, .timings = timings, .no_cache = no_cache, .watch = watch, .watch_inputs_file = watch_inputs_file, .max_threads = max_threads, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .resolve_limits = resolve_limits } };
-}
-
-fn parseBundle(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
-    var paths = try std.array_list.Managed([]const u8).initCapacity(alloc, 16);
-    var output_dir: ?[]const u8 = null;
-    var compression_level: i32 = 3;
+    var flags_given = @as([flags.len]bool, @splat(false));
+    var positional_count: usize = 0;
+    var rest = std.array_list.Managed([]const u8).init(alloc);
+    defer rest.deinit();
+    var flags_ended = false;
 
     var i: usize = 0;
-    while (i < args.len) : (i += 1) {
+    next_arg: while (i < args.len) : (i += 1) {
         const arg = args[i];
-        if (isHelpFlag(arg)) {
-            paths.deinit();
-            return CliArgs{ .help =
-            \\Bundle .roc files into a compressed archive
-            \\
-            \\Usage: roc bundle [OPTIONS] [ROC_FILES]...
-            \\
-            \\Arguments:
-            \\  [ROC_FILES]...  The .roc files to bundle [default: main.roc]
-            \\
-            \\Options:
-            \\      --output-dir <PATH>  Directory to output the bundle to [default: current directory]
-            \\      --compression <N>    Compression level (1-22) [default: 3]
-            \\  -h, --help               Print help
-            \\
+        if (!flags_ended) {
+            if (isHelpFlag(arg)) return .{ .help = help };
+
+            inline for (flags, 0..) |flag, flag_index| {
+                switch (flag.form) {
+                    .toggle => if (mem.eql(u8, arg, flag.name)) {
+                        if (flag.field) |path| fieldAt(&parsed, path).* = true;
+                        continue :next_arg;
+                    },
+                    .attached => {
+                        var written: ?[]const u8 = null;
+                        var maybe_value: ?[]const u8 = null;
+                        if (mem.startsWith(u8, arg, flag.name)) {
+                            written = flag.name;
+                            maybe_value = getFlagValue(arg);
+                        } else if (flag.short) |short| {
+                            if (mem.startsWith(u8, arg, short)) {
+                                written = short;
+                                if (arg.len > short.len) maybe_value = arg[short.len..];
+                            }
+                        }
+                        if (written) |spelling| {
+                            const value = maybe_value orelse return .{ .problem = .{ .missing_flag_value = .{ .flag = spelling } } };
+                            if (setFlagValue(flag, fieldAt(&parsed, flag.field.?), spelling, value)) |problem| return .{ .problem = problem };
+                            if (flag.marks) |name| @field(parsed, name) = true;
+                            flags_given[flag_index] = true;
+                            continue :next_arg;
+                        }
+                    },
+                    .separate => if (mem.eql(u8, arg, flag.name)) {
+                        if (i + 1 >= args.len) return .{ .problem = .{ .missing_flag_value = .{ .flag = flag.name } } };
+                        i += 1;
+                        if (setFlagValue(flag, fieldAt(&parsed, flag.field.?), flag.name, args[i])) |problem| return .{ .problem = problem };
+                        flags_given[flag_index] = true;
+                        continue :next_arg;
+                    },
+                    .terminator => if (mem.eql(u8, arg, flag.name)) {
+                        flags_ended = true;
+                        continue :next_arg;
+                    },
+                    .version => if (mem.eql(u8, arg, flag.name) or mem.eql(u8, arg, flag.short.?)) return .version,
+                    .rejected => if (mem.startsWith(u8, arg, flag.name)) return unexpectedArgument(cmd.name, arg),
+                    .documented => {},
+                }
+            }
+
+            const refused = switch (cmd.refuses) {
+                .nothing => false,
+                .dashed => mem.startsWith(u8, arg, "-"),
+                .double_dashed => mem.startsWith(u8, arg, "--"),
             };
-        } else if (mem.eql(u8, arg, "--output-dir")) {
-            if (i + 1 >= args.len) {
-                paths.deinit();
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--output-dir" } } };
+            if (refused) return unexpectedArgument(cmd.name, arg);
+
+            inline for (cmd.positionals, 0..) |positional, index| {
+                if (positional_count == index) {
+                    @field(parsed, positional.field) = arg;
+                    positional_count += 1;
+                    continue :next_arg;
+                }
             }
-            i += 1;
-            output_dir = args[i];
-        } else if (mem.eql(u8, arg, "--compression")) {
-            if (i + 1 >= args.len) {
-                paths.deinit();
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--compression" } } };
-            }
-            i += 1;
-            compression_level = std.fmt.parseInt(i32, args[i], 10) catch {
-                paths.deinit();
-                return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .value = args[i], .flag = "--compression", .valid_options = "integer between 1 and 22" } } };
-            };
-            if (compression_level < 1 or compression_level > 22) {
-                paths.deinit();
-                return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .value = args[i], .flag = "--compression", .valid_options = "integer between 1 and 22" } } };
-            }
-        } else if (mem.startsWith(u8, arg, "--")) {
-            paths.deinit();
-            return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "bundle", .arg = arg } } };
-        } else {
-            try paths.append(arg);
+        }
+        if (cmd.rest == null) return unexpectedArgument(cmd.name, arg);
+        try rest.append(arg);
+    }
+
+    inline for (cmd.positionals, 0..) |positional, index| {
+        if (positional.missing) |complaint| {
+            if (positional_count <= index) return .{ .help = complaint ++ help };
         }
     }
-
-    // Default to main.roc if no files specified
-    if (paths.items.len == 0) {
-        try paths.append("main.roc");
+    inline for (flags, 0..) |flag, flag_index| {
+        if (comptime cmd.requires(flag)) {
+            if (!flags_given[flag_index]) return .{ .problem = .{ .missing_flag_value = .{ .flag = flag.name } } };
+        }
     }
-
-    return CliArgs{ .bundle = BundleArgs{
-        .paths = try paths.toOwnedSlice(),
-        .output_dir = output_dir,
-        .compression_level = compression_level,
-    } };
+    if (cmd.rest) |rest_field| {
+        if (rest.items.len == 0) {
+            if (cmd.rest_default) |default| try rest.append(default);
+        }
+        @field(parsed, rest_field) = try rest.toOwnedSlice();
+    }
+    return @unionInit(CliArgs, @tagName(cmd.tag), parsed);
 }
 
-fn parseUnbundle(alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) ParseError!CliArgs {
-    var paths = try std.array_list.Managed([]const u8).initCapacity(alloc, 16);
+/// Stores the value written for `flag` in the field the flag sets, parsed as
+/// the field's type requires. Returns the problem when the value is not one
+/// the field accepts; `written` is the spelling of the flag to report.
+fn setFlagValue(comptime flag: Flag, field: anytype, written: []const u8, value: []const u8) ?ArgProblem {
+    const Field = @TypeOf(field.*);
+    const valid_options: []const u8 = comptime if (Field == OptLevel)
+        optLevelList(flag.levels, .names)
+    else if (Field == ?SpecializationStrategy)
+        SpecializationStrategy.cliOptions()
+    else if (flag.range) |range|
+        std.fmt.comptimePrint("integer between {d} and {d}", .{ range[0], range[1] })
+    else
+        flag.valid;
+    const invalid: ArgProblem = .{ .invalid_flag_value = .{ .flag = written, .value = value, .valid_options = valid_options } };
 
-    for (args) |arg| {
-        if (isHelpFlag(arg)) {
-            paths.deinit();
-            return CliArgs{ .help =
-            \\Extract files from compressed .tar.zst archives
-            \\
-            \\Usage: roc unbundle [OPTIONS] [ARCHIVE_FILES]...
-            \\
-            \\Arguments:
-            \\  [ARCHIVE_FILES]...  The .tar.zst files to unbundle
-            \\                      [default: all .tar.zst files in current directory]
-            \\
-            \\Options:
-            \\  -h, --help  Print help
-            \\
-            };
-        } else if (mem.startsWith(u8, arg, "-")) {
-            paths.deinit();
-            return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "unbundle", .arg = arg } } };
-        } else {
-            try paths.append(arg);
+    if (Field == []const u8 or Field == ?[]const u8) {
+        field.* = value;
+    } else if (Field == OptLevel) {
+        inline for (flag.levels) |level| {
+            if (mem.eql(u8, value, @tagName(level))) {
+                field.* = level;
+                return null;
+            }
         }
+        return invalid;
+    } else if (Field == ?SpecializationStrategy) {
+        field.* = SpecializationStrategy.fromCliValue(value) orelse return invalid;
+    } else {
+        const Int = if (@typeInfo(Field) == .optional) @typeInfo(Field).optional.child else Field;
+        const number = std.fmt.parseInt(Int, value, 10) catch return invalid;
+        if (flag.range) |range| {
+            if (number < range[0] or number > range[1]) return invalid;
+        }
+        field.* = number;
     }
+    return null;
+}
+
+fn parseRun(comptime cmd: Command, alloc: mem.Allocator, args: []const []const u8) mem.Allocator.Error!CliArgs {
+    var parsed = try parseArgsFor(cmd, alloc, args);
+    if (parsed != .run) return parsed;
+
+    const run = &parsed.run;
+    run.watch = run.explicit_watch or run.opt == .dev;
+    run.via_run_subcommand = cmd.name.len > 0;
+    if (!run.via_run_subcommand and install.classifySourceRef(run.path) == .shorthand) {
+        const name = run.path;
+        parsed.deinit(alloc);
+        return CliArgs{ .problem = ArgProblem{ .shorthand_requires_run = .{ .name = name } } };
+    }
+    return parsed;
+}
+
+fn parseUnbundle(comptime cmd: Command, alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) ParseError!CliArgs {
+    const parsed = try parseArgsFor(cmd, alloc, args);
+    if (parsed != .unbundle or parsed.unbundle.paths.len > 0) return parsed;
 
     // If no paths specified, default to all .tar.zst files in current directory
-    if (paths.items.len == 0) {
-        var cwd = try std.Io.Dir.cwd().openDir(std_io, ".", .{ .iterate = true });
-        defer cwd.close(std_io);
-        var iter = cwd.iterate();
-        while (try iter.next(std_io)) |entry| {
-            if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".tar.zst")) {
-                try paths.append(try alloc.dupe(u8, entry.name));
-            }
-        }
-
-        // If still no files found, show help
-        if (paths.items.len == 0) {
-            paths.deinit();
-            return CliArgs{ .help =
-            \\Extract files from compressed .tar.zst archives
-            \\
-            \\Usage: roc unbundle [OPTIONS] [ARCHIVE_FILES]...
-            \\
-            \\Arguments:
-            \\  [ARCHIVE_FILES]...  The .tar.zst files to unbundle
-            \\                      [default: all .tar.zst files in current directory]
-            \\
-            \\Options:
-            \\  -h, --help  Print help
-            \\
-            \\Error: No .tar.zst files found in current directory
-            \\
-            };
-        }
-    }
-
-    return CliArgs{ .unbundle = UnbundleArgs{
-        .paths = try paths.toOwnedSlice(),
-    } };
-}
-
-fn parseFormat(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
-    var paths = try std.array_list.Managed([]const u8).initCapacity(alloc, 16);
+    var paths = std.array_list.Managed([]const u8).init(alloc);
     errdefer paths.deinit();
-    var positional = false;
-    var stdin = false;
-    var check = false;
-    for (args) |arg| {
-        if (positional) {
-            try paths.append(arg);
-        } else if (mem.eql(u8, arg, "--")) {
-            positional = true;
-        } else if (isHelpFlag(arg)) {
-            // We need to free the paths here because we aren't returning the .format variant
-            paths.deinit();
-            return CliArgs{ .help =
-            \\Format a .roc file or the .roc files contained in a directory using standard Roc formatting
-            \\
-            \\Usage: roc fmt [OPTIONS] [DIRECTORY_OR_FILES]
-            \\
-            \\Arguments:
-            \\  [DIRECTORY_OR_FILES]
-            \\
-            \\Options:
-            \\      --check  Checks that specified files are formatted
-            \\               (If formatting is needed, return a non-zero exit code.)
-            \\      --stdin  Format code from stdin; output to stdout
-            \\      --       Treat all remaining arguments as paths
-            \\  -h, --help   Print help
-            \\
-            \\If DIRECTORY_OR_FILES is omitted, the .roc files in the current working directory are formatted.
-            \\
-            };
-        } else if (mem.eql(u8, arg, "--stdin")) {
-            stdin = true;
-        } else if (mem.eql(u8, arg, "--check")) {
-            check = true;
-        } else if (mem.startsWith(u8, arg, "-")) {
-            paths.deinit();
-            return .{ .problem = .{ .unexpected_argument = .{ .cmd = "fmt", .arg = arg } } };
-        } else {
-            try paths.append(arg);
+    var cwd = try std.Io.Dir.cwd().openDir(std_io, ".", .{ .iterate = true });
+    defer cwd.close(std_io);
+    var iter = cwd.iterate();
+    while (try iter.next(std_io)) |entry| {
+        if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".tar.zst")) {
+            try paths.append(try alloc.dupe(u8, entry.name));
         }
     }
+
+    // If still no files found, show help
     if (paths.items.len == 0) {
-        try paths.append("main.roc");
+        return CliArgs{ .help = comptime cmd.helpText() ++ "\nError: No .tar.zst files found in current directory\n" };
     }
-    return CliArgs{ .fmt = FormatArgs{ .paths = try paths.toOwnedSlice(), .stdin = stdin, .check = check } };
-}
-
-fn parseTest(args: []const []const u8) CliArgs {
-    var path: ?[]const u8 = null;
-    var opt: OptLevel = default_dev_opt;
-    var specialization_strategy: ?SpecializationStrategy = null;
-    var main: ?[]const u8 = null;
-    var verbose: bool = false;
-    var timings: bool = false;
-    var no_cache: bool = false;
-    var watch: bool = false;
-    var watch_inputs_file: ?[]const u8 = null;
-    var max_threads: ?usize = null;
-    var resolve_limits: ResolveLimitArgs = .{};
-    for (args) |arg| {
-        if (isHelpFlag(arg)) {
-            return CliArgs{ .help =
-            \\Run all top-level `expect`s in a main module and any modules it imports
-            \\
-            \\Dependencies reached through a filesystem path are tested too, because
-            \\they are yours to edit. Dependencies downloaded from a URL are not: their
-            \\`expect`s belong to whoever published them.
-            \\
-            \\Usage: roc test [OPTIONS] [ROC_FILE]
-            \\
-            \\Arguments:
-            \\  [ROC_FILE] The .roc file to test [default: main.roc]
-            \\
-            \\Options:
-            \\      --opt=<opt>                     Execution mode: dev (default, fast compilation), interpreter, size (LLVM) or speed (LLVM)
-            \\      --specialize=<yes|no>           Use lambda-set specialization (yes, default) or experimental boxy lowering (no)
-            \\      --main <main>                   The .roc file of the main app/package module to resolve dependencies from
-            \\      --verbose                       Enable verbose output showing individual test results
-            \\      --timings                       Show how long each compilation and test phase took
-            \\      --no-cache                      Disable compilation caching, force re-run all tests
-            \\      --watch                         Re-run when source inputs change
-            \\  -j, --jobs=<N>                      Max worker threads for parallel compilation (default: auto-detect CPU count)
-            ++ "\n" ++ resolve_limit_help ++ "\n" ++
-                \\  -h, --help                          Print help
-                \\
-            };
-        } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
-            if (parseResolveLimitProblem(arg, &resolve_limits)) |problem| return CliArgs{ .problem = problem };
-        } else if (mem.startsWith(u8, arg, "--specialize")) {
-            switch (parseSpecializeFlag(arg)) {
-                .ok => |strategy| specialization_strategy = strategy,
-                .problem => |problem| return CliArgs{ .problem = problem },
-                .not_matched => unreachable,
-            }
-        } else if (mem.startsWith(u8, arg, "--main")) {
-            if (getFlagValue(arg)) |value| {
-                main = value;
-            } else {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--main" } } };
-            }
-        } else if (mem.startsWith(u8, arg, "--opt")) {
-            if (getFlagValue(arg)) |value| {
-                if (OptLevel.from_str(value)) |level| {
-                    opt = level;
-                } else {
-                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--opt", .value = value, .valid_options = "dev,interpreter,speed,size" } } };
-                }
-            } else {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--opt" } } };
-            }
-        } else if (mem.eql(u8, arg, "--verbose")) {
-            verbose = true;
-        } else if (mem.eql(u8, arg, "--timings")) {
-            timings = true;
-        } else if (mem.eql(u8, arg, "--no-cache")) {
-            no_cache = true;
-        } else if (mem.eql(u8, arg, "--watch")) {
-            watch = true;
-        } else if (mem.startsWith(u8, arg, "--watch-inputs-file")) {
-            if (getFlagValue(arg)) |value| {
-                watch_inputs_file = value;
-            } else {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--watch-inputs-file" } } };
-            }
-        } else if (mem.startsWith(u8, arg, "--jobs")) {
-            if (getFlagValue(arg)) |value| {
-                max_threads = std.fmt.parseInt(usize, value, 10) catch {
-                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--jobs", .value = value, .valid_options = "positive integer" } } };
-                };
-            } else {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--jobs" } } };
-            }
-        } else if (mem.startsWith(u8, arg, "-j")) {
-            // Handle -jN format (e.g., -j4)
-            const value = arg[2..];
-            if (value.len == 0) {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "-j" } } };
-            }
-            max_threads = std.fmt.parseInt(usize, value, 10) catch {
-                return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "-j", .value = value, .valid_options = "positive integer" } } };
-            };
-        } else if (mem.startsWith(u8, arg, "-")) {
-            return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "test", .arg = arg } } };
-        } else {
-            if (path != null) {
-                return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "test", .arg = arg } } };
-            }
-            path = arg;
-        }
-    }
-    return CliArgs{ .test_cmd = TestArgs{ .path = path orelse "main.roc", .opt = opt, .specialization_strategy = specialization_strategy, .main = main, .verbose = verbose, .timings = timings, .no_cache = no_cache, .watch = watch, .watch_inputs_file = watch_inputs_file, .max_threads = max_threads, .resolve_limits = resolve_limits } };
-}
-
-fn parseRepl(args: []const []const u8) CliArgs {
-    var opt: OptLevel = default_dev_opt;
-    var specialization_strategy: ?SpecializationStrategy = null;
-
-    for (args) |arg| {
-        if (isHelpFlag(arg)) {
-            return CliArgs{ .help =
-            \\Launch the interactive Read Eval Print Loop (REPL)
-            \\
-            \\Usage: roc repl [OPTIONS]
-            \\
-            \\Options:
-            \\      --opt=<opt>  Execution mode: dev (default, fast compilation), interpreter, size (LLVM) or speed (LLVM)
-            \\      --specialize=<yes|no>  Use lambda-set specialization (yes, default) or experimental boxy lowering (no)
-            \\  -h, --help       Print help
-            \\
-            };
-        } else if (mem.startsWith(u8, arg, "--specialize")) {
-            switch (parseSpecializeFlag(arg)) {
-                .ok => |strategy| specialization_strategy = strategy,
-                .problem => |problem| return CliArgs{ .problem = problem },
-                .not_matched => unreachable,
-            }
-        } else if (mem.startsWith(u8, arg, "--opt")) {
-            if (getFlagValue(arg)) |value| {
-                if (OptLevel.from_str(value)) |level| {
-                    opt = level;
-                } else {
-                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--opt", .value = value, .valid_options = "dev,interpreter,speed,size" } } };
-                }
-            } else {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--opt" } } };
-            }
-        } else {
-            return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "repl", .arg = arg } } };
-        }
-    }
-    return CliArgs{ .repl = .{ .opt = opt, .specialization_strategy = specialization_strategy } };
-}
-
-fn parseGlue(args: []const []const u8) CliArgs {
-    var glue_spec: ?[]const u8 = null;
-    var output_dir: ?[]const u8 = null;
-    var platform_path: ?[]const u8 = null;
-    var opt: OptLevel = default_dev_opt;
-    var specialization_strategy: ?SpecializationStrategy = null;
-    var no_cache: bool = false;
-
-    for (args) |arg| {
-        if (isHelpFlag(arg)) {
-            return CliArgs{ .help =
-            \\Generate glue code from a platform using a glue spec
-            \\
-            \\Usage: roc glue [OPTIONS] <GLUE_SPEC> <GLUE_DIR> [ROC_FILE]
-            \\
-            \\Arguments:
-            \\  <GLUE_SPEC>  The glue spec .roc file that defines how to generate glue code
-            \\  <GLUE_DIR>   The output directory for generated glue files
-            \\  [ROC_FILE]   The platform .roc file to analyze [default: main.roc]
-            \\
-            \\Options:
-            \\  --opt=<level>  Compile and run the glue spec with dev, size, or speed [default: dev]
-            \\  --specialize=<yes|no>  Use lambda-set specialization (yes, default) or experimental boxy lowering (no)
-            \\  --no-cache     Disable compilation caching
-            \\  -h, --help     Print help
-            \\
-            };
-        } else if (mem.startsWith(u8, arg, "--specialize")) {
-            switch (parseSpecializeFlag(arg)) {
-                .ok => |strategy| specialization_strategy = strategy,
-                .problem => |problem| return CliArgs{ .problem = problem },
-                .not_matched => unreachable,
-            }
-        } else if (mem.eql(u8, arg, "--no-cache")) {
-            no_cache = true;
-        } else if (mem.startsWith(u8, arg, "--opt")) {
-            if (getFlagValue(arg)) |value| {
-                if (OptLevel.from_str(value)) |level| {
-                    switch (level) {
-                        .dev, .size, .speed => opt = level,
-                        .interpreter => return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--opt", .value = value, .valid_options = "dev,size,speed" } } },
-                    }
-                } else {
-                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--opt", .value = value, .valid_options = "dev,size,speed" } } };
-                }
-            } else {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--opt" } } };
-            }
-        } else {
-            if (glue_spec == null) {
-                glue_spec = arg;
-            } else if (output_dir == null) {
-                output_dir = arg;
-            } else if (platform_path == null) {
-                platform_path = arg;
-            } else {
-                return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "glue", .arg = arg } } };
-            }
-        }
-    }
-
-    // glue_spec is required
-    if (glue_spec == null) {
-        return CliArgs{ .help =
-        \\Error: Missing required argument <GLUE_SPEC>
-        \\
-        \\Generate glue code from a platform using a glue spec
-        \\
-        \\Usage: roc glue [OPTIONS] <GLUE_SPEC> <GLUE_DIR> [ROC_FILE]
-        \\
-        \\Arguments:
-        \\  <GLUE_SPEC>  The glue spec .roc file that defines how to generate glue code
-        \\  <GLUE_DIR>   The output directory for generated glue files
-        \\  [ROC_FILE]   The platform .roc file to analyze [default: main.roc]
-        \\
-        \\Options:
-        \\  --opt=<level>  Compile and run the glue spec with dev, size, or speed [default: dev]
-        \\  --specialize=<yes|no>  Use lambda-set specialization (yes, default) or experimental boxy lowering (no)
-        \\  -h, --help     Print help
-        \\
-        };
-    }
-
-    // output_dir is required
-    if (output_dir == null) {
-        return CliArgs{ .help =
-        \\Error: Missing required argument <GLUE_DIR>
-        \\
-        \\Generate glue code from a platform using a glue spec
-        \\
-        \\Usage: roc glue [OPTIONS] <GLUE_SPEC> <GLUE_DIR> [ROC_FILE]
-        \\
-        \\Arguments:
-        \\  <GLUE_SPEC>  The glue spec .roc file that defines how to generate glue code
-        \\  <GLUE_DIR>   The output directory for generated glue files
-        \\  [ROC_FILE]   The platform .roc file to analyze [default: main.roc]
-        \\
-        \\Options:
-        \\  --opt=<level>  Compile and run the glue spec with dev, size, or speed [default: dev]
-        \\  --specialize=<yes|no>  Use lambda-set specialization (yes, default) or experimental boxy lowering (no)
-        \\  -h, --help     Print help
-        \\
-        };
-    }
-
-    return CliArgs{ .glue = GlueArgs{
-        .glue_spec = glue_spec.?,
-        .output_dir = output_dir.?,
-        .platform_path = platform_path orelse "main.roc",
-        .opt = opt,
-        .specialization_strategy = specialization_strategy,
-        .no_cache = no_cache,
-    } };
-}
-
-fn parseVersion(args: []const []const u8) CliArgs {
-    for (args) |arg| {
-        if (isHelpFlag(arg)) {
-            return CliArgs{ .help =
-            \\Print the Roc compiler’s version
-            \\
-            \\Usage: roc version
-            \\
-            \\Options:
-            \\  -h, --help  Print help
-            \\
-            };
-        } else {
-            return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "version", .arg = arg } } };
-        }
-    }
-    return CliArgs.version;
-}
-
-fn parseLicenses(args: []const []const u8) CliArgs {
-    for (args) |arg| {
-        if (isHelpFlag(arg)) {
-            return CliArgs{ .help =
-            \\Prints license info for Roc as well as attributions to other projects used by Roc
-            \\
-            \\Usage: roc licenses
-            \\
-            \\Options:
-            \\  -h, --help  Print help
-            \\
-            };
-        } else {
-            return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "licenses", .arg = arg } } };
-        }
-    }
-    return CliArgs.licenses;
-}
-
-fn parseDocs(args: []const []const u8) CliArgs {
-    var path: ?[]const u8 = null;
-    var main: ?[]const u8 = null;
-    var output: ?[]const u8 = null;
-    var time: bool = false;
-    var no_cache: bool = false;
-    var verbose: bool = false;
-    var serve: bool = false;
-    var with_lang_ref: bool = false;
-    var builtins: bool = false;
-    var resolve_limits: ResolveLimitArgs = .{};
-
-    for (args) |arg| {
-        if (isHelpFlag(arg)) {
-            return CliArgs{ .help =
-            \\Generate documentation for a Roc package
-            \\
-            \\Usage: roc docs [OPTIONS] [ROC_FILE]
-            \\       roc docs --builtins [OPTIONS]
-            \\
-            \\Arguments:
-            \\  [ROC_FILE]  The .roc file to generate docs for [default: main.roc]
-            \\
-            \\Options:
-            \\      --main=<main>    The .roc file of the main app/package module to resolve dependencies from
-            \\      --output=<dir>   Output directory for generated documentation [default: generated-docs]
-            \\      --serve          Start an HTTP server to view the documentation
-            \\      --with-lang-ref  Include the language reference articles from docs/langref
-            \\      --builtins       Document the builtins of this roc compiler instead of a .roc file
-            \\      --time           Print timing information for each compilation phase. Will not print anything if everything is cached.
-            \\      --no-cache       Disable caching
-            \\      --verbose        Enable verbose output including cache statistics
-            ++ "\n" ++ resolve_limit_help ++ "\n" ++
-                \\  -h, --help           Print help
-                \\
-            };
-        } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
-            if (parseResolveLimitProblem(arg, &resolve_limits)) |problem| return CliArgs{ .problem = problem };
-        } else if (mem.startsWith(u8, arg, "--main")) {
-            if (getFlagValue(arg)) |value| {
-                main = value;
-            } else {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--main" } } };
-            }
-        } else if (mem.startsWith(u8, arg, "--output")) {
-            if (getFlagValue(arg)) |value| {
-                output = value;
-            } else {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--output" } } };
-            }
-        } else if (mem.eql(u8, arg, "--serve")) {
-            serve = true;
-        } else if (mem.eql(u8, arg, "--with-lang-ref")) {
-            with_lang_ref = true;
-        } else if (mem.eql(u8, arg, "--builtins")) {
-            builtins = true;
-        } else if (mem.eql(u8, arg, "--time")) {
-            time = true;
-        } else if (mem.eql(u8, arg, "--no-cache")) {
-            no_cache = true;
-        } else if (mem.eql(u8, arg, "--verbose")) {
-            verbose = true;
-        } else {
-            if (path != null) {
-                return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "docs", .arg = arg } } };
-            }
-            path = arg;
-        }
-    }
-
-    // `--builtins` documents the compiler's embedded builtin module, so there
-    // is no file to document and no main file to resolve packages from.
-    if (builtins) {
-        if (path) |file| return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "docs", .arg = file } } };
-        if (main != null) return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "docs", .arg = "--main" } } };
-    }
-
-    return CliArgs{ .docs = DocsArgs{ .path = path orelse "main.roc", .main = main, .output = output orelse "generated-docs", .time = time, .no_cache = no_cache, .verbose = verbose, .serve = serve, .with_lang_ref = with_lang_ref, .builtins = builtins, .resolve_limits = resolve_limits } };
-}
-
-fn parseDeps(args: []const []const u8) CliArgs {
-    var path: ?[]const u8 = null;
-    var resolve_limits: ResolveLimitArgs = .{};
-
-    for (args) |arg| {
-        if (isHelpFlag(arg)) {
-            return CliArgs{ .help =
-            \\Print the dependency tree of a Roc app, package, or platform
-            \\
-            \\Resolves the dependency graph and prints every declared source in full,
-            \\ready to copy into --replace-dep. Nothing is compiled or run. Packages
-            \\that are not cached yet are downloaded so their headers can be read.
-            \\
-            \\Usage: roc deps [OPTIONS] [ROC_FILE]
-            \\
-            \\Arguments:
-            \\  [ROC_FILE]  The root .roc file of the app, package, or platform [default: main.roc]
-            \\
-            \\Options:
-            ++ "\n" ++ resolve_limit_help ++ "\n" ++
-                \\  -h, --help                   Print help
-                \\
-            };
-        } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
-            if (parseResolveLimitProblem(arg, &resolve_limits)) |problem| return CliArgs{ .problem = problem };
-        } else if (mem.startsWith(u8, arg, "-")) {
-            return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "deps", .arg = arg } } };
-        } else {
-            if (path != null) {
-                return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "deps", .arg = arg } } };
-            }
-            path = arg;
-        }
-    }
-
-    return CliArgs{ .deps = DepsArgs{ .path = path orelse "main.roc", .resolve_limits = resolve_limits } };
-}
-
-fn parseBump(args: []const []const u8) CliArgs {
-    var path: ?[]const u8 = null;
-    var old: ?[]const u8 = null;
-    var old_version: ?[]const u8 = null;
-    var expect: ?[]const u8 = null;
-    var no_cache = false;
-    var verbose = false;
-    var resolve_limits: ResolveLimitArgs = .{};
-
-    var i: usize = 0;
-    while (i < args.len) : (i += 1) {
-        const arg = args[i];
-        if (isHelpFlag(arg)) {
-            return CliArgs{ .help = bump_help };
-        } else if (mem.eql(u8, arg, "--old")) {
-            if (i + 1 >= args.len) {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--old" } } };
-            }
-            i += 1;
-            old = args[i];
-        } else if (mem.eql(u8, arg, "--old-version")) {
-            if (i + 1 >= args.len) {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--old-version" } } };
-            }
-            i += 1;
-            old_version = args[i];
-        } else if (mem.eql(u8, arg, "--expect")) {
-            if (i + 1 >= args.len) {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--expect" } } };
-            }
-            i += 1;
-            expect = args[i];
-        } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
-            if (parseResolveLimitProblem(arg, &resolve_limits)) |problem| return CliArgs{ .problem = problem };
-        } else if (mem.eql(u8, arg, "--no-cache")) {
-            no_cache = true;
-        } else if (mem.eql(u8, arg, "--verbose")) {
-            verbose = true;
-        } else if (mem.startsWith(u8, arg, "--")) {
-            return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "bump", .arg = arg } } };
-        } else {
-            if (path != null) {
-                return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "bump", .arg = arg } } };
-            }
-            path = arg;
-        }
-    }
-
-    const old_value = old orelse {
-        return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--old" } } };
-    };
-
-    return CliArgs{ .bump = BumpArgs{
-        .path = path orelse "main.roc",
-        .old = old_value,
-        .old_version = old_version,
-        .expect = expect,
-        .no_cache = no_cache,
-        .verbose = verbose,
-        .resolve_limits = resolve_limits,
-    } };
-}
-
-const bump_help =
-    \\Compare a package's public API against a previous version and report the
-    \\required semver bump (patch, minor, or major) plus the next version.
-    \\
-    \\Usage: roc bump --old <OLD> [OPTIONS] [ROC_FILE]
-    \\
-    \\Arguments:
-    \\  [ROC_FILE]  The new package's main .roc file [default: main.roc]
-    \\
-    \\Options:
-    \\      --old <OLD>            The previous package version: a package URL, a
-    \\                             .tar.zst bundle, a directory, or a main .roc file
-    \\      --old-version <X.Y.Z>  The previous version number (required unless
-    \\                             --old is a URL with a version path segment)
-    \\      --expect <X.Y.Z>       Fail unless this version bumps at least as far
-    \\                             as the API diff requires (for release CI)
-    \\      --no-cache             Disable caching
-    \\      --verbose              Enable verbose output
-++ "\n" ++ install_resolve_limit_help ++ "\n" ++
-    \\  -h, --help                 Print help
-    \\
-    \\Both the old and new package must compile with this compiler. Only the
-    \\modules exposed by the package header are compared; platform
-    \\provides/requires are not yet part of the comparison.
-    \\
-    \\If this is the package's first release, there is nothing to compare—
-    \\publish it as 1.0.0.
-    \\
-;
-
-fn parseExperimentalLsp(args: []const []const u8) CliArgs {
-    var debug_io = false;
-    var debug_build = false;
-    var debug_syntax = false;
-    var debug_server = false;
-
-    for (args) |arg| {
-        if (isHelpFlag(arg)) {
-            return CliArgs{ .help =
-            \\Start the experimental Roc language server (LSP)
-            \\
-            \\Usage: roc experimental-lsp [OPTIONS]
-            \\
-            \\Options:
-            \\      --stdio            Communicate over stdio (the default and only
-            \\                         transport; accepted for compatibility with LSP
-            \\                         clients that pass it explicitly)
-            \\      --debug-transport  Mirror all JSON-RPC traffic to a temp log file
-            \\      --debug-build      Log build environment actions to the debug log
-            \\      --debug-syntax     Log syntax/type checking steps to the debug log
-            \\      --debug-server     Log server lifecycle details to the debug log
-            \\  -h, --help            Print help
-            \\
-            };
-        } else if (mem.eql(u8, arg, "--stdio")) {
-            // LSP clients (e.g. vscode-languageclient) append a transport flag to
-            // the server command line. We only ever speak LSP over stdio, so accept
-            // `--stdio` as a no-op rather than rejecting it as an unexpected argument.
-        } else if (mem.eql(u8, arg, "--debug-transport")) {
-            debug_io = true;
-        } else if (mem.eql(u8, arg, "--debug-build")) {
-            debug_build = true;
-        } else if (mem.eql(u8, arg, "--debug-syntax")) {
-            debug_syntax = true;
-        } else if (mem.eql(u8, arg, "--debug-server")) {
-            debug_server = true;
-        } else {
-            return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "experimental-lsp", .arg = arg } } };
-        }
-    }
-
-    return CliArgs{ .experimental_lsp = .{
-        .debug_io = debug_io,
-        .debug_build = debug_build,
-        .debug_syntax = debug_syntax,
-        .debug_server = debug_server,
-    } };
-}
-
-/// How a run parse was reached: the default `roc [ROC_FILE]` form, or the
-/// explicit `roc run` subcommand (the only form that accepts shorthands).
-const RunParseMode = enum { default, run_subcommand };
-
-fn parseRun(alloc: mem.Allocator, args: []const []const u8, mode: RunParseMode) std.mem.Allocator.Error!CliArgs {
-    var path: ?[]const u8 = null;
-    var opt: OptLevel = default_dev_opt;
-    var specialization_strategy: ?SpecializationStrategy = null;
-    var explicit_opt = false;
-    var target: ?[]const u8 = null;
-    var no_cache: bool = false;
-    var watch: bool = false;
-    var timings: bool = false;
-    var max_threads: ?usize = null;
-    var resolve_limits: ResolveLimitArgs = .{};
-    var app_args = try std.array_list.Managed([]const u8).initCapacity(alloc, 16);
-    var past_double_dash = false;
-
-    for (args) |arg| {
-        // After "--", all remaining args go to the app (no flag processing)
-        if (past_double_dash) {
-            try app_args.append(arg);
-            continue;
-        }
-
-        // Check for "--" separator
-        if (mem.eql(u8, arg, "--")) {
-            past_double_dash = true;
-            continue;
-        }
-
-        if (isHelpFlag(arg)) {
-            // We need to free the paths here because we aren't returning the .run variant
-            app_args.deinit();
-            return CliArgs{ .help = switch (mode) {
-                .default => main_help,
-                .run_subcommand => run_help,
-            } };
-        } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
-            if (parseResolveLimitProblem(arg, &resolve_limits)) |problem| {
-                app_args.deinit();
-                return CliArgs{ .problem = problem };
-            }
-        } else if (mem.eql(u8, arg, "-v") or mem.eql(u8, arg, "--version")) {
-            // We need to free the paths here because we aren't returning the .format variant
-            app_args.deinit();
-            return CliArgs.version;
-        } else if (mem.startsWith(u8, arg, "--specialize")) {
-            switch (parseSpecializeFlag(arg)) {
-                .ok => |strategy| specialization_strategy = strategy,
-                .problem => |problem| {
-                    app_args.deinit();
-                    return CliArgs{ .problem = problem };
-                },
-                .not_matched => unreachable,
-            }
-        } else if (mem.startsWith(u8, arg, "--target")) {
-            if (getFlagValue(arg)) |value| {
-                target = value;
-            } else {
-                app_args.deinit();
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--target" } } };
-            }
-        } else if (mem.startsWith(u8, arg, "--opt")) {
-            if (getFlagValue(arg)) |value| {
-                if (OptLevel.from_str(value)) |level| {
-                    opt = level;
-                    explicit_opt = true;
-                } else {
-                    app_args.deinit();
-                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--opt", .value = value, .valid_options = "dev,interpreter,speed,size" } } };
-                }
-            } else {
-                app_args.deinit();
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--opt" } } };
-            }
-        } else if (mem.eql(u8, arg, "--no-cache")) {
-            no_cache = true;
-        } else if (mem.eql(u8, arg, "--watch")) {
-            watch = true;
-        } else if (mem.eql(u8, arg, "--timings")) {
-            timings = true;
-        } else if (mem.startsWith(u8, arg, "--jobs")) {
-            if (getFlagValue(arg)) |value| {
-                max_threads = std.fmt.parseInt(usize, value, 10) catch {
-                    app_args.deinit();
-                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--jobs", .value = value, .valid_options = "positive integer" } } };
-                };
-            } else {
-                app_args.deinit();
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--jobs" } } };
-            }
-        } else if (mem.startsWith(u8, arg, "-j")) {
-            // Handle -jN format (e.g., -j4)
-            const value = arg[2..];
-            if (value.len == 0) {
-                app_args.deinit();
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "-j" } } };
-            }
-            max_threads = std.fmt.parseInt(usize, value, 10) catch {
-                app_args.deinit();
-                return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "-j", .value = value, .valid_options = "positive integer" } } };
-            };
-        } else {
-            if (path != null) {
-                try app_args.append(arg);
-            } else {
-                path = arg;
-            }
-        }
-    }
-    if (mode == .default) {
-        if (path) |p| {
-            if (install.classifySourceRef(p) == .shorthand) {
-                app_args.deinit();
-                return CliArgs{ .problem = ArgProblem{ .shorthand_requires_run = .{ .name = p } } };
-            }
-        }
-    }
-
-    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .specialization_strategy = specialization_strategy, .target = target, .app_args = try app_args.toOwnedSlice(), .no_cache = no_cache, .watch = watch or (opt == .dev), .explicit_watch = watch, .explicit_opt = explicit_opt, .timings = timings, .max_threads = max_threads, .resolve_limits = resolve_limits, .via_run_subcommand = mode == .run_subcommand } };
-}
-
-fn parseInstall(args: []const []const u8) CliArgs {
-    var shorthand: ?[]const u8 = null;
-    var url: ?[]const u8 = null;
-    var max_threads: ?usize = null;
-    var resolve_limits: ResolveLimitArgs = .{};
-
-    for (args) |arg| {
-        if (isHelpFlag(arg)) {
-            return CliArgs{ .help = install_help_with_limits };
-        } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
-            if (parseResolveLimitProblem(arg, &resolve_limits)) |problem| return CliArgs{ .problem = problem };
-        } else if (mem.startsWith(u8, arg, "--jobs")) {
-            if (getFlagValue(arg)) |value| {
-                max_threads = std.fmt.parseInt(usize, value, 10) catch {
-                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--jobs", .value = value, .valid_options = "positive integer" } } };
-                };
-            } else {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--jobs" } } };
-            }
-        } else if (mem.startsWith(u8, arg, "-j")) {
-            const value = arg[2..];
-            if (value.len == 0) {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "-j" } } };
-            }
-            max_threads = std.fmt.parseInt(usize, value, 10) catch {
-                return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "-j", .value = value, .valid_options = "positive integer" } } };
-            };
-        } else if (shorthand == null) {
-            shorthand = arg;
-        } else if (url == null) {
-            url = arg;
-        } else {
-            return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "install", .arg = arg } } };
-        }
-    }
-
-    if (shorthand == null or url == null) {
-        return CliArgs{ .help = install_help_with_limits };
-    }
-
-    return CliArgs{ .install = InstallArgs{
-        .shorthand = shorthand.?,
-        .url = url.?,
-        .max_threads = max_threads,
-        .resolve_limits = resolve_limits,
-    } };
+    return CliArgs{ .unbundle = UnbundleArgs{ .paths = try paths.toOwnedSlice() } };
 }
 
 fn isHelpFlag(arg: []const u8) bool {
@@ -2932,4 +2597,622 @@ test "formatter accepts flag-like filenames after the option terminator" {
     const result = try parse(gpa, testing.io, &.{ "fmt", "--", "-x.roc" });
     defer result.deinit(gpa);
     try testing.expectEqualStrings("-x.roc", result.fmt.paths[0]);
+}
+
+test "every flag sets the field its table entry names" {
+    const gpa = testing.allocator;
+    inline for (commands ++ [_]Command{default_command}) |cmd| {
+        if (cmd.tag != .help) {
+            // What the command cannot parse without, so each flag is tried on
+            // an otherwise valid command line.
+            const required: []const []const u8 = comptime required: {
+                @setEvalBranchQuota(100_000);
+                var list: []const []const u8 = &.{};
+                for (cmd.positionals) |positional| {
+                    if (positional.missing != null) list = list ++ .{"sample.roc"};
+                }
+                for (cmd.allFlags()) |flag| {
+                    if (cmd.requires(flag)) list = list ++ flagSample(cmd, flag, flag.name);
+                }
+                break :required list;
+            };
+
+            inline for (comptime cmd.allFlags()) |flag| {
+                if (flag.field) |path| {
+                    const spellings: []const []const u8 = comptime if (flag.short) |short| &.{ flag.name, short } else &.{flag.name};
+                    inline for (spellings) |written| {
+                        const result = try parseArgsFor(cmd, gpa, required ++ comptime flagSample(cmd, flag, written));
+                        defer result.deinit(gpa);
+                        try testing.expectEqual(cmd.tag, std.meta.activeTag(result));
+
+                        var args = @field(result, @tagName(cmd.tag));
+                        const value = fieldAt(&args, path).*;
+                        const Field = @TypeOf(value);
+                        if (Field == bool) {
+                            try testing.expect(value);
+                        } else if (Field == OptLevel) {
+                            try testing.expectEqual(flag.levels[flag.levels.len - 1], value);
+                        } else if (Field == ?SpecializationStrategy) {
+                            try testing.expectEqual(SpecializationStrategy.boxy, value.?);
+                        } else if (Field == []const u8) {
+                            try testing.expectEqualStrings("sample", value);
+                        } else if (Field == ?[]const u8) {
+                            try testing.expectEqualStrings("sample", value.?);
+                        } else {
+                            try testing.expectEqual(@as(Field, 7), value);
+                        }
+                        if (flag.marks) |name| try testing.expect(@field(args, name));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A command line that gives `flag` a value its field accepts, spelled `written`.
+fn flagSample(comptime cmd: Command, comptime flag: Flag, comptime written: []const u8) []const []const u8 {
+    @setEvalBranchQuota(100_000);
+    const Field = fieldInfoAt(cmd.Args(), flag.field.?).type;
+    const sample = if (Field == OptLevel)
+        @tagName(flag.levels[flag.levels.len - 1])
+    else if (Field == ?SpecializationStrategy)
+        "no"
+    else if (Field == []const u8 or Field == ?[]const u8)
+        "sample"
+    else
+        "7";
+    return switch (flag.form) {
+        .toggle => &.{written},
+        .attached => &.{written ++ (if (mem.eql(u8, written, flag.name)) "=" else "") ++ sample},
+        .separate => &.{ written, sample },
+        .terminator, .version, .rejected, .documented => unreachable,
+    };
+}
+
+test "every listed flag is in its command's help, and no unlisted one is" {
+    inline for (commands ++ [_]Command{default_command}) |cmd| {
+        if (cmd.tag != .help) {
+            const help = comptime cmd.helpText();
+            inline for (comptime cmd.allFlags()) |flag| {
+                const listed = std.mem.find(u8, help, comptime flag.spelling() ++ " ") != null or
+                    std.mem.find(u8, help, comptime flag.spelling() ++ "\n") != null;
+                try testing.expectEqual(flag.help != null, listed);
+            }
+        }
+    }
+}
+
+test "a missing required argument prints the command's help" {
+    const gpa = testing.allocator;
+    const help = try parse(gpa, testing.io, &.{ "glue", "--help" });
+    {
+        const result = try parse(gpa, testing.io, &.{"glue"});
+        try testing.expectEqualStrings("Error: Missing required argument <GLUE_SPEC>\n\n", result.help[0 .. result.help.len - help.help.len]);
+        try testing.expectEqualStrings(help.help, result.help[result.help.len - help.help.len ..]);
+    }
+    {
+        const result = try parse(gpa, testing.io, &.{ "glue", "Glue.roc" });
+        try testing.expectEqualStrings("Error: Missing required argument <GLUE_DIR>\n\n", result.help[0 .. result.help.len - help.help.len]);
+        try testing.expectEqualStrings(help.help, result.help[result.help.len - help.help.len ..]);
+    }
+    {
+        const install_help = try parse(gpa, testing.io, &.{ "install", "--help" });
+        const result = try parse(gpa, testing.io, &.{ "install", "tokei" });
+        try testing.expectEqualStrings(install_help.help, result.help);
+    }
+}
+
+test "roc test takes --main with an attached value, as its help says" {
+    const gpa = testing.allocator;
+    {
+        const result = try parse(gpa, testing.io, &.{ "test", "--main=app.roc", "foo.roc" });
+        try testing.expectEqualStrings("app.roc", result.test_cmd.main.?);
+        try testing.expectEqualStrings("foo.roc", result.test_cmd.path);
+    }
+    {
+        const result = try parse(gpa, testing.io, &.{ "test", "--main", "app.roc" });
+        try testing.expectEqualStrings("--main", result.problem.missing_flag_value.flag);
+    }
+}
+
+test "the valid options of --opt are the levels the command accepts" {
+    const gpa = testing.allocator;
+    {
+        const result = try parse(gpa, testing.io, &.{ "build", "--opt=fast" });
+        try testing.expectEqualStrings("dev,interpreter,speed,size", result.problem.invalid_flag_value.valid_options);
+    }
+    {
+        const result = try parse(gpa, testing.io, &.{ "glue", "--opt=fast", "Glue.roc", "out" });
+        try testing.expectEqualStrings("dev,size,speed", result.problem.invalid_flag_value.valid_options);
+    }
+}
+
+test "numeric flag values report what they must be" {
+    const gpa = testing.allocator;
+    const cases = [_]struct { args: []const []const u8, flag: []const u8, valid_options: []const u8 }{
+        .{ .args = &.{ "bundle", "--compression", "23" }, .flag = "--compression", .valid_options = "integer between 1 and 22" },
+        .{ .args = &.{ "bundle", "--compression", "0" }, .flag = "--compression", .valid_options = "integer between 1 and 22" },
+        .{ .args = &.{ "bundle", "--compression", "x" }, .flag = "--compression", .valid_options = "integer between 1 and 22" },
+        .{ .args = &.{ "build", "--wasm-memory=x" }, .flag = "--wasm-memory", .valid_options = "positive integer (bytes)" },
+        .{ .args = &.{ "build", "--wasm-stack-size=-1" }, .flag = "--wasm-stack-size", .valid_options = "positive integer (bytes)" },
+        .{ .args = &.{ "check", "--max-package-mb=x" }, .flag = "--max-package-mb", .valid_options = "size in MB (0 for unlimited)" },
+        .{ .args = &.{ "check", "--jobs=x" }, .flag = "--jobs", .valid_options = "positive integer" },
+    };
+    for (cases) |case| {
+        const result = try parse(gpa, testing.io, case.args);
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings(case.flag, result.problem.invalid_flag_value.flag);
+        try testing.expectEqualStrings(case.valid_options, result.problem.invalid_flag_value.valid_options);
+    }
+    {
+        const result = try parse(gpa, testing.io, &.{ "bundle", "--compression", "22", "--output-dir", "out", "a.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(@as(i32, 22), result.bundle.compression_level);
+        try testing.expectEqualStrings("out", result.bundle.output_dir.?);
+    }
+}
+
+fn expectHelp(args: []const []const u8, expected: []const u8) (ParseError || error{TestExpectedEqual})!void {
+    const result = try parse(testing.allocator, testing.io, args);
+    defer result.deinit(testing.allocator);
+    try testing.expectEqualStrings(expected, result.help);
+}
+
+test "golden help: roc --help" {
+    try expectHelp(&.{"--help"},
+        \\Run the given .roc file
+        \\You can use one of the COMMANDS below to do something else!
+        \\
+        \\Usage: roc [OPTIONS] [ROC_FILE] [ARGS_FOR_APP]...
+        \\       roc <COMMAND>
+        \\
+        \\Commands:
+        \\  run              Run a .roc file, a bundle URL, or an installed shorthand
+        \\  install          Install a Roc app or glue spec from a bundle URL under a shorthand name
+        \\  build            Build a binary from the given .roc file, but don't run it
+        \\  bundle           Bundle .roc files into a compressed archive
+        \\  unbundle         Extract files from compressed .tar.zst archives
+        \\  test             Run all top-level `expect`s in a module, and in the modules and path dependencies it imports
+        \\  repl             Launch the interactive Read Eval Print Loop (REPL)
+        \\  fmt              Format a .roc file or the .roc files contained in a directory using standard Roc formatting
+        \\  glue             Generate native glue code from a Roc platform using a language-specific glue spec
+        \\  version          Print the Roc compiler's version
+        \\  check            Check the code for problems, but don't build or run it
+        \\  docs             Generate documentation for a Roc package or platform
+        \\  deps             Print the dependency tree of a Roc app, package, or platform
+        \\  bump             Compare a package's public API against a previous version and report the required semver bump
+        \\  experimental-lsp Start the experimental language server (LSP) implementation
+        \\  help             Print this message
+        \\  licenses         Prints license info for Roc as well as attributions to other projects used by Roc
+        \\
+        \\Arguments:
+        \\  [ROC_FILE]         The .roc file of an app to run [default: main.roc]
+        \\  [ARGS_FOR_APP]...  Arguments to pass into the app being run
+        \\                     e.g. `roc app.roc -- arg1 arg2`
+        \\
+        \\Options:
+        \\      --opt=<opt>                    Execution mode: dev (native dev backend, fast compilation), interpreter (interpreted, no code generation), speed (LLVM, optimized for execution speed), or size (LLVM, optimized for binary size) [default: dev]
+        \\      --specialize=<yes|no>          Use lambda-set specialization (yes, default) or experimental boxy lowering (no)
+        \\      --target=<target>              Target to compile for. A v1 in the name (x64v1musl) targets the oldest CPUs of that architecture. Defaults to native target with musl for static linking. One of:
+        \\                                       x64musl, arm64musl, arm32musl                           - Linux (static, portable)
+        \\                                       x64glibc, x64linux, arm64linux, arm64glibc, arm32linux  - Linux (dynamic, faster)
+        \\                                       x64mac, arm64mac                                        - macOS
+        \\                                       x64win, arm64win                                        - Windows (MSVC)
+        \\                                       x64mingw, arm64mingw                                    - Windows (MinGW)
+        \\                                       x64freebsd, x64openbsd, x64netbsd                       - BSD
+        \\                                       x64elf                                                  - Freestanding ELF
+        \\                                       wasm32                                                  - WebAssembly
+        \\      --no-cache                     Disable compilation and executable caches (useful for compiler and platform developers)
+        \\      --no-color                     Do not use ANSI escape codes in CLI output
+        \\  -j, --jobs=<N>                     Max worker threads for parallel compilation (default: auto-detect CPU count)
+        \\      --replace-dep OLD NEW    Load NEW wherever a dependency declares exactly OLD, for this invocation only.
+        \\                               Each is a complete package URL or a path to a root .roc file; repeatable.
+        \\                               Run `roc deps` to see the declared sources
+        \\      --max-package-mb=<N>     Per-package decompressed size limit in MB (default: 10, 0 for unlimited)
+        \\      --max-transitive-mb=<N>  Combined size limit in MB for each direct dependency's transitive packages
+        \\                               (defaults: packages 100, platforms 512; 0 for unlimited)
+        \\                               Also caps each platform bundle during extraction
+        \\  -h, --help                         Print help
+        \\
+    );
+}
+
+test "golden help: roc run --help" {
+    try expectHelp(&.{ "run", "--help" },
+        \\Run a Roc application
+        \\
+        \\Usage: roc run [OPTIONS] [SOURCE] [-- [ARGS_FOR_APP]...]
+        \\
+        \\SOURCE may be:
+        \\  a .roc file path        roc run main.roc
+        \\  a bundle URL            roc run https://example.com/tool/1.2.3/<hash>.tar.zst
+        \\  an installed shorthand  roc run tokei      (see `roc install`)
+        \\
+        \\Running an installed shorthand executes the optimized binary that was
+        \\built at install time; no compilation or network access is needed.
+        \\File and URL sources accept the same options as the default `roc` command.
+        \\
+        \\Options:
+        \\      --opt=<opt>                Execution mode: dev (native dev backend, fast compilation), interpreter (interpreted, no code generation), speed (LLVM, optimized for execution speed), or size (LLVM, optimized for binary size) [default: dev]
+        \\      --specialize=<yes|no>      Use lambda-set specialization (yes, default) or experimental boxy lowering (no)
+        \\      --target=<target>          Target to compile for. A v1 in the name (x64v1musl) targets the oldest CPUs of that architecture. Defaults to native target with musl for static linking. One of:
+        \\                                   x64musl, arm64musl, arm32musl                           - Linux (static, portable)
+        \\                                   x64glibc, x64linux, arm64linux, arm64glibc, arm32linux  - Linux (dynamic, faster)
+        \\                                   x64mac, arm64mac                                        - macOS
+        \\                                   x64win, arm64win                                        - Windows (MSVC)
+        \\                                   x64mingw, arm64mingw                                    - Windows (MinGW)
+        \\                                   x64freebsd, x64openbsd, x64netbsd                       - BSD
+        \\                                   x64elf                                                  - Freestanding ELF
+        \\                                   wasm32                                                  - WebAssembly
+        \\      --no-cache                 Disable compilation and executable caches (useful for compiler and platform developers)
+        \\      --no-color                 Do not use ANSI escape codes in CLI output
+        \\  -j, --jobs=<N>                 Max worker threads for parallel compilation (default: auto-detect CPU count)
+        \\      --replace-dep OLD NEW    Load NEW wherever a dependency declares exactly OLD, for this invocation only.
+        \\                               Each is a complete package URL or a path to a root .roc file; repeatable.
+        \\                               Run `roc deps` to see the declared sources
+        \\      --max-package-mb=<N>     Per-package decompressed size limit in MB (default: 10, 0 for unlimited)
+        \\      --max-transitive-mb=<N>  Combined size limit in MB for each direct dependency's transitive packages
+        \\                               (defaults: packages 100, platforms 512; 0 for unlimited)
+        \\                               Also caps each platform bundle during extraction
+        \\  -h, --help                     Print help
+        \\
+    );
+}
+
+test "golden help: roc install --help" {
+    try expectHelp(&.{ "install", "--help" },
+        \\Install a Roc app or glue spec from a bundle URL under a shorthand name
+        \\
+        \\Usage: roc install [OPTIONS] <SHORTHAND> <URL>
+        \\
+        \\Downloads the bundle, verifies its content hash, and builds it with
+        \\--opt=speed. An app becomes an optimized binary that `roc run
+        \\<SHORTHAND>` executes with no compile step; a glue spec becomes an
+        \\optimized plugin dylib that `roc glue <SHORTHAND> ...` loads directly.
+        \\Installations persist outside the cache and are scoped to the compiler
+        \\version that installed them.
+        \\
+        \\Arguments:
+        \\  <SHORTHAND>  A name of your choice: a lowercase letter followed by
+        \\               lowercase letters, digits, or underscores
+        \\  <URL>        A .tar.zst bundle URL ending in a base58-encoded BLAKE3 hash
+        \\
+        \\Options:
+        \\  -j, --jobs=<N>                 Max worker threads for the install-time build
+        \\      --max-package-mb=<N>     Per-package decompressed size limit in MB (default: 10, 0 for unlimited)
+        \\      --max-transitive-mb=<N>  Combined size limit in MB for each direct dependency's transitive packages
+        \\                               (defaults: packages 100, platforms 512; 0 for unlimited)
+        \\                               Also caps each platform bundle during extraction
+        \\  -h, --help                     Print help
+        \\
+    );
+}
+
+test "golden help: roc build --help" {
+    try expectHelp(&.{ "build", "--help" },
+        \\Build a binary from the given .roc file, but don't run it
+        \\
+        \\Usage: roc build [OPTIONS] [ROC_FILE]
+        \\
+        \\Arguments:
+        \\  [ROC_FILE] The .roc file to build [default: main.roc]
+        \\
+        \\Options:
+        \\      --output=<output>              The full path to the output binary, including filename. To specify directory only, specify a path that ends in a directory separator (e.g. a slash)
+        \\      --opt=<opt>                    Build mode: dev (native dev backend, fast compilation), interpreter (interpreted, no code generation), speed (LLVM, optimized for execution speed), or size (LLVM, optimized for binary size) [default: speed]
+        \\      --specialize=<yes|no>          Use lambda-set specialization (yes, default) or experimental boxy lowering (no)
+        \\      --target=<target>              Target to compile for. A v1 in the name (x64v1musl) targets the oldest CPUs of that architecture. Defaults to native target with musl for static linking. One of:
+        \\                                       x64musl, arm64musl, arm32musl                           - Linux (static, portable)
+        \\                                       x64glibc, x64linux, arm64linux, arm64glibc, arm32linux  - Linux (dynamic, faster)
+        \\                                       x64mac, arm64mac                                        - macOS
+        \\                                       x64win, arm64win                                        - Windows (MSVC)
+        \\                                       x64mingw, arm64mingw                                    - Windows (MinGW)
+        \\                                       x64freebsd, x64openbsd, x64netbsd                       - BSD
+        \\                                       x64elf                                                  - Freestanding ELF
+        \\                                       wasm32                                                  - WebAssembly
+        \\      --debug                        Include debug information in the output binary
+        \\      --fuzz                         Add libFuzzer no-link coverage instrumentation; final linkage must provide the runtime
+        \\      --keep-temp                    Keep all temporary directories created during build
+        \\      --verbose                      Enable verbose output including cache statistics
+        \\      --timings                      Show how long each compilation phase took (shown automatically when a build is slow)
+        \\      --no-cache                     Disable compilation caching
+        \\      --watch                        Rebuild when source inputs change
+        \\  -j, --jobs=<N>                     Max worker threads for parallel compilation (default: auto-detect CPU count)
+        \\      --wasm-memory=<bytes>          Initial memory size for WASM targets in bytes (default: sized from data segments plus the stack)
+        \\      --wasm-stack-size=<bytes>      Stack size for WASM targets in bytes (default: 8388608 = 8MB)
+        \\      --replace-dep OLD NEW    Load NEW wherever a dependency declares exactly OLD, for this invocation only.
+        \\                               Each is a complete package URL or a path to a root .roc file; repeatable.
+        \\                               Run `roc deps` to see the declared sources
+        \\      --max-package-mb=<N>     Per-package decompressed size limit in MB (default: 10, 0 for unlimited)
+        \\      --max-transitive-mb=<N>  Combined size limit in MB for each direct dependency's transitive packages
+        \\                               (defaults: packages 100, platforms 512; 0 for unlimited)
+        \\                               Also caps each platform bundle during extraction
+        \\  -h, --help                         Print help
+        \\
+    );
+}
+
+test "golden help: roc bundle --help" {
+    try expectHelp(&.{ "bundle", "--help" },
+        \\Bundle .roc files into a compressed archive
+        \\
+        \\Usage: roc bundle [OPTIONS] [ROC_FILES]...
+        \\
+        \\Arguments:
+        \\  [ROC_FILES]...  The .roc files to bundle [default: main.roc]
+        \\
+        \\Options:
+        \\      --output-dir <PATH>  Directory to output the bundle to [default: current directory]
+        \\      --compression <N>    Compression level (1-22) [default: 3]
+        \\  -h, --help               Print help
+        \\
+    );
+}
+
+test "golden help: roc unbundle --help" {
+    try expectHelp(&.{ "unbundle", "--help" },
+        \\Extract files from compressed .tar.zst archives
+        \\
+        \\Usage: roc unbundle [OPTIONS] [ARCHIVE_FILES]...
+        \\
+        \\Arguments:
+        \\  [ARCHIVE_FILES]...  The .tar.zst files to unbundle
+        \\                      [default: all .tar.zst files in current directory]
+        \\
+        \\Options:
+        \\  -h, --help  Print help
+        \\
+    );
+}
+
+test "golden help: roc test --help" {
+    try expectHelp(&.{ "test", "--help" },
+        \\Run all top-level `expect`s in a main module and any modules it imports
+        \\
+        \\Dependencies reached through a filesystem path are tested too, because
+        \\they are yours to edit. Dependencies downloaded from a URL are not: their
+        \\`expect`s belong to whoever published them.
+        \\
+        \\Usage: roc test [OPTIONS] [ROC_FILE]
+        \\
+        \\Arguments:
+        \\  [ROC_FILE] The .roc file to test [default: main.roc]
+        \\
+        \\Options:
+        \\      --opt=<opt>                     Execution mode: dev (native dev backend, fast compilation), interpreter (interpreted, no code generation), speed (LLVM, optimized for execution speed), or size (LLVM, optimized for binary size) [default: dev]
+        \\      --specialize=<yes|no>           Use lambda-set specialization (yes, default) or experimental boxy lowering (no)
+        \\      --main=<main>                   The .roc file of the main app/package module to resolve dependencies from
+        \\      --verbose                       Enable verbose output showing individual test results
+        \\      --timings                       Show how long each compilation and test phase took
+        \\      --no-cache                      Disable compilation caching, force re-run all tests
+        \\      --watch                         Re-run when source inputs change
+        \\  -j, --jobs=<N>                      Max worker threads for parallel compilation (default: auto-detect CPU count)
+        \\      --replace-dep OLD NEW    Load NEW wherever a dependency declares exactly OLD, for this invocation only.
+        \\                               Each is a complete package URL or a path to a root .roc file; repeatable.
+        \\                               Run `roc deps` to see the declared sources
+        \\      --max-package-mb=<N>     Per-package decompressed size limit in MB (default: 10, 0 for unlimited)
+        \\      --max-transitive-mb=<N>  Combined size limit in MB for each direct dependency's transitive packages
+        \\                               (defaults: packages 100, platforms 512; 0 for unlimited)
+        \\                               Also caps each platform bundle during extraction
+        \\  -h, --help                          Print help
+        \\
+    );
+}
+
+test "golden help: roc repl --help" {
+    try expectHelp(&.{ "repl", "--help" },
+        \\Launch the interactive Read Eval Print Loop (REPL)
+        \\
+        \\Usage: roc repl [OPTIONS]
+        \\
+        \\Options:
+        \\      --opt=<opt>            Execution mode: dev (native dev backend, fast compilation), interpreter (interpreted, no code generation), speed (LLVM, optimized for execution speed), or size (LLVM, optimized for binary size) [default: dev]
+        \\      --specialize=<yes|no>  Use lambda-set specialization (yes, default) or experimental boxy lowering (no)
+        \\  -h, --help                 Print help
+        \\
+    );
+}
+
+test "golden help: roc fmt --help" {
+    try expectHelp(&.{ "fmt", "--help" },
+        \\Format a .roc file or the .roc files contained in a directory using standard Roc formatting
+        \\
+        \\Usage: roc fmt [OPTIONS] [DIRECTORY_OR_FILES]
+        \\
+        \\Arguments:
+        \\  [DIRECTORY_OR_FILES]
+        \\
+        \\Options:
+        \\      --check  Checks that specified files are formatted
+        \\               (If formatting is needed, return a non-zero exit code.)
+        \\      --stdin  Format code from stdin; output to stdout
+        \\      --       Treat all remaining arguments as paths
+        \\  -h, --help   Print help
+        \\
+        \\If DIRECTORY_OR_FILES is omitted, the .roc files in the current working directory are formatted.
+        \\
+    );
+}
+
+test "golden help: roc glue --help" {
+    try expectHelp(&.{ "glue", "--help" },
+        \\Generate glue code from a platform using a glue spec
+        \\
+        \\Usage: roc glue [OPTIONS] <GLUE_SPEC> <GLUE_DIR> [ROC_FILE]
+        \\
+        \\Arguments:
+        \\  <GLUE_SPEC>  The glue spec .roc file that defines how to generate glue code
+        \\  <GLUE_DIR>   The output directory for generated glue files
+        \\  [ROC_FILE]   The platform .roc file to analyze [default: main.roc]
+        \\
+        \\Options:
+        \\      --opt=<opt>            Compile and run the glue spec with dev (native dev backend, fast compilation), size (LLVM, optimized for binary size), or speed (LLVM, optimized for execution speed) [default: dev]
+        \\      --specialize=<yes|no>  Use lambda-set specialization (yes, default) or experimental boxy lowering (no)
+        \\      --no-cache             Disable compilation caching
+        \\  -h, --help                 Print help
+        \\
+    );
+}
+
+test "golden help: roc version --help" {
+    try expectHelp(&.{ "version", "--help" },
+        \\Print the Roc compiler’s version
+        \\
+        \\Usage: roc version
+        \\
+        \\Options:
+        \\  -h, --help  Print help
+        \\
+    );
+}
+
+test "golden help: roc check --help" {
+    try expectHelp(&.{ "check", "--help" },
+        \\Check the code for problems, but don't build or run it
+        \\
+        \\Usage: roc check [OPTIONS] [ROC_FILE]
+        \\
+        \\Arguments:
+        \\  [ROC_FILE]  The .roc file to check [default: main.roc]
+        \\
+        \\Options:
+        \\      --main=<main>  The .roc file of the main app/package module to resolve dependencies from
+        \\      --time         Print timing information for each compilation phase. Will not print anything if everything is cached.
+        \\      --timings      Show how long each compilation phase took (shown automatically when checking is slow)
+        \\      --no-cache     Disable caching
+        \\      --verbose      Enable verbose output including cache statistics
+        \\      --watch        Re-run when source inputs change
+        \\  -j, --jobs=<N>     Max worker threads for parallel compilation (default: auto-detect CPU count)
+        \\      --replace-dep OLD NEW    Load NEW wherever a dependency declares exactly OLD, for this invocation only.
+        \\                               Each is a complete package URL or a path to a root .roc file; repeatable.
+        \\                               Run `roc deps` to see the declared sources
+        \\      --max-package-mb=<N>     Per-package decompressed size limit in MB (default: 10, 0 for unlimited)
+        \\      --max-transitive-mb=<N>  Combined size limit in MB for each direct dependency's transitive packages
+        \\                               (defaults: packages 100, platforms 512; 0 for unlimited)
+        \\                               Also caps each platform bundle during extraction
+        \\  -h, --help         Print help
+        \\
+    );
+}
+
+test "golden help: roc docs --help" {
+    try expectHelp(&.{ "docs", "--help" },
+        \\Generate documentation for a Roc package
+        \\
+        \\Usage: roc docs [OPTIONS] [ROC_FILE]
+        \\
+        \\Arguments:
+        \\  [ROC_FILE]  The .roc file to generate docs for [default: main.roc]
+        \\
+        \\Options:
+        \\      --main=<main>    The .roc file of the main app/package module to resolve dependencies from
+        \\      --output=<dir>   Output directory for generated documentation [default: generated-docs]
+        \\      --serve          Start an HTTP server to view the documentation
+        \\      --with-lang-ref  Include the language reference articles from docs/langref
+        \\      --builtins       Document the builtins of this roc compiler instead of a .roc file
+        \\      --time           Print timing information for each compilation phase. Will not print anything if everything is cached.
+        \\      --no-cache       Disable caching
+        \\      --verbose        Enable verbose output including cache statistics
+        \\      --replace-dep OLD NEW    Load NEW wherever a dependency declares exactly OLD, for this invocation only.
+        \\                               Each is a complete package URL or a path to a root .roc file; repeatable.
+        \\                               Run `roc deps` to see the declared sources
+        \\      --max-package-mb=<N>     Per-package decompressed size limit in MB (default: 10, 0 for unlimited)
+        \\      --max-transitive-mb=<N>  Combined size limit in MB for each direct dependency's transitive packages
+        \\                               (defaults: packages 100, platforms 512; 0 for unlimited)
+        \\                               Also caps each platform bundle during extraction
+        \\  -h, --help           Print help
+        \\
+    );
+}
+
+test "golden help: roc deps --help" {
+    try expectHelp(&.{ "deps", "--help" },
+        \\Print the dependency tree of a Roc app, package, or platform
+        \\
+        \\Resolves the dependency graph and prints every declared source in full,
+        \\ready to copy into --replace-dep. Nothing is compiled or run. Packages
+        \\that are not cached yet are downloaded so their headers can be read.
+        \\
+        \\Usage: roc deps [OPTIONS] [ROC_FILE]
+        \\
+        \\Arguments:
+        \\  [ROC_FILE]  The root .roc file of the app, package, or platform [default: main.roc]
+        \\
+        \\Options:
+        \\      --replace-dep OLD NEW    Load NEW wherever a dependency declares exactly OLD, for this invocation only.
+        \\                               Each is a complete package URL or a path to a root .roc file; repeatable.
+        \\                               Run `roc deps` to see the declared sources
+        \\      --max-package-mb=<N>     Per-package decompressed size limit in MB (default: 10, 0 for unlimited)
+        \\      --max-transitive-mb=<N>  Combined size limit in MB for each direct dependency's transitive packages
+        \\                               (defaults: packages 100, platforms 512; 0 for unlimited)
+        \\                               Also caps each platform bundle during extraction
+        \\  -h, --help                   Print help
+        \\
+    );
+}
+
+test "golden help: roc bump --help" {
+    try expectHelp(&.{ "bump", "--help" },
+        \\Compare a package's public API against a previous version and report the
+        \\required semver bump (patch, minor, or major) plus the next version.
+        \\
+        \\Usage: roc bump --old <OLD> [OPTIONS] [ROC_FILE]
+        \\
+        \\Arguments:
+        \\  [ROC_FILE]  The new package's main .roc file [default: main.roc]
+        \\
+        \\Options:
+        \\      --old <OLD>            The previous package version: a package URL, a
+        \\                             .tar.zst bundle, a directory, or a main .roc file
+        \\      --old-version <X.Y.Z>  The previous version number (required unless
+        \\                             --old is a URL with a version path segment)
+        \\      --expect <X.Y.Z>       Fail unless this version bumps at least as far
+        \\                             as the API diff requires (for release CI)
+        \\      --no-cache             Disable caching
+        \\      --verbose              Enable verbose output
+        \\      --max-package-mb=<N>     Per-package decompressed size limit in MB (default: 10, 0 for unlimited)
+        \\      --max-transitive-mb=<N>  Combined size limit in MB for each direct dependency's transitive packages
+        \\                               (defaults: packages 100, platforms 512; 0 for unlimited)
+        \\                               Also caps each platform bundle during extraction
+        \\  -h, --help                 Print help
+        \\
+        \\Both the old and new package must compile with this compiler. Only the
+        \\modules exposed by the package header are compared; platform
+        \\provides/requires are not yet part of the comparison.
+        \\
+        \\If this is the package's first release, there is nothing to compare—
+        \\publish it as 1.0.0.
+        \\
+    );
+}
+
+test "golden help: roc experimental-lsp --help" {
+    try expectHelp(&.{ "experimental-lsp", "--help" },
+        \\Start the experimental Roc language server (LSP)
+        \\
+        \\Usage: roc experimental-lsp [OPTIONS]
+        \\
+        \\Options:
+        \\      --stdio            Communicate over stdio (the default and only
+        \\                         transport; accepted for compatibility with LSP
+        \\                         clients that pass it explicitly)
+        \\      --debug-transport  Mirror all JSON-RPC traffic to a temp log file
+        \\      --debug-build      Log build environment actions to the debug log
+        \\      --debug-syntax     Log syntax/type checking steps to the debug log
+        \\      --debug-server     Log server lifecycle details to the debug log
+        \\  -h, --help             Print help
+        \\
+    );
+}
+
+test "golden help: roc licenses --help" {
+    try expectHelp(&.{ "licenses", "--help" },
+        \\Prints license info for Roc as well as attributions to other projects used by Roc
+        \\
+        \\Usage: roc licenses
+        \\
+        \\Options:
+        \\  -h, --help  Print help
+        \\
+    );
 }

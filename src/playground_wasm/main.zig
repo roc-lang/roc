@@ -17,7 +17,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
-const build_options = @import("build_options");
 const parse = @import("parse");
 const reporting = @import("reporting");
 const eval = @import("eval");
@@ -144,7 +143,7 @@ const DiagnosticRegion = struct {
 };
 
 /// Diagnostic information for frontend integration
-const DiagnosticSeverity = enum { @"error", warning, info };
+const DiagnosticSeverity = enum { @"error", warning };
 
 const Diagnostic = struct {
     severity: DiagnosticSeverity,
@@ -169,20 +168,10 @@ const CompilerStageData = struct {
     formatted_code: ?[]const u8 = null,
 
     // Diagnostic reports from each stage
-    tokenize_reports: std.array_list.Managed(reporting.Report),
-    parse_reports: std.array_list.Managed(reporting.Report),
-    can_reports: std.array_list.Managed(reporting.Report),
-    type_reports: std.array_list.Managed(reporting.Report),
-
-    pub fn init(alloc: Allocator, module_env: *ModuleEnv) CompilerStageData {
-        return CompilerStageData{
-            .module_env = module_env,
-            .tokenize_reports = std.array_list.Managed(reporting.Report).init(alloc),
-            .parse_reports = std.array_list.Managed(reporting.Report).init(alloc),
-            .can_reports = std.array_list.Managed(reporting.Report).init(alloc),
-            .type_reports = std.array_list.Managed(reporting.Report).init(alloc),
-        };
-    }
+    tokenize_reports: std.ArrayList(reporting.Report) = .empty,
+    parse_reports: std.ArrayList(reporting.Report) = .empty,
+    can_reports: std.ArrayList(reporting.Report) = .empty,
+    type_reports: std.ArrayList(reporting.Report) = .empty,
 
     pub fn deinit(self: *CompilerStageData) void {
         // Deinit solver first, as it may hold references to other data
@@ -205,25 +194,10 @@ const CompilerStageData = struct {
         if (self.formatted_code) |code| allocator.free(code);
 
         // Deinit reports, which may reference data in the AST or ModuleEnv
-        for (self.tokenize_reports.items) |*report| {
-            report.deinit();
-        }
-        self.tokenize_reports.deinit();
-
-        for (self.parse_reports.items) |*report| {
-            report.deinit();
-        }
-        self.parse_reports.deinit();
-
-        for (self.can_reports.items) |*report| {
-            report.deinit();
-        }
-        self.can_reports.deinit();
-
-        for (self.type_reports.items) |*report| {
-            report.deinit();
-        }
-        self.type_reports.deinit();
+        check.module_reports.deinit(allocator, &self.tokenize_reports);
+        check.module_reports.deinit(allocator, &self.parse_reports);
+        check.module_reports.deinit(allocator, &self.can_reports);
+        check.module_reports.deinit(allocator, &self.type_reports);
 
         // Deinit the AST, which depends on the ModuleEnv's allocator and source
         if (self.parse_ast) |ast| {
@@ -565,25 +539,25 @@ export fn processMessage(message_ptr: [*]const u8, message_len: usize, response_
 
     // Check if buffer is large enough for the length prefix (u32)
     if (response_slice.len < @sizeOf(u32)) {
-        return @intFromEnum(WasmError.response_buffer_too_small);
+        return @backingInt(WasmError.response_buffer_too_small);
     }
 
     const parsed = std.json.parseFromSlice(std.json.Value, allocator, message_slice, .{}) catch {
         // Write error response. This will also write the length prefix.
-        writeErrorResponse(response_slice, ResponseStatus.ERROR, "Invalid JSON message") catch return @intFromEnum(WasmError.response_buffer_too_small);
-        return @intFromEnum(WasmError.success);
+        writeErrorResponse(response_slice, ResponseStatus.ERROR, "Invalid JSON message") catch return @backingInt(WasmError.response_buffer_too_small);
+        return @backingInt(WasmError.success);
     };
     defer parsed.deinit();
 
     const root = parsed.value;
     const message_type_str = root.object.get("type") orelse {
-        writeErrorResponse(response_slice, ResponseStatus.INVALID_MESSAGE, "Missing message type") catch return @intFromEnum(WasmError.response_buffer_too_small);
-        return @intFromEnum(WasmError.success);
+        writeErrorResponse(response_slice, ResponseStatus.INVALID_MESSAGE, "Missing message type") catch return @backingInt(WasmError.response_buffer_too_small);
+        return @backingInt(WasmError.success);
     };
 
     const message_type = MessageType.fromString(message_type_str.string) orelse {
-        writeErrorResponse(response_slice, ResponseStatus.INVALID_MESSAGE, "Unknown message type") catch return @intFromEnum(WasmError.response_buffer_too_small);
-        return @intFromEnum(WasmError.success);
+        writeErrorResponse(response_slice, ResponseStatus.INVALID_MESSAGE, "Unknown message type") catch return @backingInt(WasmError.response_buffer_too_small);
+        return @backingInt(WasmError.success);
     };
 
     // Handle message based on current state
@@ -594,9 +568,9 @@ export fn processMessage(message_ptr: [*]const u8, message_len: usize, response_
         .REPL_ACTIVE => handleReplState(message_type, root, response_slice),
     };
 
-    return if (result) |_| @intFromEnum(WasmError.success) else |err| switch (err) {
-        error.OutOfBufferSpace => @intFromEnum(WasmError.response_buffer_too_small),
-        error.WriteFailed, error.OutOfMemory => @intFromEnum(WasmError.internal_error),
+    return if (result) |_| @backingInt(WasmError.success) else |err| switch (err) {
+        error.OutOfBufferSpace => @backingInt(WasmError.response_buffer_too_small),
+        error.WriteFailed, error.OutOfMemory => @backingInt(WasmError.internal_error),
     };
 }
 
@@ -605,7 +579,7 @@ fn handleStartState(message_type: MessageType, _: std.json.Value, response_buffe
     switch (message_type) {
         .INIT => {
             current_state = .READY;
-            const compiler_version = build_options.compiler_version;
+            const compiler_version = @import("compiler_version").compiler_version;
             try writeSuccessResponse(response_buffer, compiler_version, null);
         },
         .LOAD_SOURCE,
@@ -685,7 +659,7 @@ fn handleReadyState(message_type: MessageType, root: std.json.Value, response_bu
 
             current_state = .READY;
 
-            const compiler_version = build_options.compiler_version;
+            const compiler_version = @import("compiler_version").compiler_version;
             try writeSuccessResponse(response_buffer, compiler_version, null);
         },
         .INIT,
@@ -738,7 +712,7 @@ fn handleLoadedState(message_type: MessageType, message_json: std.json.Value, re
 
             current_state = .READY;
 
-            const compiler_version = build_options.compiler_version;
+            const compiler_version = @import("compiler_version").compiler_version;
             try writeSuccessResponse(response_buffer, compiler_version, null);
         },
         .INIT, .LOAD_SOURCE, .INIT_REPL, .REPL_STEP, .CLEAR_REPL => {
@@ -780,7 +754,7 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
 
             current_state = .READY;
 
-            const compiler_version = build_options.compiler_version;
+            const compiler_version = @import("compiler_version").compiler_version;
             try writeSuccessResponse(response_buffer, compiler_version, null);
         },
         .QUERY_CIR => {
@@ -851,7 +825,7 @@ fn resolveReplInputKind(line: []const u8) std.mem.Allocator.Error!?ReplInputKind
     defer ast.deinit();
     if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) return null;
 
-    const statement = ast.store.getStatement(@enumFromInt(ast.root_node_idx));
+    const statement = ast.store.getStatement(@fromBackingInt(@intCast(ast.root_node_idx)));
     return switch (statement) {
         .expr => .expression,
         .decl,
@@ -883,7 +857,7 @@ fn replDefinitionIdentity(line: []const u8) std.mem.Allocator.Error!?ReplDefinit
     defer ast.deinit();
     if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) return null;
 
-    const statement = ast.store.getStatement(@enumFromInt(ast.root_node_idx));
+    const statement = ast.store.getStatement(@fromBackingInt(@intCast(ast.root_node_idx)));
     return switch (statement) {
         .decl => |decl| blk: {
             const pattern = ast.store.getPattern(decl.pattern);
@@ -983,9 +957,7 @@ fn findDefByName(module_env: *const ModuleEnv, name: []const u8) ?can.CIR.Def.Id
         const def = module_env.store.getDef(def_idx);
         const pattern = module_env.store.getPattern(def.pattern);
         const ident = switch (pattern) {
-            .assign => |assign| assign.ident,
-            .var_assign => |var_assign| var_assign.ident,
-            .as => |as_pattern| as_pattern.ident,
+            inline .assign, .var_assign, .as => |assign| assign.ident,
             .applied_tag,
             .nominal,
             .nominal_external,
@@ -1071,14 +1043,8 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
     return .{ .lowered = lowered };
 }
 
-fn hasBlockingReports(reports: std.array_list.Managed(reporting.Report)) bool {
-    for (reports.items) |report| {
-        switch (report.severity) {
-            .runtime_error, .fatal => return true,
-            .warning => {},
-        }
-    }
-    return false;
+fn hasBlockingReports(reports: std.ArrayList(reporting.Report)) bool {
+    return countDiagnostics(reports.items).errors > 0;
 }
 
 fn compileCheckedReplModuleSource(source: []const u8) PlaygroundCompileError!CompilerStageData {
@@ -1253,7 +1219,7 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
         module_env.* = try ModuleEnv.init(allocator, owned_source);
         errdefer module_env.deinit();
         try module_env.common.calcLineStarts(module_env.gpa);
-        var result = CompilerStageData.init(allocator, module_env);
+        var result: CompilerStageData = .{ .module_env = module_env };
         result.owned_source = owned_source;
         return result;
     }
@@ -1270,7 +1236,7 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
         module_env.* = try ModuleEnv.init(allocator, owned_source);
         errdefer module_env.deinit();
         try module_env.common.calcLineStarts(module_env.gpa);
-        var result = CompilerStageData.init(allocator, module_env);
+        var result: CompilerStageData = .{ .module_env = module_env };
         result.owned_source = owned_source;
         return result;
     }
@@ -1291,7 +1257,7 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
     try module_env.common.calcLineStarts(module_env.gpa);
     logDebug("compileSource: ModuleEnv initialized\n", .{});
 
-    var result = CompilerStageData.init(allocator, module_env);
+    var result: CompilerStageData = .{ .module_env = module_env };
     result.owned_source = stable_source;
 
     // Stage 1: Parse (includes tokenization)
@@ -1357,25 +1323,8 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
         logDebug("compileSource: Formatted code complete\n", .{});
     }
 
-    // Collect tokenize diagnostics with additional error handling
-    for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
-        const report = parse_ast.tokenizeDiagnosticToReport(diagnostic, allocator, null) catch {
-            // Log the error and continue processing other diagnostics
-            // This prevents crashes on malformed diagnostics or empty input
-            continue;
-        };
-        try result.tokenize_reports.append(report);
-    }
-
-    // Collect parse diagnostics with additional error handling
-    for (parse_ast.parse_diagnostics.items) |diagnostic| {
-        const report = parse_ast.parseDiagnosticToReport(&module_env.common, diagnostic, allocator, "main.roc") catch {
-            // Log the error and continue processing other diagnostics
-            // This prevents crashes on malformed diagnostics or empty input
-            continue;
-        };
-        try result.parse_reports.append(report);
-    }
+    try check.module_reports.appendTokenize(allocator, &result.tokenize_reports, parse_ast, null);
+    try check.module_reports.appendParse(allocator, &result.parse_reports, parse_ast, &module_env.common, "main.roc");
 
     if (parse_ast.source_rejected) return result;
 
@@ -1389,7 +1338,7 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
 
     logDebug("compileSource: Loading builtin indices\n", .{});
     const builtin_indices = compiled_builtins.builtinIndices(can.CIR);
-    logDebug("compileSource: Builtin indices loaded, bool_type={}\n", .{@intFromEnum(builtin_indices.bool_type)});
+    logDebug("compileSource: Builtin indices loaded, bool_type={}\n", .{@backingInt(builtin_indices.bool_type)});
 
     const builtin_module = try getCachedBuiltinModule();
 
@@ -1399,8 +1348,8 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
     const bool_stmt_in_builtin_module = builtin_indices.bool_type;
     const try_stmt_in_builtin_module = builtin_indices.try_type;
 
-    logDebug("compileSource: Using Bool statement from Builtin module, idx={}\n", .{@intFromEnum(bool_stmt_in_builtin_module)});
-    logDebug("compileSource: Using Result statement from Builtin module, idx={}\n", .{@intFromEnum(try_stmt_in_builtin_module)});
+    logDebug("compileSource: Using Bool statement from Builtin module, idx={}\n", .{@backingInt(bool_stmt_in_builtin_module)});
+    logDebug("compileSource: Using Result statement from Builtin module, idx={}\n", .{@backingInt(try_stmt_in_builtin_module)});
     logDebug("compileSource: Builtin injection complete\n", .{});
 
     // Store bool_stmt and builtin_types in result for later use (e.g., in test runner)
@@ -1445,18 +1394,7 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
     // Copy the modified AST back into the main result to ensure state consistency
     result.parse_ast = parse_ast;
 
-    // Collect canonicalization diagnostics
-    const diagnostics = try env.getDiagnostics();
-
-    // Process and store CAN diagnostics
-    for (diagnostics) |diagnostic| {
-        const report = env.diagnosticToReport(diagnostic, allocator, "main.roc") catch {
-            // Log the error and continue processing other diagnostics
-            // This prevents crashes on malformed diagnostics or empty input
-            continue;
-        };
-        try result.can_reports.append(report);
-    }
+    try check.module_reports.appendCanonicalize(allocator, &result.can_reports, env, 0, "main.roc");
 
     // Stage 3: Type checking (always run if we have CIR, even with canonicalization errors)
     // The type checker works with malformed canonical nodes to provide partial type information
@@ -1499,35 +1437,7 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
         };
         logDebug("compileSource: Type checking complete\n", .{});
 
-        // Collect type checking problems and convert them to reports using ReportBuilder
-        var report_builder = check.report.ReportBuilder.init(
-            allocator,
-            result.module_env,
-            type_can_ir,
-            &solver.snapshots,
-            &solver.problems,
-            "main.roc",
-            imported_envs,
-            &solver.import_mapping,
-            &solver.regions,
-            null,
-        ) catch |err| {
-            // On allocation failure, return result with current reports
-            logDebug("compileSource: ReportBuilder.init failed: {}\n", .{err});
-            return result;
-        };
-        defer report_builder.deinit();
-
-        for (solver.problems.problems.items) |type_problem| {
-            const report = report_builder.build(type_problem) catch |build_err| {
-                logDebug("compileSource: report_builder.build failed: {}\n", .{build_err});
-                return build_err;
-            };
-            result.type_reports.append(report) catch |append_err| {
-                logDebug("compileSource: append TYPE report failed: {}\n", .{append_err});
-                return append_err;
-            };
-        }
+        try check.module_reports.appendUnfinalizedTypes(allocator, &result.type_reports, type_can_ir, solver, "main.roc", imported_envs);
     }
 
     logDebug("compileSource: Compilation complete\n", .{});
@@ -1699,7 +1609,7 @@ fn writeReplInitResponse(response_buffer: []u8) ResponseWriteError!void {
     const w = &resp_writer.interface;
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"message\":\"REPL initialized\",\"repl_info\":{");
-    try w.print("\"compiler_version\":\"{s}\",", .{build_options.compiler_version});
+    try w.print("\"compiler_version\":\"{s}\",", .{@import("compiler_version").compiler_version});
     try w.writeAll("\"state\":\"REPL_ACTIVE\"");
     try w.writeAll("}}");
 
@@ -1749,7 +1659,7 @@ fn writeReplClearResponse(response_buffer: []u8) ResponseWriteError!void {
     const w = &resp_writer.interface;
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"message\":\"REPL cleared\",\"repl_info\":{");
-    try w.print("\"compiler_version\":\"{s}\",", .{build_options.compiler_version});
+    try w.print("\"compiler_version\":\"{s}\",", .{@import("compiler_version").compiler_version});
     try w.writeAll("\"state\":\"REPL_ACTIVE\"");
     try w.writeAll("}}");
 
@@ -1830,11 +1740,9 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) (Allocato
     const stmts_count = cir.store.sliceStatements(cir.all_statements).len;
 
     if (defs_count == 0 and stmts_count == 0) {
-        const debug_begin = tree.beginNode();
-        try tree.pushStaticAtom("empty-cir-debug");
+        const debug_begin = try tree.beginNamedNode("empty-cir-debug");
         try tree.pushStaticAtom("no-defs-or-statements");
-        const debug_attrs = tree.beginNode();
-        try tree.endNode(debug_begin, debug_attrs);
+        try tree.endNodeWithoutChildren(debug_begin);
     }
 
     const mutable_cir = @constCast(cir);
@@ -2239,17 +2147,14 @@ fn countDiagnostics(reports: []reporting.Report) struct { errors: u32, warnings:
     var errors: u32 = 0;
     var warnings: u32 = 0;
     for (reports) |report| {
-        switch (report.severity) {
-            .warning => warnings += 1,
-            .runtime_error, .fatal => errors += 1,
-        }
+        if (report.severity.isError()) errors += 1 else warnings += 1;
     }
     return .{ .errors = errors, .warnings = warnings };
 }
 
 fn extractDiagnosticsFromReports(
     diagnostics: *std.array_list.Managed(Diagnostic),
-    reports: std.array_list.Managed(reporting.Report),
+    reports: std.ArrayList(reporting.Report),
 ) Allocator.Error!void {
     var count: usize = 0;
     const max_diagnostics = 100;
@@ -2266,13 +2171,8 @@ fn extractDiagnosticsFromReports(
         // lives as long as the borrowed title would have.
         const message = try report.addOwnedString(report.title);
         for (@constCast(message)) |*c| c.* = std.ascii.toUpper(c.*);
-        const diagnostic_severity = switch (report.severity) {
-            .warning => DiagnosticSeverity.warning,
-            .runtime_error => DiagnosticSeverity.@"error",
-            .fatal => DiagnosticSeverity.@"error",
-        };
         try diagnostics.append(Diagnostic{
-            .severity = diagnostic_severity,
+            .severity = if (report.severity.isError()) .@"error" else .warning,
             .message = message,
             .region = DiagnosticRegion{
                 .start_line = region_info.start_line_idx,
@@ -2315,7 +2215,7 @@ export fn processAndRespond(message_ptr: [*]const u8, message_len: usize) ?[*:0]
 
     // If processMessage itself failed, create a dynamic error string using the length-prefix pattern.
     if (result_code != 0) {
-        const error_message = switch (@as(WasmError, @enumFromInt(result_code))) {
+        const error_message = switch (@as(WasmError, @fromBackingInt(@intCast(result_code)))) {
             .invalid_json => "Invalid JSON message",
             .missing_message_type => "Missing message type",
             .unknown_message_type => "Unknown message type",

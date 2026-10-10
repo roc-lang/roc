@@ -13,7 +13,6 @@ const Ident = base.Ident;
 const Region = base.Region;
 const Pattern = CIR.Pattern;
 const Statement = CIR.Statement;
-const TypeAnno = CIR.TypeAnno;
 const CoreCtx = @import("ctx").CoreCtx;
 
 /// Context helper for Scope tests
@@ -185,35 +184,6 @@ test "top level var error" {
     try std.testing.expectEqual(Scope.IntroduceResult{ .top_level_var_error = {} }, result);
 }
 
-test "type variables are tracked separately from value identifiers" {
-    const gpa = std.testing.allocator;
-
-    var ctx = try ScopeTestContext.init(gpa);
-    defer ctx.deinit();
-
-    // Create identifiers for 'a' - one for value, one for type
-    const a_ident = try ctx.module_env.insertIdent(Ident.for_text("a"));
-    const pattern = try addBindingPattern(&ctx, a_ident, false);
-    const type_anno: TypeAnno.Idx = @enumFromInt(1);
-
-    // Introduce 'a' as a value identifier
-    const value_result = ctx.self.scopeIntroduceInternal(gpa, .ident, a_ident, pattern, true);
-    try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, value_result);
-
-    // Introduce 'a' as a type variable - should succeed because they're in separate namespaces
-    const current_scope = &ctx.self.scopes.items[ctx.self.scopes.items.len - 1];
-    const type_result = current_scope.introduceTypeVar(gpa, a_ident, type_anno, null);
-    try std.testing.expectEqual(Scope.TypeVarIntroduceResult{ .success = {} }, type_result);
-
-    // Lookup 'a' as value should find the pattern
-    const value_lookup = ctx.self.scopeLookup(.ident, a_ident);
-    try std.testing.expectEqual(Scope.LookupResult{ .found = pattern }, value_lookup);
-
-    // Lookup 'a' as type variable should find the type annotation
-    const type_lookup = current_scope.lookupTypeVar(a_ident);
-    try std.testing.expectEqual(Scope.TypeVarLookupResult{ .found = type_anno }, type_lookup);
-}
-
 test "var reassignment within same function" {
     const gpa = std.testing.allocator;
 
@@ -303,7 +273,7 @@ test "aliases work separately from idents" {
 
     const foo_ident = try ctx.module_env.insertIdent(Ident.for_text("Foo"));
     const ident_pattern = try addBindingPattern(&ctx, foo_ident, false);
-    const alias_pattern: Pattern.Idx = @enumFromInt(2);
+    const alias_pattern: Pattern.Idx = @fromBackingInt(@intCast(2));
 
     // Add as both ident and alias (they're in separate namespaces)
     const ident_result = ctx.self.scopeIntroduceInternal(gpa, .ident, foo_ident, ident_pattern, true);
@@ -330,8 +300,8 @@ test "type binding introduction handles same-scope local conflicts" {
     defer scopes[0].deinit(gpa);
 
     const type_ident = try ctx.module_env.insertIdent(Ident.for_text("Thing"));
-    const first_stmt: Statement.Idx = @enumFromInt(1);
-    const second_stmt: Statement.Idx = @enumFromInt(2);
+    const first_stmt: Statement.Idx = @fromBackingInt(@intCast(1));
+    const second_stmt: Statement.Idx = @fromBackingInt(@intCast(2));
 
     const inserted = try Scope.introduceTypeBinding(
         gpa,
@@ -380,8 +350,8 @@ test "type binding introduction reports parent shadowing without changing parent
     }
 
     const type_ident = try ctx.module_env.insertIdent(Ident.for_text("Thing"));
-    const parent_stmt: Statement.Idx = @enumFromInt(1);
-    const child_stmt: Statement.Idx = @enumFromInt(2);
+    const parent_stmt: Statement.Idx = @fromBackingInt(@intCast(1));
+    const child_stmt: Statement.Idx = @fromBackingInt(@intCast(2));
 
     try std.testing.expectEqual(
         Scope.TypeBindingDecision.inserted,
@@ -421,7 +391,7 @@ test "local type bindings replace current external imports" {
     const type_ident = try ctx.module_env.insertIdent(Ident.for_text("Thing"));
     const module_ident = try ctx.module_env.insertIdent(Ident.for_text("Imported"));
     const external = externalTypeBinding(module_ident, type_ident);
-    const local_stmt: Statement.Idx = @enumFromInt(1);
+    const local_stmt: Statement.Idx = @fromBackingInt(@intCast(1));
 
     try std.testing.expectEqual(
         Scope.TypeBindingDecision.inserted,
@@ -511,7 +481,7 @@ test "associated type aliases do not replace current external imports" {
     const type_ident = try ctx.module_env.insertIdent(Ident.for_text("Thing"));
     const module_ident = try ctx.module_env.insertIdent(Ident.for_text("Imported"));
     const external = externalTypeBinding(module_ident, type_ident);
-    const associated_stmt: Statement.Idx = @enumFromInt(1);
+    const associated_stmt: Statement.Idx = @fromBackingInt(@intCast(1));
 
     try std.testing.expectEqual(
         Scope.TypeBindingDecision.inserted,

@@ -12,17 +12,17 @@ fn schemeAllocationFailures(gpa: std.mem.Allocator) (std.mem.Allocator.Error || 
         var key = @import("../canonical_names.zig").CanonicalTypeSchemeKey{};
         key.bytes[0] = @intCast(i);
         const scheme = store.schemeForKey(key).?;
-        std.debug.assert(@intFromEnum(scheme.id) == i);
-        std.debug.assert(@intFromEnum(scheme.root) == i);
+        std.debug.assert(@backingInt(scheme.id) == i);
+        std.debug.assert(@backingInt(scheme.root) == i);
     };
     while (inserted < 128) : (inserted += 1) {
         var key = @import("../canonical_names.zig").CanonicalTypeSchemeKey{};
         key.bytes[0] = @intCast(inserted);
-        const id = try store.internScheme(gpa, key, @enumFromInt(inserted));
-        try std.testing.expectEqual(inserted, @intFromEnum(id));
+        const id = try store.internScheme(gpa, key, @fromBackingInt(@intCast(inserted)));
+        try std.testing.expectEqual(inserted, @backingInt(id));
         // Re-interning keeps the first representative, including when another
         // source root has an equal scheme key.
-        try std.testing.expectEqual(id, try store.internScheme(gpa, key, @enumFromInt(inserted + 128)));
+        try std.testing.expectEqual(id, try store.internScheme(gpa, key, @fromBackingInt(@intCast(inserted + 128))));
     }
     try std.testing.expectEqual(inserted, store.schemes.items.len);
 }
@@ -41,25 +41,25 @@ test "issue 11128 top-level procedure binding appends stay amortized" {
         defer table.deinit(direct_bytes.allocator());
         for (0..binding_count) |i| {
             const ordinal: u32 = @intCast(i);
-            const ref = try table.appendDirect(direct_bytes.allocator(), .{}, .{ .proc_base = @enumFromInt(ordinal) }, .{
-                .proc_base = @enumFromInt(ordinal),
-                .template = @enumFromInt(ordinal),
+            const ref = try table.appendDirect(direct_bytes.allocator(), .{}, .{ .proc_base = @fromBackingInt(@intCast(ordinal)) }, .{
+                .proc_base = @fromBackingInt(@intCast(ordinal)),
+                .template = @fromBackingInt(@intCast(ordinal)),
             });
-            try std.testing.expectEqual(ordinal, @intFromEnum(ref));
+            try std.testing.expectEqual(ordinal, @backingInt(ref));
         }
         for (0..binding_count) |i| {
-            const binding = table.get(@enumFromInt(i));
-            try std.testing.expectEqual(i, @intFromEnum(binding.body.direct_template.proc_value.proc_base));
+            const binding = table.get(@fromBackingInt(@intCast(i)));
+            try std.testing.expectEqual(i, @backingInt(binding.body.direct_template.proc_value.proc_base));
         }
     }
     {
         var table = TopLevelProcedureBindingTable.initEmpty();
         defer table.deinit(callable_eval_bytes.allocator());
         for (0..binding_count) |i| {
-            _ = try table.appendCallableEval(callable_eval_bytes.allocator(), .{}, @enumFromInt(i));
+            _ = try table.appendCallableEval(callable_eval_bytes.allocator(), .{}, @fromBackingInt(@intCast(i)));
         }
         for (0..binding_count) |i| {
-            try std.testing.expectEqual(i, @intFromEnum(table.get(@enumFromInt(i)).body.callable_eval_template));
+            try std.testing.expectEqual(i, @backingInt(table.get(@fromBackingInt(@intCast(i))).body.callable_eval_template));
         }
     }
     if (direct_bytes.allocated_bytes > budget or callable_eval_bytes.allocated_bytes > budget) {
@@ -80,19 +80,19 @@ test "issue 11128 wrapper and callable template appends stay amortized" {
         defer table.deinit(gpa);
         for (0..count) |i| {
             const ref = if (Table == CheckedArtifact.IntrinsicWrapperTable)
-                try table.append(gpa, .{ .proc_base = @enumFromInt(i), .template = @enumFromInt(i) }, @enumFromInt(i), .structural_eq)
+                try table.append(gpa, .{ .proc_base = @fromBackingInt(@intCast(i)), .template = @fromBackingInt(@intCast(i)) }, @fromBackingInt(@intCast(i)), .structural_eq)
             else if (Table == CheckedArtifact.EntryWrapperTable)
-                try table.append(gpa, @enumFromInt(i), .{ .proc_base = @enumFromInt(i), .template = @enumFromInt(i) }, @enumFromInt(i), @enumFromInt(i))
+                try table.append(gpa, @fromBackingInt(@intCast(i)), .{ .proc_base = @fromBackingInt(@intCast(i)), .template = @fromBackingInt(@intCast(i)) }, @fromBackingInt(@intCast(i)), @fromBackingInt(@intCast(i)))
             else
-                try table.append(gpa, @intCast(i), @enumFromInt(i), @enumFromInt(i), .{}, @enumFromInt(i));
-            try std.testing.expectEqual(i, @intFromEnum(ref));
+                try table.append(gpa, @intCast(i), @fromBackingInt(@intCast(i)), @fromBackingInt(@intCast(i)), .{}, @fromBackingInt(@intCast(i)));
+            try std.testing.expectEqual(i, @backingInt(ref));
         }
         for (0..count) |i| {
-            const row = table.get(@enumFromInt(i));
-            try std.testing.expectEqual(i, @intFromEnum(row.id));
-            try std.testing.expectEqual(i, @intFromEnum(row.checked_fn_root));
+            const row = table.get(@fromBackingInt(@intCast(i)));
+            try std.testing.expectEqual(i, @backingInt(row.id));
+            try std.testing.expectEqual(i, @backingInt(row.checked_fn_root));
         }
-        const Row = @TypeOf(table.get(@enumFromInt(@as(u32, 1))));
+        const Row = @TypeOf(table.get(@fromBackingInt(@intCast(@as(u32, 1)))));
         try std.testing.expect(bytes.allocated_bytes <= 8 * count * @sizeOf(Row));
     }
 }
@@ -103,12 +103,12 @@ fn bindingAllocationFailures(gpa: std.mem.Allocator) (std.mem.Allocator.Error ||
     var count: usize = 0;
     // This also runs when a growth allocation fails, before table destruction.
     defer for (0..count) |i| {
-        const row = table.get(@enumFromInt(i));
-        std.debug.assert(@intFromEnum(row.body.callable_eval_template) == i);
+        const row = table.get(@fromBackingInt(@intCast(i)));
+        std.debug.assert(@backingInt(row.body.callable_eval_template) == i);
     };
     while (count < 128) : (count += 1) {
-        const ref = try table.appendCallableEval(gpa, .{}, @enumFromInt(count));
-        try std.testing.expectEqual(count, @intFromEnum(ref));
+        const ref = try table.appendCallableEval(gpa, .{}, @fromBackingInt(@intCast(count)));
+        try std.testing.expectEqual(count, @backingInt(ref));
     }
 }
 

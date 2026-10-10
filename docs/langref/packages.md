@@ -41,6 +41,19 @@ a bundle, Roc verifies that its contents match that hash, and refuses to use it 
 that a given URL always refers to exactly the same package contents, even if the server hosting it gets
 compromised.
 
+If the server responds with a redirect, Roc follows it (up to three redirects in a row), but each
+place it gets redirected to has to follow the same HTTPS-or-`localhost` rule as the original URL.
+
+To keep a malicious or broken package from filling up your disk, Roc also limits how big
+downloaded packages can be once they're decompressed:
+
+- Each package can be at most 10 megabytes. You can change this with `--max-package-mb`.
+- Everything a dependency brings in (the package itself plus all of its own dependencies,
+  recursively) can be at most 100 megabytes combined, or 512 megabytes for a platform. You can
+  change this with `--max-transitive-mb`.
+
+Passing `0` to either of these turns that limit off.
+
 The `roc bundle` command creates a bundle from a package's `.roc` files, and names the resulting file
 after its hash:
 
@@ -115,12 +128,10 @@ A [platform](platforms) is a special kind of package which provides the lower-le
 an application builds on. Every application has exactly one platform, which is marked with the `platform`
 keyword in the application's header. See [Platform Modules](modules#platform-modules) for details.
 
-## Inspecting dependencies with `roc deps`
+## Inspecting Dependencies with `roc deps` {#inspecting-dependencies-with-roc-deps}
 
-`roc deps main.roc` resolves the dependency graph of an app, package, or
-platform and prints it as a tree without compiling anything. Every edge shows
-the complete URL or path exactly as the header declares it (never its
-shorthand), so it can be copied straight into `--replace-dep`:
+`roc deps main.roc` figures out the whole dependency graph of an application, package, or
+platform, and prints it as a tree. It doesn't compile anything, so it's quick:
 
 ```text
 main.roc (/home/me/app/main.roc) [app]
@@ -132,34 +143,40 @@ main.roc (/home/me/app/main.roc) [app]
 [shared]  this package was already shown above, where its dependencies are listed
 ```
 
-Each shared package's subtree is expanded once; later occurrences are marked
-`[shared]`. When version selection picks a different compatible release than
-a header declares, the tree shows `[resolved to URL]` next to the declaration.
+Each line shows the full URL or path exactly as the module header wrote it (not its shorthand), so
+you can copy it straight into [`--replace-dep`](#replacing-dependencies-with-replace-dep).
 
-## Replacing dependencies with `--replace-dep`
+When a package shows up more than once, its dependencies are only listed the first time, and later
+appearances are marked `[shared]`. When [version selection](#package-versions) picks a different
+version than a header asked for, the tree shows `[resolved to URL]` next to it.
 
-To test a local change, try a fork, or build against a different release
-without editing any header, pass `--replace-dep OLD NEW` to `roc run`,
-`build`, `check`, `test`, `docs`, or `deps`. `OLD` and `NEW` are each a
-complete package URL or an explicit path to a root `.roc` file; the flag can
-be repeated.
+## Replacing Dependencies with `--replace-dep` {#replacing-dependencies-with-replace-dep}
+
+Sometimes you want to build against a different version of a dependency without editing any module
+headers; for example, to test a local change to a package, or to try out a fork. For that, you can
+pass `--replace-dep OLD NEW` to `roc run`, `roc build`, `roc check`, `roc test`, `roc docs`, or
+`roc deps`:
 
 ```sh
-# Use a local platform in place of its published URL.
+# Use a local copy of the platform instead of its published URL.
 roc build app.roc --replace-dep "$PLATFORM_URL" ../basic-cli/platform/main.roc
 
-# Replace a package everywhere it is declared, including inside other packages.
+# Replace a package everywhere it's used, including inside other packages.
 roc test app.roc --replace-dep "$ASCII_URL" ../roc-ascii/main.roc
 ```
 
-Matching is exact: every declaration of exactly `OLD` (including its version
-and hash, or its canonical file path) loads `NEW` instead, whatever shorthand
-each header gives it, and nothing else is rewritten. Different release URLs
-need separate flags. A flag that matches nothing is an error, as is a
-shorthand such as `ascii` in place of a full URL or path. The replacement's own
-header decides its dependencies, and those declarations are subject to the
-same flags. `roc deps main.roc --replace-dep …` shows the resulting graph with
-each replaced declaration marked `[replaced by …]`.
+`OLD` and `NEW` are each either a complete package URL or a path to a package's root `.roc` file.
+You can pass `--replace-dep` more than once to replace several dependencies.
 
-Replacements last for one invocation only. They never edit source files or
-touch cached packages.
+`OLD` has to match exactly. Every place that depends on exactly that URL (including its version
+and hash) or that path uses `NEW` instead, no matter what shorthand it gave the dependency. Nothing
+else gets replaced, so different versions of the same package each need their own
+`--replace-dep`. It's an error if `OLD` doesn't match anything, or if it's a shorthand (like
+`ascii`) rather than a full URL or path.
+
+The replacement package's own header decides what its dependencies are, and `--replace-dep` applies
+to those too. Running `roc deps main.roc --replace-dep …` shows the resulting dependency graph, with
+each replaced dependency marked `[replaced by …]`.
+
+Replacements only last for the one command you passed them to. They never edit any files, or
+change any cached packages.

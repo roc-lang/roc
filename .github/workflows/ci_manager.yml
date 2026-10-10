@@ -18,9 +18,9 @@ name: CI Manager
 #
 #   static-checks ────────────────────────────┐ (gates macOS + Windows)
 #   check-changes ─┬─> linux-extra-checks     │
-#                  ├─> minici-build-linux ───>│ minici-linux   (3 shards)
-#                  ├─> minici-build-macos <───┤ minici-macos   (2 shards)
-#                  └─> minici-build-windows <─┘ minici-windows (3 shards)
+#                  ├─> minici-build-linux ───>│ minici-linux   (4 shards)
+#                  ├─> minici-build-macos <───┤ minici-macos   (3 shards)
+#                  └─> minici-build-windows <─┘ minici-windows (5 shards)
 #   everything above ─> finish (the only required check)
 #
 # `static-checks` runs on every PR, including docs-only ones. The MiniCI lanes
@@ -157,7 +157,7 @@ jobs:
 
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          version: 0.16.0
+          version: 0.17.0
           use-cache: false
 
       - name: Cache Zig dependency packages
@@ -184,6 +184,41 @@ jobs:
       - name: Run tidy unit tests
         if: ${{ !cancelled() }}
         run: zig build run-test-zig-tidy-unit
+
+      # Not a MiniCI job; covers ci/restamp_zig_cache.zig itself.
+      - name: Run Zig cache re-stamping unit tests
+        if: ${{ !cancelled() }}
+        run: zig build run-test-zig-restamp-zig-cache
+
+      # Uses real generated compiler options and an empty dependency bundle;
+      # no Roc CLI compilation or published LLVM bundle is needed.
+      - name: Check compiler artifact identities
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          python3 ci/test_compiler_artifact_identity.py zig \
+            --work-dir "$RUNNER_TEMP/roc-compiler-artifact-identity"
+
+      # Two std-only test producers exercise report isolation and dynamic
+      # filtering without compiling Roc or linking a dependency bundle.
+      - name: Check independent unit-test reports
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/roc-test-report-deps/include" "$RUNNER_TEMP/roc-test-report-deps/lib"
+          python3 ci/test_unit_report_isolation.py zig \
+            --work-dir "$RUNNER_TEMP/roc-test-reports" -- \
+            "-Droc-deps-path=$RUNNER_TEMP/roc-test-report-deps" \
+            -j2 --cache-poison=disallowed
+
+      # Exercises the production display-version reader in source archives,
+      # ordinary checkouts and worktrees without compiling Roc.
+      - name: Check cached Git display metadata
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          python3 ci/test_build_version_metadata.py zig \
+            --work-dir "$RUNNER_TEMP/roc-git-display-metadata" -- -j2
 
       - name: Install actionlint
         if: ${{ !cancelled() }}
@@ -223,7 +258,7 @@ jobs:
 
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          version: 0.16.0
+          version: 0.17.0
           use-cache: false
 
       - name: Cache Zig dependency packages
@@ -268,7 +303,7 @@ jobs:
       # rebuild everything that embeds the wasm32 builtins through eval.
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          version: 0.16.0
+          version: 0.17.0
           use-cache: false
           use-tool-cache: 'true'
 
@@ -336,11 +371,25 @@ jobs:
       # Streaming tar into zstd also avoids writing an uncompressed tar the size
       # of `.zig-cache` next to it. zstd is preinstalled on all three runner
       # images.
+      #
+      # Windows runners' tar cannot recreate symlinks on extraction, and the
+      # build cache holds some (a versioned shared library such as the glibc
+      # test stub is emitted as `libc.so` -> `libc.so.6` -> `libc.so.6.0.0`),
+      # so there the artifact stores each link's target file instead.
+      #
+      # `zig-pkg` is where Zig 0.17 unpacks dependencies, the LLVM libraries
+      # among them. The cache records those files as link inputs, so a shard
+      # needs them in place before it re-stamps the cache; left out, Zig would
+      # unpack fresh copies afterwards and relink everything that uses LLVM.
       - name: Pack MiniCI build artifact
         shell: bash
         run: |
           set -euo pipefail
-          tar -cf - .zig-cache zig-out/bin zig-out/lib | zstd -T0 -3 -q -o minici-build.tar.zst
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            tar --dereference -cf - .zig-cache zig-pkg zig-out/bin zig-out/lib | zstd -T0 -3 -q -o minici-build.tar.zst
+          else
+            tar -cf - .zig-cache zig-pkg zig-out/bin zig-out/lib | zstd -T0 -3 -q -o minici-build.tar.zst
+          fi
 
       # Packing is the disk high-water mark of this job. Report free space and
       # the packed size here, where the peak actually is.
@@ -387,16 +436,17 @@ jobs:
     if: needs.check-changes.outputs.heavy == 'true' && !github.event.pull_request.draft
     name: minici-build (windows-2025)
     runs-on: windows-2025
-    timeout-minutes: 120
+    # The Zig 0.17 build takes about 110 to 120 minutes here (the eval runner
+    # alone about 35), so 120 leaves no margin; windows-eval has the same headroom.
+    timeout-minutes: 180
     steps: *minici_build_steps
 
   # Each shard runs the MiniCI jobs that src/build/minici.zig assigns to its
   # `minici_shard`. The three OS shard jobs share one step list
-  # (`&minici_shard_steps`); per-shard extras are matrix flags:
+  # (`&minici_shard_steps`). Every check and test a shard runs is a MiniCI job,
+  # so MiniCI measures what each one compiled; the one per-shard extra is a
+  # matrix flag:
   #   valgrind         - install Valgrind (for run-check-str-eq-same-allocation)
-  #   shim_archive     - the ReleaseSafe machine-code shim archive check
-  #   llvm_float_bits  - the focused LLVM exact-float-bits eval check (on the
-  #                      shard that runs run-test-eval)
   minici-linux:
     needs: [check-changes, minici-build-linux]
     if: needs.check-changes.outputs.heavy == 'true'
@@ -417,24 +467,12 @@ jobs:
         include:
           - minici_shard: linux-core
             valgrind: true
-            shim_archive: true
-            llvm_float_bits: false
-            web_wasm: false
           - minici_shard: linux-eval
             valgrind: false
-            shim_archive: false
-            llvm_float_bits: false
-            web_wasm: false
           - minici_shard: linux-simd
             valgrind: false
-            shim_archive: false
-            llvm_float_bits: true
-            web_wasm: true
           - minici_shard: linux-harness
             valgrind: false
-            shim_archive: false
-            llvm_float_bits: false
-            web_wasm: false
     steps: &minici_shard_steps
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
@@ -443,7 +481,7 @@ jobs:
       # `minici-build-linux`), so the restored cache hits.
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          version: 0.16.0
+          version: 0.17.0
           use-cache: false
           use-tool-cache: 'true'
 
@@ -459,6 +497,18 @@ jobs:
           set -euo pipefail
           zstd -dc minici-build.tar.zst | tar -xf -
           rm minici-build.tar.zst
+
+      # Every file here is new to this machine: the sources come from a fresh
+      # checkout and the cache from the archive above, so nothing has the inode
+      # or mtime the cache recorded. Zig 0.17.0 counts that as a miss for C
+      # sources and linked artifacts even when the contents are identical, and
+      # would recompile every binary this shard runs. The tool records the new
+      # stat for each entry whose contents still match; it ships in the build
+      # artifact so it can run before the first `zig` command. See
+      # ci/restamp_zig_cache.zig.
+      - name: Re-stamp the restored Zig cache
+        shell: bash
+        run: ./zig-out/bin/restamp-zig-cache
 
       - name: Install Rust wasm target
         run: rustup target add wasm32-unknown-unknown
@@ -489,30 +539,6 @@ jobs:
 
       - name: Run MiniCI
         run: zig build minici -- --minici-skip-build --minici-shard ${{ matrix.minici_shard }}
-
-      # Compiles its own ReleaseSafe shim rather than shipping ReleaseSafe
-      # outputs in the build artifact, which is otherwise all Debug.
-      - name: Check ReleaseSafe machine-code shim support ownership
-        if: matrix.shim_archive
-        run: zig build run-check-machine-code-shim-archive -Doptimize=ReleaseSafe
-
-      # LLVM evaluation is deliberately excluded from the general MiniCI eval
-      # suite for speed. Keep the exact-bit float contract PR-gated with a
-      # focused invocation so backend drift cannot wait for the nightly suite.
-      - name: Check exact float bits with LLVM
-        if: matrix.llvm_float_bits
-        run: zig build run-test-eval -- --llvm --threads 1 --filter "exact bits agree across backends"
-
-      # The REPL and echo WebAssembly modules are built by `build-ci` (its web
-      # step), so these reuse the artifact instead of compiling cold. Used to
-      # run only nightly.
-      - name: Run dedicated REPL WebAssembly tests
-        if: matrix.web_wasm
-        run: zig build run-test-repl-wasm
-
-      - name: Run echo.wasm integration test
-        if: matrix.web_wasm
-        run: zig build run-test-echo-wasm
 
       # `.zig-cache` doubles as Zig's global cache, its local cache, and the
       # build temp dir. It is restored from the MiniCI build artifact, so the
@@ -584,8 +610,37 @@ jobs:
             Write-Host ("::warning::.zig-cache is {0} MB after this shard, over the {1} MB post-shard warning threshold." -f $totalMb, $limitMb)
           }
 
+      - name: Collect macOS compiler crash reports
+        if: failure() && runner.os == 'macOS'
+        continue-on-error: true
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          import shutil
+
+          output = Path("zig-out/minici/crash-reports")
+          output.mkdir(parents=True, exist_ok=True)
+          programs = ("roc", "eval-test-runner", "lambda-mono-differential-runner")
+          roots = (Path.home() / "Library/Logs/DiagnosticReports",
+                   Path("/Library/Logs/DiagnosticReports"))
+          for index, root in enumerate(roots):
+              if not root.is_dir():
+                  continue
+              for report in root.rglob("*"):
+                  if report.is_file() and any(report.name.startswith(name + "-") or
+                                              report.name.startswith(name + "_")
+                                              for name in programs):
+                      shutil.copy2(report, output / (str(index) + "-" + report.name))
+                      print("Collected " + str(report))
+          PYTHON
+
+      # Uploaded for passing shards too: each phase's log ends with the
+      # `zig build --summary all` tree, the only record of which steps the
+      # shard compiled and which it took from the build job's cache.
       - name: Upload MiniCI report and logs
-        if: failure()
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7.0.1 # ratchet:actions/upload-artifact@v7.0.1
         with:
           name: minici-${{ matrix.minici_shard }}
@@ -604,14 +659,10 @@ jobs:
         include:
           - minici_shard: macos-core
             valgrind: false
-            shim_archive: false
-            llvm_float_bits: true
-            web_wasm: false
+          - minici_shard: macos-eval
+            valgrind: false
           - minici_shard: macos-harness
             valgrind: false
-            shim_archive: false
-            llvm_float_bits: false
-            web_wasm: false
     steps: *minici_shard_steps
 
   minici-windows:
@@ -619,7 +670,8 @@ jobs:
     if: needs.check-changes.outputs.heavy == 'true'
     name: minici (${{ matrix.minici_shard }})
     runs-on: windows-2025
-    timeout-minutes: 120
+    # Two evaluator workers use less memory and need a longer job budget.
+    timeout-minutes: ${{ matrix.minici_shard == 'windows-eval' && 180 || 120 }}
     env: *minici_shard_env
     strategy:
       fail-fast: false
@@ -627,29 +679,14 @@ jobs:
         include:
           - minici_shard: windows-core
             valgrind: false
-            shim_archive: false
-            llvm_float_bits: false
-            web_wasm: false
           - minici_shard: windows-zig
             valgrind: false
-            shim_archive: false
-            llvm_float_bits: false
-            web_wasm: false
           - minici_shard: windows-eval
             valgrind: false
-            shim_archive: false
-            llvm_float_bits: true
-            web_wasm: false
           - minici_shard: windows-simd
             valgrind: false
-            shim_archive: false
-            llvm_float_bits: false
-            web_wasm: false
           - minici_shard: windows-harness
             valgrind: false
-            shim_archive: false
-            llvm_float_bits: false
-            web_wasm: false
     steps: *minici_shard_steps
 
   # No arm64 Linux lane: hosted arm64 runners lose network mid-`build-ci` at

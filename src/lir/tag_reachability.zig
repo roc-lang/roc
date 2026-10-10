@@ -6,6 +6,7 @@
 //! not need ownership repair.
 
 const std = @import("std");
+const base = @import("base");
 const collections = @import("collections");
 const core = @import("lir_core");
 
@@ -181,14 +182,14 @@ const Pass = struct {
 
     fn seedBoundaries(self: *Pass) Allocator.Error!void {
         for (0..self.store.procSpecCount()) |proc_index| {
-            const proc = self.store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+            const proc = self.store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
             if (proc.body == null or proc.hosted != null) {
                 _ = self.proc_returns[proc_index].markAll(self.allocator);
             }
             const args = self.store.getLocalSpan(proc.args);
             for (0..args.len) |index| {
                 const arg = GuardedList.at(args, index);
-                _ = self.local_info[@intFromEnum(arg)].markAll(self.allocator);
+                _ = self.local_info[@backingInt(arg)].markAll(self.allocator);
             }
         }
     }
@@ -198,9 +199,9 @@ const Pass = struct {
         while (changed) {
             changed = false;
             for (0..self.store.procSpecCount()) |proc_index| {
-                const proc = self.store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+                const proc = self.store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
                 const body = proc.body orelse continue;
-                if (try self.analyzeProc(@enumFromInt(@as(u32, @intCast(proc_index))), body)) {
+                if (try self.analyzeProc(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))), body)) {
                     changed = true;
                 }
             }
@@ -238,7 +239,7 @@ const Pass = struct {
                 try self.pushStmt(s.next);
             },
             .assign_call => |s| {
-                const callee_index = @intFromEnum(s.proc);
+                const callee_index = @backingInt(s.proc);
                 if (callee_index >= self.proc_returns.len) tagReachabilityInvariant("callee proc id exceeded proc table");
                 if (try self.localInfoMut(s.target).mergeFrom(self.allocator, &self.proc_returns[callee_index])) changed = true;
                 try self.pushStmt(s.next);
@@ -254,11 +255,11 @@ const Pass = struct {
                 if (self.localInfoMut(s.target).markAll(self.allocator)) changed = true;
                 try self.pushStmt(s.next);
             },
-            inline .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level => |s| {
+            inline .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level => |s| {
                 if (self.localInfoMut(s.target).markAll(self.allocator)) changed = true;
                 try self.pushStmt(s.next);
             },
-            .boxy_tag_match => |s| {
+            inline .boxy_tag_match, .str_match => |s| {
                 try self.pushStmt(s.on_match);
                 try self.pushStmt(s.on_miss);
             },
@@ -299,10 +300,6 @@ const Pass = struct {
                 try self.pushStmt(s.initialized_branch);
                 try self.pushStmt(s.uninitialized_branch);
             },
-            .str_match => |s| {
-                try self.pushStmt(s.on_match);
-                try self.pushStmt(s.on_miss);
-            },
             .str_match_set => |s| {
                 const arms = self.store.getStrMatchArms(s.arms);
                 for (0..arms.len) |index| try self.pushStmt(GuardedList.at(arms, index).on_match);
@@ -313,7 +310,7 @@ const Pass = struct {
                 try self.pushStmt(s.remainder);
             },
             .ret => |s| {
-                if (try self.proc_returns[@intFromEnum(proc_id)].mergeFrom(self.allocator, self.localInfo(s.value))) changed = true;
+                if (try self.proc_returns[@backingInt(proc_id)].mergeFrom(self.allocator, self.localInfo(s.value))) changed = true;
             },
             .expect_err,
             .jump,
@@ -386,7 +383,7 @@ const Pass = struct {
     fn collectUseCounts(self: *Pass) Allocator.Error!void {
         @memset(self.use_counts, 0);
         for (0..self.store.cfStmtCount()) |stmt_index| {
-            const stmt = self.store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+            const stmt = self.store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
             try self.countStmtUses(stmt);
         }
     }
@@ -396,12 +393,8 @@ const Pass = struct {
             .assign_ref => |s| {
                 switch (s.op) {
                     .local => |source| self.noteUse(source),
-                    .discriminant => |ref| self.noteUse(ref.source),
-                    .field => |ref| self.noteUse(ref.source),
-                    .tag_payload => |ref| self.noteUse(ref.source),
-                    .tag_payload_struct => |ref| self.noteUse(ref.source),
-                    .list_reinterpret => |ref| self.noteUse(ref.backing_ref),
-                    .nominal => |ref| self.noteUse(ref.backing_ref),
+                    inline .discriminant, .field, .tag_payload, .tag_payload_struct => |ref| self.noteUse(ref.source),
+                    inline .list_reinterpret, .nominal => |ref| self.noteUse(ref.backing_ref),
                 }
             },
             .assign_call => |s| {
@@ -456,22 +449,24 @@ const Pass = struct {
                 if (s.source_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
                 if (s.target_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
             },
-            .assign_boxy_inspect => |s| {
+            inline .assign_boxy_inspect, .assign_boxy_tag_payload, .boxy_tag_match => |s| {
                 self.noteUse(s.source);
                 if (s.source_desc.localOrNull()) |local| self.noteUse(local);
+            },
+            .assign_boxy_eq => |s| {
+                self.noteUse(s.lhs);
+                self.noteUse(s.rhs);
+                if (s.desc.localOrNull()) |local| self.noteUse(local);
+            },
+            .assign_boxy_hash => |s| {
+                self.noteUse(s.value);
+                self.noteUse(s.hasher);
+                if (s.desc.localOrNull()) |local| self.noteUse(local);
             },
             .assign_boxy_tag => |s| {
                 if (s.target_desc.localOrNull()) |local| self.noteUse(local);
                 if (s.payload) |payload| self.noteUse(payload);
                 if (s.payload_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
-            },
-            .assign_boxy_tag_payload => |s| {
-                self.noteUse(s.source);
-                if (s.source_desc.localOrNull()) |local| self.noteUse(local);
-            },
-            .boxy_tag_match => |s| {
-                self.noteUse(s.source);
-                if (s.source_desc.localOrNull()) |local| self.noteUse(local);
             },
             .assign_call_dict => |s| {
                 if (s.dict.localOrNull()) |local| self.noteUse(local);
@@ -507,26 +502,20 @@ const Pass = struct {
                 self.noteUse(s.dest);
                 if (s.payload) |payload| self.noteUse(payload);
             },
-            .set_local => |s| self.noteUse(s.value),
-            .debug => |s| self.noteUse(s.message),
+            inline .set_local, .ret, .incref, .decref, .free => |s| self.noteUse(s.value),
+            inline .debug, .expect_err => |s| self.noteUse(s.message),
             .expect => |s| self.noteUse(s.condition),
-            .expect_err => |s| self.noteUse(s.message),
             .switch_stmt => |s| self.noteUse(s.cond),
             .switch_initialized_payload => |s| {
                 self.noteUse(s.cond);
                 self.noteUse(s.payload);
             },
-            .str_match => |s| self.noteUse(s.source),
-            .str_match_set => |s| self.noteUse(s.source),
-            .ret => |s| self.noteUse(s.value),
+            inline .str_match, .str_match_set => |s| self.noteUse(s.source),
             .crash => |s| if (s.msg.localId()) |message| self.noteUse(message),
-            .incref => |s| self.noteUse(s.value),
-            .decref => |s| self.noteUse(s.value),
             .decref_if_initialized => |s| {
                 self.noteUse(s.cond);
                 self.noteUse(s.value);
             },
-            .free => |s| self.noteUse(s.value),
             .init_uninitialized,
             .assign_literal,
             .comptime_branch_taken,
@@ -543,7 +532,7 @@ const Pass = struct {
     fn rewriteSwitches(self: *Pass) Allocator.Error!void {
         var stmt_index: usize = 0;
         while (stmt_index < self.store.cfStmtCount()) : (stmt_index += 1) {
-            const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
+            const stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(stmt_index))));
             const stmt = self.store.getCFStmt(stmt_id);
             if (stmt != .switch_stmt) continue;
             const switch_stmt = stmt.switch_stmt;
@@ -591,7 +580,7 @@ const Pass = struct {
     fn removeDeadDiscriminantReads(self: *Pass) Allocator.Error!void {
         var stmt_index: usize = 0;
         while (stmt_index < self.store.cfStmtCount()) : (stmt_index += 1) {
-            const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
+            const stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(stmt_index))));
             const stmt = self.store.getCFStmt(stmt_id);
             if (stmt != .assign_ref) continue;
             const assign = stmt.assign_ref;
@@ -610,7 +599,7 @@ const Pass = struct {
         if (self.redirects.count() == 0) return;
 
         for (0..self.store.procSpecCount()) |proc_index| {
-            const proc = self.store.getProcSpecPtr(@enumFromInt(@as(u32, @intCast(proc_index))));
+            const proc = self.store.getProcSpecPtr(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
             if (proc.body) |body| proc.body = self.resolveRedirect(body);
             const join_points = self.store.getJoinPointSpanMut(proc.join_points);
             for (0..join_points.len) |index| {
@@ -621,7 +610,7 @@ const Pass = struct {
 
         var stmt_index: usize = 0;
         while (stmt_index < self.store.cfStmtCount()) : (stmt_index += 1) {
-            const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
+            const stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(stmt_index))));
             const stmt = self.store.getCFStmtPtr(stmt_id);
             switch (stmt.*) {
                 .init_uninitialized => |*s| s.next = self.resolveRedirect(s.next),
@@ -638,9 +627,11 @@ const Pass = struct {
                 .assign_boxy_unbox => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_boxy_adapt => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_boxy_inspect => |*s| s.next = self.resolveRedirect(s.next),
+                .assign_boxy_eq => |*s| s.next = self.resolveRedirect(s.next),
+                .assign_boxy_hash => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_boxy_tag => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_boxy_tag_payload => |*s| s.next = self.resolveRedirect(s.next),
-                .boxy_tag_match => |*s| {
+                inline .boxy_tag_match, .str_match => |*s| {
                     s.on_match = self.resolveRedirect(s.on_match);
                     s.on_miss = self.resolveRedirect(s.on_miss);
                 },
@@ -671,10 +662,6 @@ const Pass = struct {
                 .switch_initialized_payload => |*s| {
                     s.initialized_branch = self.resolveRedirect(s.initialized_branch);
                     s.uninitialized_branch = self.resolveRedirect(s.uninitialized_branch);
-                },
-                .str_match => |*s| {
-                    s.on_match = self.resolveRedirect(s.on_match);
-                    s.on_miss = self.resolveRedirect(s.on_miss);
                 },
                 .str_match_set => |*s| {
                     const arms = self.store.getStrMatchArms(s.arms);
@@ -718,11 +705,11 @@ const Pass = struct {
     }
 
     fn localInfo(self: *const Pass, local: LIR.LocalId) *const ValueInfo {
-        return &self.local_info[@intFromEnum(local)];
+        return &self.local_info[@backingInt(local)];
     }
 
     fn localInfoMut(self: *Pass, local: LIR.LocalId) *ValueInfo {
-        return &self.local_info[@intFromEnum(local)];
+        return &self.local_info[@backingInt(local)];
     }
 
     fn pushStmt(self: *Pass, stmt: LIR.CFStmtId) Allocator.Error!void {
@@ -730,17 +717,17 @@ const Pass = struct {
     }
 
     fn noteUse(self: *Pass, local: LIR.LocalId) void {
-        self.use_counts[@intFromEnum(local)] += 1;
+        self.use_counts[@backingInt(local)] += 1;
     }
 
     fn useCount(self: *Pass, local: LIR.LocalId) u32 {
-        return self.use_counts[@intFromEnum(local)];
+        return self.use_counts[@backingInt(local)];
     }
 };
 
 fn tagReachabilityInvariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .Debug) {
-        std.debug.panic("tag reachability invariant violated: {s}", .{message});
+    if (@import("builtin").mode == .debug) {
+        base.invariant("tag reachability invariant violated: {s}", .{message});
     }
     unreachable;
 }

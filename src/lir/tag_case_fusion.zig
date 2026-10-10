@@ -9,6 +9,7 @@
 //! producer control-flow edge selects the same consumer arm explicitly.
 
 const std = @import("std");
+const base = @import("base");
 const builtin = @import("builtin");
 const core = @import("lir_core");
 const collections = @import("collections");
@@ -160,11 +161,7 @@ const BranchRewriter = struct {
     /// Claim releases of the matched union and reads of its payload.
     pub fn interceptStmt(self: *BranchRewriter, cloner: anytype, _: LIR.CFStmtId, stmt: LIR.CFStmt, _: LIR.StmtOrigin) ResourceError!body_clone.Intercept {
         switch (stmt) {
-            .decref => |release| {
-                if (!self.namesUnion(release.value)) return .none;
-                return body_clone.Intercept.one(release.next);
-            },
-            .decref_if_initialized => |release| {
+            inline .decref, .decref_if_initialized => |release| {
                 if (!self.namesUnion(release.value)) return .none;
                 return body_clone.Intercept.one(release.next);
             },
@@ -207,6 +204,8 @@ const BranchRewriter = struct {
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
             .boxy_tag_match,
@@ -283,7 +282,7 @@ const BranchRewriter = struct {
                 },
                 .local, .discriminant, .field, .list_reinterpret, .nominal => unreachable,
             },
-            .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => unreachable,
+            .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => unreachable,
         }
     }
 };
@@ -325,7 +324,7 @@ pub fn runWithStats(store: *LirStore, layouts: *const layout_mod.Store) Resource
     join_params.next_join_point = body_clone.firstFreshJoinPoint(store);
     stats.global_statement_visits = store.cfStmtCount();
     for (0..store.procSpecCount()) |proc_index| {
-        const proc: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+        const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
         try runProcWithStats(store, layouts, proc, store.allocator, &join_params, &stats, &analysis);
     }
     return stats;
@@ -401,7 +400,7 @@ fn runProcWithStats(
 /// jump left outside its declaration's scope would only surface later as an
 /// ARC lift failure with no pointer back here.
 fn debugCheckJumpScopes(store: *LirStore, proc: LIR.LirProcSpecId, fused_id: LIR.JoinPointId, allocator: Allocator) ResourceError!void {
-    if (builtin.mode != .Debug) return;
+    if (builtin.mode != .debug) return;
     const Item = struct { stmt: LIR.CFStmtId, depth: usize };
     var work = std.ArrayList(Item).empty;
     defer work.deinit(allocator);
@@ -420,7 +419,7 @@ fn debugCheckJumpScopes(store: *LirStore, proc: LIR.LirProcSpecId, fused_id: LIR
         switch (store.getCFStmt(item.stmt)) {
             .join => |join| {
                 if ((try declarations.getOrPut(join.id)).found_existing) {
-                    std.debug.panic("tag case fusion of j{d} duplicated declaration j{d}", .{ @intFromEnum(fused_id), @intFromEnum(join.id) });
+                    base.invariant("tag case fusion of j{d} duplicated declaration j{d}", .{ @backingInt(fused_id), @backingInt(join.id) });
                 }
                 try scope.append(allocator, join.id);
                 try work.append(allocator, .{ .stmt = join.body, .depth = scope.items.len });
@@ -432,10 +431,10 @@ fn debugCheckJumpScopes(store: *LirStore, proc: LIR.LirProcSpecId, fused_id: LIR
                     if (id == jump.target) in_scope = true;
                 }
                 if (!in_scope) {
-                    std.debug.panic("tag case fusion of j{d} in {s} left a jump to j{d} outside its declaration", .{
-                        @intFromEnum(fused_id),
+                    base.invariant("tag case fusion of j{d} in {s} left a jump to j{d} outside its declaration", .{
+                        @backingInt(fused_id),
                         store.procDebugName(proc) orelse "an unnamed procedure",
-                        @intFromEnum(jump.target),
+                        @backingInt(jump.target),
                     });
                 }
             },
@@ -478,13 +477,15 @@ fn debugCheckJumpScopes(store: *LirStore, proc: LIR.LirProcSpecId, fused_id: LIR
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
             .boxy_tag_match,
             .assign_call_dict,
             => {
                 successors.clearRetainingCapacity();
-                try body_clone.appendSuccessorsWithAllocator(store, &successors, item.stmt, allocator);
+                try body_clone.appendSuccessors(store, &successors, item.stmt, allocator);
                 for (successors.items) |next| try work.append(allocator, .{ .stmt = next, .depth = item.depth });
             },
         }
@@ -620,7 +621,7 @@ fn findCandidate(
         while (try remainder_walk.next()) |stmt_id| {
             stats.inventory_statement_visits += 1;
             successors.clearRetainingCapacity();
-            try body_clone.appendSuccessorsWithAllocator(store, &successors, stmt_id, allocator);
+            try body_clone.appendSuccessors(store, &successors, stmt_id, allocator);
             for (successors.items) |next| try predecessors.put(next, (predecessors.get(next) orelse 0) + 1);
             const stmt = store.getCFStmt(stmt_id);
             if (stmt == .jump and stmt.jump.target == join.id) jump_count += 1;
@@ -663,54 +664,7 @@ fn findCandidate(
                 while (true) {
                     if ((predecessors.get(current) orelse 0) != 1) shared_edge = true;
                     if (current == build.edge_jump) break;
-                    current = switch (store.getCFStmt(current)) {
-                        .decref => |release| release.next,
-                        .incref => |retain| retain.next,
-                        .decref_if_initialized => |release| release.next,
-                        .init_uninitialized,
-                        .assign_ref,
-                        .assign_literal,
-                        .assign_call,
-                        .assign_call_erased,
-                        .assign_packed_erased_fn,
-                        .assign_low_level,
-                        .assign_list,
-                        .assign_struct,
-                        .assign_tag,
-                        .store_struct,
-                        .store_tag,
-                        .set_local,
-                        .debug,
-                        .expect,
-                        .expect_err,
-                        .runtime_error,
-                        .comptime_exhaustiveness_failed,
-                        .comptime_branch_taken,
-                        .free,
-                        .switch_stmt,
-                        .switch_initialized_payload,
-                        .str_match,
-                        .str_match_set,
-                        .loop_continue,
-                        .loop_break,
-                        .join,
-                        .jump,
-                        .ret,
-                        .crash,
-                        .assign_boxy_desc_ref,
-                        .assign_boxy_dict_ref,
-                        .assign_boxy_box,
-                        .assign_boxy_record_update,
-                        .assign_boxy_reuse_box,
-                        .assign_boxy_unbox,
-                        .assign_boxy_adapt,
-                        .assign_boxy_inspect,
-                        .assign_boxy_tag,
-                        .assign_boxy_tag_payload,
-                        .boxy_tag_match,
-                        .assign_call_dict,
-                        => unreachable,
-                    };
+                    current = edgeStmtNext(store.getCFStmt(current));
                 }
             }
         }
@@ -784,7 +738,7 @@ fn hasExternalWrapperEntry(
         stats.inventory_statement_visits += 1;
         if (stmt == owner or inside.contains(stmt)) continue;
         successors.clearRetainingCapacity();
-        try body_clone.appendSuccessorsWithAllocator(store, &successors, stmt, allocator);
+        try body_clone.appendSuccessors(store, &successors, stmt, allocator);
         for (successors.items) |next| {
             for (wrappers) |wrapper| if (next == wrapper) return true;
         }
@@ -844,17 +798,13 @@ fn producerEdgeJump(
     while (true) {
         switch (store.getCFStmt(current)) {
             .jump => |jump| return if (jump.target == join_id) current else null,
-            .decref => |release| {
+            inline .decref, .decref_if_initialized => |release| {
                 if (release.value == param or release.value == payload) return null;
                 current = release.next;
             },
             .incref => |retain| {
                 if (retain.value == param or retain.value == payload) return null;
                 current = retain.next;
-            },
-            .decref_if_initialized => |release| {
-                if (release.value == param or release.value == payload) return null;
-                current = release.next;
             },
             .init_uninitialized,
             .assign_ref,
@@ -893,6 +843,8 @@ fn producerEdgeJump(
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
             .boxy_tag_match,
@@ -974,11 +926,9 @@ const ArmRewrite = struct {
 
     fn changes(self: ArmRewrite, stmt: LIR.CFStmt) bool {
         return switch (stmt) {
-            .decref => |release| namesLocal(self.union_locals, release.value),
-            .decref_if_initialized => |release| namesLocal(self.union_locals, release.value),
+            inline .decref, .decref_if_initialized => |release| namesLocal(self.union_locals, release.value),
             .assign_ref => |assign| switch (assign.op) {
-                .tag_payload => |payload| payload.source == self.matched_value,
-                .tag_payload_struct => |payload| payload.source == self.matched_value,
+                inline .tag_payload, .tag_payload_struct => |payload| payload.source == self.matched_value,
                 .local, .discriminant, .field, .list_reinterpret, .nominal => false,
             },
             .init_uninitialized,
@@ -1019,6 +969,8 @@ const ArmRewrite = struct {
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
             .boxy_tag_match,
@@ -1350,6 +1302,60 @@ fn applyCandidate(
     if (store.procNeedsStackProbe(layouts, proc.*)) proc.stack_probe = .required;
 }
 
+/// The statement after `stmt` on a producer edge, whose statements between
+/// the constructor and the edge's jump are reference-count operations only.
+inline fn edgeStmtNext(stmt: LIR.CFStmt) LIR.CFStmtId {
+    return switch (stmt) {
+        inline .decref, .decref_if_initialized => |release| release.next,
+        .incref => |retain| retain.next,
+        .init_uninitialized,
+        .assign_ref,
+        .assign_literal,
+        .assign_call,
+        .assign_call_erased,
+        .assign_packed_erased_fn,
+        .assign_low_level,
+        .assign_list,
+        .assign_struct,
+        .assign_tag,
+        .store_struct,
+        .store_tag,
+        .set_local,
+        .debug,
+        .expect,
+        .expect_err,
+        .runtime_error,
+        .comptime_exhaustiveness_failed,
+        .comptime_branch_taken,
+        .free,
+        .switch_stmt,
+        .switch_initialized_payload,
+        .str_match,
+        .str_match_set,
+        .loop_continue,
+        .loop_break,
+        .join,
+        .jump,
+        .ret,
+        .crash,
+        .assign_boxy_desc_ref,
+        .assign_boxy_dict_ref,
+        .assign_boxy_box,
+        .assign_boxy_record_update,
+        .assign_boxy_reuse_box,
+        .assign_boxy_unbox,
+        .assign_boxy_adapt,
+        .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_hash,
+        .assign_boxy_tag,
+        .assign_boxy_tag_payload,
+        .boxy_tag_match,
+        .assign_call_dict,
+        => unreachable,
+    };
+}
+
 /// Copy the releases carried on a producer edge so that the edge ends in
 /// a jump to the variant's own join. The original statements are left in
 /// place: an edge is only ever redirected through a fresh copy, so a release
@@ -1367,54 +1373,7 @@ fn redirectProducerEdge(
     var cursor = start;
     while (cursor != edge_jump) {
         try chain.append(store.allocator, cursor);
-        cursor = switch (store.getCFStmt(cursor)) {
-            .decref => |release| release.next,
-            .incref => |retain| retain.next,
-            .decref_if_initialized => |release| release.next,
-            .init_uninitialized,
-            .assign_ref,
-            .assign_literal,
-            .assign_call,
-            .assign_call_erased,
-            .assign_packed_erased_fn,
-            .assign_low_level,
-            .assign_list,
-            .assign_struct,
-            .assign_tag,
-            .store_struct,
-            .store_tag,
-            .set_local,
-            .debug,
-            .expect,
-            .expect_err,
-            .runtime_error,
-            .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
-            .free,
-            .switch_stmt,
-            .switch_initialized_payload,
-            .str_match,
-            .str_match_set,
-            .loop_continue,
-            .loop_break,
-            .join,
-            .jump,
-            .ret,
-            .crash,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
-            => unreachable,
-        };
+        cursor = edgeStmtNext(store.getCFStmt(cursor));
     }
     var next = try store.addCFStmt(.{ .jump = .{ .target = target } }, fusionOrigin(store.stmtOrigin(edge_jump)));
     while (chain.pop()) |stmt_id| {
@@ -1435,7 +1394,7 @@ fn redirectProducerEdge(
                 copy.next = next;
                 break :blk try store.addCFStmt(.{ .decref_if_initialized = copy }, origin);
             },
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => unreachable,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => unreachable,
         };
     }
     return next;
@@ -1462,7 +1421,7 @@ const TestGraph = struct {
 
     fn freshJoin(self: *TestGraph) LIR.JoinPointId {
         defer self.next_join += 1;
-        return @enumFromInt(self.next_join);
+        return @fromBackingInt(@intCast(self.next_join));
     }
 
     fn tag(self: *TestGraph, param: LIR.LocalId, variant: u32, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
@@ -1564,7 +1523,7 @@ test "tag case fusion procedure scratch is bounded and output survives scratch d
         const result = try graph.local(.u64);
         const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
         _ = try store.addCFStmt(.{ .join = .{
-            .id = @enumFromInt(50000),
+            .id = @fromBackingInt(@intCast(50000)),
             .params = .empty(),
             .body = ret,
             .remainder = ret,
@@ -1586,7 +1545,7 @@ test "tag case fusion procedure scratch is bounded and output survives scratch d
             var joins = body_clone.JoinParamIndex.init(fixed.allocator());
             defer joins.deinit();
             joins.next_join_point = next_join;
-            try runProc(&procedures, &layouts, @enumFromInt(index), fixed.allocator(), &joins);
+            try runProc(&procedures, &layouts, @fromBackingInt(@intCast(index)), fixed.allocator(), &joins);
             next_join = joins.next_join_point;
         }
         // Poison the storage to catch accidentally retained temporary spans.
@@ -1596,17 +1555,17 @@ test "tag case fusion procedure scratch is bounded and output survives scratch d
     try testing.expectEqual(layout_count, layouts.layoutCount());
     try testing.expectEqual(standalone.cfStmtCount(), procedures.cfStmtCount());
     for (0..standalone.cfStmtCount()) |index| {
-        try testing.expectEqualDeep(standalone.getCFStmt(@enumFromInt(index)), procedures.getCFStmt(@enumFromInt(index)));
+        try testing.expectEqualDeep(standalone.getCFStmt(@fromBackingInt(@intCast(index))), procedures.getCFStmt(@fromBackingInt(@intCast(index))));
     }
     for (0..procedures.procSpecCount()) |index| {
-        const proc: LIR.LirProcSpecId = @enumFromInt(index);
+        const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
         try testing.expectEqualDeep(standalone.getProcSpec(proc), procedures.getProcSpec(proc));
         var walk = try body_clone.ReachableStmts.init(&procedures, rewritableProcBody(&procedures, proc).?);
         defer walk.deinit();
         while (try walk.next()) |stmt| {
             const node = procedures.getCFStmt(stmt);
             try testing.expect(node != .assign_tag);
-            if (node == .join) try testing.expect(@intFromEnum(node.join.id) > 50000);
+            if (node == .join) try testing.expect(@backingInt(node.join.id) > 50000);
         }
     }
 }
@@ -1637,7 +1596,7 @@ fn testIndependentFusions(allocator: Allocator, candidate_count: usize, unrelate
     _ = try graph.proc(root);
     // Unreachable declarations still occupy the global identity domain.
     _ = try store.addCFStmt(.{ .join = .{
-        .id = @enumFromInt(50000),
+        .id = @fromBackingInt(@intCast(50000)),
         .params = LIR.LocalSpan.empty(),
         .body = ret,
         .remainder = ret,
@@ -1652,7 +1611,7 @@ fn testIndependentFusions(allocator: Allocator, candidate_count: usize, unrelate
     while (try walk.next()) |stmt_id| {
         const stmt = store.getCFStmt(stmt_id);
         try testing.expect(stmt != .assign_tag);
-        if (stmt == .join) try testing.expect(@intFromEnum(stmt.join.id) > 50000);
+        if (stmt == .join) try testing.expect(@backingInt(stmt.join.id) > 50000);
     }
     return stats;
 }
@@ -1829,7 +1788,7 @@ test "tag case fusion rejects a consumer that loops back to the union join" {
     const selector = try graph.local(.u64);
     const result = try graph.local(.u64);
     const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
-    const reenter = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(graph.next_join) } }, .test_fixture);
+    const reenter = try store.addCFStmt(.{ .jump = .{ .target = @fromBackingInt(@intCast(graph.next_join)) } }, .test_fixture);
     const root = try graph.candidate(selector, .{ ret, reenter }, 2);
     _ = try graph.proc(root);
     const stats = try runWithStats(&store, &layouts);
@@ -2102,8 +2061,8 @@ test "tag case fusion indexes reused join ids per procedure when cloning nested 
     defer layouts.deinit();
     var roots: [2]LIR.CFStmtId = undefined;
     var results: [2]LIR.LocalId = undefined;
-    const external_id: LIR.JoinPointId = @enumFromInt(1);
-    const internal_id: LIR.JoinPointId = @enumFromInt(2);
+    const external_id: LIR.JoinPointId = @fromBackingInt(@intCast(1));
+    const internal_id: LIR.JoinPointId = @fromBackingInt(@intCast(2));
     for (&roots, &results) |*root, *result| {
         // Both procedures reuse all source join IDs but own distinct parameters.
         var graph: TestGraph = .{ .store = &store };
@@ -2148,7 +2107,7 @@ test "tag case fusion indexes reused join ids per procedure when cloning nested 
             const stmt = store.getCFStmt(id);
             try testing.expect(stmt != .assign_tag);
             if (stmt == .join and stmt.join.id != external_id) {
-                try testing.expect(@intFromEnum(stmt.join.id) > @intFromEnum(internal_id));
+                try testing.expect(@backingInt(stmt.join.id) > @backingInt(internal_id));
                 try testing.expect(!cloned_ids.contains(stmt.join.id));
                 try cloned_ids.put(stmt.join.id, {});
                 const params = store.getLocalSpan(stmt.join.params);
@@ -2184,7 +2143,7 @@ test "tag case fusion routes exact constructor edges without materializing tags"
     const selector = try store.addLocal(.{ .layout_idx = .bool });
     const zero = try store.addLocal(.{ .layout_idx = .u64 });
     const one = try store.addLocal(.{ .layout_idx = .u64 });
-    const join_id: LIR.JoinPointId = @enumFromInt(body_clone.firstFreshJoinPoint(&store));
+    const join_id: LIR.JoinPointId = @fromBackingInt(@intCast(body_clone.firstFreshJoinPoint(&store)));
 
     const ret_zero = try store.addCFStmt(.{ .ret = .{ .value = zero } }, .test_fixture);
     const branch_zero = try store.addCFStmt(.{ .assign_literal = .{
@@ -2272,7 +2231,7 @@ test "tag case fusion shares the suffix its arms converge on" {
     const one_prefix = try store.addLocal(.{ .layout_idx = .u64 });
     const two_prefix = try store.addLocal(.{ .layout_idx = .u64 });
     const shared_default = try store.addLocal(.{ .layout_idx = .u64 });
-    const join_id: LIR.JoinPointId = @enumFromInt(body_clone.firstFreshJoinPoint(&store));
+    const join_id: LIR.JoinPointId = @fromBackingInt(@intCast(body_clone.firstFreshJoinPoint(&store)));
 
     const ret_zero = try store.addCFStmt(.{ .ret = .{ .value = zero } }, .test_fixture);
     const branch_zero = try store.addCFStmt(.{ .assign_literal = .{
@@ -2390,7 +2349,7 @@ test "tag case fusion carries releases on a producer edge" {
     const finished = try store.addLocal(.{ .layout_idx = .str });
     const zero = try store.addLocal(.{ .layout_idx = .u64 });
     const one = try store.addLocal(.{ .layout_idx = .u64 });
-    const join_id: LIR.JoinPointId = @enumFromInt(body_clone.firstFreshJoinPoint(&store));
+    const join_id: LIR.JoinPointId = @fromBackingInt(@intCast(body_clone.firstFreshJoinPoint(&store)));
 
     const ret_zero = try store.addCFStmt(.{ .ret = .{ .value = zero } }, .test_fixture);
     const branch_zero = try store.addCFStmt(.{ .assign_literal = .{
@@ -2486,7 +2445,7 @@ test "tag case fusion releases the payload where an arm released the union" {
     const taken = try store.addLocal(.{ .layout_idx = .str });
     const zero = try store.addLocal(.{ .layout_idx = .u64 });
     const one = try store.addLocal(.{ .layout_idx = .u64 });
-    const join_id: LIR.JoinPointId = @enumFromInt(body_clone.firstFreshJoinPoint(&store));
+    const join_id: LIR.JoinPointId = @fromBackingInt(@intCast(body_clone.firstFreshJoinPoint(&store)));
 
     // The payload arm reads the payload, then releases the whole union.
     const ret_one = try store.addCFStmt(.{ .ret = .{ .value = one } }, .test_fixture);
@@ -2589,8 +2548,8 @@ fn testContinuationJoin(shared_continuation: bool) TestError!void {
     const out = try store.addLocal(.{ .layout_idx = .u64 });
     const zero = try store.addLocal(.{ .layout_idx = .u64 });
     const one = try store.addLocal(.{ .layout_idx = .u64 });
-    const join_id: LIR.JoinPointId = @enumFromInt(body_clone.firstFreshJoinPoint(&store));
-    const cont_id: LIR.JoinPointId = @enumFromInt(@intFromEnum(join_id) + 1);
+    const join_id: LIR.JoinPointId = @fromBackingInt(@intCast(body_clone.firstFreshJoinPoint(&store)));
+    const cont_id: LIR.JoinPointId = @fromBackingInt(@intCast(@backingInt(join_id) + 1));
 
     // Each arm initializes the match result and jumps to its continuation,
     // which lowering declared at the head of the union join's body.
@@ -2642,7 +2601,7 @@ fn testContinuationJoin(shared_continuation: bool) TestError!void {
         .payload = null,
         .next = jump_one,
     } }, .test_fixture);
-    const external_id: LIR.JoinPointId = @enumFromInt(@intFromEnum(cont_id) + 1);
+    const external_id: LIR.JoinPointId = @fromBackingInt(@intCast(@backingInt(cont_id) + 1));
     const external_build: ?LIR.CFStmtId = if (shared_continuation) try store.addCFStmt(.{ .assign_tag = .{
         .target = param,
         .variant_index = 0,
@@ -2744,8 +2703,8 @@ test "tag case fusion keeps the join when a producer edge is shared with another
     const selector = try store.addLocal(.{ .layout_idx = .bool });
     const zero = try store.addLocal(.{ .layout_idx = .u64 });
     const one = try store.addLocal(.{ .layout_idx = .u64 });
-    const join_id: LIR.JoinPointId = @enumFromInt(body_clone.firstFreshJoinPoint(&store));
-    const dead_id: LIR.JoinPointId = @enumFromInt(@intFromEnum(join_id) + 1);
+    const join_id: LIR.JoinPointId = @fromBackingInt(@intCast(body_clone.firstFreshJoinPoint(&store)));
+    const dead_id: LIR.JoinPointId = @fromBackingInt(@intCast(@backingInt(join_id) + 1));
 
     const ret_zero = try store.addCFStmt(.{ .ret = .{ .value = zero } }, .test_fixture);
     const branch_zero = try store.addCFStmt(.{ .assign_literal = .{

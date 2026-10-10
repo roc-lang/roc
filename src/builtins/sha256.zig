@@ -20,6 +20,9 @@ fn classifyArch(arch: std.Target.Cpu.Arch) ArchClass {
     return switch (arch) {
         .x86_64 => .x86_64,
         .aarch64 => .aarch64,
+        .ez80,
+        .m88k,
+        .spork8,
         .aarch64_be,
         .alpha,
         .amdgcn,
@@ -521,14 +524,14 @@ test "rounds follow the SHA-256 instructions in a CPU's feature set" {
     var x86_baseline = std.Target.x86.cpu.x86_64.toCpu(x86_64);
     try std.testing.expectEqual(Rounds.portable, Rounds.forCpu(x86_baseline));
     try std.testing.expectEqual(Rounds.portable, Rounds.forCpu(std.Target.x86.cpu.x86_64_v3.toCpu(x86_64)));
-    x86_baseline.features.addFeature(@intFromEnum(std.Target.x86.Feature.sha));
-    x86_baseline.features.addFeature(@intFromEnum(std.Target.x86.Feature.ssse3));
+    x86_baseline.features.addFeature(@backingInt(std.Target.x86.Feature.sha));
+    x86_baseline.features.addFeature(@backingInt(std.Target.x86.Feature.ssse3));
     try std.testing.expectEqual(Rounds.x86_sha, Rounds.forCpu(x86_baseline));
 
     const aarch64 = std.Target.Cpu.Arch.aarch64;
     var aarch64_generic = std.Target.aarch64.cpu.generic.toCpu(aarch64);
     try std.testing.expectEqual(Rounds.portable, Rounds.forCpu(aarch64_generic));
-    aarch64_generic.features.addFeature(@intFromEnum(std.Target.aarch64.Feature.sha2));
+    aarch64_generic.features.addFeature(@backingInt(std.Target.aarch64.Feature.sha2));
     try std.testing.expectEqual(Rounds.aarch64_sha2, Rounds.forCpu(aarch64_generic));
     try std.testing.expectEqual(Rounds.aarch64_sha2, Rounds.forCpu(std.Target.aarch64.cpu.apple_m1.toCpu(aarch64)));
 

@@ -11,56 +11,64 @@ type=repl
 » "first" <= "second"
 ~~~
 # OUTPUT
-**Missing Method**
-The value before this `>` operator has a type that doesn't have a `is_gt` method.
+**Type Not Determined**
+Nothing in this program determines the type of this string:
 ```roc
 "apple" > "banana"
 ```
-^^^^^^^^^^^^^^^^^^
+^^^^^^^
 
-The value's type, which does not have a method named `is_gt`, is:
+Its type needs all of these:
 
-    Str
+    a where [a.is_gt : a, a -> Bool]
 
-**Hint:** The `>` operator calls a method named `is_gt` on the value preceding it, passing the value after the operator as the one argument.
+Without knowing which type it is, there's no way to tell which `>` to use.
+
+**Hint:** None of the built-in string types support `>`.
 ---
-**Missing Method**
-The value before this `<` operator has a type that doesn't have a `is_lt` method.
+**Type Not Determined**
+Nothing in this program determines the type of this string:
 ```roc
 "zoo" < "aardvark"
 ```
-^^^^^^^^^^^^^^^^^^
+^^^^^
 
-The value's type, which does not have a method named `is_lt`, is:
+Its type needs all of these:
 
-    Str
+    a where [a.is_lt : a, a -> Bool]
 
-**Hint:** The `<` operator calls a method named `is_lt` on the value preceding it, passing the value after the operator as the one argument.
+Without knowing which type it is, there's no way to tell which `<` to use.
+
+**Hint:** None of the built-in string types support `<`.
 ---
-**Missing Method**
-The value before this `>=` operator has a type that doesn't have a `is_gte` method.
+**Type Not Determined**
+Nothing in this program determines the type of this string:
 ```roc
 "equal" >= "equal"
 ```
-^^^^^^^^^^^^^^^^^^
+^^^^^^^
 
-The value's type, which does not have a method named `is_gte`, is:
+Its type needs all of these:
 
-    Str
+    a where [a.is_gte : a, a -> Bool]
 
-**Hint:** The `>=` operator calls a method named `is_gte` on the value preceding it, passing the value after the operator as the one argument.
+Without knowing which type it is, there's no way to tell which `>=` to use.
+
+**Hint:** None of the built-in string types support `>=`.
 ---
-**Missing Method**
-The value before this `<=` operator has a type that doesn't have a `is_lte` method.
+**Type Not Determined**
+Nothing in this program determines the type of this string:
 ```roc
 "first" <= "second"
 ```
-^^^^^^^^^^^^^^^^^^^
+^^^^^^^
 
-The value's type, which does not have a method named `is_lte`, is:
+Its type needs all of these:
 
-    Str
+    a where [a.is_lte : a, a -> Bool]
 
-**Hint:** The `<=` operator calls a method named `is_lte` on the value preceding it, passing the value after the operator as the one argument.
+Without knowing which type it is, there's no way to tell which `<=` to use.
+
+**Hint:** None of the built-in string types support `<=`.
 # PROBLEMS
 NIL

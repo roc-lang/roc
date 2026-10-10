@@ -89,7 +89,7 @@ test "ScopeMap.isVisibleAt handles parameter flag correctly" {
 
     const local_binding = Binding{
         .ident = testIdent(1),
-        .pattern_idx = @enumFromInt(1),
+        .pattern_idx = @fromBackingInt(@intCast(1)),
         .visible_from = 0,
         .visible_to = 100,
         .is_parameter = false,
@@ -141,7 +141,7 @@ test "ScopeMap manually added bindings are queryable" {
 
     try sm.bindings.append(allocator, .{
         .ident = testIdent(2),
-        .pattern_idx = @enumFromInt(1),
+        .pattern_idx = @fromBackingInt(@intCast(1)),
         .visible_from = 50,
         .visible_to = 100,
         .is_parameter = false,
@@ -179,14 +179,14 @@ test "Binding struct has expected fields" {
     // This test ensures the Binding struct maintains its expected shape
     const binding = Binding{
         .ident = testIdent(42),
-        .pattern_idx = @enumFromInt(7),
+        .pattern_idx = @fromBackingInt(@intCast(7)),
         .visible_from = 100,
         .visible_to = 200,
         .is_parameter = true,
     };
 
     try std.testing.expectEqual(@as(u29, 42), binding.ident.idx);
-    try std.testing.expectEqual(@as(u32, 7), @intFromEnum(binding.pattern_idx));
+    try std.testing.expectEqual(@as(u32, 7), @backingInt(binding.pattern_idx));
     try std.testing.expectEqual(@as(u32, 100), binding.visible_from);
     try std.testing.expectEqual(@as(u32, 200), binding.visible_to);
     try std.testing.expect(binding.is_parameter);
@@ -217,7 +217,7 @@ test "ScopeMap bindings can track nested scopes" {
     // Inner scope variables
     try sm.bindings.append(allocator, .{
         .ident = testIdent(2), // y
-        .pattern_idx = @enumFromInt(1),
+        .pattern_idx = @fromBackingInt(@intCast(1)),
         .visible_from = 20,
         .visible_to = 80,
         .is_parameter = false,
@@ -225,7 +225,7 @@ test "ScopeMap bindings can track nested scopes" {
 
     try sm.bindings.append(allocator, .{
         .ident = testIdent(3), // z
-        .pattern_idx = @enumFromInt(2),
+        .pattern_idx = @fromBackingInt(@intCast(2)),
         .visible_from = 40,
         .visible_to = 80,
         .is_parameter = false,

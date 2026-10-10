@@ -171,10 +171,10 @@ pub fn process(
                     .options = options,
                 };
                 if (i < threads.len) {
-                    threads[i] = try Thread.spawn(.{ .stack_size = stack_budget.roc_stack_size }, workerThread, .{ T, ctx });
+                    threads[i] = try Thread.spawn(.{ .stack_size = stack_budget.spawnStackSize() }, workerThread, .{ T, ctx });
                     stack_threads_started += 1;
                 } else {
-                    const thread = try Thread.spawn(.{ .stack_size = stack_budget.roc_stack_size }, workerThread, .{ T, ctx });
+                    const thread = try Thread.spawn(.{ .stack_size = stack_budget.spawnStackSize() }, workerThread, .{ T, ctx });
                     extra_threads.append(thread) catch |err| {
                         thread.join();
                         return err;

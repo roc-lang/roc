@@ -70,14 +70,11 @@ fn expectNestedModuleChecksCleanly(package_root_source: []const u8) NestedModule
     var errors: usize = 0;
     for (drained) |module_reports| {
         for (module_reports.reports) |report| {
-            switch (report.severity) {
-                .runtime_error, .fatal => {
-                    errors += 1;
-                    std.debug.print("unexpected {s} in {s}: {s}\n", .{
-                        report.severity.toString(), module_reports.abs_path, report.title,
-                    });
-                },
-                .warning => {},
+            if (report.severity.isError()) {
+                errors += 1;
+                std.debug.print("unexpected {s} in {s}: {s}\n", .{
+                    report.severity.toString(), module_reports.abs_path, report.title,
+                });
             }
         }
     }
@@ -150,10 +147,7 @@ fn checkEntry(
     defer build_env.freeDrainedReports(drained);
     for (drained) |module_reports| {
         for (module_reports.reports) |report| {
-            switch (report.severity) {
-                .runtime_error, .fatal => try outcome.error_titles.append(gpa, try gpa.dupe(u8, report.title)),
-                .warning => {},
-            }
+            if (report.severity.isError()) try outcome.error_titles.append(gpa, try gpa.dupe(u8, report.title));
         }
     }
 

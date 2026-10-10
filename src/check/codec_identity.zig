@@ -10,8 +10,10 @@ const CodecId = dispatch.GeneratedCodecDerivationId;
 const Span = @import("artifact_serialize.zig").Span;
 const type_roles = .{ "source_constructor_ty", "source_runtime_ty", "source_shape_ty", "source_body_shape_ty", "source_encoding_ty", "source_state_ty", "source_error_ty", "constructor_ty", "runtime_ty", "shape_ty", "body_shape_ty", "encoding_ty", "state_ty", "error_ty" };
 
-/// Intern each completed contract once. Type and call keys select candidates;
-/// exact comparison of the whole proof graph is the equality authority.
+/// Intern each completed contract once, in table order. Type and call keys
+/// select candidates; exact comparison of the proof graph is the equality
+/// authority. A nested contract interned earlier in the order is reached
+/// through its identity, so a comparison never walks a nested chain again.
 pub fn intern(allocator: Allocator, types: checked.CheckedTypeStoreView, table: *dispatch.StaticDispatchPlanTable) Allocator.Error!void {
     var buckets = std.AutoHashMap(u64, u32).init(allocator);
     defer buckets.deinit();
@@ -21,10 +23,11 @@ pub fn intern(allocator: Allocator, types: checked.CheckedTypeStoreView, table: 
     defer comparer.deinit();
     for (table.generated_codec_derivations, 0..) |*derivation, index| {
         const raw: u32 = @intCast(index);
+        comparer.interned_len = raw;
         // Bucket selector only: the derivation's own types and method names
         // are package-controlled, but a Wyhash collision just adds a chain
         // step, because a candidate is accepted solely by `comparer.equal`.
-        var hash = std.hash.Wyhash.init(@intFromEnum(derivation.kind));
+        var hash = std.hash.Wyhash.init(@backingInt(derivation.kind));
         inline for (type_roles) |role| hash.update(&types.rootKey(@field(derivation, role)).bytes);
         hash.update(std.mem.asBytes(&derivation.calls.len));
         for (derivation.callsSlice(table)) |call| {
@@ -42,7 +45,7 @@ pub fn intern(allocator: Allocator, types: checked.CheckedTypeStoreView, table: 
             if (try comparer.equal(raw, previous)) break;
             candidate = next[previous];
         }
-        derivation.identity = @enumFromInt(candidate orelse raw);
+        derivation.identity = @fromBackingInt(@intCast(candidate orelse raw));
         if (candidate == null) {
             next[raw] = buckets.get(key);
             try buckets.put(key, raw);
@@ -71,8 +74,8 @@ pub fn callsEquivalent(
     switch (left.resolution) {
         .pending => unreachable,
         .checked_error => {},
-        .callable => |id| try comparer.work.append(allocator, .{ .kind = .evidence, .left = @intFromEnum(id), .right = @intFromEnum(right.resolution.callable) }),
-        .structural => |id| _ = try comparer.codecs(id, right.resolution.structural),
+        .callable => |id| try comparer.work.append(allocator, .{ .kind = .evidence, .left = @backingInt(id), .right = @backingInt(right.resolution.callable) }),
+        .structural => |id| if (!try comparer.codecs(id, right.resolution.structural)) return false,
     }
     return try comparer.run();
 }
@@ -85,6 +88,10 @@ const Comparer = struct {
     /// Specialization identity is exact; agreement between repeated
     /// occurrences of one role is modulo transparent aliases, like the role.
     types_eql: enum { exact, alias_transparent } = .exact,
+    /// While interning, how many contracts at the front of the table already
+    /// hold their identity. Two of them are equal exactly when their
+    /// identities are.
+    interned_len: u32 = 0,
     work: std.ArrayList(Pair) = .empty,
     seen: std.AutoHashMapUnmanaged(Pair, void) = .empty,
     left_types: std.ArrayList(TypeId) = .empty,
@@ -110,7 +117,14 @@ const Comparer = struct {
 
     fn codecs(self: *Comparer, left: ?CodecId, right: ?CodecId) Allocator.Error!bool {
         if ((left == null) != (right == null)) return false;
-        if (left) |id| try self.work.append(self.allocator, .{ .kind = .codec, .left = @intFromEnum(id), .right = @intFromEnum(right.?) });
+        const left_id = left orelse return true;
+        const right_index = @backingInt(right.?);
+        const left_index = @backingInt(left_id);
+        if (left_index < self.interned_len and right_index < self.interned_len) {
+            const derivations = self.table.generated_codec_derivations;
+            return derivations[left_index].identity == derivations[right_index].identity;
+        }
+        try self.work.append(self.allocator, .{ .kind = .codec, .left = left_index, .right = right_index });
         return true;
     }
 
@@ -137,7 +151,7 @@ const Comparer = struct {
             if (a.runtime_dictionary != b.runtime_dictionary or std.meta.activeTag(a.resolution) != std.meta.activeTag(b.resolution)) return false;
             try self.typesPair(a.dispatcher_ty, b.dispatcher_ty);
             switch (a.resolution) {
-                .direct => |id| try self.work.append(self.allocator, .{ .kind = .evidence, .left = @intFromEnum(id), .right = @intFromEnum(b.resolution.direct) }),
+                .direct => |id| try self.work.append(self.allocator, .{ .kind = .evidence, .left = @backingInt(id), .right = @backingInt(b.resolution.direct) }),
                 .constraint => |ref| if (!std.meta.eql(ref, b.resolution.constraint)) return false,
                 .structural => |value| {
                     const other = b.resolution.structural;
@@ -185,8 +199,8 @@ const Comparer = struct {
                         switch (ac.resolution) {
                             .pending => unreachable,
                             .checked_error => {},
-                            .callable => |id| try self.work.append(self.allocator, .{ .kind = .evidence, .left = @intFromEnum(id), .right = @intFromEnum(bc.resolution.callable) }),
-                            .structural => |id| _ = try self.codecs(id, bc.resolution.structural),
+                            .callable => |id| try self.work.append(self.allocator, .{ .kind = .evidence, .left = @backingInt(id), .right = @backingInt(bc.resolution.callable) }),
+                            .structural => |id| if (!try self.codecs(id, bc.resolution.structural)) return false,
                         }
                     }
                 },
@@ -199,6 +213,7 @@ const Comparer = struct {
                     switch (a.instantiation) {
                         .monomorphic => {},
                         .callable => |ty| try self.typesPair(ty, b.instantiation.callable),
+                        .derived_from_callable => |ty| try self.typesPair(ty, b.instantiation.derived_from_callable),
                     }
                     const left_subst = self.table.site_substitutions[a.subst.start..][0..a.subst.len];
                     const right_subst = self.table.site_substitutions[b.subst.start..][0..b.subst.len];
@@ -225,7 +240,7 @@ test "codec identity preserves cross-root sharing, method roles, and recursive s
     defer types.deinit(gpa);
     var variables: [3]TypeId = undefined;
     for (&variables) |*variable| {
-        variable.* = try types.reserveSyntheticTypeRoot(gpa, .{ .bytes = [_]u8{7} ** 32 }, true);
+        variable.* = try types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @as([32]u8, @splat(7)) }, true);
         try types.fillSyntheticTypeRoot(gpa, variable.*, .{ .flex = .{} });
     }
     var names = @import("canonical_names.zig").CanonicalNameStore.init(gpa);
@@ -236,7 +251,7 @@ test "codec identity preserves cross-root sharing, method roles, and recursive s
     for (&derivations, &calls, 0..) |*derivation, *call, i| {
         const ty = variables[@min(i, 1)];
         derivation.* = .{
-            .identity = @enumFromInt(@as(u32, @intCast(i))),
+            .identity = @fromBackingInt(@intCast(@as(u32, @intCast(i)))),
             .kind = .encoder,
             .source_constructor_ty = ty,
             .source_runtime_ty = ty,
@@ -259,7 +274,7 @@ test "codec identity preserves cross-root sharing, method roles, and recursive s
             .method_role = 0,
             .dispatcher_ty = ty,
             .callable_ty = ty,
-            .resolution = .{ .structural = @enumFromInt(@as(u32, @intCast(i))) },
+            .resolution = .{ .structural = @fromBackingInt(@intCast(@as(u32, @intCast(i)))) },
         };
     }
     derivations[2].source_shape_ty = variables[2];
@@ -271,5 +286,5 @@ test "codec identity preserves cross-root sharing, method roles, and recursive s
     };
     try intern(gpa, types.view(), &table);
     try std.testing.expectEqual(derivations[0].identity, derivations[1].identity);
-    for (derivations[2..], 2..) |derivation, i| try std.testing.expectEqual(@as(CodecId, @enumFromInt(@as(u32, @intCast(i)))), derivation.identity);
+    for (derivations[2..], 2..) |derivation, i| try std.testing.expectEqual(@as(CodecId, @fromBackingInt(@intCast(@as(u32, @intCast(i))))), derivation.identity);
 }

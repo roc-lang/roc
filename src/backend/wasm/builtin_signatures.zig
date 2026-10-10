@@ -4,7 +4,6 @@
 //! then emit a relocation to the listed `roc_builtins_*` symbol.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const WasmModule = @import("WasmModule.zig");
 const SymbolIndex = @import("index_types.zig").SymbolIndex;
 
@@ -183,9 +182,9 @@ const RocOps = @import("builtins").host_abi.RocOps;
 /// name—a missing member is a compile error, pinning this enum to the registry—
 /// and that member supplies the symbol name (`symbolName()`) and the wrapper type
 /// the params, results, and `takes_roc_ops` flag are lowered from.
-pub const sigs: [@typeInfo(BuiltinKind).@"enum".fields.len]Sig = blk: {
+pub const sigs: [@typeInfo(BuiltinKind).@"enum".field_names.len]Sig = blk: {
     @setEvalBranchQuota(200_000);
-    var arr: [@typeInfo(BuiltinKind).@"enum".fields.len]Sig = undefined;
+    var arr: [@typeInfo(BuiltinKind).@"enum".field_names.len]Sig = undefined;
     for (std.enums.values(BuiltinKind), 0..) |kind, i| {
         arr[i] = deriveSig(kind);
     }
@@ -201,8 +200,8 @@ fn deriveSig(comptime kind: BuiltinKind) Sig {
     const fn_info = @typeInfo(@TypeOf(@field(dev_wrappers, name))).@"fn";
 
     const wasm_params: []const ValType = blk: {
-        var params: [fn_info.params.len]ValType = undefined;
-        for (fn_info.params, 0..) |param, i| params[i] = wasmValTypeOf(param.type.?);
+        var params: [fn_info.param_types.len]ValType = undefined;
+        for (fn_info.param_types, 0..) |param, i| params[i] = wasmValTypeOf(param.?);
         const frozen = params;
         break :blk &frozen;
     };
@@ -214,8 +213,8 @@ fn deriveSig(comptime kind: BuiltinKind) Sig {
         break :blk &frozen;
     };
 
-    const takes_roc_ops = fn_info.params.len > 0 and blk: {
-        const last = fn_info.params[fn_info.params.len - 1].type.?;
+    const takes_roc_ops = fn_info.param_types.len > 0 and blk: {
+        const last = fn_info.param_types[fn_info.param_types.len - 1].?;
         break :blk @typeInfo(last) == .pointer and @typeInfo(last).pointer.child == RocOps;
     };
 
@@ -229,24 +228,11 @@ fn deriveSig(comptime kind: BuiltinKind) Sig {
 
 /// Return the builtin wrapper signature for `kind`.
 pub fn sigOf(kind: BuiltinKind) Sig {
-    return sigs[@intFromEnum(kind)];
+    return sigs[@backingInt(kind)];
 }
 
 /// Relocation symbol table indexed by builtin kind.
 pub const SymbolTable = std.enums.EnumArray(BuiltinKind, SymbolIndex);
-
-/// Declare every builtin wrapper as an undefined function symbol in a generated
-/// relocatable wasm object.
-pub fn declareUndefinedRelocs(module: *WasmModule) Allocator.Error!SymbolTable {
-    var result = SymbolTable.initUndefined();
-    inline for (std.meta.tags(BuiltinKind)) |kind| {
-        const sig = sigOf(kind);
-        const type_idx = try module.addFuncType(sig.wasm_params, sig.wasm_results);
-        const imported = try module.addFunctionImportWithSymbol("env", sig.name, type_idx);
-        result.set(kind, imported.symbol);
-    }
-    return result;
-}
 
 /// Locate builtin function symbols in a merged wasm module.
 pub fn populateForRelocs(module: *const WasmModule) WasmModule.SymbolLookupError!SymbolTable {
@@ -308,6 +294,7 @@ fn wasmValTypeOf(comptime T: type) ValType {
         .@"anyframe",
         .vector,
         .enum_literal,
+        .spirv,
         => @compileError("unsupported builtin wrapper type: " ++ @typeName(T)),
     };
 }

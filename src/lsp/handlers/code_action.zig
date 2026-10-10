@@ -12,6 +12,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const protocol = @import("../protocol.zig");
+const position_params = @import("position_params.zig");
 const workspace_edit = @import("workspace_edit.zig");
 
 const TextEdit = workspace_edit.TextEdit;
@@ -100,33 +101,9 @@ fn contextAdmits(params: std.json.ObjectMap, kind: []const u8) bool {
 pub fn handler(comptime ServerType: type) type {
     return struct {
         pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) (Allocator.Error || error{WriteFailed})!void {
-            const params = maybe_params orelse {
-                try self.sendError(id, .invalid_params, "codeAction requires params");
-                return;
-            };
-            if (std.meta.activeTag(params) != .object) {
-                try self.sendError(id, .invalid_params, "codeAction params must be an object");
-                return;
-            }
-            const obj = params.object;
-
-            const text_doc_value = obj.get("textDocument") orelse {
-                try self.sendError(id, .invalid_params, "missing textDocument");
-                return;
-            };
-            if (std.meta.activeTag(text_doc_value) != .object) {
-                try self.sendError(id, .invalid_params, "textDocument must be an object");
-                return;
-            }
-            const uri_value = text_doc_value.object.get("uri") orelse {
-                try self.sendError(id, .invalid_params, "missing uri");
-                return;
-            };
-            if (std.meta.activeTag(uri_value) != .string) {
-                try self.sendError(id, .invalid_params, "uri must be a string");
-                return;
-            }
-            const uri = uri_value.string;
+            const document = try position_params.parseDocument(self, id, "codeAction", maybe_params) orelse return;
+            const uri = document.uri;
+            const obj = document.obj;
 
             const range_value = obj.get("range") orelse {
                 try self.sendError(id, .invalid_params, "missing range");

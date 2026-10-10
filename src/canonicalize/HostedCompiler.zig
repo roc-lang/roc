@@ -47,7 +47,7 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) Allocator.Error!void {
             const full_ident = expr.e_anno_only.ident;
 
             // Get the region from the original def for better error messages
-            const def_node_idx: @TypeOf(env.store.nodes).Idx = @enumFromInt(@intFromEnum(def_idx));
+            const def_node_idx: @TypeOf(env.store.nodes).Idx = @fromBackingInt(@intCast(@backingInt(def_idx)));
             const def_region = env.store.getRegionAt(def_node_idx);
 
             // Extract the local name by stripping the module name prefix (first dot-separated segment).
@@ -104,7 +104,7 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) Allocator.Error!void {
             }, def_region);
 
             // Ensure types array has an entry for this new expression
-            const expr_int = @intFromEnum(expr_idx);
+            const expr_int = @backingInt(expr_idx);
             while (env.types.len() <= expr_int) {
                 _ = try env.types.fresh();
             }
@@ -115,7 +115,7 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) Allocator.Error!void {
             const def_node = env.store.nodes.get(def_node_idx);
             const def_data_idx = def_node.getPayload().def.def_data_idx;
 
-            env.store.def_data.items.items[def_data_idx].expr = @intFromEnum(expr_idx);
+            env.store.def_data.items.items[def_data_idx].expr = @backingInt(expr_idx);
 
             try env.store.addScratchDef(def_idx);
         }
@@ -130,66 +130,3 @@ pub const HostedFunctionInfo = struct {
     expr_idx: CIR.Expr.Idx,
     name_text: []const u8, // For sorting
 };
-
-/// Collect all hosted functions from the module (transitively through imports)
-/// and sort them alphabetically by fully-qualified name (with `!` stripped).
-pub fn collectAndSortHostedFunctions(env: *ModuleEnv) Allocator.Error!std.ArrayList(HostedFunctionInfo) {
-    var hosted_fns = std.ArrayList(HostedFunctionInfo).empty;
-
-    // Use a hash set to deduplicate by symbol identifier (not string comparison)
-    var seen_symbols = std.AutoHashMap(base.Ident.Idx, void).init(env.gpa);
-    defer seen_symbols.deinit();
-
-    // Iterate through all defs to find e_hosted_lambda expressions
-    const all_defs = env.store.sliceDefs(env.all_defs);
-    for (all_defs) |def_idx| {
-        const def = env.store.getDef(def_idx);
-        const expr = env.store.getExpr(def.expr);
-
-        if (expr == .e_hosted_lambda) {
-            const hosted = expr.e_hosted_lambda;
-            const local_name = env.getIdent(hosted.symbol_name);
-
-            // Deduplicate based on symbol identifier
-            const gop = try seen_symbols.getOrPut(hosted.symbol_name);
-            if (gop.found_existing) {
-                continue; // Skip duplicate
-            }
-
-            // Build fully-qualified name: "ModuleName.functionName"
-            // Strip the .roc extension from module name (e.g., "Stdout.roc" -> "Stdout")
-            var module_name = env.module_name;
-
-            if (std.mem.endsWith(u8, module_name, ".roc")) {
-                module_name = module_name[0 .. module_name.len - 4];
-            }
-            const qualified_name = try std.fmt.allocPrint(env.gpa, "{s}.{s}", .{ module_name, local_name });
-            defer env.gpa.free(qualified_name);
-
-            // Strip the `!` suffix for sorting (e.g., "Stdout.line!" -> "Stdout.line")
-            const stripped_name = if (std.mem.endsWith(u8, qualified_name, "!"))
-                qualified_name[0 .. qualified_name.len - 1]
-            else
-                qualified_name;
-
-            // Allocate a copy for storage
-            const name_copy = try env.gpa.dupe(u8, stripped_name);
-
-            try hosted_fns.append(env.gpa, .{
-                .symbol_name = hosted.symbol_name,
-                .expr_idx = def.expr,
-                .name_text = name_copy,
-            });
-        }
-    }
-
-    // Sort alphabetically by stripped qualified name
-    const SortContext = struct {
-        pub fn lessThan(_: void, a: HostedFunctionInfo, b: HostedFunctionInfo) bool {
-            return std.mem.order(u8, a.name_text, b.name_text) == .lt;
-        }
-    };
-    std.mem.sort(HostedFunctionInfo, hosted_fns.items, {}, SortContext.lessThan);
-
-    return hosted_fns;
-}

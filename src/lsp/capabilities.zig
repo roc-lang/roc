@@ -1,21 +1,15 @@
 //! LSP server capability definitions for the Roc language server.
 
-/// Semantic token types supported by the Roc LSP.
-/// Order matters - indices into this array are used in token data.
-pub const TOKEN_TYPES = [_][]const u8{
-    "namespace", // 0 - module names
-    "type", // 1 - UpperIdent, type keywords
-    "parameter", // 2 - function parameters
-    "variable", // 3 - LowerIdent
-    "property", // 4 - record fields
-    "enumMember", // 5 - tags
-    "function", // 6 - function names
-    "keyword", // 7 - keywords
-    "string", // 8 - string literals
-    "number", // 9 - numeric literals
-    "operator", // 10 - operators
-    "comment", // 11 - comments
-    "typeParameter", // 12 - type variables
+const SemanticType = @import("semantic_tokens.zig").SemanticType;
+
+/// Semantic token types supported by the Roc LSP: the legend sent to clients.
+/// Token data refers to a type by its index here, so each entry is the name of
+/// the `SemanticType` whose value is that index.
+pub const TOKEN_TYPES = blk: {
+    const info = @typeInfo(SemanticType).@"enum";
+    var names: [info.field_names.len][]const u8 = undefined;
+    for (info.field_names, info.field_values) |name, value| names[value] = name;
+    break :blk names;
 };
 
 /// Semantic token modifiers.
@@ -44,7 +38,7 @@ pub const ServerCapabilities = struct {
 
     pub const TextDocumentSyncOptions = struct {
         openClose: bool = false,
-        change: u32 = @intFromEnum(TextDocumentSyncKind.none),
+        change: u32 = @backingInt(TextDocumentSyncKind.none),
     };
 
     pub const TextDocumentSyncKind = enum(u32) {
@@ -87,7 +81,7 @@ pub fn buildCapabilities() ServerCapabilities {
     return .{
         .textDocumentSync = .{
             .openClose = true,
-            .change = @intFromEnum(ServerCapabilities.TextDocumentSyncKind.incremental),
+            .change = @backingInt(ServerCapabilities.TextDocumentSyncKind.incremental),
         },
         .semanticTokensProvider = .{
             .legend = .{
