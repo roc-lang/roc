@@ -805,6 +805,9 @@ const Lifter = struct {
                 try children.child(if_.final_else);
             },
             .if_initialized_payload => |payload_switch| {
+                // `payload` reads an enclosing binding (see
+                // `Mono.InitializedPayloadSwitch`); it is neither rewritten
+                // nor bound here.
                 try children.child(payload_switch.cond);
                 try children.child(payload_switch.initialized);
                 try children.child(payload_switch.uninitialized);
@@ -1638,6 +1641,9 @@ const CaptureSet = struct {
                 try children.child(if_.final_else);
             },
             .if_initialized_payload => |payload_switch| {
+                // `payload` reads an enclosing binding (see
+                // `Mono.InitializedPayloadSwitch`), so it is a capture
+                // whenever that binding lies outside the function.
                 try children.child(payload_switch.cond);
                 try children.add(.{ .add_if_free = payload_switch.payload });
                 try children.child(payload_switch.initialized);
@@ -2533,6 +2539,9 @@ const CaptureGraphBuilder = struct {
                 try children.child(if_.final_else);
             },
             .if_initialized_payload => |payload_switch| {
+                // `payload` reads an enclosing binding (see
+                // `Mono.InitializedPayloadSwitch`), so it is a capture
+                // whenever that binding lies outside the function.
                 try children.child(payload_switch.cond);
                 try children.add(.{ .add_direct = .{ .node = node, .local = payload_switch.payload } });
                 try children.child(payload_switch.initialized);
@@ -3165,6 +3174,146 @@ test "capture graph propagates recursive captures with a worklist" {
     const finalized_second = finalized_second_data.call_proc;
     try std.testing.expectEqual(@as(usize, 1), program.captureOperandSpan(finalized_first.captures).len);
     try std.testing.expectEqual(@as(usize, 1), program.captureOperandSpan(finalized_second.captures).len);
+}
+
+/// The capture slots of `fn_id`, as `(local, CaptureId)` pairs in slot order.
+fn testCaptureSlots(allocator: Allocator, program: *const Ast.Program, fn_id: Ast.FnId) Allocator.Error![]struct { Ast.LocalId, checked.CaptureId } {
+    const slots = program.typedLocalSpan(program.getFn(fn_id).captures);
+    const out = try allocator.alloc(struct { Ast.LocalId, checked.CaptureId }, slots.len);
+    for (0..slots.len) |index| {
+        const slot = GuardedList.at(slots, index);
+        out[index] = .{ slot.local, slotCaptureId(program, slot) };
+    }
+    return out;
+}
+
+/// Builds `callee` (no args, body reading `first` or `second`) and `caller`
+/// (binding neither, holding a reference to `callee`), then solves captures.
+/// With `rewrite`, the callee body first reads `first`, captures are solved,
+/// and the body is then replaced by one reading `second` and captures are
+/// re-solved, as a post-lift rewrite pass does.
+fn buildRewrittenCaptureProgram(allocator: Allocator, rewrite: bool) Allocator.Error!struct { Ast.Program, Ast.FnId, Ast.FnId, Ast.ExprId } {
+    var program = initCaptureTestProgram(allocator);
+    errdefer program.deinit();
+
+    const ty = try program.types.add(.zst);
+    const first = try program.addLocalWithBinder(@fromBackingInt(@intCast(1)), ty, @fromBackingInt(@intCast(1)));
+    const second = try program.addLocalWithBinder(@fromBackingInt(@intCast(2)), ty, @fromBackingInt(@intCast(2)));
+    const first_value = try program.addExpr(.{ .ty = ty, .data = .{ .local = first } });
+    const second_value = try program.addExpr(.{ .ty = ty, .data = .{ .local = second } });
+    const callee_fn: Ast.Fn = .{
+        .symbol = @fromBackingInt(@intCast(1)),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = if (rewrite) first_value else second_value },
+        .ret = ty,
+    };
+    const callee = try program.addFn(callee_fn);
+    const reference = try program.addExpr(.{ .ty = ty, .data = .{ .fn_ref = .{
+        .fn_id = callee,
+        .captures = .empty(),
+    } } });
+    const caller = try program.addFn(.{
+        .symbol = @fromBackingInt(@intCast(2)),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = reference },
+        .ret = ty,
+    });
+
+    try recomputeCaptures(allocator, &program);
+    if (rewrite) {
+        var rewritten = program.getFn(callee);
+        rewritten.body = .{ .roc = second_value };
+        program.setFn(callee, rewritten);
+        try recomputeCaptures(allocator, &program);
+    }
+    return .{ program, callee, caller, reference };
+}
+
+test "capture recomputation after a body rewrite matches solving the rewritten program from scratch" {
+    const allocator = std.testing.allocator;
+    var rewritten, const rewritten_callee, const rewritten_caller, const rewritten_ref = try buildRewrittenCaptureProgram(allocator, true);
+    defer rewritten.deinit();
+    var fresh, const fresh_callee, const fresh_caller, const fresh_ref = try buildRewrittenCaptureProgram(allocator, false);
+    defer fresh.deinit();
+
+    const rewritten_slots = try testCaptureSlots(allocator, &rewritten, rewritten_callee);
+    defer allocator.free(rewritten_slots);
+    const fresh_slots = try testCaptureSlots(allocator, &fresh, fresh_callee);
+    defer allocator.free(fresh_slots);
+    try std.testing.expectEqual(@as(usize, 1), fresh_slots.len);
+    try std.testing.expectEqual(checked.CaptureId.fromBinder(@fromBackingInt(@intCast(2))), fresh_slots[0][1]);
+    try std.testing.expectEqualSlices(struct { Ast.LocalId, checked.CaptureId }, fresh_slots, rewritten_slots);
+
+    const rewritten_caller_slots = try testCaptureSlots(allocator, &rewritten, rewritten_caller);
+    defer allocator.free(rewritten_caller_slots);
+    const fresh_caller_slots = try testCaptureSlots(allocator, &fresh, fresh_caller);
+    defer allocator.free(fresh_caller_slots);
+    try std.testing.expectEqualSlices(struct { Ast.LocalId, checked.CaptureId }, fresh_caller_slots, rewritten_caller_slots);
+
+    const rewritten_operands = rewritten.captureOperandSpan(rewritten.getExpr(rewritten_ref).data.fn_ref.captures);
+    const fresh_operands = fresh.captureOperandSpan(fresh.getExpr(fresh_ref).data.fn_ref.captures);
+    try std.testing.expectEqual(fresh_operands.len, rewritten_operands.len);
+    for (0..fresh_operands.len) |index| {
+        const fresh_operand = GuardedList.at(fresh_operands, index);
+        const rewritten_operand = GuardedList.at(rewritten_operands, index);
+        try std.testing.expectEqual(fresh_operand.id, rewritten_operand.id);
+        try std.testing.expectEqual(fresh.getExpr(fresh_operand.value).data.local, rewritten.getExpr(rewritten_operand.value).data.local);
+    }
+    try std.testing.expectEqual(@as(?[]const u8, null), try checkCaptureInvariants(&fresh));
+}
+
+test "if_initialized_payload reads its payload as a free local" {
+    const allocator = std.testing.allocator;
+    var program = initCaptureTestProgram(allocator);
+    defer program.deinit();
+
+    const ty = try program.types.add(.zst);
+    const payload_binder: checked.PatternBinderId = @fromBackingInt(@intCast(1));
+    const payload = try program.addLocalWithBinder(@fromBackingInt(@intCast(1)), ty, payload_binder);
+    const cond = try program.addExpr(.{ .ty = ty, .data = .unit });
+    const initialized = try program.addExpr(.{ .ty = ty, .data = .unit });
+    const uninitialized = try program.addExpr(.{ .ty = ty, .data = .unit });
+    const switch_body = try program.addExpr(.{ .ty = ty, .data = .{ .if_initialized_payload = .{
+        .cond = cond,
+        .payload = payload,
+        .initialized = initialized,
+        .uninitialized = uninitialized,
+    } } });
+    // The closure body contains the switch but neither binds nor otherwise
+    // reads `payload`; the enclosing function binds it as an argument.
+    const closure = try program.addFn(.{
+        .symbol = @fromBackingInt(@intCast(1)),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = switch_body },
+        .ret = ty,
+    });
+    const reference = try program.addExpr(.{ .ty = ty, .data = .{ .fn_ref = .{
+        .fn_id = closure,
+        .captures = .empty(),
+    } } });
+    const enclosing = try program.addFn(.{
+        .symbol = @fromBackingInt(@intCast(2)),
+        .args = try program.addTypedLocalSpan(&.{.{ .local = payload, .ty = ty }}),
+        .captures = .empty(),
+        .body = .{ .roc = reference },
+        .ret = ty,
+    });
+
+    try recomputeCaptures(allocator, &program);
+
+    const closure_slots = try testCaptureSlots(allocator, &program, closure);
+    defer allocator.free(closure_slots);
+    try std.testing.expectEqual(@as(usize, 1), closure_slots.len);
+    try std.testing.expectEqual(payload, closure_slots[0][0]);
+    try std.testing.expectEqual(checked.CaptureId.fromBinder(payload_binder), closure_slots[0][1]);
+    try std.testing.expectEqual(@as(usize, 0), program.typedLocalSpan(program.getFn(enclosing).captures).len);
+
+    const operands = program.captureOperandSpan(program.getExpr(reference).data.fn_ref.captures);
+    try std.testing.expectEqual(@as(usize, 1), operands.len);
+    try std.testing.expectEqual(payload, program.getExpr(GuardedList.at(operands, 0).value).data.local);
 }
 
 test "monotype lifted lower declarations are referenced" {

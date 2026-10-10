@@ -42,14 +42,22 @@ termination hazard, and one verification coverage gap):
 - [small/monotype-machinery-hardening.md](small/monotype-machinery-hardening.md)—
   release-gate verification-only type checks; measure-first fixes for
   digest depth fallback, unify memo, spec duplication, cross-store reuse.
-- [small/lift-capture-single-sourcing.md](small/lift-capture-single-sourcing.md)—
-  one capture-fixpoint driver, the `if_initialized_payload` binder
-  question, and the capture-id override path.
 
 Within this batch the projects are independent.
 (`spec-constr-specialization-limits` used to be paired here with
 `spec-constr-static-match-soundness`, which has since landed and had its
 doc removed.)
+
+The lift capture single-sourcing project has landed, mostly by having
+already happened. The initial lift and the post-spec_constr re-solve both
+run `CaptureDependencyGraph.solve`, so there is one fixpoint driver, and the
+stale-id override it worried about is gone: operand keys join to slots by
+their explicit namespace. The `if_initialized_payload` payload is a read of
+the parser loop's payload parameter, not a binder, so the capture arms were
+already right and now say so. One residue remains: the Lifter computes
+inline-lambda captures and finalizes operands with the `CaptureSet` walker,
+while everything else uses the graph builder's walker, so the free-variable
+walk itself still exists twice.
 
 The Lambda Mono oracle-fidelity project has landed. Its dead `Queue` had
 already been deleted. The materializer now asserts that every type source of

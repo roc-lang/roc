@@ -1003,6 +1003,12 @@ pub const IfExpr = struct {
 /// Compiler-generated branch that ties an ordinary presence condition to the
 /// payload local whose initialization that condition represents. The
 /// initialized branch may read `payload`; the uninitialized branch must not.
+///
+/// `payload` is a use of an enclosing binding, never a binder: the producer
+/// (Monotype's generated record parser) binds each payload local as a parser
+/// loop parameter whose initial value is `uninitialized_payload`, and this
+/// switch reads that existing local. Capture analysis therefore treats it as
+/// a free-variable occurrence, exactly like a `local` expression.
 pub const InitializedPayloadSwitch = struct {
     cond: ExprId,
     cond_mask: u64 = 1,
