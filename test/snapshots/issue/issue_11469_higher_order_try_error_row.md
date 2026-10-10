@@ -270,11 +270,11 @@ NO CHANGE
 	(defs
 		(patt (type "(a -> Try(ok, err)), ({} -> Try(ok, b)) -> Try(ok, [BeginFailed(err), ..b]) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]"))
 		(patt (type "(a -> Try(ok, err)) -> Try({}, [BeginFailed(err), ..err]) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]"))
-		(patt (type "Try({}, [BeginFailed(err), ..err])"))
+		(patt (type "Try({}, [BeginFailed([])])"))
 		(patt (type "(a -> Try(ok, err)) -> Try(ok, [BeginFailed(err), ..err]) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]")))
 	(expressions
 		(expr (type "(a -> Try(ok, err)), ({} -> Try(ok, b)) -> Try(ok, [BeginFailed(err), ..b]) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]"))
 		(expr (type "(a -> Try(ok, err)) -> Try({}, [BeginFailed(err), ..err]) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]"))
-		(expr (type "Try({}, [BeginFailed(err), ..err])"))
+		(expr (type "Try({}, [BeginFailed([])])"))
 		(expr (type "(a -> Try(ok, err)) -> Try(ok, [BeginFailed(err), ..err]) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]"))))
 ~~~

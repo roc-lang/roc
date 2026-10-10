@@ -12022,6 +12022,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.reportNonExhaustiveForPatterns(&env);
 
     try self.closeWeakValueImplicitOpenExts(&env);
+    try self.closeTopLevelValueRows(&env);
 
     try self.pruneSelectedHoistedRootsAfterSolving();
     try self.withdrawProblemsOfVoidRelations();
@@ -16884,6 +16885,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     try self.recheckNominalConstructorBackings(&env);
 
     try self.closeWeakValueImplicitOpenExts(&env);
+    try self.closeTopLevelValueRows(&env);
 
     try self.finalizeExpectEffectSlots();
     // Expression checking suppresses root selection, but constant-condition
@@ -20558,6 +20560,50 @@ fn definitionBodyExpr(self: *const Self, rhs: CIR.Expr.Idx) CIR.Expr.Idx {
 /// Every entry point runs this AFTER `runLateImplicitOpenExtAudit`, for the
 /// reason stated there: grounding an extension empties it, and the late audit
 /// only reads extensions that still carry tags.
+/// Close every still-open row a top-level value's type reaches through the
+/// row coercion, annotated or not: the value is evaluated once, at the type
+/// its definition produces (design.md "Value Rows: Local Values Share,
+/// Top-Level Values Widen At Each Use"), and no use relates to these rows,
+/// since each use widens a copy. A row outside the reach is shared by every
+/// use and is sealed by Monotype's row defaults, and a row whose tail carries
+/// a constraint the empty row does not discharge, or that a scheme
+/// quantified, is left alone.
+fn closeTopLevelValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    for (self.cir.store.sliceDefs(self.cir.global_value_defs)) |def_idx| {
+        const def = self.cir.store.getDef(def_idx);
+        if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr))) continue;
+        const pattern_var = ModuleEnv.varFrom(def.pattern);
+        if (self.isBindingSchemeVar(pattern_var)) continue;
+        try self.computeCoercionReach(pattern_var);
+        // Collect first: closing a tail unifies, which must not run while the
+        // reach set is being iterated.
+        var tails: std.ArrayListUnmanaged(Var) = .empty;
+        defer tails.deinit(self.gpa);
+        var reached = self.coercion_reach_seen.keyIterator();
+        while (reached.next()) |row_ptr| {
+            const row = self.types.resolveVar(row_ptr.*);
+            const ext = switch (row.desc.content) {
+                .structure => |flat| switch (flat) {
+                    .tag_union => |union_| union_.ext,
+                    .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => continue,
+                },
+                .alias, .flex, .rigid, .field_presence, .err => continue,
+            };
+            if (self.coercion_outside_seen.contains(row.var_)) continue;
+            const tail = self.types.resolveVar(ext);
+            if (self.coercion_outside_seen.contains(tail.var_)) continue;
+            if (tail.desc.content != .flex) continue;
+            if (tail.desc.rank == .generalized) continue;
+            if (!self.rowDefaultDischargesConstraints(tail.desc.content.flex.constraints)) continue;
+            try tails.append(self.gpa, tail.var_);
+        }
+        for (tails.items) |tail| {
+            const empty_tu_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, self.getRegionAt(tail));
+            _ = try self.unify(tail, empty_tu_var, env);
+        }
+    }
+}
+
 fn closeWeakValueImplicitOpenExts(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     for (self.weak_value_implicit_open_ext_ranges.items) |range| {
         for (self.implicit_open_exts.items[range.start..][0..range.len]) |entry| {
