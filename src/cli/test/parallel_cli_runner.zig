@@ -2512,6 +2512,12 @@ const subcommand_cases = [_]CliCase{
     // the run below blows far past this budget (the same pipeline with List.map
     // finishes in well under a second), so the case fails on the timeout.
     .{ .id = 0, .suite = .subcommands, .name = "issue 11783: stream map collect runs within the List-pipeline perf guard", .backend = .speed, .timeout_ms = 20_000, .body = .{ .command = .{ .args = &.{ "run", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/Issue11783StreamMapCollect.roc", .exit = .success, .stdout_exact = "50000000\n" } } },
+    // A top-level value is evaluated once and each use, at its own wider union,
+    // widens it by a row coercion (design.md "Value Rows: Local Values Share,
+    // Top-Level Values Widen At Each Use").
+    .{ .id = 0, .suite = .subcommands, .name = "top-level value used at several wider unions (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/TopLevelValueWidenedUses.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (8) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "top-level value used at several wider unions (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/TopLevelValueWidenedUses.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (8) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "top-level value used at several wider unions (boxy)", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/TopLevelValueWidenedUses.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (8) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     // Two mutually recursive callable values, each built by a block:
     // a lambda lowered under one value's recursive binding names that binding,
     // so it is never shared with a copy lowered where the binding is absent.
