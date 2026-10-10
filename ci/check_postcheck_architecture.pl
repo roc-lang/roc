@@ -631,6 +631,31 @@ sub check_single_lift_capture_walk {
 
 check_single_lift_capture_walk();
 
+# A Monotype type-equality check whose only consequence is an invariant is a
+# debug-only assertion: `assertSameType`, or a condition gated on a debug
+# build. Computing the comparison in a release build would be a release-build
+# runtime check for a compiler invariant.
+sub check_monotype_same_type_assertions_debug_only {
+    my $rel = 'src/postcheck/monotype/lower.zig';
+    my $path = File::Spec->catfile($ROOT, $rel);
+    open my $fh, '<', $path or die "failed to read $rel: $!\n";
+    my @lines = <$fh>;
+    close $fh or die "failed to close $rel: $!\n";
+    chomp @lines;
+
+    for my $index (0 .. $#lines) {
+        my $code = zig_code_line($lines[$index]);
+        next unless $code =~ /\bif\s*\(!(?:try\s+)?[A-Za-z0-9_.()]*\b(?:sameType|typeEql)\(/;
+        next if $code =~ /\bmode\s*==\s*\.debug\s+and\b/;
+        my $next = $index < $#lines ? zig_code_line($lines[$index + 1]) : '';
+        if ($code =~ /\bCommon\.invariant\b/ || ($code =~ /\{\s*$/ && $next =~ /^\s*Common\.invariant\b/)) {
+            push @violations, "$rel:" . ($index + 1) . ": release-computed-type-equality-invariant: $lines[$index]";
+        }
+    }
+}
+
+check_monotype_same_type_assertions_debug_only();
+
 if (@violations) {
     print "Post-check architecture violations found:\n";
     print "$_\n" for @violations;

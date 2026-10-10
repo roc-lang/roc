@@ -11687,7 +11687,7 @@ const Builder = struct {
             };
             var lowered_expr = body_draft.exprs.items[@backingInt(lowered)];
             const lowered_ty = try lowered_expr.ty.seal(graph, sealer);
-            if (!try ctx.typeStore().typeEql(ctx.nameStore(), callable.ret, lowered_ty)) {
+            if (@import("builtin").mode == .debug and !try ctx.typeStore().typeEql(ctx.nameStore(), callable.ret, lowered_ty)) {
                 Common.invariant("deferred structural serialization changed its sealed result type");
             }
             lowered_expr.ty = .{ .sealed = callable.ret };
@@ -11825,7 +11825,7 @@ const Builder = struct {
             const reserved_cell = body_draft.exprs.items[@backingInt(boundary.expr)].ty;
             const reserved_ty = try reserved_cell.seal(graph, sealer);
             const lowered_ty = try lowered_expr.ty.seal(graph, sealer);
-            if (!try ctx.typeStore().typeEql(ctx.nameStore(), reserved_ty, lowered_ty)) {
+            if (@import("builtin").mode == .debug and !try ctx.typeStore().typeEql(ctx.nameStore(), reserved_ty, lowered_ty)) {
                 Common.invariant("deferred call-site intrinsic changed its sealed result type");
             }
             lowered_expr.ty = .{ .sealed = reserved_ty };
@@ -11964,7 +11964,7 @@ const Builder = struct {
         };
         var lowered_expr = body_draft.exprs.items[@backingInt(lowered)];
         const lowered_ty = try lowered_expr.ty.seal(graph, sealer);
-        if (!try ctx.typeStore().typeEql(ctx.nameStore(), ret_ty, lowered_ty)) {
+        if (@import("builtin").mode == .debug and !try ctx.typeStore().typeEql(ctx.nameStore(), ret_ty, lowered_ty)) {
             Common.invariant("deferred structural equality changed its sealed result type");
         }
         lowered_expr.ty = .{ .sealed = ret_ty };
@@ -13349,7 +13349,7 @@ const Builder = struct {
         const arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.activeTypeStore().span(fn_data.args));
         defer self.allocator.free(arg_tys);
         if (arg_tys.len != 1) Common.invariant("stored parser constructor had an unexpected arity");
-        if (!fn_ctx.sameType(fn_data.ret, ty)) Common.invariant("stored parser constructor result type differed from restored function type");
+        fn_ctx.assertSameType(fn_data.ret, ty, "stored parser constructor result type differed from restored function type");
 
         const runtime_fn = self.functionShape(ty, "stored parser runtime value had a non-function type");
         const runtime_arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.activeTypeStore().span(runtime_fn.args));
@@ -13478,7 +13478,7 @@ const Builder = struct {
         const arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.activeTypeStore().span(fn_data.args));
         defer self.allocator.free(arg_tys);
         if (arg_tys.len != 1) Common.invariant("stored encoder_for constructor had an unexpected arity");
-        if (!fn_ctx.sameType(fn_data.ret, ty)) Common.invariant("stored encoder_for constructor result type differed from restored function type");
+        fn_ctx.assertSameType(fn_data.ret, ty, "stored encoder_for constructor result type differed from restored function type");
 
         const runtime_fn = self.functionShape(ty, "stored encoder_for runtime value had a non-function type");
         const runtime_arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.activeTypeStore().span(runtime_fn.args));
@@ -23236,9 +23236,7 @@ const BodyContext = struct {
             Common.invariant("sealed Monotype cell was paired with a checked type that needs a specialization input");
         }
         const lowered = try self.lowerType(checked_ty);
-        if (!self.sameType(lowered, mono_ty)) {
-            Common.invariant("sealed Monotype cell differed from its closed checked type");
-        }
+        self.assertSameType(lowered, mono_ty, "sealed Monotype cell differed from its closed checked type");
     }
 
     fn constrainTypeToCell(
@@ -27987,9 +27985,7 @@ const BodyContext = struct {
             if (try self.indirectCalleeMonoType(call.func, call.args, expected_ret_ty)) |fn_ty| {
                 const ret_ty = self.functionReturnType(fn_ty);
                 if (expected_ret_ty) |expected| {
-                    if (!self.sameType(expected, ret_ty)) {
-                        Common.invariant("checked indirect call result type differed from its expected Monotype type");
-                    }
+                    self.assertSameType(expected, ret_ty, "checked indirect call result type differed from its expected Monotype type");
                     try self.constrainTypeToMono(checked_ret_ty, expected);
                     return .{ .ret = .{ .node = try self.activeNodeFromType(expected) } };
                 }
@@ -31937,9 +31933,7 @@ const BodyContext = struct {
             // A call lowered at the context type.
             2 => {
                 const lowered = input.?.callValue();
-                if (!self.sameType(ty, try self.activeTypeFromCell(lowered.ret_ty))) {
-                    Common.invariant("checked call expression lowered at a type different from its context type");
-                }
+                self.assertSameType(ty, try self.activeTypeFromCell(lowered.ret_ty), "checked call expression lowered at a type different from its context type");
                 const ret_node = try lowered.ret_ty.toGraphNode(self.graph);
                 const expected_node = try self.activeNodeFromType(ty);
                 const completes_request = try self.resultCompletesRequest(expected_node, ret_node);
@@ -31957,7 +31951,8 @@ const BodyContext = struct {
             // An expression lowered with the context type.
             else => {
                 const lowered = input.?.exprValue();
-                if (!self.sameType(ty, try self.exprType(lowered))) {
+                const lowered_ty = try self.exprType(lowered);
+                if (@import("builtin").mode == .debug and !self.sameType(ty, lowered_ty)) {
                     switch (expr.data) {
                         .lambda, .closure => Common.invariant("checked function expression lowered at a type different from its context type"),
                         .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("checked expression lowered at a type different from its call operand type"),
@@ -32411,9 +32406,7 @@ const BodyContext = struct {
                     prefix_ty = self.recordFieldType(prefix_ty, field_name);
                     self.draft.field_access_segments.appendAssumeCapacity(.{ .field = field_name });
                 }
-                if (@import("builtin").mode == .debug and !self.sameType(ty, prefix_ty)) {
-                    Common.invariant("Monotype field access path type differed from its final receiver field type");
-                }
+                self.assertSameType(ty, prefix_ty, "Monotype field access path type differed from its final receiver field type");
                 task.field_access_start = start;
                 return requestLowerChild(self, field.receiver, .{ .sealed = receiver_ty });
             },
@@ -32823,9 +32816,7 @@ const BodyContext = struct {
         }
 
         switch (expected_ret_cell) {
-            .sealed => |expected| if (!self.sameType(expected, function.ret)) {
-                Common.invariant("checked closed direct low-level call result differed from its expected type");
-            },
+            .sealed => |expected| self.assertSameType(expected, function.ret, "checked closed direct low-level call result differed from its expected type"),
             .graph_node => |expected| try relateRequestComponent(
                 self.graph,
                 expected,
@@ -32942,9 +32933,7 @@ const BodyContext = struct {
             }
             try self.constrainTypeToMono(checked_ret_ty, function.ret);
             switch (expected_ret_cell) {
-                .sealed => |expected| if (!self.sameType(expected, function.ret)) {
-                    Common.invariant("checked closed direct procedure call result differed from its expected type");
-                },
+                .sealed => |expected| self.assertSameType(expected, function.ret, "checked closed direct procedure call result differed from its expected type"),
                 .graph_node => |expected| try relateRequestComponent(
                     self.graph,
                     expected,
@@ -33413,9 +33402,7 @@ const BodyContext = struct {
                     const fn_data = self.functionShape(fn_ty, "checked call function type was not a function");
                     try self.constrainTypeToMono(checked_ret_ty, fn_data.ret);
                     if (expected_ret_ty) |expected| {
-                        if (!self.sameType(expected, fn_data.ret)) {
-                            Common.invariant("checked indirect call result type differed from its expected Monotype type");
-                        }
+                        self.assertSameType(expected, fn_data.ret, "checked indirect call result type differed from its expected Monotype type");
                     }
                     task.fn_ty = fn_ty;
                     frame.cursor = 4;
@@ -33697,9 +33684,7 @@ const BodyContext = struct {
         return switch (template.state) {
             .stored_const => |stored| blk: {
                 const stored_ty = try self.storedConstRootMonoType(self.view, stored, entry.checked_type);
-                if (!self.sameType(ty, stored_ty)) {
-                    Common.invariant("stored hoisted const representation differed from its expected Monotype type");
-                }
+                self.assertSameType(ty, stored_ty, "stored hoisted const representation differed from its expected Monotype type");
                 const saved_loc = self.builder.current_loc;
                 defer self.builder.current_loc = saved_loc;
                 const saved_region = self.builder.current_region;
@@ -34255,7 +34240,7 @@ const BodyContext = struct {
         }
         task.ret_ty = try self.currentPhaseTypeForNode(callable.ret);
         if (task.expected_ret_ty) |expected| {
-            if (!self.sameType(expected, task.ret_ty)) Common.invariant("checked call-site intrinsic lowered at a type different from its context type");
+            self.assertSameType(expected, task.ret_ty, "checked call-site intrinsic lowered at a type different from its context type");
         }
         task.index = 0;
         task.stage = .args;
@@ -34329,9 +34314,7 @@ const BodyContext = struct {
         if (maybe_ref) |ref_id| {
             if (try self.currentLocalForResolvedValue(ref_id)) |local_id| {
                 const local_ty = try self.localType(local_id);
-                if (!self.sameType(ty, local_ty)) {
-                    Common.invariant("checked call-site intrinsic local argument type differed from its concrete local type");
-                }
+                self.assertSameType(ty, local_ty, "checked call-site intrinsic local argument type differed from its concrete local type");
                 return loweredExprStep(try self.addExpr(.{ .ty = local_ty, .data = .{ .local = local_id } }));
             }
 
@@ -34941,7 +34924,7 @@ const BodyContext = struct {
         lowered_args: []const DraftExprId,
     ) Allocator.Error!DraftExprId {
         if (args.len != 2 or arg_tys.len != 2) Common.invariant("FieldNames.rename_fields reached Monotype with an unexpected arity");
-        if (!self.sameType(arg_tys[0], ret_ty)) Common.invariant("FieldNames.rename_fields result type differed from its field set argument");
+        self.assertSameType(arg_tys[0], ret_ty, "FieldNames.rename_fields result type differed from its field set argument");
 
         const fields_value = lowered_args[0];
         const rename_value = lowered_args[1];
@@ -35187,7 +35170,7 @@ const BodyContext = struct {
             .shortest => info.shortest_field,
             .longest => info.longest_field,
         };
-        if (!self.sameType(bound_field.ty, ret_ty)) Common.invariant("generated FieldNames bound metadata type differed from result type");
+        self.assertSameType(bound_field.ty, ret_ty, "generated FieldNames bound metadata type differed from result type");
         const bound_expr = try self.addFieldAccessExpr(
             try self.localExpr(backing_local, fields_backing_ty),
             bound_field.name,
@@ -35218,7 +35201,7 @@ const BodyContext = struct {
         const backing_ty = self.namedBackingType(field_ty) orelse
             Common.invariant("Field.name argument had no backing type");
         const name_field = self.recordFieldByText(backing_ty, "name");
-        if (!self.sameType(name_field.ty, ret_ty)) Common.invariant("Field.name backing name field differed from Str");
+        self.assertSameType(name_field.ty, ret_ty, "Field.name backing name field differed from Str");
 
         const field_value = lowered_args[0];
         const field_local = try self.addLocal(self.builder.symbols.fresh(), field_ty);
@@ -35416,7 +35399,7 @@ const BodyContext = struct {
         const backing_ty = self.namedBackingType(field_ty) orelse
             Common.invariant("Field index argument had no backing type");
         const index_field = self.recordFieldByText(backing_ty, "index");
-        if (!self.sameType(index_field.ty, ret_ty)) Common.invariant("Field backing index field differed from U64");
+        self.assertSameType(index_field.ty, ret_ty, "Field backing index field differed from U64");
 
         const backing_local = try self.addLocal(self.builder.symbols.fresh(), backing_ty);
         const index_expr = try self.addFieldAccessExpr(
@@ -35445,7 +35428,7 @@ const BodyContext = struct {
         const backing_ty = self.namedBackingType(field_ty) orelse
             Common.invariant("Field name length argument had no backing type");
         const name_len_field = self.recordFieldByText(backing_ty, "name_len");
-        if (!self.sameType(name_len_field.ty, ret_ty)) Common.invariant("Field backing name_len field differed from U64");
+        self.assertSameType(name_len_field.ty, ret_ty, "Field backing name_len field differed from U64");
 
         const backing_local = try self.addLocal(self.builder.symbols.fresh(), backing_ty);
         const name_len_expr = try self.addFieldAccessExpr(
@@ -36974,7 +36957,7 @@ const BodyContext = struct {
         const backing_ty = self.namedBackingType(field_ty) orelse
             Common.invariant("Field.name argument had no backing type");
         const name_field = self.recordFieldByText(backing_ty, "name");
-        if (!self.sameType(name_field.ty, ret_ty)) Common.invariant("Field.name backing name field differed from Str");
+        self.assertSameType(name_field.ty, ret_ty, "Field.name backing name field differed from Str");
 
         const backing_local = try self.addLocal(self.builder.symbols.fresh(), backing_ty);
         const name_expr = try self.addFieldAccessExpr(
@@ -37767,9 +37750,7 @@ const BodyContext = struct {
             );
 
             for (backing_record_fields, 0..) |field, index| {
-                if (!self.sameType(field.ty, str_ty)) {
-                    Common.invariant("generated tag-union spec field name value was not Str");
-                }
+                self.assertSameType(field.ty, str_ty, "generated tag-union spec field name value was not Str");
                 locals[index] = try self.addLocal(self.builder.symbols.fresh(), str_ty);
                 values[index] = try self.addFieldAccessExpr(record_expr, field.name, str_ty);
             }
@@ -37884,8 +37865,8 @@ const BodyContext = struct {
         const parse_arg_tys = self.typeStore().span(parse_fn.args);
         if (!Ident.textEql(selected.tag_text, "TagUnion")) {
             if (parse_arg_tys.len != 2) Common.invariant("parser target scalar method had an unexpected arity");
-            if (!self.sameType(GuardedList.at(parse_arg_tys, 0), encoding_ty)) Common.invariant("parser target encoding type differed from input encoding type");
-            if (!self.sameType(GuardedList.at(parse_arg_tys, 1), state_ty)) Common.invariant("parser target state type differed from input state type");
+            self.assertSameType(GuardedList.at(parse_arg_tys, 0), encoding_ty, "parser target encoding type differed from input encoding type");
+            self.assertSameType(GuardedList.at(parse_arg_tys, 1), state_ty, "parser target state type differed from input state type");
 
             const parse_args = [_]DraftExprId{ encoding_expr, state_expr };
             const result = try self.addExpr(.{
@@ -37899,8 +37880,8 @@ const BodyContext = struct {
             return try self.injectTryErrorRow(result, parse_fn.ret, ret_ty);
         }
         if (parse_arg_tys.len != 3) Common.invariant("parser target tag-union method had an unexpected arity");
-        if (!self.sameType(GuardedList.at(parse_arg_tys, 0), encoding_ty)) Common.invariant("parser target tag-union encoding type differed from input encoding type");
-        if (!self.sameType(GuardedList.at(parse_arg_tys, 2), state_ty)) Common.invariant("parser target tag-union state type differed from input state type");
+        self.assertSameType(GuardedList.at(parse_arg_tys, 0), encoding_ty, "parser target tag-union encoding type differed from input encoding type");
+        self.assertSameType(GuardedList.at(parse_arg_tys, 2), state_ty, "parser target tag-union state type differed from input state type");
 
         const record_shapes = if (precomputed_plan) |plan|
             try self.parserPrecomputedRecordShapesForTagUnion(plan, shape_ty)
@@ -37913,9 +37894,9 @@ const BodyContext = struct {
         const callable_arg_tys = self.typeStore().span(callable_fn.args);
         if (callable_arg_tys.len != 3) Common.invariant("parser target tag-union method had an unexpected arity");
         const spec_ty = GuardedList.at(callable_arg_tys, 1);
-        if (!self.sameType(GuardedList.at(callable_arg_tys, 0), encoding_ty)) Common.invariant("parser target tag-union encoding type differed from generated input encoding type");
-        if (!self.sameType(GuardedList.at(callable_arg_tys, 1), spec_ty)) Common.invariant("parser target tag-union spec type differed from generated spec type");
-        if (!self.sameType(GuardedList.at(callable_arg_tys, 2), state_ty)) Common.invariant("parser target tag-union state type differed from generated input state type");
+        self.assertSameType(GuardedList.at(callable_arg_tys, 0), encoding_ty, "parser target tag-union encoding type differed from generated input encoding type");
+        self.assertSameType(GuardedList.at(callable_arg_tys, 1), spec_ty, "parser target tag-union spec type differed from generated spec type");
+        self.assertSameType(GuardedList.at(callable_arg_tys, 2), state_ty, "parser target tag-union state type differed from generated input state type");
 
         const final_spec_expr = blk: {
             const plan = precomputed_plan orelse Common.invariant("generated tag-union spec requested without a precomputed plan");
@@ -37936,9 +37917,7 @@ const BodyContext = struct {
             const value_name = try self.nameStoreMut().internRecordFieldLabel("value");
             const rest_name = try self.nameStoreMut().internRecordFieldLabel("rest");
             const source_value_ty = self.recordFieldType(source_info.ok_ty, value_name);
-            if (!self.sameType(self.recordFieldType(source_info.ok_ty, rest_name), state_ty)) {
-                Common.invariant("tag-union parser result changed the state type");
-            }
+            self.assertSameType(self.recordFieldType(source_info.ok_ty, rest_name), state_ty, "tag-union parser result changed the state type");
             const value_local = try self.addLocal(self.builder.symbols.fresh(), source_value_ty);
             const rest_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
             const value = try self.wrapParsedTagUnionValue(
@@ -38031,7 +38010,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const ret_info = self.tryInfo(ret_ty);
         const parse_ok_ty = try self.parseResultOkType(shape_ty, state_ty);
-        if (!self.sameType(ret_info.ok_ty, parse_ok_ty)) Common.invariant("record parser return Ok type differed from generated parse result");
+        self.assertSameType(ret_info.ok_ty, parse_ok_ty, "record parser return Ok type differed from generated parse result");
 
         const record_fields = try GuardedList.dupe(self.allocator, Type.Field, switch (self.shapeContent(shape_ty)) {
             .record => |span| self.typeStore().fieldSpan(span),
@@ -38082,8 +38061,8 @@ const BodyContext = struct {
         const parse_fn = self.functionShape(callable_mono_ty, "parse_record_field target method was not a function");
         const parse_arg_tys = self.typeStore().span(parse_fn.args);
         if (parse_arg_tys.len != 3) Common.invariant("parse_record_field target method had an unexpected arity");
-        if (!self.sameType(GuardedList.at(parse_arg_tys, 0), encoding_ty)) Common.invariant("parse_record_field encoding type differed from input encoding type");
-        if (!self.sameType(GuardedList.at(parse_arg_tys, 2), state_ty)) Common.invariant("parse_record_field state type differed from input state type");
+        self.assertSameType(GuardedList.at(parse_arg_tys, 0), encoding_ty, "parse_record_field encoding type differed from input encoding type");
+        self.assertSameType(GuardedList.at(parse_arg_tys, 2), state_ty, "parse_record_field state type differed from input state type");
         const fields_ty = GuardedList.at(parse_arg_tys, 1);
         const step_try_ty = parse_fn.ret;
         const step_try_info = self.tryInfo(step_try_ty);
@@ -38732,9 +38711,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const str_ty = try self.primitiveType(.str);
         const key_expr = try self.recordPayloadFieldAccess(payload_local, payload_ty, "name");
-        if (!self.sameType(try self.exprType(key_expr), str_ty)) {
-            Common.invariant("record named-field event key was not Str");
-        }
+        self.assertSameType(try self.exprType(key_expr), str_ty, "record named-field event key was not Str");
         const rest_expr = try self.recordPayloadFieldAccess(payload_local, payload_ty, "rest");
         const key_local = try self.addLocal(self.builder.symbols.fresh(), str_ty);
         const rest_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
@@ -38978,8 +38955,8 @@ const BodyContext = struct {
         const skip_fn = self.functionShape(callable_mono_ty, "skip_record_field target method was not a function");
         const arg_tys = self.typeStore().span(skip_fn.args);
         if (arg_tys.len != 2) Common.invariant("skip_record_field target method had an unexpected arity");
-        if (!self.sameType(GuardedList.at(arg_tys, 0), encoding_ty)) Common.invariant("skip_record_field encoding type differed from record encoding type");
-        if (!self.sameType(GuardedList.at(arg_tys, 1), state_ty)) Common.invariant("skip_record_field state type differed from record state type");
+        self.assertSameType(GuardedList.at(arg_tys, 0), encoding_ty, "skip_record_field encoding type differed from record encoding type");
+        self.assertSameType(GuardedList.at(arg_tys, 1), state_ty, "skip_record_field state type differed from record state type");
 
         const skip_expr = try self.addExpr(.{
             .ty = skip_fn.ret,
@@ -40436,8 +40413,8 @@ const BodyContext = struct {
         const parse_null_fn = self.functionShape(parse_null_mono_ty, "parse_null target method was not a function");
         const parse_null_arg_tys = self.typeStore().span(parse_null_fn.args);
         if (parse_null_arg_tys.len != 2) Common.invariant("parse_null target method had an unexpected arity");
-        if (!self.sameType(GuardedList.at(parse_null_arg_tys, 0), encoding_ty)) Common.invariant("parse_null encoding type differed from input encoding type");
-        if (!self.sameType(GuardedList.at(parse_null_arg_tys, 1), state_ty)) Common.invariant("parse_null state type differed from input state type");
+        self.assertSameType(GuardedList.at(parse_null_arg_tys, 0), encoding_ty, "parse_null encoding type differed from input encoding type");
+        self.assertSameType(GuardedList.at(parse_null_arg_tys, 1), state_ty, "parse_null state type differed from input state type");
         const null_try_ty = parse_null_fn.ret;
 
         const parse_null_expr = try self.addExpr(.{
@@ -40511,20 +40488,17 @@ const BodyContext = struct {
         const parse_fn = self.functionShape(callable_mono_ty, "custom parser target was not a function");
         const parse_arg_tys = self.typeStore().span(parse_fn.args);
         if (parse_arg_tys.len != 1) Common.invariant("custom parser target had an unexpected arity");
-        if (!self.sameType(GuardedList.at(parse_arg_tys, 0), encoding_ty)) Common.invariant("custom parser encoding type differed from input encoding type");
+        self.assertSameType(GuardedList.at(parse_arg_tys, 0), encoding_ty, "custom parser encoding type differed from input encoding type");
         const runtime_fn_ty = parse_fn.ret;
         const runtime_fn = self.functionShape(runtime_fn_ty, "custom parser runtime target was not a function");
         const runtime_arg_tys = self.typeStore().span(runtime_fn.args);
-        if (runtime_arg_tys.len != 1 or !self.sameType(GuardedList.at(runtime_arg_tys, 0), state_ty)) {
-            Common.invariant("custom parser runtime argument differed from parser state type");
-        }
+        if (runtime_arg_tys.len != 1) Common.invariant("custom parser runtime target did not take exactly one argument");
+        self.assertSameType(GuardedList.at(runtime_arg_tys, 0), state_ty, "custom parser runtime argument differed from parser state type");
         const source_ret_ty = runtime_fn.ret;
 
         const source_ret_info = self.tryInfo(source_ret_ty);
         const target_ret_info = self.tryInfo(ret_ty);
-        if (!self.sameType(source_ret_info.ok_ty, target_ret_info.ok_ty)) {
-            Common.invariant("custom parser result Ok type differed from derived parser result Ok type");
-        }
+        self.assertSameType(source_ret_info.ok_ty, target_ret_info.ok_ty, "custom parser result Ok type differed from derived parser result Ok type");
         const parse_ok_fields = switch (self.shapeContent(source_ret_info.ok_ty)) {
             .record => |span| self.typeStore().fieldSpan(span),
             .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("custom parser result Ok type was not a parse result record"),
@@ -40535,7 +40509,7 @@ const BodyContext = struct {
             const field_text = self.nameStore().recordFieldLabelText(field.name);
             if (Ident.textEql(field_text, "value")) {
                 found_value = true;
-                if (!self.sameType(field.ty, shape_ty)) Common.invariant("custom parser value type differed from parsed shape");
+                self.assertSameType(field.ty, shape_ty, "custom parser value type differed from parsed shape");
             }
         }
         if (!found_value) Common.invariant("custom parser result was missing value field");
@@ -40567,9 +40541,7 @@ const BodyContext = struct {
         if (self.sameType(source_try_ty, target_try_ty)) return source_expr;
         const source_info = self.tryInfo(source_try_ty);
         const target_info = self.tryInfo(target_try_ty);
-        if (!self.sameType(source_info.ok_ty, target_info.ok_ty)) {
-            Common.invariant("parser Try error-row injection changed the Ok type");
-        }
+        self.assertSameType(source_info.ok_ty, target_info.ok_ty, "parser Try error-row injection changed the Ok type");
         const ok_local = try self.addLocal(self.builder.symbols.fresh(), source_info.ok_ty);
         return try self.sequenceTryTo(
             source_expr,
@@ -40601,7 +40573,7 @@ const BodyContext = struct {
             const target_payloads = self.typeStore().span(target_tag.payloads);
             if (source_payloads.len != target_payloads.len) Common.invariant("parser error injection changed payload arity");
             for (0..source_payloads.len) |i| {
-                if (!self.sameType(GuardedList.at(source_payloads, i), GuardedList.at(target_payloads, i))) Common.invariant("parser error injection changed payload type");
+                self.assertSameType(GuardedList.at(source_payloads, i), GuardedList.at(target_payloads, i), "parser error injection changed payload type");
             }
             entry.* = @intCast(target_index);
         }
@@ -40698,7 +40670,7 @@ const BodyContext = struct {
             .data = .{ .record = try self.addFieldExprSpan(&fields) },
         });
         const parse_ok_ty = try self.parseResultOkType(value_ty, rest_ty);
-        if (!self.sameType(try_info.ok_ty, parse_ok_ty)) Common.invariant("parse result Ok type differed from generated parse result record");
+        self.assertSameType(try_info.ok_ty, parse_ok_ty, "parse result Ok type differed from generated parse result record");
         return try self.tryOk(try_ty, record_expr);
     }
 
@@ -40826,7 +40798,7 @@ const BodyContext = struct {
         error_join: DraftExprId,
     ) Allocator.Error!DraftExprId {
         const ret_info = self.tryInfo(ret_ty);
-        if (!self.sameType(ret_info.ok_ty, record_ty)) Common.invariant("record finish Try Ok type differed from record type");
+        self.assertSameType(ret_info.ok_ty, record_ty, "record finish Try Ok type differed from record type");
 
         const record_fields = try GuardedList.dupe(self.allocator, Type.Field, switch (self.shapeContent(record_ty)) {
             .record => |span| self.typeStore().fieldSpan(span),
@@ -41135,9 +41107,9 @@ const BodyContext = struct {
         const args = self.typeStore().span(fn_shape.args);
         if (args.len != expected_args.len) Common.invariant("tag payload boundary had an unexpected arity");
         for (expected_args, 0..) |expected, index| {
-            if (!self.sameType(GuardedList.at(args, index), expected)) Common.invariant("tag payload boundary argument type differed from expected type");
+            self.assertSameType(GuardedList.at(args, index), expected, "tag payload boundary argument type differed from expected type");
         }
-        if (!self.sameType(fn_shape.ret, expected_ret)) Common.invariant("tag payload boundary return type differed from expected type");
+        self.assertSameType(fn_shape.ret, expected_ret, "tag payload boundary return type differed from expected type");
     }
 
     fn decodedTagPayloadsFromState(
@@ -41406,9 +41378,9 @@ const BodyContext = struct {
         const rename_fn = self.functionShape(callable_mono_ty, "rename_field target method was not a function");
         const arg_tys = self.typeStore().span(rename_fn.args);
         if (arg_tys.len != 2) Common.invariant("rename_field target method had an unexpected arity");
-        if (!self.sameType(GuardedList.at(arg_tys, 0), encoding_ty)) Common.invariant("rename_field encoding argument differed from parser encoding type");
-        if (!self.sameType(GuardedList.at(arg_tys, 1), str_ty)) Common.invariant("rename_field name argument differed from Str");
-        if (!self.sameType(rename_fn.ret, str_ty)) Common.invariant("rename_field return type differed from Str");
+        self.assertSameType(GuardedList.at(arg_tys, 0), encoding_ty, "rename_field encoding argument differed from parser encoding type");
+        self.assertSameType(GuardedList.at(arg_tys, 1), str_ty, "rename_field name argument differed from Str");
+        self.assertSameType(rename_fn.ret, str_ty, "rename_field return type differed from Str");
         return try self.addExpr(.{
             .ty = str_ty,
             .data = .{ .call_proc = .{
@@ -43030,11 +43002,8 @@ const BodyContext = struct {
             {
                 const checked_binder_ty = try self.lowerType(binder_ty);
                 const checked_use_ty = try self.lowerType(checked_ty);
-                if (!self.sameType(checked_binder_ty, local_ty) or
-                    !self.sameType(checked_use_ty, ty))
-                {
-                    Common.invariant("closed checked local lookup differed from its sealed binding type");
-                }
+                self.assertSameType(checked_binder_ty, local_ty, "closed checked local lookup differed from its sealed binding type");
+                self.assertSameType(checked_use_ty, ty, "closed checked local lookup differed from its sealed binding type");
                 return try self.addExprWithTypeCell(.{ .sealed = local_ty }, .{ .local = local_id });
             }
             // The local's Monotype identifies the binder's node in the
@@ -43758,9 +43727,7 @@ const BodyContext = struct {
         return switch (template.state) {
             .stored_const => |stored| blk: {
                 const stored_ty = try self.storedConstRootMonoType(store_view, stored, requested_ty);
-                if (!self.sameType(ty, stored_ty)) {
-                    Common.invariant("stored const representation differed from its expected Monotype type");
-                }
+                self.assertSameType(ty, stored_ty, "stored const representation differed from its expected Monotype type");
                 var active_const_scope: ActiveConstBindingScope = .{};
                 const has_active_const_binding = try self.enterActiveConstBindingAtCell(
                     store_view,
@@ -46272,6 +46239,14 @@ const BodyContext = struct {
         return requestLowerChild(self, field.receiver, DraftTypeCell.fromGraphNode(task.receiver_node));
     }
 
+    /// Debug-only assertion that two monotypes are `sameType`. The
+    /// comparison is the invariant check itself, so it is comptime-dead
+    /// outside debug builds; callers whose control flow depends on type
+    /// equality call `sameType` directly.
+    fn assertSameType(self: *BodyContext, expected: Type.TypeId, actual: Type.TypeId, comptime message: []const u8) void {
+        if (@import("builtin").mode == .debug and !self.sameType(expected, actual)) Common.invariant(message);
+    }
+
     fn sameType(self: *BodyContext, expected: Type.TypeId, actual: Type.TypeId) bool {
         var equality = SameTypeEquality{
             .ctx = self,
@@ -46926,9 +46901,7 @@ const BodyContext = struct {
         slot: Builder.OptionalSlotInfo,
         value_expr: DraftExprId,
     ) Allocator.Error!DraftExprId {
-        if (!self.sameType(try self.exprType(value_expr), slot.payload_ty)) {
-            Common.invariant("optional field's supplied value type differed from its slot payload type");
-        }
+        self.assertSameType(try self.exprType(value_expr), slot.payload_ty, "optional field's supplied value type differed from its slot payload type");
         return try self.addExpr(.{
             .ty = slot_ty,
             .data = .{ .tag = .{
@@ -47260,9 +47233,7 @@ const BodyContext = struct {
                         if (field_kind == .optional) {
                             const slot = try self.optionalSlotInfo(slot_ty);
                             const payload = if (pre_by_expr.get(field.value)) |pre| pre_blk: {
-                                if (!self.sameType(slot.payload_ty, try self.exprType(pre))) {
-                                    Common.invariant("record update child lowered at a type different from its finalized field type");
-                                }
+                                self.assertSameType(slot.payload_ty, try self.exprType(pre), "record update child lowered at a type different from its finalized field type");
                                 break :pre_blk pre;
                             } else Common.invariant("record update lost its pre-lowered field child");
                             break :value try self.optionalSlotPresentExpr(slot_ty, slot, payload);
@@ -47345,17 +47316,13 @@ const BodyContext = struct {
                 if (field_kind == .optional) {
                     const slot = try self.optionalSlotInfo(field.ty);
                     const payload = if (pre_by_expr.get(field_value)) |pre| pre_blk: {
-                        if (!self.sameType(slot.payload_ty, try self.exprType(pre))) {
-                            Common.invariant("record constructor child lowered at a type different from its finalized field type");
-                        }
+                        self.assertSameType(slot.payload_ty, try self.exprType(pre), "record constructor child lowered at a type different from its finalized field type");
                         break :pre_blk pre;
                     } else Common.invariant("record constructor lost its pre-lowered field child");
                     break :supplied try self.optionalSlotPresentExpr(field.ty, slot, payload);
                 }
                 if (pre_by_expr.get(field_value)) |pre| {
-                    if (!self.sameType(field.ty, try self.exprType(pre))) {
-                        Common.invariant("record constructor child lowered at a type different from its finalized field type");
-                    }
+                    self.assertSameType(field.ty, try self.exprType(pre), "record constructor child lowered at a type different from its finalized field type");
                     break :supplied pre;
                 }
                 Common.invariant("record constructor lost its pre-lowered field child");
@@ -48776,8 +48743,8 @@ const BodyContext = struct {
         const method_fn = self.functionShape(callable_mono_ty, label ++ " target method was not a function");
         const arg_tys = self.typeStore().span(method_fn.args);
         if (arg_tys.len != 1) Common.invariant(label ++ " target method had an unexpected arity");
-        if (!self.sameType(GuardedList.at(arg_tys, 0), arg_ty)) Common.invariant(label ++ " argument type differed from " ++ arg_description);
-        if (!self.sameType(method_fn.ret, ret_ty)) Common.invariant(label ++ " return type differed from " ++ ret_description);
+        self.assertSameType(GuardedList.at(arg_tys, 0), arg_ty, label ++ " argument type differed from " ++ arg_description);
+        self.assertSameType(method_fn.ret, ret_ty, label ++ " return type differed from " ++ ret_description);
 
         return try self.addExpr(.{
             .ty = ret_ty,
@@ -48831,10 +48798,10 @@ const BodyContext = struct {
         const insert_fn = self.functionShape(callable_mono_ty, "Dict.insert target method was not a function");
         const arg_tys = self.typeStore().span(insert_fn.args);
         if (arg_tys.len != 3) Common.invariant("Dict.insert target method had an unexpected arity");
-        if (!self.sameType(GuardedList.at(arg_tys, 0), dict_ty)) Common.invariant("Dict.insert dict argument type differed from Dict type");
-        if (!self.sameType(GuardedList.at(arg_tys, 1), key_ty)) Common.invariant("Dict.insert key argument type differed from key type");
-        if (!self.sameType(GuardedList.at(arg_tys, 2), value_ty)) Common.invariant("Dict.insert value argument type differed from value type");
-        if (!self.sameType(insert_fn.ret, dict_ty)) Common.invariant("Dict.insert return type differed from Dict type");
+        self.assertSameType(GuardedList.at(arg_tys, 0), dict_ty, "Dict.insert dict argument type differed from Dict type");
+        self.assertSameType(GuardedList.at(arg_tys, 1), key_ty, "Dict.insert key argument type differed from key type");
+        self.assertSameType(GuardedList.at(arg_tys, 2), value_ty, "Dict.insert value argument type differed from value type");
+        self.assertSameType(insert_fn.ret, dict_ty, "Dict.insert return type differed from Dict type");
 
         return try self.addExpr(.{
             .ty = dict_ty,
@@ -52399,12 +52366,8 @@ const BodyContext = struct {
             Common.invariant("checked derived map payload plan was outside the selected tag's payloads");
         }
         const selected_index: usize = @intCast(map_plan.payload_index);
-        if (!self.sameType(transform_arg_tys[0], GuardedList.at(input_selected_payloads, selected_index))) {
-            Common.invariant("checked derived map transform argument differed from the selected input payload");
-        }
-        if (!self.sameType(transform_fn.ret, GuardedList.at(output_selected_payloads, selected_index))) {
-            Common.invariant("checked derived map transform result differed from the selected output payload");
-        }
+        self.assertSameType(transform_arg_tys[0], GuardedList.at(input_selected_payloads, selected_index), "checked derived map transform argument differed from the selected input payload");
+        self.assertSameType(transform_fn.ret, GuardedList.at(output_selected_payloads, selected_index), "checked derived map transform result differed from the selected output payload");
 
         const input_tags = try GuardedList.dupe(self.allocator, Type.Tag, self.tagUnionTags(input_ty));
         defer self.allocator.free(input_tags);
@@ -52440,9 +52403,7 @@ const BodyContext = struct {
                         } },
                     });
                 } else {
-                    if (!self.sameType(input_payload_ty, output_payload_ty)) {
-                        Common.invariant("derived map changed an unselected payload type");
-                    }
+                    self.assertSameType(input_payload_ty, output_payload_ty, "derived map changed an unselected payload type");
                     output_payloads[payload_index] = input_payload;
                 }
             }
@@ -52487,7 +52448,7 @@ const BodyContext = struct {
         defer self.allocator.free(arg_tys);
         const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
         if (arg_tys.len != 1 or plan_args.len != 1) Common.invariant("structural parser callable type must have one encoding argument");
-        if (!self.sameType(fn_data.ret, ret_ty)) Common.invariant("structural parser return type differed from dispatch expression type");
+        self.assertSameType(fn_data.ret, ret_ty, "structural parser return type differed from dispatch expression type");
 
         const runtime_fn = self.functionShape(ret_ty, "checked structural parser return had a non-function type");
         const runtime_arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.typeStore().span(runtime_fn.args));
@@ -52629,7 +52590,7 @@ const BodyContext = struct {
         defer self.allocator.free(arg_tys);
         const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
         if (arg_tys.len != 1 or plan_args.len != 1) Common.invariant("structural encoder_for callable type must have one encoding argument");
-        if (!self.sameType(fn_data.ret, ret_ty)) Common.invariant("structural encoder_for return type differed from dispatch expression type");
+        self.assertSameType(fn_data.ret, ret_ty, "structural encoder_for return type differed from dispatch expression type");
 
         const runtime_fn = self.functionShape(ret_ty, "checked structural encoder_for return had a non-function type");
         const runtime_arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.typeStore().span(runtime_fn.args));
@@ -53762,7 +53723,7 @@ const BodyContext = struct {
         const value = task.value;
         if (stage == 0) {
             const ret_info = self.tryInfo(value.ret_ty);
-            if (!self.sameType(ret_info.ok_ty, value.state_ty)) Common.invariant("encoder_for record return Ok type differed from state type");
+            self.assertSameType(ret_info.ok_ty, value.state_ty, "encoder_for record return Ok type differed from state type");
 
             task.record_fields = try GuardedList.dupe(self.allocator, Type.Field, switch (self.shapeContent(value.shape_ty)) {
                 .record => |span| self.typeStore().fieldSpan(span),
@@ -53893,8 +53854,8 @@ const BodyContext = struct {
         var value_expr = task.field_value_expr;
         if (try self.missingTryInfo(field.ty)) |optional_info| {
             const try_info = self.tryInfo(field.ty);
-            if (!self.sameType(try_info.ok_ty, optional_info.ok_ty)) Common.invariant("optional encoder_for field Ok payload differed from optional info");
-            if (!self.sameType(try_info.err_ty, optional_info.err_ty)) Common.invariant("optional encoder_for field Err payload differed from optional info");
+            self.assertSameType(try_info.ok_ty, optional_info.ok_ty, "optional encoder_for field Ok payload differed from optional info");
+            self.assertSameType(try_info.err_ty, optional_info.err_ty, "optional encoder_for field Err payload differed from optional info");
             task.field_form = .optional;
             task.optional_info = optional_info;
             task.field_try_info = try_info;
@@ -54053,17 +54014,17 @@ const BodyContext = struct {
         const method_args = self.typeStore().span(method_fn.args);
         const expected_arity: usize = if (kind == .tag) 4 else 3;
         if (method_args.len != expected_arity) Common.invariant("container encoder method had an unexpected arity");
-        if (!self.sameType(GuardedList.at(method_args, 0), state_ty)) Common.invariant("container encoder input state type differed from the encoder state type");
-        if (!self.sameType(method_fn.ret, result_ty)) Common.invariant("container encoder result type differed from the encoder result type");
+        self.assertSameType(GuardedList.at(method_args, 0), state_ty, "container encoder input state type differed from the encoder state type");
+        self.assertSameType(method_fn.ret, result_ty, "container encoder result type differed from the encoder result type");
 
         const u64_ty = try self.primitiveType(.u64);
         const str_ty = try self.primitiveType(.str);
         const body_index: usize = expected_arity - 1;
         if (kind == .tag) {
-            if (!self.sameType(GuardedList.at(method_args, 1), str_ty)) Common.invariant("tag encoder name argument was not Str");
-            if (!self.sameType(GuardedList.at(method_args, 2), u64_ty)) Common.invariant("tag encoder payload count argument was not U64");
-        } else if (!self.sameType(GuardedList.at(method_args, 1), u64_ty)) {
-            Common.invariant("container encoder item count argument was not U64");
+            self.assertSameType(GuardedList.at(method_args, 1), str_ty, "tag encoder name argument was not Str");
+            self.assertSameType(GuardedList.at(method_args, 2), u64_ty, "tag encoder payload count argument was not U64");
+        } else {
+            self.assertSameType(GuardedList.at(method_args, 1), u64_ty, "container encoder item count argument was not U64");
         }
 
         const body_ty = GuardedList.at(method_args, body_index);
@@ -54075,10 +54036,10 @@ const BodyContext = struct {
         const container_result_ty = body_fn.ret;
 
         const outer_result = self.tryInfo(result_ty);
-        if (!self.sameType(outer_result.ok_ty, state_ty)) Common.invariant("container encoder result Ok type differed from the encoder state type");
+        self.assertSameType(outer_result.ok_ty, state_ty, "container encoder result Ok type differed from the encoder state type");
         const container_result = self.tryInfo(container_result_ty);
-        if (!self.sameType(container_result.ok_ty, container_state_ty)) Common.invariant("container encoder callback result Ok type differed from its state type");
-        if (!self.sameType(container_result.err_ty, outer_result.err_ty)) Common.invariant("container encoder callback and outer result error types differed");
+        self.assertSameType(container_result.ok_ty, container_state_ty, "container encoder callback result Ok type differed from its state type");
+        self.assertSameType(container_result.err_ty, outer_result.err_ty, "container encoder callback and outer result error types differed");
 
         const writer_fn = self.functionShape(writer_ty, "container encoder writer was not a function");
         const writer_args = self.typeStore().span(writer_fn.args);
@@ -54087,23 +54048,23 @@ const BodyContext = struct {
             .tag, .tuple, .list => 2,
         };
         if (writer_args.len != expected_writer_arity) Common.invariant("container encoder writer had an unexpected arity");
-        if (!self.sameType(GuardedList.at(writer_args, 0), container_state_ty)) Common.invariant("container encoder writer state type differed from the callback state type");
-        if (!self.sameType(writer_fn.ret, container_result_ty)) Common.invariant("container encoder writer result type differed from the callback result type");
-        if (kind == .record and !self.sameType(GuardedList.at(writer_args, 1), str_ty)) Common.invariant("record encoder field name argument was not Str");
+        self.assertSameType(GuardedList.at(writer_args, 0), container_state_ty, "container encoder writer state type differed from the callback state type");
+        self.assertSameType(writer_fn.ret, container_result_ty, "container encoder writer result type differed from the callback result type");
+        if (kind == .record) self.assertSameType(GuardedList.at(writer_args, 1), str_ty, "record encoder field name argument was not Str");
         if (kind == .dict) {
             const key_writer_fn = self.functionShape(GuardedList.at(writer_args, 1), "dict encoder key writer was not a function");
             const key_writer_args = self.typeStore().span(key_writer_fn.args);
             if (key_writer_args.len != 1) Common.invariant("dict encoder key writer had an unexpected arity");
-            if (!self.sameType(GuardedList.at(key_writer_args, 0), state_ty)) Common.invariant("dict encoder key writer state type differed from the encoder state type");
-            if (!self.sameType(key_writer_fn.ret, result_ty)) Common.invariant("dict encoder key writer result type differed from the encoder result type");
+            self.assertSameType(GuardedList.at(key_writer_args, 0), state_ty, "dict encoder key writer state type differed from the encoder state type");
+            self.assertSameType(key_writer_fn.ret, result_ty, "dict encoder key writer result type differed from the encoder result type");
         }
 
         const value_writer_ty = GuardedList.at(writer_args, expected_writer_arity - 1);
         const value_writer_fn = self.functionShape(value_writer_ty, "container encoder value writer was not a function");
         const value_writer_args = self.typeStore().span(value_writer_fn.args);
         if (value_writer_args.len != 1) Common.invariant("container encoder value writer had an unexpected arity");
-        if (!self.sameType(GuardedList.at(value_writer_args, 0), state_ty)) Common.invariant("container encoder value writer state type differed from the encoder state type");
-        if (!self.sameType(value_writer_fn.ret, result_ty)) Common.invariant("container encoder value writer result type differed from the encoder result type");
+        self.assertSameType(GuardedList.at(value_writer_args, 0), state_ty, "container encoder value writer state type differed from the encoder state type");
+        self.assertSameType(value_writer_fn.ret, result_ty, "container encoder value writer result type differed from the encoder result type");
 
         return .{
             .lookup = prepared.lookup,
@@ -54185,7 +54146,7 @@ const BodyContext = struct {
                 .body = try self.stringExpr(self.nameStore().tagLabelText(tag.name), str_ty),
             };
         }
-        if (!self.sameType(ret_ty, str_ty)) Common.invariant("dict unit tag key name type was not Str");
+        self.assertSameType(ret_ty, str_ty, "dict unit tag key name type was not Str");
         return try self.addExpr(.{ .ty = ret_ty, .data = .{ .match_ = .{
             .scrutinee = key_expr,
             .branches = try self.addBranchSpan(branches),
@@ -54218,8 +54179,8 @@ const BodyContext = struct {
         const encode_fn = self.functionShape(callable_mono_ty, "custom encoder_for target was not a function");
         const encode_arg_tys = self.typeStore().span(encode_fn.args);
         if (encode_arg_tys.len != 1) Common.invariant("custom encoder_for target had an unexpected arity");
-        if (!self.sameType(GuardedList.at(encode_arg_tys, 0), encoding_ty)) Common.invariant("custom encoder_for encoding type differed from input encoding type");
-        if (!self.sameType(encode_fn.ret, runtime_fn_ty)) Common.invariant("custom encoder_for runtime function type differed from expected type");
+        self.assertSameType(GuardedList.at(encode_arg_tys, 0), encoding_ty, "custom encoder_for encoding type differed from input encoding type");
+        self.assertSameType(encode_fn.ret, runtime_fn_ty, "custom encoder_for runtime function type differed from expected type");
 
         const encoder_expr = try self.addExpr(.{
             .ty = runtime_fn_ty,
@@ -54257,9 +54218,9 @@ const BodyContext = struct {
         for (0..GuardedList.borrowLen(actual_arg_tys)) |index| {
             const actual = GuardedList.at(actual_arg_tys, index);
             const expected = arg_tys[index];
-            if (!self.sameType(actual, expected)) Common.invariant("encoder_for target method argument type differed from expected type");
+            self.assertSameType(actual, expected, "encoder_for target method argument type differed from expected type");
         }
-        if (!self.sameType(encode_fn.ret, ret_ty)) Common.invariant("encoder_for target method return type differed from expected type");
+        self.assertSameType(encode_fn.ret, ret_ty, "encoder_for target method return type differed from expected type");
         return try self.addExpr(.{
             .ty = ret_ty,
             .data = .{ .call_proc = .{
@@ -54289,9 +54250,9 @@ const BodyContext = struct {
         for (0..GuardedList.borrowLen(actual_arg_tys)) |index| {
             const actual = GuardedList.at(actual_arg_tys, index);
             const expected = arg_tys[index];
-            if (!self.sameType(actual, expected)) Common.invariant("parser_for target method argument type differed from expected type");
+            self.assertSameType(actual, expected, "parser_for target method argument type differed from expected type");
         }
-        if (!self.sameType(self.tryInfo(parse_fn.ret).ok_ty, self.tryInfo(ret_ty).ok_ty)) Common.invariant("parser_for target method success type differed from expected type");
+        self.assertSameType(self.tryInfo(parse_fn.ret).ok_ty, self.tryInfo(ret_ty).ok_ty, "parser_for target method success type differed from expected type");
         return try self.addExpr(.{
             .ty = parse_fn.ret,
             .data = .{ .call_proc = .{
@@ -54546,7 +54507,7 @@ const BodyContext = struct {
     fn tryOk(self: *BodyContext, try_ty: Type.TypeId, value_expr: DraftExprId) Allocator.Error!DraftExprId {
         const info = self.tryInfo(try_ty);
         const value_ty = try self.exprType(value_expr);
-        if (!self.sameType(value_ty, info.ok_ty)) Common.invariant("Try.Ok payload type differed from Try Ok type");
+        self.assertSameType(value_ty, info.ok_ty, "Try.Ok payload type differed from Try Ok type");
         const backing_expr = try self.addExpr(.{
             .ty = info.backing_ty,
             .data = .{ .tag = .{
@@ -54563,7 +54524,7 @@ const BodyContext = struct {
     fn tryErr(self: *BodyContext, try_ty: Type.TypeId, err_expr: DraftExprId) Allocator.Error!DraftExprId {
         const info = self.tryInfo(try_ty);
         const err_ty = try self.exprType(err_expr);
-        if (!self.sameType(err_ty, info.err_ty)) Common.invariant("Try.Err payload type differed from Try Err type");
+        self.assertSameType(err_ty, info.err_ty, "Try.Err payload type differed from Try Err type");
         const backing_expr = try self.addExpr(.{
             .ty = info.backing_ty,
             .data = .{ .tag = .{
@@ -54654,7 +54615,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const source_ty = try self.exprType(try_expr);
         const info = self.tryInfo(source_ty);
-        if (!self.sameType(info.ok_ty, self.tryInfo(try_ty).ok_ty)) Common.invariant("sequenced Try success type differed from expected type");
+        self.assertSameType(info.ok_ty, self.tryInfo(try_ty).ok_ty, "sequenced Try success type differed from expected type");
         const out_info = self.tryInfo(out_try_ty);
         if (self.typeIsClosedEmptyTagUnion(info.err_ty)) {
             return try self.sequenceInfallibleParser(try_expr, source_ty, try self.bindPat(ok_local, info.ok_ty), ok_body, out_try_ty);
@@ -54683,7 +54644,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const info = self.tryInfo(try_ty);
         const out_info = self.tryInfo(out_try_ty);
-        if (!self.sameType(info.err_ty, out_info.err_ty)) Common.invariant("sequenced encoder_for Try error type differed from output Try error type");
+        self.assertSameType(info.err_ty, out_info.err_ty, "sequenced encoder_for Try error type differed from output Try error type");
 
         if (!self.typeIsClosedEmptyTagUnion(info.err_ty)) {
             return try self.sequenceTry(try_expr, try_ty, ok_local, ok_body, out_try_ty);
@@ -54753,15 +54714,11 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const source_ty = try self.exprType(try_expr);
         const info = self.tryInfo(source_ty);
-        if (!self.sameType(info.ok_ty, self.tryInfo(try_ty).ok_ty)) Common.invariant("sequenced Try record success type differed from expected type");
+        self.assertSameType(info.ok_ty, self.tryInfo(try_ty).ok_ty, "sequenced Try record success type differed from expected type");
         const out_info = self.tryInfo(out_try_ty);
 
-        if (!self.sameType(self.recordFieldType(info.ok_ty, value_field), try self.localType(value_local))) {
-            Common.invariant("sequenced Try record value local type differed from Ok record field");
-        }
-        if (!self.sameType(self.recordFieldType(info.ok_ty, rest_field), try self.localType(rest_local))) {
-            Common.invariant("sequenced Try record rest local type differed from Ok record field");
-        }
+        self.assertSameType(self.recordFieldType(info.ok_ty, value_field), try self.localType(value_local), "sequenced Try record value local type differed from Ok record field");
+        self.assertSameType(self.recordFieldType(info.ok_ty, rest_field), try self.localType(rest_local), "sequenced Try record rest local type differed from Ok record field");
 
         if (self.typeIsClosedEmptyTagUnion(info.err_ty)) {
             const fields = [_]DraftRecordDestruct{
@@ -57573,12 +57530,8 @@ const BodyContext = struct {
         }
         const payload_local = record_slots.payload_locals[field_index];
         const payload_ty = record_slots.payload_tys[field_index];
-        if (!self.sameType(payload_ty, field_ty)) {
-            Common.invariant("generated optional record payload type differed from field type");
-        }
-        if (!self.sameType(try self.localType(field_local), field_ty)) {
-            Common.invariant("record finish field local type differed from optional field type");
-        }
+        self.assertSameType(payload_ty, field_ty, "generated optional record payload type differed from field type");
+        self.assertSameType(try self.localType(field_local), field_ty, "record finish field local type differed from optional field type");
 
         const missing_field = if (maybe_try_info) |optional_info|
             try self.tryErr(field_ty, try self.tagUnionValueWithoutPayload(optional_info.err_ty, "Missing"))
@@ -57619,12 +57572,8 @@ const BodyContext = struct {
         const field_ty = field.ty;
         const payload_local = record_slots.payload_locals[field_index];
         const payload_ty = record_slots.payload_tys[field_index];
-        if (!self.sameType(payload_ty, field_ty)) {
-            Common.invariant("generated defaulted record payload type differed from field type");
-        }
-        if (!self.sameType(try self.localType(field_local), field_ty)) {
-            Common.invariant("record finish field local type differed from defaulted field type");
-        }
+        self.assertSameType(payload_ty, field_ty, "generated defaulted record payload type differed from field type");
+        self.assertSameType(try self.localType(field_local), field_ty, "record finish field local type differed from defaulted field type");
 
         // Materializing a default lowers a checked expression, which is
         // relation production. Phase-B (frozen) emission therefore consumes
@@ -57657,18 +57606,15 @@ const BodyContext = struct {
         err_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
         const str_ty = try self.primitiveType(.str);
-        if (!self.sameType(try self.exprType(field_name_expr), str_ty)) {
-            Common.invariant("generated missing required field name was not Str");
-        }
+        self.assertSameType(try self.exprType(field_name_expr), str_ty, "generated missing required field name was not Str");
         // The checker adds `MissingRequiredField(Str)` to the error row of every
         // derived parser that owns a required field, so the checked row always
         // carries it here.
         const missing_tag = self.monoTagByTextOptional(err_ty, "MissingRequiredField") orelse
             Common.invariant("derived parser with a required field had no MissingRequiredField in its checked error row");
         const payload_tys = self.typeStore().span(missing_tag.payloads);
-        if (payload_tys.len != 1 or !self.sameType(GuardedList.at(payload_tys, 0), str_ty)) {
-            Common.invariant("MissingRequiredField in parser error row did not carry one Str payload");
-        }
+        if (payload_tys.len != 1) Common.invariant("MissingRequiredField in parser error row did not carry one payload");
+        self.assertSameType(GuardedList.at(payload_tys, 0), str_ty, "MissingRequiredField in parser error row did not carry a Str payload");
         return try self.addExpr(.{
             .ty = err_ty,
             .data = .{ .tag = .{
@@ -57692,9 +57638,9 @@ const BodyContext = struct {
         const invalid_fn = self.functionShape(callable_mono_ty, "invalid_value target method was not a function");
         const arg_tys = self.typeStore().span(invalid_fn.args);
         if (arg_tys.len != 2) Common.invariant("invalid_value target method had an unexpected arity");
-        if (!self.sameType(GuardedList.at(arg_tys, 0), encoding_ty)) Common.invariant("invalid_value encoding type differed from parser encoding type");
-        if (!self.sameType(GuardedList.at(arg_tys, 1), state_ty)) Common.invariant("invalid_value state type differed from parser state type");
-        if (!self.sameType(invalid_fn.ret, err_ty)) Common.invariant("invalid_value return type differed from parse error type");
+        self.assertSameType(GuardedList.at(arg_tys, 0), encoding_ty, "invalid_value encoding type differed from parser encoding type");
+        self.assertSameType(GuardedList.at(arg_tys, 1), state_ty, "invalid_value state type differed from parser state type");
+        self.assertSameType(invalid_fn.ret, err_ty, "invalid_value return type differed from parse error type");
 
         return try self.addExpr(.{
             .ty = err_ty,
@@ -57811,9 +57757,12 @@ const BodyContext = struct {
 
     fn finishDirectStructural(self: *BodyContext, task: *const DirectStructuralTask, lowered: DraftExprId) Allocator.Error!LowerStep {
         switch (task.ret) {
-            .context => |ty| if (!self.sameType(ty, try self.exprType(lowered))) switch (task.stage) {
-                .hash_hasher => Common.invariant("checked structural hash lowered at a type different from its context type"),
-                .start, .discriminant, .lhs, .rhs, .hash_value => Common.invariant("checked structural equality lowered at a type different from its context type"),
+            .context => |ty| {
+                const lowered_ty = try self.exprType(lowered);
+                if (@import("builtin").mode == .debug and !self.sameType(ty, lowered_ty)) switch (task.stage) {
+                    .hash_hasher => Common.invariant("checked structural hash lowered at a type different from its context type"),
+                    .start, .discriminant, .lhs, .rhs, .hash_value => Common.invariant("checked structural equality lowered at a type different from its context type"),
+                };
             },
             .checked => {},
         }
@@ -60628,7 +60577,7 @@ const BodyContext = struct {
                 const requested_cell = task.recursive_direct_cell;
                 switch (requested_cell) {
                     .sealed => |requested_ty| switch (self.exprTypeCell(value)) {
-                        .sealed => |produced_ty| if (!self.sameType(requested_ty, produced_ty)) Common.invariant("recursive declaration value produced a different sealed type"),
+                        .sealed => |produced_ty| self.assertSameType(requested_ty, produced_ty, "recursive declaration value produced a different sealed type"),
                         .graph_node => Common.invariant("recursive declaration value produced a graph-backed type for a sealed request"),
                     },
                     .graph_node => |requested_node| try relateRequestComponent(self.graph, requested_node, try self.exprTypeCell(value).toGraphNode(self.graph)),
@@ -62180,9 +62129,7 @@ const BodyContext = struct {
                     .sealed => |ty| ty,
                     .graph_node => Common.invariant("graph-free closed dispatch produced a graph-backed result"),
                 };
-                if (!self.sameType(requested_ty, produced_ty)) {
-                    Common.invariant("graph-free closed dispatch produced a different sealed result type");
-                }
+                self.assertSameType(requested_ty, produced_ty, "graph-free closed dispatch produced a different sealed result type");
                 break :blk produced_cell;
             },
             .graph_node => |requested_node| blk: {
@@ -64150,8 +64097,6 @@ test "queued specialization skips a body claimed immediately before dispatch" {
             };
             const spec = try program_.addSpec(.{
                 .identity = identity,
-                .request_fn_ty = ty_,
-                .request_fn_ty_digest = identity.request_fn_ty_digest,
                 .solved_fn_ty = ty_,
                 .solved_fn_ty_digest = identity.request_fn_ty_digest,
                 .fn_id = fn_id,
@@ -64688,6 +64633,15 @@ test "monotype sameType keeps failed alias alternatives out of recursion stack" 
     try std.testing.expect(ctx.sameType(str_ty, alias_str));
     try std.testing.expect(!ctx.sameType(alias_i64, alias_str));
     try std.testing.expect(!ctx.sameType(alias_str, alias_i64));
+}
+
+test "monotype assertSameType compares nothing outside debug builds" {
+    if (@import("builtin").mode == .debug) return error.SkipZigTest;
+    // Outside debug builds the assertion must not read its context or the
+    // type store at all: an undefined context and two unrelated type ids
+    // would fault or reach `unreachable` if the comparison ran.
+    var ctx: BodyContext = undefined;
+    ctx.assertSameType(@fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(1)), "release assertion compared types");
 }
 
 test "body context inspects graph-owned types despite program TypeId collisions" {

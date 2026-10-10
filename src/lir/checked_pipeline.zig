@@ -2708,7 +2708,6 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
             var rendered: std.Io.Writer.Allocating = .init(allocator);
             defer rendered.deinit();
             renderType(&rendered.writer, allocator, mono, view.types, spec.identity.request_fn_ty, 0) catch return error.OutOfMemory;
-            const key_hex = std.fmt.bytesToHex(spec.request_fn_ty_digest.bytes, .lower);
             const req_hex = std.fmt.bytesToHex(spec.identity.request_fn_ty_digest.bytes, .lower);
             const solved_hex = std.fmt.bytesToHex(spec.solved_fn_ty_digest.bytes, .lower);
             std.debug.print("CENSUS_SPEC\t{d}\t{s}\t{s}\t{s}\t{d}\t{d}\t{s}\t{d}\t{d}\t{d}\t{s}\t{s}\t{s}\t{s}\n", .{
@@ -2727,7 +2726,7 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
                 @tagName(spec.status),
                 &shape.classes(),
             });
-            std.debug.print("CENSUS_REQ\t{s}\t{s}\t{s}\n", .{ callable_name, key_hex[0..16], rendered.written() });
+            std.debug.print("CENSUS_REQ\t{s}\t{s}\t{s}\n", .{ callable_name, req_hex[0..16], rendered.written() });
         }
     }
 

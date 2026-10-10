@@ -13853,15 +13853,16 @@ reuse one specialization, while different callable shapes remain distinct.
 
 The identity is immutable: it is written once when the record is reserved and
 never rewritten, so no structure that indexes by identity ever needs a rekey or
-a second synchronized entry. Later refinements are data on the record. The
-request view may be refined while the record is still `reserved`—once per
-deferring graph that seals its view of the request; the solved view records the
-body's solved type when the record becomes `ready`. Each refinement registers
-an *alias* lookup entry (the new digest also reaches the same record), so a
-request shaped like the current request reuses the record even after the body
-solved a more specific type—the record is never widened (the one-way snapshot
-rule above). Status transitions (`reserved → lowering → ready`) and both
-refinements happen only through the specialization store's API.
+a second synchronized entry. The identity's requested type is the record's
+request view, and it never changes: a requester that matched a record while it
+was `reserved` matched the same view every later requester sees. The solved
+view is data on the record: it records the body's solved type when the record
+becomes `ready` and registers an *alias* lookup entry (the solved digest also
+reaches the same record), so a request shaped like the original request reuses
+the record even after the body solved a more specific type—the record is never
+widened (the one-way snapshot rule above). Status transitions
+(`reserved → lowering → ready`) and the solved refinement happen only through
+the specialization store's API.
 
 The in-memory builder owns a transient hash table from lookup keys to
 `SpecId`, plus the append-only `SpecRecord` array. The output program owns the
