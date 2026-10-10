@@ -89,9 +89,14 @@ batches and of each other:
 - [big/runtime-representation-single-sourcing.md](big/runtime-representation-single-sourcing.md)—
   backends stop re-encoding RocStr/RocList offsets, flag bits, the
   refcount contract, and C-ABI thresholds as magic numbers.
-- [small/llvm-conversion-op-explicit-dispatch.md](small/llvm-conversion-op-explicit-dispatch.md)—
-  end the LLVM backend's `@tagName`-substring dispatch for numeric
-  conversion ops (the one backend exempt from switch exhaustiveness).
+
+The LLVM conversion-op dispatch project from this batch has landed, mostly
+before it was picked up: `base/numeric_conversion.zig` already built the
+comptime-checked conversion table and LLVM's `emitLowLevel` already switched
+exhaustively. What remained was the drift profile: the conversion prong now
+passes a comptime `Conversion`, like the interpreter, so a conversion op that
+LLVM has no lowering for is a `@compileError` instead of a runtime
+`UnsupportedLowLevel`. Emitted code is unchanged.
 
 One CI gate list outside pull requests has landed. The nightly legs on
 hosts PR CI never uses (`minici-other-hosts` in `ci_zig.yml`) and the
