@@ -4464,6 +4464,13 @@ pub const CheckedTypeStore = struct {
         // or a per-use where-method callable.
         try output_type_roots.forEachSchemeUseTypeRoot(module_env, &publisher);
 
+        // A row-coerced use reads its value at the value's own type
+        // (`ModuleEnv.RowCoercedUse`), which checked-body construction gives
+        // the coercion's child.
+        for (module_env.row_coerced_uses.items.items) |use| {
+            _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @fromBackingInt(use.value_var));
+        }
+
         for (module_env.store.sliceDefs(module_env.global_value_defs)) |def_idx| {
             const root = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, module.defType(def_idx));
             try store.publishSourceScheme(allocator, module, &source_schemes, &active.scratch.?.key_writer, module.defType(def_idx), root);
@@ -12673,7 +12680,10 @@ pub const CheckedBodyStore = struct {
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
             if (source_nodes.hasExpr(@fromBackingInt(@intCast(node_idx)))) {
                 const id = source_node_map.exprAtRawNode(node_idx) orelse unreachable;
-                exprs.items[@backingInt(id)].data = try copier.copyExprData(@fromBackingInt(@intCast(node_idx)));
+                // Copying a row-coerced use appends its coercion's child to
+                // `exprs`, so take the slot only after the copy has grown it.
+                const data = try copier.copyExprData(@fromBackingInt(@intCast(node_idx)));
+                exprs.items[@backingInt(id)].data = data;
             } else if (source_nodes.hasPattern(@fromBackingInt(@intCast(node_idx)))) {
                 const id = source_node_map.patternAtRawNode(node_idx) orelse unreachable;
                 patterns.items[@backingInt(id)].data = try copier.copyPatternData(@fromBackingInt(@intCast(node_idx)));
@@ -15238,11 +15248,11 @@ const CheckedBodyPayloadCopier = struct {
             .e_str_segment => |str| .{ .str_segment = try self.string_builder.intern(str.literal) },
             .e_str => |str| try self.copyStrExpr(expr_idx, str.span),
             .e_bytes_literal => |bytes| .{ .bytes_literal = try self.string_builder.intern(bytes.literal) },
-            .e_lookup_local => |lookup| .{ .lookup_local = .{
+            .e_lookup_local => |lookup| try self.rowCoercedUseData(expr_idx, .{ .lookup_local = .{
                 .pattern = self.checkedPattern(lookup.pattern_idx),
                 .resolved = null,
-            } },
-            .e_lookup_external, .e_lookup_associated_resolved => .{ .lookup_external = null },
+            } }),
+            .e_lookup_external, .e_lookup_associated_resolved => try self.rowCoercedUseData(expr_idx, .{ .lookup_external = null }),
             .e_lookup_associated_local, .e_lookup_associated => checkedArtifactInvariant("unresolved associated lookup reached checked body publication", .{}),
             .e_lookup_required => .{ .lookup_required = null },
             .e_list => |list| .{ .list = try self.copyExprSpan(list.elems) },
@@ -16151,6 +16161,24 @@ const CheckedBodyPayloadCopier = struct {
             };
         }
         return null;
+    }
+
+    /// A use checking recorded as a widening of a top-level value
+    /// (`ModuleEnv.RowCoercedUse`) coerces the value—the lookup, at the
+    /// value's own type—to the row this use relates to, which is this
+    /// expression's checked type (design.md "Value Rows: Local Values Share,
+    /// Top-Level Values Widen At Each Use", "Row Coercion Primitive"). Every
+    /// other lookup is the lookup itself.
+    fn rowCoercedUseData(self: *@This(), expr_idx: CIR.Expr.Idx, lookup_data: CheckedExprData) Allocator.Error!CheckedExprData {
+        const value_var = self.module.moduleEnvConst().rowCoercedUseValueVar(ModuleEnv.nodeIdxFrom(expr_idx)) orelse return lookup_data;
+        const value_id: CheckedExprId = @fromBackingInt(try checkedSourceNodeIdFromLen(self.exprs.items.len));
+        try self.exprs.append(self.allocator, .{
+            .id = value_id,
+            .ty = try self.checkedTypeForRequiredVar(value_var, "row-coerced value type root was not published"),
+            .source_region = self.module.regionAt(ModuleEnv.nodeIdxFrom(expr_idx)),
+            .data = lookup_data,
+        });
+        return .{ .row_coerce = .{ .value = value_id } };
     }
 
     fn checkedTypeForRequiredVar(
@@ -17155,7 +17183,22 @@ pub const ResolvedValueRefTable = struct {
                 tag != .expr_required_lookup) continue;
 
             const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(node_idx));
-            const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse continue;
+            const source_checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse continue;
+            // A row-coerced use of a top-level value is a coercion of the
+            // value: the lookup, and so the reference and its type, is the
+            // coercion's child (design.md "Value Rows: Local Values Share,
+            // Top-Level Values Widen At Each Use").
+            const coerced_lookup: ?CheckedExpr = switch (checked_bodies.expr(source_checked_expr).data) {
+                .row_coerce => |coerce| blk: {
+                    const value = checked_bodies.expr(coerce.value);
+                    if (value.data != .lookup_local and value.data != .lookup_external) {
+                        checkedArtifactInvariant("row coercion of a value use did not wrap a lookup", .{});
+                    }
+                    break :blk value;
+                },
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
+            };
+            const checked_expr = if (coerced_lookup) |value| value.id else source_checked_expr;
             var resolved_ref = try categorizeValueRef(
                 allocator,
                 module,
@@ -17173,7 +17216,7 @@ pub const ResolvedValueRefTable = struct {
                 &local_pattern_roles,
                 checked_bodies,
             );
-            const checked_ty = checked_types.rootForSourceVar(module, module.exprType(expr_idx)) orelse {
+            const checked_ty = if (coerced_lookup) |value| value.ty else checked_types.rootForSourceVar(module, module.exprType(expr_idx)) orelse {
                 if (builtin.mode == .debug) {
                     base.invariant("checked artifact invariant violated: resolved value ref type root was not published", .{});
                 }
@@ -17181,7 +17224,7 @@ pub const ResolvedValueRefTable = struct {
             };
             // Publication keys every source root by this same writer.
             const checked_type_key = checked_types.store.view().rootKey(checked_ty);
-            if (builtin.mode == .debug) {
+            if (builtin.mode == .debug and coerced_lookup == null) {
                 const written = (try key_writer.fromVar(module.exprType(expr_idx))).key;
                 if (@as(u256, @bitCast(written.bytes)) != @as(u256, @bitCast(checked_type_key.bytes))) {
                     base.invariant("checked artifact invariant violated: resolved value ref type key differs from its published root", .{});

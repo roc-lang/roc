@@ -40433,7 +40433,11 @@ const ProcBodyBuilder = struct {
         const source_layout = self.parent.result.store.getLocal(source).layout_idx;
         const target_layout_value = self.parent.result.layouts.getLayout(target_layout);
         const source_layout_value = self.parent.result.layouts.getLayout(source_layout);
-        if (target_layout_value.tag != .tag_union or source_layout_value.tag != .tag_union) return null;
+        if (target_layout_value.tag != .tag_union) return null;
+        // A single tag whose payloads are all zero-sized has a zero-sized
+        // layout: no discriminant to switch on, and one variant to re-tag.
+        const source_is_zst = self.isZstLocal(source);
+        if (source_layout_value.tag != .tag_union and !source_is_zst) return null;
 
         // Equal-layout tag unions can preserve the source value and its exact
         // descriptor when the planned representations prove that every source
@@ -40450,6 +40454,9 @@ const ProcBodyBuilder = struct {
         const target_variants = self.parent.plan.tagVariantSlice(self.parent.plan.representations.items[@backingInt(target_tag_rep)].tag_variants);
         const source_variants = self.parent.plan.tagVariantSlice(self.parent.plan.representations.items[@backingInt(source_tag_rep)].tag_variants);
         if (target_variants.len == 0 or source_variants.len == 0) return null;
+        if (source_is_zst and source_variants.len != 1) {
+            boxyLowerInvariant("boxy zero-sized concrete tag source had more than one variant");
+        }
 
         // Checked row coercions can widen or narrow a concrete tag union. Prove
         // that one row is a subset of the other before emitting either form;
@@ -40802,6 +40809,14 @@ const ProcBodyBuilder = struct {
     }
 
     fn finishTagUnionBoundary(self: *ProcBodyBuilder, state: *TagUnionBoundaryState) Allocator.Error!LIR.CFStmtId {
+        // A zero-sized source is its one variant; its branch is the boundary.
+        if (state.kind == .concrete and self.isZstLocal(state.request.source)) {
+            const body = state.branches[0].body;
+            const scope = state.scope orelse return body;
+            const stmt = try self.leaveNominalBackingFormalScope(scope, body);
+            state.scope = null;
+            return stmt;
+        }
         const default_branch = switch (state.kind) {
             .concrete => state.unreachable_source_variant,
             .dynamic => try self.parent.result.store.addCFStmt(.runtime_error, self.glueOrigin()),
@@ -41050,6 +41065,13 @@ const ProcBodyBuilder = struct {
         };
     }
 
+    /// Re-tag a zero-sized single-tag source, whose value its type alone
+    /// determines, into a target that stores no payload for that tag: a
+    /// zero-sized target, a target whose every payload is zero-sized (a bare
+    /// discriminant scalar), or a tag-union target whose matching variant has
+    /// no payload. A target variant with payload storage is re-tagged by
+    /// `beginConcreteTagUnionToConcreteBoundary`, which converts each
+    /// zero-sized payload into it.
     fn assignSingletonZstTagToConcreteBoundary(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -41063,35 +41085,42 @@ const ProcBodyBuilder = struct {
         const target_tag_rep = self.tagVariantRepForBoundary(target_rep) orelse return null;
         const source_tag_rep = self.tagVariantRepForBoundary(source_rep) orelse return null;
 
-        const target_layout = self.parent.result.store.getLocal(target).layout_idx;
-        const target_layout_value = self.parent.result.layouts.getLayout(target_layout);
-        if (target_layout_value.tag != .tag_union) return null;
-
         const source_rep_info = self.parent.plan.representations.items[@backingInt(source_tag_rep)];
         const source_variants = self.parent.plan.tagVariantSlice(source_rep_info.tag_variants);
         if (source_variants.len != 1) return null;
-        const source_variant = source_variants[0];
-        if (self.parent.plan.childSlice(source_variant.payloads).len != 0) return null;
+        const source_name = self.tagVariantNameText(source_variants[0]);
 
         const target_rep_info = self.parent.plan.representations.items[@backingInt(target_tag_rep)];
         const target_variants = self.parent.plan.tagVariantSlice(target_rep_info.tag_variants);
-        const source_name = self.tagVariantNameText(source_variant);
-
         for (target_variants, 0..) |target_variant, index| {
             if (!std.mem.eql(u8, source_name, self.tagVariantNameText(target_variant))) continue;
             if (index > std.math.maxInt(u32)) {
                 boxyLowerInvariant("singleton tag widening target variant index exceeded LIR variant range");
             }
-            if (self.parent.plan.childSlice(target_variant.payloads).len != 0) return null;
             if (self.isZstLocal(target)) return try self.assignZst(target, next);
-            return try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
-                .target = target,
-                .target_desc = try self.boundaryTargetDesc(target, target_rep),
-                .variant_index = @intCast(index),
-                .discriminant = @intCast(index),
-                .payload = null,
-                .next = next,
-            } }, self.glueOrigin());
+            const target_layout = self.parent.result.store.getLocal(target).layout_idx;
+            switch (self.parent.result.layouts.getLayout(target_layout).tag) {
+                .scalar => return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
+                    .target = target,
+                    .value = .{ .i64_literal = .{
+                        .value = @intCast(index),
+                        .layout_idx = target_layout,
+                    } },
+                    .next = next,
+                } }, self.glueOrigin()),
+                .tag_union => {
+                    if (self.parent.plan.childSlice(target_variant.payloads).len != 0) return null;
+                    return try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
+                        .target = target,
+                        .target_desc = try self.boundaryTargetDesc(target, target_rep),
+                        .variant_index = @intCast(index),
+                        .discriminant = @intCast(index),
+                        .payload = null,
+                        .next = next,
+                    } }, self.glueOrigin());
+                },
+                .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => return null,
+            }
         }
 
         return null;
@@ -41483,6 +41512,9 @@ const ProcBodyBuilder = struct {
         payload_count: usize,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        // A zero-sized source's payloads are zero-sized too, so there is no
+        // storage to read them from.
+        if (self.isZstLocal(source)) return try self.assignZst(target, next);
         const tag_rep = self.parent.plan.representations.items[@backingInt(source_tag_rep)];
         var after_read = next;
         if (target_desc) |desc_local| {

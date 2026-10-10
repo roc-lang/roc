@@ -202,11 +202,11 @@ checks = (same(Yes(1), Yes(1)), is_nope(Yes(2)), value == None)
 	(defs
 		(patt (type "[Nope, ..c], [Nope, ..c] -> Bool where [c.is_eq : c, c -> Bool]"))
 		(patt (type "[Nope, ..a] -> Bool where [a.is_eq : a, a -> Bool]"))
-		(patt (type "[None, Some(Str)]"))
+		(patt (type "[Some(Str)]"))
 		(patt (type "(Bool, Bool, Bool)")))
 	(expressions
 		(expr (type "[Nope, ..c], [Nope, ..c] -> Bool where [c.is_eq : c, c -> Bool]"))
 		(expr (type "[Nope, ..a] -> Bool where [a.is_eq : a, a -> Bool]"))
-		(expr (type "[None, Some(Str)]"))
+		(expr (type "[Some(Str)]"))
 		(expr (type "(Bool, Bool, Bool)"))))
 ~~~

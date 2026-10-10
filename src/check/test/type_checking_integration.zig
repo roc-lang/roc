@@ -9873,13 +9873,12 @@ test "check type - polarity - annotated value body is bounded" {
     try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
-test "check type - polarity - annotated value shares one weak row across uses" {
-    // A value binding's implicitly opened row is one weak variable shared by
-    // every use. The first use widens it to `[A, Boom]`; the second use then
-    // sees a value whose row carries `A`, which its own annotation does not
-    // list. (Exactly how an inferred `e = Boom` already behaves; on main the
-    // closed `[Boom]` rejected both uses.) Write `..` on the value to
-    // generalize it instead—see the next test.
+test "check type - polarity - each use of a top-level value widens it independently" {
+    // A top-level value has one type, and each use relates to its own
+    // widening copy of it (design.md "Value Rows: Local Values Share,
+    // Top-Level Values Widen At Each Use"): `use_a` needs `e` at `[A, Boom]`
+    // and `use_b` at `[B, Boom]`, and neither use changes `e`'s type or
+    // constrains the other.
     const source =
         \\e : [Boom]
         \\e = Boom
@@ -9890,14 +9889,16 @@ test "check type - polarity - annotated value shares one weak row across uses" {
         \\use_b : Str -> [B, Boom]
         \\use_b = |_| e
     ;
-    try checkTypesModule(source, .fail_first, "Type Mismatch");
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
 }
 
-test "check type - polarity - a weak value row widened by a use is grounded at its tail" {
-    // `choice` widens `e`'s shared weak row to `[A, Boom]`, so after solving
-    // the annotation's extension is a tag row whose own tail is still open.
-    // The module grounds that tail, so importers see the closed row
-    // `[A, Boom]` and cannot widen it further.
+test "check type - polarity - an importer widens a top-level value its module also widens" {
+    // `choice` uses `e` at `[A, Boom]` through its own widening copy, so `e`'s
+    // type stays `[Boom]`, and an importer widens that type at its own use
+    // (design.md "Value Rows: Local Values Share, Top-Level Values Widen At
+    // Each Use").
     const source_lib =
         \\module [e, choice]
         \\
@@ -9918,7 +9919,7 @@ test "check type - polarity - a weak value row widened by a use is grounded at i
     ;
     var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
     defer main_env.deinit();
-    try main_env.assertOneTypeError("Type Mismatch");
+    try main_env.assertNoErrors();
 }
 
 test "check type - polarity - a defaulted field use may widen a weak value row" {

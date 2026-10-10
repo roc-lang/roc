@@ -31923,6 +31923,11 @@ const BodyContext = struct {
                 self.draft.exprs.items[@backingInt(lowered)].ty = cell;
                 return loweredExprStep(lowered);
             },
+            // A row coercion's value, lowered at a graph cell of its own type;
+            // the widen sits at the demanded cell.
+            6 => return loweredExprStep(try self.addExprWithTypeCell(cell, .{ .row_widen = .{
+                .value = input.?.exprValue(),
+            } })),
             // A dispatch or call lowered at this node.
             else => return .{ .ret = input.? },
         }
@@ -32001,9 +32006,8 @@ const BodyContext = struct {
                 return loweredExprStep(try self.addExprWithTypeCell(cell, .{ .checked_error = try self.addStringLiteral("runtime error") }));
             },
             .anno_only => Common.invariant("non-runtime checked expression reached Monotype lowering"),
-            // A row coercion takes the `?` return's path below: the
-            // demanded node relates to the widen node's own type, and
-            // `lowerExprInner` lowers the child with no expected node.
+            // A row coercion is lowered below, once the demanded node relates
+            // to the coercion's own type.
             .pending, .str_segment, .str, .bytes_literal, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
         switch (expr.data) {
@@ -32037,7 +32041,15 @@ const BodyContext = struct {
                 frame.cursor = 3;
                 return requestLowerTask(self, .{ .span = .{ .exprs = low_level.args } });
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda => {},
+            // The demanded node already relates to the coercion's own type
+            // (above). The value is lowered at a graph cell of its own checked
+            // type, as a `?` return's value is, so a value row that no use
+            // relates to seals by the specialization's row defaults.
+            .row_coerce => |coerce| {
+                frame.cursor = 6;
+                return requestLowerChild(self, coerce.value, DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(coerce.value)));
+            },
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda => {},
         }
         frame.cursor = 4;
         return requestLowerTask(self, .{ .expr_inner = .{ .expr = checked_expr } });
@@ -32569,10 +32581,17 @@ const BodyContext = struct {
                 return requestLowerTask(self, .{ .expr = .{ .expr = child } }),
             .break_ => try self.breakCurrentLoopExprData(),
             .return_ => |ret| return requestLowerTask(self, .{ .return_value = .{ .expr = ret.expr, .lambda = ret.lambda, .context = ret.context } }),
-            // The coerced value is lowered at its own checked type, exactly
-            // like a `?` return's value; the widen node carries the demanded
-            // type and Lambda Solved relates the two without unifying them.
-            .row_coerce => |coerce| return requestLowerTask(self, .{ .expr = .{ .expr = coerce.value } }),
+            // The coerced value is lowered at a graph cell of its own checked
+            // type, like a `?` return's value; the widen node carries the
+            // demanded type and Lambda Solved relates the two without
+            // unifying them. A value's row that no use relates to stays a
+            // graph cell and seals by the specialization's row defaults.
+            .row_coerce => |coerce| return requestLowerTask(self, .{ .at_type_cell = .{
+                .expr = coerce.value,
+                .cell = try self.lowerTypeCell(self.view.bodies.expr(coerce.value).ty),
+                .demand = .runtime_value,
+                .diverges = false,
+            } }),
             .for_ => |for_| return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .for_ = checkedForLoop(for_) } }) }),
             .hosted_lambda => Common.invariant("hosted lambda expression reached ordinary Monotype expression lowering"),
             .run_low_level => |low_level| return requestLowerTask(self, .{ .span = .{ .exprs = low_level.args } }),
