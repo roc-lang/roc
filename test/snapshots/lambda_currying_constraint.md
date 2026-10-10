@@ -166,7 +166,11 @@ NO CHANGE
 				(e-lambda
 					(args
 						(p-assign (ident "y")))
-					(e-runtime-error (tag "erroneous_value_expr")))))
+					(e-runtime-error (tag "erroneous_value_expr")
+						(e-lookup-local
+							(p-assign (ident "x")))
+						(e-lookup-local
+							(p-assign (ident "y")))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "a"))

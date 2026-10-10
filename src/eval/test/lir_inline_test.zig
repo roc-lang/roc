@@ -244,7 +244,6 @@ const LowerMonotypeOptions = struct {
     diagnostics: ?*MonoLower.Diagnostics = null,
     post_check_executor: ?base.post_check_task_executor.Executor = null,
     root_selection: enum { all, test_expects } = .all,
-    literal_roots: bool = false,
 };
 
 fn lowerMonotypeModuleWithOptions(
@@ -294,7 +293,6 @@ fn lowerMonotypeModuleWithOptions(
             .specialization_counters = options.specialization_counters,
             .diagnostics = options.diagnostics,
             .post_check_executor = options.post_check_executor,
-            .literal_roots = options.literal_roots,
         },
     );
     errdefer mono.deinit();
@@ -470,18 +468,9 @@ fn structuralJsonMonotypeStatsForSource(
     allocator: Allocator,
     source: []const u8,
 ) TestError!StructuralJsonMonotypeStats {
-    return structuralJsonMonotypeStatsForSourceWithOptions(allocator, source, .{});
-}
-
-fn structuralJsonMonotypeStatsForSourceWithOptions(
-    allocator: Allocator,
-    source: []const u8,
-    options: struct { literal_roots: bool = false },
-) TestError!StructuralJsonMonotypeStats {
     var counters: MonoLower.SpecializationCounters = .{};
     var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{
         .specialization_counters = &counters,
-        .literal_roots = options.literal_roots,
     });
     defer lowered.deinit(allocator);
 
@@ -686,6 +675,8 @@ fn countDebugEffectStmts(lowered: *const lir.CheckedPipeline.LoweredProgram) Deb
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
             .boxy_tag_match,
@@ -1223,7 +1214,7 @@ fn expectInlinePlanDecision(
         if (!std.mem.eql(u8, actual_name, fn_name)) continue;
 
         found = true;
-        const fn_id: postcheck.MonotypeLifted.Ast.FnId = @enumFromInt(@as(u32, @intCast(index)));
+        const fn_id: postcheck.MonotypeLifted.Ast.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         try std.testing.expectEqual(expected, plan.bodyForFn(fn_id) != null);
     }
 
@@ -1276,6 +1267,8 @@ fn collectAssignCallProcs(
             .assign_boxy_unbox => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_adapt => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_inspect => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_eq => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_hash => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_tag => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_tag_payload => |stmt| try work.append(allocator, stmt.next),
             .assign_call_dict => |stmt| try work.append(allocator, stmt.next),
@@ -1482,7 +1475,7 @@ fn markReachableLiftedExpr(
     expr_id: postcheck.MonotypeLifted.Ast.ExprId,
     reachable: []bool,
 ) void {
-    const index = @intFromEnum(expr_id);
+    const index = @backingInt(expr_id);
     if (reachable[index]) return;
     reachable[index] = true;
 
@@ -2202,7 +2195,7 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
         // Each direct call instantiates its callee's checked type once per
         // body and shares that request across its result-type queries and
         // its own lowering.
-        .nominal_backing_instantiations = 32,
+        .nominal_backing_instantiations = 25,
     });
 }
 
@@ -2325,10 +2318,10 @@ test "specialization scheduling is deterministic across repeat runs" {
     try std.testing.expectEqual(first.mono.fnCount(), second.mono.fnCount());
     try std.testing.expectEqual(first.mono.defCount(), second.mono.defCount());
     try std.testing.expectEqual(first.mono.exprCount(), second.mono.exprCount());
-    inline for (std.meta.fields(@TypeOf(first_diagnostics.body))) |field| {
+    inline for (@typeInfo(@TypeOf(first_diagnostics.body)).@"struct".field_names) |field_name| {
         try std.testing.expectEqual(
-            @field(first_diagnostics.body, field.name),
-            @field(second_diagnostics.body, field.name),
+            @field(first_diagnostics.body, field_name),
+            @field(second_diagnostics.body, field_name),
         );
     }
 }
@@ -2678,7 +2671,7 @@ test "issue 9802 growing-structural map2 specialization counters are bounded" {
         // Each template miss also instantiates the template's root once for
         // its interface relations' summarized expansion.
         .nominal_backing_reuses = 31,
-        .nominal_backing_instantiations = 86,
+        .nominal_backing_instantiations = 71,
     });
 }
 
@@ -2891,13 +2884,13 @@ test "issue 11144 nested lambdas in one large body specialize in linear work" {
     }
     // Compare deltas to remove fixed module work. A linear delta doubles;
     // quadratic work approaches four times the preceding delta.
-    inline for (std.meta.fields(Counts)) |field| {
-        const small = @field(counts[0], field.name);
-        const medium = @field(counts[1], field.name);
-        const large = @field(counts[2], field.name);
+    inline for (@typeInfo(Counts).@"struct".field_names) |field_name| {
+        const small = @field(counts[0], field_name);
+        const medium = @field(counts[1], field_name);
+        const large = @field(counts[2], field_name);
         const linear = small <= medium and medium <= large and
             large - medium <= ((medium - small) *| 5) / 2;
-        if (!linear) std.debug.print("issue 11144 {s} grew nonlinearly: {d}->{d}->{d}\n", .{ field.name, small, medium, large });
+        if (!linear) std.debug.print("issue 11144 {s} grew nonlinearly: {d}->{d}->{d}\n", .{ field_name, small, medium, large });
         try std.testing.expect(linear);
     }
 }
@@ -3553,7 +3546,7 @@ test "spec constr retains an exact virtual source frame for an inlined procedure
 
     var found_source_scope = false;
     for (0..store.cf_stmts.len()) |stmt_index| {
-        const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
+        const stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(stmt_index))));
         const scope_id = store.stmtInlineScope(stmt_id);
         if (scope_id == LIR.InlineScopeId.none) continue;
         const scope = store.inlineScope(scope_id);
@@ -3627,7 +3620,7 @@ test "boxy lowering preserves a runtime-built crash message" {
     const result = &lowered_source.lowered.lir_result;
     var found_local_crash_message = false;
     for (0..result.store.cf_stmts.len()) |stmt_index| {
-        const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
+        const stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(stmt_index))));
         const stmt = result.store.getCFStmt(stmt_id);
         if (std.meta.activeTag(stmt) != .crash) continue;
         switch (stmt.crash.msg) {
@@ -4215,6 +4208,8 @@ test "LIR statements and procs carry resolved source locations" {
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
             .boxy_tag_match,
@@ -4270,7 +4265,7 @@ test "LIR statements and procs carry resolved source locations" {
     var found_add2 = false;
     var found_mul3 = false;
     for (0..store.getProcSpecs().len) |i| {
-        const name = store.procDebugName(@enumFromInt(i)) orelse continue;
+        const name = store.procDebugName(@fromBackingInt(@intCast(i))) orelse continue;
         if (std.mem.eql(u8, name, "add2")) found_add2 = true;
         if (std.mem.eql(u8, name, "mul3")) found_mul3 = true;
     }
@@ -4281,7 +4276,7 @@ test "LIR statements and procs carry resolved source locations" {
 fn countProcsNamed(store: *const lir.LirStore, name: []const u8) usize {
     var count: usize = 0;
     for (0..store.getProcSpecs().len) |i| {
-        const proc_name = store.procDebugName(@enumFromInt(i)) orelse continue;
+        const proc_name = store.procDebugName(@fromBackingInt(@intCast(i))) orelse continue;
         if (std.mem.eql(u8, proc_name, name)) count += 1;
     }
     return count;
@@ -4339,7 +4334,7 @@ test "referenced but uncalled function does not materialize a proc" {
     const store = &lowered_source.lowered.lir_result.store;
     var found_unused = false;
     for (0..store.getProcSpecs().len) |i| {
-        const name = store.procDebugName(@enumFromInt(i)) orelse continue;
+        const name = store.procDebugName(@fromBackingInt(@intCast(i))) orelse continue;
         if (std.mem.eql(u8, name, "unused")) found_unused = true;
     }
     try std.testing.expect(!found_unused);
@@ -4417,7 +4412,7 @@ test "LIR locals carry source-level names" {
     var found_first = false;
     var found_second = false;
     for (0..store.getLocals().len) |i| {
-        const name = store.localName(@enumFromInt(i)) orelse continue;
+        const name = store.localName(@fromBackingInt(@intCast(i))) orelse continue;
         if (std.mem.eql(u8, name, "first_part")) found_first = true;
         if (std.mem.eql(u8, name, "second_part")) found_second = true;
     }
@@ -4591,6 +4586,8 @@ fn collectLirResultProcShape(
             .assign_boxy_unbox => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_adapt => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_inspect => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_eq => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_hash => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_tag => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_tag_payload => |stmt| try work.append(allocator, stmt.next),
             .assign_call_dict => |stmt| try work.append(allocator, stmt.next),
@@ -4811,7 +4808,7 @@ fn procOrInlineScopeDebugName(
 
     const store = &lowered.lir_result.store;
     for (0..store.cf_stmts.len()) |stmt_index| {
-        const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
+        const stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(stmt_index))));
         const scope_id = store.stmtInlineScope(stmt_id);
         if (scope_id == LIR.InlineScopeId.none) continue;
         const source_name = store.inlineScope(scope_id).source_name;
@@ -7161,7 +7158,7 @@ test "post-check lowering modes eliminate public iter adapters" {
 //
 //     try std.testing.expectEqual(@as(usize, 1), lifted.roots.items.len);
 //     const root_fn_id = lifted.roots.items[0].fn_id;
-//     const root_fn_index = @intFromEnum(root_fn_id);
+//     const root_fn_index = @backingInt(root_fn_id);
 //     const ret_ty = lifted.fns.items[root_fn_index].ret;
 //     const original_body = switch (lifted.fns.items[root_fn_index].body) {
 //         .roc => |body| body,
@@ -7171,8 +7168,8 @@ test "post-check lowering modes eliminate public iter adapters" {
 //     const empty_params = try lifted.addTypedLocalSpan(&.{});
 //     const empty_values = try lifted.addExprSpan(&.{});
 //     const state_start: u32 = @intCast(lifted.state_loop_states.items.len);
-//     const state0_id: Lifted.StateLoopStateId = @enumFromInt(state_start);
-//     const state1_id: Lifted.StateLoopStateId = @enumFromInt(state_start + 1);
+//     const state0_id: Lifted.StateLoopStateId = @fromBackingInt(state_start);
+//     const state1_id: Lifted.StateLoopStateId = @fromBackingInt(state_start + 1);
 //
 //     const break_expr = try lifted.addExpr(.{
 //         .ty = ret_ty,
@@ -8679,7 +8676,7 @@ test "spec constr keeps a same-binder scalar distinct from a substituted aggrega
     var mono_consumed = false;
     errdefer if (!mono_consumed) mono.deinit();
 
-    const shared_binder: check.CheckedModule.PatternBinderId = @enumFromInt(7);
+    const shared_binder: check.CheckedModule.PatternBinderId = @fromBackingInt(@intCast(7));
 
     const u32_ty = try mono.types.add(.{ .primitive = .u32 });
     const pair_span = try mono.types.addSpan(&.{ u32_ty, u32_ty });
@@ -8695,8 +8692,8 @@ test "spec constr keeps a same-binder scalar distinct from a substituted aggrega
         .mono_fn_ty = worker_fn_ty,
     });
 
-    const pair_local = try mono.addLocalWithBinder(@enumFromInt(1), pair_ty, shared_binder);
-    const scalar_local = try mono.addLocalWithBinder(@enumFromInt(2), u32_ty, shared_binder);
+    const pair_local = try mono.addLocalWithBinder(@fromBackingInt(@intCast(1)), pair_ty, shared_binder);
+    const scalar_local = try mono.addLocalWithBinder(@fromBackingInt(@intCast(2)), u32_ty, shared_binder);
 
     const scalar_literal = try mono.addExpr(.{ .ty = u32_ty, .data = .{ .int_lit = .{ .bytes = @splat(0), .kind = .u128 } } });
     const scalar_value = try mono.addExpr(.{ .ty = u32_ty, .data = .{ .dbg = scalar_literal } });
@@ -8713,7 +8710,7 @@ test "spec constr keeps a same-binder scalar distinct from a substituted aggrega
     } } });
 
     try mono.defs.append(allocator, .{
-        .symbol = @enumFromInt(10),
+        .symbol = @fromBackingInt(@intCast(10)),
         .fn_id = worker_fn_id,
         .args = try mono.addTypedLocalSpan(&.{.{ .local = pair_local, .ty = pair_ty }}),
         .body = .{ .roc = worker_body },
@@ -8728,7 +8725,7 @@ test "spec constr keeps a same-binder scalar distinct from a substituted aggrega
         .args = try mono.addExprSpan(&.{call_arg}),
     } } });
     try mono.defs.append(allocator, .{
-        .symbol = @enumFromInt(11),
+        .symbol = @fromBackingInt(@intCast(11)),
         .args = MonoAst.Span(MonoAst.TypedLocal).empty(),
         .body = .{ .roc = caller_body },
         .ret = pair_ty,
@@ -8946,7 +8943,7 @@ test "literal conversion ownership includes nested codec evidence" {
                 .run_low_level,
                 => continue,
             };
-            const plan = artifact.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+            const plan = artifact.static_dispatch_plans.plans[@backingInt(plan_id)];
             try std.testing.expect(plan.resolution == .direct_parametric);
             try std.testing.expect(artifact.checked_bodies.literalConversionRoot(expr.id) == null);
             dependent_conversions += 1;
@@ -9058,7 +9055,7 @@ test "custom literal field default gets an ordinary conversion root" {
         .run_low_level,
         => unreachable,
     };
-    const plan = &artifact.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+    const plan = &artifact.static_dispatch_plans.plans[@backingInt(plan_id)];
     const saved = plan.resolution;
     defer plan.resolution = saved;
     plan.resolution = .{ .direct_parametric = saved.direct_closed };
@@ -9108,26 +9105,26 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
     templates.templates.items[raw_template].specialization_interface_relations = saved_template_span;
 
     const saved_parent = templates.dispatch_scopes[0].parent;
-    templates.dispatch_scopes[0].parent = @enumFromInt(templates.dispatch_scopes.len);
+    templates.dispatch_scopes[0].parent = @fromBackingInt(@intCast(templates.dispatch_scopes.len));
     failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_scope_parent_invalid, failure.kind);
     templates.dispatch_scopes[0].parent = saved_parent;
 
     const saved_scheme_root = templates.dispatch_scopes[0].scheme_root;
-    templates.dispatch_scopes[0].scheme_root = @enumFromInt(artifact.checked_types.payloadCount());
+    templates.dispatch_scopes[0].scheme_root = @fromBackingInt(@intCast(artifact.checked_types.payloadCount()));
     failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_scope_scheme_root_out_of_bounds, failure.kind);
     templates.dispatch_scopes[0].scheme_root = saved_scheme_root;
 
     const saved_scope = templates.specialization_interface_relations[0].scope;
-    templates.specialization_interface_relations[0].scope = .{ .generalized = @enumFromInt(templates.dispatch_scopes.len) };
+    templates.specialization_interface_relations[0].scope = .{ .generalized = @fromBackingInt(@intCast(templates.dispatch_scopes.len)) };
     failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_scope_out_of_bounds, failure.kind);
     templates.specialization_interface_relations[0].scope = saved_scope;
 
     const saved_relation_data = templates.specialization_interface_relations[0].data;
     templates.specialization_interface_relations[0].data = .{ .type_equality = .{
-        .left = @enumFromInt(artifact.checked_types.payloadCount()),
+        .left = @fromBackingInt(@intCast(artifact.checked_types.payloadCount())),
         .right = templates.dispatch_scopes[0].scheme_root,
     } };
     failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
@@ -9160,7 +9157,7 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
 
     const raw_direct_call = direct_call_index orelse return error.TestUnexpectedResult;
     const saved_direct_target = templates.specialization_interface_relations[raw_direct_call].data.call.direct_target;
-    templates.specialization_interface_relations[raw_direct_call].data.call.direct_target = @enumFromInt(artifact.resolved_value_refs.records.len);
+    templates.specialization_interface_relations[raw_direct_call].data.call.direct_target = @fromBackingInt(@intCast(artifact.resolved_value_refs.records.len));
     failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_value_ref_out_of_bounds, failure.kind);
     templates.specialization_interface_relations[raw_direct_call].data.call.direct_target = saved_direct_target;
@@ -9175,7 +9172,7 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
             ref_tag != .platform_required_proc and
             ref_tag != .promoted_top_level_proc)
         {
-            non_procedure_ref = @enumFromInt(i);
+            non_procedure_ref = @fromBackingInt(@intCast(i));
             break;
         }
     }
@@ -9192,12 +9189,12 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_local_proc_use_invalid, failure.kind);
     templates.specialization_interface_relations[raw_local_use].data.local_proc_use = saved_local_ref;
 
-    const local_record = artifact.resolved_value_refs.records[@intFromEnum(saved_local_ref)].ref.local_proc;
+    const local_record = artifact.resolved_value_refs.records[@backingInt(saved_local_ref)].ref.local_proc;
     const local_scope = local_record.dispatch_scope orelse return error.TestUnexpectedResult;
-    const raw_local_scope = @intFromEnum(local_scope);
+    const raw_local_scope = @backingInt(local_scope);
     const saved_scope_expr = templates.dispatch_scopes[raw_local_scope].checked_expr;
-    const next_expr = (@intFromEnum(saved_scope_expr) + 1) % artifact.checked_bodies.exprCount();
-    templates.dispatch_scopes[raw_local_scope].checked_expr = @enumFromInt(next_expr);
+    const next_expr = (@backingInt(saved_scope_expr) + 1) % artifact.checked_bodies.exprCount();
+    templates.dispatch_scopes[raw_local_scope].checked_expr = @fromBackingInt(@intCast(next_expr));
     failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_local_proc_use_invalid, failure.kind);
     templates.dispatch_scopes[raw_local_scope].checked_expr = saved_scope_expr;
@@ -9300,12 +9297,12 @@ test "dispatch evidence boundary validator names the method of a dangling eviden
     for (table.plans) |*plan| {
         switch (plan.resolution) {
             .direct_closed => {
-                plan.resolution = .{ .direct_closed = .{ .evidence = @enumFromInt(table.evidence_nodes.len) } };
+                plan.resolution = .{ .direct_closed = .{ .evidence = @fromBackingInt(@intCast(table.evidence_nodes.len)) } };
                 corrupted_method = resources.checked_artifact.canonical_names.methodNameText(plan.method);
                 break;
             },
             .direct_parametric => {
-                plan.resolution = .{ .direct_parametric = .{ .evidence = @enumFromInt(table.evidence_nodes.len) } };
+                plan.resolution = .{ .direct_parametric = .{ .evidence = @fromBackingInt(@intCast(table.evidence_nodes.len)) } };
                 corrupted_method = resources.checked_artifact.canonical_names.methodNameText(plan.method);
                 break;
             },
@@ -9576,21 +9573,13 @@ test "W6b widened closed where-method impl is reached through a generated adapte
     // adapter that re-tags into the requested row (design.md "Result-Row
     // Widening Adapter"). Running the program proves neither: it produces the
     // same answer whether the impl was adapted or simply specialized wide, so
-    // the adapter count is the only witness. `closed_value` is closed by its
-    // body forwarding `seal`'s closed result: an annotated value alone
-    // generalizes its implicitly opened row (design.md "Polarity"). That
-    // depends on the known limitation that forwarding closes the row
-    // (design.md "Deferred: Row Subsumption"); row subsumption will require
-    // reworking this fixture.
+    // the adapter count is the only witness.
     const widened =
         \\describe : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]
         \\describe = |x| x.status()
         \\
-        \\seal : [Ok(Str), Err(Str)] -> [Ok(Str), Err(Str)]
-        \\seal = |v| v
-        \\
         \\closed_value : [Ok(Str), Err(Str)]
-        \\closed_value = seal(Ok("cv"))
+        \\closed_value = Ok("cv")
         \\
         \\Job := [Pending].{
         \\    status : Job -> [Ok(Str), Err(Str)]
@@ -9616,11 +9605,8 @@ test "W6b widened closed where-method impl is reached through a generated adapte
         \\describe : a -> [Ok(Str), Err(Str)] where [a.status : a -> [Ok(Str), Err(Str)]]
         \\describe = |x| x.status()
         \\
-        \\seal : [Ok(Str), Err(Str)] -> [Ok(Str), Err(Str)]
-        \\seal = |v| v
-        \\
         \\closed_value : [Ok(Str), Err(Str)]
-        \\closed_value = seal(Ok("cv"))
+        \\closed_value = Ok("cv")
         \\
         \\Job := [Pending].{
         \\    status : Job -> [Ok(Str), Err(Str)]
@@ -9647,10 +9633,6 @@ test "W6b question-widened closed Try impl is reached through a generated adapte
     // error row `[NotFound]` and `?` requests `[NotFound, Other]`, so the
     // adapter unwraps the declared-row `Try` and re-wraps its error into the
     // wider row.
-    // The `closed_*` values are closed only by forwarding `seal`'s closed
-    // result, which depends on the known limitation that forwarding closes
-    // the row (design.md "Deferred: Row Subsumption"); row subsumption will
-    // require reworking this fixture.
     const source =
         \\load : a -> Try(Str, [NotFound, Other]) where [a.fetch : a -> Try(Str, [NotFound])]
         \\load = |x| {
@@ -9658,11 +9640,8 @@ test "W6b question-widened closed Try impl is reached through a generated adapte
         \\    Ok(s)
         \\}
         \\
-        \\seal : Try(Str, [NotFound]) -> Try(Str, [NotFound])
-        \\seal = |v| v
-        \\
         \\closed_try : Try(Str, [NotFound])
-        \\closed_try = seal(Ok("hit"))
+        \\closed_try = Ok("hit")
         \\
         \\Src := [S].{
         \\    fetch : Src -> Try(Str, [NotFound])
@@ -9691,19 +9670,12 @@ test "W6b closed impl reached through nested evidence is adapted" {
     // `WidenNestedEvidenceClosedImpl.roc` runs this program on both backends
     // and only proves it computes the right answer; the adapter count is what
     // proves the mechanism.
-    // The `closed_*` values are closed only by forwarding `seal`'s closed
-    // result, which depends on the known limitation that forwarding closes
-    // the row (design.md "Deferred: Row Subsumption"); row subsumption will
-    // require reworking this fixture.
     const source =
-        \\seal : [Ok(Str), Err(Str)] -> [Ok(Str), Err(Str)]
-        \\seal = |v| v
-        \\
         \\closed_ok : [Ok(Str), Err(Str)]
-        \\closed_ok = seal(Ok("ok"))
+        \\closed_ok = Ok("ok")
         \\
         \\closed_err : [Ok(Str), Err(Str)]
-        \\closed_err = seal(Err("err"))
+        \\closed_err = Err("err")
         \\
         \\Wrap(a) := [W(a)].{
         \\    status : Wrap(a) -> [Ok(Str), Err(Str)] where [a.name : a -> Str]
@@ -9794,19 +9766,12 @@ test "W6b direct-result widening adapter re-tags into the requested row at run t
     // payload out of a payload-less `Extra`—which only running the program
     // can catch. (`Err` maps 0 to 0 and proves nothing on its own; it is here
     // so both constructors travel through the adapter.)
-    // The `closed_*` values are closed only by forwarding `seal`'s closed
-    // result, which depends on the known limitation that forwarding closes
-    // the row (design.md "Deferred: Row Subsumption"); row subsumption will
-    // require reworking this fixture.
     const source =
-        \\seal : [Ok(Str), Err(Str)] -> [Ok(Str), Err(Str)]
-        \\seal = |v| v
-        \\
         \\closed_ok : [Ok(Str), Err(Str)]
-        \\closed_ok = seal(Ok("ok"))
+        \\closed_ok = Ok("ok")
         \\
         \\closed_err : [Ok(Str), Err(Str)]
-        \\closed_err = seal(Err("bad"))
+        \\closed_err = Err("bad")
         \\
         \\Job := [Pending, Failed].{
         \\    status : Job -> [Ok(Str), Err(Str)]
@@ -9861,19 +9826,12 @@ test "W6b Try error-row widening adapter re-tags into the requested row at run t
     // sorts first, so the declared row numbers `NotFound` 0 while the requested
     // row numbers `Gone` 0 and `NotFound` 1, and a missing or misordered
     // injection reports `Gone` where the callee returned `NotFound`.
-    // The `closed_*` values are closed only by forwarding `seal`'s closed
-    // result, which depends on the known limitation that forwarding closes
-    // the row (design.md "Deferred: Row Subsumption"); row subsumption will
-    // require reworking this fixture.
     const source =
-        \\seal : Try(Str, [NotFound]) -> Try(Str, [NotFound])
-        \\seal = |v| v
-        \\
         \\closed_hit : Try(Str, [NotFound])
-        \\closed_hit = seal(Ok("hit"))
+        \\closed_hit = Ok("hit")
         \\
         \\closed_miss : Try(Str, [NotFound])
-        \\closed_miss = seal(Err(NotFound))
+        \\closed_miss = Err(NotFound)
         \\
         \\Src := [Found, Missing].{
         \\    fetch : Src -> Try(Str, [NotFound])
@@ -9935,21 +9893,14 @@ test "W6b alias-wrapped closed Try error row is adapted and re-tagged at run tim
     // while the requested row numbers `Gone` 0 and `NotFound` 1: a missing or
     // misordered injection reports `Gone` where the callee returned
     // `NotFound`.
-    // The `closed_*` values are closed only by forwarding `seal`'s closed
-    // result, which depends on the known limitation that forwarding closes
-    // the row (design.md "Deferred: Row Subsumption"); row subsumption will
-    // require reworking this fixture.
     const source =
         \\IoResult(a) : Try(a, [NotFound])
         \\
-        \\seal : IoResult(Str) -> IoResult(Str)
-        \\seal = |v| v
-        \\
         \\closed_hit : IoResult(Str)
-        \\closed_hit = seal(Ok("hit"))
+        \\closed_hit = Ok("hit")
         \\
         \\closed_miss : IoResult(Str)
-        \\closed_miss = seal(Err(NotFound))
+        \\closed_miss = Err(NotFound)
         \\
         \\Src := [Found, Missing].{
         \\    fetch : Src -> IoResult(Str)
@@ -10498,7 +10449,7 @@ fn recordFieldReadCounts(
                 seen_call = true;
                 cursor = stmt.next;
             },
-            inline .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
+            inline .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
                 cursor = stmt.next;
             },
             .expect_err,
@@ -10552,7 +10503,7 @@ test "issue 10426 record update reads spread fields before the mutation" {
     const store = &lowered.lowered.lir_result.store;
     var checked_any = false;
     for (0..store.procSpecCount()) |index| {
-        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const proc = store.getProcSpec(proc_id);
         const args = store.getLocalSpan(proc.args);
         if (GuardedList.borrowLen(args) != 1) continue;
@@ -10597,7 +10548,7 @@ fn fieldReadRetainCount(
         stack.clearRetainingCapacity();
         try stack.append(allocator, body);
         while (stack.pop()) |cursor| {
-            const seen = try visited.getOrPut(@intFromEnum(cursor));
+            const seen = try visited.getOrPut(@backingInt(cursor));
             if (seen.found_existing) continue;
             switch (store.getCFStmt(cursor)) {
                 .assign_ref => |stmt| {
@@ -10621,7 +10572,7 @@ fn fieldReadRetainCount(
                     }
                     try stack.append(allocator, stmt.next);
                 },
-                inline .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .decref, .decref_if_initialized, .free => |stmt| {
+                inline .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .decref, .decref_if_initialized, .free => |stmt| {
                     try stack.append(allocator, stmt.next);
                 },
                 .switch_stmt => |stmt| {
@@ -10692,7 +10643,7 @@ test "field takes drop the field-read retains of dying local records" {
     const store = &lowered.lowered.lir_result.store;
     var root_retained: ?usize = null;
     for (0..store.procSpecCount()) |index| {
-        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const proc = store.getProcSpec(proc_id);
         const args = store.getLocalSpan(proc.args);
         if (GuardedList.borrowLen(args) != 0) continue;
@@ -10731,7 +10682,7 @@ test "field takes cross a fall-through branch diamond" {
     const store = &lowered.lowered.lir_result.store;
     var root_retained: ?usize = null;
     for (0..store.procSpecCount()) |index| {
-        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const proc = store.getProcSpec(proc_id);
         const args = store.getLocalSpan(proc.args);
         if (GuardedList.borrowLen(args) != 0) continue;
@@ -10766,7 +10717,7 @@ test "field takes split across the arms of a branch" {
     const store = &lowered.lowered.lir_result.store;
     var root_retained: ?usize = null;
     for (0..store.procSpecCount()) |index| {
-        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const proc = store.getProcSpec(proc_id);
         const args = store.getLocalSpan(proc.args);
         if (GuardedList.borrowLen(args) != 0) continue;
@@ -10836,7 +10787,7 @@ test "field takes dismantle a Try whose caller match tag reachability folded" {
     const store = &lowered.lowered.lir_result.store;
     var main_retained: ?usize = null;
     for (0..store.procSpecCount()) |index| {
-        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const name = store.procDebugName(proc_id) orelse continue;
         if (!std.mem.eql(u8, name, "main")) continue;
         if (store.getProcSpec(proc_id).body == null) continue;
@@ -10892,7 +10843,7 @@ test "a field take assigned into a join result cell keeps a loop list unique" {
     const store = &lowered.lowered.lir_result.store;
     var main_sets: ?ListSetCounts = null;
     for (0..store.procSpecCount()) |index| {
-        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const name = store.procDebugName(proc_id) orelse continue;
         if (!std.mem.eql(u8, name, "main")) continue;
         if (store.getProcSpec(proc_id).body == null) continue;
@@ -10946,7 +10897,7 @@ test "owned variants take a helper parameter's fields at the call" {
     const store = &optimized.lowered.lir_result.store;
     var mutating_retain_free: usize = 0;
     for (0..store.procSpecCount()) |index| {
-        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const proc = store.getProcSpec(proc_id);
         if (proc.body == null) continue;
         const sets = listSetCounts(store, proc_id);
@@ -10991,12 +10942,12 @@ fn listSetCounts(store: *const lir.LirStore, proc_id: LIR.LirProcSpecId) ListSet
     var top: usize = 0;
     cursor_stack[top] = body;
     top += 1;
-    var seen = std.bit_set.ArrayBitSet(usize, 1 << 20).initEmpty();
+    var seen = std.bit_set.ArrayBitSet(usize, 1 << 20).empty;
     while (top > 0) {
         top -= 1;
         const cursor = cursor_stack[top];
-        if (seen.isSet(@intFromEnum(cursor))) continue;
-        seen.set(@intFromEnum(cursor));
+        if (seen.isSet(@backingInt(cursor))) continue;
+        seen.set(@backingInt(cursor));
         switch (store.getCFStmt(cursor)) {
             .assign_low_level => |stmt| {
                 if (stmt.op == .list_set) {
@@ -11007,7 +10958,7 @@ fn listSetCounts(store: *const lir.LirStore, proc_id: LIR.LirProcSpecId) ListSet
                     top += 1;
                 }
             },
-            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
+            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
                 if (top < cursor_stack.len) {
                     cursor_stack[top] = stmt.next;
                     top += 1;
@@ -11621,7 +11572,7 @@ test "wide loop-carried state scalarizes into flat join params" {
     var max_join_params: usize = 0;
     const proc_count = optimized.lowered.lir_result.store.getProcSpecs().len;
     for (0..proc_count) |index| {
-        const shape = try collectProcShape(allocator, &optimized.lowered, @enumFromInt(@as(u32, @intCast(index))));
+        const shape = try collectProcShape(allocator, &optimized.lowered, @fromBackingInt(@intCast(@as(u32, @intCast(index)))));
         total_incref += shape.incref_count;
         max_join_params = @max(max_join_params, shape.max_join_param_count);
     }
@@ -11814,7 +11765,7 @@ test "tail calls behind an inlined loop still become jumps" {
         try std.testing.expectEqual(@as(u64, 12_000), evaluated.value.read(u64));
         const walk_proc = blk: {
             for (0..result.store.procSpecCount()) |index| {
-                const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+                const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
                 const name = result.store.procDebugName(proc_id) orelse continue;
                 if (std.mem.eql(u8, name, "walk")) break :blk proc_id;
             }
@@ -11863,7 +11814,7 @@ test "tail-call lowering handles a source loop in both inline modes" {
         try std.testing.expectEqual(@as(u64, 12_000), evaluated.value.read(u64));
         var found_walk = false;
         for (0..result.store.procSpecCount()) |index| {
-            const proc_id: LIR.LirProcSpecId = @enumFromInt(index);
+            const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
             const name = result.store.procDebugName(proc_id) orelse continue;
             if (!std.mem.eql(u8, name, "walk")) continue;
             found_walk = true;
@@ -12114,7 +12065,7 @@ test "tail-call lowering loops a boxy self-call whose resolved ABI needs no retu
     try std.testing.expectEqual(@as(u64, 20), evaluated.value.read(u64));
     var found_walk = false;
     for (0..result.store.procSpecCount()) |index| {
-        const proc_id: LIR.LirProcSpecId = @enumFromInt(index);
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
         const name = result.store.procDebugName(proc_id) orelse continue;
         if (!std.mem.eql(u8, name, "walk")) continue;
         found_walk = true;
@@ -12304,9 +12255,13 @@ test "issue 11376: packed products survive Boxy boundaries and copy-on-write" {
     }
 }
 
-/// The format and input state every stored-parser gate below shares, ending
-/// in a blank line so a gate appends its own `parse_stored` and `main`.
-const stored_parser_format_source =
+/// A stored parser constant (`parse_stored = { Shape.parser_for(...) }`),
+/// mirroring test/cli/ParserTopLevelStoredParser.roc without its module
+/// header. This body is emitted in Phase B, behind the graph freeze; no
+/// snapshot anywhere carries lowered output, so the Monotype footprint below
+/// is the gate that the deferred body is the same body the eager restore used
+/// to emit.
+const stored_parser_gate_source =
     \\Format := [Default].{
     \\    rename_field : Format, Str -> Str
     \\    rename_field = |_, name| name
@@ -12348,16 +12303,6 @@ const stored_parser_format_source =
     \\
     \\State := [Present(Str), Done]
     \\
-    \\
-;
-
-/// A stored parser constant (`parse_stored = { Shape.parser_for(...) }`),
-/// mirroring test/cli/ParserTopLevelStoredParser.roc without its module
-/// header. Its implicitly open error row generalizes it, so it is lowered per
-/// specialization as a literal root rather than restored in Phase B; no
-/// snapshot anywhere carries lowered output, so the Monotype footprint below
-/// is its gate.
-const stored_parser_gate_source = stored_parser_format_source ++
     \\parse_stored : State -> Try({ value : { foo : Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
     \\parse_stored = {
     \\    Shape : { foo : Str }
@@ -12367,43 +12312,6 @@ const stored_parser_gate_source = stored_parser_format_source ++
     \\main : State -> Try({ value : { foo : Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
     \\main = |state| parse_stored(state)
 ;
-
-/// `stored_parser_gate_source`'s parser with no annotation, used only by a
-/// `main` that closes its error row with an exhaustive match. Nothing
-/// generalizes it (no annotation, so no implicitly opened row) and its
-/// checked type is concrete, so the module evaluates it once and every use
-/// restores the stored parser, with the generated body emitted in Phase B,
-/// behind the graph freeze.
-const stored_parser_restore_gate_source = stored_parser_format_source ++
-    \\parse_stored = {
-    \\    Shape : { foo : Str }
-    \\    Shape.parser_for(Format.Default)
-    \\}
-    \\
-    \\main : State -> Str
-    \\main = |state|
-    \\    match parse_stored(state) {
-    \\        Ok(_) => "ok"
-    \\        Err(FormatError) => "format"
-    \\        Err(MissingRequiredField(field)) => field
-    \\    }
-;
-
-/// The request eligibility checking gave a source's one callable binding root.
-fn onlyCallableBindingRootEligibility(
-    allocator: Allocator,
-    source: []const u8,
-) TestError!check.CheckedArtifact.CompileTimeRootRequestEligibility {
-    var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{});
-    defer lowered.deinit(allocator);
-    var found: ?check.CheckedArtifact.CompileTimeRootRequestEligibility = null;
-    for (lowered.resources.checked_artifact.compile_time_roots.roots) |root| {
-        if (root.kind != .callable_binding) continue;
-        if (found != null) return error.TestUnexpectedResult;
-        found = root.request_eligibility;
-    }
-    return found orelse error.TestUnexpectedResult;
-}
 
 test "stored codec restore emits the same Monotype shape from Phase B" {
     // This body's generation sits behind the graph freeze, in Phase B. No
@@ -12419,11 +12327,6 @@ test "stored codec restore emits the same Monotype shape from Phase B" {
     // `MissingRequiredField` directly, with no remaining-state binding for an
     // `invalid_value` call:
     //   fns=10 defs=11 exprs=593 locals=119 template_misses=14 nested_misses=0
-    // An annotated stored parser now generalizes its implicitly open error
-    // row and is lowered per specialization instead (see the literal-root
-    // gate below), so the gate moved to the unannotated parser that `main`
-    // closes with a match: the restore is unchanged, and `main`'s match adds
-    // exactly six expressions and one local (`field`).
     // Every count is exact, including expressions and locals. The reserve-
     // and-copy that Phase-B emission ends in is the same reserve-and-copy the
     // eager restore already performed (it too filled a reservation with a
@@ -12433,43 +12336,12 @@ test "stored codec restore emits the same Monotype shape from Phase B" {
     // fall: the eager restore keyed the callee spec as an open request, and
     // Phase-B emission removes that cause.
     const allocator = std.testing.allocator;
-    try std.testing.expectEqual(
-        check.CheckedArtifact.CompileTimeRootRequestEligibility.eligible,
-        try onlyCallableBindingRootEligibility(allocator, stored_parser_restore_gate_source),
-    );
-    try std.testing.expectEqual(@as(usize, 0), try specializedValueRootCount(allocator, stored_parser_restore_gate_source));
-    const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_restore_gate_source);
+    const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_gate_source);
     try std.testing.expectEqual(@as(usize, 10), stats.functions);
     try std.testing.expectEqual(@as(usize, 11), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 599), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 549), stats.expressions);
     try std.testing.expectEqual(@as(usize, 120), stats.locals);
     try std.testing.expect(stats.template_misses <= 14);
-    try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
-}
-
-test "a generalized stored parser's literal root emits a pinned Monotype shape" {
-    // `parse_stored`'s annotated error row is an output row, so it is
-    // implicitly open and the value generalizes (design.md "Polarity"): the
-    // module does not evaluate or restore it. A program that evaluates
-    // compile-time work lowers its one specialization (the row `main` closes)
-    // once, as the body of a zero-argument literal root that `main` reads
-    // (design.md "Specialization-Owned Top-Level Values"). Measured against
-    // plain Monotype (no literal roots, body lowered at the use: fns=8 defs=9
-    // exprs=320 locals=68 template_misses=7), the root adds exactly one
-    // definition and three expressions; the generated parser is lowered once
-    // either way. Every count is exact, including expressions and locals.
-    const allocator = std.testing.allocator;
-    try std.testing.expectEqual(
-        check.CheckedArtifact.CompileTimeRootRequestEligibility.per_specialization,
-        try onlyCallableBindingRootEligibility(allocator, stored_parser_gate_source),
-    );
-    try std.testing.expectEqual(@as(usize, 1), try specializedValueRootCount(allocator, stored_parser_gate_source));
-    const stats = try structuralJsonMonotypeStatsForSourceWithOptions(allocator, stored_parser_gate_source, .{ .literal_roots = true });
-    try std.testing.expectEqual(@as(usize, 8), stats.functions);
-    try std.testing.expectEqual(@as(usize, 10), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 323), stats.expressions);
-    try std.testing.expectEqual(@as(usize, 68), stats.locals);
-    try std.testing.expectEqual(@as(u64, 7), stats.template_misses);
     try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
 }
 
@@ -12479,7 +12351,48 @@ test "a generalized stored parser's literal root emits a pinned Monotype shape" 
 /// node"), so it has no earlier baseline: its numbers are Phase-B emission's
 /// own, pinned as a regression gate rather than as an equivalence gate. It is
 /// the case the two-phase restore exists for.
-const stored_parser_optional_gate_source = stored_parser_format_source ++
+const stored_parser_optional_gate_source =
+    \\Format := [Default].{
+    \\    rename_field : Format, Str -> Str
+    \\    rename_field = |_, name| name
+    \\
+    \\    parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError])
+    \\    parse_str = |_, state|
+    \\        match state {
+    \\            Present(value) => Ok({ value, rest: Done })
+    \\            Done => Err(FormatError)
+    \\        }
+    \\
+    \\    parse_record_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [FormatError])
+    \\    parse_record_start = |_, state| Ok(Uncounted(state))
+    \\
+    \\    parse_record_field : Format,
+    \\    Encoding.FieldName.FieldNames(_shape),
+    \\    State -> Try(
+    \\        [
+    \\            Field({ field : Encoding.FieldName(_shape), rest : State }),
+    \\            TryField({ name : Str, rest : State }),
+    \\            TryFieldCaseless({ name : Str, rest : State }),
+    \\            Continue(State),
+    \\            Done(State),
+    \\        ],
+    \\        [FormatError],
+    \\    )
+    \\    parse_record_field = |_, _, state|
+    \\        match state {
+    \\            Present(_) => Ok(TryField({ name: "foo", rest: state }))
+    \\            Done => Ok(Done(state))
+    \\        }
+    \\
+    \\    parse_record_after_field : Format, State -> Try([Continue(State), Done(State)], [FormatError])
+    \\    parse_record_after_field = |_, state| Ok(Continue(state))
+    \\
+    \\    skip_record_field : Format, State -> Try(State, [FormatError])
+    \\    skip_record_field = |_, _| Ok(Done)
+    \\}
+    \\
+    \\State := [Present(Str), Done]
+    \\
     \\parse_stored : State -> Try({ value : { foo : Str, bar ?: Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
     \\parse_stored = {
     \\    Shape : { foo : Str, bar ?: Str }
@@ -12542,60 +12455,6 @@ const stored_encoder_optional_gate_source =
     \\main = |state| encode_stored(value, state)
 ;
 
-fn specializedValueRootCount(allocator: Allocator, source: []const u8) TestError!usize {
-    var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{ .literal_roots = true });
-    defer lowered.deinit(allocator);
-    var count: usize = 0;
-    for (lowered.mono.view().literal_roots) |root| {
-        if (root.subject == .value) count += 1;
-    }
-    return count;
-}
-
-test "a generalized stored parser is a literal root of a program that evaluates compile-time work" {
-    // design.md "Specialization-Owned Top-Level Values" and "Polarity": the
-    // stored parser's annotated error row is an output row, so the
-    // annotation implicitly opens it and the value generalizes exactly as if
-    // the row were written `..`. The module cannot evaluate it; the program
-    // evaluates its one specialization (the row `main` closes) as a literal
-    // root instead of running the parser construction at runtime. Both
-    // spellings mean the same thing, so both have exactly that one root.
-    const allocator = std.testing.allocator;
-    const implicit_row = "[FormatError, MissingRequiredField(Str)])\n";
-    const explicit_row = "[FormatError, MissingRequiredField(Str), ..])\n";
-    const annotation = "parse_stored : State -> Try({ value : { foo : Str }, rest : State }, ";
-    const implicit = annotation ++ implicit_row;
-    const explicit = annotation ++ explicit_row;
-    const index = std.mem.find(u8, stored_parser_gate_source, implicit) orelse return error.TestUnexpectedResult;
-    const explicitly_open = try std.mem.concat(allocator, u8, &.{
-        stored_parser_gate_source[0..index],
-        explicit,
-        stored_parser_gate_source[index + implicit.len ..],
-    });
-    defer allocator.free(explicitly_open);
-
-    try std.testing.expectEqual(@as(usize, 1), try specializedValueRootCount(allocator, stored_parser_gate_source));
-    try std.testing.expectEqual(@as(usize, 1), try specializedValueRootCount(allocator, explicitly_open));
-}
-
-/// `stored_parser_optional_gate_source`'s parser with no annotation, closed
-/// by `main`'s exhaustive match, so it is module-evaluated and restored in
-/// Phase B exactly like `stored_parser_restore_gate_source`.
-const stored_parser_optional_restore_gate_source = stored_parser_format_source ++
-    \\parse_stored = {
-    \\    Shape : { foo : Str, bar ?: Str }
-    \\    Shape.parser_for(Format.Default)
-    \\}
-    \\
-    \\main : State -> Str
-    \\main = |state|
-    \\    match parse_stored(state) {
-    \\        Ok(_) => "ok"
-    \\        Err(FormatError) => "format"
-    \\        Err(MissingRequiredField(field)) => field
-    \\    }
-;
-
 test "stored parser restore lowers a shape with an optional field" {
     // Not an equivalence gate: this program panicked before W2b
     // ("resolved Monotype view requested for an unresolved instantiation
@@ -12606,39 +12465,14 @@ test "stored parser restore lowers a shape with an optional field" {
     // Re-measured after the 2026-09-15 rebase onto upstream's codec contract
     // machinery (exprs 669 -> 731, locals 127 -> 140), and again once a
     // missing required field always constructs `MissingRequiredField`
-    // directly (exprs 731 -> 727, locals 140 -> 138). Moved, like the gate
-    // above, to the unannotated parser `main` closes with a match, which adds
-    // exactly six expressions and one local (exprs 727 -> 733, locals
-    // 138 -> 139).
+    // directly (exprs 731 -> 727, locals 140 -> 138).
     const allocator = std.testing.allocator;
-    try std.testing.expectEqual(
-        check.CheckedArtifact.CompileTimeRootRequestEligibility.eligible,
-        try onlyCallableBindingRootEligibility(allocator, stored_parser_optional_restore_gate_source),
-    );
-    try std.testing.expectEqual(@as(usize, 0), try specializedValueRootCount(allocator, stored_parser_optional_restore_gate_source));
-    const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_optional_restore_gate_source);
+    const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_optional_gate_source);
     try std.testing.expectEqual(@as(usize, 10), stats.functions);
     try std.testing.expectEqual(@as(usize, 11), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 733), stats.expressions);
-    try std.testing.expectEqual(@as(usize, 139), stats.locals);
+    try std.testing.expectEqual(@as(usize, 679), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 138), stats.locals);
     try std.testing.expectEqual(@as(u64, 14), stats.template_misses);
-    try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
-}
-
-test "a generalized stored parser with an optional field lowers its literal root" {
-    // Like `stored_parser_gate_source`, the annotated value's implicitly open
-    // error row generalizes it, so it is not restored: the gate pins its one
-    // specialization lowered as a literal root (plain Monotype lowers the
-    // same parser at the use: fns=8 defs=9 exprs=396 locals=80
-    // template_misses=7; the root adds one definition and three expressions).
-    const allocator = std.testing.allocator;
-    try std.testing.expectEqual(@as(usize, 1), try specializedValueRootCount(allocator, stored_parser_optional_gate_source));
-    const stats = try structuralJsonMonotypeStatsForSourceWithOptions(allocator, stored_parser_optional_gate_source, .{ .literal_roots = true });
-    try std.testing.expectEqual(@as(usize, 8), stats.functions);
-    try std.testing.expectEqual(@as(usize, 10), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 399), stats.expressions);
-    try std.testing.expectEqual(@as(usize, 80), stats.locals);
-    try std.testing.expectEqual(@as(u64, 7), stats.template_misses);
     try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
 }
 
@@ -12719,13 +12553,13 @@ fn stampRowCoerceOnIdentityMatch(bodies: *check.CheckedArtifact.CheckedBodyStore
         if (match.branches.len == 0) continue;
         const branches = bodies.match_branch_pool.items[match.branches.start..][0..match.branches.len];
         const every_arm_yields_a_tag = for (branches) |branch| {
-            switch (bodies.stored_exprs.items[@intFromEnum(branch.value)].data) {
+            switch (bodies.stored_exprs.items[@backingInt(branch.value)].data) {
                 .tag, .zero_argument_tag, .nominal => {},
                 .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => break false,
             }
         } else true;
         if (!every_arm_yields_a_tag) continue;
-        const child = bodies.stored_exprs.items[@intFromEnum(match.cond)];
+        const child = bodies.stored_exprs.items[@backingInt(match.cond)];
         if (expr.diverges != child.diverges or expr.diverges_without_inline_expects != child.diverges_without_inline_expects) {
             @panic("row coercion stamp target's stored divergence differs from its scrutinee's");
         }
@@ -13043,7 +12877,7 @@ fn procStmts(
     try work.append(allocator, store.getProcSpec(proc).body orelse return error.MissingProcSpec);
     while (work.pop()) |stmt_id| {
         if ((try seen.getOrPut(stmt_id)).found_existing) continue;
-        try lir.BodyClone.appendSuccessorsWithAllocator(store, &work, stmt_id, allocator);
+        try lir.BodyClone.appendSuccessors(store, &work, stmt_id, allocator);
         try out.append(allocator, stmt_id);
     }
     return out.toOwnedSlice(allocator);
@@ -13137,7 +12971,7 @@ test "provenance: ARC RC statements state their subject, reason, and deciding lo
                     try std.testing.expect(store.stmtLoc(stmt_id).hasLocation());
                     decrefs += 1;
                 },
-                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => try std.testing.expect(!kind.isArcInserted()),
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => try std.testing.expect(!kind.isArcInserted()),
             }
         }
     }

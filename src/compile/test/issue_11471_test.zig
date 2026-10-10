@@ -7,7 +7,7 @@ const harness = @import("lower_to_lir_harness.zig");
 fn expectTransparentAliasesErased(prepared: *const lir.CheckedPipeline.PreparedMonotype) harness.LowerToLirHarnessError!void {
     const types = &prepared.program.types;
     for (0..types.typeCount()) |index| {
-        const content = types.get(@enumFromInt(index));
+        const content = types.get(@fromBackingInt(@intCast(index)));
         if (content == .named) try std.testing.expect(content.named.kind != .alias);
     }
 }

@@ -186,7 +186,7 @@ pub const UseOrder = struct {
         }
 
         fn stmtIndex(self: *const Scratch, raw: u32) u32 {
-            return if (self.domain) |domain| domain.stmts.get(@enumFromInt(raw)).? else raw;
+            return if (self.domain) |domain| domain.stmts.get(@fromBackingInt(@intCast(raw))).? else raw;
         }
 
         fn initTablesInDomain(allocator: Allocator, store: *const LirStore, marks: Marks, domain: ?*Domain) Allocator.Error!Scratch {
@@ -254,7 +254,7 @@ pub const UseOrder = struct {
 
         fn keyIndex(self: *const RowIndex, raw: u32) ?u32 {
             return if (self.domain) |domain|
-                if (self.statement_keys) domain.stmts.get(@enumFromInt(raw)) else domain.locals.get(@enumFromInt(raw))
+                if (self.statement_keys) domain.stmts.get(@fromBackingInt(@intCast(raw))) else domain.locals.get(@fromBackingInt(@intCast(raw)))
             else
                 raw;
         }
@@ -282,7 +282,7 @@ pub const UseOrder = struct {
         stmts: []u32,
 
         pub fn row(self: *const Rows, local: LIR.LocalId) []const u32 {
-            return self.rowAt(@intFromEnum(local));
+            return self.rowAt(@backingInt(local));
         }
 
         pub fn rowAt(self: *const Rows, key: u32) []const u32 {
@@ -366,7 +366,7 @@ pub const UseOrder = struct {
             errdefer for (member_list.items) |stmt| tables.seen.unset(tables.stmtIndex(stmt));
             for (lists) |list| {
                 for (list) |stmt_id| {
-                    const index = @intFromEnum(stmt_id);
+                    const index = @backingInt(stmt_id);
                     if (tables.seen.isSet(tables.stmtIndex(index))) continue;
                     try member_list.append(allocator, index);
                     tables.seen.set(tables.stmtIndex(index));
@@ -386,13 +386,13 @@ pub const UseOrder = struct {
             joins.clearRetainingCapacity();
             for (list) |stmt_id| {
                 const stmt = store.getCFStmt(stmt_id);
-                if (stmt == .join) try joins.put(stmt.join.id, @intFromEnum(stmt_id));
+                if (stmt == .join) try joins.put(stmt.join.id, @backingInt(stmt_id));
             }
             for (list) |stmt_id| {
                 const stmt = store.getCFStmt(stmt_id);
                 if (stmt != .jump) continue;
                 if (joins.get(stmt.jump.target)) |join_stmt| {
-                    tables.jump_join[tables.stmtIndex(@intFromEnum(stmt_id))] = join_stmt;
+                    tables.jump_join[tables.stmtIndex(@backingInt(stmt_id))] = join_stmt;
                 }
             }
         }
@@ -447,7 +447,7 @@ pub const UseOrder = struct {
     /// join parameter) and no other edge reaches the successor.
     fn blockContinuation(store: *const LirStore, tables: *const Scratch, preds: *const Rows, stmt: u32) ?u32 {
         if (tables.unresolved.isSet(tables.stmtIndex(stmt))) return null;
-        if (store.getCFStmt(@enumFromInt(stmt)) == .jump) return null;
+        if (store.getCFStmt(@fromBackingInt(@intCast(stmt))) == .jump) return null;
         const Single = struct {
             count: u32 = 0,
             succ: u32 = no_local,
@@ -519,6 +519,8 @@ pub const UseOrder = struct {
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
             .boxy_tag_match,
@@ -608,7 +610,7 @@ pub const UseOrder = struct {
     }
 
     fn localKey(local: LIR.LocalId) u32 {
-        return @intFromEnum(local);
+        return @backingInt(local);
     }
 
     fn stmtKey(stmt: u32) u32 {
@@ -620,7 +622,7 @@ pub const UseOrder = struct {
         var builder = Builder{ .allocator = allocator, .index = index };
         errdefer builder.abandon();
         for (members) |raw| {
-            const stmt = store.getCFStmt(@enumFromInt(raw));
+            const stmt = store.getCFStmt(@fromBackingInt(@intCast(raw)));
             if (!rowsInclude(stmt, kind)) continue;
             switch (kind) {
                 .reads => body_clone.forEachStmtRead(store, stmt, &builder, Builder.count),
@@ -629,7 +631,7 @@ pub const UseOrder = struct {
         }
         try builder.place();
         for (members) |raw| {
-            const stmt = store.getCFStmt(@enumFromInt(raw));
+            const stmt = store.getCFStmt(@fromBackingInt(@intCast(raw)));
             if (!rowsInclude(stmt, kind)) continue;
             builder.stmt = raw;
             switch (kind) {
@@ -678,10 +680,10 @@ pub const UseOrder = struct {
         defer seen.deinit();
         var stack = std.ArrayList(LIR.CFStmtId).empty;
         defer stack.deinit(allocator);
-        const first: usize = if (only_proc) |id| @intFromEnum(id) else 0;
+        const first: usize = if (only_proc) |id| @backingInt(id) else 0;
         const end = if (only_proc != null) first + 1 else store.procSpecCount();
         for (first..end) |proc_index| {
-            const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+            const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
             const body = proc.body orelse continue;
             var list = std.ArrayList(LIR.CFStmtId).empty;
             errdefer list.deinit(allocator);
@@ -742,11 +744,11 @@ pub const UseOrder = struct {
     /// before `local` is redefined. Marks from the local's reads once and
     /// answers every later query about the same local from those marks.
     pub fn usesAfter(self: *UseOrder, from: u32, local: LIR.LocalId) Allocator.Error!bool {
-        const key: UseQuery = .{ .stmt = @enumFromInt(from), .local = local };
+        const key: UseQuery = .{ .stmt = @fromBackingInt(@intCast(from)), .local = local };
         if (self.use_answers) |answers| if (answers.get(key)) |answer| return answer;
-        if (self.marked_local != @intFromEnum(local) or !self.marked_uses) {
+        if (self.marked_local != @backingInt(local) or !self.marked_uses) {
             try self.markFrom(local, self.topology.reads_of.row(local));
-            self.marked_local = @intFromEnum(local);
+            self.marked_local = @backingInt(local);
             self.marked_uses = true;
         }
         const answer = self.after(from, local);
@@ -758,7 +760,7 @@ pub const UseOrder = struct {
     /// `local` is redefined, for `after` queries about that local.
     pub fn markAmong(self: *UseOrder, local: LIR.LocalId, among: []const u32) Allocator.Error!void {
         try self.markFrom(local, among);
-        self.marked_local = @intFromEnum(local);
+        self.marked_local = @backingInt(local);
         self.marked_uses = false;
     }
 
@@ -891,12 +893,12 @@ pub const UseOrder = struct {
     /// A jump into a join that declares `local` as a parameter redefines
     /// it, so that edge carries no use of the previous value.
     fn cutEdge(self: *const UseOrder, from: u32, to: u32, local: LIR.LocalId) bool {
-        const node = self.topology.store.getCFStmt(@enumFromInt(from));
+        const node = self.topology.store.getCFStmt(@fromBackingInt(@intCast(from)));
         if (node != .jump) return false;
         const join_stmt = self.topology.jump_join[self.topology.tables.stmtIndex(from)];
         if (join_stmt == no_local) return false;
-        const join = self.topology.store.getCFStmt(@enumFromInt(join_stmt)).join;
-        if (@intFromEnum(join.body) != to) return false;
+        const join = self.topology.store.getCFStmt(@fromBackingInt(@intCast(join_stmt))).join;
+        if (@backingInt(join.body) != to) return false;
         const params = self.topology.store.getLocalSpan(join.params);
         for (0..GuardedList.borrowLen(params)) |index| {
             if (GuardedList.at(params, index) == local) return true;
@@ -907,7 +909,7 @@ pub const UseOrder = struct {
     /// Calls `note(ctx, successor)` for each control-flow successor of
     /// `stmt`; returns true when an edge cannot be resolved.
     fn forEachSuccessor(store: *const LirStore, tables: *const Scratch, stmt: u32, ctx: anytype, comptime note: fn (@TypeOf(ctx), u32) void) bool {
-        switch (store.getCFStmt(@enumFromInt(stmt))) {
+        switch (store.getCFStmt(@fromBackingInt(@intCast(stmt)))) {
             inline .init_uninitialized,
             .assign_ref,
             .assign_literal,
@@ -922,6 +924,8 @@ pub const UseOrder = struct {
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
             .assign_call_dict,
@@ -939,41 +943,37 @@ pub const UseOrder = struct {
             .decref,
             .decref_if_initialized,
             .free,
-            => |node| note(ctx, @intFromEnum(node.next)),
+            => |node| note(ctx, @backingInt(node.next)),
             .switch_stmt => |node| {
-                if (node.continuation) |continuation| note(ctx, @intFromEnum(continuation));
-                note(ctx, @intFromEnum(node.default_branch));
+                if (node.continuation) |continuation| note(ctx, @backingInt(continuation));
+                note(ctx, @backingInt(node.default_branch));
                 const branches = store.getCFSwitchBranches(node.branches);
                 for (0..GuardedList.borrowLen(branches)) |index| {
-                    note(ctx, @intFromEnum(GuardedList.at(branches, index).body));
+                    note(ctx, @backingInt(GuardedList.at(branches, index).body));
                 }
             },
             .switch_initialized_payload => |node| {
-                note(ctx, @intFromEnum(node.initialized_branch));
-                note(ctx, @intFromEnum(node.uninitialized_branch));
+                note(ctx, @backingInt(node.initialized_branch));
+                note(ctx, @backingInt(node.uninitialized_branch));
             },
-            .str_match => |node| {
-                note(ctx, @intFromEnum(node.on_match));
-                note(ctx, @intFromEnum(node.on_miss));
-            },
-            .boxy_tag_match => |node| {
-                note(ctx, @intFromEnum(node.on_match));
-                note(ctx, @intFromEnum(node.on_miss));
+            inline .str_match, .boxy_tag_match => |node| {
+                note(ctx, @backingInt(node.on_match));
+                note(ctx, @backingInt(node.on_miss));
             },
             .str_match_set => |node| {
                 const arms = store.getStrMatchArms(node.arms);
                 for (0..GuardedList.borrowLen(arms)) |index| {
-                    note(ctx, @intFromEnum(GuardedList.at(arms, index).on_match));
+                    note(ctx, @backingInt(GuardedList.at(arms, index).on_match));
                 }
-                note(ctx, @intFromEnum(node.on_miss));
+                note(ctx, @backingInt(node.on_miss));
             },
             // A join's body runs only when jumped to; declaring the join
             // continues with its remainder.
-            .join => |node| note(ctx, @intFromEnum(node.remainder)),
+            .join => |node| note(ctx, @backingInt(node.remainder)),
             .jump => {
                 const join_stmt = tables.jump_join[tables.stmtIndex(stmt)];
                 if (join_stmt == no_local) return true;
-                note(ctx, @intFromEnum(store.getCFStmt(@enumFromInt(join_stmt)).join.body));
+                note(ctx, @backingInt(store.getCFStmt(@fromBackingInt(@intCast(join_stmt))).join.body));
             },
             .loop_continue, .loop_break => return true,
             .runtime_error,
@@ -1040,6 +1040,8 @@ pub fn appendStructuralSuccessors(
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_hash,
         .assign_boxy_tag,
         .assign_boxy_tag_payload,
         .assign_call_dict,
@@ -1100,11 +1102,11 @@ test "use order compact procedure domain matches dense queries and excludes unre
     try testing.expectEqual(@as(usize, 2), compact.topology.preds.index.len.len);
     for ([_]LIR.CFStmtId{ alias, done }) |stmt| {
         for ([_]LIR.LocalId{ input, view }) |local| {
-            try testing.expectEqual(try dense.usesAfter(@intFromEnum(stmt), local), try compact.usesAfter(@intFromEnum(stmt), local));
+            try testing.expectEqual(try dense.usesAfter(@backingInt(stmt), local), try compact.usesAfter(@backingInt(stmt), local));
         }
     }
-    try testing.expect(try compact.usesAfter(@intFromEnum(alias), view));
-    try testing.expect(!try compact.usesAfter(@intFromEnum(alias), input));
+    try testing.expect(try compact.usesAfter(@backingInt(alias), view));
+    try testing.expect(!try compact.usesAfter(@backingInt(alias), input));
 
     // Compact domains own both their remapping and topology storage. Every
     // partial construction and query must release both after allocation failure.
@@ -1112,7 +1114,7 @@ test "use order compact procedure domain matches dense queries and excludes unre
         fn run(probe_allocator: Allocator, source: *const LirStore, id: LIR.LirProcSpecId, stmt: LIR.CFStmtId, local: LIR.LocalId) Allocator.Error!void {
             var order = try UseOrder.initFromStore(probe_allocator, source, id);
             defer order.deinit();
-            _ = try order.usesAfter(@intFromEnum(stmt), local);
+            _ = try order.usesAfter(@backingInt(stmt), local);
         }
     };
     try testing.checkAllAllocationFailures(allocator, Probe.run, .{ &store, proc, alias, view });
@@ -1161,7 +1163,7 @@ test "use order block queries agree with a statement-level search on random bodi
                     .default_branch = default_branch,
                 } }, .test_fixture);
             }
-            const id: LIR.JoinPointId = @enumFromInt(self.next_join);
+            const id: LIR.JoinPointId = @fromBackingInt(@intCast(self.next_join));
             self.next_join += 1;
             try self.scope.append(testing.allocator, id);
             defer _ = self.scope.pop();
@@ -1199,18 +1201,18 @@ test "use order block queries agree with a statement-level search on random bodi
         var order = try UseOrder.initFromStore(allocator, &store, proc);
         defer order.deinit();
         members.clearRetainingCapacity();
-        for (0..store.cfStmtCount()) |index| try members.append(allocator, @enumFromInt(@as(u32, @intCast(index))));
+        for (0..store.cfStmtCount()) |index| try members.append(allocator, @fromBackingInt(@intCast(@as(u32, @intCast(index)))));
         for (gen.locals) |local| {
             for (members.items) |stmt| {
-                const expected = try referenceAfter(&order, &visited, &stack, @intFromEnum(stmt), local, null);
-                try testing.expectEqual(expected, try order.usesAfter(@intFromEnum(stmt), local));
+                const expected = try referenceAfter(&order, &visited, &stack, @backingInt(stmt), local, null);
+                try testing.expectEqual(expected, try order.usesAfter(@backingInt(stmt), local));
             }
             // An explicit statement set marks the same way as a local's reads.
-            const among = [_]u32{ @intFromEnum(members.items[0]), @intFromEnum(members.items[members.items.len / 2]) };
+            const among = [_]u32{ @backingInt(members.items[0]), @backingInt(members.items[members.items.len / 2]) };
             try order.markAmong(local, &among);
             for (members.items) |stmt| {
-                const expected = try referenceAfter(&order, &visited, &stack, @intFromEnum(stmt), local, &among);
-                try testing.expectEqual(expected, order.after(@intFromEnum(stmt), local));
+                const expected = try referenceAfter(&order, &visited, &stack, @backingInt(stmt), local, &among);
+                try testing.expectEqual(expected, order.after(@backingInt(stmt), local));
             }
         }
     }

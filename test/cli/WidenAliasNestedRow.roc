@@ -15,15 +15,8 @@ Statuses : List([Ok(Str), Err(Str)])
 describe : a -> List([Ok(Str), Err(Str), Extra]) where [a.statuses : a -> Statuses]
 describe = |x| x.statuses()
 
-# `seal` forwards its closed input, which closes its output row, and so the
-# row of every value built from it (design.md "Deferred: Row Subsumption").
-# This depends on that known limitation (forwarding closes the row): once
-# row subsumption lands, this fixture must close its impl row another way.
-seal : Statuses -> Statuses
-seal = |v| v
-
 closed_statuses : Statuses
-closed_statuses = seal([Ok("cv")])
+closed_statuses = [Ok("cv")]
 
 Job := [Pending].{
     statuses : Job -> Statuses

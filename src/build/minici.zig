@@ -4,6 +4,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const target = @import("roc_target");
+const modules = @import("modules.zig");
 
 const out_dir = "zig-out/minici";
 const raw_dir = out_dir ++ "/raw";
@@ -21,6 +22,16 @@ const cpu_limit_env = "MINICI_MAX_CPUS";
 /// middle) keeps the failure actionable without a re-run.
 const failure_log_head_bytes: usize = 12 * 1024;
 const failure_log_tail_bytes: usize = 4 * 1024;
+
+/// Installed by `build-ci`. See `restampBuildCache`.
+const restamp_exe = "zig-out/bin/restamp-zig-cache" ++ builtin.target.exeFileExt();
+const restamp_log = logs_dir ++ "/restamp-zig-cache.txt";
+
+/// Exit status when every phase passed but the cache-reuse canary did not (see
+/// `CacheReuseFailure`). 1 means a phase failed and 2 means bad arguments, so
+/// this status says "the checks and tests are fine; the run compiled work it
+/// should have reused".
+const cache_reuse_exit_code: u8 = 3;
 
 const JobKind = enum {
     single,
@@ -49,6 +60,19 @@ const Job = struct {
     args: []const []const u8 = &.{},
     skip_reason: ?[]const u8 = null,
     placement: Placement = .every_host,
+    /// Compile steps this job is expected to build itself instead of reusing
+    /// them from `build-ci`, each named exactly as `zig build --summary all`
+    /// prints it (for example `compile obj foo debug x86_64-linux-musl`). Any
+    /// other compile step that runs during the job fails the cache-reuse
+    /// canary (see `cacheReuseFailure`). Empty by default: an exception is
+    /// stated here, in the table, and never inferred from a job's output.
+    expected_compiles: []const []const u8 = &.{},
+    /// `zig build` options for this job alone, for example
+    /// `-Doptimize=ReleaseSafe`. Options select a build configuration, and
+    /// `build-ci` built only the default one, so a job with options of its own
+    /// compiles its own outputs: the canary measures it without restricting
+    /// it (see `CommandResult.own_configuration`).
+    build_args: []const []const u8 = &.{},
 };
 
 /// A group of CI jobs that together run each MiniCI job exactly once per host
@@ -108,10 +132,11 @@ const shards = [_]Shard{
     .{ .name = "linux-eval", .host = .linux, .lane = .primary, .selection = .{ .from = "run-test-eval", .to = "run-test-eval" } },
     .{ .name = "linux-simd", .host = .linux, .lane = .primary, .selection = .{ .from = "run-test-simd-differential", .to = "run-test-eval-host-effects" } },
     .{ .name = "linux-harness", .host = .linux, .lane = .primary, .selection = .{ .after = "run-test-eval-host-effects" } },
-    .{ .name = "macos-core", .host = .macos, .lane = .secondary, .selection = .{ .to = "run-test-eval" } },
+    .{ .name = "macos-core", .host = .macos, .lane = .secondary, .selection = .{ .before = "run-test-eval" } },
+    .{ .name = "macos-eval", .host = .macos, .lane = .secondary, .selection = .{ .from = "run-test-eval", .to = "run-test-eval" } },
     .{ .name = "macos-harness", .host = .macos, .lane = .secondary, .selection = .{ .after = "run-test-eval" } },
-    .{ .name = "windows-core", .host = .windows, .lane = .secondary, .selection = .{ .to = "run-test-zig-module-roc_target" } },
-    .{ .name = "windows-zig", .host = .windows, .lane = .secondary, .selection = .{ .after = "run-test-zig-module-roc_target", .before = "run-test-eval" } },
+    .{ .name = "windows-core", .host = .windows, .lane = .secondary, .selection = .{ .to = last_module_test_job } },
+    .{ .name = "windows-zig", .host = .windows, .lane = .secondary, .selection = .{ .after = last_module_test_job, .before = "run-test-eval" } },
     .{ .name = "windows-eval", .host = .windows, .lane = .secondary, .selection = .{ .from = "run-test-eval", .to = "run-test-eval" } },
     .{ .name = "windows-simd", .host = .windows, .lane = .secondary, .selection = .{ .from = "run-test-simd-differential", .to = "run-test-eval-host-effects" } },
     .{ .name = "windows-harness", .host = .windows, .lane = .secondary, .selection = .{ .after = "run-test-eval-host-effects" } },
@@ -157,10 +182,33 @@ const ParsedArgs = struct {
     verify_workflow: ?[]const u8 = null,
 };
 
+/// The `run-test-zig-module-<name>` jobs, in `ModuleType` order. The module
+/// inventory in `modules.zig` says which modules have such a step and whether
+/// MiniCI runs it, so a new module's tests reach MiniCI without an edit here.
+const module_test_jobs = module_test_jobs: {
+    var list: []const Job = &.{};
+    for (std.enums.values(modules.ModuleType)) |module_type| {
+        const name = "run-test-zig-module-" ++ @tagName(module_type);
+        switch (module_type.info().tests) {
+            .unit => |unit| if (unit.minici) {
+                list = list ++ [_]Job{.{ .name = name }};
+            },
+            .harness => list = list ++ [_]Job{.{ .name = name, .kind = .harness }},
+            .no_tests => {},
+        }
+    }
+    break :module_test_jobs list[0..list.len].*;
+};
+
+/// The Windows lanes split right after the module tests.
+const last_module_test_job = module_test_jobs[module_test_jobs.len - 1].name;
+
 const jobs = [_]Job{
-    // MiniCI trusts `build.zig` to keep build work behind `build-ci`. Keep this
-    // list to leaf `run-*` steps. Do not add aliases or aggregate steps that
-    // hide useful reporting boundaries.
+    // `build.zig` keeps build work behind `build-ci`, and MiniCI checks it: a
+    // job that runs a compile step it does not list in `expected_compiles`
+    // fails the cache-reuse canary (see `cacheReuseFailure`). Keep this list to
+    // leaf `run-*` steps. Do not add aliases or aggregate steps that hide
+    // useful reporting boundaries.
     //
     // A new job defaults to `.every_host`. Mark it `.source` only when it reads
     // nothing but tracked sources, and `.primary_host` only when its result
@@ -175,51 +223,28 @@ const jobs = [_]Job{
     .{ .name = "run-check-unused-suppression", .placement = .source },
     .{ .name = "run-check-semantic-audit", .placement = .source },
     .{ .name = "run-check-postcheck-architecture", .placement = .source },
-    .{ .name = "run-check-wasm-builtin-routing", .placement = .source },
     .{ .name = "run-check-panic", .placement = .source },
     .{ .name = "run-check-cli-global-stdio", .placement = .source },
     .{ .name = "run-check-test-wiring" },
     .{ .name = "run-check-builtin-format", .placement = .primary_host },
     .{ .name = "run-check-glue-abi" },
-    .{ .name = "run-check-simd-codegen" },
-    .{ .name = "run-check-baseline-codegen" },
+    // These three scripts verify properties of emitted code with Linux-only
+    // tools and exit at once on any other host, where running them cost a
+    // `zig build` start-up each for nothing.
+    .{ .name = "run-check-simd-codegen", .placement = .primary_host },
+    .{ .name = "run-check-baseline-codegen", .placement = .primary_host },
     .{ .name = "run-check-match-extension-codegen" },
-    .{ .name = "run-check-str-eq-same-allocation" },
+    .{ .name = "run-check-str-eq-same-allocation", .placement = .primary_host },
     .{ .name = "run-check-snapshots" },
+    // Builds its own ReleaseSafe shim: the archive it checks is the one a
+    // release ships, and everything `build-ci` builds is Debug.
+    .{
+        .name = "run-check-machine-code-shim-archive",
+        .placement = .primary_host,
+        .build_args = &.{"-Doptimize=ReleaseSafe"},
+    },
     .{ .name = "run-check-test-asset-coverage", .placement = .source },
-    .{ .name = "run-test-zig-module-collections" },
-    .{ .name = "run-test-zig-module-base" },
-    .{ .name = "run-test-zig-module-types" },
-    .{ .name = "run-test-zig-module-builtins" },
-    .{ .name = "run-test-zig-module-compile" },
-    .{ .name = "run-test-zig-module-reporting" },
-    .{ .name = "run-test-zig-module-parse" },
-    .{ .name = "run-test-zig-module-can" },
-    .{ .name = "run-test-zig-module-check" },
-    .{ .name = "run-test-zig-module-ctx" },
-    .{ .name = "run-test-zig-module-eval" },
-    .{ .name = "run-test-zig-module-layout" },
-    .{ .name = "run-test-zig-module-values" },
-    .{ .name = "run-test-zig-module-ipc" },
-    .{ .name = "run-test-zig-module-fmt" },
-    .{ .name = "run-test-zig-module-watch" },
-    .{ .name = "run-test-zig-module-bundle" },
-    .{ .name = "run-test-zig-module-unbundle" },
-    .{ .name = "run-test-zig-module-base58" },
-    .{ .name = "run-test-zig-module-lsp" },
-    .{ .name = "run-test-zig-module-lsp_unit" },
-    .{ .name = "run-test-zig-module-lsp_integration", .kind = .harness },
-    .{ .name = "run-test-zig-module-backend" },
-    .{ .name = "run-test-zig-module-lir_core" },
-    .{ .name = "run-test-zig-module-postcheck" },
-    .{ .name = "run-test-zig-module-lir" },
-    .{ .name = "run-test-zig-module-symbol" },
-    .{ .name = "run-test-zig-module-sljmp" },
-    .{ .name = "run-test-zig-module-echo_platform" },
-    .{ .name = "run-test-zig-module-docs" },
-    .{ .name = "run-test-zig-module-host_alloc" },
-    .{ .name = "run-test-zig-module-bump" },
-    .{ .name = "run-test-zig-module-roc_target" },
+} ++ module_test_jobs ++ [_]Job{
     .{ .name = "run-test-zig-snapshot-tool" },
     .{ .name = "run-test-zig-builtin-doc" },
     .{ .name = "run-test-zig-cli-main" },
@@ -231,8 +256,26 @@ const jobs = [_]Job{
     .{ .name = "run-test-zig-trmc-lir" },
     .{ .name = "run-test-zig-build-helpers" },
     .{ .name = "run-test-zig-backend-llvm" },
-    .{ .name = "run-test-eval", .kind = .harness, .args = &.{ "--timeout", "120000" } },
+    .{
+        .name = "run-test-eval",
+        .kind = .harness,
+        // Each eval process also spawns compiler workers. Avoid overlapping
+        // their committed thread stacks on the Windows CI runner (#12116).
+        .args = if (builtin.os.tag == .windows)
+            &.{ "--timeout", "120000", "--threads", "1" }
+        else
+            &.{ "--timeout", "120000" },
+    },
     .{ .name = "run-test-simd-differential", .kind = .harness },
+    // `run-test-eval` leaves LLVM out for speed. This focused run keeps the
+    // exact-bit float contract on every host without it.
+    .{ .name = "run-test-eval-llvm-float-bits", .kind = .harness },
+    // The modules these load are WebAssembly, so one host is enough.
+    .{ .name = "run-test-repl-wasm", .placement = .primary_host },
+    .{ .name = "run-test-echo-wasm", .placement = .primary_host },
+    // www.roc-lang.org refuses an echo.wasm over Cloudflare's 25 MiB asset
+    // limit; this catches growth before the website's nightly bump does.
+    .{ .name = "run-check-echo-wasm-size", .placement = .primary_host },
     .{ .name = "run-test-eval-host-effects", .kind = .harness },
     .{ .name = "run-test-playground", .kind = .harness },
     .{ .name = "run-test-cli", .kind = .harness },
@@ -363,14 +406,15 @@ fn requireSha256Hardware() void {
 
 fn aarch64HasSha2() bool {
     if (builtin.cpu.arch != .aarch64) return false;
-    return switch (target.classifyOs(builtin.os.tag)) {
+    // Zig 0.17 declares `std.elf.AT` per OS, so only Linux may name HWCAP.
+    if (builtin.os.tag == .linux) {
         // HWCAP_SHA2 is bit 6 of AT_HWCAP on aarch64 Linux.
-        .linux => (std.os.linux.getauxval(std.elf.AT_HWCAP) & (1 << 6)) != 0,
-        // Every Apple Silicon CPU has the crypto extension, and Zig's macOS
-        // aarch64 baseline (apple_m1) already assumes it. Other aarch64 hosts
-        // trust the build target, which also requires `sha2`.
-        .macos, .windows, .freebsd, .openbsd, .netbsd, .other => true,
-    };
+        return (std.os.linux.getauxval(std.elf.AT.HWCAP) & (1 << 6)) != 0;
+    }
+    // Every Apple Silicon CPU has the crypto extension, and Zig's macOS
+    // aarch64 baseline (apple_m1) already assumes it. Other aarch64 hosts
+    // trust the build target, which also requires `sha2`.
+    return true;
 }
 
 fn parseMiniArgs(allocator: std.mem.Allocator, args: []const []const u8) !ParsedArgs {
@@ -567,6 +611,330 @@ fn printSelectionError(selection: Selection, err: SelectionError) void {
     }
 }
 
+/// What `zig build --summary all` prints in front of its step counts.
+const build_summary_marker = "Build Summary: ";
+
+/// Units Zig prints after a step's duration.
+const duration_units = [_][]const u8{ "ns", "us", "ms", "s", "m" };
+
+/// Units Zig prints after a step's peak RSS.
+const max_rss_units = [_][]const u8{ "B", "K", "M", "G" };
+
+/// What a step line of a `zig build --summary all` tree says happened to the
+/// step. The spellings are the ones Zig's build runner writes (`printTreeStep`,
+/// `printStepStatus` and `printStepFailure` in `lib/compiler/Maker.zig`; Zig
+/// 0.16 wrote the same ones from `build_runner.zig`, without `transitive skip`).
+const StepState = enum {
+    /// ` cached`: the step's result came from the cache.
+    cached,
+    /// ` success`, or a test count with no failure in it: the step ran.
+    ran,
+    /// ` N errors`, ` failure`, ` w`, or a test count with a failure in it: the
+    /// step ran and failed.
+    failed,
+    /// ` transitive failure`, ` transitive skip`, ` skipped`, or ` skipped (not
+    /// enough memory) ...`: the step did not run.
+    not_run,
+    /// ` (reused)` or ` (+N more reused dependencies)`: the tree reaches a step
+    /// it has already printed. The step's state is on its first line.
+    repeated,
+};
+
+/// `text` without the ASCII digits it ends with, or null when it ends with none.
+fn cutTrailingDigits(text: []const u8) ?[]const u8 {
+    var end = text.len;
+    while (end > 0 and std.ascii.isDigit(text[end - 1])) end -= 1;
+    return if (end == text.len) null else text[0..end];
+}
+
+/// `text` without a trailing `<before><digits><after>`, or null when it does
+/// not end with one. Cutting `" MaxRSS:"` and `"M"` from `x cached 2s
+/// MaxRSS:19M` leaves `x cached 2s`.
+fn cutNumber(text: []const u8, before: []const u8, after: []const u8) ?[]const u8 {
+    const without_after = std.mem.cutSuffix(u8, text, after) orelse return null;
+    const without_digits = cutTrailingDigits(without_after) orelse return null;
+    return std.mem.cutSuffix(u8, without_digits, before);
+}
+
+/// `text` without a trailing `<before><digits><unit>` for one of `units`, or
+/// `text` itself when it ends with none: Zig prints a step's duration and peak
+/// RSS only when it has them.
+fn cutOptionalMeasure(text: []const u8, before: []const u8, units: []const []const u8) []const u8 {
+    for (units) |unit| {
+        if (cutNumber(text, before, unit)) |rest| return rest;
+    }
+    return text;
+}
+
+/// A test count split off the end of a step line.
+const TestCount = struct {
+    /// The step line without the count.
+    name: []const u8,
+    /// Whether the count reports a failing, crashing, timed-out or leaking
+    /// test, or logged errors. Zig prints those parts only when non-zero.
+    failed: bool,
+};
+
+/// Splits a trailing test count off `text`, for example ` 158 pass, 1 skip (159
+/// total)` or ` 793 pass, 1 fail (794 total); 2 leaks`. Null when `text` does
+/// not end with one.
+fn cutTestCount(text: []const u8) ?TestCount {
+    var rest = text;
+    var failed = false;
+    for ([_][]const u8{ " error logs", " leaks" }) |what| {
+        if (cutNumber(rest, "; ", what)) |cut| {
+            rest = cut;
+            failed = true;
+        }
+    }
+    rest = cutNumber(rest, " (", " total)") orelse return null;
+    for ([_][]const u8{ " timeout", " crash", " fail" }) |what| {
+        if (cutNumber(rest, ", ", what)) |cut| {
+            rest = cut;
+            failed = true;
+        }
+    }
+    if (cutNumber(rest, ", ", " skip")) |cut| rest = cut;
+    const name = cutNumber(rest, " ", " pass") orelse return null;
+    return .{ .name = name, .failed = failed };
+}
+
+/// One line of a `zig build --summary all` tree: a step and what happened to it.
+const SummaryStep = struct {
+    name: []const u8,
+    state: StepState,
+
+    /// Reads one tree line. Zig prints the tree drawing, the step's name and
+    /// then its state, and a step name is free text, so the state is matched
+    /// from the end of the line and whatever precedes it is the name. Null
+    /// when the line is not one Zig prints; the caller reports that rather
+    /// than guessing a state.
+    fn parse(line: []const u8) ?SummaryStep {
+        // With `--color off` Zig draws one `|  ` or three spaces per ancestor
+        // below the root, then `+- `. A root step has no drawing.
+        var text = line;
+        while (std.mem.cutPrefix(u8, text, "|  ") orelse std.mem.cutPrefix(u8, text, "   ")) |cut| text = cut;
+        if (std.mem.cutPrefix(u8, text, "+- ")) |cut| {
+            text = cut;
+        } else if (text.len != line.len) {
+            return null;
+        }
+
+        // The tree reached a step it has already printed.
+        if (std.mem.cutSuffix(u8, text, " (reused)")) |name| return .{ .name = name, .state = .repeated };
+        if (cutNumber(text, " (+", " more reused dependencies)")) |name| return .{ .name = name, .state = .repeated };
+
+        // A step that did not run.
+        for ([_][]const u8{ " transitive failure", " transitive skip", " skipped" }) |spelling| {
+            if (std.mem.cutSuffix(u8, text, spelling)) |name| return .{ .name = name, .state = .not_run };
+        }
+        if (cutNumber(text, " exceeded runner limit (", ")")) |rest| {
+            if (cutNumber(rest, " skipped (not enough memory) upper bound of ", "")) |name| {
+                return .{ .name = name, .state = .not_run };
+            }
+        }
+
+        // A step that ran and failed. ` transitive failure` is matched above,
+        // and ` w` is how Zig 0.16 and 0.17 spell "failed with only stderr".
+        if (cutNumber(text, " ", " errors")) |name| return .{ .name = name, .state = .failed };
+        for ([_][]const u8{ " failure", " w" }) |spelling| {
+            if (std.mem.cutSuffix(u8, text, spelling)) |name| return .{ .name = name, .state = .failed };
+        }
+
+        // A step that succeeded, which Zig may follow with the step's duration
+        // and then its peak RSS. A failing test count has nothing after it.
+        const untimed = cutOptionalMeasure(cutOptionalMeasure(text, " MaxRSS:", &max_rss_units), " ", &duration_units);
+        if (std.mem.cutSuffix(u8, untimed, " cached")) |name| return .{ .name = name, .state = .cached };
+        if (std.mem.cutSuffix(u8, untimed, " success")) |name| return .{ .name = name, .state = .ran };
+        const count = cutTestCount(untimed) orelse return null;
+        if (!count.failed) return .{ .name = count.name, .state = .ran };
+        return if (untimed.len == text.len) .{ .name = count.name, .state = .failed } else null;
+    }
+};
+
+/// Whether a step named `name` is one in which Zig's build system runs the
+/// compiler itself. `std.Build` names exactly those steps this way:
+/// `Step.Compile` (`zig build-exe`, `build-lib`, `build-obj` and `test`) is
+/// `compile <kind> <artifact> <optimize> <target>`, and `Step.TranslateC`
+/// (`zig translate-c`) is `translate-c`. Both turn source into an artifact the
+/// cache keys by its inputs, so either one running after `build-ci` means the
+/// cache was not reused.
+///
+/// A `run ...` step is not compile work even when the command it runs is a
+/// compiler (`run zig (roc_builtins.o)`, `run exe builtin_compiler
+/// (Builtin.bin)`). The summary says nothing about what a Run step's command
+/// does, so such a generator cannot be told apart from the phase's own leaf
+/// Run step, which runs every time, without guessing from the command's name.
+fn isCompileStep(name: []const u8) bool {
+    return std.mem.startsWith(u8, name, "compile ") or std.mem.eql(u8, name, "translate-c");
+}
+
+/// The compile work one `zig build <step> --summary all` invocation did, read
+/// from its summary tree by `readCompileWork`.
+const CompileWork = struct {
+    /// How many compile steps came from the cache.
+    reused: usize,
+    /// The compile steps that ran instead, in tree order, named as Zig prints
+    /// them. Distinct steps can share a name, so a name can repeat.
+    compiled: []const []const u8,
+};
+
+/// What is known about the compile work a command did.
+const CompileWorkReading = union(enum) {
+    /// The command was skipped, so it has no output to read.
+    not_run,
+    /// The whole `--summary all` tree was read.
+    measured: CompileWork,
+    /// The output has no `Build Summary:`. `zig build` prints one whenever it
+    /// gets as far as running steps, so only a command that failed before
+    /// then is expected to lack it.
+    missing_summary,
+    /// The summary is not in the shape Zig prints, so no count read from it
+    /// can be trusted. Holds what was wrong.
+    unreadable_summary: []const u8,
+};
+
+/// The step counts of a `Build Summary: 25/27 steps succeeded (1 failed); ...`
+/// line. They cover every step of the build, which is also every step the
+/// `--summary all` tree prints, so they say whether the whole tree was read.
+const StepCounts = struct {
+    succeeded: usize,
+    total: usize,
+
+    /// Reads the counts from the text after `build_summary_marker`.
+    fn parse(text: []const u8) ?StepCounts {
+        const counts = std.mem.cut(u8, text, " steps succeeded") orelse return null;
+        const numbers = std.mem.cutScalar(u8, counts[0], '/') orelse return null;
+        return .{
+            .succeeded = std.fmt.parseInt(usize, numbers[0], 10) catch return null,
+            .total = std.fmt.parseInt(usize, numbers[1], 10) catch return null,
+        };
+    }
+};
+
+/// Reads the compile work a `zig build <step> --summary all` invocation did
+/// from its output: the tree under the last `Build Summary:`. Every tree line
+/// has to be one Zig prints, and the tree has to list exactly the steps the
+/// summary counts, so an output that was cut short or interleaved is reported
+/// as unreadable instead of being counted as far as it goes.
+fn readCompileWork(allocator: std.mem.Allocator, output: []const u8) std.mem.Allocator.Error!CompileWorkReading {
+    const marker = std.mem.findLast(u8, output, build_summary_marker) orelse return .missing_summary;
+    var lines = std.mem.splitScalar(u8, output[marker + build_summary_marker.len ..], '\n');
+
+    const counts_text = std.mem.trimEnd(u8, lines.first(), "\r");
+    const counted = StepCounts.parse(counts_text) orelse return .{
+        .unreadable_summary = try std.fmt.allocPrint(allocator, "unrecognized step counts in `{s}{s}`", .{ build_summary_marker, counts_text }),
+    };
+
+    var listed = StepCounts{ .succeeded = 0, .total = 0 };
+    var reused: usize = 0;
+    var compiled = std.ArrayList([]const u8).empty;
+    while (lines.next()) |raw_line| {
+        const line = std.mem.trimEnd(u8, raw_line, "\r");
+        // Zig ends the tree with an empty line.
+        if (line.len == 0) break;
+        const step = SummaryStep.parse(line) orelse return .{
+            .unreadable_summary = try std.fmt.allocPrint(allocator, "unrecognized step line `{s}`", .{line}),
+        };
+        const is_compile = isCompileStep(step.name);
+        switch (step.state) {
+            // Counted on the line where the step first appears.
+            .repeated => continue,
+            .cached => {
+                listed.succeeded += 1;
+                if (is_compile) reused += 1;
+            },
+            .ran => {
+                listed.succeeded += 1;
+                if (is_compile) try compiled.append(allocator, try allocator.dupe(u8, step.name));
+            },
+            // A compile step that failed still ran the compiler.
+            .failed => if (is_compile) try compiled.append(allocator, try allocator.dupe(u8, step.name)),
+            .not_run => {},
+        }
+        listed.total += 1;
+    }
+
+    if (listed.total != counted.total or listed.succeeded != counted.succeeded) return .{
+        .unreadable_summary = try std.fmt.allocPrint(
+            allocator,
+            "the summary counts {d}/{d} steps succeeded but its tree lists {d}/{d}",
+            .{ counted.succeeded, counted.total, listed.succeeded, listed.total },
+        ),
+    };
+    return .{ .measured = .{ .reused = reused, .compiled = try compiled.toOwnedSlice(allocator) } };
+}
+
+/// What the cache-reuse canary allows a command to compile.
+const CompileExpectation = union(enum) {
+    /// Anything: `build-ci` itself, and the phases of a lane that runs no
+    /// `build-ci` before them.
+    unrestricted,
+    /// `build-ci` came first, so only these steps (the job's
+    /// `expected_compiles`) may compile.
+    only: []const []const u8,
+};
+
+/// How a command fails the cache-reuse canary.
+const CacheReuseFailure = union(enum) {
+    /// `build-ci` came before the phase, yet the phase ran these compile steps
+    /// and its job does not declare them in `expected_compiles`.
+    undeclared_compiles: []const []const u8,
+    /// The command passed without printing a `Build Summary:`, so the compile
+    /// work it did is unknown.
+    missing_summary,
+    /// The command printed a summary that is not in the shape Zig prints.
+    /// Holds what was wrong.
+    unreadable_summary: []const u8,
+};
+
+/// Whether `build-ci` comes before the phases of this invocation, which is
+/// when a phase that compiles fails the canary. `--minici-skip-build` does not
+/// change the answer: it states that `build-ci` already ran (in CI, in the
+/// build job whose `.zig-cache` the shard restored), so its outputs are
+/// expected to be there just the same. Only a lane that needs no `build-ci`
+/// has phases that build their own tools.
+fn buildCiPrecedesPhases(parsed_args: ParsedArgs) bool {
+    const shard = parsed_args.shard orelse return true;
+    return shard.lane.needsBuildCi();
+}
+
+/// Whether `name` is one of `names`, compared exactly.
+fn containsName(names: []const []const u8, name: []const u8) bool {
+    for (names) |candidate| {
+        if (std.mem.eql(u8, candidate, name)) return true;
+    }
+    return false;
+}
+
+/// Decides whether a command fails the cache-reuse canary. An unreadable
+/// summary always does, and so does a missing one on a command that passed:
+/// the compile work is then unknown, which is never treated as none. A
+/// command that failed without a summary is already reported as that failure.
+fn cacheReuseFailure(
+    allocator: std.mem.Allocator,
+    result: CommandResult,
+    expectation: CompileExpectation,
+) std.mem.Allocator.Error!?CacheReuseFailure {
+    switch (result.compile_work) {
+        .not_run => return null,
+        .missing_summary => return if (isPass(result)) .missing_summary else null,
+        .unreadable_summary => |problem| return .{ .unreadable_summary = problem },
+        .measured => |work| {
+            const expected = switch (expectation) {
+                .unrestricted => return null,
+                .only => |names| names,
+            };
+            var undeclared = std.ArrayList([]const u8).empty;
+            for (work.compiled) |name| {
+                if (!containsName(expected, name)) try undeclared.append(allocator, name);
+            }
+            if (undeclared.items.len == 0) return null;
+            return .{ .undeclared_compiles = try undeclared.toOwnedSlice(allocator) };
+        },
+    }
+}
+
 const CommandResult = struct {
     status: []const u8,
     start_ns: u64,
@@ -574,6 +942,17 @@ const CommandResult = struct {
     duration_ns: u64,
     log_path: []const u8,
     command: []const []const u8,
+    /// The compile steps this command reused and the ones it ran, read from
+    /// its build summary.
+    compile_work: CompileWorkReading,
+    /// Why this command fails the cache-reuse canary, when it does. Set from
+    /// `cacheReuseFailure` once the command has run.
+    cache_reuse_failure: ?CacheReuseFailure = null,
+    /// Whether the command ran with build options of its own (see
+    /// `Job.build_args`). Its compile steps then belong to a configuration
+    /// `build-ci` did not build, so they are reported apart from the steps the
+    /// run was expected to reuse.
+    own_configuration: bool = false,
     stats_path: ?[]const u8 = null,
     heartbeat_printed: bool = false,
 };
@@ -920,9 +1299,179 @@ fn appendSummaryLine(
     try out.appendSlice(allocator, suffix);
 }
 
+/// The plural ending for a count of things: `1 phase`, `2 phases`.
+fn pluralS(count: usize) []const u8 {
+    return if (count == 1) "" else "s";
+}
+
+/// How much of a command's compile work to show under its result line.
+const CompileWorkDetail = enum {
+    /// The two counts only. For `build-ci`, whose job is to compile: the names
+    /// of its steps stay in `report.json` rather than filling the console.
+    counts,
+    /// The counts and the name of every compile step that ran, shown only
+    /// when at least one did. For the run phases, which are meant to reuse
+    /// what `build-ci` built.
+    steps,
+};
+
+/// Appends what belongs right under a command's result line: the compile
+/// steps it ran, and why it fails the cache-reuse canary if it does. A reader
+/// of the job log then sees a cache that was not reused without opening
+/// `report.json`. `expected_compiles` is the job's list, used to mark the
+/// steps the job declares.
+fn appendCompileWorkReport(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    result: CommandResult,
+    detail: CompileWorkDetail,
+    expected_compiles: []const []const u8,
+) !void {
+    switch (result.compile_work) {
+        .not_run, .missing_summary, .unreadable_summary => {},
+        .measured => |work| switch (detail) {
+            .counts => try out.print(allocator, "  Compile steps: {d} reused, {d} compiled\n", .{ work.reused, work.compiled.len }),
+            .steps => if (work.compiled.len != 0) {
+                try out.print(allocator, "  Compile steps: {d} reused, {d} compiled:\n", .{ work.reused, work.compiled.len });
+                for (work.compiled) |name| {
+                    const note = if (containsName(expected_compiles, name)) " (declared in `expected_compiles`)" else "";
+                    try out.print(allocator, "    {s}{s}\n", .{ name, note });
+                }
+            },
+        },
+    }
+    const failure = result.cache_reuse_failure orelse return;
+    switch (failure) {
+        // The steps are the unmarked ones listed just above.
+        .undeclared_compiles => |names| try out.print(
+            allocator,
+            "  Cache not reused: `build-ci` should have built {d} of these.\n",
+            .{names.len},
+        ),
+        .missing_summary, .unreadable_summary => try appendCacheReuseFailure(out, allocator, result),
+    }
+}
+
+/// Prints `appendCompileWorkReport`'s lines for a command that just finished.
+fn printCompileWorkReport(
+    allocator: std.mem.Allocator,
+    result: CommandResult,
+    detail: CompileWorkDetail,
+    expected_compiles: []const []const u8,
+) !void {
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(allocator);
+    try appendCompileWorkReport(&out, allocator, result, detail, expected_compiles);
+    std.debug.print("{s}", .{out.items});
+}
+
+/// Appends the final summary's entry for a command that fails the cache-reuse
+/// canary: its name, why it fails, and the steps it should not have compiled.
+/// Appends nothing for a command that does not fail it.
+fn appendCacheReuseFailure(out: *std.ArrayList(u8), allocator: std.mem.Allocator, result: CommandResult) !void {
+    const failure = result.cache_reuse_failure orelse return;
+    const name = commandStepName(result.command);
+    switch (failure) {
+        .undeclared_compiles => |names| {
+            try out.print(
+                allocator,
+                "  `{s}` compiled {d} step{s} that `build-ci` should have built:\n",
+                .{ name, names.len, pluralS(names.len) },
+            );
+            for (names) |step| try out.print(allocator, "    {s}\n", .{step});
+        },
+        .missing_summary => try out.print(
+            allocator,
+            "  `{s}` passed without printing a `Build Summary:`, so its compile work is unknown\n",
+            .{name},
+        ),
+        .unreadable_summary => |problem| try out.print(
+            allocator,
+            "  `{s}` printed a build summary MiniCI cannot read: {s}\n",
+            .{ name, problem },
+        ),
+    }
+}
+
+/// Appends the cache-reuse part of the final summary. Its first line reads
+/// differently from the phase tally in `appendSummaryLine`, so a run that
+/// passed every phase but did not reuse its cache is not mistaken for a test
+/// failure; each offending command and its steps follow. The totals cover the
+/// run phases only: `build-ci` is where compile steps are meant to run.
+fn appendCacheReuseSummary(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    enforced: bool,
+    build_result: CommandResult,
+    results: []const CommandResult,
+) !void {
+    var measured: usize = 0;
+    var reused: usize = 0;
+    var compiled: usize = 0;
+    var own_configuration_compiled: usize = 0;
+    var failures: usize = @intFromBool(build_result.cache_reuse_failure != null);
+    var undeclared = false;
+    for (results) |result| {
+        switch (result.compile_work) {
+            .measured => |work| if (result.own_configuration) {
+                own_configuration_compiled += work.compiled.len;
+            } else {
+                measured += 1;
+                reused += work.reused;
+                compiled += work.compiled.len;
+            },
+            .not_run, .missing_summary, .unreadable_summary => {},
+        }
+        const failure = result.cache_reuse_failure orelse continue;
+        failures += 1;
+        switch (failure) {
+            .undeclared_compiles => undeclared = true,
+            .missing_summary, .unreadable_summary => {},
+        }
+    }
+
+    try out.appendSlice(allocator, "MiniCI cache reuse: ");
+    if (failures != 0) {
+        try out.print(allocator, "FAILED in {d} phase{s}", .{ failures, pluralS(failures) });
+    } else if (measured == 0) {
+        try out.appendSlice(allocator, "no run phase was measured\n");
+        return;
+    } else if (enforced) {
+        try out.appendSlice(allocator, "ok");
+    } else {
+        try out.appendSlice(allocator, "not enforced (no `build-ci` before these phases)");
+    }
+    try out.print(
+        allocator,
+        "; {d} run phase{s} measured, {d} compile step{s} reused, {d} compiled{s}\n",
+        .{
+            measured,
+            pluralS(measured),
+            reused,
+            pluralS(reused),
+            compiled,
+            if (enforced and failures == 0 and compiled != 0) " (all declared in `expected_compiles`)" else "",
+        },
+    );
+    if (own_configuration_compiled != 0) try out.print(
+        allocator,
+        "  Not counted above: {d} compile step{s} in jobs that build a configuration of their own.\n",
+        .{ own_configuration_compiled, pluralS(own_configuration_compiled) },
+    );
+
+    try appendCacheReuseFailure(out, allocator, build_result);
+    for (results) |result| try appendCacheReuseFailure(out, allocator, result);
+    if (undeclared) try out.appendSlice(allocator,
+        \\  Either `build-ci` does not build these steps (see build.zig), or what it built was not reusable here.
+        \\  A job that is meant to compile a step says so in `expected_compiles` (src/build/minici.zig).
+        \\
+    );
+}
+
 fn printSummary(
     allocator: std.mem.Allocator,
     total_phases: usize,
+    cache_reuse_enforced: bool,
     build_result: CommandResult,
     results: []const CommandResult,
     wall_ns: u64,
@@ -930,6 +1479,7 @@ fn printSummary(
     var out = std.ArrayList(u8).empty;
     defer out.deinit(allocator);
     try appendSummaryLine(&out, allocator, total_phases, build_result, results, wall_ns);
+    try appendCacheReuseSummary(&out, allocator, cache_reuse_enforced, build_result, results);
     std.debug.print("{s}", .{out.items});
 }
 
@@ -1042,6 +1592,8 @@ fn runCommand(
             .duration_ns = ended -| started,
             .log_path = log_path,
             .command = argv,
+            // Nothing ran, so nothing printed a summary.
+            .compile_work = .missing_summary,
             .heartbeat_printed = heartbeat.printed.load(.acquire),
         };
     };
@@ -1067,8 +1619,50 @@ fn runCommand(
         .duration_ns = ended -| started,
         .log_path = log_path,
         .command = argv,
+        .compile_work = try readCompileWork(allocator, log.items),
         .heartbeat_printed = heartbeat.printed.load(.acquire),
     };
+}
+
+/// Gives the cache entries `build-ci` just wrote the stat of the files they
+/// name, so that the run jobs reuse them.
+///
+/// Zig 0.17.0 misses the cache for a declared input whose recorded stat does
+/// not match the file, whatever the file contains (see
+/// ci/restamp_zig_cache.zig), and `build-ci` leaves such records behind: an
+/// input recorded in the clock tick it was written in gets a zeroed stat. A
+/// generated host library copied into a fixture tree the moment it exists is
+/// often that new, and the first run job to check it then rebuilds the tree
+/// and everything built from it.
+///
+/// Only this build's own cache is re-stamped. Other builds on a developer's
+/// machine may be reading the global one.
+fn restampBuildCache(allocator: std.mem.Allocator, io: std.Io, zig_exe: []const u8) !void {
+    const started = nowNs(io);
+    const argv: []const []const u8 = &.{ restamp_exe, "--zig", zig_exe, "--local-cache-only" };
+    std.debug.print("MiniCI: re-stamping the Zig cache `build-ci` wrote ... ", .{});
+
+    const result = std.process.run(allocator, io, .{ .argv = argv }) catch |err| {
+        std.debug.print("crashed\n  could not run `{s}`: {s}\n", .{ restamp_exe, @errorName(err) });
+        std.process.exit(1);
+    };
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    const log = try std.mem.concat(allocator, u8, &.{ result.stdout, result.stderr });
+    defer allocator.free(log);
+    try writeFile(io, restamp_log, log);
+
+    const passed = switch (result.term) {
+        .exited => |code| code == 0,
+        .signal, .stopped, .unknown => false,
+    };
+    if (!passed) {
+        std.debug.print("failed\n  --- output from `{s}` ---\n", .{restamp_exe});
+        printIndentedLines(std.mem.trimEnd(u8, log, "\n"));
+        std.process.exit(1);
+    }
+    std.debug.print("done in {d:.3}s\n", .{seconds(durationSince(io, started))});
 }
 
 fn skipCommand(
@@ -1088,6 +1682,7 @@ fn skipCommand(
         .duration_ns = ended -| started,
         .log_path = log_path,
         .command = argv,
+        .compile_work = .not_run,
     };
 }
 
@@ -1127,11 +1722,11 @@ fn buildCommand(
     return try argv.toOwnedSlice(allocator);
 }
 
-fn appendCommandJson(out: *std.ArrayList(u8), allocator: std.mem.Allocator, command: []const []const u8) !void {
+fn appendJsonStrings(out: *std.ArrayList(u8), allocator: std.mem.Allocator, strings: []const []const u8) !void {
     try out.appendSlice(allocator, "[");
-    for (command, 0..) |arg, i| {
+    for (strings, 0..) |string, i| {
         if (i > 0) try out.appendSlice(allocator, ", ");
-        try appendJsonString(out, allocator, arg);
+        try appendJsonString(out, allocator, string);
     }
     try out.appendSlice(allocator, "]");
 }
@@ -1140,23 +1735,56 @@ fn writeReportJson(
     allocator: std.mem.Allocator,
     io: std.Io,
     run_started_unix_ms: u64,
+    cache_reuse_enforced: bool,
     build_result: CommandResult,
     results: []const CommandResult,
 ) !void {
     var out = std.ArrayList(u8).empty;
     defer out.deinit(allocator);
 
-    try out.appendSlice(allocator, "{\n  \"schema_version\": 1,\n  \"run_started_unix_ms\": ");
-    try appendU64(&out, allocator, run_started_unix_ms);
-    try out.appendSlice(allocator, ",\n  \"build_ci\": ");
-    try appendResultJson(&out, allocator, build_result);
-    try out.appendSlice(allocator, ",\n  \"jobs\": [\n");
-    for (results, 0..) |result, i| {
-        if (i > 0) try out.appendSlice(allocator, ",\n");
-        try appendResultJson(&out, allocator, result);
-    }
-    try out.appendSlice(allocator, "\n  ]\n}\n");
+    try appendReportJsonObject(&out, allocator, run_started_unix_ms, cache_reuse_enforced, build_result, results);
+    try out.appendSlice(allocator, "\n");
     try writeFile(io, out_dir ++ "/report.json", out.items);
+}
+
+/// Appends a command's `compile_work`: `summary` says how its build summary
+/// read, and the counts are present only when it was measured, so an unknown
+/// count is never written as zero.
+fn appendCompileWorkJson(out: *std.ArrayList(u8), allocator: std.mem.Allocator, reading: CompileWorkReading) !void {
+    try out.appendSlice(allocator, "{\"summary\": ");
+    try appendJsonString(out, allocator, @tagName(reading));
+    switch (reading) {
+        .not_run, .missing_summary => {},
+        .measured => |work| {
+            try out.print(allocator, ", \"reused\": {d}, \"compiled\": {d}, \"compiled_steps\": ", .{ work.reused, work.compiled.len });
+            try appendJsonStrings(out, allocator, work.compiled);
+        },
+        .unreadable_summary => |problem| {
+            try out.appendSlice(allocator, ", \"problem\": ");
+            try appendJsonString(out, allocator, problem);
+        },
+    }
+    try out.appendSlice(allocator, "}");
+}
+
+/// Appends a command's `cache_reuse_failure`: null when it does not fail the
+/// canary, otherwise the kind of failure and what it is about.
+fn appendCacheReuseFailureJson(out: *std.ArrayList(u8), allocator: std.mem.Allocator, maybe_failure: ?CacheReuseFailure) !void {
+    const failure = maybe_failure orelse return out.appendSlice(allocator, "null");
+    try out.appendSlice(allocator, "{\"kind\": ");
+    try appendJsonString(out, allocator, @tagName(failure));
+    switch (failure) {
+        .undeclared_compiles => |names| {
+            try out.appendSlice(allocator, ", \"steps\": ");
+            try appendJsonStrings(out, allocator, names);
+        },
+        .missing_summary => {},
+        .unreadable_summary => |problem| {
+            try out.appendSlice(allocator, ", \"problem\": ");
+            try appendJsonString(out, allocator, problem);
+        },
+    }
+    try out.appendSlice(allocator, "}");
 }
 
 fn appendResultJson(out: *std.ArrayList(u8), allocator: std.mem.Allocator, result: CommandResult) !void {
@@ -1171,13 +1799,17 @@ fn appendResultJson(out: *std.ArrayList(u8), allocator: std.mem.Allocator, resul
     try out.appendSlice(allocator, ",\n    \"log_path\": ");
     try appendJsonString(out, allocator, result.log_path);
     try out.appendSlice(allocator, ",\n    \"command\": ");
-    try appendCommandJson(out, allocator, result.command);
+    try appendJsonStrings(out, allocator, result.command);
     try out.appendSlice(allocator, ",\n    \"stats_path\": ");
     if (result.stats_path) |path| {
         try appendJsonString(out, allocator, path);
     } else {
         try out.appendSlice(allocator, "null");
     }
+    try out.appendSlice(allocator, ",\n    \"compile_work\": ");
+    try appendCompileWorkJson(out, allocator, result.compile_work);
+    try out.appendSlice(allocator, ",\n    \"cache_reuse_failure\": ");
+    try appendCacheReuseFailureJson(out, allocator, result.cache_reuse_failure);
     try out.appendSlice(allocator, "\n  }");
 }
 
@@ -1192,15 +1824,21 @@ fn appendScriptJsonBytes(out: *std.ArrayList(u8), allocator: std.mem.Allocator, 
     }
 }
 
+/// Appends the report object that `report.json` holds and `index.html` embeds.
+/// Schema version 2 added `cache_reuse_enforced`, and `compile_work` and
+/// `cache_reuse_failure` on `build_ci` and on every job.
 fn appendReportJsonObject(
     out: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
     run_started_unix_ms: u64,
+    cache_reuse_enforced: bool,
     build_result: CommandResult,
     results: []const CommandResult,
 ) !void {
-    try out.appendSlice(allocator, "{\n  \"schema_version\": 1,\n  \"run_started_unix_ms\": ");
+    try out.appendSlice(allocator, "{\n  \"schema_version\": 2,\n  \"run_started_unix_ms\": ");
     try appendU64(out, allocator, run_started_unix_ms);
+    try out.appendSlice(allocator, ",\n  \"cache_reuse_enforced\": ");
+    try out.appendSlice(allocator, if (cache_reuse_enforced) "true" else "false");
     try out.appendSlice(allocator, ",\n  \"build_ci\": ");
     try appendResultJson(out, allocator, build_result);
     try out.appendSlice(allocator, ",\n  \"jobs\": [\n");
@@ -1240,6 +1878,7 @@ fn writeHtml(
     allocator: std.mem.Allocator,
     io: std.Io,
     run_started_unix_ms: u64,
+    cache_reuse_enforced: bool,
     build_result: CommandResult,
     results: []const CommandResult,
 ) !void {
@@ -1326,7 +1965,7 @@ fn writeHtml(
     );
     var report_json = std.ArrayList(u8).empty;
     defer report_json.deinit(allocator);
-    try appendReportJsonObject(&report_json, allocator, run_started_unix_ms, build_result, results);
+    try appendReportJsonObject(&report_json, allocator, run_started_unix_ms, cache_reuse_enforced, build_result, results);
     try appendScriptJsonBytes(&out, allocator, report_json.items);
     try out.appendSlice(allocator,
         \\;
@@ -1634,6 +2273,17 @@ fn memoryAwareBuildJobs(_: std.Io, _: std.mem.Allocator, env: *const std.process
     return budget;
 }
 
+/// Parallel job limit for run phases that may still compile. Run phases
+/// normally execute prebuilt runners, but some (for example the test-wiring
+/// check) build a debug compiler of their own. On Windows, running those
+/// builds at full width has exhausted the hosted runner's memory
+/// (`std::bad_alloc` inside zig.exe), so cap them there. `MINICI_MAX_CPUS=N`
+/// overrides the cap.
+fn runPhaseJobs(env: *const std.process.Environ.Map) ?usize {
+    if (envCpuOverride(env)) |n| return if (builtin.os.tag == .windows) n else null;
+    return if (builtin.os.tag == .windows) 2 else null;
+}
+
 const workflow_shard_key = "minici_shard:";
 
 /// Returns one message per problem with the `minici_shard:` keys in `text`: a
@@ -1644,7 +2294,7 @@ const workflow_shard_key = "minici_shard:";
 fn workflowShardProblems(allocator: std.mem.Allocator, text: []const u8) ![]const []const u8 {
     var problems = std.ArrayList([]const u8).empty;
     errdefer problems.deinit(allocator);
-    var counts = [_]usize{0} ** shards.len;
+    var counts = @as([shards.len]usize, @splat(0));
 
     var lines = std.mem.splitScalar(u8, text, '\n');
     while (lines.next()) |raw_line| {
@@ -1691,7 +2341,9 @@ fn verifyWorkflow(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !v
 
 /// Entry point: build the CI artifacts, then run each selected `run-*` job in order,
 /// streaming heartbeats and a machine-readable report. Limits only build graph
-/// parallelism on memory-constrained hosts (see `memoryAwareBuildJobs`).
+/// parallelism on memory-constrained hosts (see `memoryAwareBuildJobs`). A job
+/// that compiles what `build-ci` should have built fails the run with
+/// `cache_reuse_exit_code` once every job has run (see `cacheReuseFailure`).
 pub fn main(init: std.process.Init) !void {
     requireSha256Hardware();
     const io = init.io;
@@ -1714,6 +2366,7 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
     const lane: ?Lane = if (parsed_args.shard) |shard| shard.lane else null;
+    const cache_reuse_enforced = buildCiPrecedesPhases(parsed_args);
     const selected_jobs = resolveSelection(parsed_args.selection) catch |err| {
         printSelectionError(parsed_args.selection, err);
         printSelectionUsage();
@@ -1746,14 +2399,18 @@ pub fn main(init: std.process.Init) !void {
     const build_log = logs_dir ++ "/build-ci.txt";
     const build_progress = Progress{ .current = 1, .total = total_phases };
     printBuildStart(build_progress);
-    const build_result = if (parsed_args.skip_build)
+    var build_result = if (parsed_args.skip_build)
         try skipCommand(io, build_argv, build_log, "skipped by --minici-skip-build\n", run_started_ns)
     else if (lane != null and !lane.?.needsBuildCi())
         try skipCommand(io, build_argv, build_log, "skipped: the source lane runs only source checks, which build their own tools\n", run_started_ns)
     else
         try runCommand(allocator, io, build_argv, build_log, heartbeat_interval_ms, run_started_ns, build_progress);
+    // `build-ci` is where compile steps belong, so it may run any of them; its
+    // summary still has to be readable.
+    build_result.cache_reuse_failure = try cacheReuseFailure(allocator, build_result, .unrestricted);
     if (build_result.heartbeat_printed) printBuildStart(build_progress);
     std.debug.print("{s} in {d:.3}s\n", .{ buildStatusText(build_result), seconds(build_result.duration_ns) });
+    try printCompileWorkReport(allocator, build_result, .counts, &.{});
 
     var results = std.ArrayList(CommandResult).empty;
     defer results.deinit(allocator);
@@ -1761,11 +2418,12 @@ pub fn main(init: std.process.Init) !void {
     if (!isSuccessful(build_result)) {
         printFailureLog(allocator, io, build_result);
         printRerunHint(build_result);
-        try writeReportJson(allocator, io, run_started_unix_ms, build_result, results.items);
-        try writeHtml(allocator, io, run_started_unix_ms, build_result, results.items);
-        try printSummary(allocator, total_phases, build_result, results.items, durationSince(io, run_started_ns));
+        try writeReportJson(allocator, io, run_started_unix_ms, cache_reuse_enforced, build_result, results.items);
+        try writeHtml(allocator, io, run_started_unix_ms, cache_reuse_enforced, build_result, results.items);
+        try printSummary(allocator, total_phases, cache_reuse_enforced, build_result, results.items, durationSince(io, run_started_ns));
         std.process.exit(1);
     }
+    if (isPass(build_result)) try restampBuildCache(allocator, io, zig_exe);
 
     for (jobs, 0..) |job, job_index| {
         const log_path = try std.fmt.allocPrint(allocator, "{s}/{s}.txt", .{ logs_dir, job.name });
@@ -1773,7 +2431,8 @@ pub fn main(init: std.process.Init) !void {
             try std.fmt.allocPrint(allocator, "{s}/{s}.json", .{ raw_dir, job.name })
         else
             null;
-        const argv = try buildCommand(allocator, zig_exe, build_args, job.name, null, stats_path, job.args);
+        const job_build_args = try std.mem.concat(allocator, []const u8, &.{ build_args, job.build_args });
+        const argv = try buildCommand(allocator, zig_exe, job_build_args, job.name, runPhaseJobs(init.environ_map), stats_path, job.args);
         const progress = Progress{ .current = job_index + 2, .total = total_phases };
         printRunStart(progress, job.name);
         const skip_reason: ?[]const u8 = if (!selected_jobs.includes(job_index))
@@ -1787,9 +2446,20 @@ pub fn main(init: std.process.Init) !void {
         else
             try runCommand(allocator, io, argv, log_path, heartbeat_interval_ms, run_started_ns, progress);
         result.stats_path = if (skip_reason == null) stats_path else null;
+        result.own_configuration = job.build_args.len != 0;
+        // A phase that compiles when it should have reused `build-ci` outputs
+        // fails the run at the end, with its own exit status; the remaining
+        // phases still run, so one run reports every such phase. A job with
+        // build options of its own has no `build-ci` outputs to reuse.
+        const compile_expectation: CompileExpectation = if (cache_reuse_enforced and !result.own_configuration)
+            .{ .only = job.expected_compiles }
+        else
+            .unrestricted;
+        result.cache_reuse_failure = try cacheReuseFailure(allocator, result, compile_expectation);
         try results.append(allocator, result);
         if (result.heartbeat_printed) printRunStart(progress, job.name);
         std.debug.print("{s} in {d:.3}s\n", .{ runStatusText(result), seconds(result.duration_ns) });
+        try printCompileWorkReport(allocator, result, if (result.own_configuration) .counts else .steps, job.expected_compiles);
 
         if (!isSuccessful(result)) {
             printFailureLog(allocator, io, result);
@@ -1798,19 +2468,23 @@ pub fn main(init: std.process.Init) !void {
 
         const stops_at_failing_check = if (lane) |l| l.stopsAtFailingCheck() else true;
         if (stops_at_failing_check and isCheckJob(job.name) and !isSuccessful(result)) {
-            try writeReportJson(allocator, io, run_started_unix_ms, build_result, results.items);
-            try writeHtml(allocator, io, run_started_unix_ms, build_result, results.items);
-            try printSummary(allocator, total_phases, build_result, results.items, durationSince(io, run_started_ns));
+            try writeReportJson(allocator, io, run_started_unix_ms, cache_reuse_enforced, build_result, results.items);
+            try writeHtml(allocator, io, run_started_unix_ms, cache_reuse_enforced, build_result, results.items);
+            try printSummary(allocator, total_phases, cache_reuse_enforced, build_result, results.items, durationSince(io, run_started_ns));
             std.process.exit(1);
         }
     }
 
-    try writeReportJson(allocator, io, run_started_unix_ms, build_result, results.items);
-    try writeHtml(allocator, io, run_started_unix_ms, build_result, results.items);
-    try printSummary(allocator, total_phases, build_result, results.items, durationSince(io, run_started_ns));
+    try writeReportJson(allocator, io, run_started_unix_ms, cache_reuse_enforced, build_result, results.items);
+    try writeHtml(allocator, io, run_started_unix_ms, cache_reuse_enforced, build_result, results.items);
+    try printSummary(allocator, total_phases, cache_reuse_enforced, build_result, results.items, durationSince(io, run_started_ns));
 
     for (results.items) |result| {
         if (!isSuccessful(result)) std.process.exit(1);
+    }
+    if (build_result.cache_reuse_failure != null) std.process.exit(cache_reuse_exit_code);
+    for (results.items) |result| {
+        if (result.cache_reuse_failure != null) std.process.exit(cache_reuse_exit_code);
     }
 }
 
@@ -1921,12 +2595,35 @@ test "resolveSelection includes the requested MiniCI range" {
     try std.testing.expect(!selected.includes(last + 1));
 }
 
+test "MiniCI's module test jobs follow the module inventory" {
+    // Unit-tested modules run unless the inventory keeps them out of MiniCI.
+    try std.testing.expect(jobIndexByName("run-test-zig-module-static_data") != null);
+    try std.testing.expect(jobIndexByName("run-test-zig-module-roc_args") != null);
+    try std.testing.expect(jobIndexByName("run-test-zig-module-glue") == null);
+    // A harness-run module is a harness job; an untested module is no job.
+    const harness = jobIndexByName("run-test-zig-module-lsp_integration") orelse return error.MissingHarnessJob;
+    try std.testing.expectEqual(JobKind.harness, jobs[harness].kind);
+    try std.testing.expect(jobIndexByName("run-test-zig-module-tracy") == null);
+
+    var expected: usize = 0;
+    for (std.enums.values(modules.ModuleType)) |module_type| {
+        expected += switch (module_type.info().tests) {
+            .unit => |unit| @intFromBool(unit.minici),
+            .harness => 1,
+            .no_tests => 0,
+        };
+    }
+    var listed: usize = 0;
+    for (jobs) |job| listed += @intFromBool(std.mem.startsWith(u8, job.name, "run-test-zig-module-"));
+    try std.testing.expectEqual(expected, listed);
+}
+
 test "resolveSelection supports exclusive MiniCI range boundaries" {
     const selected = try resolveSelection(.{
-        .after = "run-test-zig-module-roc_target",
+        .after = last_module_test_job,
         .before = "run-test-eval",
     });
-    const after = jobIndexByName("run-test-zig-module-roc_target") orelse return error.MissingAfter;
+    const after = jobIndexByName(last_module_test_job) orelse return error.MissingAfter;
     const before = jobIndexByName("run-test-eval") orelse return error.MissingBefore;
 
     try std.testing.expect(!selected.includes(after));
@@ -1936,14 +2633,14 @@ test "resolveSelection supports exclusive MiniCI range boundaries" {
 }
 
 test "resolveSelection supports exhaustive adjacent MiniCI shards" {
-    const first = try resolveSelection(.{ .to = "run-test-zig-module-roc_target" });
+    const first = try resolveSelection(.{ .to = last_module_test_job });
     const middle = try resolveSelection(.{
-        .after = "run-test-zig-module-roc_target",
+        .after = last_module_test_job,
         .before = "run-test-eval",
     });
     const last = try resolveSelection(.{ .from = "run-test-eval" });
 
-    const core_boundary = jobIndexByName("run-test-zig-module-roc_target") orelse return error.MissingCoreBoundary;
+    const core_boundary = jobIndexByName(last_module_test_job) orelse return error.MissingCoreBoundary;
     const harness_boundary = jobIndexByName("run-test-eval") orelse return error.MissingHarnessBoundary;
 
     for (jobs, 0..) |_, i| {
@@ -2119,6 +2816,7 @@ fn testResult(status: []const u8, duration_ns: u64) CommandResult {
         .duration_ns = duration_ns,
         .log_path = "log.txt",
         .command = &.{ "zig", "build", "step" },
+        .compile_work = .not_run,
     };
 }
 
@@ -2303,4 +3001,626 @@ test "findCoreError returns null when no known shape matches" {
         \\nothing actionable in a recognizable shape
     ;
     try std.testing.expect(findCoreError(log) == null);
+}
+
+/// A whole phase log from a Windows shard on Zig 0.16 whose `.zig-cache` was
+/// reused: every compile step is `cached`.
+const summary_reused_zig_0_16 =
+    \\Build Summary: 7/7 steps succeeded; 158/159 tests passed (1 skipped)
+    \\run-test-zig-module-base success
+    \\+- run test base 158 pass, 1 skip (159 total) 294ms MaxRSS:32M
+    \\   +- compile test base Debug native-native cached 98ms MaxRSS:19M
+    \\   |  +- options cached
+    \\   |  +- options cached
+    \\   +- install stack_overflow_test_helper cached
+    \\      +- compile exe stack_overflow_test_helper Debug native-native cached 98ms MaxRSS:19M
+    \\         +- options (reused)
+    \\
+;
+
+/// The same phase, whole and fully reused, from a Linux shard on Zig 0.17,
+/// which spells optimize modes in lower case (`debug`, `fast`). This tree also
+/// repeats whole subtrees as `(+N more reused dependencies)`.
+const summary_reused_zig_0_17 =
+    \\Build Summary: 12/12 steps succeeded; 151/151 tests passed
+    \\run-test-zig-module-base success
+    \\+- run test base 151 pass (151 total) 236ms MaxRSS:53M
+    \\   +- compile test base debug native-native-musl cached 6ms MaxRSS:40M
+    \\   |  +- options cached
+    \\   |  |  +- compile exe stack_overflow_test_helper debug native-native-musl cached 8ms MaxRSS:40M
+    \\   |  |     +- options cached
+    \\   |  |     +- run exe compiler_identity (compiler_identity.zig) cached
+    \\   |  |        +- compile exe compiler_identity fast native cached 8ms MaxRSS:41M
+    \\   |  |        +- WriteFile src/backend/dev/CallingConvention.zig cached
+    \\   |  |        +- run exe compiler_identity (toolchain_identity.zig) cached
+    \\   |  |           +- compile exe compiler_identity fast native (reused)
+    \\   |  |           +- WriteFile lib cached
+    \\   |  +- options (reused)
+    \\   |  +- run exe compiler_identity (compiler_identity.zig) (+3 more reused dependencies)
+    \\   +- install stack_overflow_test_helper success
+    \\      +- compile exe stack_overflow_test_helper debug native-native-musl (+2 more reused dependencies)
+    \\
+;
+
+/// The start of `run-check-test-wiring`'s tree from a Linux shard on Zig 0.16
+/// that rebuilt 25 compile steps. The step counts in the first line are those
+/// of this excerpt.
+const summary_rebuilt_zig_0_16 =
+    \\Build Summary: 12/12 steps succeeded
+    \\run-check-test-wiring success
+    \\+- run exe check_test_wiring success 8s
+    \\   +- compile exe check_test_wiring Debug native success 927ms MaxRSS:144M
+    \\   +- install check_test_wiring success
+    \\   |  +- compile exe check_test_wiring Debug native (reused)
+    \\   +- compile test machine_code_shim Debug native-native-musl success 4s MaxRSS:376M
+    \\   |  +- WriteFile Builtin.bin success
+    \\   |  |  +- run exe builtin_compiler (Builtin.bin) success 26s
+    \\   |  |  |  +- compile exe builtin_compiler Debug native success 24s MaxRSS:1G
+    \\   |  |  |     +- options cached
+    \\   |  |  +- run exe builtin_compiler (Builtin.bin) (+1 more reused dependencies)
+    \\   |  |  +- run exe builtin_compiler (Builtin.bin) (+1 more reused dependencies)
+    \\   |  +- WriteFile cached
+    \\   |  +- compile obj machine_code_shim_test_host Debug native-native-musl cached 57ms MaxRSS:40M
+    \\   |  |  +- options (reused)
+    \\   |  +- compile obj roc_builtins Debug native-native-musl cached 40ms MaxRSS:40M
+    \\
+;
+
+/// The start of the same tree from a Linux shard on Zig 0.17 that rebuilt
+/// nearly everything, followed by the `translate-c` it also reran. The step
+/// counts in the first line are those of this excerpt.
+const summary_rebuilt_zig_0_17 =
+    \\Build Summary: 19/19 steps succeeded
+    \\run-check-test-wiring success
+    \\+- run exe check_test_wiring success 6s
+    \\   +- compile exe check_test_wiring debug native success 679ms MaxRSS:154M
+    \\   +- install check_test_wiring success
+    \\   |  +- compile exe check_test_wiring debug native (reused)
+    \\   +- compile test machine_code_shim debug native-native-musl success 3s MaxRSS:375M
+    \\   |  +- WriteFile Builtin.bin success
+    \\   |  |  +- run exe builtin_compiler (Builtin.bin) success 18s
+    \\   |  |  |  +- compile exe builtin_compiler debug native success 22s MaxRSS:1G
+    \\   |  |  |     +- options cached
+    \\   |  |  |     +- run exe compiler_identity (compiler_identity.zig) cached
+    \\   |  |  |        +- compile exe compiler_identity fast native cached 7ms MaxRSS:38M
+    \\   |  |  |        +- WriteFile src/backend/dev/CallingConvention.zig cached
+    \\   |  |  |        +- run exe compiler_identity (toolchain_identity.zig) cached
+    \\   |  |  |           +- compile exe compiler_identity fast native (reused)
+    \\   |  |  |           +- WriteFile lib cached
+    \\   |  |  +- run exe builtin_compiler (Builtin.bin) (+1 more reused dependencies)
+    \\   |  |  +- run exe builtin_compiler (Builtin.bin) (+1 more reused dependencies)
+    \\   |  +- WriteFile cached
+    \\   |  +- compile obj machine_code_shim_test_host debug native-native-musl success 599ms MaxRSS:132M
+    \\   |  |  +- options (reused)
+    \\   |  |  +- run exe compiler_identity (compiler_identity.zig) (+3 more reused dependencies)
+    \\   |  +- compile obj roc_builtins debug native-native-musl cached 20ms MaxRSS:40M
+    \\   |  +- compile obj machine_code_shim_test_host debug native-native-musl (+2 more reused dependencies)
+    \\   |  +- translate-c success 36s MaxRSS:699M
+    \\   |  |  +- WriteFile roc_zstd.h cached
+    \\
+;
+
+/// A phase log from a Linux shard on Zig 0.16 whose test binary crashed, up to
+/// Zig's closing error: the failing step's own output comes before the
+/// summary, and more text follows the tree.
+const summary_failed_tests_zig_0_16 =
+    \\run-test-zig-module-postcheck
+    \\+- run test postcheck 622 pass, 1 crash (623 total)
+    \\error: 'structural_test.test.hosted Try adaptation consumes checker-recorded nominal provenance' terminated with signal ABRT with stderr:
+    \\       thread 11278 panic: missing source slice start marker
+    \\       Cannot print stack trace: stack tracing is disabled
+    \\failed command: ./.zig-cache/o/6ca79fb3c8c049151c41fed337c0a5e8/postcheck --cache-dir=./.zig-cache --seed=0x121a8a81 --listen=-
+    \\
+    \\Build Summary: 2/4 steps succeeded (1 failed); 622/623 tests passed (1 crashed)
+    \\run-test-zig-module-postcheck transitive failure
+    \\+- run test postcheck 622 pass, 1 crash (623 total)
+    \\   +- compile test postcheck Debug native-native-musl cached 46ms MaxRSS:41M
+    \\      +- options cached
+    \\
+    \\error: the following build command failed with exit code 1:
+;
+
+/// The summary of a local Zig 0.17 build that stopped on compile errors.
+const summary_compile_errors_zig_0_17 =
+    \\Build Summary: 3/10 steps succeeded (2 failed)
+    \\test-wasm transitive failure
+    \\+- install test-wasm transitive failure
+    \\|  +- compile exe test-wasm debug native 1 errors
+    \\|     +- options cached
+    \\|     +- options (reused)
+    \\+- run exe test-wasm transitive failure
+    \\   +- compile exe test-wasm debug native (+2 more reused dependencies)
+    \\   +- install transitive failure
+    \\      +- install bytebox transitive failure
+    \\      |  +- compile exe bytebox debug native 24 errors
+    \\      |     +- options (reused)
+    \\      |     +- options (reused)
+    \\      +- install bytebox success
+    \\         +- compile lib bytebox debug native success 2s MaxRSS:339M
+    \\            +- options (reused)
+    \\
+    \\error: the following build command exited with code 1:
+;
+
+/// Expects `output` to read as `reused` cached compile steps and the
+/// `compiled` ones having run.
+fn expectCompileWork(output: []const u8, reused: usize, compiled: []const []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const work = switch (try readCompileWork(arena.allocator(), output)) {
+        .measured => |measured| measured,
+        .unreadable_summary => |problem| {
+            std.debug.print("unreadable summary: {s}\n", .{problem});
+            return error.UnreadableSummary;
+        },
+        .not_run, .missing_summary => return error.NotMeasured,
+    };
+    try std.testing.expectEqual(reused, work.reused);
+    try std.testing.expectEqual(compiled.len, work.compiled.len);
+    for (compiled, work.compiled) |expected, actual| try std.testing.expectEqualStrings(expected, actual);
+}
+
+/// Expects `output` to be rejected as an unreadable summary whose problem
+/// mentions `needle`.
+fn expectUnreadableSummary(output: []const u8, needle: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    switch (try readCompileWork(arena.allocator(), output)) {
+        .unreadable_summary => |problem| {
+            if (std.mem.find(u8, problem, needle) == null) std.debug.print("unexpected problem: {s}\n", .{problem});
+            try std.testing.expect(std.mem.find(u8, problem, needle) != null);
+        },
+        .not_run, .measured, .missing_summary => return error.SummaryWasNotRejected,
+    }
+}
+
+test "SummaryStep.parse reads each state Zig prints" {
+    const cases = [_]struct { line: []const u8, name: []const u8, state: StepState }{
+        .{ .line = "run-check-test-wiring success", .name = "run-check-test-wiring", .state = .ran },
+        .{ .line = "+- run exe check_test_wiring success 10s", .name = "run exe check_test_wiring", .state = .ran },
+        .{
+            .line = "   +- compile exe check_test_wiring Debug native cached 116ms MaxRSS:19M",
+            .name = "compile exe check_test_wiring Debug native",
+            .state = .cached,
+        },
+        .{ .line = "   |  +- WriteFile Builtin.bin cached", .name = "WriteFile Builtin.bin", .state = .cached },
+        .{
+            .line = "   |  |  |  +- compile exe builtin_compiler debug native success 22s MaxRSS:1G",
+            .name = "compile exe builtin_compiler debug native",
+            .state = .ran,
+        },
+        .{ .line = "   |  +- translate-c success 36s MaxRSS:699M", .name = "translate-c", .state = .ran },
+        .{ .line = "   +- install check_test_wiring success", .name = "install check_test_wiring", .state = .ran },
+        // A step name is free text: spaces, parentheses and path separators.
+        .{
+            .line = "   |  |  +- run C:\\hostedtoolcache\\windows\\zig\\0.16.0\\x64\\zig.exe (roc_builtins.o) cached",
+            .name = "run C:\\hostedtoolcache\\windows\\zig\\0.16.0\\x64\\zig.exe (roc_builtins.o)",
+            .state = .cached,
+        },
+        // Test counts, passing and failing.
+        .{ .line = "+- run test base 158 pass, 1 skip (159 total) 294ms MaxRSS:32M", .name = "run test base", .state = .ran },
+        .{ .line = "+- run test minici_test 31 pass (31 total) 5ms MaxRSS:11M", .name = "run test minici_test", .state = .ran },
+        .{ .line = "+- run test compile 793 pass, 1 fail (794 total)", .name = "run test compile", .state = .failed },
+        .{ .line = "+- run test cli_test 374 pass, 2 skip, 1 fail (377 total)", .name = "run test cli_test", .state = .failed },
+        .{ .line = "+- run test postcheck 622 pass, 1 crash (623 total)", .name = "run test postcheck", .state = .failed },
+        .{ .line = "+- run test eval 9 pass, 1 timeout (10 total); 2 leaks", .name = "run test eval", .state = .failed },
+        .{ .line = "+- run test eval 10 pass (10 total); 1 error logs", .name = "run test eval", .state = .failed },
+        // Other failures.
+        .{ .line = "|  +- compile exe test-wasm debug native 1 errors", .name = "compile exe test-wasm debug native", .state = .failed },
+        .{ .line = "+- run exe minici failure", .name = "run exe minici", .state = .failed },
+        .{ .line = "+- run exe minici w", .name = "run exe minici", .state = .failed },
+        // Steps that did not run.
+        .{ .line = "run-test-zig-module-postcheck transitive failure", .name = "run-test-zig-module-postcheck", .state = .not_run },
+        .{ .line = "+- install roc transitive skip", .name = "install roc", .state = .not_run },
+        .{ .line = "+- run exe roc skipped", .name = "run exe roc", .state = .not_run },
+        .{
+            .line = "+- compile exe roc debug native skipped (not enough memory) upper bound of 8000000000 exceeded runner limit (4000000000)",
+            .name = "compile exe roc debug native",
+            .state = .not_run,
+        },
+        // Repeats of a step printed elsewhere in the tree.
+        .{
+            .line = "   |  +- compile exe check_test_wiring Debug native (reused)",
+            .name = "compile exe check_test_wiring Debug native",
+            .state = .repeated,
+        },
+        .{
+            .line = "   |  |  +- run exe builtin_compiler (Builtin.bin) (+1 more reused dependencies)",
+            .name = "run exe builtin_compiler (Builtin.bin)",
+            .state = .repeated,
+        },
+    };
+    for (cases) |case| {
+        const step = SummaryStep.parse(case.line) orelse {
+            std.debug.print("unrecognized: {s}\n", .{case.line});
+            return error.UnrecognizedStepLine;
+        };
+        try std.testing.expectEqualStrings(case.name, step.name);
+        try std.testing.expectEqual(case.state, step.state);
+    }
+}
+
+test "SummaryStep.parse rejects a line Zig does not print" {
+    const lines = [_][]const u8{
+        // A state that is not one of Zig's.
+        "+- compile exe roc debug native rebuilt 3s MaxRSS:1G",
+        // No state at all.
+        "+- compile exe roc debug native",
+        // Indented without the `+- ` that ends the tree drawing.
+        "   compile exe roc debug native cached",
+        // Zig never times a failing test count.
+        "+- run test eval 9 pass, 1 fail (10 total) 12ms",
+        // A unit Zig does not use.
+        "+- compile exe roc debug native success 3h",
+    };
+    for (lines) |line| {
+        if (SummaryStep.parse(line)) |step| {
+            std.debug.print("read `{s}` as {s}\n", .{ line, @tagName(step.state) });
+            return error.LineWasNotRejected;
+        }
+    }
+}
+
+test "isCompileStep covers the steps in which Zig runs the compiler" {
+    try std.testing.expect(isCompileStep("compile exe roc debug native-native-musl"));
+    try std.testing.expect(isCompileStep("compile test check Debug native-native"));
+    try std.testing.expect(isCompileStep("compile obj roc_builtins32_bc fast wasm32-freestanding-none"));
+    try std.testing.expect(isCompileStep("compile lib zstd Debug native-native"));
+    try std.testing.expect(isCompileStep("translate-c"));
+    // The phase's own leaf step, and steps that copy or generate files.
+    try std.testing.expect(!isCompileStep("run exe check_test_wiring"));
+    try std.testing.expect(!isCompileStep("run test base"));
+    try std.testing.expect(!isCompileStep("run exe builtin_compiler (Builtin.bin)"));
+    try std.testing.expect(!isCompileStep("install check_test_wiring"));
+    try std.testing.expect(!isCompileStep("WriteFile Builtin.bin"));
+    try std.testing.expect(!isCompileStep("options"));
+}
+
+test "readCompileWork counts a fully reused tree" {
+    // `(reused)` and `(+N more reused dependencies)` lines repeat a step that
+    // is already counted.
+    try expectCompileWork(summary_reused_zig_0_16, 2, &.{});
+    try expectCompileWork(summary_reused_zig_0_17, 3, &.{});
+}
+
+test "readCompileWork names the compile steps that ran" {
+    // Durations and peak RSS are not part of a step's name, and the `(reused)`
+    // repeat of `check_test_wiring` is not a second compile.
+    try expectCompileWork(summary_rebuilt_zig_0_16, 2, &.{
+        "compile exe check_test_wiring Debug native",
+        "compile test machine_code_shim Debug native-native-musl",
+        "compile exe builtin_compiler Debug native",
+    });
+    try expectCompileWork(summary_rebuilt_zig_0_17, 2, &.{
+        "compile exe check_test_wiring debug native",
+        "compile test machine_code_shim debug native-native-musl",
+        "compile exe builtin_compiler debug native",
+        "compile obj machine_code_shim_test_host debug native-native-musl",
+        "translate-c",
+    });
+}
+
+test "readCompileWork reads the tree of a phase that failed" {
+    // The test binary crashed; its compile step was still reused.
+    try expectCompileWork(summary_failed_tests_zig_0_16, 1, &.{});
+    // A compile step with errors ran the compiler; one behind it did not run.
+    try expectCompileWork(summary_compile_errors_zig_0_17, 0, &.{
+        "compile exe test-wasm debug native",
+        "compile exe bytebox debug native",
+        "compile lib bytebox debug native",
+    });
+}
+
+test "readCompileWork reads the last summary in the output" {
+    // A job's own output comes first in the log and can hold the summary of a
+    // `zig build` the job ran itself.
+    try expectCompileWork(summary_compile_errors_zig_0_17 ++ "\n" ++ summary_reused_zig_0_16, 2, &.{});
+}
+
+test "readCompileWork reports a missing summary instead of counting nothing" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const output =
+        \\Checking for separator comments...
+        \\All lints passed!
+        \\
+    ;
+    try std.testing.expect(try readCompileWork(arena.allocator(), output) == .missing_summary);
+    try std.testing.expect(try readCompileWork(arena.allocator(), "") == .missing_summary);
+}
+
+test "readCompileWork rejects a state it does not recognize" {
+    const output =
+        \\Build Summary: 3/3 steps succeeded; 158/159 tests passed (1 skipped)
+        \\run-test-zig-module-base success
+        \\+- run test base 158 pass, 1 skip (159 total) 294ms MaxRSS:32M
+        \\   +- compile test base Debug native-native rebuilt 98ms MaxRSS:19M
+        \\
+    ;
+    try expectUnreadableSummary(output, "unrecognized step line `   +- compile test base Debug native-native rebuilt 98ms MaxRSS:19M`");
+    try expectUnreadableSummary("Build Summary: all steps succeeded\nroot success\n", "unrecognized step counts");
+}
+
+test "readCompileWork rejects a tree that does not list every step the summary counts" {
+    // The reused tree cut off two lines early: one compile step is missing.
+    const cut = std.mem.find(u8, summary_reused_zig_0_16, "      +- compile exe stack_overflow_test_helper") orelse return error.MissingLine;
+    try expectUnreadableSummary(summary_reused_zig_0_16[0..cut], "the summary counts 7/7 steps succeeded but its tree lists 6/6");
+    // A summary line with no tree under it.
+    try expectUnreadableSummary("Build Summary: 7/7 steps succeeded\n", "its tree lists 0/0");
+}
+
+/// A result for `zig build <step>` whose summary read as `reused` cached
+/// compile steps and the `compiled` ones having run.
+fn measuredResult(comptime step: []const u8, status: []const u8, reused: usize, compiled: []const []const u8) CommandResult {
+    var result = testResult(status, 1);
+    result.command = &.{ "zig", "build", step };
+    result.compile_work = .{ .measured = .{ .reused = reused, .compiled = compiled } };
+    return result;
+}
+
+/// Expects the canary to flag exactly `undeclared` for `result`, or to pass it
+/// when `undeclared` is empty.
+fn expectUndeclaredCompiles(result: CommandResult, expectation: CompileExpectation, undeclared: []const []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const failure = try cacheReuseFailure(arena.allocator(), result, expectation) orelse {
+        try std.testing.expectEqual(@as(usize, 0), undeclared.len);
+        return;
+    };
+    switch (failure) {
+        .undeclared_compiles => |names| {
+            try std.testing.expectEqual(undeclared.len, names.len);
+            for (undeclared, names) |expected, actual| try std.testing.expectEqualStrings(expected, actual);
+        },
+        .missing_summary, .unreadable_summary => return error.WrongFailure,
+    }
+}
+
+test "cacheReuseFailure flags the compile steps a job does not declare" {
+    const lock = "compile obj glue_zig_abi_lock_x64_linux Debug x86_64-linux-musl";
+    const generator = "compile exe generate_foreign_abi_lock ReleaseSafe native";
+    const compiled = [_][]const u8{ lock, generator };
+    const result = measuredResult("run-check-glue-abi", "pass", 97, &compiled);
+
+    // Nothing declared: `build-ci` should have built both.
+    try expectUndeclaredCompiles(result, .{ .only = &.{} }, &compiled);
+    // A declared step is the job's own work; only the other one is flagged.
+    try expectUndeclaredCompiles(result, .{ .only = &.{lock} }, &.{generator});
+    try expectUndeclaredCompiles(result, .{ .only = &compiled }, &.{});
+    // A declaration names a step exactly; Zig 0.17's spelling is another name.
+    try expectUndeclaredCompiles(result, .{ .only = &.{"compile obj glue_zig_abi_lock_x64_linux debug x86_64-linux-musl"} }, &compiled);
+    // Without a `build-ci` before it, a phase builds what it needs.
+    try expectUndeclaredCompiles(result, .unrestricted, &.{});
+    // A phase that reused everything passes.
+    try expectUndeclaredCompiles(measuredResult("run-check-test-wiring", "pass", 83, &.{}), .{ .only = &.{} }, &.{});
+    // A phase that failed is still held to it.
+    try expectUndeclaredCompiles(measuredResult("run-check-glue-abi", "fail", 97, &compiled), .{ .only = &.{} }, &compiled);
+}
+
+test "cacheReuseFailure never takes unknown compile work for none" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    // A phase that passed always prints a summary, so one without it fails,
+    // whether or not the lane restricts what it may compile.
+    var passed = testResult("pass", 1);
+    passed.compile_work = .missing_summary;
+    for ([_]CompileExpectation{ .unrestricted, .{ .only = &.{} } }) |expectation| {
+        const failure = try cacheReuseFailure(allocator, passed, expectation) orelse return error.NotFlagged;
+        try std.testing.expect(failure == .missing_summary);
+    }
+
+    // A phase that failed or crashed before the summary is already reported.
+    for ([_][]const u8{ "fail", "crash" }) |status| {
+        var stopped = testResult(status, 1);
+        stopped.compile_work = .missing_summary;
+        try std.testing.expect(try cacheReuseFailure(allocator, stopped, .{ .only = &.{} }) == null);
+    }
+
+    // A summary that cannot be read fails whatever the phase's own status.
+    for ([_][]const u8{ "pass", "fail" }) |status| {
+        var unreadable = testResult(status, 1);
+        unreadable.compile_work = .{ .unreadable_summary = "unrecognized step line `x`" };
+        const failure = try cacheReuseFailure(allocator, unreadable, .unrestricted) orelse return error.NotFlagged;
+        try std.testing.expect(failure == .unreadable_summary);
+    }
+
+    // A skipped phase ran nothing.
+    try std.testing.expect(try cacheReuseFailure(allocator, testResult("skip", 1), .{ .only = &.{} }) == null);
+}
+
+test "cache reuse is enforced whenever build-ci precedes the phases" {
+    const cases = [_]struct { args: []const []const u8, enforced: bool }{
+        // A plain run builds `build-ci` itself.
+        .{ .args = &.{ "minici", "zig" }, .enforced = true },
+        .{ .args = &.{ "minici", "zig", "--minici-shard", "linux-core" }, .enforced = true },
+        // A CI shard skips the build and restores the build job's `.zig-cache`.
+        .{ .args = &.{ "minici", "zig", "--minici-skip-build", "--minici-shard", "windows-core" }, .enforced = true },
+        .{ .args = &.{ "minici", "zig", "--minici-skip-build", "--minici-only", "run-check-test-wiring" }, .enforced = true },
+        // The source lane has no `build-ci`: its checks build their own tools.
+        .{ .args = &.{ "minici", "zig", "--minici-shard", "source" }, .enforced = false },
+        .{ .args = &.{ "minici", "zig", "--minici-skip-build", "--minici-shard", "source" }, .enforced = false },
+    };
+    for (cases) |case| {
+        const parsed = try parseMiniArgs(std.testing.allocator, case.args);
+        defer std.testing.allocator.free(parsed.build_args);
+        try std.testing.expectEqual(case.enforced, buildCiPrecedesPhases(parsed));
+    }
+}
+
+test "appendCompileWorkReport lists the compiled steps under the result line" {
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(std.testing.allocator);
+
+    const wiring = "compile exe check_test_wiring Debug native";
+    const check = "compile test check Debug native-native-musl";
+    var result = measuredResult("run-check-test-wiring", "pass", 54, &.{ wiring, check });
+    result.cache_reuse_failure = .{ .undeclared_compiles = &.{check} };
+    try appendCompileWorkReport(&out, std.testing.allocator, result, .steps, &.{wiring});
+    try std.testing.expectEqualStrings(
+        \\  Compile steps: 54 reused, 2 compiled:
+        \\    compile exe check_test_wiring Debug native (declared in `expected_compiles`)
+        \\    compile test check Debug native-native-musl
+        \\  Cache not reused: `build-ci` should have built 1 of these.
+        \\
+    , out.items);
+
+    // A phase that reused everything adds nothing to the log.
+    out.clearRetainingCapacity();
+    try appendCompileWorkReport(&out, std.testing.allocator, measuredResult("run-check-test-wiring", "pass", 83, &.{}), .steps, &.{});
+    try std.testing.expectEqualStrings("", out.items);
+
+    // `build-ci` shows its counts, not its steps.
+    out.clearRetainingCapacity();
+    try appendCompileWorkReport(&out, std.testing.allocator, measuredResult("build-ci", "pass", 12, &.{ wiring, check }), .counts, &.{});
+    try std.testing.expectEqualStrings("  Compile steps: 12 reused, 2 compiled\n", out.items);
+
+    // Unknown compile work is said to be unknown.
+    out.clearRetainingCapacity();
+    var silent = testResult("pass", 1);
+    silent.compile_work = .missing_summary;
+    silent.cache_reuse_failure = .missing_summary;
+    try appendCompileWorkReport(&out, std.testing.allocator, silent, .steps, &.{});
+    try std.testing.expectEqualStrings(
+        "  `step` passed without printing a `Build Summary:`, so its compile work is unknown\n",
+        out.items,
+    );
+}
+
+test "appendCacheReuseSummary reports a run that reused everything" {
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(std.testing.allocator);
+
+    const results = [_]CommandResult{
+        measuredResult("run-check-test-wiring", "pass", 83, &.{}),
+        testResult("skip", 1),
+        measuredResult("run-check-simd-codegen", "pass", 210, &.{}),
+    };
+    try appendCacheReuseSummary(&out, std.testing.allocator, true, testResult("skip", 1), &results);
+    try std.testing.expectEqualStrings(
+        "MiniCI cache reuse: ok; 2 run phases measured, 293 compile steps reused, 0 compiled\n",
+        out.items,
+    );
+
+    out.clearRetainingCapacity();
+    try appendCacheReuseSummary(&out, std.testing.allocator, true, testResult("fail", 1), &.{});
+    try std.testing.expectEqualStrings("MiniCI cache reuse: no run phase was measured\n", out.items);
+}
+
+test "appendCacheReuseSummary keeps a job's own configuration out of the reuse totals" {
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(std.testing.allocator);
+
+    // The ReleaseSafe shim check compiles its own outputs. They are not steps
+    // the run failed to reuse, so they neither fail it nor count as compiled.
+    var own = measuredResult("run-check-machine-code-shim-archive", "pass", 4, &.{
+        "compile lib roc_machine_code_shim safe native-native-musl",
+        "compile exe machine_code_shim_archive_check debug native",
+    });
+    own.own_configuration = true;
+    const results = [_]CommandResult{
+        measuredResult("run-check-test-wiring", "pass", 83, &.{}),
+        own,
+    };
+    try appendCacheReuseSummary(&out, std.testing.allocator, true, testResult("skip", 1), &results);
+    try std.testing.expectEqualStrings(
+        \\MiniCI cache reuse: ok; 1 run phase measured, 83 compile steps reused, 0 compiled
+        \\  Not counted above: 2 compile steps in jobs that build a configuration of their own.
+        \\
+    , out.items);
+}
+
+test "only a job with build options of its own is exempt from the cache-reuse canary" {
+    // Every job listed here compiles a configuration `build-ci` does not build.
+    // Adding one is a decision to compile in a shard, so it is made here.
+    var with_build_args: usize = 0;
+    for (jobs) |job| {
+        if (job.build_args.len == 0) continue;
+        with_build_args += 1;
+        try std.testing.expectEqualStrings("run-check-machine-code-shim-archive", job.name);
+        try std.testing.expectEqual(@as(usize, 0), job.expected_compiles.len);
+    }
+    try std.testing.expectEqual(@as(usize, 1), with_build_args);
+}
+
+test "appendCacheReuseSummary names each phase that did not reuse its cache" {
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(std.testing.allocator);
+
+    const compiled = [_][]const u8{
+        "compile exe check_test_wiring Debug native",
+        "compile test check Debug native-native-musl",
+    };
+    var wiring = measuredResult("run-check-test-wiring", "pass", 54, &compiled);
+    wiring.cache_reuse_failure = .{ .undeclared_compiles = &compiled };
+    var silent = testResult("pass", 1);
+    silent.command = &.{ "zig", "build", "run-check-snapshots" };
+    silent.compile_work = .missing_summary;
+    silent.cache_reuse_failure = .missing_summary;
+    const results = [_]CommandResult{ wiring, measuredResult("run-check-simd-codegen", "pass", 210, &.{}), silent };
+
+    try appendCacheReuseSummary(&out, std.testing.allocator, true, testResult("skip", 1), &results);
+    try std.testing.expectEqualStrings(
+        \\MiniCI cache reuse: FAILED in 2 phases; 2 run phases measured, 264 compile steps reused, 2 compiled
+        \\  `run-check-test-wiring` compiled 2 steps that `build-ci` should have built:
+        \\    compile exe check_test_wiring Debug native
+        \\    compile test check Debug native-native-musl
+        \\  `run-check-snapshots` passed without printing a `Build Summary:`, so its compile work is unknown
+        \\  Either `build-ci` does not build these steps (see build.zig), or what it built was not reusable here.
+        \\  A job that is meant to compile a step says so in `expected_compiles` (src/build/minici.zig).
+        \\
+    , out.items);
+
+    // The phase tally stays that of a run whose phases all passed.
+    out.clearRetainingCapacity();
+    try appendSummaryLine(&out, std.testing.allocator, 4, testResult("skip", 1), &results, 1_000_000_000);
+    try std.testing.expectEqualStrings(
+        "MiniCI summary: 4/4 phases ran; 3 passed, 0 failed, 0 crashed, 1 skipped; wall 1.000s\n",
+        out.items,
+    );
+}
+
+test "appendCacheReuseSummary does not flag compiles in the lane without build-ci" {
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(std.testing.allocator);
+
+    const results = [_]CommandResult{
+        measuredResult("run-check-tidy", "pass", 0, &.{"compile exe tidy debug native"}),
+    };
+    try appendCacheReuseSummary(&out, std.testing.allocator, false, testResult("skip", 1), &results);
+    try std.testing.expectEqualStrings(
+        "MiniCI cache reuse: not enforced (no `build-ci` before these phases); 1 run phase measured, 0 compile steps reused, 1 compiled\n",
+        out.items,
+    );
+}
+
+test "report.json carries compile work and the canary's verdict" {
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(std.testing.allocator);
+
+    const compiled = [_][]const u8{"compile exe check_test_wiring Debug native"};
+    var wiring = measuredResult("run-check-test-wiring", "pass", 54, &compiled);
+    wiring.cache_reuse_failure = .{ .undeclared_compiles = &compiled };
+    var unreadable = testResult("pass", 1);
+    unreadable.compile_work = .{ .unreadable_summary = "unrecognized step line `x`" };
+    unreadable.cache_reuse_failure = .{ .unreadable_summary = "unrecognized step line `x`" };
+    const results = [_]CommandResult{ wiring, unreadable };
+
+    try appendReportJsonObject(&out, std.testing.allocator, 1, true, testResult("skip", 1), &results);
+    const expected = [_][]const u8{
+        "\"schema_version\": 2,",
+        "\"cache_reuse_enforced\": true,",
+        // A command that did not run has no counts, rather than counts of zero.
+        "\"compile_work\": {\"summary\": \"not_run\"},\n    \"cache_reuse_failure\": null",
+        "\"compile_work\": {\"summary\": \"measured\", \"reused\": 54, \"compiled\": 1, " ++
+            "\"compiled_steps\": [\"compile exe check_test_wiring Debug native\"]},",
+        "\"cache_reuse_failure\": {\"kind\": \"undeclared_compiles\", \"steps\": [\"compile exe check_test_wiring Debug native\"]}",
+        "\"compile_work\": {\"summary\": \"unreadable_summary\", \"problem\": \"unrecognized step line `x`\"},",
+        "\"cache_reuse_failure\": {\"kind\": \"unreadable_summary\", \"problem\": \"unrecognized step line `x`\"}",
+    };
+    for (expected) |needle| {
+        if (std.mem.find(u8, out.items, needle) == null) std.debug.print("missing from report: {s}\n{s}\n", .{ needle, out.items });
+        try std.testing.expect(std.mem.find(u8, out.items, needle) != null);
+    }
 }

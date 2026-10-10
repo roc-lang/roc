@@ -64,6 +64,7 @@
 //! and the comparison's facts flow there without any merge in between.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const collections = @import("collections");
@@ -105,7 +106,7 @@ pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!voi
     const proc_count = store.procSpecCount();
     var proc_index: usize = 0;
     while (proc_index < proc_count) : (proc_index += 1) {
-        try pass.transformProc(@enumFromInt(proc_index));
+        try pass.transformProc(@fromBackingInt(@intCast(proc_index)));
     }
 }
 
@@ -174,7 +175,7 @@ test "range prove ordered procedure runs match whole-store constant arithmetic a
             for (0..store.procSpecCount()) |index| {
                 var scratch = std.heap.ArenaAllocator.init(testing.allocator);
                 defer scratch.deinit();
-                try runProc(&store, &layouts, @enumFromInt(index), scratch.allocator());
+                try runProc(&store, &layouts, @fromBackingInt(@intCast(index)), scratch.allocator());
             }
         } else {
             try run(&store, &layouts);
@@ -456,8 +457,8 @@ const QueryBest = struct {
     assumed: u64 = 0,
     /// On the `relaxFrom` worklist already.
     queued: bool = false,
-    /// Times the slack improved after the root was first reached.
-    improvements: u8 = 0,
+    /// Times the root has come off the `relaxFrom` worklist.
+    visits: u32 = 0,
 };
 
 /// Index links of one path fact, see `Pass.fact_links`.
@@ -1631,10 +1632,13 @@ const Pass = struct {
     /// are reached, nearest first and through the path's older facts
     /// first, so the roots a region's seeded facts relate are reached
     /// ahead of the ones its own branches add and the bounds persisted
-    /// from them come back the same round after round. A root's slack
-    /// improving `query_visit_cap` times after it was reached means the
-    /// facts hold a negative cycle (no execution satisfies them
-    /// together), and the walk ends there with the slacks it has.
+    /// from them come back the same round after round. The worklist is
+    /// first in, first out, so a root comes off it at most once per pass
+    /// over the roots reached so far, and without a negative cycle among
+    /// them its slack settles within as many passes as there are roots: a
+    /// root coming off more times than that means the facts hold a
+    /// negative cycle (no execution satisfies them together), and the
+    /// walk ends there with the slacks it has.
     fn relaxFrom(self: *Pass, start: NodeId, direction: Direction) ResourceError!void {
         self.query_best.clearRetainingCapacity();
         self.query_queue.clearRetainingCapacity();
@@ -1646,6 +1650,8 @@ const Pass = struct {
             const node = self.query_queue.items[next];
             const acc = self.query_best.getPtr(node).?;
             acc.queued = false;
+            acc.visits += 1;
+            if (acc.visits > self.query_best.count()) return;
             const acc_c = acc.c;
             const acc_assumed = acc.assumed;
             if (node >= self.fwd_heads.items.len) continue;
@@ -1674,8 +1680,6 @@ const Pass = struct {
                 const next_acc = clampSlack(acc_c + fact.c);
                 if (self.query_best.getPtr(other)) |known| {
                     if (next_acc >= known.c) continue;
-                    if (known.improvements >= query_visit_cap) return;
-                    known.improvements += 1;
                     known.c = next_acc;
                     known.assumed = acc_assumed | fact.assumed;
                     self.query_used |= fact.assumed;
@@ -1751,7 +1755,7 @@ const Pass = struct {
         const ra = self.rootOf(a);
         const rb = self.rootOf(b);
         const m = k + self.offLoOf(b) - self.offHiOf(a);
-        if (builtin.mode == .Debug) self.last_claim = .{ .ordering = .{ .a = ra, .b = rb, .m = m } };
+        if (builtin.mode == .debug) self.last_claim = .{ .ordering = .{ .a = ra, .b = rb, .m = m } };
         if (ra == rb) return m >= 0;
 
         // Reach rb from ra along fact edges with accumulated slack <= m.
@@ -2041,7 +2045,30 @@ const Pass = struct {
             if (seen.contains(current)) continue;
             try seen.put(current, {});
             switch (self.store.getCFStmt(current)) {
-                .init_uninitialized => |s| {
+                inline .init_uninitialized,
+                .assign_literal,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .assign_call_dict,
+                .set_local,
+                => |s| {
                     try self.bumpAssign(s.target);
                     try self.edgeTo(s.next);
                 },
@@ -2050,92 +2077,8 @@ const Pass = struct {
                     if (s.op == .local) try self.alias_of.put(s.target, s.op.local);
                     try self.edgeTo(s.next);
                 },
-                .assign_literal => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_call => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_call_erased => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_packed_erased_fn => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_low_level => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_list => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_struct => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_tag => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_boxy_desc_ref => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_boxy_dict_ref => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_boxy_box => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_boxy_record_update => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_boxy_reuse_box => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_boxy_unbox => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_boxy_adapt => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_boxy_inspect => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_boxy_tag => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_boxy_tag_payload => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_call_dict => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .store_struct => |s| {
+                inline .store_struct, .store_tag => |s| {
                     try self.bumpAssign(s.dest);
-                    try self.edgeTo(s.next);
-                },
-                .store_tag => |s| {
-                    try self.bumpAssign(s.dest);
-                    try self.edgeTo(s.next);
-                },
-                .set_local => |s| {
-                    try self.bumpAssign(s.target);
                     try self.edgeTo(s.next);
                 },
                 .debug => |s| try self.edgeTo(s.next),
@@ -2159,11 +2102,7 @@ const Pass = struct {
                     try self.edgeTo(s.initialized_branch);
                     try self.edgeTo(s.uninitialized_branch);
                 },
-                .str_match => |s| {
-                    try self.edgeTo(s.on_match);
-                    try self.edgeTo(s.on_miss);
-                },
-                .boxy_tag_match => |s| {
+                inline .str_match, .boxy_tag_match => |s| {
                     try self.edgeTo(s.on_match);
                     try self.edgeTo(s.on_miss);
                 },
@@ -2177,8 +2116,8 @@ const Pass = struct {
                 .join => |s| {
                     try self.join_stmts.put(s.id, current);
                     try self.joins_in_order.append(self.allocator, current);
-                    if (@intFromEnum(s.id) + 1 > self.max_join_id) {
-                        self.max_join_id = @intFromEnum(s.id) + 1;
+                    if (@backingInt(s.id) + 1 > self.max_join_id) {
+                        self.max_join_id = @backingInt(s.id) + 1;
                     }
                     try self.edgeTo(s.remainder);
                     // The body is only entered through jumps, so it is only
@@ -2334,6 +2273,8 @@ const Pass = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .assign_call_dict,
@@ -2365,7 +2306,7 @@ const Pass = struct {
                 .crash,
                 => {
                     successors.clearRetainingCapacity();
-                    try BodyClone.appendSuccessorsWithAllocator(self.store, &successors, item.stmt, self.allocator);
+                    try BodyClone.appendSuccessors(self.store, &successors, item.stmt, self.allocator);
                     for (successors.items) |next| try stack.append(self.allocator, .{ .stmt = next, .join = item.join });
                 },
             }
@@ -2486,6 +2427,8 @@ const Pass = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .assign_call_dict,
@@ -2515,7 +2458,7 @@ const Pass = struct {
                 .loop_break,
                 .ret,
                 .crash,
-                => try BodyClone.appendSuccessorsWithAllocator(self.store, successors, stmt, gpa),
+                => try BodyClone.appendSuccessors(self.store, successors, stmt, gpa),
             }
             for (successors.items) |next| {
                 try scan.edges.append(gpa, .{ .from = cursor, .to = try scan.node(gpa, next) });
@@ -2646,6 +2589,8 @@ const Pass = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .assign_call_dict,
@@ -2699,7 +2644,7 @@ const Pass = struct {
     }
 
     fn joinAssignedKey(join_id: JoinPointId, local: LocalId) u64 {
-        return (@as(u64, @intFromEnum(join_id)) << 32) | @as(u64, @intFromEnum(local));
+        return (@as(u64, @backingInt(join_id)) << 32) | @as(u64, @backingInt(local));
     }
 
     /// The local a statement writes, if any.
@@ -2719,6 +2664,8 @@ const Pass = struct {
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
             .assign_call_dict,
@@ -2897,11 +2844,11 @@ const Pass = struct {
     }
 
     fn stableTermOrder(a: StableTerm, b: StableTerm) std.math.Order {
-        const tag_a = @intFromEnum(std.meta.activeTag(a));
-        const tag_b = @intFromEnum(std.meta.activeTag(b));
+        const tag_a = @backingInt(std.meta.activeTag(a));
+        const tag_b = @backingInt(std.meta.activeTag(b));
         if (tag_a != tag_b) return std.math.order(tag_a, tag_b);
         return switch (a) {
-            .value_of, .len_of => |local| std.math.order(@intFromEnum(local), @intFromEnum(switch (b) {
+            .value_of, .len_of => |local| std.math.order(@backingInt(local), @backingInt(switch (b) {
                 .value_of, .len_of => |other| other,
                 .constant => unreachable,
             })),
@@ -3349,7 +3296,7 @@ const Pass = struct {
 
     /// Key for one loop parameter's cross-round bounds.
     fn loopBoundKey(join_id: JoinPointId, local: LocalId) u64 {
-        return (@as(u64, @intFromEnum(join_id)) << 32) | @intFromEnum(local);
+        return (@as(u64, @backingInt(join_id)) << 32) | @backingInt(local);
     }
 
     /// Round-stable form of a bound root: a list-length term of a stable
@@ -4250,6 +4197,8 @@ const Pass = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .boxy_tag_match,
@@ -4304,6 +4253,8 @@ const Pass = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .boxy_tag_match,
@@ -4337,8 +4288,8 @@ const Pass = struct {
                 structural_jumps_ready = true;
             }
 
-            const true_id: JoinPointId = @enumFromInt(self.max_join_id);
-            const false_id: JoinPointId = @enumFromInt(self.max_join_id + 1);
+            const true_id: JoinPointId = @fromBackingInt(@intCast(self.max_join_id));
+            const false_id: JoinPointId = @fromBackingInt(@intCast(self.max_join_id + 1));
             self.max_join_id += 2;
 
             const empty_params = try self.store.addLocalSpan(&.{});
@@ -4406,6 +4357,8 @@ const Pass = struct {
                     .assign_boxy_unbox,
                     .assign_boxy_adapt,
                     .assign_boxy_inspect,
+                    .assign_boxy_eq,
+                    .assign_boxy_hash,
                     .assign_boxy_tag,
                     .assign_boxy_tag_payload,
                     .boxy_tag_match,
@@ -4439,7 +4392,7 @@ const Pass = struct {
     /// Debug-only: snapshot the deciding proof of a rewrite for independent
     /// certification at the end of the round.
     fn recordProof(self: *Pass, stmt: CFStmtId) ResourceError!void {
-        if (builtin.mode != .Debug) return;
+        if (builtin.mode != .debug) return;
         const claim = self.last_claim orelse return;
         const start: u32 = @intCast(self.proof_facts.items.len);
         try self.proof_facts.appendSlice(self.allocator, self.facts.items);
@@ -4458,7 +4411,7 @@ const Pass = struct {
     /// closure over the snapshot facts re-derives the claim. A failure is a
     /// compiler bug in the pass, never a property of the compiled program.
     fn certifyRound(self: *Pass, body: CFStmtId) ResourceError!void {
-        if (builtin.mode != .Debug) return;
+        if (builtin.mode != .debug) return;
         if (self.proof_records.items.len == 0) return;
 
         var doms = try RangeProveCertify.dominators(self.allocator, self.store, body);
@@ -4470,9 +4423,9 @@ const Pass = struct {
                 switch (fact.origin) {
                     .branch => |origin_stmt| {
                         if (!doms.dominates(origin_stmt, record.stmt)) {
-                            std.debug.panic(
+                            invariant(
                                 "range_prove certification failed: fact from s{d} does not dominate rewritten s{d}",
-                                .{ @intFromEnum(origin_stmt), @intFromEnum(record.stmt) },
+                                .{ @backingInt(origin_stmt), @backingInt(record.stmt) },
                             );
                         }
                     },
@@ -4482,9 +4435,9 @@ const Pass = struct {
             switch (record.claim) {
                 .ordering => |claim| {
                     if (!RangeProveCertify.implies(self.allocator, facts, self.nodes.items, claim.a, claim.b, claim.m)) {
-                        std.debug.panic(
+                        invariant(
                             "range_prove certification failed: claim at s{d} does not follow from its facts",
-                            .{@intFromEnum(record.stmt)},
+                            .{@backingInt(record.stmt)},
                         );
                     }
                 },
@@ -4492,9 +4445,9 @@ const Pass = struct {
                     if (!doms.dominates(claim.edge_head, record.stmt) or
                         !RangeProveCertify.isFalseOverflowEdge(self.store, claim))
                     {
-                        std.debug.panic(
+                        invariant(
                             "range_prove certification failed: overflow claim at s{d} does not follow from its false predicate edge",
-                            .{@intFromEnum(record.stmt)},
+                            .{@backingInt(record.stmt)},
                         );
                     }
                 },
@@ -4667,82 +4620,25 @@ const Pass = struct {
                         }
                         current = s.next;
                     },
-                    .init_uninitialized => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_call => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_call_erased => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_packed_erased_fn => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_boxy_desc_ref => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_boxy_dict_ref => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_boxy_box => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_boxy_record_update => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_boxy_reuse_box => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_boxy_unbox => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_boxy_adapt => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_boxy_inspect => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_boxy_tag => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_boxy_tag_payload => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_call_dict => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_list => |s| {
+                    inline .init_uninitialized,
+                    .assign_call,
+                    .assign_call_erased,
+                    .assign_packed_erased_fn,
+                    .assign_boxy_desc_ref,
+                    .assign_boxy_dict_ref,
+                    .assign_boxy_box,
+                    .assign_boxy_record_update,
+                    .assign_boxy_reuse_box,
+                    .assign_boxy_unbox,
+                    .assign_boxy_adapt,
+                    .assign_boxy_inspect,
+                    .assign_boxy_eq,
+                    .assign_boxy_hash,
+                    .assign_boxy_tag,
+                    .assign_boxy_tag_payload,
+                    .assign_call_dict,
+                    .assign_list,
+                    => |s| {
                         try self.visited.put(current, {});
                         try self.bindFresh(s.target);
                         current = s.next;
@@ -4752,41 +4648,12 @@ const Pass = struct {
                         try self.modelStruct(s.target, s.fields);
                         current = s.next;
                     },
-                    .store_struct => |s| {
+                    inline .store_struct, .store_tag => |s| {
                         try self.visited.put(current, {});
                         try self.bindFresh(s.dest);
                         current = s.next;
                     },
-                    .store_tag => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.dest);
-                        current = s.next;
-                    },
-                    .debug => |s| {
-                        try self.visited.put(current, {});
-                        current = s.next;
-                    },
-                    .expect => |s| {
-                        try self.visited.put(current, {});
-                        current = s.next;
-                    },
-                    .comptime_branch_taken => |s| {
-                        try self.visited.put(current, {});
-                        current = s.next;
-                    },
-                    .incref => |s| {
-                        try self.visited.put(current, {});
-                        current = s.next;
-                    },
-                    .decref => |s| {
-                        try self.visited.put(current, {});
-                        current = s.next;
-                    },
-                    .decref_if_initialized => |s| {
-                        try self.visited.put(current, {});
-                        current = s.next;
-                    },
-                    .free => |s| {
+                    inline .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                         try self.visited.put(current, {});
                         current = s.next;
                     },
@@ -4806,13 +4673,7 @@ const Pass = struct {
                         try self.pushFrame(s.uninitialized_branch, null);
                         break :walk;
                     },
-                    .str_match => |s| {
-                        try self.visited.put(current, {});
-                        try self.pushFrame(s.on_match, null);
-                        try self.pushFrame(s.on_miss, null);
-                        break :walk;
-                    },
-                    .boxy_tag_match => |s| {
+                    inline .str_match, .boxy_tag_match => |s| {
                         try self.visited.put(current, {});
                         try self.pushFrame(s.on_match, null);
                         try self.pushFrame(s.on_miss, null);
@@ -4999,9 +4860,8 @@ const Pass = struct {
 
     fn modelLiteral(self: *Pass, target: LocalId, value: LIR.LiteralValue) ResourceError!void {
         const literal: ?i128 = switch (value) {
-            .i64_literal => |lit| if (lit.value >= 0) lit.value else null,
-            .i128_literal => |lit| if (lit.value >= 0) lit.value else null,
-            .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal => null,
+            inline .i64_literal, .i128_literal => |lit| if (lit.value >= 0) lit.value else null,
+            .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .proc_ref, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal => null,
         };
         if (literal) |v| {
             // A non-negative literal is the same number whatever its type,
@@ -5926,7 +5786,7 @@ const Pass = struct {
         var proof = try self.proveFamilyNoOverflow(entry.operation, lhs, rhs, operand_layout);
         if (!proof.proven) {
             if (self.pathNoOverflowFact(entry.operation, lhs, rhs, operand_layout)) |fact| {
-                if (builtin.mode == .Debug) self.last_claim = .{ .no_overflow = fact };
+                if (builtin.mode == .debug) self.last_claim = .{ .no_overflow = fact };
                 proof = .{
                     .proven = true,
                     .result = try self.survivingFamilyResult(entry.operation, lhs, rhs),
@@ -6118,7 +5978,7 @@ const Pass = struct {
         rhs: NodeId,
         operand_layout: layout_mod.Idx,
     ) ResourceError!ArithmeticProof {
-        if (builtin.mode == .Debug) self.last_claim = null;
+        if (builtin.mode == .debug) self.last_claim = null;
         const max = trackedIntMax(operand_layout) orelse return .{};
         const lhs_lo = self.absLoOf(lhs);
         const lhs_hi = self.absHiOf(lhs);
@@ -6330,6 +6190,8 @@ const RangeProveCertify = struct {
                 .assign_boxy_unbox => |t| try list.append(allocator, t.next),
                 .assign_boxy_adapt => |t| try list.append(allocator, t.next),
                 .assign_boxy_inspect => |t| try list.append(allocator, t.next),
+                .assign_boxy_eq => |t| try list.append(allocator, t.next),
+                .assign_boxy_hash => |t| try list.append(allocator, t.next),
                 .assign_boxy_tag => |t| try list.append(allocator, t.next),
                 .assign_boxy_tag_payload => |t| try list.append(allocator, t.next),
                 .assign_call_dict => |t| try list.append(allocator, t.next),
@@ -6354,11 +6216,7 @@ const RangeProveCertify = struct {
                     try list.append(allocator, t.initialized_branch);
                     try list.append(allocator, t.uninitialized_branch);
                 },
-                .str_match => |t| {
-                    try list.append(allocator, t.on_match);
-                    try list.append(allocator, t.on_miss);
-                },
-                .boxy_tag_match => |t| {
+                inline .str_match, .boxy_tag_match => |t| {
                     try list.append(allocator, t.on_match);
                     try list.append(allocator, t.on_miss);
                 },

@@ -125,8 +125,8 @@ test "required-only accesses canonicalize to the same flat path representation" 
     for (expected_names, 0..) |expected_name, position| {
         const segment_idx = env.module_env.store.fieldAccessSegmentAt(access.segments, @intCast(position));
         try std.testing.expectEqual(
-            @intFromEnum(access.segments.start) + @as(u32, @intCast(position)),
-            @intFromEnum(segment_idx),
+            @backingInt(access.segments.start) + @as(u32, @intCast(position)),
+            @backingInt(segment_idx),
         );
         const segment = env.module_env.store.getFieldAccessSegment(segment_idx);
         try std.testing.expectEqualStrings(expected_name, env.getIdent(segment.name));

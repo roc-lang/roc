@@ -39,10 +39,12 @@ build() { # target opt out
 # byte/dword/qword siblings arrived with SSE4.1.
 x86_above_baseline='^(v[a-z].*|popcnt|lzcnt|tzcnt|pshufb|pclmul.*|pext|pdep|pmovsx.*|pmovzx.*|pminsb|pmaxsb|pminuw|pmaxuw|pminud|pmaxud|pminsd|pmaxsd|pcmpgtq|pcmpeqq|palignr|phadd.*|phsub.*|pmulld|pmuldq|pabs[bwd]|pmaddubsw|pmulhrsw|blend.*|ptest|movbe|crc32.*|round[sp][sd]|insertps|pinsr[bdq]|pextr[bdq])$'
 
-x86_mnemonics() { # binary -> distinct mnemonics in .text
-    objdump -d --no-show-raw-insn --section=.text "$1" \
-        | awk '{ if ($1 ~ /^[0-9a-f]+:$/) print $2 }' \
-        | sort -u
+# Binary -> distinct mnemonics in its function bodies. A plain `objdump -d` also
+# decodes the padding, string literals, and stale object-writer leftovers that
+# sit between functions in `.text`, and reports whatever mnemonics that data
+# happens to decode to. See ci/x86_code_mnemonics.py.
+x86_mnemonics() {
+    python3 ci/x86_code_mnemonics.py "$1" | sort -u
 }
 
 x86_above_baseline_mnemonics() { # read mnemonics on stdin

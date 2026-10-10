@@ -1,15 +1,7 @@
 app [main!] { pf: platform "./platform/fallible_alias_main.roc" }
 
-# A hosted result declared through a transparent alias, widened with `?`:
-# platform/FallibleHostAlias.roc declares its host symbol as IoResult(Str), an
-# alias over Try(Str, [HostErr(Str)]), and platform/FallibleAlias.roc unwraps
-# it into a closed row that also carries Widened(I32). Monotype lowering keeps
-# the alias on the declared side, so building the widening adapter has to cross
-# it to find the `Try` the checker published the capability for; reading the
-# alias as written declines an adapter the relation already committed to.
-#
-# The host always returns Ok("ok"), so this must print "ok". An extern emitted
-# at the widened row would read those same bytes as Err.
+# An alias-wrapped hosted result explicitly reconstructed into a wider row.
+# The host always returns Ok("ok"); a widened extern would misread it as Err.
 
 import pf.FallibleAlias
 import pf.Stdout

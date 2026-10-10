@@ -1,5 +1,4 @@
-# A self-recursive callable value built by a block, with an open result row,
-# used twice at the same type under one owner: inside one expect, and inside
+# A self-recursive callable value built by a block, used twice at the same type under one owner: inside one expect, and inside
 # another value's inlined lambda body. Each use expands the value under its
 # own recursive binding, so the lambda lowered for one use names that use's
 # binding and must not be reused for the other.

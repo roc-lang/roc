@@ -45,6 +45,12 @@ fn cacheOs(os: std.Target.Os.Tag) CacheOs {
         .watchos,
         .uefi,
         .@"3ds",
+        .wiiu,
+        .@"switch",
+        .gba,
+        .psx,
+        .tios,
+        .ashetos,
         .ps3,
         .ps4,
         .ps5,
@@ -66,12 +72,6 @@ fn cacheOs(os: std.Target.Os.Tag) CacheOs {
 
 /// Cache configuration constants
 pub const Constants = struct {
-    /// Default cache directory name
-    pub const DEFAULT_CACHE_DIR = ".roc_cache";
-
-    /// Default file extension for cache files
-    pub const CACHE_FILE_EXT = ".rcache";
-
     /// Maximum cache file size (256MB)
     pub const MAX_CACHE_SIZE = 256 * 1024 * 1024;
 
@@ -282,16 +282,25 @@ pub const Constants = struct {
     /// 127: Type descriptors mark declared nominal backing structure.
     /// 128: Module environments carry no package-qualified module name, and
     ///      checked procedure names use the module's own name.
-    /// 129: Stored closure captures record whether each is a lexical capture
+    /// 129: Interpolation plans validate segments before assembling values.
+    /// 130: Recursive value bindings, erased row evidence, and row-default
+    /// constraint discharge are explicit in checked artifacts.
+    /// 131: If-expression metadata records source, and, or or origin instead
+    ///      of a boolean warning flag.
+    /// 132: Scheme-use records of replayed uses name their source's
+    ///      substitution.
+    /// 133: Type descriptor flags mark deferred requirement callables.
+    /// 134: Hoisted roots record an unannotated top-level value that always
+    ///      crashes as a valueless binding.
+    /// 135: Canonicalization warns on redundant returns recorded by parsing.
+    /// 136: Folded dispatch relations carry explicit target substitutions.
+    /// 137: Module environments persist diagnostic host-return provenance.
+    /// 138: Hosted Try errors no longer widen implicitly at question operators.
+    /// 139: Stored closure captures record whether each is a lexical capture
     ///      or a top-level compile-time root's recursive binding.
-    /// 130: Compile-time roots of specialization-owned top-level values are
-    ///      marked `per_specialization`, and stored compile-time debug
-    ///      observations carry an optional value site.
-    /// 131: Top-level annotated values quantify their implicitly opened rows
-    ///      instead of grounding them to `[]`.
-    /// 132: Checked bodies gain the `row_coerce` expression form (design.md
-    ///      "Row Coercion Primitive"); no checker site emits it yet.
-    pub const CACHE_VERSION = 132;
+    /// 140: Checked bodies gain the `row_coerce` expression form (design.md
+    ///      "Row Coercion Primitive").
+    pub const CACHE_VERSION = 140;
 };
 
 /// Configuration for the Roc cache system.
@@ -443,27 +452,9 @@ pub const CacheConfig = struct {
         return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "test" });
     }
 
-    /// Get the prepared Wasm host cache directory.
-    pub fn getWasmHostCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
-        const version_dir = try self.getVersionCacheDir(allocator);
-        defer allocator.free(version_dir);
-
-        return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "wasm-host" });
-    }
-
     /// Get the cache entries directory (alias for module cache dir).
     pub fn getCacheEntriesDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         return self.getModuleCacheDir(allocator);
-    }
-
-    /// Get maximum cache size in bytes.
-    pub fn getMaxSizeBytes(self: Self) u64 {
-        return @as(u64, self.max_size_mb) * 1024 * 1024;
-    }
-
-    /// Get maximum age in nanoseconds.
-    pub fn getMaxAgeNanos(self: Self) i64 {
-        return @as(i64, self.max_age_days) * 24 * 60 * 60 * 1_000_000_000;
     }
 };
 
@@ -497,11 +488,6 @@ pub const CacheStats = struct {
     /// no counter is ever shared between the two caches.
     pub const Kind = enum { checked, canonicalized };
 
-    /// Record a cache hit.
-    pub fn recordHit(self: *Self, bytes_read: u64) void {
-        self.recordHitFor(.checked, bytes_read);
-    }
-
     /// Record a cache miss.
     pub fn recordMiss(self: *Self) void {
         self.recordMissFor(.checked);
@@ -510,11 +496,6 @@ pub const CacheStats = struct {
     /// Record a cache invalidation.
     pub fn recordInvalidation(self: *Self) void {
         self.recordInvalidationFor(.checked);
-    }
-
-    /// Record a successful cache store.
-    pub fn recordStore(self: *Self, bytes_written: u64) void {
-        self.recordStoreFor(.checked, bytes_written);
     }
 
     /// Record a failed cache store.
@@ -573,30 +554,6 @@ pub const CacheStats = struct {
             .canonicalized => self.canonicalized_store_failures += 1,
         }
     }
-
-    /// Get total checked-cache operations.
-    pub fn getTotalOps(self: Self) u64 {
-        return self.hits + self.misses;
-    }
-
-    /// Get total canonicalized-cache operations.
-    pub fn getCanonicalizedTotalOps(self: Self) u64 {
-        return self.canonicalized_hits + self.canonicalized_misses;
-    }
-
-    /// Get checked-cache hit rate as a percentage.
-    pub fn getHitRate(self: Self) f64 {
-        const total = self.getTotalOps();
-        if (total == 0) return 0.0;
-        return (@as(f64, @floatFromInt(self.hits)) / @as(f64, @floatFromInt(total))) * 100.0;
-    }
-
-    /// Get canonicalized-cache hit rate as a percentage.
-    pub fn getCanonicalizedHitRate(self: Self) f64 {
-        const total = self.getCanonicalizedTotalOps();
-        if (total == 0) return 0.0;
-        return (@as(f64, @floatFromInt(self.canonicalized_hits)) / @as(f64, @floatFromInt(total))) * 100.0;
-    }
 };
 
 /// Get the platform-specific cache directory name.
@@ -610,10 +567,10 @@ pub fn getCacheDirName() []const u8 {
 
 /// Get a compiler version-specific directory name.
 ///
-/// Returns the human-readable compiler version string (e.g., "debug-abcd1234")
-/// to isolate cache entries between different compiler builds.
+/// Uses an explicit namespace prefix followed by the owning compiler's content
+/// identity. Older compilers recognize bare hexadecimal directories as legacy
+/// caches and delete them, so the prefix also preserves concurrent-version use.
+/// The directory spelling does not change semantic compatibility or cache keys.
 pub fn getCompilerVersionDir(allocator: Allocator) Allocator.Error![]u8 {
-    // Use build-time compiler version that includes git commit SHA
-    const version_info = build_options.compiler_version;
-    return allocator.dupe(u8, version_info);
+    return std.fmt.allocPrint(allocator, "compat-{s}", .{build_options.compiler_compatibility_id});
 }

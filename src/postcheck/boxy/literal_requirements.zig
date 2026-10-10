@@ -26,7 +26,7 @@ pub const Term = union(enum) {
 
 const TermContext = struct {
     pub fn hash(_: TermContext, term: Term) u64 {
-        var state = std.hash.Wyhash.init(@intFromEnum(std.meta.activeTag(term)));
+        var state = std.hash.Wyhash.init(@backingInt(std.meta.activeTag(term)));
         switch (term) {
             .variable => |variable| state.update(std.mem.asBytes(&variable)),
             .application => |application| {
@@ -88,7 +88,7 @@ pub const Terms = struct {
                 break :blk true;
             },
         };
-        const id: TermId = @enumFromInt(self.entries.items.len);
+        const id: TermId = @fromBackingInt(@intCast(self.entries.items.len));
         self.entries.appendAssumeCapacity(owned);
         self.closed.appendAssumeCapacity(is_closed);
         self.by_term.putAssumeCapacity(owned, id);
@@ -96,7 +96,7 @@ pub const Terms = struct {
     }
 
     pub fn isClosed(self: *const Terms, term: TermId) bool {
-        return self.closed.items[@intFromEnum(term)];
+        return self.closed.items[@backingInt(term)];
     }
 
     /// Substitute `bindings` into `root`, rebuilding each open application
@@ -122,7 +122,7 @@ pub const Terms = struct {
                     delivered = term;
                 } else if (memo.get(term)) |result| {
                     delivered = result;
-                } else switch (self.entries.items[@intFromEnum(term)]) {
+                } else switch (self.entries.items[@backingInt(term)]) {
                     .variable => |variable| {
                         // A lexical variable not quantified by the callee
                         // stays in its enclosing scope. Only recorded
@@ -152,7 +152,7 @@ pub const Terms = struct {
                 top.next += 1;
                 delivered = null;
             }
-            const application = self.entries.items[@intFromEnum(top.term)].application;
+            const application = self.entries.items[@backingInt(top.term)].application;
             if (top.next < application.args.len) {
                 pending = application.args[top.next];
                 continue;
@@ -208,12 +208,12 @@ pub const Abi = struct {
     }
 
     pub fn workerParameters(self: *const Abi, worker: WorkerId) []const RequirementId {
-        const span = self.workers[@intFromEnum(worker)];
+        const span = self.workers[@backingInt(worker)];
         return self.parameters[span.start..][0..span.len];
     }
 
     pub fn edgeArguments(self: *const Abi, edge: EdgeId) []const Argument {
-        const span = self.edges[@intFromEnum(edge)];
+        const span = self.edges[@backingInt(edge)];
         return self.arguments[span.start..][0..span.len];
     }
 };
@@ -277,7 +277,7 @@ pub const Graph = struct {
     /// Allocate the identity of one source literal. Its checked source is
     /// retained by the planner, independently of its instantiated demands.
     pub fn addSite(self: *Graph) SiteId {
-        const site: SiteId = @enumFromInt(self.site_count);
+        const site: SiteId = @fromBackingInt(@intCast(self.site_count));
         self.site_count += 1;
         return site;
     }
@@ -292,13 +292,13 @@ pub const Graph = struct {
     }
 
     pub fn addWorker(self: *Graph) Allocator.Error!WorkerId {
-        const id: WorkerId = @enumFromInt(self.workers.items.len);
+        const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
         try self.workers.append(self.allocator, .{});
         return id;
     }
 
     pub fn addEdge(self: *Graph, caller: ?WorkerId, callee: WorkerId, bindings: []const Binding) Allocator.Error!EdgeId {
-        const id: EdgeId = @enumFromInt(self.edges.items.len);
+        const id: EdgeId = @fromBackingInt(@intCast(self.edges.items.len));
         const owned = try self.allocator.dupe(Binding, bindings);
         self.edges.append(self.allocator, .{ .caller = caller, .callee = callee, .bindings = owned }) catch |err| {
             self.allocator.free(owned);
@@ -313,12 +313,12 @@ pub const Graph = struct {
     /// if a propagated demand reaches the edge.
     pub fn addDeferredEdge(self: *Graph, caller: ?WorkerId, callee: WorkerId) Allocator.Error!EdgeId {
         const id = try self.addEdge(caller, callee, &.{});
-        self.edges.items[@intFromEnum(id)].bindings_ready = false;
+        self.edges.items[@backingInt(id)].bindings_ready = false;
         return id;
     }
 
     pub fn bindEdge(self: *Graph, id: EdgeId, bindings: []const Binding) Allocator.Error!void {
-        const edge = &self.edges.items[@intFromEnum(id)];
+        const edge = &self.edges.items[@backingInt(id)];
         std.debug.assert(!edge.bindings_ready);
         const owned = try self.allocator.dupe(Binding, bindings);
         self.allocator.free(edge.bindings);
@@ -331,7 +331,7 @@ pub const Graph = struct {
     }
 
     fn connectEdge(self: *Graph, id: EdgeId) Allocator.Error!EdgeId {
-        const worker = &self.workers.items[@intFromEnum(self.edges.items[@intFromEnum(id)].callee)];
+        const worker = &self.workers.items[@backingInt(self.edges.items[@backingInt(id)].callee)];
         try worker.incoming.append(self.allocator, id);
         var requirements = worker.requirements.keyIterator();
         while (requirements.next()) |requirement| {
@@ -344,7 +344,7 @@ pub const Graph = struct {
         if (self.by_requirement.get(requirement)) |id| return id;
         try self.requirements.ensureUnusedCapacity(self.allocator, 1);
         const entry = try self.by_requirement.getOrPut(self.allocator, requirement);
-        const id: RequirementId = @enumFromInt(self.requirements.items.len);
+        const id: RequirementId = @fromBackingInt(@intCast(self.requirements.items.len));
         entry.value_ptr.* = id;
         self.requirements.appendAssumeCapacity(requirement);
         return id;
@@ -357,7 +357,7 @@ pub const Graph = struct {
     pub fn demand(self: *Graph, worker: WorkerId, requirement: Requirement) Allocator.Error!Source {
         const id = try self.internRequirement(requirement);
         if (self.isClosed(requirement)) return .{ .closed = id };
-        const owner = &self.workers.items[@intFromEnum(worker)];
+        const owner = &self.workers.items[@backingInt(worker)];
         if (!(try owner.requirements.getOrPut(self.allocator, id)).found_existing) {
             for (owner.incoming.items) |edge| try self.pending.append(self.allocator, .{ .edge = edge, .requirement = id });
         }
@@ -369,11 +369,11 @@ pub const Graph = struct {
     pub fn solve(self: *Graph) (Allocator.Error || error{ UnboundRootRequirement, MissingSubstitution })!void {
         while (self.cursor < self.pending.items.len) : (self.cursor += 1) {
             const pending = self.pending.items[self.cursor];
-            const edge = &self.edges.items[@intFromEnum(pending.edge)];
+            const edge = &self.edges.items[@backingInt(pending.edge)];
             if (edge.args.contains(pending.requirement)) continue;
             if (!edge.bindings_ready) return error.MissingSubstitution;
-            const requirement = self.requirements.items[@intFromEnum(pending.requirement)];
-            if (edge.site_limit) |limit| if (@intFromEnum(requirement.site) >= limit) continue;
+            const requirement = self.requirements.items[@backingInt(pending.requirement)];
+            if (edge.site_limit) |limit| if (@backingInt(requirement.site) >= limit) continue;
             const ty = try self.terms.substitute(requirement.ty, edge.bindings, &edge.memo);
             const instantiated = Requirement{
                 .site = requirement.site,
@@ -393,7 +393,7 @@ pub const Graph = struct {
     }
 
     pub fn argument(self: *const Graph, edge: EdgeId, requirement: RequirementId) ?Source {
-        return self.edges.items[@intFromEnum(edge)].args.get(requirement);
+        return self.edges.items[@backingInt(edge)].args.get(requirement);
     }
 
     pub fn freezeAbi(self: *const Graph) Allocator.Error!Abi {
@@ -425,35 +425,35 @@ pub const Graph = struct {
         for (self.requirements.items, 0..) |requirement, index| {
             if (self.observations.contains(requirement.site)) continue;
             if (!self.isClosed(requirement)) continue;
-            if (active_sites) |active| if (!active[@intFromEnum(requirement.site)]) continue;
-            const id: RequirementId = @enumFromInt(index);
-            results[@intFromEnum(id)] = @intCast(closed.items.len);
+            if (active_sites) |active| if (!active[@backingInt(requirement.site)]) continue;
+            const id: RequirementId = @fromBackingInt(@intCast(index));
+            results[@backingInt(id)] = @intCast(closed.items.len);
             try closed.append(allocator, id);
         }
         for (self.workers.items, workers, 0..) |worker, *span, index| {
             span.* = .{ .start = @intCast(parameters.items.len) };
             var required = worker.requirements.keyIterator();
             while (required.next()) |requirement| {
-                if (self.observations.contains(self.requirements.items[@intFromEnum(requirement.*)].site)) continue;
-                if (active_sites) |active| if (!active[@intFromEnum(self.requirements.items[@intFromEnum(requirement.*)].site)]) continue;
+                if (self.observations.contains(self.requirements.items[@backingInt(requirement.*)].site)) continue;
+                if (active_sites) |active| if (!active[@backingInt(self.requirements.items[@backingInt(requirement.*)].site)]) continue;
                 try parameters.append(allocator, requirement.*);
             }
             span.len = @intCast(parameters.items.len - span.start);
             const params = parameters.items[span.start..][0..span.len];
             std.mem.sort(RequirementId, params, {}, struct {
                 fn lessThan(_: void, a: RequirementId, b: RequirementId) bool {
-                    return @intFromEnum(a) < @intFromEnum(b);
+                    return @backingInt(a) < @backingInt(b);
                 }
             }.lessThan);
-            for (params, 0..) |requirement, ordinal| try slots.put(.{ .worker = @enumFromInt(index), .requirement = requirement }, @intCast(ordinal));
+            for (params, 0..) |requirement, ordinal| try slots.put(.{ .worker = @fromBackingInt(@intCast(index)), .requirement = requirement }, @intCast(ordinal));
         }
         for (self.edges.items, edges) |edge, *span| {
-            const callee = workers[@intFromEnum(edge.callee)];
+            const callee = workers[@backingInt(edge.callee)];
             span.* = .{ .start = @intCast(arguments.items.len), .len = callee.len };
             for (parameters.items[callee.start..][0..callee.len]) |requirement| {
                 const source = edge.args.get(requirement).?;
                 try arguments.append(allocator, switch (source) {
-                    .closed => |id| .{ .result = results[@intFromEnum(id)].? },
+                    .closed => |id| .{ .result = results[@backingInt(id)].? },
                     .parameter => |id| .{ .parameter = slots.get(.{ .worker = edge.caller.?, .requirement = id }).? },
                 });
             }
@@ -496,7 +496,7 @@ test "boxy literal demands close composite types across recursive forwarding" {
     const forwarded = graph.argument(call, required.parameter).?;
     const result = graph.argument(root, forwarded.parameter).?;
     const expected = try graph.terms.intern(.{ .application = .{ .constructor = 2, .args = &.{ word, number } } });
-    try std.testing.expectEqual(expected, graph.requirements.items[@intFromEnum(result.closed)].ty);
+    try std.testing.expectEqual(expected, graph.requirements.items[@backingInt(result.closed)].ty);
     const processed = graph.cursor;
     _ = try graph.demand(worker, .{ .site = site, .ty = pair });
     try graph.solve();
@@ -553,7 +553,7 @@ test "boxy literal demands close a finite polymorphic recursive permutation" {
     try std.testing.expect(swapped.parameter != requirement.parameter);
     try std.testing.expectEqual(requirement, graph.argument(recursive, swapped.parameter).?);
     try std.testing.expect(graph.argument(root, requirement.parameter).?.closed != graph.argument(root, swapped.parameter).?.closed);
-    try std.testing.expectEqual(@as(usize, 2), graph.workers.items[@intFromEnum(worker)].requirements.count());
+    try std.testing.expectEqual(@as(usize, 2), graph.workers.items[@backingInt(worker)].requirements.count());
 }
 
 test "boxy literal demands only request substitutions on demanded edges" {
@@ -570,7 +570,7 @@ test "boxy literal demands only request substitutions on demanded edges" {
     try std.testing.expectEqual(root, graph.pendingEdge());
     try graph.bindEdge(root, &.{.{ .variable = 0, .term = fixed }});
     try graph.solve();
-    try std.testing.expectEqual(fixed, graph.requirements.items[@intFromEnum(graph.argument(root, demand.parameter).?.closed)].ty);
+    try std.testing.expectEqual(fixed, graph.requirements.items[@backingInt(graph.argument(root, demand.parameter).?.closed)].ty);
 }
 
 fn allocationFailureFixture(allocator: Allocator) (Allocator.Error || error{ UnboundRootRequirement, MissingSubstitution })!void {
@@ -653,7 +653,7 @@ test "boxy freeze observations collect closed environments without imposing runt
     const demand = try graph.demand(worker, .{ .site = site, .ty = variable });
     try graph.solve();
     const observed = graph.argument(closed_edge, demand.parameter).?.closed;
-    try std.testing.expectEqual(concrete, graph.requirements.items[@intFromEnum(observed)].ty);
+    try std.testing.expectEqual(concrete, graph.requirements.items[@backingInt(observed)].ty);
     var abi = try graph.freezeAbi();
     defer abi.deinit();
     try std.testing.expectEqual(@as(usize, 0), abi.parameters.len);

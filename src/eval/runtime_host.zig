@@ -61,18 +61,14 @@ pub const HostEvent = union(enum) {
     /// effect events must compare `EffectEvent.name` separately.
     pub fn bytes(self: HostEvent) []const u8 {
         return switch (self) {
-            .dbg => |msg| msg,
-            .expect_failed => |msg| msg,
-            .crashed => |msg| msg,
+            inline .dbg, .expect_failed, .crashed => |msg| msg,
             .effect => |effect| effect.payload,
         };
     }
 
     pub fn deinit(self: *HostEvent, allocator: std.mem.Allocator) void {
         switch (self.*) {
-            .dbg => |msg| allocator.free(msg),
-            .expect_failed => |msg| allocator.free(msg),
-            .crashed => |msg| allocator.free(msg),
+            inline .dbg, .expect_failed, .crashed => |msg| allocator.free(msg),
             .effect => |effect| {
                 allocator.free(effect.name);
                 allocator.free(effect.payload);

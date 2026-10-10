@@ -105,12 +105,8 @@ pub fn startBackgroundCleanup(cache_base: []const u8, std_io: Io) std.Thread.Spa
 fn runCleanup(base: CacheBase, std_io: Io) void {
     const now_ns = nowNs(std_io);
 
-    // TODO: REMOVE THIS FOR THE 0.1.0 RELEASE - NOT NEEDED ANYMORE
-    // This is just to clean up people who have old stale persistent Roc caches
-    // from before we restructured the cache directories to use roc/{version}/
-    // structure.
+    // Remove old flat files without treating current compiler namespaces as legacy.
     cleanupLegacyPersistentCache(std_io, base.path(), null);
-    // END OF LEGACY CLEANUP - REMOVE ABOVE FOR 0.1.0
 
     // Clean up scratch directories (5 minute threshold)
     cleanupScratchDirs(std_io, base.path(), now_ns, null);
@@ -347,13 +343,12 @@ pub fn deleteTempDir(std_io: Io, temp_dir_path: []const u8) void {
     Dir.cwd().deleteFile(std_io, txt_path) catch {};
 }
 
-// TODO: REMOVE THESE FOR THE 0.1.0 RELEASE - NOT NEEDED ANYMORE
-// This cleans up old persistent cache entries from before we restructured to
-// use the roc/{version}/ directory structure.
-
-/// Clean up legacy persistent cache that used the old flat structure.
-/// Old structure: ~/.cache/roc/{hash}/ or ~/.cache/roc/*.rcache (flat)
-/// New structure: ~/.cache/roc/{version}/mod/ and ~/.cache/roc/{version}/exe/
+/// Remove legacy `.rcache` files directly inside the cache root.
+///
+/// Directory names cannot identify legacy caches: current source-derived
+/// compiler compatibility IDs are hexadecimal, just like old flat hash
+/// directories. Never delete a directory here. The scoped expiry passes
+/// handle scratch directories and artifacts within compiler namespaces.
 fn cleanupLegacyPersistentCache(std_io: Io, cache_base: []const u8, maybe_stats: ?*CleanupStats) void {
     var base = Dir.cwd().openDir(std_io, cache_base, .{ .iterate = true }) catch return;
     defer base.close(std_io);
@@ -361,45 +356,58 @@ fn cleanupLegacyPersistentCache(std_io: Io, cache_base: []const u8, maybe_stats:
     var it = base.iterate();
     while (true) {
         const entry = (it.next(std_io) catch break) orelse break;
-
-        if (entry.kind == .file) {
-            // Old-style: direct .rcache files in the cache root.
-            if (!std.mem.endsWith(u8, entry.name, ".rcache")) continue;
-            base.deleteFile(std_io, entry.name) catch {
-                if (maybe_stats) |stats| stats.errors += 1;
-                continue;
-            };
-            if (maybe_stats) |stats| stats.cache_files_deleted += 1;
-        } else if (entry.kind == .directory) {
-            // Old-style hash directory (vs. a new version dir, which has a hyphen).
-            if (!isLegacyHashDir(entry.name)) continue;
-            base.deleteTree(std_io, entry.name) catch {
-                if (maybe_stats) |stats| stats.errors += 1;
-                continue;
-            };
-            if (maybe_stats) |stats| stats.temp_dirs_deleted += 1;
-        }
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".rcache")) continue;
+        base.deleteFile(std_io, entry.name) catch {
+            if (maybe_stats) |stats| stats.errors += 1;
+            continue;
+        };
+        if (maybe_stats) |stats| stats.temp_files_deleted += 1;
     }
 }
 
-/// Check if a directory name looks like an old-style hash directory.
-/// Old hash dirs: all hex characters, typically 16+ chars (blake3 hash prefix)
-/// New version dirs: contain hyphens like "debug-abcd1234"
-fn isLegacyHashDir(name: []const u8) bool {
-    // New version directories always contain a hyphen
-    if (std.mem.findScalar(u8, name, '-') != null) {
-        return false;
+test "background cleanup preserves compatibility namespaces and removes only flat legacy files" {
+    const allocator = std.testing.allocator;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const cache_base = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp_dir.sub_path, "roc" });
+    defer allocator.free(cache_base);
+    const compatibility_id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const namespaces = [_][]const u8{ compatibility_id, "compat-" ++ compatibility_id, "debug-abcd1234", "embedder-compiler-v1" };
+    for (namespaces) |namespace| {
+        const scratch = try std.fs.path.join(allocator, &.{ cache_base, namespace, scratch_dir_name, "active" });
+        defer allocator.free(scratch);
+        const artifact_dir = try std.fs.path.join(allocator, &.{ cache_base, namespace, "mod", "aa" });
+        defer allocator.free(artifact_dir);
+        try Dir.cwd().createDirPath(std.testing.io, scratch);
+        try Dir.cwd().createDirPath(std.testing.io, artifact_dir);
+        const source = try std.fs.path.join(allocator, &.{ scratch, "main.roc" });
+        defer allocator.free(source);
+        const artifact = try std.fs.path.join(allocator, &.{ artifact_dir, "checked.rcache" });
+        defer allocator.free(artifact);
+        try Dir.cwd().writeFile(std.testing.io, .{ .sub_path = source, .data = "live staged source" });
+        try Dir.cwd().writeFile(std.testing.io, .{ .sub_path = artifact, .data = "live checked artifact" });
     }
+    const legacy_file = try std.fs.path.join(allocator, &.{ cache_base, "old.rcache" });
+    defer allocator.free(legacy_file);
+    try Dir.cwd().writeFile(std.testing.io, .{ .sub_path = legacy_file, .data = "flat legacy cache" });
 
-    // Old hash directories are all hex characters and fairly long
-    if (name.len < 8) return false;
+    var cleanup = (try startBackgroundCleanup(cache_base, std.testing.io)).?;
+    cleanup.join();
 
-    for (name) |c| {
-        const is_hex = (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F');
-        if (!is_hex) return false;
+    for (namespaces) |namespace| {
+        const source = try std.fs.path.join(allocator, &.{ cache_base, namespace, scratch_dir_name, "active", "main.roc" });
+        defer allocator.free(source);
+        const artifact = try std.fs.path.join(allocator, &.{ cache_base, namespace, "mod", "aa", "checked.rcache" });
+        defer allocator.free(artifact);
+        const source_bytes = try Dir.cwd().readFileAlloc(std.testing.io, source, allocator, .unlimited);
+        defer allocator.free(source_bytes);
+        const artifact_bytes = try Dir.cwd().readFileAlloc(std.testing.io, artifact, allocator, .unlimited);
+        defer allocator.free(artifact_bytes);
+        try std.testing.expectEqualStrings("live staged source", source_bytes);
+        try std.testing.expectEqualStrings("live checked artifact", artifact_bytes);
     }
-
-    return true;
+    try std.testing.expectError(error.FileNotFound, Dir.cwd().access(std.testing.io, legacy_file, .{}));
 }
 
 test "CleanupStats initializes to zero" {

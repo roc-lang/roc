@@ -8,7 +8,7 @@ bool_rejects : Str -> Bool
 bool_rejects = |json| {
 	result : Try(Bool, [InvalidJson(Str)])
 	result = Json.parse(json)
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 
 # Parse with `skip` as an unknown (skipped) field, so a rejection is
@@ -17,7 +17,7 @@ skipped_scalar_rejects : Str -> Bool
 skipped_scalar_rejects = |scalar| {
 	result : Try({ a : U64 }, [InvalidJson(Str), MissingRequiredField(Str)])
 	result = Json.parse(Str.concat(Str.concat("{\"skip\":", scalar), ",\"a\":7}"))
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 
 skipped_scalar_accepts : Str -> Bool
@@ -38,7 +38,7 @@ u64_rejects : Str -> Bool
 u64_rejects = |json| {
 	result : Try(U64, [InvalidJson(Str)])
 	result = Json.parse(json)
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 
 i64_parses_as : Str, I64 -> Bool
@@ -59,7 +59,7 @@ f64_rejects : Str -> Bool
 f64_rejects = |json| {
 	result : Try(F64, [InvalidJson(Str)])
 	result = Json.parse(json)
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 
 dec_parses_as : Str, Dec -> Bool
@@ -159,12 +159,12 @@ expect {
 expect {
 	result : Try({ a : U64, b : U64 }, [InvalidJson(Str), MissingRequiredField(Str)])
 	result = Json.parse("{\"a\":,\"b\":1}")
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 expect {
 	result : Try(List(U64), [InvalidJson(Str)])
 	result = Json.parse("[,1]")
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 
 # --- inter-token whitespace is exactly RFC 8259's ws ---
@@ -183,10 +183,10 @@ expect {
 	result : Try(List(U64), [InvalidJson(Str)])
 	result = match document {
 		Ok(value) => Json.parse(value)
-		Err(_) => Err(Json.invalid_json)
+		Err(_) => Err(Json.invalid_json({}))
 	}
 
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 
 # a no-break space (U+00A0) before a value is not JSON whitespace
@@ -196,10 +196,10 @@ expect {
 	result : Try(Bool, [InvalidJson(Str)])
 	result = match document {
 		Ok(value) => Json.parse(value)
-		Err(_) => Err(Json.invalid_json)
+		Err(_) => Err(Json.invalid_json({}))
 	}
 
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 
 # a vertical tab (0x0B) after the document is not JSON whitespace
@@ -209,10 +209,10 @@ expect {
 	result : Try(U64, [InvalidJson(Str)])
 	result = match document {
 		Ok(value) => Json.parse(value)
-		Err(_) => Err(Json.invalid_json)
+		Err(_) => Err(Json.invalid_json({}))
 	}
 
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 
 # a no-break space at each remaining grammar position rejects the document
@@ -224,10 +224,10 @@ expect {
 	result : Try({ a : U64 }, [InvalidJson(Str), MissingRequiredField(Str)])
 	result = match document {
 		Ok(value) => Json.parse(value)
-		Err(_) => Err(Json.invalid_json)
+		Err(_) => Err(Json.invalid_json({}))
 	}
 
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 
 # after the colon, before the value
@@ -237,10 +237,10 @@ expect {
 	result : Try({ a : U64 }, [InvalidJson(Str), MissingRequiredField(Str)])
 	result = match document {
 		Ok(value) => Json.parse(value)
-		Err(_) => Err(Json.invalid_json)
+		Err(_) => Err(Json.invalid_json({}))
 	}
 
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 
 # between object fields, after the comma
@@ -250,10 +250,10 @@ expect {
 	result : Try({ a : U64, b : U64 }, [InvalidJson(Str), MissingRequiredField(Str)])
 	result = match document {
 		Ok(value) => Json.parse(value)
-		Err(_) => Err(Json.invalid_json)
+		Err(_) => Err(Json.invalid_json({}))
 	}
 
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 
 # before the object closer
@@ -263,10 +263,10 @@ expect {
 	result : Try({ a : U64 }, [InvalidJson(Str), MissingRequiredField(Str)])
 	result = match document {
 		Ok(value) => Json.parse(value)
-		Err(_) => Err(Json.invalid_json)
+		Err(_) => Err(Json.invalid_json({}))
 	}
 
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 
 # after the array opener
@@ -276,10 +276,10 @@ expect {
 	result : Try(List(U64), [InvalidJson(Str)])
 	result = match document {
 		Ok(value) => Json.parse(value)
-		Err(_) => Err(Json.invalid_json)
+		Err(_) => Err(Json.invalid_json({}))
 	}
 
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 
 # inside a skipped object, before a key
@@ -289,8 +289,8 @@ expect {
 	result : Try({ a : U64 }, [InvalidJson(Str), MissingRequiredField(Str)])
 	result = match document {
 		Ok(value) => Json.parse(value)
-		Err(_) => Err(Json.invalid_json)
+		Err(_) => Err(Json.invalid_json({}))
 	}
 
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }

@@ -19,6 +19,7 @@
 //! Aggregates".
 
 const std = @import("std");
+const base = @import("base");
 const collections = @import("collections");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
@@ -309,7 +310,7 @@ pub const Dismantles = struct {
     }
 
     pub fn ownedOnlyParamBenefits(self: *const Dismantles, proc: LIR.LirProcSpecId) arc_sig.ParamMask {
-        const index = @intFromEnum(proc);
+        const index = @backingInt(proc);
         if (index >= self.owned_only_param_benefits.len) {
             dismantleInvariant("ARC owned-only benefit lookup exceeded the analyzed source-procedure table");
         }
@@ -317,16 +318,16 @@ pub const Dismantles = struct {
     }
 
     pub fn ownedOnlyBindingRoot(self: *const Dismantles, local: LIR.LocalId) ?LIR.LocalId {
-        const index = @intFromEnum(local);
+        const index = @backingInt(local);
         if (index >= self.owned_only_binding_roots.len) {
             dismantleInvariant("ARC owned-only binding lookup exceeded the analyzed local table");
         }
         const root = self.owned_only_binding_roots[index];
-        return if (root == no_index) null else @enumFromInt(root);
+        return if (root == no_index) null else @fromBackingInt(@intCast(root));
     }
 
     pub fn isTakeBinding(self: *const Dismantles, local: LIR.LocalId) bool {
-        const index = @intFromEnum(local);
+        const index = @backingInt(local);
         if (index >= self.take_bindings.len) {
             dismantleInvariant("ARC take-binding lookup exceeded the analyzed local table");
         }
@@ -352,7 +353,7 @@ pub const Dismantles = struct {
 };
 
 fn dismantleInvariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .Debug) std.debug.panic(message, .{});
+    if (@import("builtin").mode == .debug) base.invariant(message, .{});
     unreachable;
 }
 
@@ -389,7 +390,7 @@ const MentionEdge = struct {
 /// occurrence of the root other than its definition, a discriminant read, a
 /// borrowed pure alias, or the view itself disqualifies it.
 const UnionRoot = struct {
-    def_stmt: LIR.CFStmtId = @enumFromInt(no_index),
+    def_stmt: LIR.CFStmtId = @fromBackingInt(@intCast(no_index)),
     def_count: u32 = 0,
     disqualified: bool = false,
     /// The single payload view, `no_index` before one is seen and
@@ -410,7 +411,7 @@ const OrderMark = enum(u8) {
 };
 
 const Candidate = struct {
-    def_stmt: LIR.CFStmtId = @enumFromInt(no_index),
+    def_stmt: LIR.CFStmtId = @fromBackingInt(@intCast(no_index)),
     def_count: u32 = 0,
     join_starts: std.ArrayList(LIR.CFStmtId) = .empty,
     disqualified: bool = false,
@@ -500,7 +501,7 @@ const Analysis = struct {
     }
 
     fn demandOwned(self: *Analysis, local: LIR.LocalId) void {
-        self.owned_demand[@intFromEnum(local)] = true;
+        self.owned_demand[@backingInt(local)] = true;
     }
 
     fn noteDemandAlias(self: *Analysis, source: LIR.LocalId, target: LIR.LocalId) Error!void {
@@ -512,8 +513,8 @@ const Analysis = struct {
         while (changed) {
             changed = false;
             for (self.demand_aliases.items) |edge| {
-                if (!self.owned_demand[@intFromEnum(edge.target)]) continue;
-                const source = &self.owned_demand[@intFromEnum(edge.source)];
+                if (!self.owned_demand[@backingInt(edge.target)]) continue;
+                const source = &self.owned_demand[@backingInt(edge.source)];
                 if (source.*) continue;
                 source.* = true;
                 changed = true;
@@ -525,7 +526,7 @@ const Analysis = struct {
     /// dismantling. Cheap: layout answers are memoized per field layout, and the
     /// full per-candidate work only happens for locals that pass.
     fn passesGate(self: *Analysis, local: LIR.LocalId) Error!bool {
-        const local_index = @intFromEnum(local);
+        const local_index = @backingInt(local);
         if (local_index >= self.rc_local.len) dismantleInvariant("ARC dismantle resource table did not cover local");
         if (!self.rc_local[local_index]) return false;
         const local_layout = self.layouts.getLayout(self.store.getLocal(local).layout_idx);
@@ -558,7 +559,7 @@ const Analysis = struct {
     }
 
     fn entryOf(self: *Analysis, local: LIR.LocalId) Error!?*Candidate {
-        const index = @intFromEnum(local);
+        const index = @backingInt(local);
         switch (self.state[index]) {
             .ineligible, .transparent_alias => return null,
             .candidate => return self.candidates.getPtr(index).?,
@@ -577,19 +578,19 @@ const Analysis = struct {
 
     /// The container a source local stands for: itself, or its alias root.
     fn resolveRoot(self: *Analysis, local: LIR.LocalId) LIR.LocalId {
-        const index = @intFromEnum(local);
+        const index = @backingInt(local);
         if (self.projected_container[index] != no_index and self.projected_container[index] != index) {
-            return @enumFromInt(self.projected_container[index]);
+            return @fromBackingInt(@intCast(self.projected_container[index]));
         }
         if (self.state[index] == .transparent_alias) {
-            return @enumFromInt(self.alias_root[index]);
+            return @fromBackingInt(@intCast(self.alias_root[index]));
         }
         return local;
     }
 
     fn disqualify(self: *Analysis, local: LIR.LocalId) void {
         const root = self.resolveRoot(local);
-        const index = @intFromEnum(root);
+        const index = @backingInt(root);
         if (self.state[index] == .candidate) {
             if (self.candidates.getPtr(index)) |candidate| candidate.disqualified = true;
         }
@@ -598,10 +599,10 @@ const Analysis = struct {
 
     /// Records an operand mention of a solved-borrowed refcounted local.
     fn noteMention(self: *Analysis, stmt: LIR.CFStmtId, local: LIR.LocalId) Error!void {
-        const index = @intFromEnum(local);
+        const index = @backingInt(local);
         if (!self.rc_local[index] or !self.solution.isBorrowed(local)) return;
         try self.mention_edges.append(self.gpa, .{
-            .stmt = @intFromEnum(stmt),
+            .stmt = @backingInt(stmt),
             .next = self.mention_heads[index],
         });
         self.mention_heads[index] = @intCast(self.mention_edges.items.len - 1);
@@ -631,7 +632,7 @@ const Analysis = struct {
     /// neither a join parameter nor conditionally initialized.
     fn unionRootOf(self: *Analysis, local: LIR.LocalId) ?u32 {
         const unit = self.solution.unitLocalOf(local);
-        const unit_index = @intFromEnum(unit);
+        const unit_index = @backingInt(unit);
         if (unit_index >= self.rc_local.len or !self.rc_local[unit_index]) return null;
         if (self.layouts.getLayout(self.store.getLocal(unit).layout_idx).tag != .tag_union) return null;
         if (self.solution.isBorrowed(unit) or self.solution.isJoinParam(unit)) return null;
@@ -664,20 +665,20 @@ const Analysis = struct {
         if (!projectionOwnsAllRc(self.store, self.layouts, op.source, target, projection)) return false;
         const entry = try self.unionEntryOf(root_index);
         if (entry.view == no_index) {
-            entry.view = @intFromEnum(target);
+            entry.view = @backingInt(target);
             entry.variant_index = op.variant_index;
             entry.tag_discriminant = op.tag_discriminant;
         } else {
             entry.view = ambiguous_view;
         }
-        self.view_root[@intFromEnum(target)] = root_index;
+        self.view_root[@backingInt(target)] = root_index;
         return true;
     }
 
     /// A definition of `local` by `stmt`: one value-producing assignment,
     /// or an explicit initialization edge of a join cell.
     fn noteDef(self: *Analysis, local: LIR.LocalId, stmt: LIR.CFStmtId) Error!void {
-        const index = @intFromEnum(local);
+        const index = @backingInt(local);
         if (self.projected_container[index] != no_index and self.projected_container[index] != index) return;
         if (self.state[index] == .transparent_alias) {
             // A second definition of an alias re-points it; the root can no
@@ -713,12 +714,12 @@ const Analysis = struct {
     fn noteFieldRead(self: *Analysis, stmt: LIR.CFStmtId, source: LIR.LocalId, field_idx: u32, target: LIR.LocalId) Error!void {
         // A refcounted field read through a borrowed source observes the
         // source's stored unit at the read itself when the target retains.
-        if (self.rc_local[@intFromEnum(target)]) try self.noteMention(stmt, source);
+        if (self.rc_local[@backingInt(target)]) try self.noteMention(stmt, source);
         const root = self.resolveRoot(source);
-        const target_index = @intFromEnum(target);
+        const target_index = @backingInt(target);
         const representative_index = self.projected_container[target_index];
         if (representative_index != no_index and representative_index != target_index) {
-            try self.noteEquivalencedRead(stmt, root, field_idx, target, @enumFromInt(representative_index));
+            try self.noteEquivalencedRead(stmt, root, field_idx, target, @fromBackingInt(@intCast(representative_index)));
             return;
         }
         const candidate = (try self.entryOf(root)) orelse return;
@@ -754,7 +755,7 @@ const Analysis = struct {
     }
 
     fn noteAliasDef(self: *Analysis, stmt: LIR.CFStmtId, target: LIR.LocalId, source: LIR.LocalId) Error!void {
-        const target_index = @intFromEnum(target);
+        const target_index = @backingInt(target);
         if (self.state[target_index] == .transparent_alias) {
             // Redefinition of an existing alias: neither its old nor its new
             // root can attribute reads through it.
@@ -768,7 +769,7 @@ const Analysis = struct {
         // is the container for an owned struct but the union root for a
         // payload view, so the unit chain is the same-value test that covers
         // both.
-        const explicit_projected_alias = self.projected_container[target_index] == @intFromEnum(root);
+        const explicit_projected_alias = self.projected_container[target_index] == @backingInt(root);
         const transparent = self.solution.isBorrowed(target) and
             (explicit_projected_alias or self.solution.leaderOf(target) == root or self.solution.unitLocalOf(target) == root) and
             ((try self.entryOf(root)) != null);
@@ -778,7 +779,7 @@ const Analysis = struct {
                 if (self.candidates.getPtr(target_index)) |candidate| candidate.disqualified = true;
             }
             self.state[target_index] = .transparent_alias;
-            self.alias_root[target_index] = @intFromEnum(root);
+            self.alias_root[target_index] = @backingInt(root);
         } else {
             // An owned same-value binding is a path-local whole use. It can
             // move an intact container on this edge, while takes on mutually
@@ -908,7 +909,7 @@ const FutureFields = struct {
                 },
                 .join => |stmt| try self.edge(gpa, index, stmt.remainder, ~@as(u64, 0)),
                 .jump => |stmt| {
-                    if (joins.get(@intFromEnum(stmt.target))) |body| try self.edge(gpa, index, body, ~@as(u64, 0));
+                    if (joins.get(@backingInt(stmt.target))) |body| try self.edge(gpa, index, body, ~@as(u64, 0));
                 },
                 .switch_stmt => |stmt| {
                     const branches = store.getCFSwitchBranches(stmt.branches);
@@ -935,6 +936,8 @@ const FutureFields = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .assign_call_dict,
@@ -962,7 +965,7 @@ const FutureFields = struct {
                 .comptime_exhaustiveness_failed,
                 => {
                     successors.clearRetainingCapacity();
-                    try body_clone.appendSuccessors(@constCast(store), &successors, cursor);
+                    try body_clone.appendSuccessors(store, &successors, cursor, gpa);
                     for (successors.items) |next| try self.edge(gpa, index, next, ~@as(u64, 0));
                 },
             }
@@ -1008,7 +1011,7 @@ fn fieldObservedAfter(
             },
             .join => |stmt| try work.append(gpa, stmt.remainder),
             .jump => |stmt| {
-                if (joins.get(@intFromEnum(stmt.target))) |body| try work.append(gpa, body);
+                if (joins.get(@backingInt(stmt.target))) |body| try work.append(gpa, body);
             },
             .switch_stmt => |stmt| {
                 const branches = store.getCFSwitchBranches(stmt.branches);
@@ -1037,6 +1040,8 @@ fn fieldObservedAfter(
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
             .assign_call_dict,
@@ -1062,7 +1067,7 @@ fn fieldObservedAfter(
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            => try body_clone.appendSuccessors(@constCast(store), &work, cursor),
+            => try body_clone.appendSuccessors(store, &work, cursor, gpa),
         }
     }
     return false;
@@ -1082,19 +1087,19 @@ fn collectProcJoinBodies(
 ) Error!void {
     try stack.append(gpa, root);
     while (stack.pop()) |stmt_id| {
-        const stmt_index = @intFromEnum(stmt_id);
+        const stmt_index = @backingInt(stmt_id);
         if (epochs[stmt_index] == epoch) continue;
         epochs[stmt_index] = epoch;
         const stmt = store.getCFStmt(stmt_id);
         if (stmt == .join) {
-            const entry = try joins.getOrPut(gpa, @intFromEnum(stmt.join.id));
+            const entry = try joins.getOrPut(gpa, @backingInt(stmt.join.id));
             if (entry.found_existing) {
                 if (entry.value_ptr.* != stmt.join.body) dismantleInvariant("procedure contains two bodies for one join identity");
             } else {
                 entry.value_ptr.* = stmt.join.body;
             }
         }
-        try body_clone.appendSuccessorsWithAllocator(store, stack, stmt_id, gpa);
+        try body_clone.appendSuccessors(store, stack, stmt_id, gpa);
     }
 }
 
@@ -1163,7 +1168,7 @@ test "future field observations agree with per-read traversal across joins rebin
     // Reserve the two procedure-local join identities before building their
     // bodies, which contain forward references to the enclosing joins.
     var join_ids: [2]LIR.JoinPointId = undefined;
-    for (&join_ids, 0..) |*id, index| id.* = @enumFromInt(index);
+    for (&join_ids, 0..) |*id, index| id.* = @fromBackingInt(@intCast(index));
     const outer_id = join_ids[0];
     const nested_id = join_ids[1];
     const jump = try store.addCFStmt(.{ .jump = .{ .target = outer_id } }, .test_fixture);
@@ -1201,8 +1206,8 @@ test "future field observations agree with per-read traversal across joins rebin
     } }, .test_fixture);
     var joins = std.AutoHashMapUnmanaged(u32, LIR.CFStmtId).empty;
     defer joins.deinit(gpa);
-    try joins.put(gpa, @intFromEnum(outer_id), nested);
-    try joins.put(gpa, @intFromEnum(nested_id), branch);
+    try joins.put(gpa, @backingInt(outer_id), nested);
+    try joins.put(gpa, @backingInt(nested_id), branch);
     var reads = std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind).empty;
     defer reads.deinit(gpa);
     try reads.put(gpa, read, .{ .bit = 1, .consuming = false });
@@ -1465,12 +1470,12 @@ const StatementDominance = struct {
         defer successors.deinit(store.allocator);
         for (0..store.cfStmtCount()) |index| {
             successors.clearRetainingCapacity();
-            try body_clone.appendSuccessors(store, &successors, @enumFromInt(@as(u32, @intCast(index))));
-            for (successors.items) |next| try edges.append(gpa, .{ .from = @intCast(index), .to = @intFromEnum(next) });
+            try body_clone.appendSuccessors(store, &successors, @fromBackingInt(@as(u32, @intCast(index))), store.allocator);
+            for (successors.items) |next| try edges.append(gpa, .{ .from = @intCast(index), .to = @backingInt(next) });
         }
         for (0..store.procSpecCount()) |index| {
-            const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(index))));
-            if (proc.body) |body| try edges.append(gpa, .{ .from = entry, .to = @intFromEnum(body) });
+            const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
+            if (proc.body) |body| try edges.append(gpa, .{ .from = entry, .to = @backingInt(body) });
         }
         return initGraph(gpa, store.cfStmtCount() + 1, entry, edges.items);
     }
@@ -1590,8 +1595,8 @@ const StatementDominance = struct {
     }
 
     fn dominates(self: StatementDominance, dominator: LIR.CFStmtId, target: LIR.CFStmtId) bool {
-        const a = @intFromEnum(dominator);
-        const b = @intFromEnum(target);
+        const a = @backingInt(dominator);
+        const b = @backingInt(target);
         std.debug.assert(self.enter[a] != no_index and self.enter[b] != no_index);
         return self.enter[a] <= self.enter[b] and self.enter[b] < self.leave[a];
     }
@@ -1634,8 +1639,8 @@ test "statement dominance agrees with deleted-node reachability on every four-no
             for (0..4) |target| {
                 if (dominance.enter[target] == no_index) continue;
                 try std.testing.expectEqual(!reachable[target], dominance.dominates(
-                    @enumFromInt(@as(u32, @intCast(removed))),
-                    @enumFromInt(@as(u32, @intCast(target))),
+                    @fromBackingInt(@intCast(@as(u32, @intCast(removed)))),
+                    @fromBackingInt(@intCast(@as(u32, @intCast(target)))),
                 ));
             }
         }
@@ -1671,12 +1676,12 @@ pub fn compute(
     defer gpa.free(direct_call_position_by_arg);
     @memset(direct_call_position_by_arg, std.math.maxInt(u8));
     for (0..store.procSpecCount()) |proc_index| {
-        const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+        const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
         const body = proc.body orelse continue;
         const params = store.getLocalSpan(proc.args);
         for (0..GuardedList.borrowLen(params)) |position| {
             const param = GuardedList.at(params, position);
-            is_param[@intFromEnum(param)] = true;
+            is_param[@backingInt(param)] = true;
             const slot = try param_bodies.getOrPut(gpa, param);
             if (slot.found_existing) {
                 slot.value_ptr.* = null;
@@ -1696,14 +1701,14 @@ pub fn compute(
     var reach_work = std.ArrayList(LIR.CFStmtId).empty;
     defer reach_work.deinit(gpa);
     for (0..store.procSpecCount()) |proc_index| {
-        const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+        const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
         if (proc.body) |body| try reach_work.append(gpa, body);
     }
     while (reach_work.pop()) |stmt_id| {
-        const index = @intFromEnum(stmt_id);
+        const index = @backingInt(stmt_id);
         if (reachable.isSet(index)) continue;
         reachable.set(index);
-        try body_clone.appendSuccessors(@constCast(store), &reach_work, stmt_id);
+        try body_clone.appendSuccessors(store, &reach_work, stmt_id, gpa);
     }
 
     const join_init_counts = try gpa.alloc(u32, store.localCount());
@@ -1711,9 +1716,9 @@ pub fn compute(
     @memset(join_init_counts, 0);
     for (0..store.cfStmtCount()) |stmt_index| {
         if (!reachable.isSet(stmt_index)) continue;
-        const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+        const stmt = store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
         if (stmt == .set_local and stmt.set_local.mode == .initialize_join_param) {
-            join_init_counts[@intFromEnum(stmt.set_local.target)] += 1;
+            join_init_counts[@backingInt(stmt.set_local.target)] += 1;
         }
     }
     const explicit_init_join = try gpa.alloc(bool, store.localCount());
@@ -1730,7 +1735,7 @@ pub fn compute(
     defer projection_edges.deinit(gpa);
     for (0..store.cfStmtCount()) |stmt_index| {
         if (!reachable.isSet(stmt_index)) continue;
-        const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+        const stmt = store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
         if (stmt != .assign_ref) continue;
         const assign = stmt.assign_ref;
         const source: LIR.LocalId, const is_projection: bool = switch (assign.op) {
@@ -1742,9 +1747,7 @@ pub fn compute(
             .field, .tag_payload, .tag_payload_struct => blk: {
                 const projection = encodeProjection(assign.op).?;
                 const local = switch (assign.op) {
-                    .field => |op| op.source,
-                    .tag_payload => |op| op.source,
-                    .tag_payload_struct => |op| op.source,
+                    inline .field, .tag_payload, .tag_payload_struct => |op| op.source,
                     .local, .discriminant, .list_reinterpret, .nominal => unreachable,
                 };
                 if (!projectionOwnsAllRc(store, layouts, local, assign.target, projection)) continue;
@@ -1752,22 +1755,22 @@ pub fn compute(
             },
             .discriminant, .list_reinterpret, .nominal => continue,
         };
-        try projection_edges.append(gpa, .{ .source = source, .target = assign.target, .stmt = @enumFromInt(@as(u32, @intCast(stmt_index))), .is_projection = is_projection });
+        try projection_edges.append(gpa, .{ .source = source, .target = assign.target, .stmt = @fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))), .is_projection = is_projection });
     }
     var projection_changed = true;
     while (projection_changed) {
         projection_changed = false;
         for (projection_edges.items) |edge| {
-            const source_index = @intFromEnum(edge.source);
+            const source_index = @backingInt(edge.source);
             const source_unit = solution.unitLocalOf(edge.source);
             const source_root = if (projected_root[source_index] != no_index)
                 projected_root[source_index]
-            else if (edge.is_projection and (!solution.isBorrowed(source_unit) or is_param[@intFromEnum(source_unit)] or solution.isJoinParam(source_unit)))
-                @intFromEnum(source_unit)
+            else if (edge.is_projection and (!solution.isBorrowed(source_unit) or is_param[@backingInt(source_unit)] or solution.isJoinParam(source_unit)))
+                @backingInt(source_unit)
             else
                 no_index;
             if (source_root == no_index) continue;
-            const target_index = @intFromEnum(edge.target);
+            const target_index = @backingInt(edge.target);
             if (projected_root[target_index] == no_index) {
                 projected_root[target_index] = source_root;
                 projection_changed = true;
@@ -1786,7 +1789,7 @@ pub fn compute(
     const projected_stmt = try gpa.alloc(u32, store.localCount());
     defer gpa.free(projected_stmt);
     @memset(projected_stmt, no_index);
-    for (projection_edges.items) |edge| projected_stmt[@intFromEnum(edge.target)] = @intFromEnum(edge.stmt);
+    for (projection_edges.items) |edge| projected_stmt[@backingInt(edge.target)] = @backingInt(edge.stmt);
     // Compare only projections of the same explicit ownership root, rather
     // than scanning every local in the module for each projected container.
     const root_heads = try gpa.alloc(u32, store.localCount());
@@ -1804,7 +1807,7 @@ pub fn compute(
     defer dominance.deinit(gpa);
     for (projected_root, 0..) |root, local_index| {
         if (root == no_index) continue;
-        const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(local_index)));
+        const local: LIR.LocalId = @fromBackingInt(@intCast(@as(u32, @intCast(local_index))));
         const local_layout = layouts.getLayout(store.getLocal(local).layout_idx);
         if (local_layout.tag != .struct_) continue;
         const target_stmt_index = projected_stmt[local_index];
@@ -1812,12 +1815,12 @@ pub fn compute(
         var representative: u32 = @intCast(local_index);
         var other_index = root_heads[root];
         while (other_index != no_index) : (other_index = root_next[other_index]) {
-            const other: LIR.LocalId = @enumFromInt(@as(u32, @intCast(other_index)));
+            const other: LIR.LocalId = @fromBackingInt(@intCast(@as(u32, @intCast(other_index))));
             if (store.getLocal(other).layout_idx != store.getLocal(local).layout_idx) continue;
-            const other_stmt: LIR.CFStmtId = @enumFromInt(projected_stmt[other_index]);
-            const target_stmt: LIR.CFStmtId = @enumFromInt(target_stmt_index);
+            const other_stmt: LIR.CFStmtId = @fromBackingInt(@intCast(projected_stmt[other_index]));
+            const target_stmt: LIR.CFStmtId = @fromBackingInt(@intCast(target_stmt_index));
             if (!dominance.dominates(other_stmt, target_stmt)) continue;
-            const representative_stmt: LIR.CFStmtId = @enumFromInt(projected_stmt[representative]);
+            const representative_stmt: LIR.CFStmtId = @fromBackingInt(@intCast(projected_stmt[representative]));
             if (dominance.dominates(other_stmt, representative_stmt)) {
                 representative = @intCast(other_index);
             }
@@ -1859,12 +1862,12 @@ pub fn compute(
     var stack = std.ArrayList(LIR.CFStmtId).empty;
     defer stack.deinit(gpa);
     for (0..store.procSpecCount()) |proc_index| {
-        const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+        const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
         if (proc.body) |body| try stack.append(gpa, body);
     }
 
     while (stack.pop()) |current| {
-        const stmt_index = @intFromEnum(current);
+        const stmt_index = @backingInt(current);
         if (visited.isSet(stmt_index)) continue;
         visited.set(stmt_index);
         const current_stmt = store.getCFStmt(current);
@@ -1902,11 +1905,7 @@ pub fn compute(
                         if (!try analysis.notePayloadView(stmt.target, op)) try analysis.useWhole(current, op.source);
                         try analysis.noteDef(stmt.target, current);
                     },
-                    .list_reinterpret => |op| {
-                        try analysis.useWhole(current, op.backing_ref);
-                        analysis.disqualify(stmt.target);
-                    },
-                    .nominal => |op| {
+                    inline .list_reinterpret, .nominal => |op| {
                         try analysis.useWhole(current, op.backing_ref);
                         analysis.disqualify(stmt.target);
                     },
@@ -1923,8 +1922,8 @@ pub fn compute(
                 for (0..GuardedList.borrowLen(args)) |i| {
                     const arg = GuardedList.at(args, i);
                     if (i < arc_sig.tracked_param_count) {
-                        direct_call_stmt_by_arg[@intFromEnum(arg)] = @intFromEnum(current);
-                        direct_call_position_by_arg[@intFromEnum(arg)] = @intCast(i);
+                        direct_call_stmt_by_arg[@backingInt(arg)] = @backingInt(current);
+                        direct_call_position_by_arg[@backingInt(arg)] = @intCast(i);
                     }
                     try analysis.useWholeAt(arg, current);
                     if (callee_sig.paramMode(i) == .owned) analysis.demandOwned(arg);
@@ -1976,26 +1975,22 @@ pub fn compute(
                 analysis.disqualify(stmt.target);
                 try stack.append(gpa, stmt.next);
             },
-            .assign_boxy_reuse_box => |stmt| {
+            inline .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect => |stmt| {
                 try analysis.useWhole(current, stmt.source);
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
                 try stack.append(gpa, stmt.next);
             },
-            .assign_boxy_unbox => |stmt| {
-                try analysis.useWhole(current, stmt.source);
+            .assign_boxy_eq => |stmt| {
+                try analysis.useWhole(current, stmt.lhs);
+                try analysis.useWhole(current, stmt.rhs);
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
                 try stack.append(gpa, stmt.next);
             },
-            .assign_boxy_adapt => |stmt| {
-                try analysis.useWhole(current, stmt.source);
-                try analysis.noteDef(stmt.target, current);
-                analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_boxy_inspect => |stmt| {
-                try analysis.useWhole(current, stmt.source);
+            .assign_boxy_hash => |stmt| {
+                try analysis.useWhole(current, stmt.value);
+                try analysis.useWhole(current, stmt.hasher);
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
                 try stack.append(gpa, stmt.next);
@@ -2069,7 +2064,7 @@ pub fn compute(
             },
             .set_local => |stmt| {
                 try analysis.useWholeAt(stmt.value, current);
-                if (stmt.mode == .initialize_join_param and analysis.explicit_init_join[@intFromEnum(stmt.target)]) {
+                if (stmt.mode == .initialize_join_param and analysis.explicit_init_join[@backingInt(stmt.target)]) {
                     try analysis.noteDef(stmt.target, current);
                 } else {
                     try analysis.useWhole(current, stmt.target);
@@ -2085,25 +2080,16 @@ pub fn compute(
                 try stack.append(gpa, stmt.next);
             },
             .expect_err => |stmt| try analysis.useWhole(current, stmt.message),
-            .runtime_error => {},
-            .comptime_exhaustiveness_failed => {},
+            .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break, .jump => {},
             .comptime_branch_taken => |stmt| try stack.append(gpa, stmt.next),
             // The input contract is RC-free LIR; if RC statements ever appear
             // here, classifying their operands as whole uses stays sound.
-            .incref => |stmt| {
-                try analysis.useWhole(current, stmt.value);
-                try stack.append(gpa, stmt.next);
-            },
-            .decref => |stmt| {
+            inline .incref, .decref, .free => |stmt| {
                 try analysis.useWhole(current, stmt.value);
                 try stack.append(gpa, stmt.next);
             },
             .decref_if_initialized => |stmt| {
                 try analysis.useWhole(current, stmt.cond);
-                try analysis.useWhole(current, stmt.value);
-                try stack.append(gpa, stmt.next);
-            },
-            .free => |stmt| {
                 try analysis.useWhole(current, stmt.value);
                 try stack.append(gpa, stmt.next);
             },
@@ -2155,14 +2141,12 @@ pub fn compute(
                 try stack.append(gpa, stmt.on_match);
                 try stack.append(gpa, stmt.on_miss);
             },
-            .loop_continue, .loop_break => {},
             .join => |stmt| {
                 // Join parameters are excluded by the gate; the condition
                 // locals are scalar presence words.
                 try stack.append(gpa, stmt.body);
                 try stack.append(gpa, stmt.remainder);
             },
-            .jump => {},
             .ret => |stmt| try analysis.useWholeAt(stmt.value, current),
             .crash => |stmt| if (stmt.msg.localId()) |message| try analysis.useWholeAt(message, current),
         }
@@ -2176,9 +2160,9 @@ pub fn compute(
     var demand_it = analysis.candidates.valueIterator();
     while (demand_it.next()) |candidate| {
         for (candidate.equivalenced_reads.items) |deferred| {
-            const target_index = @intFromEnum(deferred.read.target);
+            const target_index = @backingInt(deferred.read.target);
             if (!solution.isBorrowed(deferred.read.target) or !analysis.owned_demand[target_index]) continue;
-            const representative = analysis.candidates.getPtr(@intFromEnum(deferred.representative)) orelse continue;
+            const representative = analysis.candidates.getPtr(@backingInt(deferred.representative)) orelse continue;
             try representative.whole_uses.append(gpa, deferred.read.stmt);
         }
     }
@@ -2232,12 +2216,12 @@ pub fn compute(
     @memset(stmt_proc, no_index);
     const ambiguous_proc = no_index - 1;
     for (0..store.procSpecCount()) |proc_index| {
-        const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+        const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
         if (proc.body == null) continue;
         join_scan_epoch += 1;
         try join_scan_stack.append(gpa, proc.body.?);
         while (join_scan_stack.pop()) |stmt_id| {
-            const stmt_index = @intFromEnum(stmt_id);
+            const stmt_index = @backingInt(stmt_id);
             if (join_scan_epochs[stmt_index] == join_scan_epoch) continue;
             join_scan_epochs[stmt_index] = join_scan_epoch;
             const owner = &stmt_proc[stmt_index];
@@ -2246,7 +2230,7 @@ pub fn compute(
             } else if (owner.* != @as(u32, @intCast(proc_index))) {
                 owner.* = ambiguous_proc;
             }
-            try body_clone.appendSuccessorsWithAllocator(store, &join_scan_stack, stmt_id, gpa);
+            try body_clone.appendSuccessors(store, &join_scan_stack, stmt_id, gpa);
         }
     }
     var future_fields = FutureFields.init(gpa);
@@ -2269,8 +2253,8 @@ pub fn compute(
     defer gpa.free(borrow_child_heads);
     @memset(borrow_child_heads, no_index);
     for (0..store.localCount()) |index| {
-        const source = solution.borrowSourceOf(@enumFromInt(@as(u32, @intCast(index)))) orelse continue;
-        const source_index = @intFromEnum(source);
+        const source = solution.borrowSourceOf(@fromBackingInt(@intCast(@as(u32, @intCast(index))))) orelse continue;
+        const source_index = @backingInt(source);
         try borrow_child_edges.append(gpa, .{ .local = @intCast(index), .next = borrow_child_heads[source_index] });
         borrow_child_heads[source_index] = @intCast(borrow_child_edges.items.len - 1);
     }
@@ -2298,7 +2282,7 @@ pub fn compute(
                 .unvisited => {
                     order_marks[index] = .visiting;
                     for (analysis.candidates.getPtr(index).?.equivalenced_reads.items) |deferred| {
-                        const representative_index = @intFromEnum(deferred.representative);
+                        const representative_index = @backingInt(deferred.representative);
                         switch (order_marks[representative_index]) {
                             .unvisited => if (analysis.candidates.contains(representative_index)) {
                                 try order_stack.append(gpa, representative_index);
@@ -2319,7 +2303,7 @@ pub fn compute(
     }
 
     candidates: for (candidate_order.items) |candidate_index| {
-        const local: LIR.LocalId = @enumFromInt(candidate_index);
+        const local: LIR.LocalId = @fromBackingInt(@intCast(candidate_index));
         const candidate = analysis.candidates.getPtr(candidate_index).?;
         if (candidate.disqualified) continue;
         // A deferred read whose representative committed a plan is that
@@ -2336,9 +2320,9 @@ pub fn compute(
         // its own, but an ownership-complete view of a root that dies whole,
         // is defined once, and is otherwise only aliased or discriminated
         // spends the root's unit through its fields.
-        const union_root: ?*UnionRoot = if (analysis.view_root[@intFromEnum(local)] != no_index) blk: {
-            const root_entry = analysis.union_roots.getPtr(analysis.view_root[@intFromEnum(local)]) orelse continue :candidates;
-            if (root_entry.disqualified or root_entry.def_count != 1 or root_entry.view != @intFromEnum(local)) continue :candidates;
+        const union_root: ?*UnionRoot = if (analysis.view_root[@backingInt(local)] != no_index) blk: {
+            const root_entry = analysis.union_roots.getPtr(analysis.view_root[@backingInt(local)]) orelse continue :candidates;
+            if (root_entry.disqualified or root_entry.def_count != 1 or root_entry.view != @backingInt(local)) continue :candidates;
             break :blk root_entry;
         } else null;
 
@@ -2350,7 +2334,7 @@ pub fn compute(
         else if (candidate.def_count == 1)
             switch (store.getCFStmt(candidate.def_stmt)) {
                 inline .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag => |stmt| stmt.next,
-                .assign_ref => |stmt| if (union_root != null or analysis.projected_root[@intFromEnum(local)] != no_index) stmt.next else continue :candidates,
+                .assign_ref => |stmt| if (union_root != null or analysis.projected_root[@backingInt(local)] != no_index) stmt.next else continue :candidates,
                 .set_local => continue :candidates,
                 .init_uninitialized,
                 .assign_boxy_desc_ref,
@@ -2361,6 +2345,8 @@ pub fn compute(
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .boxy_tag_match,
@@ -2430,7 +2416,7 @@ pub fn compute(
         for (candidate.reads.items) |read| {
             const bit = @as(u64, 1) << @intCast(read.field_idx);
             if (rc_mask & bit == 0) continue;
-            const consuming = !solution.isBorrowed(read.target) or analysis.owned_demand[@intFromEnum(read.target)];
+            const consuming = !solution.isBorrowed(read.target) or analysis.owned_demand[@backingInt(read.target)];
             try read_kinds.put(gpa, read.stmt, .{
                 .bit = bit,
                 .consuming = consuming,
@@ -2442,11 +2428,11 @@ pub fn compute(
             // result is refined by the explicit alias/discriminant/switch
             // continuation. This is a total syntactic/metadata boundary:
             // unsupported continuations simply keep the ordinary schedule.
-            if (!consuming or operand_read_counts[@intFromEnum(read.target)] != 1) continue;
-            const call_stmt_index = direct_call_stmt_by_arg[@intFromEnum(read.target)];
-            const position = direct_call_position_by_arg[@intFromEnum(read.target)];
+            if (!consuming or operand_read_counts[@backingInt(read.target)] != 1) continue;
+            const call_stmt_index = direct_call_stmt_by_arg[@backingInt(read.target)];
+            const position = direct_call_position_by_arg[@backingInt(read.target)];
             if (call_stmt_index == no_index or position == std.math.maxInt(u8)) continue;
-            const call_stmt_id: LIR.CFStmtId = @enumFromInt(call_stmt_index);
+            const call_stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(call_stmt_index));
             const call_stmt = store.getCFStmt(call_stmt_id);
             if (call_stmt != .assign_call) continue;
             const args = store.getLocalSpan(call_stmt.assign_call.args);
@@ -2490,9 +2476,9 @@ pub fn compute(
         for (candidate.reads.items) |read| {
             const bit = @as(u64, 1) << @intCast(read.field_idx);
             if (rc_mask & bit == 0) continue;
-            if (!solution.isBorrowed(read.target) or analysis.owned_demand[@intFromEnum(read.target)]) continue;
+            if (!solution.isBorrowed(read.target) or analysis.owned_demand[@backingInt(read.target)]) continue;
             borrow_stack.clearRetainingCapacity();
-            try borrow_stack.append(gpa, @intFromEnum(read.target));
+            try borrow_stack.append(gpa, @backingInt(read.target));
             var borrow_steps: usize = 0;
             while (borrow_stack.pop()) |borrower| {
                 borrow_steps += 1;
@@ -2500,7 +2486,7 @@ pub fn compute(
                 var mention = analysis.mention_heads[borrower];
                 while (mention != no_index) {
                     const edge = analysis.mention_edges.items[mention];
-                    const slot = try read_kinds.getOrPut(gpa, @enumFromInt(edge.stmt));
+                    const slot = try read_kinds.getOrPut(gpa, @fromBackingInt(@intCast(edge.stmt)));
                     if (!slot.found_existing) {
                         slot.value_ptr.* = .{ .bit = bit, .consuming = false };
                     } else if (slot.value_ptr.consuming) {
@@ -2521,7 +2507,7 @@ pub fn compute(
 
         var candidate_mask: u64 = 0;
         for (candidate.reads.items) |read| {
-            if (!solution.isBorrowed(read.target) or analysis.owned_demand[@intFromEnum(read.target)]) {
+            if (!solution.isBorrowed(read.target) or analysis.owned_demand[@backingInt(read.target)]) {
                 candidate_mask |= @as(u64, 1) << @intCast(read.field_idx);
             }
         }
@@ -2529,18 +2515,22 @@ pub fn compute(
         if (candidate_mask == 0) continue;
 
         if (candidate.reads.items.len == 0) dismantleInvariant("field-take candidate had no field projection");
-        const owner = stmt_proc[@intFromEnum(candidate.reads.items[0].stmt)];
+        const owner = stmt_proc[@backingInt(candidate.reads.items[0].stmt)];
         if (owner == no_index or owner == ambiguous_proc) continue;
         if (!joins_ready[owner]) {
             joins_ready[owner] = true;
             join_scan_epoch += 1;
-            const proc = store.getProcSpec(@enumFromInt(owner));
+            const proc = store.getProcSpec(@fromBackingInt(@intCast(owner)));
             try collectProcJoinBodies(gpa, store, proc.body.?, &proc_joins[owner], join_scan_epochs, join_scan_epoch, &join_scan_stack);
         }
         const join_bodies = &proc_joins[owner];
 
         var poison: u64 = 0;
-        const redefinition: ?LIR.CFStmtId = if (candidate.join_starts.items.len == 0) candidate.def_stmt else null;
+        // A borrowed payload view supplies no unit of its own. Only producing
+        // its union root again restores fresh fields across a loop back edge;
+        // recreating the view still observes the same stored units.
+        const fresh_def = if (union_root) |root| root.def_stmt else candidate.def_stmt;
+        const redefinition: ?LIR.CFStmtId = if (candidate.join_starts.items.len == 0) fresh_def else null;
         try future_fields.compute(gpa, store, solution, local, &read_kinds, join_bodies, field_restitutions.items, redefinition);
         for (candidate.reads.items) |read| {
             const kind = read_kinds.getPtr(read.stmt) orelse continue;
@@ -2581,7 +2571,9 @@ pub fn compute(
                 // iteration's fresh value with every field intact; the
                 // previous value is dead past its redefinition exactly as it
                 // is past an explicit join-cell write.
-                if (cursor == candidate.def_stmt and candidate.join_starts.items.len == 0) state = .{ .may = 0, .must = 0 };
+                if (redefinition) |def_stmt| if (cursor == def_stmt) {
+                    state = .{ .may = 0, .must = 0 };
+                };
                 if (read_kinds.getPtr(cursor)) |kind| {
                     kind.visited = true;
                     if (kind.consuming) {
@@ -2597,7 +2589,7 @@ pub fn compute(
                     }
                 }
                 switch (store.getCFStmt(cursor)) {
-                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
+                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
                     .set_local => |stmt| {
                         // The value operand above still observes the old
                         // definition. Only the explicit write starts a fresh
@@ -2631,7 +2623,7 @@ pub fn compute(
                         // enclosing early exit—so it ends this path like a
                         // return would. Reads living past it are never
                         // visited, which keeps their fields residual.
-                        const body = join_bodies.get(@intFromEnum(stmt.target)) orelse break :chain;
+                        const body = join_bodies.get(@backingInt(stmt.target)) orelse break :chain;
                         const slot = try body_states.getOrPut(gpa, body);
                         if (slot.found_existing) {
                             const merged = FlowState.meet(slot.value_ptr.*, state);
@@ -2648,7 +2640,7 @@ pub fn compute(
                         try flow_frames.append(gpa, .{ .cursor = stmt.initialized_branch, .state = state });
                         cursor = stmt.uninitialized_branch;
                     },
-                    .str_match => |stmt| {
+                    inline .str_match, .boxy_tag_match => |stmt| {
                         try flow_frames.append(gpa, .{ .cursor = stmt.on_match, .state = state });
                         cursor = stmt.on_miss;
                     },
@@ -2657,10 +2649,6 @@ pub fn compute(
                         for (0..GuardedList.borrowLen(arms)) |i| {
                             try flow_frames.append(gpa, .{ .cursor = GuardedList.at(arms, i).on_match, .state = state });
                         }
-                        cursor = stmt.on_miss;
-                    },
-                    .boxy_tag_match => |stmt| {
-                        try flow_frames.append(gpa, .{ .cursor = stmt.on_match, .state = state });
                         cursor = stmt.on_miss;
                     },
                     .loop_continue, .loop_break => {
@@ -2698,9 +2686,9 @@ pub fn compute(
         // A parameter solved borrowed dismantles only in emissions whose
         // demand vector overrides it to owned; everything else applies to
         // every emission of its proc.
-        const projection_root_index = analysis.projected_root[@intFromEnum(local)];
+        const projection_root_index = analysis.projected_root[@backingInt(local)];
         const projected = projection_root_index != no_index and union_root == null;
-        const activation_root: LIR.LocalId = if (projected) @enumFromInt(projection_root_index) else local;
+        const activation_root: LIR.LocalId = if (projected) @fromBackingInt(@intCast(projection_root_index)) else local;
         const owned_only = solution.isBorrowed(activation_root) and union_root == null;
         const stored_fields = try result.arena.allocator().dupe(FieldPlace, fields.items);
         if (projected) {
@@ -2711,16 +2699,16 @@ pub fn compute(
             // without the explicit complete-projection receipt.
             try result.complete_takes.put(gpa, candidate.def_stmt, activation_root);
             if (owned_only) {
-                result.owned_only_binding_roots[@intFromEnum(local)] = @intFromEnum(activation_root);
+                result.owned_only_binding_roots[@backingInt(local)] = @backingInt(activation_root);
             } else {
-                result.take_bindings[@intFromEnum(local)] = true;
+                result.take_bindings[@backingInt(local)] = true;
             }
         }
         for (candidate.reads.items) |read| {
             const bit = @as(u64, 1) << @intCast(read.field_idx);
             if (taken_mask & bit == 0) continue;
             if (!(read_kinds.get(read.stmt) orelse continue).consuming) continue;
-            if (solution.isBorrowed(read.target) and !analysis.owned_demand[@intFromEnum(read.target)]) continue;
+            if (solution.isBorrowed(read.target) and !analysis.owned_demand[@backingInt(read.target)]) continue;
             const take = Take{ .root = local, .field_mask = bit };
             if (owned_only) {
                 try result.owned_only_takes.put(gpa, read.stmt, take);
@@ -2730,15 +2718,15 @@ pub fn compute(
                 // borrowed binding has exactly one defining read, so exactly
                 // one parameter root authorizes the override.
                 if (!solution.isBorrowed(read.target)) continue;
-                const target_index = @intFromEnum(read.target);
+                const target_index = @backingInt(read.target);
                 const prior = result.owned_only_binding_roots[target_index];
-                if (prior != no_index and prior != @intFromEnum(activation_root)) {
+                if (prior != no_index and prior != @backingInt(activation_root)) {
                     dismantleInvariant("ARC owned-only field binding had conflicting parameter roots");
                 }
-                result.owned_only_binding_roots[target_index] = @intFromEnum(activation_root);
+                result.owned_only_binding_roots[target_index] = @backingInt(activation_root);
             } else {
                 try result.takes.put(gpa, read.stmt, take);
-                result.take_bindings[@intFromEnum(read.target)] = true;
+                result.take_bindings[@backingInt(read.target)] = true;
             }
         }
         for (field_restitutions.items) |receipt| {
@@ -2762,7 +2750,7 @@ pub fn compute(
             }
         }
         if (union_root) |view_root_entry| {
-            const root_local: LIR.LocalId = @enumFromInt(analysis.view_root[@intFromEnum(local)]);
+            const root_local: LIR.LocalId = @fromBackingInt(@intCast(analysis.view_root[@backingInt(local)]));
             try result.containers.put(gpa, root_local, .{
                 .fields = stored_fields,
                 .full_mask = rc_mask,
@@ -2783,7 +2771,7 @@ pub fn compute(
     // LIR and ownership schedule.
     for (projected_container, 0..) |representative, local_index| {
         if (representative == no_index or representative == local_index) continue;
-        const representative_local: LIR.LocalId = @enumFromInt(representative);
+        const representative_local: LIR.LocalId = @fromBackingInt(@intCast(representative));
         if (!result.containers.contains(representative_local) and
             !result.owned_only_containers.contains(representative_local)) continue;
         // The deferred reads of this alias were settled against this exact
@@ -2793,16 +2781,16 @@ pub fn compute(
         }
         const stmt_index = projected_stmt[local_index];
         if (stmt_index == no_index) continue;
-        const stmt = store.getCFStmtPtr(@enumFromInt(stmt_index));
+        const stmt = store.getCFStmtPtr(@fromBackingInt(@intCast(stmt_index)));
         if (stmt.* != .assign_ref) dismantleInvariant("projected alias definition stopped being a reference read");
         stmt.assign_ref.op = .{ .local = representative_local };
-        try result.projection_aliases.put(gpa, @enumFromInt(@as(u32, @intCast(local_index))), representative_local);
+        try result.projection_aliases.put(gpa, @fromBackingInt(@intCast(@as(u32, @intCast(local_index)))), representative_local);
     }
 
     // Variant admission consumes the exact owned-only benefit without
     // rescanning bodies or reconstructing parameter identity from statements.
     for (0..store.procSpecCount()) |proc_index| {
-        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
         const params = store.getLocalSpan(store.getProcSpec(proc_id).args);
         for (0..GuardedList.borrowLen(params)) |position| {
             const bit = arc_sig.paramBit(position) orelse break;
@@ -2824,11 +2812,11 @@ pub fn compute(
     defer param_info.deinit(gpa);
 
     for (0..store.procSpecCount()) |proc_index| {
-        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
         const params = store.getLocalSpan(store.getProcSpec(proc_id).args);
         for (0..GuardedList.borrowLen(params)) |position| {
             const param = GuardedList.at(params, position);
-            const param_index = @intFromEnum(param);
+            const param_index = @backingInt(param);
             if (position >= arc_sig.tracked_param_count) continue;
             const param_slot = try param_info.getOrPut(gpa, param_index);
             if (param_slot.found_existing) {
@@ -2843,11 +2831,11 @@ pub fn compute(
     // not from the borrowed projection binding itself.
     var projected_containers = result.owned_only_containers.keyIterator();
     while (projected_containers.next()) |local_ptr| {
-        const root_index = result.owned_only_binding_roots[@intFromEnum(local_ptr.*)];
+        const root_index = result.owned_only_binding_roots[@backingInt(local_ptr.*)];
         if (root_index == no_index) continue;
         const source_info = param_info.get(root_index) orelse continue;
         if (source_info.proc == ambiguous_index) continue;
-        const source_proc: LIR.LirProcSpecId = @enumFromInt(source_info.proc);
+        const source_proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(source_info.proc));
         if (solution.isPinnedProc(source_proc)) continue;
         result.owned_only_param_benefits[source_info.proc] |= arc_sig.paramBit(source_info.position).?;
     }
@@ -2872,7 +2860,7 @@ pub fn compute(
     defer place_heads.deinit(gpa);
     for (0..store.cfStmtCount()) |stmt_index| {
         if (!visited.isSet(stmt_index)) continue;
-        const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+        const stmt = store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
         if (stmt != .assign_ref) continue;
         const assign = stmt.assign_ref;
         const source: LIR.LocalId, const kind: PlaceEdgeKind = switch (assign.op) {
@@ -2884,9 +2872,7 @@ pub fn compute(
             .field, .tag_payload, .tag_payload_struct => blk: {
                 const projection = encodeProjection(assign.op).?;
                 const projection_source = switch (assign.op) {
-                    .field => |op| op.source,
-                    .tag_payload => |op| op.source,
-                    .tag_payload_struct => |op| op.source,
+                    inline .field, .tag_payload, .tag_payload_struct => |op| op.source,
                     .local,
                     .discriminant,
                     .list_reinterpret,
@@ -2898,11 +2884,11 @@ pub fn compute(
             },
             .discriminant, .list_reinterpret, .nominal => continue,
         };
-        const source_index = @intFromEnum(source);
+        const source_index = @backingInt(source);
         const previous_head = place_heads.get(source_index) orelse no_index;
         try place_edges.append(gpa, .{
             .source = source_index,
-            .target = @intFromEnum(assign.target),
+            .target = @backingInt(assign.target),
             .kind = kind,
             .next = previous_head,
         });
@@ -2921,9 +2907,9 @@ pub fn compute(
     // complete-projection edge.
     var source_it = place_heads.keyIterator();
     while (source_it.next()) |source_ptr| {
-        const source: LIR.LocalId = @enumFromInt(source_ptr.*);
+        const source: LIR.LocalId = @fromBackingInt(@intCast(source_ptr.*));
         const root = solution.unitLocalOf(source);
-        const root_index = @intFromEnum(root);
+        const root_index = @backingInt(root);
         const root_can_own = !solution.isBorrowed(root) or
             is_param[root_index] or
             solution.isJoinParam(root);
@@ -2939,7 +2925,7 @@ pub fn compute(
         while (edge_index != no_index) {
             const edge = place_edges.items[edge_index];
             const projected = source_origin.projected or edge.kind == .projection;
-            const target: LIR.LocalId = @enumFromInt(edge.target);
+            const target: LIR.LocalId = @fromBackingInt(@intCast(edge.target));
             // A join parameter is a cell with one definition per incoming
             // edge, not an SSA value. Its edge-specific transfer is handled
             // by join solving; one global place origin would incorrectly
@@ -2975,21 +2961,21 @@ pub fn compute(
     while (places_it.next()) |entry| {
         const origin = entry.value_ptr.*;
         if (origin.root == ambiguous_index or !origin.projected) continue;
-        const local: LIR.LocalId = @enumFromInt(entry.key_ptr.*);
+        const local: LIR.LocalId = @fromBackingInt(@intCast(entry.key_ptr.*));
         if (!solution.isBorrowed(local) or solution.isJoinParam(local)) continue;
-        if (result.isTakeBinding(local) or result.owned_only_binding_roots[@intFromEnum(local)] != no_index) continue;
-        try result.projection_units.put(gpa, local, @enumFromInt(origin.root));
+        if (result.isTakeBinding(local) or result.owned_only_binding_roots[@backingInt(local)] != no_index) continue;
+        try result.projection_units.put(gpa, local, @fromBackingInt(@intCast(origin.root)));
     }
     for (place_edges.items) |edge| {
         if (edge.kind != .projection) continue;
-        const target: LIR.LocalId = @enumFromInt(edge.target);
+        const target: LIR.LocalId = @fromBackingInt(@intCast(edge.target));
         // Unlike a borrowed place origin, this move is attached to one exact
         // incoming read. An owned join cell can therefore receive the unit on
         // this edge without conflating its other definitions.
         if (solution.isBorrowed(target)) continue;
         const origin = places.get(edge.source) orelse continue;
         if (origin.root == ambiguous_index) continue;
-        try result.complete_takes.put(gpa, @enumFromInt(edge.kind.projection), @enumFromInt(origin.root));
+        try result.complete_takes.put(gpa, @fromBackingInt(@intCast(edge.kind.projection)), @fromBackingInt(@intCast(origin.root)));
 
         // A complete projection can move its root's exact unit in an owned
         // parameter emission. Publish that mechanical capability to variant
@@ -2998,7 +2984,7 @@ pub fn compute(
         // particular read (including outcome-conditioned restitution).
         const source_info = param_info.get(origin.root) orelse continue;
         if (source_info.proc == ambiguous_index) continue;
-        const source_proc: LIR.LirProcSpecId = @enumFromInt(source_info.proc);
+        const source_proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(source_info.proc));
         if (solution.isPinnedProc(source_proc)) continue;
         result.owned_only_param_benefits[source_info.proc] |= arc_sig.paramBit(source_info.position).?;
     }
@@ -3017,22 +3003,22 @@ pub fn compute(
     defer benefit_heads.deinit(gpa);
     for (0..store.cfStmtCount()) |stmt_index| {
         if (!visited.isSet(stmt_index)) continue;
-        const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+        const stmt = store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
         if (stmt != .assign_call) continue;
         const call = stmt.assign_call;
         const args = store.getLocalSpan(call.args);
         for (0..GuardedList.borrowLen(args)) |position| {
             if (position >= arc_sig.tracked_param_count) continue;
             const arg = GuardedList.at(args, position);
-            const arg_index = @intFromEnum(arg);
+            const arg_index = @backingInt(arg);
             const place_origin = places.get(arg_index);
-            const root_index: u32 = if (place_origin) |origin| origin.root else @intFromEnum(solution.unitLocalOf(arg));
+            const root_index: u32 = if (place_origin) |origin| origin.root else @backingInt(solution.unitLocalOf(arg));
             if (root_index == no_index or root_index == ambiguous_index) continue;
             const source_info = param_info.get(root_index) orelse continue;
             if (source_info.proc == ambiguous_index) continue;
-            const source_proc: LIR.LirProcSpecId = @enumFromInt(source_info.proc);
+            const source_proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(source_info.proc));
             if (solution.isPinnedProc(source_proc)) continue;
-            const target_key: u32 = @intCast(@intFromEnum(call.proc) * arc_sig.tracked_param_count + position);
+            const target_key: u32 = @intCast(@backingInt(call.proc) * arc_sig.tracked_param_count + position);
             const previous_head = benefit_heads.get(target_key) orelse no_index;
             try benefit_edges.append(gpa, .{
                 .source_key = @intCast(source_info.proc * arc_sig.tracked_param_count + source_info.position),

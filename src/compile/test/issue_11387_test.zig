@@ -160,7 +160,7 @@ fn expectReports(app_path: []const u8, expectation: ReportExpectation) TestError
         1,
         roc_target.RocTarget.detectNative(),
         &builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
     );
@@ -174,7 +174,7 @@ fn expectReports(app_path: []const u8, expectation: ReportExpectation) TestError
 
     const lines = expectation.declaration_lines;
     var report_count: usize = 0;
-    var declaration_error_counts = [_]usize{0} ** 8;
+    var declaration_error_counts = @as([8]usize, @splat(0));
     std.debug.assert(lines.len <= declaration_error_counts.len);
     var reports = coord.iterReports();
     while (reports.next()) |entry| {
@@ -220,7 +220,7 @@ fn hostTwice(n: u64) callconv(.c) u64 {
     return n * 2;
 }
 
-const erased_hosts = [_]builtins.host_abi.HostedFn{builtins.host_abi.hostedFn(&hostPassBox)} ** 4;
+const erased_hosts = @as([4]builtins.host_abi.HostedFn, @splat(builtins.host_abi.hostedFn(&hostPassBox)));
 
 var expected_result: u64 = 0;
 var host_functions: []const builtins.host_abi.HostedFn = &.{};

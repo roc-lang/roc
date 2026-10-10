@@ -15,7 +15,7 @@ pub const TypeVarId = enum(u32) {
     _,
 
     pub fn is_gt(self: TypeVarId, other: TypeVarId) bool {
-        return @intFromEnum(self) > @intFromEnum(other);
+        return @backingInt(self) > @backingInt(other);
     }
 };
 
@@ -140,7 +140,7 @@ test "lambda solved named backing preserves generated-private authority" {
         .kind = .@"opaque",
         .args = Span.empty(),
         .backing = .{
-            .ty = @enumFromInt(1),
+            .ty = @fromBackingInt(@intCast(1)),
             .use = .runtime_layout_only,
             .authority = .generated_private,
         },
@@ -192,7 +192,7 @@ pub const Store = struct {
     }
 
     pub fn add(self: *Store, content: Content) std.mem.Allocator.Error!TypeVarId {
-        const id: TypeVarId = @enumFromInt(@as(u32, @intCast(self.vars.items.len)));
+        const id: TypeVarId = @fromBackingInt(@intCast(@as(u32, @intCast(self.vars.items.len))));
         try self.vars.append(self.allocator, content);
         errdefer _ = self.vars.pop();
         try self.owned_named_backings.append(self.allocator, false);
@@ -201,25 +201,25 @@ pub const Store = struct {
 
     pub fn set(self: *Store, id: TypeVarId, content: Content) void {
         self.mutation_epoch +%= 1;
-        if (content == .link and self.owned_named_backings.items[@intFromEnum(id)]) {
+        if (content == .link and self.owned_named_backings.items[@backingInt(id)]) {
             const target = self.root(content.link);
-            self.owned_named_backings.items[@intFromEnum(target)] = true;
+            self.owned_named_backings.items[@backingInt(target)] = true;
         }
-        self.vars.items[@intFromEnum(id)] = content;
+        self.vars.items[@backingInt(id)] = content;
     }
 
     pub fn markNamedBacking(self: *Store, id: TypeVarId) void {
         const root_id = self.root(id);
-        self.owned_named_backings.items[@intFromEnum(root_id)] = true;
+        self.owned_named_backings.items[@backingInt(root_id)] = true;
     }
 
     pub fn isOwnedNamedBacking(self: *const Store, id: TypeVarId) bool {
         const root_id = self.root(id);
-        return self.owned_named_backings.items[@intFromEnum(root_id)];
+        return self.owned_named_backings.items[@backingInt(root_id)];
     }
 
     pub fn get(self: *const Store, id: TypeVarId) Content {
-        return self.vars.items[@intFromEnum(id)];
+        return self.vars.items[@backingInt(id)];
     }
 
     pub fn root(self: *const Store, id: TypeVarId) TypeVarId {
@@ -265,7 +265,7 @@ pub const Store = struct {
 
     pub fn compressAllRoots(self: *Store) void {
         for (0..self.vars.items.len) |index| {
-            _ = self.rootCompressed(@enumFromInt(@as(u32, @intCast(index))));
+            _ = self.rootCompressed(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
         }
     }
 
@@ -351,7 +351,7 @@ pub const Store = struct {
         declared_fields: []const DeclaredField,
 
         pub fn get(self: View, id: TypeVarId) Content {
-            return self.vars[@intFromEnum(id)];
+            return self.vars[@backingInt(id)];
         }
 
         pub fn root(self: View, id: TypeVarId) TypeVarId {
@@ -430,8 +430,8 @@ test "lambda solved function types carry callable variables" {
 }
 
 test "lambda solved type variable order uses the typed id helper" {
-    try std.testing.expect(@as(TypeVarId, @enumFromInt(2)).is_gt(@enumFromInt(1)));
-    try std.testing.expect(!@as(TypeVarId, @enumFromInt(1)).is_gt(@enumFromInt(2)));
+    try std.testing.expect(@as(TypeVarId, @fromBackingInt(@intCast(2))).is_gt(@fromBackingInt(@intCast(1))));
+    try std.testing.expect(!@as(TypeVarId, @fromBackingInt(@intCast(1))).is_gt(@fromBackingInt(@intCast(2))));
 }
 
 test "lambda solved empty spans use shared empty descriptor" {
@@ -440,10 +440,10 @@ test "lambda solved empty spans use shared empty descriptor" {
 
     const unit = try store.add(.zst);
     const nonempty_span = try store.addSpan(&.{unit});
-    const nonempty_fields = try store.addFields(&.{.{ .name = @enumFromInt(1), .ty = unit, .default = null }});
-    const nonempty_tags = try store.addTags(&.{.{ .name = @enumFromInt(2), .checked_name = @enumFromInt(2), .payloads = nonempty_span }});
-    const nonempty_captures = try store.addCaptures(&.{.{ .local = @enumFromInt(3), .symbol = @enumFromInt(4), .binder = null, .ty = unit }});
-    const nonempty_members = try store.addMembers(&.{.{ .lambda = @enumFromInt(5), .captures = nonempty_captures }});
+    const nonempty_fields = try store.addFields(&.{.{ .name = @fromBackingInt(@intCast(1)), .ty = unit, .default = null }});
+    const nonempty_tags = try store.addTags(&.{.{ .name = @fromBackingInt(@intCast(2)), .checked_name = @fromBackingInt(@intCast(2)), .payloads = nonempty_span }});
+    const nonempty_captures = try store.addCaptures(&.{.{ .local = @fromBackingInt(@intCast(3)), .symbol = @fromBackingInt(@intCast(4)), .binder = null, .ty = unit }});
+    const nonempty_members = try store.addMembers(&.{.{ .lambda = @fromBackingInt(@intCast(5)), .captures = nonempty_captures }});
     try std.testing.expect(nonempty_span.len == 1);
     try std.testing.expect(nonempty_fields.len == 1);
     try std.testing.expect(nonempty_tags.len == 1);
