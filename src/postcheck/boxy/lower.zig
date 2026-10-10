@@ -804,11 +804,11 @@ fn procedureModuleById(modules: Common.CheckedModules, module_id: checked.Module
 
 fn procedureModuleByKey(modules: Common.CheckedModules, key: checked.CheckedModuleArtifactKey) ProcedureModuleView {
     if (checked_moduleKeyEqual(modules.root.module.key, key)) return rootProcedureModule(modules);
-    for (modules.imports) |import| {
-        if (checked_moduleKeyEqual(import.key, key)) return procedureModuleFromImport(import);
+    for (modules.imports) |*import| {
+        if (checked_moduleKeyEqual(import.key, key)) return procedureModuleFromImport(import.*);
     }
-    for (modules.root.relation_modules) |relation| {
-        if (checked_moduleKeyEqual(relation.key, key)) return procedureModuleFromImport(relation);
+    for (modules.root.relation_modules) |*relation| {
+        if (checked_moduleKeyEqual(relation.key, key)) return procedureModuleFromImport(relation.*);
     }
     boxyLowerInvariant("boxy worker referenced a checked checked_module that was not available to lowering");
 }
@@ -11903,9 +11903,10 @@ const ProcedureBuilder = struct {
         key_state: LIR.LocalId = undefined,
     };
 
-    /// A record parsed by a loop whose field events each parse one matched
-    /// field: every `Field` match first, then every `TryField` and
-    /// `TryFieldCaseless` name comparison last field first.
+    /// A record parsed by a loop whose field events each select one matched
+    /// field. Each field's value parser is built once, in its own join whose
+    /// parameter is the state after the field's key; the `Field`, `TryField`,
+    /// and `TryFieldCaseless` events jump to it.
     const GeneratedRecordParseState = struct {
         shape_context: GeneratedParserShapeContext,
         state: LIR.LocalId,
@@ -11916,23 +11917,12 @@ const ProcedureBuilder = struct {
         step: GeneratedParserTryCall,
         variants: [5]GeneratedParserTagVariant,
         bodies: [5]LIR.CFStmtId,
-        phase: enum { direct, try_field, caseless },
-        /// The field whose match is being built.
+        /// The field whose value parser is being built.
         field_cursor: usize = 0,
-        direct: struct {
-            payload: ProcBodyBuilder.GeneratedParserTagPayload,
-            field_handle: LIR.LocalId,
-            rest: LIR.LocalId,
-            index: LIR.LocalId,
-            branches: []LIR.CFSwitchBranch,
-        },
-        named: struct {
-            payload: ProcBodyBuilder.GeneratedParserTagPayload,
-            name: LIR.LocalId,
-            rest: LIR.LocalId,
-            dispatch: LIR.CFStmtId,
-            matches: LIR.LocalId,
-        } = undefined,
+        field_joins: []LIR.JoinPointId,
+        /// Each field join's parameter: the state its value parser starts at.
+        field_states: []LIR.LocalId,
+        field_bodies: []LIR.CFStmtId,
     };
 
     fn lowerGeneratedParseShapeFromState(
@@ -12019,7 +12009,9 @@ const ProcedureBuilder = struct {
             .record => |state| {
                 self.allocator.free(state.context.fields);
                 self.allocator.free(state.context.presence);
-                self.allocator.free(state.direct.branches);
+                self.allocator.free(state.field_joins);
+                self.allocator.free(state.field_states);
+                self.allocator.free(state.field_bodies);
             },
         }
     }
@@ -12552,50 +12544,20 @@ const ProcedureBuilder = struct {
                 },
             },
             .record => |*state| {
-                const fields = state.context.fields;
-                switch (state.phase) {
-                    .direct => {
-                        if (child) |matched| {
-                            state.direct.branches[state.field_cursor].body = matched;
-                            state.field_cursor += 1;
-                        }
-                        if (state.field_cursor < fields.len) {
-                            state.direct.branches[state.field_cursor].value = fields[state.field_cursor].index;
-                            frame.awaiting = true;
-                            return .{ .request = try self.beginGeneratedMatchedRecordField(proc, &state.context, state.field_cursor, state.direct.rest) };
-                        }
-                        state.bodies[2] = try self.finishGeneratedRecordDirectFieldEvent(proc, state);
-                        try self.beginGeneratedRecordNamedFieldEvent(proc, state, .try_field);
-                    },
-                    .try_field, .caseless => if (child) |matched| {
-                        const compare_op: LIR.LowLevel = switch (state.phase) {
-                            .try_field => .str_is_eq,
-                            .caseless => .str_caseless_ascii_equals,
-                            .direct => boxyLowerInvariant("generated record named field phase was direct"),
-                        };
-                        const switch_stmt = try proc.boolSwitchNoContinuation(state.named.matches, matched, state.named.dispatch);
-                        state.named.dispatch = try proc.assignBinaryLowLevel(state.named.matches, compare_op, state.named.name, fields[state.field_cursor].renamed, switch_stmt);
-                    },
+                if (child) |matched| {
+                    state.field_bodies[state.field_cursor] = matched;
+                    state.field_cursor += 1;
                 }
-                while (true) {
-                    if (state.field_cursor > 0) {
-                        state.field_cursor -= 1;
-                        state.named.matches = try proc.addFrameLocal(.bool);
-                        frame.awaiting = true;
-                        return .{ .request = try self.beginGeneratedMatchedRecordField(proc, &state.context, state.field_cursor, state.named.rest) };
-                    }
-                    switch (state.phase) {
-                        .direct => boxyLowerInvariant("generated record parser named fields began in the direct phase"),
-                        .try_field => {
-                            state.bodies[3] = try self.finishGeneratedRecordNamedFieldEvent(proc, state);
-                            try self.beginGeneratedRecordNamedFieldEvent(proc, state, .caseless);
-                        },
-                        .caseless => {
-                            state.bodies[4] = try self.finishGeneratedRecordNamedFieldEvent(proc, state);
-                            return self.finishParseShapeFrame(frames, try self.finishGeneratedRecordParse(proc, state));
-                        },
-                    }
+                if (state.field_cursor < state.context.fields.len) {
+                    frame.awaiting = true;
+                    return .{ .request = try self.beginGeneratedMatchedRecordField(
+                        proc,
+                        &state.context,
+                        state.field_cursor,
+                        state.field_states[state.field_cursor],
+                    ) };
                 }
+                return self.finishParseShapeFrame(frames, try self.finishGeneratedRecordParse(proc, state));
             },
         }
     }
@@ -13158,14 +13120,9 @@ const ProcedureBuilder = struct {
             .step = undefined,
             .variants = undefined,
             .bodies = undefined,
-            .phase = .direct,
-            .direct = .{
-                .payload = undefined,
-                .field_handle = undefined,
-                .rest = undefined,
-                .index = undefined,
-                .branches = &.{},
-            },
+            .field_joins = &.{},
+            .field_states = &.{},
+            .field_bodies = &.{},
         } } };
         errdefer self.releaseParseShapeFrame(&frame);
         const record = &frame.state.record;
@@ -13203,108 +13160,118 @@ const ProcedureBuilder = struct {
         record.bodies[0] = try self.lowerGeneratedRecordContinueEvent(proc, record.context, event, continue_variant);
         record.bodies[1] = try self.lowerGeneratedRecordDoneEvent(proc, record.context, event, done_variant);
 
-        record.direct.payload = try proc.generatedParserSingleTagPayloadLocal(field_variant);
-        record.direct.field_handle = try proc.addFrameLocal(self.layout_plan.generated_evidence.field);
-        record.direct.rest = try proc.addFrameLocalForRep(record.context.state_rep);
-        record.direct.index = try proc.addFrameLocal(.u64);
-        record.direct.branches = try self.allocator.alloc(LIR.CFSwitchBranch, fields.len);
+        record.field_joins = try self.allocator.alloc(LIR.JoinPointId, fields.len);
+        for (record.field_joins) |*join_id| join_id.* = proc.freshJoinPointId();
+        record.field_states = try self.allocator.alloc(LIR.LocalId, fields.len);
+        for (record.field_states) |*local| local.* = try proc.addGeneratedParserOutputLocalForRep(record.context.state_rep);
+        record.field_bodies = try self.allocator.alloc(LIR.CFStmtId, fields.len);
         try frames.append(self.allocator, frame);
         return .pushed;
     }
 
-    fn finishGeneratedRecordDirectFieldEvent(
+    /// Enter a field's value parser at `rest`, the state after its key.
+    fn lowerGeneratedRecordFieldJump(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        state: *const GeneratedRecordParseState,
+        field_index: usize,
+        rest: LIR.LocalId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const jump = try self.result.store.addCFStmt(.{ .jump = .{ .target = state.field_joins[field_index] } }, proc.derivedOrigin());
+        return try proc.setLocalInitializeJoinParamFromRep(state.field_states[field_index], rest, state.context.state_rep, jump);
+    }
+
+    /// A `Field` event names its field by handle index.
+    fn lowerGeneratedRecordDirectFieldEvent(
         self: *ProcedureBuilder,
         proc: *ProcBodyBuilder,
         state: *const GeneratedRecordParseState,
     ) Allocator.Error!LIR.CFStmtId {
-        const direct = state.direct;
         const context = state.context;
+        const fields = context.fields;
+        const payload = try proc.generatedParserSingleTagPayloadLocal(state.variants[2]);
+        const field_handle = try proc.addFrameLocal(self.layout_plan.generated_evidence.field);
+        const rest = try proc.addFrameLocalForRep(context.state_rep);
+        const index = try proc.addFrameLocal(.u64);
+        const branches = try self.allocator.alloc(LIR.CFSwitchBranch, fields.len);
+        defer self.allocator.free(branches);
+        for (fields, branches, 0..) |field, *branch, field_index| {
+            branch.* = .{
+                .value = field.index,
+                .body = try self.lowerGeneratedRecordFieldJump(proc, state, field_index, rest),
+            };
+        }
         const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
         const field_switch = try self.result.store.addCFStmt(.{ .switch_stmt = .{
-            .cond = direct.index,
-            .branches = try self.result.store.addCFSwitchBranches(direct.branches),
+            .cond = index,
+            .branches = try self.result.store.addCFSwitchBranches(branches),
             .default_branch = impossible,
             .continuation = null,
         } }, proc.derivedOrigin());
         var continuation = try self.result.store.addCFStmt(.{ .assign_ref = .{
-            .target = direct.index,
-            .op = .{ .field = .{ .source = direct.field_handle, .field_idx = 1 } },
+            .target = index,
+            .op = .{ .field = .{ .source = field_handle, .field_idx = 1 } },
             .next = field_switch,
         } }, proc.derivedOrigin());
         continuation = try proc.generatedParserReadRecordField(
-            direct.rest,
+            rest,
             context.state_rep,
-            direct.payload.local,
-            direct.payload.child,
+            payload.local,
+            payload.child,
             "rest",
             continuation,
         );
         continuation = try proc.generatedParserReadRecordField(
-            direct.field_handle,
-            proc.repForTypeRef(try proc.generatedParserRecordFieldType(direct.payload.child.source_type, "field")),
-            direct.payload.local,
-            direct.payload.child,
+            field_handle,
+            proc.repForTypeRef(try proc.generatedParserRecordFieldType(payload.child.source_type, "field")),
+            payload.local,
+            payload.child,
             "field",
             continuation,
         );
-        return try proc.generatedParserReadTagPayload(state.step.ok_payload.local, state.variants[2], direct.payload, continuation);
+        return try proc.generatedParserReadTagPayload(state.step.ok_payload.local, state.variants[2], payload, continuation);
     }
 
-    /// Begin a `TryField` or `TryFieldCaseless` event: compare the name with
-    /// each field's name, last field first, skipping an unmatched entry.
-    fn beginGeneratedRecordNamedFieldEvent(
+    /// A `TryField` or `TryFieldCaseless` event compares the name with each
+    /// field's name, first field first, skipping an unmatched entry.
+    fn lowerGeneratedRecordNamedFieldEvent(
         self: *ProcedureBuilder,
         proc: *ProcBodyBuilder,
-        state: *GeneratedRecordParseState,
-        phase: @FieldType(GeneratedRecordParseState, "phase"),
-    ) Allocator.Error!void {
-        const variant = switch (phase) {
-            .try_field => state.variants[3],
-            .caseless => state.variants[4],
-            .direct => boxyLowerInvariant("generated record named field event began in the direct phase"),
-        };
+        state: *const GeneratedRecordParseState,
+        variant: GeneratedParserTagVariant,
+        compare_op: LIR.LowLevel,
+    ) Allocator.Error!LIR.CFStmtId {
+        const context = state.context;
+        const fields = context.fields;
         const payload = try proc.generatedParserSingleTagPayloadLocal(variant);
         const name = try proc.addFrameLocal(.str);
-        const rest = try proc.addFrameLocalForRep(state.context.state_rep);
-        state.named = .{
-            .payload = payload,
-            .name = name,
-            .rest = rest,
-            .dispatch = try self.lowerGeneratedSkipRecordField(proc, state.context, rest),
-            .matches = undefined,
-        };
-        state.phase = phase;
-        state.field_cursor = state.context.fields.len;
-    }
-
-    fn finishGeneratedRecordNamedFieldEvent(
-        _: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        state: *const GeneratedRecordParseState,
-    ) Allocator.Error!LIR.CFStmtId {
-        const named = state.named;
-        const variant = switch (state.phase) {
-            .try_field => state.variants[3],
-            .caseless => state.variants[4],
-            .direct => boxyLowerInvariant("generated record named field event finished in the direct phase"),
-        };
-        var dispatch = try proc.generatedParserReadRecordField(
-            named.rest,
-            state.context.state_rep,
-            named.payload.local,
-            named.payload.child,
+        const rest = try proc.addFrameLocalForRep(context.state_rep);
+        var dispatch = try self.lowerGeneratedSkipRecordField(proc, context, rest);
+        var field_index = fields.len;
+        while (field_index > 0) {
+            field_index -= 1;
+            const matches = try proc.addFrameLocal(.bool);
+            const matched = try self.lowerGeneratedRecordFieldJump(proc, state, field_index, rest);
+            const switch_stmt = try proc.boolSwitchNoContinuation(matches, matched, dispatch);
+            dispatch = try proc.assignBinaryLowLevel(matches, compare_op, name, fields[field_index].renamed, switch_stmt);
+        }
+        dispatch = try proc.generatedParserReadRecordField(
+            rest,
+            context.state_rep,
+            payload.local,
+            payload.child,
             "rest",
-            named.dispatch,
+            dispatch,
         );
         dispatch = try proc.generatedParserReadRecordField(
-            named.name,
-            proc.repForTypeRef(try proc.generatedParserRecordFieldType(named.payload.child.source_type, "name")),
-            named.payload.local,
-            named.payload.child,
+            name,
+            proc.repForTypeRef(try proc.generatedParserRecordFieldType(payload.child.source_type, "name")),
+            payload.local,
+            payload.child,
             "name",
             dispatch,
         );
-        return try proc.generatedParserReadTagPayload(state.step.ok_payload.local, variant, named.payload, dispatch);
+        return try proc.generatedParserReadTagPayload(state.step.ok_payload.local, variant, payload, dispatch);
     }
 
     /// The parser for a matched record field's value, reserving the value
@@ -13370,8 +13337,22 @@ const ProcedureBuilder = struct {
         const context = state.context;
         const fields = context.fields;
         const presence = context.presence;
+        var bodies = state.bodies;
+        bodies[2] = try self.lowerGeneratedRecordDirectFieldEvent(proc, state);
+        bodies[3] = try self.lowerGeneratedRecordNamedFieldEvent(proc, state, state.variants[3], .str_is_eq);
+        bodies[4] = try self.lowerGeneratedRecordNamedFieldEvent(proc, state, state.variants[4], .str_caseless_ascii_equals);
         const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
-        const event_body = try proc.generatedParserTagDispatch(state.step.ok_payload.local, state.step.ok_payload.child.rep, &state.variants, &state.bodies, impossible);
+        var event_body = try proc.generatedParserTagDispatch(state.step.ok_payload.local, state.step.ok_payload.child.rep, &state.variants, &bodies, impossible);
+        var field_index = fields.len;
+        while (field_index > 0) {
+            field_index -= 1;
+            event_body = try self.result.store.addCFStmt(.{ .join = .{
+                .id = state.field_joins[field_index],
+                .params = try proc.joinParamSpan(&.{state.field_states[field_index]}),
+                .body = state.field_bodies[field_index],
+                .remainder = event_body,
+            } }, proc.derivedOrigin());
+        }
         const read_event = try self.finishGeneratedParserTryCall(
             proc,
             state.step,
@@ -13405,7 +13386,7 @@ const ProcedureBuilder = struct {
         } }, proc.derivedOrigin());
 
         var initial = try self.lowerGeneratedRecordStart(proc, context, state.state);
-        var field_index = fields.len;
+        field_index = fields.len;
         while (field_index > 0) {
             field_index -= 1;
             initial = try proc.initUninitializedLocal(fields[field_index].payload, initial);
@@ -21631,11 +21612,11 @@ const ProcBodyBuilder = struct {
         method_text: []const u8,
         subject_type: ?Plan.CheckedTypeIdentity,
     ) ?Plan.GeneratedCodecCallPlan {
-        for (self.parent.plan.generated_codec_calls.items) |call| {
+        for (self.parent.plan.generated_codec_calls.items) |*call| {
             if (call.caller != caller or !planTypeRefEql(call.dispatch_type, dispatch_type)) continue;
             if (!optionalPlanTypeRefEql(call.subject_type, subject_type)) continue;
             const method_module = procedureModuleById(self.parent.modules, call.method_module);
-            if (std.mem.eql(u8, method_module.canonical_names.methodNameText(call.method), method_text)) return call;
+            if (std.mem.eql(u8, method_module.canonical_names.methodNameText(call.method), method_text)) return call.*;
         }
         return null;
     }
@@ -21648,10 +21629,10 @@ const ProcBodyBuilder = struct {
         method_module: checked.ModuleId,
         method: names.MethodNameId,
     ) Plan.GeneratedCodecCallPlan {
-        for (self.parent.plan.generated_codec_calls.items) |call| {
+        for (self.parent.plan.generated_codec_calls.items) |*call| {
             if (call.caller != caller or !planTypeRefEql(call.dispatch_type, dispatch_type)) continue;
             if (!optionalPlanTypeRefEql(call.subject_type, subject_type)) continue;
-            if (checked_moduleKeyEqual(call.method_module, method_module) and call.method == method) return call;
+            if (checked_moduleKeyEqual(call.method_module, method_module) and call.method == method) return call.*;
         }
         boxyLowerInvariant("generated codec body referenced an unplanned exact method call");
     }
@@ -21663,12 +21644,12 @@ const ProcBodyBuilder = struct {
         method_text: []const u8,
     ) Plan.GeneratedCodecCallPlan {
         var found: ?Plan.GeneratedCodecCallPlan = null;
-        for (self.parent.plan.generated_codec_calls.items) |call| {
+        for (self.parent.plan.generated_codec_calls.items) |*call| {
             if (call.caller != caller or !planTypeRefEql(call.dispatch_type, dispatch_type)) continue;
             const method_module = procedureModuleById(self.parent.modules, call.method_module);
             if (!std.mem.eql(u8, method_module.canonical_names.methodNameText(call.method), method_text)) continue;
             if (found != null) boxyLowerInvariant("generated codec body referenced an ambiguously planned method call");
-            found = call;
+            found = call.*;
         }
         return found orelse boxyLowerInvariant("generated codec body referenced an unplanned method call");
     }

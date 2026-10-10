@@ -2000,7 +2000,7 @@ pub const ProgramPlan = struct {
     }
 
     pub fn workerForSourceType(self: *const ProgramPlan, source: WorkerSource, checked_type: CheckedTypeIdentity) ?WorkerPlanId {
-        for (self.workers.items) |worker| {
+        for (self.workers.items) |*worker| {
             if (!workerSourceEql(worker.source, source)) continue;
             if (source == .nested_expr or typeRefEql(worker.checked_type, checked_type)) return worker.id;
         }
@@ -4035,14 +4035,14 @@ const Builder = struct {
 
     fn moduleForId(self: *Builder, module_id: checked.ModuleId) ModuleView {
         if (moduleKeyEqual(module_id, self.root_view.key)) return self.root_view;
-        for (self.extra_module_views) |view| {
-            if (moduleKeyEqual(module_id, view.key)) return view;
+        for (self.extra_module_views) |*view| {
+            if (moduleKeyEqual(module_id, view.key)) return view.*;
         }
-        for (self.imports) |imported| {
-            if (moduleKeyEqual(module_id, imported.key)) return moduleViewFromImported(imported);
+        for (self.imports) |*imported| {
+            if (moduleKeyEqual(module_id, imported.key)) return moduleViewFromImported(imported.*);
         }
-        for (self.relation_modules) |relation| {
-            if (moduleKeyEqual(module_id, relation.key)) return moduleViewFromImported(relation);
+        for (self.relation_modules) |*relation| {
+            if (moduleKeyEqual(module_id, relation.key)) return moduleViewFromImported(relation.*);
         }
         boxyPlanInvariant("checked nominal representation referenced a module outside boxy planner input");
     }
@@ -4980,7 +4980,7 @@ const Builder = struct {
         if (!typeRefEql(definition_type, worker_type)) {
             _ = try self.analyzeType(self.moduleForId(definition_type.module), definition_type.ty);
         }
-        for (self.plan.workers.items) |worker| {
+        for (self.plan.workers.items) |*worker| {
             if (workerSourceEql(worker.source, source) and (source == .nested_expr or typeRefEql(worker.checked_type, worker_type))) {
                 if (root_request) |request| {
                     if (worker.root_request == null) {

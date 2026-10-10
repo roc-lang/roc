@@ -6674,6 +6674,11 @@ Monotype commits that plan as one loop plus explicit shared continuations:
   payload to one typed error continuation, which constructs the outer `Err`
   exactly once.
 
+Boxy's generated record parser keeps the first rule the same way: each field's
+value parser is built once, as a join whose parameter is the state after the
+field's key, and the `Field`, `TryField`, and `TryFieldCaseless` events jump to
+it.
+
 The continuation targets are producer-authored Monotype data. Lifting,
 specialization, lambda solving, and direct LIR lowering preserve and consume
 those targets explicitly; no pass may discover equivalent branches and merge

@@ -534,6 +534,48 @@ fn structuralJsonLirStats(
     };
 }
 
+/// Call statements in the whole Boxy-lowered program for a flat JSON record
+/// parser of `field_count` `Str` fields.
+fn boxyStructuralJsonParserCalls(allocator: Allocator, field_count: usize) TestError!usize {
+    var source_buf = std.ArrayList(u8).empty;
+    defer source_buf.deinit(allocator);
+    try source_buf.appendSlice(allocator, "Shape : {\n");
+    for (0..field_count) |field_index| {
+        const field = try std.fmt.allocPrint(allocator, "    f{d} : Str,\n", .{field_index});
+        defer allocator.free(field);
+        try source_buf.appendSlice(allocator, field);
+    }
+    try source_buf.appendSlice(allocator,
+        \\}
+        \\
+        \\parse_shape : Str -> Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\parse_shape = |json| Json.parse(json)
+        \\
+        \\main : Str -> Bool
+        \\main = |json| parse_shape(json).is_ok()
+        \\
+    );
+    const source = source_buf.items;
+
+    var compiled = try helpers.compileProgramForTargetWithBuiltinAndContext(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .boxy,
+    );
+    defer compiled.deinit(allocator);
+    var calls: usize = 0;
+    for (compiled.lowered.view.store.getCFStmts()) |stmt| {
+        if (stmt == .assign_call or stmt == .assign_call_erased or stmt == .assign_call_dict) calls += 1;
+    }
+    return calls;
+}
+
 fn structuralJsonLirPeakBytes(field_count: usize) TestError!usize {
     const source = try structuralJsonSource(std.testing.allocator, field_count, "Str", .parse);
     defer std.testing.allocator.free(source);
@@ -1995,6 +2037,17 @@ test "issue 10979 flat JSON record parser ARC growth is linear in field count" {
     }
     try std.testing.expect(wide_per_field * 2 <= narrow_per_field * 3);
     try std.testing.expect(wide_statements_per_field * 2 <= narrow_statements_per_field * 3);
+}
+
+test "issue 11910 boxy JSON record parser lowers each field's value parser once" {
+    // The `Field`, `TryField`, and `TryFieldCaseless` events all select a
+    // field and then parse its value; each field's value parser is one join
+    // they jump to. A field therefore adds two calls: the parser's
+    // constructor renaming its name, and the one call parsing its value.
+    const allocator = std.testing.allocator;
+    const four = try boxyStructuralJsonParserCalls(allocator, 4);
+    const eight = try boxyStructuralJsonParserCalls(allocator, 8);
+    try std.testing.expectEqual(@as(usize, 2 * 4), eight - four);
 }
 
 test "issue 10979 shared JSON record continuations preserve field semantics" {
