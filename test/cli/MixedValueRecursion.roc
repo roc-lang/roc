@@ -10,7 +10,7 @@ is_even = {
 	|n| if n == z { Bool.True } else { match is_odd(n - 1) { Yes => Bool.True, No => Bool.False } }
 }
 
-is_odd : U64 -> [Yes, No]
+is_odd : U64 -> [Yes, No, ..]
 is_odd = {
 	z = 0
 	|n| if n == z { No } else { if is_even(n - 1) { Yes } else { No } }

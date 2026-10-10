@@ -1,15 +1,15 @@
 # Generalized top-level values are compile-time evaluated once per concrete
 # specialization (design.md "Specialization-Owned Top-Level Values"). `boom`
-# and `missing` have an implicitly open output row, so each use instantiates
-# the row fresh and every specialization is its own compile-time value at its own
+# and `missing` write `..` in an output row, so each use instantiates the row
+# fresh and every specialization is its own compile-time value at its own
 # layout: `Boom` has a different discriminant in `[Boom, Zed]` and in
 # `[Aa, Ab, Boom]`. `made` is used at two element types.
 GeneralizedValueSpecializations := {}
 
-boom : [Boom]
+boom : [Boom, ..]
 boom = Boom
 
-missing : Try(U64, [Missing])
+missing : Try(U64, [Missing, ..])
 missing = Err(Missing)
 
 grow : U64, List(a) -> List(a)

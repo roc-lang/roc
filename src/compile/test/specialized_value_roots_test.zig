@@ -204,7 +204,7 @@ test "an optimized runtime program reads each specialization of a generalized va
 test "a generalized callable binding is compile-time evaluated at its specialization" {
     if (is_freestanding) return error.SkipZigTest;
     const allocator = std.testing.allocator;
-    // `validate`'s implicitly opened error row generalizes, so its type is
+    // The written `..` generalizes `validate`'s error row, so its type is
     // specialization-owned; its use in `main!` closes the row.
     var app: App = undefined;
     try app.check(allocator,
@@ -213,7 +213,7 @@ test "a generalized callable binding is compile-time evaluated at its specializa
         \\make_validator = |limit| {
         \\    |n| if n > limit { Ok(n) } else { Err(Small("too small")) }
         \\}
-        \\validate : I64 -> Try(I64, [Small(Str)])
+        \\validate : I64 -> Try(I64, [Small(Str), ..])
         \\validate = make_validator(0.I64)
         \\main! = |args| {
         \\    validated = match validate(List.len(args).to_i64_wrap()) {
@@ -508,9 +508,9 @@ test "mutually recursive generalized callable values are evaluated at their spec
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
         \\make = |f| f
-        \\is_even : U64 -> [Yes, No]
+        \\is_even : U64 -> [Yes, No, ..]
         \\is_even = make(|n| if n == 0 Yes else is_odd(n - 1))
-        \\is_odd : U64 -> [Yes, No]
+        \\is_odd : U64 -> [Yes, No, ..]
         \\is_odd = make(|n| if n == 0 No else is_even(n - 1))
         \\main! = |args| {
         \\    answer = match is_even(List.len(args)) {
@@ -565,7 +565,7 @@ test "a generalized callable value recursive with a monomorphic one is evaluated
         \\    z = 0
         \\    |n| if n == z { Bool.True } else { match is_odd(n - 1) { Yes => Bool.True, No => Bool.False } }
         \\}
-        \\is_odd : U64 -> [Yes, No]
+        \\is_odd : U64 -> [Yes, No, ..]
         \\is_odd = {
         \\    z = 0
         \\    |n| if n == z { No } else { if is_even(n - 1) { Yes } else { No } }
@@ -597,7 +597,7 @@ test "a generalized callable value recursive with a monomorphic one built by a c
         \\make = |f| f
         \\is_even : U64 -> Bool
         \\is_even = make(|n| if n == 0 Bool.True else match is_odd(n - 1) { Yes => Bool.True, No => Bool.False })
-        \\is_odd : U64 -> [Yes, No]
+        \\is_odd : U64 -> [Yes, No, ..]
         \\is_odd = make(|n| if n == 0 No else if is_even(n - 1) Yes else No)
         \\main! = |args| {
         \\    answer = match is_odd(List.len(args)) {
@@ -689,9 +689,9 @@ test "mutually recursive generalized record values are evaluated at their specia
     try app.check(allocator,
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
-        \\evens : { check : U64 -> [Yes, No] }
+        \\evens : { check : U64 -> [Yes, No, ..] }
         \\evens = { check: |n| if n == 0 Yes else (odds.check)(n - 1) }
-        \\odds : { check : U64 -> [Yes, No] }
+        \\odds : { check : U64 -> [Yes, No, ..] }
         \\odds = { check: |n| if n == 0 No else (evens.check)(n - 1) }
         \\main! = |args| {
         \\    answer = match (evens.check)(List.len(args)) {

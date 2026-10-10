@@ -465,18 +465,9 @@ fn structuralJsonMonotypeStatsForSource(
     allocator: Allocator,
     source: []const u8,
 ) TestError!StructuralJsonMonotypeStats {
-    return structuralJsonMonotypeStatsForSourceWithOptions(allocator, source, .{});
-}
-
-fn structuralJsonMonotypeStatsForSourceWithOptions(
-    allocator: Allocator,
-    source: []const u8,
-    options: struct { literal_roots: bool = false },
-) TestError!StructuralJsonMonotypeStats {
     var counters: MonoLower.SpecializationCounters = .{};
     var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{
         .specialization_counters = &counters,
-        .literal_roots = options.literal_roots,
     });
     defer lowered.deinit(allocator);
 
@@ -9569,21 +9560,13 @@ test "W6b widened closed where-method impl is reached through a generated adapte
     // adapter that re-tags into the requested row (design.md "Result-Row
     // Widening Adapter"). Running the program proves neither: it produces the
     // same answer whether the impl was adapted or simply specialized wide, so
-    // the adapter count is the only witness. `closed_value` is closed by its
-    // body forwarding `seal`'s closed result: an annotated value alone
-    // generalizes its implicitly opened row (design.md "Polarity"). That
-    // depends on the known limitation that forwarding closes the row
-    // (design.md "Deferred: Row Subsumption"); row subsumption will require
-    // reworking this fixture.
+    // the adapter count is the only witness.
     const widened =
         \\describe : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]
         \\describe = |x| x.status()
         \\
-        \\seal : [Ok(Str), Err(Str)] -> [Ok(Str), Err(Str)]
-        \\seal = |v| v
-        \\
         \\closed_value : [Ok(Str), Err(Str)]
-        \\closed_value = seal(Ok("cv"))
+        \\closed_value = Ok("cv")
         \\
         \\Job := [Pending].{
         \\    status : Job -> [Ok(Str), Err(Str)]
@@ -9609,11 +9592,8 @@ test "W6b widened closed where-method impl is reached through a generated adapte
         \\describe : a -> [Ok(Str), Err(Str)] where [a.status : a -> [Ok(Str), Err(Str)]]
         \\describe = |x| x.status()
         \\
-        \\seal : [Ok(Str), Err(Str)] -> [Ok(Str), Err(Str)]
-        \\seal = |v| v
-        \\
         \\closed_value : [Ok(Str), Err(Str)]
-        \\closed_value = seal(Ok("cv"))
+        \\closed_value = Ok("cv")
         \\
         \\Job := [Pending].{
         \\    status : Job -> [Ok(Str), Err(Str)]
@@ -9640,10 +9620,6 @@ test "W6b question-widened closed Try impl is reached through a generated adapte
     // error row `[NotFound]` and `?` requests `[NotFound, Other]`, so the
     // adapter unwraps the declared-row `Try` and re-wraps its error into the
     // wider row.
-    // The `closed_*` values are closed only by forwarding `seal`'s closed
-    // result, which depends on the known limitation that forwarding closes
-    // the row (design.md "Deferred: Row Subsumption"); row subsumption will
-    // require reworking this fixture.
     const source =
         \\load : a -> Try(Str, [NotFound, Other]) where [a.fetch : a -> Try(Str, [NotFound])]
         \\load = |x| {
@@ -9651,11 +9627,8 @@ test "W6b question-widened closed Try impl is reached through a generated adapte
         \\    Ok(s)
         \\}
         \\
-        \\seal : Try(Str, [NotFound]) -> Try(Str, [NotFound])
-        \\seal = |v| v
-        \\
         \\closed_try : Try(Str, [NotFound])
-        \\closed_try = seal(Ok("hit"))
+        \\closed_try = Ok("hit")
         \\
         \\Src := [S].{
         \\    fetch : Src -> Try(Str, [NotFound])
@@ -9684,19 +9657,12 @@ test "W6b closed impl reached through nested evidence is adapted" {
     // `WidenNestedEvidenceClosedImpl.roc` runs this program on both backends
     // and only proves it computes the right answer; the adapter count is what
     // proves the mechanism.
-    // The `closed_*` values are closed only by forwarding `seal`'s closed
-    // result, which depends on the known limitation that forwarding closes
-    // the row (design.md "Deferred: Row Subsumption"); row subsumption will
-    // require reworking this fixture.
     const source =
-        \\seal : [Ok(Str), Err(Str)] -> [Ok(Str), Err(Str)]
-        \\seal = |v| v
-        \\
         \\closed_ok : [Ok(Str), Err(Str)]
-        \\closed_ok = seal(Ok("ok"))
+        \\closed_ok = Ok("ok")
         \\
         \\closed_err : [Ok(Str), Err(Str)]
-        \\closed_err = seal(Err("err"))
+        \\closed_err = Err("err")
         \\
         \\Wrap(a) := [W(a)].{
         \\    status : Wrap(a) -> [Ok(Str), Err(Str)] where [a.name : a -> Str]
@@ -9787,19 +9753,12 @@ test "W6b direct-result widening adapter re-tags into the requested row at run t
     // payload out of a payload-less `Extra`—which only running the program
     // can catch. (`Err` maps 0 to 0 and proves nothing on its own; it is here
     // so both constructors travel through the adapter.)
-    // The `closed_*` values are closed only by forwarding `seal`'s closed
-    // result, which depends on the known limitation that forwarding closes
-    // the row (design.md "Deferred: Row Subsumption"); row subsumption will
-    // require reworking this fixture.
     const source =
-        \\seal : [Ok(Str), Err(Str)] -> [Ok(Str), Err(Str)]
-        \\seal = |v| v
-        \\
         \\closed_ok : [Ok(Str), Err(Str)]
-        \\closed_ok = seal(Ok("ok"))
+        \\closed_ok = Ok("ok")
         \\
         \\closed_err : [Ok(Str), Err(Str)]
-        \\closed_err = seal(Err("bad"))
+        \\closed_err = Err("bad")
         \\
         \\Job := [Pending, Failed].{
         \\    status : Job -> [Ok(Str), Err(Str)]
@@ -9854,19 +9813,12 @@ test "W6b Try error-row widening adapter re-tags into the requested row at run t
     // sorts first, so the declared row numbers `NotFound` 0 while the requested
     // row numbers `Gone` 0 and `NotFound` 1, and a missing or misordered
     // injection reports `Gone` where the callee returned `NotFound`.
-    // The `closed_*` values are closed only by forwarding `seal`'s closed
-    // result, which depends on the known limitation that forwarding closes
-    // the row (design.md "Deferred: Row Subsumption"); row subsumption will
-    // require reworking this fixture.
     const source =
-        \\seal : Try(Str, [NotFound]) -> Try(Str, [NotFound])
-        \\seal = |v| v
-        \\
         \\closed_hit : Try(Str, [NotFound])
-        \\closed_hit = seal(Ok("hit"))
+        \\closed_hit = Ok("hit")
         \\
         \\closed_miss : Try(Str, [NotFound])
-        \\closed_miss = seal(Err(NotFound))
+        \\closed_miss = Err(NotFound)
         \\
         \\Src := [Found, Missing].{
         \\    fetch : Src -> Try(Str, [NotFound])
@@ -9928,21 +9880,14 @@ test "W6b alias-wrapped closed Try error row is adapted and re-tagged at run tim
     // while the requested row numbers `Gone` 0 and `NotFound` 1: a missing or
     // misordered injection reports `Gone` where the callee returned
     // `NotFound`.
-    // The `closed_*` values are closed only by forwarding `seal`'s closed
-    // result, which depends on the known limitation that forwarding closes
-    // the row (design.md "Deferred: Row Subsumption"); row subsumption will
-    // require reworking this fixture.
     const source =
         \\IoResult(a) : Try(a, [NotFound])
         \\
-        \\seal : IoResult(Str) -> IoResult(Str)
-        \\seal = |v| v
-        \\
         \\closed_hit : IoResult(Str)
-        \\closed_hit = seal(Ok("hit"))
+        \\closed_hit = Ok("hit")
         \\
         \\closed_miss : IoResult(Str)
-        \\closed_miss = seal(Err(NotFound))
+        \\closed_miss = Err(NotFound)
         \\
         \\Src := [Found, Missing].{
         \\    fetch : Src -> IoResult(Str)
@@ -12297,9 +12242,13 @@ test "issue 11376: packed products survive Boxy boundaries and copy-on-write" {
     }
 }
 
-/// The format and input state every stored-parser gate below shares, ending
-/// in a blank line so a gate appends its own `parse_stored` and `main`.
-const stored_parser_format_source =
+/// A stored parser constant (`parse_stored = { Shape.parser_for(...) }`),
+/// mirroring test/cli/ParserTopLevelStoredParser.roc without its module
+/// header. This body is emitted in Phase B, behind the graph freeze; no
+/// snapshot anywhere carries lowered output, so the Monotype footprint below
+/// is the gate that the deferred body is the same body the eager restore used
+/// to emit.
+const stored_parser_gate_source =
     \\Format := [Default].{
     \\    rename_field : Format, Str -> Str
     \\    rename_field = |_, name| name
@@ -12341,16 +12290,6 @@ const stored_parser_format_source =
     \\
     \\State := [Present(Str), Done]
     \\
-    \\
-;
-
-/// A stored parser constant (`parse_stored = { Shape.parser_for(...) }`),
-/// mirroring test/cli/ParserTopLevelStoredParser.roc without its module
-/// header. Its implicitly open error row generalizes it, so it is lowered per
-/// specialization as a literal root rather than restored in Phase B; no
-/// snapshot anywhere carries lowered output, so the Monotype footprint below
-/// is its gate.
-const stored_parser_gate_source = stored_parser_format_source ++
     \\parse_stored : State -> Try({ value : { foo : Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
     \\parse_stored = {
     \\    Shape : { foo : Str }
@@ -12360,43 +12299,6 @@ const stored_parser_gate_source = stored_parser_format_source ++
     \\main : State -> Try({ value : { foo : Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
     \\main = |state| parse_stored(state)
 ;
-
-/// `stored_parser_gate_source`'s parser with no annotation, used only by a
-/// `main` that closes its error row with an exhaustive match. Nothing
-/// generalizes it (no annotation, so no implicitly opened row) and its
-/// checked type is concrete, so the module evaluates it once and every use
-/// restores the stored parser, with the generated body emitted in Phase B,
-/// behind the graph freeze.
-const stored_parser_restore_gate_source = stored_parser_format_source ++
-    \\parse_stored = {
-    \\    Shape : { foo : Str }
-    \\    Shape.parser_for(Format.Default)
-    \\}
-    \\
-    \\main : State -> Str
-    \\main = |state|
-    \\    match parse_stored(state) {
-    \\        Ok(_) => "ok"
-    \\        Err(FormatError) => "format"
-    \\        Err(MissingRequiredField(field)) => field
-    \\    }
-;
-
-/// The request eligibility checking gave a source's one callable binding root.
-fn onlyCallableBindingRootEligibility(
-    allocator: Allocator,
-    source: []const u8,
-) TestError!check.CheckedArtifact.CompileTimeRootRequestEligibility {
-    var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{});
-    defer lowered.deinit(allocator);
-    var found: ?check.CheckedArtifact.CompileTimeRootRequestEligibility = null;
-    for (lowered.resources.checked_artifact.compile_time_roots.roots) |root| {
-        if (root.kind != .callable_binding) continue;
-        if (found != null) return error.TestUnexpectedResult;
-        found = root.request_eligibility;
-    }
-    return found orelse error.TestUnexpectedResult;
-}
 
 test "stored codec restore emits the same Monotype shape from Phase B" {
     // This body's generation sits behind the graph freeze, in Phase B. No
@@ -12412,11 +12314,6 @@ test "stored codec restore emits the same Monotype shape from Phase B" {
     // `MissingRequiredField` directly, with no remaining-state binding for an
     // `invalid_value` call:
     //   fns=10 defs=11 exprs=593 locals=119 template_misses=14 nested_misses=0
-    // An annotated stored parser now generalizes its implicitly open error
-    // row and is lowered per specialization instead (see the literal-root
-    // gate below), so the gate moved to the unannotated parser that `main`
-    // closes with a match: the restore is unchanged, and `main`'s match adds
-    // exactly six expressions and one local (`field`).
     // Every count is exact, including expressions and locals. The reserve-
     // and-copy that Phase-B emission ends in is the same reserve-and-copy the
     // eager restore already performed (it too filled a reservation with a
@@ -12426,43 +12323,12 @@ test "stored codec restore emits the same Monotype shape from Phase B" {
     // fall: the eager restore keyed the callee spec as an open request, and
     // Phase-B emission removes that cause.
     const allocator = std.testing.allocator;
-    try std.testing.expectEqual(
-        check.CheckedArtifact.CompileTimeRootRequestEligibility.eligible,
-        try onlyCallableBindingRootEligibility(allocator, stored_parser_restore_gate_source),
-    );
-    try std.testing.expectEqual(@as(usize, 0), try specializedValueRootCount(allocator, stored_parser_restore_gate_source));
-    const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_restore_gate_source);
+    const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_gate_source);
     try std.testing.expectEqual(@as(usize, 10), stats.functions);
     try std.testing.expectEqual(@as(usize, 11), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 599), stats.expressions);
-    try std.testing.expectEqual(@as(usize, 120), stats.locals);
+    try std.testing.expectEqual(@as(usize, 593), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 119), stats.locals);
     try std.testing.expect(stats.template_misses <= 14);
-    try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
-}
-
-test "a generalized stored parser's literal root emits a pinned Monotype shape" {
-    // `parse_stored`'s annotated error row is an output row, so it is
-    // implicitly open and the value generalizes (design.md "Polarity"): the
-    // module does not evaluate or restore it. A program that evaluates
-    // compile-time work lowers its one specialization (the row `main` closes)
-    // once, as the body of a zero-argument literal root that `main` reads
-    // (design.md "Specialization-Owned Top-Level Values"). Measured against
-    // plain Monotype (no literal roots, body lowered at the use: fns=8 defs=9
-    // exprs=320 locals=68 template_misses=7), the root adds exactly one
-    // definition and three expressions; the generated parser is lowered once
-    // either way. Every count is exact, including expressions and locals.
-    const allocator = std.testing.allocator;
-    try std.testing.expectEqual(
-        check.CheckedArtifact.CompileTimeRootRequestEligibility.per_specialization,
-        try onlyCallableBindingRootEligibility(allocator, stored_parser_gate_source),
-    );
-    try std.testing.expectEqual(@as(usize, 1), try specializedValueRootCount(allocator, stored_parser_gate_source));
-    const stats = try structuralJsonMonotypeStatsForSourceWithOptions(allocator, stored_parser_gate_source, .{ .literal_roots = true });
-    try std.testing.expectEqual(@as(usize, 8), stats.functions);
-    try std.testing.expectEqual(@as(usize, 10), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 323), stats.expressions);
-    try std.testing.expectEqual(@as(usize, 68), stats.locals);
-    try std.testing.expectEqual(@as(u64, 7), stats.template_misses);
     try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
 }
 
@@ -12472,7 +12338,48 @@ test "a generalized stored parser's literal root emits a pinned Monotype shape" 
 /// node"), so it has no earlier baseline: its numbers are Phase-B emission's
 /// own, pinned as a regression gate rather than as an equivalence gate. It is
 /// the case the two-phase restore exists for.
-const stored_parser_optional_gate_source = stored_parser_format_source ++
+const stored_parser_optional_gate_source =
+    \\Format := [Default].{
+    \\    rename_field : Format, Str -> Str
+    \\    rename_field = |_, name| name
+    \\
+    \\    parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError])
+    \\    parse_str = |_, state|
+    \\        match state {
+    \\            Present(value) => Ok({ value, rest: Done })
+    \\            Done => Err(FormatError)
+    \\        }
+    \\
+    \\    parse_record_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [FormatError])
+    \\    parse_record_start = |_, state| Ok(Uncounted(state))
+    \\
+    \\    parse_record_field : Format,
+    \\    Encoding.FieldName.FieldNames(_shape),
+    \\    State -> Try(
+    \\        [
+    \\            Field({ field : Encoding.FieldName(_shape), rest : State }),
+    \\            TryField({ name : Str, rest : State }),
+    \\            TryFieldCaseless({ name : Str, rest : State }),
+    \\            Continue(State),
+    \\            Done(State),
+    \\        ],
+    \\        [FormatError],
+    \\    )
+    \\    parse_record_field = |_, _, state|
+    \\        match state {
+    \\            Present(_) => Ok(TryField({ name: "foo", rest: state }))
+    \\            Done => Ok(Done(state))
+    \\        }
+    \\
+    \\    parse_record_after_field : Format, State -> Try([Continue(State), Done(State)], [FormatError])
+    \\    parse_record_after_field = |_, state| Ok(Continue(state))
+    \\
+    \\    skip_record_field : Format, State -> Try(State, [FormatError])
+    \\    skip_record_field = |_, _| Ok(Done)
+    \\}
+    \\
+    \\State := [Present(Str), Done]
+    \\
     \\parse_stored : State -> Try({ value : { foo : Str, bar ?: Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
     \\parse_stored = {
     \\    Shape : { foo : Str, bar ?: Str }
@@ -12546,48 +12453,29 @@ fn specializedValueRootCount(allocator: Allocator, source: []const u8) TestError
 }
 
 test "a generalized stored parser is a literal root of a program that evaluates compile-time work" {
-    // design.md "Specialization-Owned Top-Level Values" and "Polarity": the
-    // stored parser's annotated error row is an output row, so the
-    // annotation implicitly opens it and the value generalizes exactly as if
-    // the row were written `..`. The module cannot evaluate it; the program
-    // evaluates its one specialization (the row `main` closes) as a literal
-    // root instead of running the parser construction at runtime. Both
-    // spellings mean the same thing, so both have exactly that one root.
+    // design.md "Specialization-Owned Top-Level Values": writing `..` in the
+    // stored parser's error row generalizes it, so the module cannot evaluate
+    // it; the program evaluates its one specialization (the row `main`
+    // closes) as a literal root instead of running the parser construction
+    // at runtime. The monomorphic original is module-evaluated and restored,
+    // so it has no such root.
     const allocator = std.testing.allocator;
-    const implicit_row = "[FormatError, MissingRequiredField(Str)])\n";
-    const explicit_row = "[FormatError, MissingRequiredField(Str), ..])\n";
+    const closed_row = "[FormatError, MissingRequiredField(Str)])\n";
+    const open_row = "[FormatError, MissingRequiredField(Str), ..])\n";
     const annotation = "parse_stored : State -> Try({ value : { foo : Str }, rest : State }, ";
-    const implicit = annotation ++ implicit_row;
-    const explicit = annotation ++ explicit_row;
-    const index = std.mem.find(u8, stored_parser_gate_source, implicit) orelse return error.TestUnexpectedResult;
-    const explicitly_open = try std.mem.concat(allocator, u8, &.{
+    const closed = annotation ++ closed_row;
+    const open = annotation ++ open_row;
+    const index = std.mem.find(u8, stored_parser_gate_source, closed) orelse return error.TestUnexpectedResult;
+    const generalized = try std.mem.concat(allocator, u8, &.{
         stored_parser_gate_source[0..index],
-        explicit,
-        stored_parser_gate_source[index + implicit.len ..],
+        open,
+        stored_parser_gate_source[index + closed.len ..],
     });
-    defer allocator.free(explicitly_open);
+    defer allocator.free(generalized);
 
-    try std.testing.expectEqual(@as(usize, 1), try specializedValueRootCount(allocator, stored_parser_gate_source));
-    try std.testing.expectEqual(@as(usize, 1), try specializedValueRootCount(allocator, explicitly_open));
+    try std.testing.expectEqual(@as(usize, 0), try specializedValueRootCount(allocator, stored_parser_gate_source));
+    try std.testing.expectEqual(@as(usize, 1), try specializedValueRootCount(allocator, generalized));
 }
-
-/// `stored_parser_optional_gate_source`'s parser with no annotation, closed
-/// by `main`'s exhaustive match, so it is module-evaluated and restored in
-/// Phase B exactly like `stored_parser_restore_gate_source`.
-const stored_parser_optional_restore_gate_source = stored_parser_format_source ++
-    \\parse_stored = {
-    \\    Shape : { foo : Str, bar ?: Str }
-    \\    Shape.parser_for(Format.Default)
-    \\}
-    \\
-    \\main : State -> Str
-    \\main = |state|
-    \\    match parse_stored(state) {
-    \\        Ok(_) => "ok"
-    \\        Err(FormatError) => "format"
-    \\        Err(MissingRequiredField(field)) => field
-    \\    }
-;
 
 test "stored parser restore lowers a shape with an optional field" {
     // Not an equivalence gate: this program panicked before W2b
@@ -12599,39 +12487,14 @@ test "stored parser restore lowers a shape with an optional field" {
     // Re-measured after the 2026-09-15 rebase onto upstream's codec contract
     // machinery (exprs 669 -> 731, locals 127 -> 140), and again once a
     // missing required field always constructs `MissingRequiredField`
-    // directly (exprs 731 -> 727, locals 140 -> 138). Moved, like the gate
-    // above, to the unannotated parser `main` closes with a match, which adds
-    // exactly six expressions and one local (exprs 727 -> 733, locals
-    // 138 -> 139).
+    // directly (exprs 731 -> 727, locals 140 -> 138).
     const allocator = std.testing.allocator;
-    try std.testing.expectEqual(
-        check.CheckedArtifact.CompileTimeRootRequestEligibility.eligible,
-        try onlyCallableBindingRootEligibility(allocator, stored_parser_optional_restore_gate_source),
-    );
-    try std.testing.expectEqual(@as(usize, 0), try specializedValueRootCount(allocator, stored_parser_optional_restore_gate_source));
-    const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_optional_restore_gate_source);
+    const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_optional_gate_source);
     try std.testing.expectEqual(@as(usize, 10), stats.functions);
     try std.testing.expectEqual(@as(usize, 11), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 733), stats.expressions);
-    try std.testing.expectEqual(@as(usize, 139), stats.locals);
+    try std.testing.expectEqual(@as(usize, 727), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 138), stats.locals);
     try std.testing.expectEqual(@as(u64, 14), stats.template_misses);
-    try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
-}
-
-test "a generalized stored parser with an optional field lowers its literal root" {
-    // Like `stored_parser_gate_source`, the annotated value's implicitly open
-    // error row generalizes it, so it is not restored: the gate pins its one
-    // specialization lowered as a literal root (plain Monotype lowers the
-    // same parser at the use: fns=8 defs=9 exprs=396 locals=80
-    // template_misses=7; the root adds one definition and three expressions).
-    const allocator = std.testing.allocator;
-    try std.testing.expectEqual(@as(usize, 1), try specializedValueRootCount(allocator, stored_parser_optional_gate_source));
-    const stats = try structuralJsonMonotypeStatsForSourceWithOptions(allocator, stored_parser_optional_gate_source, .{ .literal_roots = true });
-    try std.testing.expectEqual(@as(usize, 8), stats.functions);
-    try std.testing.expectEqual(@as(usize, 10), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 399), stats.expressions);
-    try std.testing.expectEqual(@as(usize, 80), stats.locals);
-    try std.testing.expectEqual(@as(u64, 7), stats.template_misses);
     try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
 }
 

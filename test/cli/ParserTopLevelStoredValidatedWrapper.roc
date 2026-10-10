@@ -41,7 +41,7 @@ Format := [Default].{
 
 State := [Present(Str), Done]
 
-trailing_input : [TrailingInput]
+trailing_input : [TrailingInput, ..]
 trailing_input = TrailingInput
 
 parser_for : () -> (Str -> Try(a, [FormatError, TrailingInput, ..errs]))

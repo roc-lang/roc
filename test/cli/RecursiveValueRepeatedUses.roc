@@ -5,7 +5,7 @@
 # binding and must not be reused for the other.
 RecursiveValueRepeatedUses :: [].{}
 
-pick : U64 -> [A, B]
+pick : U64 -> [A, B, ..]
 pick = {
 	z = 0
 	|n| if n == z { A } else if n == 1 { B } else { pick(n - 2) }

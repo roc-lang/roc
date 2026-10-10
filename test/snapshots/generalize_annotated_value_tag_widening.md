@@ -16,30 +16,10 @@ g = f
 main! = |_| {}
 ~~~
 # EXPECTED
-REDUNDANT OPEN TAG UNION - generalize_annotated_value_tag_widening.md:3:18:3:20
 REDUNDANT OPEN TAG UNION - generalize_annotated_value_tag_widening.md:6:24:6:26
 # PROBLEMS
 ~~~clojure
 (reports
-	(report
-		(severity warning)
-		(title "Redundant Open Tag Union")
-		(region (start 3 18) (end 3 20))
-		(headline
-			(reflow "This tag union has an explicit `..`, but it is already implicitly open."))
-		(document
-			(source-region (file "generalize_annotated_value_tag_widening.md") (start 3 18) (end 3 20) (annotation warning) (line-text "f : [Red, Green, ..]"))
-			(line-break)
-			(line-break)
-			(reflow "Tag unions in output positions, like the return type of a function, are automatically open. Remove the")
-			(reflow " ")
-			(annotated code "..")
-			(reflow " ")
-			(reflow "or bind it to a named type variable like")
-			(reflow " ")
-			(annotated code "..others")
-			(reflow " ")
-			(reflow "if you want to refer to the extension elsewhere.")))
 	(report
 		(severity warning)
 		(title "Redundant Open Tag Union")
@@ -113,15 +93,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-app [main!] { pf: platform "../basic-cli/main.roc" }
-
-f : [Red, Green]
-f = Red
-
-g : [Red, Green, Blue]
-g = f
-
-main! = |_| {}
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

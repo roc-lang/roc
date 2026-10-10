@@ -1094,8 +1094,8 @@ evaluation. Whether the module itself can evaluate it depends on its checked
 type. A context-free type gets one module-owned `RootRequest`
 (`request_eligibility = .eligible`). A type that is not context-free—a
 generalized value such as `made : List(a)` or a value whose annotation
-has an implicitly opened (or written `..`) output row (Polarity), or an
-unannotated data value with a reachable callable slot—is specialization-owned when specialization can supply what
+writes `..` in an output row, or an unannotated data value with a reachable
+callable slot—is specialization-owned when specialization can supply what
 the type lacks: the type contains no error, and it is either concrete (only
 a callable graph waits for a consumer) or the checker classified the
 binding as a scheme (`ModuleEnv.nodeIsBindingScheme`), so each use
@@ -7541,20 +7541,18 @@ tags (`[]`) is exempt: it asserts uninhabitedness (`Try(a, [])` needs no
 `Err` branch), which opening would destroy. Polarity is walk state only
 (`types.Polarity`); no new content kind exists.
 
-What that opening MEANS depends on what is annotated. One spelling, two
-rules: a function or a top-level value quantifies the row, and a host
-boundary does not open it.
+What that opening MEANS depends on what is annotated. One spelling, three
+rules:
 
 | Annotated thing | The opened extension | What a use may do |
 | --- | --- | --- |
 | A FUNCTION signature | A quantified flex in the generalized scheme, instantiated fresh at every call | Each caller may use the result at a wider union, independently of every other caller |
-| A top-level VALUE binding | A quantified flex, exactly as for a function: the implicitly opened row counts as a type variable, so the value generalizes as if the row were written `..` | Each use may use the value at a wider union, independently of every other use |
+| A VALUE binding | ONE weak flex shared by every use in the module, grounded to `[]` after the module solves (`Check.closeWeakValueImplicitOpenExts`) | Uses may widen the shared row, and what accumulates is what every later use sees |
 | A HOST-BOUNDARY annotation (a hosted lambda, a `provides` def, a platform `requires` type) | None: the row is generated exactly as written (`AnnotationGenCtx.opening = .as_written`) | Nothing |
 
-A value binding otherwise generalizes only when its annotation writes a type
-variable, so at the top level values and functions follow one rule; a host
-boundary opts out because the host is a fixed ABI rather than a Roc producer
-participating in unification.
+A value binding generalizes only when its annotation writes a type variable,
+exactly as before; a host boundary opts out because the host is a fixed ABI
+rather than a Roc producer participating in unification.
 
 The annotation still BOUNDS the definition—widening happens only at
 instantiation sites. When the definition's body pass generates its annotation,
@@ -7599,7 +7597,8 @@ parser's error tags, and any tag the validation added to the row by relating it
 to a format method. After finalize, `Check.runLateImplicitOpenExtAudit` reports
 every demanded tag that lies in the extension of a binding whose right-hand side
 contains the demanding expression and whose row the demand shares (the two rows
-end in the same extension variable).
+end in the same extension variable), before `closeWeakValueImplicitOpenExts`
+grounds the leftovers to `[]`.
 
 Provenance is exact, so neither timing nor type-graph reachability decides who
 widened a row. A caller that widens the same row with other tags is not
@@ -7656,10 +7655,9 @@ resolved declaration over EVERY declaration the spelling could reach (every
 same-named type declaration in the file, the `Builtin` type of that name, any
 import that could introduce it) and deletes only on a unanimous answer. It
 also keeps the `..` wherever the file alone cannot rule out a different
-meaning: a block-local binding whose body is not a lambda (on a local value
-`..` opts into a quantified row), a platform's `provides` definition, and an
-annotation-only definition outside an app (which may be hosted). Every other
-top-level or associated definition, value or function, generalizes regardless. So the
+meaning: a value binding (where `..` opts into a quantified row) and any
+other body that is not a lambda, a platform's `provides` definition, and an
+annotation-only definition outside an app (which may be hosted). So the
 formatter may keep a `..` the checker reports, and never deletes one it does
 not; `src/check/test/redundant_open_fmt_test.zig` runs both on the same
 sources to hold that. A change to where the checker opens a row is a change
@@ -7671,33 +7669,17 @@ positions, shared across its sequential files and paths and released at invocati
 exit. Standalone formatting owns the same data for that call; independent
 workers never share mutable analysis state.
 
-The top-level VALUE row above is decided before the value's body is checked:
-`Check.predeclareAnnotatedDefSchemes` records every type-variable-free
-top-level annotation whose generation mints an implicitly opened extension
-(`Check.implicit_open_top_level_annotations`; an annotation that cannot be
-predeclared is generated speculatively for this alone), and
-`Check.isGeneralizableValueBinding` treats those exactly like a written type
-variable, so a predeclared scheme and the value's own scheme agree. The
-value's body is still bounded by the audit, and the value's checked type is
-the annotated row whatever its uses do, so an importer may widen it too. A
-body that forwards a closed value closes the row, which then has nothing left
-to quantify (Deferred: Row Subsumption). An `_` hole in such an annotation
-follows the existing hole rule (Def Checking Order: a hole is a body-inferred
-variable that the definition's boundary generalizes like any other), so a
-hole filled only by a constrained literal (`e : Try(_, [Boom])`,
-`e = Ok(1)`, or `Ok("ok")`) makes the value polymorphic, and it is rejected
-like any constrained top-level value; the Polymorphic Value report points at
-the hole and asks for the concrete type in its place.
-
-Local value bindings do not yet generalize by their implicitly opened rows.
-This is a known gap, not the intended language rule: a generalized local value
-lowers to a single Monotype cell, so generalizing it needs "evaluate once at
-the annotated width, widen at each use", which waits for row subsumption's
-widen-at-use lowering primitive (`row_widen`, Deferred: Row Subsumption).
-Until then those rows behave like inferred local rows, one variable shared by
-every use, and are sealed by Monotype's row defaults; a written `..` is how a
-local value opts into a quantified row. Locals follow the top-level rule once
-that primitive exists.
+The VALUE row above is the pre-polarity behaviour of an inferred value
+(`x = Boom`) extended to annotated ones: the value's body is bounded by the
+audit, and a later annotated use listing fewer tags than the shared row has
+accumulated is rejected by its own audit. Writing `..` on the value opts into
+a quantified row, as it always has. Grounding those extensions is safe because
+nothing in the module can widen them further, and the closed row is exactly
+what the annotation produced before polarity, so importers and Monotype's
+stored constants see the type they always did (an extension that meanwhile
+joined a generalized scheme is left alone). Local value bindings are not
+grounded: their rows behave like inferred local rows and are sealed by
+Monotype's row defaults.
 
 An ALIAS carries its implicit row variables as hidden ordinary rigid
 parameters. `MyResult(a) : Try(a, [MyError])` has an additional internal
@@ -8028,10 +8010,9 @@ Two questions are settled in the same pass, because each asks what a closed
 row means at a boundary. A bounded row refuses exactly the relations that
 would add a tag to it, so a coercion that changes when an extension gains tags
 changes what the bound refuses with it.
-A top-level annotated value whose body forwards a closed value is closed by
-that body like any other definition, so widening it, in its own module or
-across modules, waits on this same coercion rather than on a lowering
-default.
+`Check.closeWeakValueImplicitOpenExts` grounds a top-level weak value's
+still-open extensions to `[]`, and cross-module widening of annotated weak
+values waits on this same coercion rather than on a lowering default.
 
 The acceptance bar is that no fixture is edited: a program this design says
 should typecheck must typecheck as written. The hosted instance already meets

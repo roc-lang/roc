@@ -1,5 +1,5 @@
-# ParserTopLevelStoredOptionalField.roc in Boxy: the stored parser's
-# implicitly open error row generalizes it (design.md "Polarity"), so Boxy lowers the direct structural call at the use.
+# ParserTopLevelStoredOptionalField.roc with `..` written in the stored
+# parser's error row, so Boxy lowers the direct structural call at the use.
 BoxyParserTopLevelStoredOptionalFieldGeneralized :: [].{}
 
 Format := [Default].{
@@ -43,7 +43,7 @@ Format := [Default].{
 
 State := [Present(Str), Done]
 
-parse_stored : State -> Try({ value : { foo : Str, bar ?: Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
+parse_stored : State -> Try({ value : { foo : Str, bar ?: Str }, rest : State }, [FormatError, MissingRequiredField(Str), ..])
 parse_stored = {
 	Shape : { foo : Str, bar ?: Str }
 	Shape.parser_for(Format.Default)

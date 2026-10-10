@@ -6,15 +6,8 @@ load = |x| {
     Ok(s)
 }
 
-# `seal` forwards its closed input, which closes its output row, and so the
-# row of every value built from it (design.md "Deferred: Row Subsumption").
-# This depends on that known limitation (forwarding closes the row): once
-# row subsumption lands, this fixture must close its impl row another way.
-seal : IoResult(Str) -> IoResult(Str)
-seal = |v| v
-
 closed_try : IoResult(Str)
-closed_try = seal(Ok("hit"))
+closed_try = Ok("hit")
 
 Src := [S].{
     fetch : Src -> IoResult(Str)
