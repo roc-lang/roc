@@ -26,15 +26,17 @@ Commit `847aeab60b` (main at the start of this work), ReleaseFast, `--no-cache`:
 ## Results
 
 ReleaseFast, `perf stat -e instructions:u` pinned to P-cores, `--no-cache`,
-measured at the commit that indexes procedure debug names and inhabitation
-graph rows:
+measured at commit `ff30659f46`:
 
 | Workload | Baseline | This branch | Change |
 | --- | ---: | ---: | ---: |
-| `roc check -j1 package/main.roc` (roc-pg) | 266.28 G | 253.05 G | -5.0% |
-| `roc build --opt=dev examples/query.roc` | 244.83 G | 239.5 G | -2.2% |
-| `roc build examples/query.roc` (LLVM) | 524.75 G | 427.02 G | -18.6% |
-| `roc test test/fx/issue8826_full.roc` | 141.4 M | 140.4 M | -0.7% |
+| `roc check -j1 package/main.roc` (roc-pg) | 266.28 G | 249.76 G | -6.2% |
+| `roc build --opt=dev examples/query.roc` | 244.83 G | 239.58 G | -2.1% |
+| `roc build examples/query.roc` (LLVM) | 524.75 G | 416.04 G | -20.7% |
+| `roc test test/fx/issue8826_full.roc` | 141.4 M | 140.5 M | -0.6% |
+
+Validation: the module unit tests of every touched module, the lint gates,
+and all CLI suites (platforms, echo, subcommands, glue: 2198 tests) pass.
 
 ## Method
 
@@ -189,6 +191,10 @@ stages it touches; the instruction-count effect is reported in "Results".
 35. `src/check/exhaustive.zig:1226-1259`: the inhabitation graph's roots,
     rows, and assumed-empty set are `DenseMap`s over the root var, and parent
     edges are chained through one shared list instead of a list per node.
+
+36. `src/lir/arc_dismantle.zig` `FutureFields`: statement successors that
+    do not depend on the candidate are recorded once and reused by every
+    later candidate's walk.
 
 ## Findings from profiling
 
