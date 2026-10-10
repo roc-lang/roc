@@ -3577,6 +3577,7 @@ pub fn build(b: *std.Build) void {
     b.step("build-source-events", "Build the compiler-owned source-event runtime object")
         .dependOn(&install_source_events.step);
     testSourceEventRuntimeObject(b);
+    testSourceEventRawLinuxLink(b);
     const source_event_runtime_objects = buildSourceEventRuntimeObjects(b, roc_modules.roc_target);
 
     const minici_exe = b.addExecutable(.{
@@ -7635,6 +7636,7 @@ fn testSourceEventRuntimeObject(b: *std.Build) void {
         \\        .source = .{ .source_identity = @splat(23), .has_location = 1, .line = 13, .column = 7 },
         \\    };
         \\    roc_source_event(&descriptor.header);
+        \\    roc_source_event(@ptrFromInt(@alignOf(events.Header)));
         \\    var saved: events.Saved = undefined;
         \\    roc_source_event_observer_enter(&outer_observer, &saved);
         \\    var restored = false;
@@ -7649,6 +7651,7 @@ fn testSourceEventRuntimeObject(b: *std.Build) void {
         \\    var disabled: events.Saved = undefined;
         \\    roc_source_event_observer_enter(null, &disabled);
         \\    roc_source_event(&descriptor.header);
+        \\    roc_source_event(@ptrFromInt(@alignOf(events.Header)));
         \\    roc_source_event_observer_leave(&disabled);
         \\    roc_source_event(&descriptor.header);
         \\    const malformed: events.Header = .{ .version = 99, .kind = 0, .byte_size = 0 };
@@ -7666,6 +7669,7 @@ fn testSourceEventRuntimeObject(b: *std.Build) void {
         \\    restored = true;
         \\    roc_source_event(&descriptor.header);
         \\    roc_source_event(&malformed);
+        \\    roc_source_event(@ptrFromInt(@alignOf(events.Header)));
         \\    try std.testing.expectEqual(@as(usize, 2), outer.count);
         \\    try std.testing.expectEqual(@as(usize, 1), inner.invalid_count);
         \\}
@@ -7713,6 +7717,64 @@ fn testSourceEventRuntimeObject(b: *std.Build) void {
     configureBackend(tests, b.graph.host);
     b.step("test-source-events-object", "Exercise observer registration in the linked ReleaseFast tracing object")
         .dependOn(&b.addRunArtifact(tests).step);
+}
+
+/// Match the CLI's static Linux object-input contract without a libc CRT,
+/// observer registration, Zig startup, or TLS setup. These executables can also
+/// be run on Linux: the deliberately unreadable event pointer must be ignored.
+fn testSourceEventRawLinuxLink(b: *std.Build) void {
+    const files = b.addWriteFiles();
+    const source = files.add("source_events_raw_start.zig",
+        \\//! Raw kernel-entry fixture: no native TLS or RocOps initialization.
+        \\const builtin = @import("builtin");
+        \\pub const panic = @import("std").debug.no_panic;
+        \\comptime { @export(&start, .{ .name = "_start" }); }
+        \\fn start() callconv(.naked) noreturn {
+        \\    switch (builtin.cpu.arch) {
+        \\        .x86_64 => asm volatile (
+        \\            \\andq $-16, %%rsp
+        \\            \\movl $4, %%edi
+        \\            \\call roc_source_event
+        \\            \\movl $60, %%eax
+        \\            \\xorl %%edi, %%edi
+        \\            \\syscall
+        \\        ),
+        \\        .aarch64 => asm volatile (
+        \\            \\mov x0, #4
+        \\            \\bl roc_source_event
+        \\            \\mov x8, #93
+        \\            \\mov x0, #0
+        \\            \\svc #0
+        \\        ),
+        \\        else => @compileError("raw source event fixture needs x64 or arm64 Linux"),
+        \\    }
+        \\}
+        \\
+    );
+    const check = b.step("test-source-events-raw-link", "Cross-link raw Linux source tracing callers using ld.lld (no TLS initialization)");
+    for ([_]roc_target.RocTarget{ .x64glibc, .x64musl, .arm64glibc, .arm64musl }) |roc_linux_target| {
+        const baseline = roc_linux_target.baselineCpuTarget().?;
+        const target = b.resolveTargetQuery(baseline.llvmTargetQuery());
+        const caller = b.addObject(.{
+            .name = b.fmt("source_events_raw_start_{s}", .{roc_linux_target.toName()}),
+            .root_module = b.createModule(.{
+                .root_source_file = source,
+                .target = target,
+                .optimize = .ReleaseFast,
+                .link_libc = false,
+                .stack_check = false,
+            }),
+        });
+        caller.bundle_compiler_rt = false;
+        configureBackend(caller, target);
+        const runtime = buildSourceEventRuntimeObject(b, target, b.fmt("source_events_raw_runtime_{s}", .{roc_linux_target.toName()}));
+        const link = b.addSystemCommand(&.{ "ld.lld", "-nostdlib", "-static", "--gc-sections", "--build-id", "-o" });
+        const executable = link.addOutputFileArg(b.fmt("source-events-raw-{s}", .{roc_linux_target.toName()}));
+        link.addFileArg(caller.getEmittedBin());
+        link.addFileArg(runtime.getEmittedBin());
+        const install = b.addInstallFileWithDir(executable, .bin, b.fmt("source-events-raw-{s}", .{roc_linux_target.toName()}));
+        check.dependOn(&install.step);
+    }
 }
 
 /// CPU twins can share a baseline tracing carrier; Linux spelling aliases have

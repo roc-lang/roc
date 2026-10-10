@@ -160,6 +160,9 @@ pub const Observer = extern struct {
 };
 
 threadlocal var current_observer: ?Observer = null;
+// An exact capability count, not a platform/TLS readiness probe. Raw-startup
+// programs with no observer must return before native TLS is accessed at all.
+var active_observers: std.atomic.Value(usize) = .init(0);
 
 /// Live registration state, not persistent metadata. A Saved value must be
 /// restored on its originating thread, in nesting order, without modification.
@@ -173,6 +176,8 @@ pub const Saved = extern struct {
 };
 
 /// Registration belongs to this thread, independently of its RocOps host.
+/// Active tracing requires an initialized native thread/TLS runtime on every
+/// thread that may execute events. Globally disabled tracing has no such need.
 pub fn enter(observer: ?Observer) Saved {
     const saved: Saved = if (current_observer) |previous| .{
         .active = 1,
@@ -185,13 +190,13 @@ pub fn enter(observer: ?Observer) Saved {
         .on_event = null,
         .on_invalid = null,
     };
-    current_observer = observer;
+    replaceObserver(observer);
     return saved;
 }
 
 pub fn leave(saved: Saved) void {
     if (saved.reserved != 0) @trap();
-    current_observer = switch (saved.active) {
+    replaceObserver(switch (saved.active) {
         0 => null,
         1 => .{
             .context = saved.context,
@@ -199,7 +204,19 @@ pub fn leave(saved: Saved) void {
             .on_invalid = saved.on_invalid orelse @trap(),
         },
         else => @trap(),
-    };
+    });
+}
+
+fn replaceObserver(observer: ?Observer) void {
+    const was_active = current_observer != null;
+    current_observer = observer;
+    // Publish a completed TLS transition before changing the global count.
+    // Both operations complete before registration returns to its caller.
+    if (!was_active and observer != null) {
+        _ = active_observers.fetchAdd(1, .release);
+    } else if (was_active and observer == null) {
+        _ = active_observers.fetchSub(1, .release);
+    }
 }
 
 /// Optional tracing-service exports, not required platform host symbols.
@@ -213,9 +230,17 @@ pub fn roc_source_event_observer_leave(saved: *const Saved) callconv(.c) void {
 }
 
 /// Generated code has this single C ABI, with or without an observer.
-/// The caller guarantees a readable Header and `byte_size` readable bytes.
+/// Globally unregistered calls inspect neither the pointer nor native TLS.
+/// Registered callers guarantee a readable Header and `byte_size` readable bytes.
 /// Validation detects malformed records, not arbitrary invalid pointers.
 pub fn roc_source_event(header: *const Header) callconv(.c) void {
+    if (active_observers.load(.acquire) == 0) return;
+    // Keep all TLS address/resolver work behind the capability gate, including
+    // in optimizing backends that can otherwise hoist TLS address computation.
+    @call(.never_inline, observe, .{header});
+}
+
+fn observe(header: *const Header) void {
     const observer = current_observer orelse return;
     _ = validate(header) catch |err| {
         observer.on_invalid(observer.context, @intFromEnum(invalidTag(err)));
@@ -349,8 +374,10 @@ const Recorder = struct {
 test "source events disabled execution does not inspect or record descriptors" {
     const saved = enter(null);
     defer leave(saved);
+    try std.testing.expectEqual(@as(usize, 0), active_observers.load(.acquire));
     const malformed: Header = .{ .version = 99, .kind = 0, .byte_size = 0 };
     roc_source_event(&malformed);
+    roc_source_event(@ptrFromInt(@alignOf(Header)));
 }
 
 test "source events registered execution and nested restoration" {
@@ -373,23 +400,53 @@ test "source events registered execution and nested restoration" {
     try std.testing.expectEqual(Kind.call_enter, outer.last_kind.?);
 }
 
+test "source events capability count follows active thread transitions exactly" {
+    var recorder: Recorder = .{};
+    try std.testing.expectEqual(@as(usize, 0), active_observers.load(.acquire));
+    {
+        const outer = enter(recorder.observer());
+        defer leave(outer);
+        try std.testing.expectEqual(@as(usize, 1), active_observers.load(.acquire));
+        {
+            const nested = enter(recorder.observer());
+            defer leave(nested);
+            try std.testing.expectEqual(@as(usize, 1), active_observers.load(.acquire));
+            {
+                const disabled = enter(null);
+                defer leave(disabled);
+                try std.testing.expectEqual(@as(usize, 0), active_observers.load(.acquire));
+                roc_source_event(@ptrFromInt(@alignOf(Header)));
+            }
+            try std.testing.expectEqual(@as(usize, 1), active_observers.load(.acquire));
+        }
+        try std.testing.expectEqual(@as(usize, 1), active_observers.load(.acquire));
+    }
+    try std.testing.expectEqual(@as(usize, 0), active_observers.load(.acquire));
+}
+
 test "source events registration is owned by the executing thread" {
     var owner: Recorder = .{};
     const saved = enter(owner.observer());
     defer leave(saved);
     const Worker = struct {
-        fn run() void {
+        const Counts = struct { during: usize = 0, after: usize = 0 };
+        fn run(counts: *Counts) void {
             const descriptor: Descriptor = .{ .header = .{ .kind = @intFromEnum(Kind.call_exit) } };
             roc_source_event(&descriptor.header);
             var local: Recorder = .{};
             const nested = enter(local.observer());
-            defer leave(nested);
+            counts.during = active_observers.load(.acquire);
             roc_source_event(&descriptor.header);
             std.debug.assert(local.count == 1);
+            leave(nested);
+            counts.after = active_observers.load(.acquire);
         }
     };
-    const thread = try std.Thread.spawn(.{}, Worker.run, .{});
+    var counts: Worker.Counts = .{};
+    const thread = try std.Thread.spawn(.{}, Worker.run, .{&counts});
     thread.join();
+    try std.testing.expectEqual(@as(usize, 2), counts.during);
+    try std.testing.expectEqual(@as(usize, 1), counts.after);
     try std.testing.expectEqual(@as(usize, 0), owner.count);
 }
 
