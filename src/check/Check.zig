@@ -719,6 +719,12 @@ widened_use_copies: std.AutoHashMapUnmanaged(Var, Var) = .empty,
 /// Scratch for `widenedValueUseVar`: one row's tags, gathered along its
 /// extension chain.
 widened_use_tags: std.ArrayListUnmanaged(types_mod.Tag) = .empty,
+/// Every row a use's widening copy re-opened, paired with the value's row it
+/// copies (`WidenedUseRow`). A value's row can still gain tags after a use
+/// copied it (a generated codec's validation adds its error tags during
+/// finalize), so `propagateValueRowsToWidenedUses` carries them into the
+/// copies once constraints settle.
+widened_use_rows: std.ArrayListUnmanaged(WidenedUseRow) = .empty,
 /// The annotation whose definition's body check is about to generate it; its
 /// implicitly opened rows are bounded for the rest of that body check
 /// (`beginBoundedAnnotationRows`).
@@ -3894,6 +3900,7 @@ pub fn deinit(self: *Self) void {
     self.coercion_outside_seen.deinit(self.gpa);
     self.widened_use_copies.deinit(self.gpa);
     self.widened_use_tags.deinit(self.gpa);
+    self.widened_use_rows.deinit(self.gpa);
     self.annotation_implicit_open_exts.deinit(self.gpa);
     self.bounded_row_marks.deinit(self.gpa);
     self.weak_value_implicit_open_ext_ranges.deinit(self.gpa);
@@ -20184,7 +20191,73 @@ fn widenedRowCopy(self: *Self, row: Var, env: *Env, region: Region) std.mem.Allo
         tag.* = try self.types.mkTag(tag.name, args);
     }
     const ext = try self.freshFromContent(.{ .flex = Flex.init() }, env, region);
-    return try self.freshFromContent(try self.types.mkTagUnion(tags, ext), env, region);
+    const copy = try self.freshFromContent(try self.types.mkTagUnion(tags, ext), env, region);
+    try self.widened_use_rows.append(self.gpa, .{ .value_row = self.types.resolveVar(row).var_, .use_row = copy });
+    return copy;
+}
+
+/// One row a use's widening copy re-opened (`widened_use_rows`).
+const WidenedUseRow = struct {
+    /// The value's own row.
+    value_row: Var,
+    /// The use's copy of it.
+    use_row: Var,
+};
+
+/// Add to every use's widened copy each tag its value's row gained after the
+/// use copied it, with the value's own payloads, so the copy still lists
+/// every tag the value can have (design.md "Value Rows: Local Values Share,
+/// Top-Level Values Widen At Each Use"). A use whose type no longer admits
+/// such a tag is a type mismatch at the use. Returns whether any copy gained
+/// a tag, since unifying one can introduce constraints of its own.
+fn propagateValueRowsToWidenedUses(self: *Self, env: *Env) std.mem.Allocator.Error!bool {
+    var changed = false;
+    var index: usize = 0;
+    while (index < self.widened_use_rows.items.len) : (index += 1) {
+        const pair = self.widened_use_rows.items[index];
+        const tags_start = self.widened_use_tags.items.len;
+        defer self.widened_use_tags.shrinkRetainingCapacity(tags_start);
+        try self.appendRowTags(pair.value_row);
+        const value_end = self.widened_use_tags.items.len;
+        try self.appendRowTags(pair.use_row);
+        const value_tags = self.widened_use_tags.items[tags_start..value_end];
+        const use_tags = self.widened_use_tags.items[value_end..];
+        var missing: std.ArrayListUnmanaged(types_mod.Tag) = .empty;
+        defer missing.deinit(self.gpa);
+        for (value_tags) |value_tag| {
+            for (use_tags) |use_tag| {
+                if (value_tag.name.eql(use_tag.name)) break;
+            } else try missing.append(self.gpa, value_tag);
+        }
+        if (missing.items.len == 0) continue;
+        changed = true;
+        const region = self.getRegionAt(pair.use_row);
+        const ext = try self.freshFromContent(.{ .flex = Flex.init() }, env, region);
+        const extra = try self.freshFromContent(try self.types.mkTagUnion(missing.items, ext), env, region);
+        _ = try self.unify(self.tagRowTail(pair.use_row), extra, env);
+    }
+    return changed;
+}
+
+/// Append every tag on `row`'s extension chain to `widened_use_tags`.
+fn appendRowTags(self: *Self, row: Var) std.mem.Allocator.Error!void {
+    var current = row;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .tag_union => |union_| {
+                    for (0..union_.tags.count) |tag_index| {
+                        try self.widened_use_tags.append(self.gpa, self.types.getTagAt(union_.tags, @intCast(tag_index)));
+                    }
+                    current = union_.ext;
+                },
+                .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return,
+            },
+            .flex, .rigid, .field_presence, .err => return,
+        }
+    }
 }
 
 fn tagRowTail(self: *const Self, row: Var) Var {
@@ -36299,6 +36372,9 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
     }
     try self.validateResolvedOpenNumeralLiterals(env);
     try self.finalizeGeneratedCodecConstraintsToQuiescence(env, scope == .module);
+    while (try self.propagateValueRowsToWidenedUses(env)) {
+        try self.finalizeGeneratedCodecConstraintsToQuiescence(env, scope == .module);
+    }
     try self.resolvePendingTupleAccesses(env, true);
     try self.checkAllConstraints(env);
     try self.checkDefaultRestrictions();
