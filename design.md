@@ -21753,18 +21753,19 @@ takes a descriptor argument. A variable slot is never given a stand-in type
 such as `{}`: converting a value to a stand-in would discard it on the way to
 the host.
 
-Monotype lowering holds that boundary where extern specializations are
-produced: emitting a hosted procedure at any other type stops the build with a
-compiler-bug report naming the symbol (`requireHostedExternAtDeclaredAbi`,
-src/postcheck/monotype/lower.zig). The comparison is structural type equality—
-the declared lowering and the request build their graphs separately, so a
-recursive nominal is the same type through either graph—with the declaration's
-variable slots open when it has any. The check runs in release builds too,
-because what it prevents is silent: the host returns `Ok`, the app reads those
-bytes as `Err`, and no diagnostic or crash marks the difference. No checker
-behavior can therefore produce a wrongly typed extern. A checker rule that
-adjusts a hosted call's type at a use site is judged purely as a typing decision
-(see Solver-Mutating Rewrites); it is not what keeps the ABI intact.
+Monotype lowering asserts that boundary where extern specializations are
+produced: emitting a hosted procedure at any other type is a compiler
+invariant violation, reported in debug builds with a message naming the symbol
+(`requireHostedExternAtDeclaredAbi`, src/postcheck/monotype/lower.zig). The
+comparison is structural type equality—the declared lowering and the request
+build their graphs separately, so a recursive nominal is the same type through
+either graph—with the declaration's variable slots open when it has any. Like
+every compiler invariant it is a debug-only assertion; it exists because the
+failure it catches is otherwise silent: the host returns `Ok`, the app reads
+those bytes as `Err`, and nothing downstream marks the difference. A checker
+rule that adjusts a hosted call's type at a use site is judged purely as a
+typing decision (see Solver-Mutating Rewrites); it is not what keeps the ABI
+intact.
 
 Weak linkage exists to break the app/host reference cycle without imposing
 link order; COFF has no equivalent weak external, and needs none: the app

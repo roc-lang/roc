@@ -304,16 +304,18 @@ it now compares the declaration's module identity.
 
 ### Chain B—the host/platform boundary
 
-1. [small/hosted-extern-declared-abi.md](small/hosted-extern-declared-abi.md)—
-   the invariant that a hosted extern is only specialized at its declared
-   type, enforced at the producer instead of by a checker rewrite.
+The hosted-extern declared-ABI project has landed: Monotype lowering asserts
+(`requireHostedExternAtDeclaredAbi`) that every hosted extern is specialized
+at its declared type, with the non-`?` widening channels and the host
+`Ok`-not-misread case pinned on native and wasm32. Correction: the guard is
+a debug-only invariant assertion like every other, not a release-build stop,
+and the checker's hosted `?` widening rewrite is deleted rather than kept
+(PR 12118), so direct hosted errors are reconstructed explicitly in Roc.
 
 The solver-rewrite audit that followed this chain has landed: design.md's
-"Solver-Mutating Rewrites" section holds the mechanism/policy inventory,
+"Solver-Mutating Rewrites" section holds the mechanism/policy inventory, and
 `Store.dangerousSetVarRedirect` requires a declared `RedirectRule` at every
-call site, and the 9966 widening is the declared Hosted Try Question
-Widening rule, scoped to direct hosted calls with both sides pinned by
-tests.
+call site.
 
 The platform-relation migration that concluded this chain has landed:
 checking records each platform requirement's solution in the app's checked
@@ -377,5 +379,4 @@ front-loads leverage and keeps prerequisites satisfied:
 1. `small/rceffect-conformance.md`
 2. `small/pin-deferred-spec-requests.md`
 3. `small/hoist-consumes-dispatch-evidence.md`
-4. `small/hosted-extern-declared-abi.md`
-5. `small/compact-constant-aggregates.md`
+4. `small/compact-constant-aggregates.md`

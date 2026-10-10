@@ -5102,24 +5102,26 @@ const Builder = struct {
         return false;
     }
 
-    /// Stop the build unless this hosted specialization emits its extern at
-    /// the declared host ABI type.
+    /// Assert that this hosted specialization emits its extern at the declared
+    /// host ABI type.
     ///
     /// The host was compiled against the declared signature. An extern emitted
     /// at any other type reads the host's return value at a layout the host
     /// never wrote—the app sees `Err` where the host returned `Ok`—and
-    /// nothing downstream can tell that apart from a genuine `Err`. So this is
-    /// a producer-side stop, in release builds as well as debug ones: whatever
-    /// upstream stage widened, narrowed, or re-represented the request, its
-    /// output never reaches codegen.
+    /// nothing downstream can tell that apart from a genuine `Err`. Checking
+    /// guarantees every hosted request is at the declared type, so a mismatch
+    /// is a compiler bug. This is the producer-side assertion for it: in debug
+    /// builds it stops the build with a report naming the hosted symbol, so a
+    /// wrongly typed request never silently reaches codegen.
     fn requireHostedExternAtDeclaredAbi(
         self: *Builder,
         view: ModuleView,
         template: names.ProcTemplate,
         declared_checked_fn_ty: checked.CheckedTypeId,
-        declared_fn_ty: Type.TypeId,
         emitted_fn_ty: Type.TypeId,
     ) Allocator.Error!void {
+        if (!std.debug.runtime_safety) return;
+        const declared_fn_ty = try self.lowerType(view, declared_checked_fn_ty);
         const mode = try self.hostedDeclaredAbiMatchMode(view, declared_checked_fn_ty);
         if (try self.hostedExternMatchesDeclaredAbi(declared_fn_ty, emitted_fn_ty, mode)) return;
         var message_buf: [hosted_extern_abi_message_max]u8 = undefined;
@@ -7040,7 +7042,6 @@ const Builder = struct {
                 // request against that boundary.
                 const declared_source_fn_ty = template.checked_fn_root;
                 const declared_source_fn_key = view.types.rootKey(declared_source_fn_ty);
-                const declared_mono_fn_ty = try self.lowerType(view, declared_source_fn_ty);
                 var hosted_fn_template = self.fnDefForTemplate(
                     view,
                     template_ref,
@@ -7075,7 +7076,6 @@ const Builder = struct {
                     view,
                     template_ref,
                     declared_source_fn_ty,
-                    declared_mono_fn_ty,
                     lower_fn_ty,
                 );
                 self.program.setDef(reservation.def, .{
