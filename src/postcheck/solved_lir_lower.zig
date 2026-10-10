@@ -23,8 +23,6 @@ const SolvedInline = @import("solved_inline.zig");
 const proc_identity = @import("proc_identity.zig");
 const Solved = @import("lambda_solved/ast.zig");
 const SolvedType = @import("lambda_solved/type.zig");
-const LambdaMono = @import("lambda_mono/ast.zig");
-const LambdaMonoLower = @import("lambda_mono/lower.zig");
 const MonoType = @import("monotype/type.zig");
 const Type = @import("lambda_mono/type.zig");
 const RecordFields = @import("record_fields.zig");
@@ -202,8 +200,6 @@ pub const Options = struct {
     /// slot reads so the LIR passes see the constants. Only a continuation
     /// lowered after the host program completed can supply them.
     completed_scalar_values: ?*const ComptimeScalarValues.CompletedScalarValues = null,
-    /// Debug-only destination for the materialized Lambda Mono verifier input.
-    debug_materialized_out: ?*?LambdaMono.Program = null,
     /// Optional deterministic task counts for parallel solved-LIR lowering.
     /// `run` resets this destination before doing any work.
     parallel_metrics: ?*ParallelMetrics = null,
@@ -286,9 +282,6 @@ pub fn runBorrowed(
     lowerer.keepLoweredSpecProcs();
     try lowerer.writeRuntimeSchemas();
     lowerer.result.finishExpectSites();
-    if (builtin.mode == .debug) {
-        try lowerer.verifyMaterializedDecisions();
-    }
 
     return lowerer.finish();
 }
@@ -320,13 +313,6 @@ const CaptureSpanId = struct {
 /// A capture span identifies its captures structurally (source, start and
 /// length) rather than as a dense index, so it is a hashable key.
 const CaptureSpanKey = CaptureSpanId;
-
-fn specializationIdentityCaptureStart(span: CaptureSpanId) u32 {
-    return switch (span.source) {
-        .solved => span.start,
-        .own => 0,
-    };
-}
 
 const ErasedReturnReuse = union(enum) {
     none,
@@ -901,7 +887,6 @@ const Lowerer = struct {
     erased_owner_states: std.ArrayList(ErasedOwnerState),
     erased_call_owner_uses: std.ArrayList(ErasedCallOwnerUse),
     erased_capture_ptr_ty: ?Type.TypeId = null,
-    debug_materialized_out: ?*?LambdaMono.Program = null,
     parallel_metrics: ?*ParallelMetrics = null,
     /// Worker callbacks borrow the coordinator's frozen identity tables while
     /// owning procedure-local scratch and LIR body storage.
@@ -1086,7 +1071,6 @@ const Lowerer = struct {
             .fn_queue_index = 0,
             .initializer_queue_index = 0,
             .layout_request_const_plans = options.layout_request_const_plans,
-            .debug_materialized_out = options.debug_materialized_out,
             .parallel_metrics = options.parallel_metrics,
             .root_requests = .{ .test_plan_metadata = options.test_plan_metadata },
             .folded_map_matches = .empty,
@@ -1679,7 +1663,6 @@ const Lowerer = struct {
         worker.erased_owner_state_prefix = coordinator.erased_owner_states.items;
         worker.erased_owner_states = workspace.erased_owner_states;
         worker.erased_call_owner_uses = workspace.erased_call_owner_uses;
-        worker.debug_materialized_out = null;
         worker.worker_callback = true;
         worker.worker_features = .{};
         worker.worker_discovered_fns = .empty;
@@ -5442,180 +5425,6 @@ const Lowerer = struct {
             .type_name = try self.allocator.dupe(u8, type_name),
             .tags = schema_tags,
         });
-    }
-
-    fn verifyMaterializedDecisions(self: *Lowerer) Common.LowerError!void {
-        if (builtin.mode != .debug) return;
-        const solved_clone = try cloneSolvedProgram(self.allocator, self.solved);
-
-        var materialized_identities = std.ArrayList(LambdaMonoLower.SpecializationIdentity).empty;
-        defer materialized_identities.deinit(self.allocator);
-        // `run` owns the clone from here on and releases it itself when it
-        // fails, so this frame must not also release it.
-        var materialized = try LambdaMonoLower.run(self.allocator, solved_clone, self.folded_map_matches.items, .{
-            .inline_expects = switch (self.inline_expects) {
-                .run => .run,
-                .omit => .omit,
-            },
-            .debug_specialization_identities = &materialized_identities,
-        });
-        var materialized_owned = true;
-        defer if (materialized_owned) materialized.deinit();
-
-        var type_equivalence = TypeEquivalence.init(self.allocator, self, &materialized.types);
-        defer type_equivalence.deinit();
-
-        try self.verifyFnEntriesMatch(&materialized, materialized_identities.items, &type_equivalence);
-        try self.verifyRootsMatch(&materialized, materialized_identities.items, &type_equivalence);
-        try self.verifyLayoutRequestsMatch(&materialized, &type_equivalence);
-        try self.verifyRuntimeSchemaRequestsMatch(&materialized, &type_equivalence);
-
-        if (self.debug_materialized_out) |out| {
-            out.* = materialized;
-            materialized_owned = false;
-        }
-    }
-
-    fn specializationIdentity(spec: FnSpec) LambdaMonoLower.SpecializationIdentity {
-        return .{
-            .source = spec.source,
-            .solved_fn_ty = spec.solved_fn_ty,
-            .abi = switch (spec.abi) {
-                .finite => .finite,
-                .erased => .erased,
-            },
-            .captures_source = switch (spec.captures.source) {
-                .solved => .solved,
-                .own => .own,
-            },
-            .captures_start = specializationIdentityCaptureStart(spec.captures),
-            .captures_len = spec.captures.len,
-        };
-    }
-
-    fn verifyFnEntriesMatch(
-        self: *Lowerer,
-        materialized: *const LambdaMono.Program,
-        identities: []const LambdaMonoLower.SpecializationIdentity,
-        type_equivalence: *TypeEquivalence,
-    ) Common.LowerError!void {
-        const materialized_fns = materialized.fnsView();
-        if (identities.len != materialized_fns.len) {
-            Common.invariant("debug Lambda Mono verifier saw a specialization identity count mismatch");
-        }
-        var by_identity = std.AutoHashMap(LambdaMonoLower.SpecializationIdentity, LambdaMono.FnId).init(self.allocator);
-        defer by_identity.deinit();
-        for (identities, 0..) |identity, index| {
-            const result = try by_identity.getOrPut(identity);
-            if (result.found_existing) {
-                Common.invariant("debug Lambda Mono verifier saw duplicate specialization identities");
-            }
-            result.value_ptr.* = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-        }
-
-        for (self.fn_entries.items, 0..) |entry, entry_index| {
-            // Direct LIR keeps type-level entries so callable layouts and
-            // ConstStore metadata can refer to source templates without forcing
-            // every queued Lambda Mono function into a LIR proc.
-            if (!self.fn_reachable.items[entry_index]) continue;
-            const materialized_fn_id = by_identity.get(specializationIdentity(entry.spec)) orelse {
-                Common.invariant("debug Lambda Mono verifier could not match a direct function spec");
-            };
-            if (!try self.fnEntryMatchesMaterialized(entry, materialized.getFn(materialized_fn_id), materialized, type_equivalence)) {
-                Common.invariant("debug Lambda Mono verifier saw different types for an exact function specialization");
-            }
-        }
-    }
-
-    /// Every comparison of one verification shares `type_equivalence`, so a
-    /// direct type pairs with one materialized type across all of them and a
-    /// type shared by many functions is compared once.
-    fn fnEntryMatchesMaterialized(
-        self: *Lowerer,
-        entry: FnEntry,
-        fn_: LambdaMono.Fn,
-        materialized: *const LambdaMono.Program,
-        type_equivalence: *TypeEquivalence,
-    ) Common.LowerError!bool {
-        if (!std.meta.eql(entry.source, fn_.source)) return false;
-        if (!try type_equivalence.equivalent(entry.ret, fn_.ret)) return false;
-
-        const args = materialized.typedLocalSpan(fn_.args);
-        const arg_tys = self.types.span(entry.args);
-        const expected_arg_count = arg_tys.len + if (entry.capture_arg_ty == null) @as(usize, 0) else 1;
-        if (args.len != expected_arg_count) return false;
-        for (0..arg_tys.len) |arg_index| {
-            const arg_ty = GuardedList.at(arg_tys, arg_index);
-            const arg = GuardedList.at(args, arg_index);
-            if (!try type_equivalence.equivalent(arg_ty, arg.ty)) return false;
-        }
-        if (entry.capture_arg_ty) |capture_arg_ty| {
-            if (!try type_equivalence.equivalent(capture_arg_ty, GuardedList.at(args, arg_tys.len).ty)) return false;
-        }
-        return true;
-    }
-
-    fn verifyRootsMatch(
-        self: *Lowerer,
-        materialized: *const LambdaMono.Program,
-        identities: []const LambdaMonoLower.SpecializationIdentity,
-        type_equivalence: *TypeEquivalence,
-    ) Common.LowerError!void {
-        // The materializer lowers the whole producer program, so each root
-        // this consumer took is compared against the producer position it
-        // was taken from.
-        const roots = materialized.rootsView();
-        if (self.roots.items.len > roots.len) {
-            Common.invariant("debug Lambda Mono verifier saw a root count mismatch");
-        }
-        for (self.roots.items) |direct| {
-            if (direct.request_index >= roots.len) {
-                Common.invariant("debug Lambda Mono verifier saw a root count mismatch");
-            }
-            const expected = roots[direct.request_index];
-            if (!std.meta.eql(direct.request, expected.request)) {
-                Common.invariant("debug Lambda Mono verifier saw a root mismatch");
-            }
-            if (!std.meta.eql(
-                specializationIdentity(self.fn_entries.items[@backingInt(direct.fn_id)].spec),
-                identities[@backingInt(expected.fn_id)],
-            )) {
-                Common.invariant("debug Lambda Mono verifier saw a root specialization identity mismatch");
-            }
-            const expected_fn = materialized.getFn(expected.fn_id);
-            if (!try self.fnEntryMatchesMaterialized(self.fn_entries.items[@backingInt(direct.fn_id)], expected_fn, materialized, type_equivalence)) {
-                Common.invariant("debug Lambda Mono verifier saw a root mismatch");
-            }
-        }
-    }
-
-    fn verifyLayoutRequestsMatch(self: *Lowerer, materialized: *const LambdaMono.Program, type_equivalence: *TypeEquivalence) Common.LowerError!void {
-        if (!self.lowersLayoutRequests()) return;
-        const requests = materialized.layoutRequestsView();
-        if (self.layout_requests.items.len != requests.len) {
-            Common.invariant("debug Lambda Mono verifier saw a layout request count mismatch");
-        }
-        for (self.layout_requests.items, requests) |direct, expected| {
-            if (direct.checked_type != expected.checked_type or
-                !std.meta.eql(direct.const_locator, expected.const_locator) or
-                !try type_equivalence.equivalent(direct.ty, expected.ty))
-            {
-                Common.invariant("debug Lambda Mono verifier saw a layout request mismatch");
-            }
-        }
-    }
-
-    fn verifyRuntimeSchemaRequestsMatch(self: *Lowerer, materialized: *const LambdaMono.Program, type_equivalence: *TypeEquivalence) Common.LowerError!void {
-        if (!self.lowersRuntimeSchemaRequests()) return;
-        const requests = materialized.runtimeSchemaRequestsView();
-        if (self.runtime_schema_requests.items.len != requests.len) {
-            Common.invariant("debug Lambda Mono verifier saw a runtime schema request count mismatch");
-        }
-        for (self.runtime_schema_requests.items, requests) |direct, expected| {
-            if (!std.meta.eql(direct.def, expected.def) or !try type_equivalence.equivalent(direct.ty, expected.ty)) {
-                Common.invariant("debug Lambda Mono verifier saw a runtime schema request mismatch");
-            }
-        }
     }
 
     fn lowerExprReturn(self: *Lowerer, where: LowerSite, expr_id: Lifted.ExprId, ret_ty: Type.TypeId) Common.LowerError!LIR.CFStmtId {
@@ -14604,524 +14413,7 @@ const Lowerer = struct {
     }
 };
 
-const TypeEquivalence = struct {
-    allocator: std.mem.Allocator,
-    lowerer: *Lowerer,
-    materialized: *const Type.Store,
-    map: collections.DenseMap(Type.TypeId, Type.TypeId),
-
-    fn init(allocator: std.mem.Allocator, lowerer: *Lowerer, materialized: *const Type.Store) TypeEquivalence {
-        return .{
-            .allocator = allocator,
-            .lowerer = lowerer,
-            .materialized = materialized,
-            .map = collections.DenseMap(Type.TypeId, Type.TypeId).init(allocator),
-        };
-    }
-
-    fn deinit(self: *TypeEquivalence) void {
-        self.map.deinit();
-    }
-
-    /// Whether a directly lowered type matches its materialized counterpart:
-    /// the conjunction of every check their structures reach, in order,
-    /// stopping at the first that fails. A direct type already paired with a
-    /// materialized one matches only that one. Evaluated on explicit stacks,
-    /// so type nesting never becomes native call depth.
-    fn equivalent(self: *TypeEquivalence, direct: Type.TypeId, materialized: Type.TypeId) Common.LowerError!bool {
-        return try Eval.run(self.allocator, self, .{ .pair = .{ .direct = direct, .materialized = materialized } });
-    }
-
-    const Eval = AnyAll.Evaluation(Leaf, TypeEquivalence);
-
-    /// A pair of types to compare, or a check already decided.
-    const Leaf = union(enum) {
-        pair: struct { direct: Type.TypeId, materialized: Type.TypeId },
-        decided: bool,
-    };
-
-    pub fn enter(self: *TypeEquivalence, items: Eval.Items, leaf: Leaf) Allocator.Error!Eval.Expansion {
-        const pair = switch (leaf) {
-            .decided => |value| return .{ .value = value },
-            .pair => |pair| pair,
-        };
-        if (self.map.get(pair.direct)) |existing| return .{ .value = existing == pair.materialized };
-        try self.map.put(pair.direct, pair.materialized);
-
-        const lhs = self.lowerer.types.get(pair.direct);
-        const rhs = self.materialized.get(pair.materialized);
-        if (std.meta.activeTag(lhs) != std.meta.activeTag(rhs)) return .{ .value = false };
-
-        switch (lhs) {
-            .primitive => |primitive| return .{ .value = primitive == rhs.primitive },
-            .zst, .erased_capture_ptr => return .{ .value = true },
-            .list => |elem| try addPair(items, elem, rhs.list),
-            .box => |elem| try addPair(items, elem, rhs.box),
-            .tuple => |elems| if (!try self.addSpanPairs(items, elems, rhs.tuple)) return .{ .value = false },
-            .record => |fields| {
-                const lhs_fields = self.lowerer.types.fieldSpan(fields);
-                const rhs_fields = self.materialized.fieldSpan(rhs.record);
-                if (lhs_fields.len != rhs_fields.len) return .{ .value = false };
-                for (0..lhs_fields.len) |index| {
-                    const a = GuardedList.at(lhs_fields, index);
-                    const b = GuardedList.at(rhs_fields, index);
-                    if (a.name != b.name) {
-                        try items.add(.{ .decided = false });
-                        break;
-                    }
-                    try addPair(items, a.ty, b.ty);
-                }
-            },
-            .capture_record => |fields| {
-                const lhs_fields = self.lowerer.types.captureFieldSpan(fields);
-                const rhs_fields = self.materialized.captureFieldSpan(rhs.capture_record);
-                if (lhs_fields.len != rhs_fields.len) return .{ .value = false };
-                for (0..lhs_fields.len) |index| {
-                    const a = GuardedList.at(lhs_fields, index);
-                    const b = GuardedList.at(rhs_fields, index);
-                    if (!std.meta.eql(a.capture_id, b.capture_id)) {
-                        try items.add(.{ .decided = false });
-                        break;
-                    }
-                    try addPair(items, a.ty, b.ty);
-                }
-            },
-            .tag_union => |tags| {
-                const lhs_tags = self.lowerer.types.tagSpan(tags);
-                const rhs_tags = self.materialized.tagSpan(rhs.tag_union);
-                if (lhs_tags.len != rhs_tags.len) return .{ .value = false };
-                for (0..lhs_tags.len) |index| {
-                    const a = GuardedList.at(lhs_tags, index);
-                    const b = GuardedList.at(rhs_tags, index);
-                    if (a.name != b.name or a.checked_name != b.checked_name or !try self.addSpanPairs(items, a.payloads, b.payloads)) {
-                        try items.add(.{ .decided = false });
-                        break;
-                    }
-                }
-            },
-            .callable => |variants| if (!try self.addVariantPairs(items, variants, rhs.callable)) return .{ .value = false },
-            .erased_fn => |erased| {
-                if (!std.mem.eql(u8, erased.source_fn_ty.bytes[0..], rhs.erased_fn.source_fn_ty.bytes[0..])) return .{ .value = false };
-                if (!try self.addVariantPairs(items, erased.members, rhs.erased_fn.members)) return .{ .value = false };
-            },
-            .named => |named| {
-                const other = rhs.named;
-                if (!std.meta.eql(named.named_type, other.named_type)) return .{ .value = false };
-                if (!std.meta.eql(named.def, other.def)) return .{ .value = false };
-                if (named.kind != other.kind) return .{ .value = false };
-                if (!std.meta.eql(named.builtin_owner, other.builtin_owner)) return .{ .value = false };
-                if (!try self.addSpanPairs(items, named.args, other.args)) return .{ .value = false };
-                if (named.backing == null or other.backing == null) {
-                    try items.add(.{ .decided = named.backing == null and other.backing == null });
-                } else if (named.backing.?.use != other.backing.?.use or named.backing.?.authority != other.backing.?.authority) {
-                    try items.add(.{ .decided = false });
-                } else {
-                    try addPair(items, named.backing.?.ty, other.backing.?.ty);
-                }
-            },
-        }
-        return .{ .group = .all };
-    }
-
-    pub fn exit(_: *TypeEquivalence, _: Leaf, _: ?bool) std.mem.Allocator.Error!void {}
-
-    fn addPair(items: Eval.Items, direct: Type.TypeId, materialized: Type.TypeId) Allocator.Error!void {
-        try items.add(.{ .pair = .{ .direct = direct, .materialized = materialized } });
-    }
-
-    /// List the pairs of two type spans; false when their lengths differ.
-    fn addSpanPairs(self: *TypeEquivalence, items: Eval.Items, direct: Type.Span, materialized: Type.Span) Allocator.Error!bool {
-        const lhs = self.lowerer.types.span(direct);
-        const rhs = self.materialized.span(materialized);
-        if (lhs.len != rhs.len) return false;
-        for (0..lhs.len) |index| try addPair(items, GuardedList.at(lhs, index), GuardedList.at(rhs, index));
-        return true;
-    }
-
-    /// List the capture pairs of two callable variant spans, with a failed
-    /// check where a variant's identity or capture presence differs; false
-    /// when their lengths differ.
-    fn addVariantPairs(self: *TypeEquivalence, items: Eval.Items, direct: Type.Span, materialized: Type.Span) Allocator.Error!bool {
-        const lhs = self.lowerer.types.fnVariantSpan(direct);
-        const rhs = self.materialized.fnVariantSpan(materialized);
-        if (lhs.len != rhs.len) return false;
-        for (0..lhs.len) |index| {
-            const a = GuardedList.at(lhs, index);
-            const b = GuardedList.at(rhs, index);
-            if (a.source != b.source) {
-                try items.add(.{ .decided = false });
-                return true;
-            }
-            if (a.capture_ty == null or b.capture_ty == null) {
-                if (!(a.capture_ty == null and b.capture_ty == null)) {
-                    try items.add(.{ .decided = false });
-                    return true;
-                }
-                continue;
-            }
-            try addPair(items, a.capture_ty.?, b.capture_ty.?);
-        }
-        return true;
-    }
-};
-
-/// Clone the frozen identity domain exactly; all producer IDs are preserved.
-pub fn cloneSolvedProgram(allocator: std.mem.Allocator, solved: *const Solved.Program) std.mem.Allocator.Error!Solved.Program {
-    var lifted = try cloneLiftedProgram(allocator, &solved.lifted);
-    errdefer lifted.deinit();
-
-    var types = try cloneSolvedTypeStore(allocator, &solved.types);
-    errdefer types.deinit();
-
-    var defs = try cloneArrayList(Solved.Def, allocator, &solved.defs);
-    errdefer defs.deinit(allocator);
-    var local_tys = try cloneArrayList(SolvedType.TypeVarId, allocator, &solved.local_tys);
-    errdefer local_tys.deinit(allocator);
-    var expr_tys = try cloneArrayList(SolvedType.TypeVarId, allocator, &solved.expr_tys);
-    errdefer expr_tys.deinit(allocator);
-    var pat_tys = try cloneArrayList(SolvedType.TypeVarId, allocator, &solved.pat_tys);
-    errdefer pat_tys.deinit(allocator);
-    var fn_tys = try cloneArrayList(SolvedType.TypeVarId, allocator, &solved.fn_tys);
-    errdefer fn_tys.deinit(allocator);
-    var layout_requests = try cloneArrayList(Solved.LayoutRequest, allocator, &solved.layout_requests);
-    errdefer layout_requests.deinit(allocator);
-    var runtime_schema_requests = try cloneArrayList(Solved.RuntimeSchemaRequest, allocator, &solved.runtime_schema_requests);
-    errdefer runtime_schema_requests.deinit(allocator);
-
-    return .{
-        .allocator = allocator,
-        .lifted = lifted,
-        .types = types,
-        .defs = defs,
-        .local_tys = local_tys,
-        .expr_tys = expr_tys,
-        .pat_tys = pat_tys,
-        .fn_tys = fn_tys,
-        .layout_requests = layout_requests,
-        .runtime_schema_requests = runtime_schema_requests,
-    };
-}
-
-fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Program) std.mem.Allocator.Error!Lifted.Program {
-    const view = program.view();
-
-    var name_store = try program.names.clone(allocator);
-    errdefer name_store.deinit();
-
-    var types = try cloneMonoTypeStore(allocator, &program.types);
-    errdefer types.deinit();
-
-    var string_literals = try cloneStringLiterals(allocator, program.stringLiteralsView());
-    errdefer deinitStringLiterals(allocator, &string_literals);
-
-    var source_files: std.ArrayList(base.SourceFileEntry) = .empty;
-    errdefer {
-        for (source_files.items) |file| {
-            allocator.free(file.name);
-            allocator.free(file.qualified_name);
-        }
-        source_files.deinit(allocator);
-    }
-    try source_files.ensureTotalCapacityPrecise(allocator, program.sourceFiles().len);
-    for (program.sourceFiles()) |file| {
-        const name = try allocator.dupe(u8, file.name);
-        errdefer allocator.free(name);
-        const qualified_name = try allocator.dupe(u8, file.qualified_name);
-        source_files.appendAssumeCapacity(.{
-            .name = name,
-            .qualified_name = qualified_name,
-            .module_identity = file.module_identity,
-        });
-    }
-
-    var const_fn_evidence = try clonedLiftedProgramList(check.ConstStore.ConstFnEvidence, "const_fn_evidence", allocator, view.const_fn_evidence);
-    errdefer const_fn_evidence.deinit(allocator);
-
-    var const_fn_evidence_frames = try clonedLiftedProgramList(check.ConstStore.ConstFnEvidenceFrame, "const_fn_evidence_frames", allocator, view.const_fn_evidence_frames);
-    errdefer const_fn_evidence_frames.deinit(allocator);
-
-    var fns = try clonedLiftedProgramList(Lifted.Fn, "fns", allocator, view.fns);
-    errdefer fns.deinit(allocator);
-    var exprs = try clonedLiftedProgramList(Lifted.Expr, "exprs", allocator, view.exprs);
-    errdefer exprs.deinit(allocator);
-    var pats = try clonedLiftedProgramList(Lifted.Pat, "pats", allocator, view.pats);
-    errdefer pats.deinit(allocator);
-    var stmts = try clonedLiftedProgramList(Lifted.Stmt, "stmts", allocator, view.stmts);
-    errdefer stmts.deinit(allocator);
-    var locals = try clonedLiftedProgramList(Lifted.Local, "locals", allocator, view.locals);
-    errdefer locals.deinit(allocator);
-    var expr_ids = try clonedLiftedProgramList(Lifted.ExprId, "expr_ids", allocator, view.expr_ids);
-    errdefer expr_ids.deinit(allocator);
-    var pat_ids = try clonedLiftedProgramList(Lifted.PatId, "pat_ids", allocator, view.pat_ids);
-    errdefer pat_ids.deinit(allocator);
-    var typed_locals = try clonedLiftedProgramList(Lifted.TypedLocal, "typed_locals", allocator, view.typed_locals);
-    errdefer typed_locals.deinit(allocator);
-    var stmt_ids = try clonedLiftedProgramList(Lifted.StmtId, "stmt_ids", allocator, view.stmt_ids);
-    errdefer stmt_ids.deinit(allocator);
-    var field_exprs = try clonedLiftedProgramList(Lifted.FieldExpr, "field_exprs", allocator, view.field_exprs);
-    errdefer field_exprs.deinit(allocator);
-    var field_access_segments = try clonedLiftedProgramList(Lifted.FieldAccessSegment, "field_access_segments", allocator, view.field_access_segments);
-    errdefer field_access_segments.deinit(allocator);
-    var fn_def_captures = try clonedLiftedProgramList(Lifted.FnDefCapture, "fn_def_captures", allocator, view.fn_def_captures);
-    errdefer fn_def_captures.deinit(allocator);
-    var capture_operands = try clonedLiftedProgramList(Lifted.CaptureOperand, "capture_operands", allocator, view.capture_operands);
-    errdefer capture_operands.deinit(allocator);
-    var record_destructs = try clonedLiftedProgramList(Lifted.RecordDestruct, "record_destructs", allocator, view.record_destructs);
-    errdefer record_destructs.deinit(allocator);
-    var str_pattern_steps = try clonedLiftedProgramList(Lifted.StrPatternStep, "str_pattern_steps", allocator, view.str_pattern_steps);
-    errdefer str_pattern_steps.deinit(allocator);
-    var branches = try clonedLiftedProgramList(Lifted.Branch, "branches", allocator, view.branches);
-    errdefer branches.deinit(allocator);
-    var if_branches = try clonedLiftedProgramList(Lifted.IfBranch, "if_branches", allocator, view.if_branches);
-    errdefer if_branches.deinit(allocator);
-    var roots = try clonedLiftedProgramList(Lifted.Root, "roots", allocator, view.roots);
-    errdefer roots.deinit(allocator);
-    var literal_roots = try clonedLiftedProgramList(Lifted.LiteralRoot, "literal_roots", allocator, view.literal_roots);
-    errdefer literal_roots.deinit(allocator);
-    var layout_requests = try clonedLiftedProgramList(Lifted.LayoutRequest, "layout_requests", allocator, view.layout_requests);
-    errdefer layout_requests.deinit(allocator);
-    var comptime_value_reads = try clonedLiftedProgramList(Common.ComptimeValueRoot, "comptime_value_reads", allocator, view.comptime_value_reads);
-    errdefer comptime_value_reads.deinit(allocator);
-    var runtime_schema_requests = try clonedLiftedProgramList(Lifted.RuntimeSchemaRequest, "runtime_schema_requests", allocator, view.runtime_schema_requests);
-    errdefer runtime_schema_requests.deinit(allocator);
-    var static_data_values = try clonedLiftedProgramList(Lifted.StaticDataValue, "static_data_values", allocator, view.static_data_values);
-    errdefer static_data_values.deinit(allocator);
-    var comptime_value_roots = try clonedLiftedProgramList(Common.ComptimeValueRoot, "comptime_value_roots", allocator, view.comptime_value_roots);
-    errdefer comptime_value_roots.deinit(allocator);
-    var lowering_modules = try clonedLiftedProgramList(check.CheckedModule.ModuleId, "lowering_modules", allocator, view.lowering_modules);
-    errdefer lowering_modules.deinit(allocator);
-    var expr_locs = try clonedLiftedProgramList(base.SourceLoc, "expr_locs", allocator, view.expr_locs);
-    errdefer expr_locs.deinit(allocator);
-    var expr_regions = try clonedLiftedProgramList(base.Region, "expr_regions", allocator, view.expr_regions);
-    errdefer expr_regions.deinit(allocator);
-    var stmt_locs = try clonedLiftedProgramList(base.SourceLoc, "stmt_locs", allocator, view.stmt_locs);
-    errdefer stmt_locs.deinit(allocator);
-    var stmt_regions = try clonedLiftedProgramList(base.Region, "stmt_regions", allocator, view.stmt_regions);
-    errdefer stmt_regions.deinit(allocator);
-    var inline_scopes = try clonedLiftedProgramList(Lifted.InlineScope, "inline_scopes", allocator, view.inline_scopes);
-    errdefer inline_scopes.deinit(allocator);
-    var expr_inline_scopes = try clonedLiftedProgramList(Lifted.InlineScopeId, "expr_inline_scopes", allocator, view.expr_inline_scopes);
-    errdefer expr_inline_scopes.deinit(allocator);
-    var stmt_inline_scopes = try clonedLiftedProgramList(Lifted.InlineScopeId, "stmt_inline_scopes", allocator, view.stmt_inline_scopes);
-    errdefer stmt_inline_scopes.deinit(allocator);
-    var proc_debug_names = try cloneProcDebugNameMap(allocator, &program.proc_debug_names);
-    errdefer proc_debug_names.deinit();
-    var comptime_sites = try cloneComptimeSites(allocator, view.comptime_sites);
-    errdefer {
-        for (comptime_sites.items) |site| allocator.free(site.branch_regions);
-        comptime_sites.deinit(allocator);
-    }
-
-    return .{
-        .allocator = allocator,
-        .names = name_store,
-        .next_symbol = program.next_symbol,
-        .types = types,
-        .const_fn_evidence = const_fn_evidence,
-        .const_fn_evidence_frames = const_fn_evidence_frames,
-        .fns = fns,
-        .exprs = exprs,
-        .pats = pats,
-        .stmts = stmts,
-        .locals = locals,
-        .expr_ids = expr_ids,
-        .pat_ids = pat_ids,
-        .typed_locals = typed_locals,
-        .stmt_ids = stmt_ids,
-        .field_exprs = field_exprs,
-        .field_access_segments = field_access_segments,
-        .fn_def_captures = fn_def_captures,
-        .capture_operands = capture_operands,
-        .record_destructs = record_destructs,
-        .str_pattern_steps = str_pattern_steps,
-        .branches = branches,
-        .if_branches = if_branches,
-        .string_literals = Lifted.ProgramList(Mono.StringLiteral, "string_literals").fromArrayList(string_literals),
-        .next_lift_capture_id = program.next_lift_capture_id,
-        .proc_debug_names = proc_debug_names,
-        .roots = roots,
-        .literal_roots = literal_roots,
-        .layout_requests = layout_requests,
-        .comptime_value_reads = comptime_value_reads,
-        .runtime_schema_requests = runtime_schema_requests,
-        .static_data_values = static_data_values,
-        .comptime_value_roots = comptime_value_roots,
-        .comptime_sites = Lifted.ProgramList(Lifted.ComptimeSite, "comptime_sites").fromArrayList(comptime_sites),
-        .lowering_modules = lowering_modules,
-        .platform_requirement_filling = view.platform_requirement_filling,
-        .source_files = Lifted.ProgramList(base.SourceFileEntry, "source_files").fromArrayList(source_files),
-        .expr_locs = expr_locs,
-        .expr_regions = expr_regions,
-        .stmt_locs = stmt_locs,
-        .stmt_regions = stmt_regions,
-        .inline_scopes = inline_scopes,
-        .expr_inline_scopes = expr_inline_scopes,
-        .stmt_inline_scopes = stmt_inline_scopes,
-        .local_names = blk: {
-            var names: std.ArrayList([]const u8) = .empty;
-            errdefer {
-                for (names.items) |name| {
-                    if (name.len > 0) allocator.free(name);
-                }
-                names.deinit(allocator);
-            }
-            try names.ensureTotalCapacityPrecise(allocator, view.local_names.len);
-            for (view.local_names) |name| {
-                names.appendAssumeCapacity(if (name.len == 0) "" else try allocator.dupe(u8, name));
-            }
-            break :blk Lifted.ProgramList([]const u8, "local_names").fromArrayList(names);
-        },
-        .current_loc = program.current_loc,
-        .current_region = program.current_region,
-        .current_inline_scope = program.current_inline_scope,
-    };
-}
-
-fn clonedLiftedProgramList(
-    comptime T: type,
-    comptime field_name: []const u8,
-    allocator: std.mem.Allocator,
-    source: []const T,
-) std.mem.Allocator.Error!Lifted.ProgramList(T, field_name) {
-    return Lifted.ProgramList(T, field_name).fromArrayList(try cloneSlice(T, allocator, source));
-}
-
-fn cloneComptimeSites(allocator: std.mem.Allocator, source: []const Lifted.ComptimeSite) std.mem.Allocator.Error!std.ArrayList(Lifted.ComptimeSite) {
-    var cloned: std.ArrayList(Lifted.ComptimeSite) = .empty;
-    errdefer {
-        for (cloned.items) |site| allocator.free(site.branch_regions);
-        cloned.deinit(allocator);
-    }
-    try cloned.ensureTotalCapacityPrecise(allocator, source.len);
-    for (source) |site| {
-        cloned.appendAssumeCapacity(.{
-            .kind = site.kind,
-            .owner = site.owner,
-            .region = site.region,
-            .checked_site = site.checked_site,
-            .branch_regions = try allocator.dupe(base.Region, site.branch_regions),
-        });
-    }
-    return cloned;
-}
-
-fn cloneProcDebugNameMap(allocator: std.mem.Allocator, source: *const Lifted.ProcDebugNameMap) std.mem.Allocator.Error!Lifted.ProcDebugNameMap {
-    var cloned = Lifted.ProcDebugNameMap.init(allocator);
-    errdefer cloned.deinit();
-
-    try cloned.items.ensureTotalCapacityPrecise(allocator, source.items.items.len);
-    for (source.items.items) |entry| {
-        cloned.items.appendAssumeCapacity(entry);
-    }
-
-    return cloned;
-}
-
 const NameStore = check.CheckedNames.NameStore;
-
-fn cloneMonoTypeStore(allocator: std.mem.Allocator, source: *const MonoType.Store) std.mem.Allocator.Error!MonoType.Store {
-    const view = source.view();
-    if (source.hasSpeculativeConstruction()) Common.invariant("Solved cloning requires completed Monotype construction");
-    var cloned = MonoType.Store.init(allocator);
-    errdefer cloned.deinit();
-
-    cloned.types = @TypeOf(source.types).fromArrayList(try cloneSlice(MonoType.Content, allocator, view.types));
-    cloned.type_digests = @TypeOf(source.type_digests).fromArrayList(try cloneSlice(?check.CheckedNames.TypeDigest, allocator, view.type_digests));
-    cloned.specialization_digests = @TypeOf(source.specialization_digests).fromArrayList(try cloneSlice(?check.CheckedNames.TypeDigest, allocator, source.specializationDigestsView()));
-    cloned.equality_digests = @TypeOf(source.equality_digests).fromArrayList(try cloneSlice(?check.CheckedNames.TypeDigest, allocator, source.equality_digests.unsafeRawItemsForView()));
-    cloned.constructing = @TypeOf(source.constructing).fromArrayList(try cloneSlice(bool, allocator, source.constructing.unsafeRawItemsForView()));
-    cloned.iterator_interface_cache = @TypeOf(source.iterator_interface_cache).fromArrayList(try cloneSlice(?bool, allocator, source.iterator_interface_cache.unsafeRawItemsForView()));
-    cloned.generated_private_cache = @TypeOf(source.generated_private_cache).fromArrayList(try cloneSlice(?bool, allocator, source.generated_private_cache.unsafeRawItemsForView()));
-    var iterator_interface_visit_epochs: std.ArrayList(u32) = .empty;
-    errdefer iterator_interface_visit_epochs.deinit(allocator);
-    try iterator_interface_visit_epochs.resize(allocator, view.types.len);
-    @memset(iterator_interface_visit_epochs.items, 0);
-    cloned.iterator_interface_visit_epochs = @TypeOf(source.iterator_interface_visit_epochs).fromArrayList(iterator_interface_visit_epochs);
-    iterator_interface_visit_epochs = .empty;
-    // The unfolding index must travel with the cloned digest caches: a clone
-    // holding cached recursive digests but no unfoldings would digest a new
-    // rolled-out prefix differently from the knot it unrolls.
-    // Each copy reserves the source's whole capacity first: inserting a hash
-    // table's entries in its own slot order into a smaller, growing table
-    // with the same hash function packs them into long probe runs.
-    try cloned.recursive_digest_unfoldings.ensureTotalCapacity(source.recursive_digest_unfoldings.count());
-    var unfoldings = source.recursive_digest_unfoldings.iterator();
-    while (unfoldings.next()) |entry| {
-        try cloned.recursive_digest_unfoldings.put(entry.key_ptr.*, entry.value_ptr.*);
-    }
-    try cloned.full_digest_interned.ensureTotalCapacity(source.full_digest_interned.count());
-    var buckets = source.full_digest_interned.iterator();
-    while (buckets.next()) |entry| {
-        var copied = try cloneSlice(MonoType.TypeId, allocator, entry.value_ptr.items);
-        cloned.full_digest_interned.put(entry.key_ptr.*, copied) catch |err| {
-            copied.deinit(allocator);
-            return err;
-        };
-    }
-    cloned.spans = @TypeOf(source.spans).fromArrayList(try cloneSlice(MonoType.TypeId, allocator, view.spans));
-    cloned.fields = @TypeOf(source.fields).fromArrayList(try cloneSlice(MonoType.Field, allocator, view.fields));
-    cloned.tags = @TypeOf(source.tags).fromArrayList(try cloneSlice(MonoType.Tag, allocator, view.tags));
-    cloned.declared_fields = @TypeOf(source.declared_fields).fromArrayList(try cloneSlice(MonoType.DeclaredField, allocator, view.declared_fields));
-    cloned.frozen = source.isFrozen();
-    return cloned;
-}
-
-fn cloneSolvedTypeStore(allocator: std.mem.Allocator, source: *const SolvedType.Store) std.mem.Allocator.Error!SolvedType.Store {
-    var vars = try cloneArrayList(SolvedType.Content, allocator, &source.vars);
-    errdefer vars.deinit(allocator);
-    var owned_named_backings = try cloneArrayList(bool, allocator, &source.owned_named_backings);
-    errdefer owned_named_backings.deinit(allocator);
-    var spans = try cloneArrayList(SolvedType.TypeVarId, allocator, &source.spans);
-    errdefer spans.deinit(allocator);
-    var fields = try cloneArrayList(SolvedType.Field, allocator, &source.fields);
-    errdefer fields.deinit(allocator);
-    var tags = try cloneArrayList(SolvedType.Tag, allocator, &source.tags);
-    errdefer tags.deinit(allocator);
-    var captures = try cloneArrayList(SolvedType.Capture, allocator, &source.captures);
-    errdefer captures.deinit(allocator);
-    var fn_members = try cloneArrayList(SolvedType.FnMember, allocator, &source.fn_members);
-    errdefer fn_members.deinit(allocator);
-    var declared_fields = try cloneArrayList(SolvedType.DeclaredField, allocator, &source.declared_fields);
-    errdefer declared_fields.deinit(allocator);
-
-    return .{
-        .allocator = allocator,
-        .vars = vars,
-        .owned_named_backings = owned_named_backings,
-        .spans = spans,
-        .fields = fields,
-        .tags = tags,
-        .captures = captures,
-        .fn_members = fn_members,
-        .declared_fields = declared_fields,
-    };
-}
-
-fn cloneStringLiterals(allocator: std.mem.Allocator, source: []const Mono.StringLiteral) std.mem.Allocator.Error!std.ArrayList(Mono.StringLiteral) {
-    var cloned: std.ArrayList(Mono.StringLiteral) = .empty;
-    errdefer deinitStringLiterals(allocator, &cloned);
-    try cloned.ensureTotalCapacity(allocator, source.len);
-    for (source) |literal| {
-        cloned.appendAssumeCapacity(try literal.clone(allocator));
-    }
-    return cloned;
-}
-
-fn deinitStringLiterals(allocator: std.mem.Allocator, literals: *std.ArrayList(Mono.StringLiteral)) void {
-    for (literals.items) |literal| literal.deinit(allocator);
-    literals.deinit(allocator);
-}
-
-fn cloneArrayList(comptime T: type, allocator: std.mem.Allocator, source: *const std.ArrayList(T)) std.mem.Allocator.Error!std.ArrayList(T) {
-    return cloneSlice(T, allocator, source.items);
-}
-
-fn cloneSlice(comptime T: type, allocator: std.mem.Allocator, source: []const T) std.mem.Allocator.Error!std.ArrayList(T) {
-    var cloned: std.ArrayList(T) = .empty;
-    errdefer cloned.deinit(allocator);
-    try cloned.appendSlice(allocator, source);
-    return cloned;
-}
 
 fn constPrimitive(primitive: MonoType.Primitive) const_store.Primitive {
     return std.meta.stringToEnum(const_store.Primitive, @tagName(primitive)) orelse
@@ -15227,7 +14519,11 @@ fn constFnDefFromMono(fn_def: Mono.FnDef) check.ConstStore.FnDef {
 }
 
 fn emptySolvedProgramForTest(allocator: std.mem.Allocator) Solved.Program {
-    const lifted = Lifted.Program.init(
+    return Solved.Program.init(allocator, emptyLiftedProgramForTest(allocator));
+}
+
+fn emptyLiftedProgramForTest(allocator: std.mem.Allocator) Lifted.Program {
+    return Lifted.Program.init(
         allocator,
         NameStore.init(allocator),
         MonoType.Store.init(allocator),
@@ -15264,7 +14560,6 @@ fn emptySolvedProgramForTest(allocator: std.mem.Allocator) Solved.Program {
         .empty, // comptime_sites
         0, // next_symbol
     );
-    return Solved.Program.init(allocator, lifted);
 }
 
 test "shared procedure scheduling preserves exact specialization demand" {
@@ -15275,10 +14570,7 @@ test "shared procedure scheduling preserves exact specialization demand" {
     for ([_]bool{ false, true }) |owner_first| {
         var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
         defer lowerer.deinit();
-        var materialized = LambdaMono.Program.init(allocator, NameStore.init(allocator), .empty, .empty, .empty);
-        defer materialized.deinit();
         const direct_ty = try lowerer.types.add(.{ .primitive = .u8 });
-        const materialized_ty = try materialized.types.add(.{ .primitive = .u8 });
         const owner: Type.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(lowerer.fn_entries.items.len))));
         const alias: Type.FnId = @fromBackingInt(@intCast(@backingInt(owner) + 1));
         const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(lowerer.result.store.procSpecCount()))));
@@ -15307,88 +14599,22 @@ test "shared procedure scheduling preserves exact specialization demand" {
             });
             try lowerer.fn_reachable.append(allocator, false);
         }
-        var identities: std.ArrayList(LambdaMonoLower.SpecializationIdentity) = .empty;
-        defer identities.deinit(allocator);
         const order = if (owner_first) [_]Type.FnId{ owner, alias } else [_]Type.FnId{ alias, owner };
         for (order) |requested| {
             try std.testing.expectEqual(proc, try lowerer.markReachableFn(requested));
             try std.testing.expectEqual(proc, try lowerer.markReachableFn(requested));
             try std.testing.expectEqualSlices(Type.FnId, &.{owner}, lowerer.fn_reach_queue.items);
-            const entry = lowerer.fn_entries.items[@backingInt(requested)];
-            _ = try materialized.addFn(.{
-                .symbol = entry.symbol,
-                .source = null,
-                .args = .empty(),
-                .ret = materialized_ty,
-                .body = .hosted,
-            });
-            try identities.append(allocator, Lowerer.specializationIdentity(entry.spec));
-            var type_equivalence = TypeEquivalence.init(allocator, &lowerer, &materialized.types);
-            defer type_equivalence.deinit();
-            try lowerer.verifyFnEntriesMatch(&materialized, identities.items, &type_equivalence);
         }
         try std.testing.expect(lowerer.fn_reachable.items[@backingInt(owner)]);
         try std.testing.expect(lowerer.fn_reachable.items[@backingInt(alias)]);
     }
 }
 
-test "frozen solved clone preserves producer IDs and releases partial allocations" {
-    const allocator = std.testing.allocator;
-    var source = emptySolvedProgramForTest(allocator);
-    defer source.deinit();
-    const names = &source.lifted.names;
-    const module = try names.internModuleName("Fixture");
-    const identity = try names.internModuleIdentity(&(@as([32]u8, @splat(17))));
-    _ = try names.internTypeName("Value");
-    _ = try names.internMethodName("method");
-    _ = try names.internRecordFieldLabel("field");
-    _ = try names.internTagLabel("Tag");
-    const exported = try names.internExportName("entry");
-    _ = try names.internExternalSymbolName("roc_entry");
-    _ = try names.internProcBase(.{ .module_name = module, .export_name = exported, .kind = .checked_source, .ordinal = 0 });
-    const mono_ty = try source.lifted.types.add(.{ .primitive = .u8 });
-    var symbols: Common.SymbolGen = .{};
-    const capture_symbol = symbols.fresh();
-    const local = try source.lifted.addLocal(capture_symbol, mono_ty);
-    const ty = try source.types.add(.{ .primitive = .u8 });
-    const captures = try source.types.addCaptures(&.{.{ .local = local, .symbol = capture_symbol, .binder = null, .ty = ty }});
-    const members = try source.types.addMembers(&.{.{ .lambda = symbols.fresh(), .captures = captures }});
-    try source.local_tys.append(allocator, ty);
-    try source.expr_tys.append(allocator, ty);
-    try source.pat_tys.append(allocator, ty);
-    try source.fn_tys.append(allocator, ty);
-    const root: Common.ComptimeValueRoot = .{ .module = .{}, .root = .{ .checked = @fromBackingInt(@intCast(91)) }, .const_locator = null };
-    const root_id = try source.lifted.addComptimeValueRoot(root);
-    var cloned = try cloneSolvedProgram(allocator, &source);
-    defer cloned.deinit();
-    try std.testing.expectEqualDeep(root, cloned.lifted.getComptimeValueRoot(root_id));
-    try std.testing.expect(source.lifted.view().comptime_value_roots.ptr != cloned.lifted.view().comptime_value_roots.ptr);
-    try std.testing.expectEqual(source.types.memberItem(members, 0).captures, cloned.types.memberItem(members, 0).captures);
-    try std.testing.expectEqual(source.types.captureItem(captures, 0).local, cloned.types.captureItem(captures, 0).local);
-    try std.testing.expectEqualSlices(u8, names.moduleIdentityBytes(identity), cloned.lifted.names.moduleIdentityBytes(identity));
-    inline for (.{ "module_names", "module_identities", "type_names", "method_names", "record_field_labels", "tag_labels", "export_names", "external_symbol_names" }) |field| {
-        const original = &@field(names, field);
-        const copy = &@field(cloned.lifted.names, field);
-        try std.testing.expectEqual(original.count(), copy.count());
-        for (0..original.count()) |index| try std.testing.expectEqualSlices(u8, original.getText(@intCast(index)), copy.getText(@intCast(index)));
-    }
-    try std.testing.expectEqual(names.proc_bases.items.items.len, cloned.lifted.names.proc_bases.items.items.len);
-    try std.testing.expect(cloned.local_tys.items.ptr != source.local_tys.items.ptr);
-    const Attempt = struct {
-        fn run(failing: std.mem.Allocator, original: *const Solved.Program) std.mem.Allocator.Error!void {
-            var copy = try cloneSolvedProgram(failing, original);
-            defer copy.deinit();
-        }
-    };
-    try std.testing.checkAllAllocationFailures(allocator, Attempt.run, .{&source});
-}
-
 test "compact comptime root descriptors survive solved teardown and direct LIR lowering" {
     const allocator = std.testing.allocator;
-    var solved = emptySolvedProgramForTest(allocator);
-    // Lambda Mono lowering consumes and destroys this source on every path.
-    var source_consumed = false;
-    defer if (!source_consumed) solved.deinit();
+    var lifted = emptyLiftedProgramForTest(allocator);
+    var lifted_owned = true;
+    defer if (lifted_owned) lifted.deinit();
     const roots = [_]Common.ComptimeValueRoot{
         .{ .module = .{}, .root = .{ .checked = @fromBackingInt(@intCast(91)) }, .const_locator = null },
         .{
@@ -15402,20 +14628,20 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
             },
         },
     };
-    for (roots) |root| _ = try solved.lifted.addComptimeValueRoot(root);
-    const bool_ty = try solved.lifted.types.add(.{ .primitive = .bool });
-    const produced = try solved.lifted.addExpr(.{ .ty = bool_ty, .data = .{ .int_lit = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 } } });
-    const witness = try solved.lifted.addExpr(.{ .ty = bool_ty, .data = .@"unreachable" });
-    const read = try solved.lifted.addExpr(.{ .ty = bool_ty, .data = .{ .comptime_value = .{ .root = @fromBackingInt(@intCast(1)), .initializer = witness } } });
+    for (roots) |root| _ = try lifted.addComptimeValueRoot(root);
+    const bool_ty = try lifted.types.add(.{ .primitive = .bool });
+    const produced = try lifted.addExpr(.{ .ty = bool_ty, .data = .{ .int_lit = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 } } });
+    const witness = try lifted.addExpr(.{ .ty = bool_ty, .data = .@"unreachable" });
+    const read = try lifted.addExpr(.{ .ty = bool_ty, .data = .{ .comptime_value = .{ .root = @fromBackingInt(@intCast(1)), .initializer = witness } } });
     for ([_]Lifted.ExprId{ produced, read }, 0..) |body, index| {
-        const fn_id = try solved.lifted.addFn(.{
+        const fn_id = try lifted.addFn(.{
             .symbol = @fromBackingInt(@intCast(@as(u32, @intCast(index)))),
             .args = .empty(),
             .captures = .empty(),
             .body = .{ .roc = body },
             .ret = bool_ty,
         });
-        try solved.lifted.addRoot(.{
+        try lifted.addRoot(.{
             .fn_id = fn_id,
             .request = .{
                 .order = @intCast(index),
@@ -15429,40 +14655,21 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
             .owner = .first,
         });
     }
-    solved.lifted.next_symbol = 2;
-    const field = try solved.lifted.names.internRecordFieldLabel("field");
-    _ = try solved.lifted.addFieldAccessSegmentSpan(&.{.{ .field = field }});
+    lifted.next_symbol = 2;
+    const field = try lifted.names.internRecordFieldLabel("field");
+    _ = try lifted.addFieldAccessSegmentSpan(&.{.{ .field = field }});
     {
         const name = try allocator.dupe(u8, "Fixture.roc");
         errdefer allocator.free(name);
         const qualified_name = try allocator.dupe(u8, "Fixture");
         errdefer allocator.free(qualified_name);
-        try solved.lifted.source_files.append(allocator, .{ .name = name, .qualified_name = qualified_name, .module_identity = @splat(0) });
+        try lifted.source_files.append(allocator, .{ .name = name, .qualified_name = qualified_name, .module_identity = @splat(0) });
     }
-    // Derive real function and expression types, rather than synthesizing a
-    // materialized read after lowering has already finished.
-    const inferred = try @import("lambda_solved/solve.zig").run(allocator, try cloneLiftedProgram(allocator, &solved.lifted));
-    solved.deinit();
-    solved = inferred;
-
-    const Attempt = struct {
-        fn run(failing: std.mem.Allocator, original: *const Solved.Program, folded: Lifted.Program.FoldedMatch) std.mem.Allocator.Error!void {
-            const copy = try cloneSolvedProgram(failing, original);
-            // run consumes the clone on success AND failure; no clone errdefer.
-            var result = try LambdaMonoLower.run(failing, copy, &.{folded}, .{});
-            defer result.deinit();
-        }
-    };
-    var deterministic = base.DeterministicAllocator.init(allocator);
-    try std.testing.checkAllAllocationFailures(deterministic.allocator(), Attempt.run, .{ &solved, Lifted.Program.FoldedMatch{ .scrutinee = produced, .body = read } });
-    const Verify = struct {
-        fn run(failing: std.mem.Allocator, original: *const Solved.Program) Common.LowerError!void {
-            var lowerer = try Lowerer.init(failing, .u64, original, .{});
-            defer lowerer.deinit();
-            try lowerer.verifyMaterializedDecisions();
-        }
-    };
-    try std.testing.checkAllAllocationFailures(deterministic.allocator(), Verify.run, .{&solved});
+    // Derive real function and expression types so the lowered reads carry
+    // solved types rather than synthesized ones.
+    lifted_owned = false;
+    var solved = try @import("lambda_solved/solve.zig").run(allocator, lifted);
+    defer solved.deinit();
     {
         var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
         defer lowerer.deinit();
@@ -15501,28 +14708,6 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
         _ = try lowerer.lowerRootSlotReadInto(test_site, target, .{ .root = duplicate, .initializer = undefined }, ty, next);
         try std.testing.expectEqual(@as(usize, 4), lowerer.result.static_data_values.items.len);
     }
-    source_consumed = true;
-    var materialized = try LambdaMonoLower.run(allocator, solved, &.{}, .{});
-    defer materialized.deinit();
-    for (roots, 0..) |root, index| {
-        try std.testing.expectEqualDeep(root, materialized.getComptimeValueRoot(@fromBackingInt(@intCast(@as(u32, @intCast(index))))));
-    }
-    // Evaluate a read after both lowering and source teardown. Producer order is
-    // deliberately unrelated to the descriptor ID and checked root number.
-    const Eval = @import("lambda_mono/eval.zig");
-    const consumer = materialized.getFn(materialized.rootsView()[1].fn_id);
-    const lowered_read = materialized.getExpr(consumer.body.roc).data.comptime_value;
-    try std.testing.expectEqual(@as(Common.ComptimeValueRootId, @fromBackingInt(@intCast(1))), lowered_read.root);
-    try std.testing.expectEqualDeep(roots[1], materialized.getComptimeValueRoot(lowered_read.root));
-    try std.testing.expect(materialized.getExpr(lowered_read.initializer).data == .@"unreachable");
-    var evaluator = try Eval.Evaluator.init(allocator, &materialized, .{
-        .comptime_producers = &.{
-            .{ .root = roots[0], .root_index = 1 },
-            .{ .root = roots[1], .root_index = 0 },
-        },
-    });
-    defer evaluator.deinit();
-    try std.testing.expect((try evaluator.runRoot(1)).value.bool_);
 }
 
 test "layout lowering accepts tag payload alias backed by primitive" {

@@ -306,7 +306,6 @@ pub const ProgramSession = struct {
             if (comptime field == .timing or
                 field == .work_metrics or
                 field == .post_check_executor or
-                field == .debug_materialized_out or
                 field == .solved_lir_parallel_metrics_out or
                 field == .lifted_expr_count_out or
                 field == .completed_scalar_values)

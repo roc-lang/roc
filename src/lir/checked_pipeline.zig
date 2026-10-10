@@ -204,10 +204,6 @@ pub const TargetConfig = struct {
     /// is enabled for optimized builds and kept off for dev and compile-time
     /// evaluation.
     prove_ranges: bool = false,
-    /// Debug-only: forwarded to `SolvedLirLower.Options.debug_materialized_out`
-    /// so a differential harness can execute the Debug verifier's materialized
-    /// Lambda Mono program. The slot receives a value only in Debug builds.
-    debug_materialized_out: ?*?postcheck.LambdaMono.Ast.Program = null,
     /// Optional deterministic task counts for solved-LIR body-shard lowering.
     solved_lir_parallel_metrics_out: ?*SolvedLirParallelMetrics = null,
     /// Per-run staged specialization counters; SpecConstr owns resetting them.
@@ -891,7 +887,6 @@ pub const Observers = struct {
     work_metrics: ?*WorkMetrics = null,
     timing: ?*Timing = null,
     post_check_executor: ?base.post_check_task_executor.Executor = null,
-    debug_materialized_out: ?*?postcheck.LambdaMono.Ast.Program = null,
     solved_lir_parallel_metrics_out: ?*SolvedLirParallelMetrics = null,
     lir_pass_parallel_metrics_out: ?*LirPassParallelMetrics = null,
     arc_parallel_metrics_out: ?*ArcParallelMetrics = null,
@@ -1029,10 +1024,6 @@ pub const FrozenMaterializer = struct {
     context: *anyopaque,
     materialize: *const fn (Allocator, *anyopaque, *LirProgram.Result) Allocator.Error!LirProgram.FrozenStaticData,
 };
-
-/// Materialized Lambda Mono program type, re-exported for harnesses that
-/// receive one through `TargetConfig.debug_materialized_out`.
-pub const LambdaMonoProgram = postcheck.LambdaMono.Ast.Program;
 
 /// Runtime record and tag-union schemas needed by dev tooling.
 pub const RuntimeValueSchemaStore = struct {
@@ -1662,7 +1653,6 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
         .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
         .layout_request_const_plans = target.layout_request_const_plans,
         .test_plan_metadata = prepared.test_plan_metadata,
-        .debug_materialized_out = target.debug_materialized_out,
         .parallel_metrics = parallel_metrics,
         .completed_scalar_values = target.completed_scalar_values,
     });

@@ -14,6 +14,5 @@ that adjusted if run from here.
 | `update_basic_cli_url.sh` | `ci/` |
 | `guarded_zig.sh` | `ci/` |
 | `check_mir_cutover_contracts.pl` | `ci/` |
-| `lambda_mono_mutation_check.sh` + `lambda_mono_mutations/` | `ci/` |
 | `spec_constr_mutation_check.sh` + `spec_constr_mutations/` | `ci/` |
 | `benchmarks_zig/run_snapshot_benchmark.sh` | `ci/benchmarks_zig/` |

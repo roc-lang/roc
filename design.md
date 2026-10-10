@@ -7101,10 +7101,8 @@ must keep analysis state bounded by the finite LIR graph.
 
 `SolvedLirLower` computes the logical Lambda Mono callable, capture, procedure,
 and function-free type decisions while directly consuming Lambda Solved syntax.
-Release builds do not materialize a second Lambda Mono expression, pattern,
-statement, or local tree. Debug builds separately materialize Lambda Mono and
-compare its decisions with the direct lowerer; that verifier is not a production
-lowering route.
+No build materializes a second Lambda Mono expression, pattern, statement, or
+local tree; the direct lowerer is the only consumer of Lambda Solved syntax.
 
 #### Public Iterator Contract
 
@@ -8136,9 +8134,7 @@ The following properties require focused tests:
 - iterator loop scalarization preserves every reachable transition, including
   adapter-state changes across `continue` edges;
 - constant-list zero-allocation claims are tested on a cart path that performs
-  compile-time finalization;
-- direct Solved-to-LIR decisions agree with the debug materialized Lambda Mono
-  verifier.
+  compile-time finalization.
 
 Backends receive only ordinary LIR and explicit ARC statements. They must not
 know whether a value originated as a public iterator, a minted iterator,
@@ -13567,8 +13563,8 @@ Drafts own their root descriptors until sealing; a draft ID cannot be used in
 the destination program without explicit remapping. Whole-program forks copy
 the table with its ID domain, while Lift transfers it with the expression
 storage. SpecConstr body shards borrow the frozen table without allocating or
-relocating root IDs. Materialized Lambda Mono owns its matching table, and LIR
-lowering resolves the descriptor before producing runtime slots. Local table
+relocating root IDs. LIR lowering resolves the descriptor before producing
+runtime slots. Local table
 ordinals never replace checked module/root identity in slot caches or serialized
 checked module data, and moving metadata out of line does not change their existing
 module/root matching rules.
@@ -15221,8 +15217,8 @@ Exact specialization demand and shared LIR procedure-body scheduling are separat
 state. When distinct specializations have one procedure identity, a reference
 demands its exact specialization and queues the shared owner's body once. It
 does not demand the owner's specialization merely because that owner supplies
-the body. The debug materializer compares referenced specializations; sharing a
-procedure must not introduce additional specialization demands into that check.
+the body. Sharing a procedure must not introduce additional specialization
+demands.
 
 The Lambda Mono type store has no function type. Function values have already
 become ordinary value representations:
@@ -17087,43 +17083,6 @@ dictionary, argument, and hidden-argument locals. Backends must not infer any
 missing behavior from target layout shape; if codegen has not implemented a
 boxy statement's specified behavior, reaching that statement is an invariant failure in
 that backend.
-
-### Debug Lambda Mono Verification
-
-This verification applies only to `.lss`. Debug builds may additionally
-materialize the logical Lambda Mono tree for verification. That tree is never
-an input to production lowering, never a
-substitute result, and never a recovery path. The direct solved-to-LIR builder
-always produces the LIR result first. The debug verifier then checks a
-separately materialized Lambda Mono tree against the direct path.
-
-The verifier must be guarded so that release builds pay nothing for it: no tree
-allocation, no materialized Lambda Mono traversal, no verifier data structures,
-and no old Lambda Mono-to-LIR run. The release branch must be compile-time dead
-after Zig specializes the debug condition.
-
-The debug verifier checks at least these explicit decisions:
-
-- every direct function specialization has the same lifted function id, solved
-  function type, capture ABI, capture span, capture record type, source
-  metadata, argument list, and return type as the materialized Lambda Mono tree
-- every finite callable type has the same variants, variant ids, source
-  symbols, target functions, and capture payload types
-- every erased callable type has the same entries, targets, source function
-  digest, and capture payload types
-- every function reference, direct call, value call, captured local access, and
-  callable pattern uses the same target, payload, and capture binding decisions
-- root, layout, runtime-schema, const-plan, and requested-layout outputs name
-  the same checked ids and Lambda Mono types
-
-The verifier may also lower the materialized Lambda Mono tree with the legacy
-Lambda Mono-to-LIR builder and compare that LIR to the direct LIR result. This
-comparison is a debug assertion only. A mismatch is a compiler bug. The compiler
-must not continue by using the materialized Lambda Mono LIR.
-
-The full Lambda Mono body-lowering differential sweep over the ordinary eval
-corpus runs once per day on Ubuntu through `nightly_gate.yml`; it is not part of
-PR MiniCI.
 
 ### Direct Builder Internal Contracts
 
@@ -22104,7 +22063,7 @@ solving, adapted for Roc's checked module boundary and existing LIR.
 | `monotype` | Monotype IR |
 | `monotype_lifted` | Monotype Lifted IR |
 | `lambdasolved` | Lambda Solved IR |
-| `lambdamono` | logical Lambda Mono decisions in direct lowering; materialized only by the debug verifier |
+| `lambdamono` | logical Lambda Mono decisions in direct lowering; never materialized as a tree |
 | `ir` | direct Solved-to-LIR builder |
 | `eval` | LIR interpreter for compile-time evaluation |
 

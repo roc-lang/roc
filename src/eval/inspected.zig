@@ -1194,48 +1194,6 @@ fn compileInspectedProgramForTargetImpl(
     };
 }
 
-/// Debug-only: compile an inspect-wrapped program for the native target while
-/// capturing the Debug verifier's materialized Lambda Mono program in
-/// `materialized_out`. Compiles with the in-place list-transform paths off (so the
-/// materialized tree stays on the copy paths a tree evaluator executes).
-pub fn compileInspectedProgramWithLambdaMono(
-    allocator: Allocator,
-    io: std.Io,
-    source_kind: SourceKind,
-    source: []const u8,
-    imports: []const ModuleSource,
-    pre_published_builtin: ?PrePublishedBuiltin,
-    materialized_out: *?lir.CheckedPipeline.LambdaMonoProgram,
-    inline_expects_enabled: bool,
-) Error!CompiledTargetProgram {
-    var resources = try parseAndCanonicalizeProgramWithRootMode(
-        allocator,
-        source_kind,
-        source,
-        imports,
-        true,
-        .{ .eval_root = true },
-        pre_published_builtin,
-        null,
-    );
-    errdefer cleanupParseAndCanonical(allocator, resources);
-
-    const lowered = try lowerParsedProgramToLirWithOptions(allocator, io, &resources, .native, .{
-        .list_in_place_map = false,
-        .inline_expects = if (inline_expects_enabled) .run else .omit,
-        .debug_materialized_out = materialized_out,
-    });
-    errdefer {
-        var owned = lowered;
-        owned.deinit(allocator);
-    }
-
-    return .{
-        .resources = resources,
-        .lowered = lowered,
-    };
-}
-
 /// Free all resources held by a ParsedResources value.
 pub fn cleanupParseAndCanonical(allocator: Allocator, resources: ParsedResources) void {
     var owned = resources;
@@ -1855,12 +1813,8 @@ const LowerToLirOptions = struct {
     prove_ranges: bool = false,
     /// Match optimized builds so every backend exercises the in-place
     /// List.map and List.update paths; the copy paths are still covered by
-    /// shared-list, slice, and layout-mismatch cases. The Lambda Mono
-    /// differential harness disables this so its tree stays on the copy path.
+    /// shared-list, slice, and layout-mismatch cases.
     list_in_place_map: bool = true,
-    /// Debug-only capture slot for the verifier's materialized Lambda Mono
-    /// program.
-    debug_materialized_out: ?*?lir.CheckedPipeline.LambdaMonoProgram = null,
 };
 
 fn lowerParsedProgramToLirWithOptions(
@@ -1942,7 +1896,6 @@ fn lowerCheckedRootWithViews(
             .inline_expects = options.inline_expects,
             .tag_reachability = options.tag_reachability,
             .prove_ranges = options.prove_ranges,
-            .debug_materialized_out = options.debug_materialized_out,
         },
     );
     defer lowered.deinit();

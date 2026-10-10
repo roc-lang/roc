@@ -118,14 +118,11 @@ pattern this project generalizes:
   reads committed layouts out of the LIR lowering instead of producing its own.
   This seam holds and should be the model for shape description.
 
-`src/postcheck/lambda_mono/` (6,294 lines, reachable only from
-`src/eval/test/lambda_mono_differential_runner.zig`) is the model for
-duplication that is *kept on purpose*: its header states it is "a
-derivation that shares no lowering code with the direct path", and a
-differential harness asserts the two agree on inspect string, abort
-kind and message, `dbg` transcript, and expect-failure transcript.
-That is what makes its duplication safe. Nothing equivalent exists
-between `.lss` and `.boxy`.
+A differential harness that runs one shared corpus through two independent
+derivations and asserts they agree on inspect string, abort kind and
+message, `dbg` transcript, and expect-failure transcript is what makes
+deliberate duplication safe. Nothing equivalent exists between `.lss` and
+`.boxy`.
 
 ## Evidence
 
@@ -211,14 +208,12 @@ between `.lss` and `.boxy`.
    both strategies.
 
 7. **The standing agreement harness.** Some duplication survives by
-   design—two strategies, two emit paths. Make the survivors safe the
-   way `lambda_mono` is: run one shared corpus under `--opt=dev` (LSS)
-   and under `.boxy`, and require identical inspect strings, `dbg`
-   transcripts, abort kinds and messages, and expect-failure
-   transcripts. `src/eval/test/parallel_cli_runner.zig:867` is a
-   single hand-written instance of this today; it becomes the general
-   harness, modeled on
-   `src/eval/test/lambda_mono_differential_runner.zig`.
+   design—two strategies, two emit paths. Make the survivors safe by
+   running one shared corpus under `--opt=dev` (LSS) and under `.boxy`,
+   and requiring identical inspect strings, `dbg` transcripts, abort
+   kinds and messages, and expect-failure transcripts.
+   `src/eval/test/parallel_cli_runner.zig:867` is a single hand-written
+   instance of this today; it becomes the general harness.
 
 Order matters: steps 1 and 2 unblock everything; 3+4 and 5 are
 independent of each other; 6 is independent of 3–5; 7 should land
@@ -245,7 +240,7 @@ Every criterion below must hold; the project is not done until all do:
 - The cross-strategy differential harness is in-tree, runs the shared
   corpus under both strategies, and is green. Constructs a strategy
   does not support are counted and reported per reason—never silently
-  skipped (the `lambda_mono` runner's rule).
+  skipped.
 - Snapshot output is unchanged (`git diff test/snapshots` empty) and
   `roc check` / `roc run` output on a fixture set is byte-identical
   before and after, under both strategies.

@@ -1707,8 +1707,6 @@ pub fn build(b: *std.Build) void {
     const run_test_simd_differential_step = b.step("run-test-simd-differential", "Run the exhaustive integer-SIMD oracle corpus through every compiler consumer");
     const build_test_eval_host_effects_runner_step = b.step("build-test-eval-host-effects-runner", "Build runtime host-effects eval test runner");
     const run_test_eval_host_effects_step = b.step("run-test-eval-host-effects", "Run runtime host-effects eval tests across supported backends");
-    const build_test_lambda_mono_differential_step = b.step("build-test-lambda-mono-differential", "Build the Lambda Mono differential harness");
-    const run_test_lambda_mono_differential_step = b.step("run-test-lambda-mono-differential", "Run the Lambda Mono body-lowering differential harness (Debug only)");
     const build_playground_step = b.step("build-playground", "Build the WASM playground");
     const build_playground_wasm_archive_step = b.step("build-playground-wasm-archive", "Build playground.wasm and zstd-compress it under zig-out/lib/playground");
     const build_repl_wasm_step = b.step("build-repl-wasm", "Build the dedicated REPL WebAssembly module");
@@ -3113,71 +3111,6 @@ pub fn build(b: *std.Build) void {
         eval_host_effects_run_args,
     );
 
-    const lambda_mono_differential_exe = b.addExecutable(.{
-        .name = "lambda-mono-differential-runner",
-        // Linux compiler targets use musl so Roc-produced binaries are portable.
-        // Keep this host-executed test runner portable too instead of requiring
-        // the host to provide musl's dynamic loader. Other hosts retain their
-        // platform's ordinary executable linkage.
-        .linkage = if (target.result.os.tag == .linux and target.result.abi.isMusl()) .static else null,
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/eval/test/lambda_mono_differential_runner.zig"),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-        }),
-    });
-    // The tree evaluator and the deepest eval corpus programs both recurse;
-    // match the eval runner's generous stack.
-    lambda_mono_differential_exe.stack_size = stack_budget.roc_stack_size;
-    configureBackend(lambda_mono_differential_exe, target);
-    roc_modules.addAll(lambda_mono_differential_exe);
-    lambda_mono_differential_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
-    lambda_mono_differential_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
-    lambda_mono_differential_exe.root_module.addImport("test_harness", createTestHarnessModule(b, roc_modules));
-    lambda_mono_differential_exe.root_module.addImport("simd_test_sources", simd_test_sources_module);
-    lambda_mono_differential_exe.root_module.addOptions("coverage_options", blk: {
-        const opts = b.addOptions();
-        opts.addOption(bool, "coverage", false);
-        break :blk opts;
-    });
-    lambda_mono_differential_exe.step.dependOn(&write_compiled_builtins.step);
-    try addLlvmSupportToStep(
-        b,
-        lambda_mono_differential_exe,
-        target,
-        dependency_source,
-        roc_modules,
-        llvm_codegen_module,
-        llvm_embedded_module,
-        zstd,
-    );
-    if (lambda_mono_differential_exe.root_module.resolved_target.?.result.os.tag != .windows or
-        lambda_mono_differential_exe.root_module.resolved_target.?.result.abi != .msvc)
-    {
-        lambda_mono_differential_exe.root_module.link_libcpp = true;
-    }
-    const lambda_mono_differential_run_args = if (test_filters.len > 0) blk: {
-        var lm_args_list = std.ArrayList([]const u8).empty;
-        for (run_args) |arg| {
-            lm_args_list.append(b.allocator, arg) catch @panic("OOM");
-        }
-        for (test_filters) |f| {
-            lm_args_list.append(b.allocator, "--filter") catch @panic("OOM");
-            lm_args_list.append(b.allocator, f) catch @panic("OOM");
-        }
-        break :blk lm_args_list.toOwnedSlice(b.allocator) catch @panic("OOM");
-    } else run_args;
-    const lambda_mono_differential_install = install_and_run(
-        b,
-        no_bin,
-        lambda_mono_differential_exe,
-        null,
-        build_test_lambda_mono_differential_step,
-        run_test_lambda_mono_differential_step,
-        lambda_mono_differential_run_args,
-    );
-
     // One explicitly expensive proof gate owns every execution lane. Keep the
     // commands sequential: each corpus is intentionally large, and running
     // several compiler instances concurrently obscures failures and wastes RAM.
@@ -3198,29 +3131,7 @@ pub fn build(b: *std.Build) void {
 
     run_simd_eval.step.dependOn(&run_simd_ctfe.step);
 
-    if (lambda_mono_differential_install) |install| {
-        // Evaluator tests compile temporary Roc programs beneath `.zig-cache`.
-        // Run the installed Lambda Mono runner so this final gate does not
-        // depend on a cache artifact surviving the preceding evaluator.
-        const run_simd_lambda_mono = Step.Run.create(b, "run installed lambda_mono_differential");
-        run_simd_lambda_mono.addFileArg(.{ .relative = .{ .base = .install_bin, .sub_path = lambda_mono_differential_exe.out_filename } });
-        run_simd_lambda_mono.addArgs(&.{
-            "--filter",
-            "SIMD full differential corpus",
-            "--threads",
-            "1",
-            "--timeout",
-            "900000",
-            "corpus-only",
-        });
-        run_simd_lambda_mono.addArgs(run_args);
-        run_simd_lambda_mono.addPassthruArgs();
-        run_simd_lambda_mono.step.dependOn(install);
-        run_simd_lambda_mono.step.dependOn(&run_simd_eval.step);
-        run_test_simd_differential_step.dependOn(&run_simd_lambda_mono.step);
-    } else {
-        run_test_simd_differential_step.dependOn(&lambda_mono_differential_exe.step);
-    }
+    run_test_simd_differential_step.dependOn(&run_simd_eval.step);
 
     const wasm_archive_exe = b.addExecutable(.{
         .name = "wasm_archive",
@@ -4337,7 +4248,6 @@ pub fn build(b: *std.Build) void {
         .{ .name = "mono_exprs", .list_name = "monotype.Program.exprs" },
         .{ .name = "mono_type_spans", .list_name = "monotype.Type.Store.spans" },
         .{ .name = "mono_type_fields", .list_name = "monotype.Type.Store.fields" },
-        .{ .name = "lambda_mono_expr_ids", .list_name = "lambda_mono.Program.expr_ids" },
         .{ .name = "lambda_mono_type_spans", .list_name = "lambda_mono.Type.Store.spans" },
     };
     for (guarded_list_violation_cases) |case| {
@@ -5245,9 +5155,6 @@ pub fn build(b: *std.Build) void {
     build_ci_step.dependOn(build_test_wasm_static_lib_runner_step);
     build_ci_step.dependOn(build_test_dylib_step);
     build_ci_step.dependOn(build_test_archive_step);
-    // `run-test-simd-differential` runs the installed Lambda Mono runner; build
-    // it here so MiniCI shards running with `--minici-skip-build` reuse it.
-    build_ci_step.dependOn(build_test_lambda_mono_differential_step);
     build_ci_step.dependOn(build_coverage_tools_step);
 
     const fuzz = b.option(bool, "fuzz", "Build fuzz targets including AFL++ and tooling") orelse false;
