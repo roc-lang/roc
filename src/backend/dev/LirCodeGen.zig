@@ -24365,9 +24365,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn emitRocDbgFromStackStr(self: *Self, str_offset: i32) Allocator.Error!void {
-            // Compile-time evaluation identifies a dbg by its statement's
-            // source stamp, delivered exactly as an expect failure's is.
-            if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
             try builder.addLeaArg(frame_ptr, str_offset);

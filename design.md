@@ -556,10 +556,6 @@ checking already walks every expression, resolves local identity, computes
 types, validates function effects, and receives static-dispatch results. The
 checker must not perform a later whole-module expression walk merely to decide
 which expressions are roots, and later stages must not recreate those answers.
-Selecting a top-level value whose type is not context-free as a
-per-specialization root is part of this selection; the post-check pipeline
-only supplies the concrete types at which checking's selection is evaluated
-(see "Specialization-Owned Top-Level Values").
 
 The question "can this expression be evaluated at compile time?" depends only
 on checked data dependency, checked control reachability, and effectfulness. It
@@ -1069,9 +1065,7 @@ validation checks the recorded root ids and message ranges before replay.
 
 Compile-time evaluation must evaluate every checked top-level expression and
 every selected compile-time root that can be evaluated without effectful calls
-or runtime data. A specialization-owned top-level value is evaluated
-once per concrete specialization the program uses (see "Specialization-Owned
-Top-Level Values" below). It must run `crash`, `dbg`, and `expect` during that
+or runtime data. It must run `crash`, `dbg`, and `expect` during that
 evaluation and output their diagnostics during `roc check`.
 
 A function-typed top-level binding whose entire checked right-hand side is one
@@ -1084,135 +1078,6 @@ kind and its resolved value reference. It must not infer a procedure from source
 names, function type alone, body shape below the root expression, or post-check
 specialization results. Any wrapper, capture, conditional, call, or other
 function-valued computation remains an ordinary compile-time callable root.
-
-### Specialization-Owned Top-Level Values
-
-A top-level value binding (a `constant` or `callable_binding` root whose
-source is the definition) is effect-free and evaluated unconditionally
-whenever it is used, so checking always selects it for compile-time
-evaluation. Whether the module itself can evaluate it depends on its checked
-type. A context-free type gets one module-owned `RootRequest`
-(`request_eligibility = .eligible`). A type that is not context-free—a
-generalized value such as `made : List(a)` or a value whose annotation
-writes `..` in an output row, or an unannotated data value with a reachable
-callable slot—is specialization-owned when specialization can supply what
-the type lacks: the type contains no error, and it is either concrete (only
-a callable graph waits for a consumer) or the checker classified the
-binding as a scheme (`ModuleEnv.nodeIsBindingScheme`), so each use
-instantiates its quantified variables. Checking then records
-`request_eligibility = .per_specialization` and requests nothing, because no
-concrete type exists to evaluate it at until post-check specialization
-instantiates it. An erroneous type, or a variable no scheme quantifies, has
-nothing for a specialization to instantiate and stays `.ineligible`. A callable binding
-that is one resolved procedure lookup has no value computation and is demoted
-to `.ineligible`. A value whose checked right-hand side diverges on every path
-(the checked body's explicit divergence data for its root expression,
-`diverges_without_inline_expects`, which implies divergence when inline expects
-run too) is also demoted to `.ineligible`, once dispatch resolutions have fixed
-that data: there is no value for any specialization to fold, so evaluating it
-at compile time could only fail, and it would fail for every use, reached or
-not. It stays evaluated at its use exactly as a value no specialization owns,
-so a placeholder such as `todo : a` / `todo = crash "TODO"` crashes only when a
-use of it runs. A value that diverges on only some paths keeps
-`.per_specialization`, and a specialization whose evaluation takes a failing
-path reports at compile time. A per-specialization evaluation that reaches code checking
-rejected stops there like any other compile-time root: its literal root's
-failure carries `ComptimeFailureKind.checked_error`, and nothing further is
-reported. This is root SELECTION, and it stays in checking: the
-post-check pipeline never decides that a value is compile-time evaluable.
-
-A program lowered with literal roots (every compile-time evaluation, see
-`specialization_dispatch` under literal-origin resolution) evaluates each
-concrete specialization of a `.per_specialization` value once. Where
-Monotype would otherwise lower the value's checked body at a use (a pending
-`ConstEvalTemplate` or pending callable-eval binding), it lowers that body
-at the use's concrete type as the body of a zero-argument literal root whose
-subject is the value (`LiteralRootSubject.value`: owning module, checked
-root id, and specialization identity), and the use reads the root's
-`comptime_value` slot. The root's definition identity is the checked root
-plus its sealed return type, so every use at one concrete type reads one
-root, and distinct types are distinct roots; that identity is the subject's
-`specialization`, and it is the same in every program that lowers the same
-specialization. Only a use that no other inlined value body encloses
-becomes a root: a use lowered as part of another top-level value's body
-(including through a deferred const-use boundary, which records the
-enclosing depth, and including the body of a module-evaluated callable
-value's own root, which is lowered under that value's recursive binding)
-stays inline, because it belongs to that enclosing
-computation—which is itself a literal root when it is specialization-owned,
-exactly as an ordinary top-level constant's body selects no nested hoisted
-roots—and because only there are the enclosing value's recursive bindings
-in scope. A separate root definition must never name another definition's
-recursive-binding local. The enclosing depth (`inlined_value_depth`, raised by
-`lowerCallableEvalBindingBody`) is draft-wide and stays above zero inside
-nested lambda bodies lowered within the enclosing value, so a
-per-specialization use inside a stored closure's runtime body is inlined there
-and recomputed on every call of that closure rather than evaluated once as a
-root: correct, since it is the enclosing computation's code, but weaker than
-once per concrete specialization. A use whose root definition is deduplicated
-into an earlier root of the same identity reads that root and cites that
-root's definition as its representation evidence: a nested function that reads
-a recursive-binding local has no merge identity, so two equal-identity
-definitions may name different specializations of it, and the read must name
-the one the root evaluates. Finalization evaluates these roots exactly like literal
-conversion roots—on first slot demand from another root, otherwise after
-every checked root—and a runtime consumer continuing the shared Solved
-program reads their completed values from the frozen image. Nothing is
-written to the owning module's `ConstStore`: the specializations a program
-demands are a property of the program, not of the checked module, so the
-values live in the program's evaluation and are recomputed by every
-command that finalizes the program, as literal roots are.
-
-Observables follow from that: each specialization is its own evaluation.
-`dbg` runs once per concrete specialization the program evaluates; a value
-no specialization uses is never evaluated, because there is no type to
-evaluate it at. Failures are diagnostics of the value's source, each
-identified by explicit data: the value's checked root, the specialization
-identity, the failure kind, and the failure site, where the site is the
-explicit source stamp of the failed statement in the value's module. One
-identity is one diagnostic (`comptimeFailureReported`), even when a later
-finalization program of the same compilation evaluates the specialization
-again: each program reports into a problem store that ends with it, so the
-driver retains each module's reported identities
-(`ReportedValueFailure`) and hands them to the next program. Different
-specializations and different values always report separately, and a
-failure with no stamp of its own (or one in source inlined from another
-module) has no identity and is never treated as already reported. Message
-text never identifies a failure.
-A literal root's `dbg` observations go through the finalization's ordered
-debug-event stream like a checked root's: a literal root a checked root
-demands runs exactly when that root runs, so its observations are recorded
-as that root's (persisted with it and replayed on a cache hit); one that no
-checked root demands is evaluated by every finalization of its program, so
-its observations are replayed but never persisted. A value root's observation
-made at an explicitly stamped `dbg` in the value's module carries an identity
-(`CompileTimeDebugStore.ValueSite`): the value's module and checked root, the
-specialization identity, and the stamp's region, persisted with the
-observation. An observation whose identity a stored observation (one a
-completed checked module replays, such as the platform program's) already
-carries is the same specialization's `dbg` an earlier program reported, so it
-is neither replayed nor persisted again. Observations one finalization makes
-never suppress each other, because one evaluation may run one `dbg` many
-times; an observation with no stamp of its own in the value's module, and a
-conversion literal's, has no identity and always reports.
-
-Declared limitation: a platform paired with an app finalizes in two
-programs—first the platform's own roots, then the pairing. A specialization
-both programs need (a platform constant and app runtime code using one
-generalized platform value at one type) is evaluated by each, as literal
-conversion roots are, because the first program's literal roots are not
-retained. Only the evaluation repeats, which costs time but is not
-observable: its `dbg` reports once per specialization (the second program's
-observations at identities the first program stored are dropped, see above),
-and a failure no checked root embeds (an inline `expect`) is reported at the
-value once. A failure the first program's checked root embedded is reported at
-that root, while the second program reports it at the value. Evaluating such a
-specialization once is follow-up work. Retaining program-local roots across the two programs would
-need a durable per-specialization store, which checked modules do not
-have. A lowering without literal roots (a
-Boxy program, or a program not lowered for compile-time evaluation) has no
-slot to read and evaluates the value's body at the use, as before; it does
-not select or reject roots.
 
 A shared post-check program represents a selected root read as an explicit
 `comptime_value` expression. Its identity is the checked module id, compile-time
@@ -1255,9 +1120,7 @@ reads always name the completed slot directly, never a runtime accessor.
 
 Evaluation and static storage are separate checked outputs. Unreachable
 top-level values are still evaluated when eligible so their `crash`, `dbg`, and
-`expect` behavior is reported (a specialization-owned value is the exception:
-with no specialization there is no type to evaluate it at, see
-"Specialization-Owned Top-Level Values"), but successfully evaluated unreachable data does
+`expect` behavior is reported, but successfully evaluated unreachable data does
 not need to be stored in checked module data or target static data. Reachable
 evaluated values that have a static representation should be stored once and
 shared. Records that contain static lists should point at shared static list
@@ -1298,10 +1161,7 @@ not by root type eligibility alone. Eligible procedure aliases and roots with
 unbound platform requirements can be intentionally absent from that manifest.
 The initial reservation pass records exactly its module/root identities and
 reserved root functions; lowering uses that declaration table to select slot reads.
-Unrequested callable bindings retain their ordinary checked body computation,
-except that a `.per_specialization` binding in a program lowered with literal
-roots computes it as a literal root (see "Specialization-Owned Top-Level
-Values").
+Unrequested callable bindings retain their ordinary checked body computation.
 
 A shared compile-time value slot has its root type's own layout. A read whose
 target stores that type boxed, such as a recursive payload field, reads the
@@ -5053,12 +4913,7 @@ Every live literal-origin record leaves checking with one explicit resolution:
   definition the draft registers; the specialization reads the root's
   `comptime_value` slot (producer `.literal`); LIR carries `LiteralRootPlan`s
   beside the checked roots' plans; and finalization evaluates each literal root
-  on its first slot demand, and the rest after every checked root. A literal
-  root carries an explicit subject (`LiteralRootSubject`): a `conversion`
-  names the literal its rejection reports, and a `value` names a
-  specialization-owned top-level value's checked root (see
-  "Specialization-Owned Top-Level Values"); failures without a source
-  region of their own report at the subject. Every command
+  on its first slot demand, and the rest after every checked root. Every command
   that finalizes checking evaluates the literal roots of its program roots,
   with the rest of compile-time evaluation and under its fixed configuration,
   so `roc check` reports every rejected or crashing conversion a build would. Two object-cache

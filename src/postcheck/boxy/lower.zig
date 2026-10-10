@@ -7755,7 +7755,7 @@ const ProcedureBuilder = struct {
         self.result.literal_roots.items[index] = .{
             .module = module.key,
             .id = @enumFromInt(index),
-            .subject = .{ .conversion = .{ .owner = owner, .checked_expr = @intFromEnum(site.source.expr), .kind = if (expr.data == .numeral) .numeral else .quote } },
+            .site = .{ .owner = owner, .checked_expr = @intFromEnum(site.source.expr), .kind = if (expr.data == .numeral) .numeral else .quote },
             .proc = proc_id,
             .ret_layout = ret_layout,
             .plan = constant_plan,

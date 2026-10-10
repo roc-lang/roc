@@ -189,7 +189,7 @@ pub const Root = struct {
 pub const LiteralRoot = struct {
     fn_id: FnId,
     module: check.CheckedModule.ModuleId,
-    subject: Common.LiteralRootSubject,
+    site: Common.LiteralRejectionSite,
 };
 
 /// Runtime layout requested for a checked data value.

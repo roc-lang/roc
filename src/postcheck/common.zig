@@ -92,9 +92,6 @@ pub const LiteralRejectionKind = LIR.LiteralRejectionKind;
 /// Program-local literal root index; see `LIR.LiteralRootId`.
 pub const LiteralRootId = LIR.LiteralRootId;
 
-/// What one literal root evaluates; see `LIR.LiteralRootSubject`.
-pub const LiteralRootSubject = LIR.LiteralRootSubject;
-
 /// The producer of one compile-time value; see `LIR.ComptimeProducer`.
 pub const ComptimeProducer = LIR.ComptimeProducer;
 

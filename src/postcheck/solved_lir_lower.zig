@@ -512,7 +512,7 @@ const RootEntry = struct {
 const LiteralRootEntry = struct {
     fn_id: Type.FnId,
     module: check.CheckedModule.ModuleId,
-    subject: Common.LiteralRootSubject,
+    site: Common.LiteralRejectionSite,
 };
 
 const LayoutRequest = struct {
@@ -1399,7 +1399,7 @@ const Lowerer = struct {
                 self.literal_roots.appendAssumeCapacity(.{
                     .fn_id = try self.ensureOwnFnSpec(root.fn_id, .finite),
                     .module = root.module,
-                    .subject = root.subject,
+                    .site = root.site,
                 });
             }
         }
@@ -4455,7 +4455,7 @@ const Lowerer = struct {
             try self.result.literal_roots.append(self.allocator, .{
                 .module = root.module,
                 .id = id,
-                .subject = root.subject,
+                .site = root.site,
                 .proc = try self.markReachableFn(root.fn_id),
                 .ret_layout = ret_layout,
                 .plan = try self.constPlanOfType(entry.ret),
@@ -5896,16 +5896,11 @@ const Lowerer = struct {
         var hasher = base.TypeDigestHasher.init();
         hasher.update("roc.proc.comptime-root-accessor.v2");
         hasher.update(&root.module.bytes);
-        // A literal root's id is program-local; its subject names it within
-        // its module: the literal's checked expression, or the value's
-        // checked root. The representation below separates the
-        // specializations of one subject.
+        // A literal root's id is program-local; the literal's checked
+        // expression names it within its module.
         const tag: u8, const index: u32 = switch (root.root) {
             .checked => |checked_root| .{ 0, @intFromEnum(checked_root) },
-            .literal => |literal| switch (self.literal_roots.items[@intFromEnum(literal)].subject) {
-                .conversion => |site| .{ 1, site.checked_expr },
-                .value => |value| .{ 2, @intFromEnum(value.root) },
-            },
+            .literal => |literal| .{ 1, self.literal_roots.items[@intFromEnum(literal)].site.checked_expr },
         };
         hasher.update(&[_]u8{ tag, @truncate(index), @truncate(index >> 8), @truncate(index >> 16), @truncate(index >> 24) });
         hasher.update(&representation.bytes);

@@ -497,7 +497,7 @@ const Lifter = struct {
             try self.output.addLiteralRoot(.{
                 .fn_id = fn_id,
                 .module = root.module,
-                .subject = root.subject,
+                .site = root.site,
             });
         }
 
