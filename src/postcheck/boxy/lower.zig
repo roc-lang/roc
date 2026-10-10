@@ -11906,9 +11906,13 @@ const ProcedureBuilder = struct {
     /// A record parsed by a loop whose field events each select one matched
     /// field. Each field's value parser is built once, in its own join whose
     /// parameter is the state after the field's key; the `Field`, `TryField`,
-    /// and `TryFieldCaseless` events jump to it.
+    /// and `TryFieldCaseless` events jump to it. Every error inside the loop
+    /// writes the parser result into `context.target` and jumps to
+    /// `error_join`, which retains the field names and payload slots and
+    /// forwards that result to `shape_context`.
     const GeneratedRecordParseState = struct {
         shape_context: GeneratedParserShapeContext,
+        error_join: LIR.JoinPointId,
         state: LIR.LocalId,
         field_names_source: GeneratedParserFieldNamesSource,
         parse_call: Plan.GeneratedCodecCallPlan,
@@ -13083,6 +13087,8 @@ const ProcedureBuilder = struct {
             boxyLowerInvariant("generated parse_record_field call disagreed with parser state metadata");
         }
 
+        const error_join = proc.freshJoinPointId();
+        const error_target = try proc.addFrameBoundaryTargetLocalForRep(shape_context.result_rep);
         const cursor = try proc.addGeneratedParserOutputLocalForRep(shape_context.state_rep);
         const counted = try proc.addFrameLocal(.bool);
         const remaining = try proc.addFrameLocal(.u64);
@@ -13090,6 +13096,7 @@ const ProcedureBuilder = struct {
         const evidence = try proc.addFrameLocalForRep(proc.repForTypeRef(parse_arg_types[1]));
         var frame: ParseShapeFrame = .{ .state = .{ .record = .{
             .shape_context = shape_context,
+            .error_join = error_join,
             .state = state,
             .field_names_source = field_names_source,
             .parse_call = parse_call,
@@ -13099,7 +13106,7 @@ const ProcedureBuilder = struct {
                 .encoding = shape_context.encoding,
                 .shape_type = shape_type,
                 .shape_rep = shape_rep,
-                .target = shape_context.result,
+                .target = error_target,
                 .target_rep = shape_context.result_rep,
                 .state_type = shape_context.state_type,
                 .state_rep = shape_context.state_rep,
@@ -13111,7 +13118,7 @@ const ProcedureBuilder = struct {
                 .fields = &.{},
                 .presence = &.{},
                 .join_id = undefined,
-                .next = shape_context.next,
+                .next = try proc.joinJump(error_join),
                 .value = value,
                 .rest = rest,
                 .success = success,
@@ -13378,14 +13385,69 @@ const ProcedureBuilder = struct {
 
         const entry_end = try self.lowerGeneratedRecordEntryEnd(proc, context);
         const head_dispatch = try proc.boolSwitchNoContinuation(context.entry_pending, entry_end, head);
-        const loop_body = try self.result.store.addCFStmt(.{ .join = .{
+        const step_loop = try self.result.store.addCFStmt(.{ .join = .{
             .id = state.step_join,
             .params = LIR.LocalSpan.empty(),
             .body = read_event,
             .remainder = head_dispatch,
         } }, proc.derivedOrigin());
 
-        var initial = try self.lowerGeneratedRecordStart(proc, context, state.state);
+        const maybe_payloads = try self.allocator.alloc(LIR.LocalId, fields.len);
+        defer self.allocator.free(maybe_payloads);
+        const maybe_conditions = try self.allocator.alloc(LIR.LocalId, fields.len);
+        defer self.allocator.free(maybe_conditions);
+        const maybe_masks = try self.allocator.alloc(u64, fields.len);
+        defer self.allocator.free(maybe_masks);
+        for (fields, 0..) |field, index| {
+            maybe_payloads[index] = field.payload;
+            maybe_conditions[index] = presence[index / 64];
+            maybe_masks[index] = @as(u64, 1) << @intCast(index % 64);
+        }
+
+        // The loop's one error continuation. Its retained environment is the
+        // field-name evidence, the field names this worker owns, and the
+        // payload slots, so their cleanup exists once rather than at every
+        // fallible call inside the loop.
+        const retained = try self.allocator.alloc(LIR.LocalId, 1 + fields.len * 2);
+        defer self.allocator.free(retained);
+        var retained_len: usize = 0;
+        retained[retained_len] = context.evidence;
+        retained_len += 1;
+        switch (state.field_names_source) {
+            .captures => for (fields) |field| {
+                retained[retained_len] = field.renamed;
+                retained_len += 1;
+            },
+            .tag_union_spec => {},
+        }
+        for (fields) |field| {
+            retained[retained_len] = field.payload;
+            retained_len += 1;
+        }
+        const error_body = try proc.assignRepresentationBoundaryConsumingSource(
+            state.shape_context.result,
+            context.target,
+            state.shape_context.result_rep,
+            context.target_rep,
+            state.shape_context.next,
+        );
+        const loop_body = try self.result.store.addCFStmt(.{ .join = .{
+            .id = state.error_join,
+            .params = try proc.joinParamSpan(&.{context.target}),
+            .retained = try self.result.store.addLocalSpan(retained[0..retained_len]),
+            .maybe_uninitialized_params = try self.result.store.addLocalSpan(maybe_payloads),
+            .maybe_uninitialized_conditions = try self.result.store.addLocalSpan(maybe_conditions),
+            .maybe_uninitialized_condition_masks = try self.result.store.addU64Span(maybe_masks),
+            .body = error_body,
+            .remainder = step_loop,
+        } }, proc.derivedOrigin());
+
+        // `parse_record_start` runs before the loop holds any payload, so its
+        // error goes straight to the parser result.
+        var start_context = context;
+        start_context.target = state.shape_context.result;
+        start_context.next = state.shape_context.next;
+        var initial = try self.lowerGeneratedRecordStart(proc, start_context, state.state);
         field_index = fields.len;
         while (field_index > 0) {
             field_index -= 1;
@@ -13405,18 +13467,6 @@ const ProcedureBuilder = struct {
         @memcpy(join_params[0..control_params.len], &control_params);
         for (fields, 0..) |field, index| join_params[control_params.len + index] = field.payload;
         for (presence, 0..) |local, index| join_params[control_params.len + fields.len + index] = local;
-
-        const maybe_payloads = try self.allocator.alloc(LIR.LocalId, fields.len);
-        defer self.allocator.free(maybe_payloads);
-        const maybe_conditions = try self.allocator.alloc(LIR.LocalId, fields.len);
-        defer self.allocator.free(maybe_conditions);
-        const maybe_masks = try self.allocator.alloc(u64, fields.len);
-        defer self.allocator.free(maybe_masks);
-        for (fields, 0..) |field, index| {
-            maybe_payloads[index] = field.payload;
-            maybe_conditions[index] = presence[index / 64];
-            maybe_masks[index] = @as(u64, 1) << @intCast(index % 64);
-        }
 
         const join = try self.result.store.addCFStmt(.{ .join = .{
             .id = context.join_id,
@@ -15891,11 +15941,14 @@ const ProcBodyBuilder = struct {
         ids: std.AutoHashMap(DescriptorTemplateDescKey, LIR.BoxyTypeDescId),
         env_ids: std.AutoHashMap(DescriptorTemplateEnvKey, DescriptorTemplateEnvId),
         bindings: std.ArrayList(DescriptorTemplateBinding),
-        forced_refs: []?LIR.LocalId,
+        /// The descriptor local a constructed value forces at a
+        /// representation. A template names few, so the map is sparse.
+        forced_refs: std.AutoHashMapUnmanaged(Plan.TypeRepId, LIR.LocalId) = .empty,
         /// The environment of the root's own instantiation, where descriptor
         /// locals named by representation describe what they were bound to.
         root_env: ?DescriptorTemplateEnvId = null,
-        exact_reps: []?Plan.TypeRepId,
+        /// The actual each currently bound nominal formal stands for.
+        exact_reps: std.AutoHashMapUnmanaged(Plan.TypeRepId, Plan.TypeRepId) = .empty,
         exact_storage: bool,
         env: DescriptorTemplateEnvId = .empty,
         excluded_local: ?LIR.LocalId = null,
@@ -15904,8 +15957,21 @@ const ProcBodyBuilder = struct {
             self.ids.deinit();
             self.env_ids.deinit();
             self.bindings.deinit(allocator);
-            allocator.free(self.forced_refs);
-            allocator.free(self.exact_reps);
+            self.forced_refs.deinit(allocator);
+            self.exact_reps.deinit(allocator);
+        }
+
+        /// Restore `formal` to `outer`, its value before a binding. An
+        /// `outer` representation was read from this map, so its entry is
+        /// still present and restoring it needs no allocation.
+        fn restoreExactRep(self: *DescriptorTemplateContext, formal: Plan.TypeRepId, outer: ?Plan.TypeRepId) void {
+            if (outer) |rep| {
+                const entry = self.exact_reps.getPtr(formal) orelse
+                    boxyLowerInvariant("boxy descriptor template restored a formal it never bound");
+                entry.* = rep;
+            } else {
+                _ = self.exact_reps.remove(formal);
+            }
         }
     };
 
@@ -21729,17 +21795,30 @@ const ProcBodyBuilder = struct {
             .concrete => blk: {
                 const branches = try self.parent.allocator.alloc(LIR.CFSwitchBranch, variants.len);
                 defer self.parent.allocator.free(branches);
+                const variant_count = self.parent.plan.representations.items[@backingInt(source_tag_rep)].tag_variants.len;
+                const dispatched = try self.parent.allocator.alloc(bool, variant_count);
+                defer self.parent.allocator.free(dispatched);
+                @memset(dispatched, false);
                 for (variants, bodies, branches) |variant, body, *branch| {
                     if (variant.tag_rep != source_tag_rep or variant.owner_rep != source_tag_rep) {
                         boxyLowerInvariant("generated parser concrete dispatch referenced a nonlocal row variant");
                     }
+                    if (variant.index >= variant_count or dispatched[variant.index]) {
+                        boxyLowerInvariant("generated parser concrete dispatch repeated or exceeded its union's variants");
+                    }
+                    dispatched[variant.index] = true;
                     branch.* = .{ .value = variant.index, .body = body };
                 }
+                // A dispatch over every variant of the union cannot miss, so
+                // its last variant is the default rather than an impossible
+                // branch.
+                const exhaustive = variants.len == variant_count;
+                const switch_branches = if (exhaustive) branches[0 .. branches.len - 1] else branches;
                 const discriminant = try self.addFrameLocal(.u32);
                 const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
                     .cond = discriminant,
-                    .branches = try self.parent.result.store.addCFSwitchBranches(branches),
-                    .default_branch = default_branch,
+                    .branches = try self.parent.result.store.addCFSwitchBranches(switch_branches),
+                    .default_branch = if (exhaustive) branches[branches.len - 1].body else default_branch,
                     .continuation = null,
                 } }, self.derivedOrigin());
                 break :blk try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
@@ -33402,7 +33481,7 @@ const ProcBodyBuilder = struct {
 
         for (overrides) |override| {
             const override_rep = self.parent.descriptorIdentityRep(override.rep);
-            context.forced_refs[@backingInt(override_rep)] = override.local;
+            try context.forced_refs.put(self.parent.allocator, override_rep, override.local);
         }
 
         const desc: LIR.BoxyDescRef = .{ .static = try self.descriptorTemplateTypeDescForRep(identity_rep, &captures, &context) };
@@ -33586,19 +33665,15 @@ const ProcBodyBuilder = struct {
     }
 
     fn initDescriptorTemplateContext(self: *ProcBodyBuilder, exact_storage: bool) Allocator.Error!DescriptorTemplateContext {
-        const forced_refs = try self.parent.allocator.alloc(?LIR.LocalId, self.parent.plan.representations.items.len);
-        errdefer self.parent.allocator.free(forced_refs);
-        const exact_reps = try self.parent.allocator.alloc(?Plan.TypeRepId, self.parent.plan.representations.items.len);
-        @memset(forced_refs, null);
-        @memset(exact_reps, null);
+        var exact_reps: std.AutoHashMapUnmanaged(Plan.TypeRepId, Plan.TypeRepId) = .empty;
+        errdefer exact_reps.deinit(self.parent.allocator);
         for (self.nominal_formal_bindings.items) |binding| {
-            exact_reps[@backingInt(binding.formal)] = binding.actual;
+            try exact_reps.put(self.parent.allocator, binding.formal, binding.actual);
         }
         return .{
             .ids = std.AutoHashMap(DescriptorTemplateDescKey, LIR.BoxyTypeDescId).init(self.parent.allocator),
             .env_ids = std.AutoHashMap(DescriptorTemplateEnvKey, DescriptorTemplateEnvId).init(self.parent.allocator),
             .bindings = std.ArrayList(DescriptorTemplateBinding).empty,
-            .forced_refs = forced_refs,
             .exact_reps = exact_reps,
             .exact_storage = exact_storage,
         };
@@ -33612,8 +33687,8 @@ const ProcBodyBuilder = struct {
         if (!context.exact_storage and !self.repIsBareDynamic(rep_id)) return rep_id;
 
         var current = rep_id;
-        var remaining = context.exact_reps.len;
-        while (context.exact_reps[@backingInt(current)]) |next| {
+        var remaining = context.exact_reps.count();
+        while (context.exact_reps.get(current)) |next| {
             if (remaining == 0) {
                 boxyLowerInvariant("boxy exact descriptor substitutions contained a cycle");
             }
@@ -33651,7 +33726,7 @@ const ProcBodyBuilder = struct {
             while (substitutions.next()) |substitution| {
                 const formal_rep = substitution.formal_rep orelse continue;
                 const actual = self.descriptorTemplateExactRep(substitution.actual_rep, context);
-                const outer = context.exact_reps[@backingInt(formal_rep)];
+                const outer = context.exact_reps.get(formal_rep);
                 if (formal_rep == actual or outer == actual) continue;
                 try context.bindings.append(self.parent.allocator, .{
                     .formal = formal_rep,
@@ -33659,7 +33734,7 @@ const ProcBodyBuilder = struct {
                     .actual = actual,
                 });
             }
-            try activateDescriptorTemplateBindings(context, bindings_start);
+            try activateDescriptorTemplateBindings(self.parent.allocator, context, bindings_start);
             current = self.parent.descriptorBackingShapeRep(current) orelse return scope;
         }
         boxyLowerInvariant("cyclic exact descriptor storage wrapper");
@@ -33668,11 +33743,12 @@ const ProcBodyBuilder = struct {
     /// Bind the formals of `context.bindings[bindings_start..]`, extending the
     /// environment by each binding.
     fn activateDescriptorTemplateBindings(
+        allocator: Allocator,
         context: *DescriptorTemplateContext,
         bindings_start: usize,
     ) Allocator.Error!void {
         for (context.bindings.items[bindings_start..]) |binding| {
-            context.exact_reps[@backingInt(binding.formal)] = binding.actual;
+            try context.exact_reps.put(allocator, binding.formal, binding.actual);
             const key = DescriptorTemplateEnvKey{
                 .parent = context.env,
                 .formal = binding.formal,
@@ -33695,7 +33771,7 @@ const ProcBodyBuilder = struct {
         while (index > scope.bindings_start) {
             index -= 1;
             const binding = context.bindings.items[index];
-            context.exact_reps[@backingInt(binding.formal)] = binding.outer;
+            context.restoreExactRep(binding.formal, binding.outer);
         }
         context.bindings.shrinkRetainingCapacity(scope.bindings_start);
         context.env = scope.env;
@@ -33838,7 +33914,7 @@ const ProcBodyBuilder = struct {
             // fills, which a nominal backing names by its formal. The value's
             // own descriptor describes its storage there, whatever descriptor
             // the formal's actual type carries.
-            if (context.forced_refs[@backingInt(self.parent.descriptorIdentityRep(rep_id))]) |local| {
+            if (context.forced_refs.get(self.parent.descriptorIdentityRep(rep_id))) |local| {
                 if (context.excluded_local != local) {
                     try appendUniqueLocal(self.parent.allocator, captures, local);
                     return .{ .local = local };
@@ -33858,7 +33934,7 @@ const ProcBodyBuilder = struct {
         const may_reuse_rep_local = shares_identity_storage and may_reuse_whole_descriptor and
             !try self.descriptorTemplateRebindsRep(identity_rep, context);
         if (may_reuse_rep_local) {
-            if (context.forced_refs[@backingInt(identity_rep)]) |local| {
+            if (context.forced_refs.get(identity_rep)) |local| {
                 if (context.excluded_local == local) return try self.templateStaticRef(rep_id, frames, context);
                 try appendUniqueLocal(self.parent.allocator, captures, local);
                 return .{ .local = local };
@@ -34285,14 +34361,14 @@ const ProcBodyBuilder = struct {
         context: *DescriptorTemplateContext,
     ) Allocator.Error!void {
         const actual = self.descriptorTemplateExactRep(actual_rep, context);
-        const outer = context.exact_reps[@backingInt(formal)];
+        const outer = context.exact_reps.get(formal);
         if (formal == actual or outer == actual) return;
         try context.bindings.append(self.parent.allocator, .{
             .formal = formal,
             .outer = outer,
             .actual = actual,
         });
-        context.exact_reps[@backingInt(formal)] = actual;
+        try context.exact_reps.put(self.parent.allocator, formal, actual);
         const key = DescriptorTemplateEnvKey{
             .parent = context.env,
             .formal = formal,
@@ -40557,15 +40633,17 @@ const ProcBodyBuilder = struct {
     }
 
     fn finishTagUnionBoundary(self: *ProcBodyBuilder, state: *TagUnionBoundaryState) Allocator.Error!LIR.CFStmtId {
-        const default_branch = switch (state.kind) {
-            .concrete => state.unreachable_source_variant,
-            .dynamic => try self.parent.result.store.addCFStmt(.runtime_error, self.glueOrigin()),
-        };
+        // Both kinds branch on every variant of the concrete source, so the
+        // switch cannot miss and its last variant is the default.
+        if (state.branches.len != state.source_variants.len or state.branches.len == 0) {
+            boxyLowerInvariant("boxy tag boundary did not branch on every source variant");
+        }
+        const last = state.branches.len - 1;
         const discriminant = try self.addFrameLocal(.u32);
         const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
             .cond = discriminant,
-            .branches = try self.parent.result.store.addCFSwitchBranches(state.branches),
-            .default_branch = default_branch,
+            .branches = try self.parent.result.store.addCFSwitchBranches(state.branches[0..last]),
+            .default_branch = state.branches[last].body,
             .continuation = null,
         } }, self.glueOrigin());
         const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{

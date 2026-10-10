@@ -534,11 +534,15 @@ fn structuralJsonLirStats(
     };
 }
 
-/// Call statements in the whole Boxy-lowered program for a flat JSON record
-/// parser of `field_count` `Str` fields.
-/// Calls in the boxy program for a `Shape` of `field_count` string fields
-/// that `parse_sites` separate functions each parse with `Json.parse`.
-fn boxyStructuralJsonParserCalls(allocator: Allocator, field_count: usize, parse_sites: usize) TestError!usize {
+const BoxyJsonParserCounts = struct {
+    calls: usize = 0,
+    releases: usize = 0,
+};
+
+/// Calls and inserted releases in the whole Boxy-lowered program for a `Shape`
+/// of `field_count` string fields that `parse_sites` separate functions each
+/// parse with `Json.parse`.
+fn boxyStructuralJsonParserCounts(allocator: Allocator, field_count: usize, parse_sites: usize) TestError!BoxyJsonParserCounts {
     var source_buf = std.ArrayList(u8).empty;
     defer source_buf.deinit(allocator);
     try source_buf.appendSlice(allocator, "Shape : {\n");
@@ -578,11 +582,12 @@ fn boxyStructuralJsonParserCalls(allocator: Allocator, field_count: usize, parse
         .boxy,
     );
     defer compiled.deinit(allocator);
-    var calls: usize = 0;
+    var counts = BoxyJsonParserCounts{};
     for (compiled.lowered.view.store.getCFStmts()) |stmt| {
-        if (stmt == .assign_call or stmt == .assign_call_erased or stmt == .assign_call_dict) calls += 1;
+        if (stmt == .assign_call or stmt == .assign_call_erased or stmt == .assign_call_dict) counts.calls += 1;
+        if (stmt == .decref or stmt == .decref_if_initialized) counts.releases += 1;
     }
-    return calls;
+    return counts;
 }
 
 fn structuralJsonLirPeakBytes(field_count: usize) TestError!usize {
@@ -2054,8 +2059,8 @@ test "issue 11910 boxy JSON record parser lowers each field's value parser once"
     // they jump to. A field therefore adds two calls: the parser's
     // constructor renaming its name, and the one call parsing its value.
     const allocator = std.testing.allocator;
-    const four = try boxyStructuralJsonParserCalls(allocator, 4, 1);
-    const eight = try boxyStructuralJsonParserCalls(allocator, 8, 1);
+    const four = (try boxyStructuralJsonParserCounts(allocator, 4, 1)).calls;
+    const eight = (try boxyStructuralJsonParserCounts(allocator, 8, 1)).calls;
     try std.testing.expectEqual(@as(usize, 2 * 4), eight - four);
 }
 
@@ -2065,9 +2070,21 @@ test "issue 11910 boxy JSON parses of one shape share its generated parser" {
     // second function's parser construction still renames each field, so it
     // adds one call per field rather than a second value parser per field.
     const allocator = std.testing.allocator;
-    const narrow_second = try boxyStructuralJsonParserCalls(allocator, 4, 2) - try boxyStructuralJsonParserCalls(allocator, 4, 1);
-    const wide_second = try boxyStructuralJsonParserCalls(allocator, 8, 2) - try boxyStructuralJsonParserCalls(allocator, 8, 1);
+    const narrow_second = (try boxyStructuralJsonParserCounts(allocator, 4, 2)).calls - (try boxyStructuralJsonParserCounts(allocator, 4, 1)).calls;
+    const wide_second = (try boxyStructuralJsonParserCounts(allocator, 8, 2)).calls - (try boxyStructuralJsonParserCounts(allocator, 8, 1)).calls;
     try std.testing.expectEqual(@as(usize, 4), wide_second - narrow_second);
+}
+
+test "issue 11910 boxy JSON record parser releases its fields once on error" {
+    // Every error inside the record loop jumps to one error join that retains
+    // the field names and payload slots, so their releases exist once rather
+    // than at each fallible call: the program's releases grow linearly with
+    // the record's width.
+    const allocator = std.testing.allocator;
+    const four = (try boxyStructuralJsonParserCounts(allocator, 4, 1)).releases;
+    const eight = (try boxyStructuralJsonParserCounts(allocator, 8, 1)).releases;
+    const sixteen = (try boxyStructuralJsonParserCounts(allocator, 16, 1)).releases;
+    try std.testing.expectEqual(2 * (eight - four), sixteen - eight);
 }
 
 test "issue 10979 shared JSON record continuations preserve field semantics" {
