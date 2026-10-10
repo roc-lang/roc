@@ -127,6 +127,64 @@ receives an explicit trust-required error. Request registrations declare
 whether they require trust. This gate precedes compiler entry; it does not skip
 stages or produce partially checked modules as checked module data.
 
+## REPL formatter plugins
+
+`roc repl --formatter FILE` uses a checked Roc module as a line-oriented
+frontend. The module exposes `decode : Str -> Try(Str, Str)` and
+`encode : { result : Str, stdout : Str, diagnostics : Str, value : [Other, Tag({ name : Str, payload : Try(Str, {}) })] } -> Str`.
+`Ok(source)` evaluates a cell in the process's persistent language session;
+`Err(reply)` answers immediately without changing that session. Each input line
+receives one output line. Replies must not contain literal newlines. EOF ends
+the session. Wire protocols, including JSON parsing and serialization, belong
+to the formatter, never to compiler-side dispatch.
+
+A compiler-owned, annotated wrapper checks both functions' signatures before
+lowering. The formatter is compiled once, in a separate scope, with sibling
+imports relative to its file. Calls use the LIR interpreter and explicit tuple
+field placements from committed layouts. User code cannot shadow formatter
+definitions. Compiler diagnostics for invalid plugins go to stderr and abort
+startup; language diagnostics from cells are passed to `encode` without color.
+Cells commit accepted definitions in order, stop at the first error, and expose
+the last expression's inspected text plus captured debug output. A standalone
+`:t <identifier>` line between statements uses the terminal REPL's checked
+binding type query without evaluating the binding. It replaces the cell's text
+result and sets its semantic value to `Other`; subsequent statements still run.
+
+Formatter evaluation explicitly publishes a tuple containing inspected text and
+its original value, evaluated once. A hygienic synthetic local binder is chosen
+using parsed identifiers. The declared tuple root is read from the finalized
+checked `ConstStore`, never from inspection text or runtime layout guesses.
+`value` is `Tag({name, payload})` for a structural top-level tag, and `Other`
+otherwise. `payload` is `Ok(text)` only for exactly one Str payload; other
+arities and types produce `Err({})`. Nominal wrappers and nested tags are not
+implicitly unwrapped. Display conventions and MIME selection belong entirely
+to plugins. The regular terminal REPL retains its string-only root.
+
+An explicit `repl_expr` is an executable entry with no subsequent consuming
+use site. At its producer-designated zero-argument wrapper's generalization
+boundary, result data does not protect literal variables from defaulting.
+Functions contained in that result still protect their full signatures and
+constraint relations, because they have future call sites. Body-only scheme
+relations retain their normal protection; only returned literals and their
+connected constraints lose protection. The root keeps its
+ordinary scheme ownership, constraint capture, and generalization machinery;
+only its literal-defaulting protection set differs from a reusable function's.
+Thus retaining `1 + 2 + 3` alongside inspected text defaults it to `Dec` just
+as inspecting it alone does. Explicit annotations still constrain defaulting.
+This rule uses the frontend's exact lambda identity, never a source name.
+Checked publication schedules the root independently of the context-free
+concreteness test used for reusable constants. Entry lowering consumes the
+checked literal and row defaults and instantiates the callable graph, as it
+does for a `dev_expr`. The frontend supplies the exact enclosing function
+binding pattern with the extracted body. Checked publication retains it as the
+root's `source_pattern`, so the entry wrapper inherits the original lexical
+scheme and dispatch-evidence parameters, including literal defaults. It never
+extracts a body while discarding the evidence needed to execute that body.
+This permits unannotated literals, structural tags, and function values in a
+retained REPL result. Existing executable-root typing,
+effect rejection, and diagnostic exclusion still apply; no solved types are
+rewritten and no lowering stage reclassifies root eligibility.
+
 ## Core Principles
 
 Compiler stages after parsing and error reporting must not use workarounds,
@@ -8152,6 +8210,19 @@ adding or citing a member, which is greppable and reviewable. A new
 probe-then-mutate rewrite requires a declared rule in this document first;
 "it makes a test pass" is not a rule.
 
+### Executable Result Literal Defaulting
+
+A producer-designated compile-time entry's result data has no future consuming
+use site. After computing ordinary boundary protection,
+`unprotectExecutableResultLiterals` removes returned data literals and variables
+reachable through their constraints, except variables also exposed by a
+function contained in the result. Body-only scheme relations keep their normal
+protection and diagnostics. The ordinary boundary literal-defaulting engine
+then commits defaults and resolves dispatch before scheme publication;
+constraint capture and error checking remain unchanged. Ordinary reusable
+definitions retain full signature protection. This is a boundary policy, not
+a post-check type rewrite or a diagnostic suppression.
+
 ### Expected Shape Context
 
 An expected aggregate shape guides construction but introduces no new value
@@ -11213,6 +11284,12 @@ site to any family below must classify it here.
 
 Other solved-graph mutations:
 
+- `unprotectExecutableResultLiterals`—policy: Executable Result Literal
+  Defaulting (above). This changes only the boundary protection set; the
+  existing literal-defaulting engine performs the resulting unifications.
+  Retained arithmetic, explicit numeric types, reusable polymorphic helpers,
+  returned functions, and invalid arithmetic are pinned by REPL tests.
+
 - `recordForMerge` / `tagUnionForMerge`—mechanism: row-extension
   preservation during ordinary unification. Both operand equivalence classes
   acquire the merged content, so an extension reaching either operand must
@@ -14201,9 +14278,11 @@ Checked-module construction computes the `contains_diagnostic_error` column
 once every source runtime error and rejected binding use is explicit in the
 bodies: after rejected procedure uses are rewritten to `runtime_error` and
 before template references are sealed, because sealing excludes erroneous sites
-from the specialization-interface relation table. Compile-time roots take their
+from the specialization-interface relation table. Reusable compile-time roots take their
 context-free request eligibility from solved types when the root table is
-built, and each computation of the column only removes eligibility. Runtime
+built. Explicit `repl_expr` entries are scheduled in their executable defaulting
+context (REPL formatter plugins). Each computation of the diagnostic column
+only removes eligibility. Runtime
 divergence is computed once, after total dispatch resolution, because rejected
 and unreachable dispatch resolutions diverge.
 
@@ -16152,7 +16231,12 @@ parent rather than from its own key: a nested descriptor read for aggregate,
 list and box positions, and a tag payload read
 (`ErasedArgDescRead.tag_payload`) for a variant payload such as a presence
 slot's `Present` value. Only a descriptor no earlier parameter holds is read
-from its call-site key.
+from its call-site key. The representation graph can share a child across
+multiple parents. When several earlier parameters contain the exact same
+descriptor identity, including nominal methods and opacity, the ABI uses the
+lowest published parameter index as the canonical parent. Every candidate is an
+exact projection of that identity; shared backing storage, equal sizes, or
+similar layouts never establish this relationship.
 
 An evidence-only descriptor collected inside an evidence dispatcher's
 representation, such as a presence slot of a record dispatcher, takes the
@@ -19200,6 +19284,18 @@ Dead `Box` lenders are the explicit exception already modeled by the
 consuming/borrowing `Box.unbox` operation pair; they do not extend a borrow
 through the mutation merely because control flow separates unbox and re-box.
 
+### Tag Union Descriptors at Branch Joins
+
+Boxy lowering reserves a tag-union `if`/`match` result's descriptor local
+before lowering any branch when its committed representation includes an
+aggregate payload. Tag constructors materialize descriptors for these payloads
+regardless of whether their types are concrete. The descriptor is carried
+through the join with the value, and every variant initializes it, including
+zero-payload tags and tags with zero-sized payloads. A descriptor introduced
+while lowering one branch must never retroactively become an uninitialized
+join parameter on another branch. The reservation follows the union's explicit
+payload representations, independently of branch visitation order.
+
 ### Field Takes From Dying Aggregates
 
 A payload read pays a retain whenever its result must be owned, because the
@@ -20515,15 +20611,17 @@ checked CIR
   -> store eval result in ConstStore
 ```
 
-An interactive REPL expression is an explicit `.repl_expr` compile-time root
-whose checked body returns `Str.inspect(expression)`. The evaluation helper
+An interactive REPL expression is an explicit `.repl_expr` compile-time root.
+The terminal frontend's checked body returns `Str.inspect(expression)`; a
+formatter frontend retains `(inspection_text, value)` from one evaluation, as
+described in REPL formatter plugins. The evaluation helper
 that generated the zero-argument wrapper resolves its asserted body once and
 puts that exact expression identity in the root request; `CheckedModuleBuilder`
 and `CompileTimeFinalization` consume the identity directly. Checking retains the zero-argument
 REPL-root context so inspecting an
 uncalled constrained polymorphic function does not force its body, but checking
-finalization evaluates the selected body itself and stores its `Str` result in
-the root payload. This payload is not a source-visible top-level constant and is
+finalization evaluates the selected body itself and stores its declared result
+shape in the root payload. This payload is not a source-visible top-level constant and is
 not installed in the module's const-template tables. An effectful REPL body is a
 checking error; it is never silently demoted to a runtime root. Runtime backend
 selection and specialization settings therefore do not affect ordinary REPL

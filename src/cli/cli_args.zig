@@ -357,6 +357,7 @@ pub const ExperimentalLspArgs = struct {
 
 /// Arguments for `roc repl`
 pub const ReplArgs = struct {
+    formatter: ?[]const u8 = null,
     opt: OptLevel = default_dev_opt,
     specialization_strategy: ?SpecializationStrategy = null,
 };
@@ -889,6 +890,7 @@ const commands = [_]Command{
         .summary = "Launch the interactive Read Eval Print Loop (REPL)",
         .usage = " [OPTIONS]",
         .flags = &.{
+            .{ .name = "--formatter", .form = .separate, .field = "formatter", .value_name = "<FILE>", .help = "Use a Roc module to decode input lines and encode evaluation results" },
             .{ .name = "--opt", .form = .attached, .field = "opt", .value_name = "<opt>", .help = "Execution mode:" },
             specialize_flag,
         },
@@ -2013,6 +2015,16 @@ test "roc check" {
 test "roc repl" {
     const gpa = testing.allocator;
     {
+        const result = try parse(gpa, testing.io, &.{ "repl", "--formatter", "a formatter.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("a formatter.roc", result.repl.formatter.?);
+    }
+    {
+        const result = try parse(gpa, testing.io, &.{ "repl", "--formatter" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.missing_flag_value, std.meta.activeTag(result.problem));
+    }
+    {
         const result = try parse(gpa, testing.io, &[_][]const u8{"repl"});
         defer result.deinit(gpa);
         try testing.expectEqual(.repl, std.meta.activeTag(result));
@@ -3006,6 +3018,7 @@ test "golden help: roc repl --help" {
         \\Usage: roc repl [OPTIONS]
         \\
         \\Options:
+        \\      --formatter <FILE>     Use a Roc module to decode input lines and encode evaluation results
         \\      --opt=<opt>            Execution mode: dev (native dev backend, fast compilation), interpreter (interpreted, no code generation), speed (LLVM, optimized for execution speed), or size (LLVM, optimized for binary size) [default: dev]
         \\      --specialize=<yes|no>  Use lambda-set specialization (yes, default) or experimental boxy lowering (no)
         \\  -h, --help                 Print help

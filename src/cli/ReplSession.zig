@@ -73,6 +73,9 @@ definitions: DefinitionStore,
 virtual_modules: VirtualModuleStore,
 import_policy: ImportPolicy,
 last_events: []eval.InspectedRun.Event = &.{},
+capture_result_value: bool = false,
+last_value: ResultValue = .{},
+
 builtin_modules: *eval.BuiltinModules,
 /// Whether this session owns `builtin_modules` (and must deinit it). Tests can
 /// borrow a shared, already-published instance to avoid re-publishing the
@@ -81,6 +84,24 @@ owns_builtin_modules: bool,
 /// Directory that imported sibling modules are resolved against. Defaults to the
 /// process working directory (`.`); tests point it at a fixture directory.
 module_root: []const u8 = ".",
+
+/// An explicit projection of the checked top-level value. No display tag names
+/// or wire-format conventions belong to the compiler.
+pub const ResultValue = struct {
+    tag_name: ?[]const u8 = null,
+    string_payload: ?[]const u8 = null,
+
+    pub fn deinit(self: ResultValue, allocator: Allocator) void {
+        if (self.tag_name) |bytes| allocator.free(bytes);
+        if (self.string_payload) |bytes| allocator.free(bytes);
+    }
+};
+
+pub fn takeResultValue(self: *ReplSession) ResultValue {
+    const value = self.last_value;
+    self.last_value = .{};
+    return value;
+}
 
 /// Outcome of evaluating a single REPL input line.
 pub const StepResult = union(enum) {
@@ -146,6 +167,18 @@ pub const Command = union(enum) {
     type_of: []const u8,
     exit,
 };
+
+/// Parse the read-only type query shared by terminal and formatter frontends.
+/// Commands occupy a physical line and are recognized only between statements.
+pub fn parseTypeQuery(input: []const u8) ?[]const u8 {
+    const line = std.mem.trim(u8, input, " \t\r\n");
+    if (line.len <= 2 or !std.mem.startsWith(u8, line, ":t") or
+        (line[2] != ' ' and line[2] != '\t') or std.mem.indexOfScalar(u8, line, '\n') != null)
+    {
+        return null;
+    }
+    return std.mem.trim(u8, line[3..], " \t");
+}
 
 pub fn init(
     allocator: Allocator,
@@ -217,6 +250,8 @@ pub fn deinit(self: *ReplSession) void {
 const ImportPolicy = enum { filesystem, virtual_only };
 
 fn clearLastEvents(self: *ReplSession) void {
+    self.last_value.deinit(self.allocator);
+    self.last_value = .{};
     for (self.last_events) |*event| event.deinit(self.allocator);
     self.allocator.free(self.last_events);
     self.last_events = &.{};
@@ -260,6 +295,42 @@ fn prePublishedBuiltin(self: *ReplSession) eval.Inspected.PrePublishedBuiltin {
         .env = self.builtin_modules.builtin_module.env,
         .indices = self.builtin_modules.builtin_indices,
         .artifact = &self.builtin_modules.checked_artifact,
+    };
+}
+
+/// Create an independent scope sharing this session's published builtins.
+/// The parent must outlive the returned session.
+pub fn sibling(self: *ReplSession) ReplSession {
+    var result = initBorrowingBuiltins(self.allocator, self.roc_ctx, self.backend_kind, self.builtin_modules);
+    result.specialization_strategy = self.specialization_strategy;
+    return result;
+}
+
+/// Compile a frontend plugin against this scope's imports. Diagnostics retain
+/// their checked resources; the caller renders them before attempting execution.
+pub fn compileFrontend(self: *ReplSession, source: []const u8) ReplStepError!union(enum) {
+    compiled: eval.Inspected.CompiledTargetProgram,
+    diagnostics: eval.Inspected.ParsedResources,
+    import_error: []u8,
+} {
+    const imports = switch (try self.resolveImports()) {
+        .resolved => |sources| sources,
+        .failed => |message| return .{ .import_error = message },
+    };
+    defer self.freeModuleSources(imports);
+    return switch (try eval.Inspected.compileProgramForTargetWithBuiltinAndContextReporting(
+        self.allocator,
+        self.roc_ctx.std_io,
+        .module,
+        source,
+        imports,
+        .native,
+        self.prePublishedBuiltin(),
+        self.roc_ctx,
+        self.specialization_strategy,
+    )) {
+        .compiled => |program| .{ .compiled = program },
+        .diagnostics => |resources| .{ .diagnostics = resources },
     };
 }
 
@@ -317,7 +388,7 @@ pub fn stepWithConfig(self: *ReplSession, input: []const u8, report_config: repo
 /// presentation strings.
 pub fn stepLanguageWithConfig(self: *ReplSession, input: []const u8, report_config: reporting.ReportingConfig) ReplStepError!LanguageStepResult {
     self.clearLastEvents();
-    const line = std.mem.trim(u8, input, " \t\r\n");
+    const line = std.mem.trimStart(u8, input, " \t\r\n");
     if (line.len == 0) return .none;
 
     const input_info = switch (try self.inputStatus(line)) {
@@ -433,28 +504,41 @@ pub fn splitInputIntoStatementsWithAllocator(allocator: Allocator, input: []cons
     var current = std.ArrayList(u8).empty;
     defer current.deinit(allocator);
 
+    var multiline_string_at_eof = false;
     var lines = std.mem.splitScalar(u8, input, '\n');
     while (lines.next()) |raw_line| {
-        const trimmed_line = std.mem.trimEnd(u8, raw_line, " \t\r");
+        if (multiline_string_at_eof and !lineStartsMultilineString(raw_line)) {
+            try result.append(allocator, try allocator.dupe(u8, std.mem.trimStart(u8, current.items, " \t\r\n")));
+            current.clearRetainingCapacity();
+            multiline_string_at_eof = false;
+        }
+        const trimmed_line = std.mem.trimEnd(u8, raw_line, "\r");
         if (std.mem.trim(u8, trimmed_line, " \t\r\n").len == 0 and current.items.len == 0) {
+            continue;
+        }
+
+        if (current.items.len == 0 and parseTypeQuery(trimmed_line) != null) {
+            try result.append(allocator, try allocator.dupe(u8, trimmed_line));
             continue;
         }
 
         if (current.items.len > 0) try current.append(allocator, '\n');
         try current.appendSlice(allocator, trimmed_line);
 
-        const candidate = std.mem.trim(u8, current.items, " \t\r\n");
+        const candidate = std.mem.trimStart(u8, current.items, " \t\r\n");
         if (candidate.len == 0) continue;
         switch (try inputStatusWithAllocator(allocator, candidate)) {
-            .complete => {
+            .complete => |info| {
+                multiline_string_at_eof = info.multiline_string_at_eof;
+                if (multiline_string_at_eof) continue;
                 try result.append(allocator, try allocator.dupe(u8, candidate));
                 current.clearRetainingCapacity();
             },
-            .incomplete, .invalid => {},
+            .incomplete, .invalid => multiline_string_at_eof = false,
         }
     }
 
-    const remaining = std.mem.trim(u8, current.items, " \t\r\n");
+    const remaining = std.mem.trimStart(u8, current.items, " \t\r\n");
     if (remaining.len > 0) {
         try result.append(allocator, try allocator.dupe(u8, remaining));
     }
@@ -876,7 +960,8 @@ fn printDefs(self: *ReplSession, use_color: bool) ReplStepError![]u8 {
     return try out.toOwnedSlice(self.allocator);
 }
 
-fn printTypeOfVar(self: *ReplSession, name: []const u8, use_color: bool) ReplStepError![]u8 {
+/// Render a stored binding's checked type without evaluating its value.
+pub fn printTypeOfVar(self: *ReplSession, name: []const u8, use_color: bool) ReplStepError![]u8 {
     var out = std.ArrayList(u8).empty;
     defer out.deinit(self.allocator);
 
@@ -1428,12 +1513,31 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
     const definitions = try self.definitionsSource();
     defer self.allocator.free(definitions);
 
-    // Checking preserves the REPL semantics of this zero-argument expression
-    // root, while checked publication selects its body for compile-time
-    // evaluation and archives the resulting Str directly in ConstStore.
-    const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = || Str.inspect(({s}))\n", .{ definitions, expr });
+    if (!self.capture_result_value) {
+        const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = || Str.inspect((\n{s}\n))\n", .{ definitions, expr });
+        defer self.allocator.free(source);
+        return self.evaluateMainSource(source, report_config, .text);
+    }
+
+    // Intern the user's tokens to choose a hygienic local binder that cannot
+    // capture a user identifier or shadow an existing definition.
+    const user_source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = || (\n{s}\n)\n", .{ definitions, expr });
+    defer self.allocator.free(user_source);
+    var env = try ModuleEnv.init(self.allocator, user_source);
+    defer env.deinit();
+    const ast = try parse.file(self.allocator, &env.common);
+    defer ast.deinit();
+    var name_buffer: [64]u8 = undefined;
+    var index: usize = 0;
+    const name = while (true) : (index += 1) {
+        const candidate = std.fmt.bufPrint(&name_buffer, "roc_repl_value_{d}", .{index}) catch unreachable;
+        if (env.common.findIdent(candidate) == null) break candidate;
+    };
+    // Evaluate once and publish both inspection text and the original value as
+    // explicit tuple fields in ConstStore. The projection uses semantic nodes.
+    const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = || {{\n{s} = (\n{s}\n)\n(Str.inspect({s}), {s})\n}}\n", .{ definitions, name, expr, name, name });
     defer self.allocator.free(source);
-    return self.evaluateMainSource(source, report_config);
+    return self.evaluateMainSource(source, report_config, .value_and_text);
 }
 
 /// Evaluate a value-less statement (`expect`, `for`, `while`) by running it
@@ -1444,10 +1548,10 @@ fn evaluateStatement(self: *ReplSession, statement: []const u8, report_config: r
 
     const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = || {{\n{s}\nStr.inspect({{}})\n}}\n", .{ definitions, statement });
     defer self.allocator.free(source);
-    return self.evaluateMainSource(source, report_config);
+    return self.evaluateMainSource(source, report_config, .text);
 }
 
-fn evaluateMainSource(self: *ReplSession, source: []const u8, report_config: reporting.ReportingConfig) ReplStepError!StepResult {
+fn evaluateMainSource(self: *ReplSession, source: []const u8, report_config: reporting.ReportingConfig, result_shape: enum { text, value_and_text }) ReplStepError!StepResult {
     const import_sources = switch (try self.resolveImports()) {
         .resolved => |s| s,
         .failed => |msg| return .{ .diagnostic = msg },
@@ -1490,7 +1594,27 @@ fn evaluateMainSource(self: *ReplSession, source: []const u8, report_config: rep
         ) };
     }
 
-    const output = try eval.Inspected.finalizedComptimeReplStr(&resources);
+    const output = switch (result_shape) {
+        .text => try eval.Inspected.finalizedComptimeReplStr(&resources),
+        .value_and_text => blk: {
+            const store = &resources.checked_artifact.const_store;
+            const tuple = store.get(eval.Inspected.finalizedComptimeReplValue(&resources)).tuple;
+            std.debug.assert(tuple.len == 2);
+            switch (store.get(tuple[1])) {
+                .tag => |tag| {
+                    self.last_value.tag_name = try self.allocator.dupe(u8, tag.tag_name);
+                    if (tag.payloads.len == 1) {
+                        const payload = store.get(tag.payloads[0]);
+                        if (payload == .str) {
+                            self.last_value.string_payload = try self.allocator.dupe(u8, store.strBytes(payload.str));
+                        }
+                    }
+                },
+                else => {},
+            }
+            break :blk eval.Inspected.finalizedConstStr(&resources, tuple[0]);
+        },
+    };
     var visible = std.Io.Writer.Allocating.init(self.allocator);
     defer visible.deinit();
     try base.bidi.writeVisible(&visible.writer, output);
@@ -1601,6 +1725,8 @@ pub const DefinitionKind = enum {
 /// What the session made of an input line, used to label transcript entries.
 pub const InputInfo = struct {
     kind: InputKind,
+    /// Valid at EOF, but the next physical line can extend this string.
+    multiline_string_at_eof: bool = false,
     definition_kind: DefinitionKind = .value,
     name: ?[]const u8 = null,
     file_import: bool = false,
@@ -1651,64 +1777,78 @@ pub fn inputStatusWithAllocator(allocator: Allocator, line: []const u8) Allocato
     }
 
     const statement = ast.store.getStatement(@fromBackingInt(@intCast(ast.root_node_idx)));
-    return .{
-        .complete = switch (statement) {
-            .expr,
-            .crash,
-            .dbg,
-            .@"return",
-            .@"break",
-            => .{ .kind = .expression },
-            .expect,
-            .@"for",
-            .@"while",
-            => .{ .kind = .statement },
-            .decl => |decl| .{
-                .kind = .definition,
-                .definition_kind = .value,
-                .name = declarationName(ast, decl.pattern),
-            },
-            .@"var" => |v| .{
-                .kind = .definition,
-                .definition_kind = .value,
-                .name = ast.resolve(v.name),
-            },
-            .type_anno => |anno| .{
-                .kind = .definition,
-                .definition_kind = .annotation,
-                .name = ast.resolve(anno.name),
-            },
-            .type_decl => |decl| blk: {
-                const header = ast.store.getTypeHeader(decl.header) catch break :blk .{
-                    .kind = .definition,
-                    .definition_kind = .type_decl,
-                    .name = null,
-                };
-                break :blk .{
-                    .kind = .definition,
-                    .definition_kind = .type_decl,
-                    .name = ast.resolve(header.name),
-                };
-            },
-            .import => |import| .{
-                .kind = .definition,
-                .definition_kind = .import,
-                .name = if (import.alias_tok) |tok|
-                    ast.resolve(tok)
-                else if (import.target.nested_start_tok) |nested_start|
-                    ast.resolve(nested_start + import.target.nested_len - 1)
-                else
-                    ast.resolve(import.target.module_name_tok),
-            },
-            .file_import => |file_import| .{
-                .kind = .definition,
-                .definition_kind = .import,
-                .name = ast.resolve(file_import.name_tok),
-                .file_import = true,
-            },
-            .malformed => return .invalid,
+    var info: InputInfo = switch (statement) {
+        .expr,
+        .crash,
+        .dbg,
+        .@"return",
+        .@"break",
+        => .{ .kind = .expression },
+        .expect,
+        .@"for",
+        .@"while",
+        => .{ .kind = .statement },
+        .decl => |decl| .{
+            .kind = .definition,
+            .definition_kind = .value,
+            .name = declarationName(ast, decl.pattern),
         },
+        .@"var" => |v| .{
+            .kind = .definition,
+            .definition_kind = .value,
+            .name = ast.resolve(v.name),
+        },
+        .type_anno => |anno| .{
+            .kind = .definition,
+            .definition_kind = .annotation,
+            .name = ast.resolve(anno.name),
+        },
+        .type_decl => |decl| blk: {
+            const header = ast.store.getTypeHeader(decl.header) catch break :blk .{
+                .kind = .definition,
+                .definition_kind = .type_decl,
+                .name = null,
+            };
+            break :blk .{
+                .kind = .definition,
+                .definition_kind = .type_decl,
+                .name = ast.resolve(header.name),
+            };
+        },
+        .import => |import| .{
+            .kind = .definition,
+            .definition_kind = .import,
+            .name = if (import.alias_tok) |tok|
+                ast.resolve(tok)
+            else if (import.target.nested_start_tok) |nested_start|
+                ast.resolve(nested_start + import.target.nested_len - 1)
+            else
+                ast.resolve(import.target.module_name_tok),
+        },
+        .file_import => |file_import| .{
+            .kind = .definition,
+            .definition_kind = .import,
+            .name = ast.resolve(file_import.name_tok),
+            .file_import = true,
+        },
+        .malformed => return .invalid,
     };
+    const tokens = ast.tokens.tokens.slice();
+    if (tokens.len >= 2) {
+        const last = tokens.get(tokens.len - 2);
+        // A closed quoted string ends in StringEnd. A multiline string's
+        // final StringPart instead reaches EOF, including empty/interpolated
+        // tails. A physical newline after it explicitly ends the input.
+        info.multiline_string_at_eof = last.tag == .StringPart and
+            last.region.end.offset == line.len;
+    }
+    return .{ .complete = info };
+}
+
+/// These are the two lexical prefixes for a multiline string's next line.
+pub fn lineStartsMultilineString(line: []const u8) bool {
+    const trimmed = std.mem.trimStart(u8, line, " \t");
+    return std.mem.startsWith(u8, trimmed, "\\\\") or std.mem.startsWith(u8, trimmed, "\"\"\"");
 }
 
 fn inputDiagnosticsAreIncomplete(ast: *const parse.AST) bool {
@@ -3398,5 +3538,26 @@ test "Repl bidi rejection preserves definitions and escaped values remain legal"
         const expected = try std.fmt.allocPrint(testing.allocator, "{d}", .{control.utf8.len});
         defer testing.allocator.free(expected);
         try testing.expectEqualStrings(expected, result.output);
+    }
+}
+
+test "splitInputIntoStatements - contiguous multiline string lines stay whole" {
+    const definition = "str =\n  \\\\first line\n  \\\\second line  ";
+    try expectSplit(definition, &.{definition});
+    try expectSplit(definition ++ "\nstr", &.{ definition, "str" });
+    try expectSplit("\\\\first\n\\\\\n\\\\third", &.{"\\\\first\n\\\\\n\\\\third"});
+    try expectSplit("\\\\hello ${\"world\"}\n\\\\next", &.{"\\\\hello ${\"world\"}\n\\\\next"});
+}
+
+test "inputStatus - multiline string EOF is extensible" {
+    for ([_][]const u8{ "\\\\first", "str =\n  \\\\first", "\\\\", "\\\\${\"hi\"}" }) |source| {
+        const status = try inputStatusWithAllocator(testing.allocator, source);
+        try testing.expect(status == .complete);
+        try testing.expect(status.complete.multiline_string_at_eof);
+    }
+    for ([_][]const u8{ "\"quoted\"", "42", "\\\\first\n", "(\n\\\\first\n)" }) |source| {
+        const status = try inputStatusWithAllocator(testing.allocator, source);
+        try testing.expect(status == .complete);
+        try testing.expect(!status.complete.multiline_string_at_eof);
     }
 }

@@ -17161,6 +17161,13 @@ fn isCompileTimeExecutableRootDef(self: *const Self, def_idx: CIR.Def.Idx) bool 
     return false;
 }
 
+fn isCompileTimeExecutableRootScheme(self: *const Self, owner: Var) bool {
+    for (self.compile_time_executable_roots.items) |root| {
+        if (ModuleEnv.varFrom(root.lambda) == owner) return true;
+    }
+    return false;
+}
+
 // dependency-ordered driver //
 
 /// Compute the module's dependency-ordered checking plan: the SCC condensation
@@ -38273,6 +38280,33 @@ fn reportDerivedCodecOpenRecord(
     try self.markStaticDispatchRejected(constraint);
 }
 
+/// Returned data literals of an executable entry have no future consuming
+/// use site. Unprotect their connected constraints for ordinary defaulting,
+/// except variables also exposed by a function contained in the result.
+/// Body-only scheme relations keep their ordinary protection and diagnostics.
+fn unprotectExecutableResultLiterals(self: *Self, interface: Var) Allocator.Error!void {
+    const result = self.zeroArgFunctionReturnVar(interface) orelse unreachable;
+    var data_vars = collections.DenseMap(Var, void).init(self.gpa);
+    defer data_vars.deinit();
+    var literals = collections.DenseMap(Var, void).init(self.gpa);
+    defer literals.deinit();
+    var functions = collections.DenseMap(Var, void).init(self.gpa);
+    defer functions.deinit();
+    try self.collectDataReachableVars(result, &data_vars);
+    var iter = data_vars.keyIterator();
+    while (iter.next()) |var_| {
+        if (self.varIsFunctionType(var_.*)) {
+            try self.collectReachableVars(var_.*, &functions);
+        } else if (self.varLiteralKind(var_.*) != null) {
+            try self.collectReachableVars(var_.*, &literals);
+        }
+    }
+    var literal_iter = literals.keyIterator();
+    while (literal_iter.next()) |var_| {
+        if (!functions.contains(var_.*)) _ = self.boundary_reachable_vars.remove(var_.*);
+    }
+}
+
 /// `defaultLiteralsAtGeneralizationBoundary` for a whole binding group: the
 /// reachable protection set is seeded from every member's root, so a literal
 /// reachable from any member's signature stays open across the shared
@@ -38373,6 +38407,12 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
     var relation_iter = self.scheme_relation_reachable_vars.keyIterator();
     while (relation_iter.next()) |var_| {
         try self.boundary_reachable_vars.put(var_.*, {});
+    }
+
+    for (roots) |root| {
+        if (self.isCompileTimeExecutableRootScheme(root.owner)) {
+            try self.unprotectExecutableResultLiterals(root.interface);
+        }
     }
 
     // Default every unreachable candidate through the shared component machinery—

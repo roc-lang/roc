@@ -16355,7 +16355,7 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
     const stdin = std.Io.File.stdin();
     const stdin_is_tty = stdin.isTty(ctx.io.std_io) catch false;
     const stdout_is_tty = std.Io.File.stdout().isTty(ctx.io.std_io) catch false;
-    const mode: ReplMode = if (stdin_is_tty and stdout_is_tty) .interactive else .batch;
+    const mode: ReplMode = if (repl_args.formatter == null and stdin_is_tty and stdout_is_tty) .interactive else .batch;
     const report_config = replReportingConfig(ctx, mode);
     const use_color = mode == .interactive and ctx.usesColor(.stdout);
 
@@ -16387,6 +16387,14 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
     );
     defer session.deinit();
 
+    if (repl_args.formatter) |path| {
+        @import("ReplFormatter.zig").run(ctx, &session, path) catch |err| {
+            try ctx.io.stderr().print("REPL formatter `{s}` failed: {s}\n", .{ path, @errorName(err) });
+            return error.CliError;
+        };
+        return;
+    }
+
     if (mode == .interactive) {
         try stdout.writeAll(if (use_color) REPL_WELCOME_COLOR else REPL_WELCOME_PLAIN);
         try stdout.writeAll(REPL_SHORT_INSTRUCTIONS);
@@ -16396,6 +16404,7 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
     var pending = std.ArrayList(u8).empty;
     defer pending.deinit(ctx.gpa);
 
+    var multiline_string_at_eof = false;
     var should_exit = false;
     var had_diagnostics = false;
     while (!should_exit) {
@@ -16419,6 +16428,16 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
             .line => |raw_line| {
                 defer ctx.gpa.free(raw_line);
 
+                // A complete multiline string remains pending until a line
+                // without a string prefix arrives (or EOF). Process that line
+                // separately so it can begin the next REPL statement.
+                if (multiline_string_at_eof and !ReplSession.lineStartsMultilineString(raw_line)) {
+                    should_exit = try processReplInput(ctx, &session, pending.items, report_config, &had_diagnostics);
+                    pending.clearRetainingCapacity();
+                    multiline_string_at_eof = false;
+                    if (should_exit) break;
+                }
+
                 if (pending.items.len == 0 and std.mem.trim(u8, raw_line, " \t\r\n").len == 0) {
                     continue;
                 }
@@ -16429,8 +16448,16 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
                 try pending.appendSlice(ctx.gpa, raw_line);
 
                 switch (try session.inputStatus(pending.items)) {
-                    .incomplete => {},
-                    .complete, .invalid => {
+                    .incomplete => multiline_string_at_eof = false,
+                    .complete => |info| {
+                        multiline_string_at_eof = info.multiline_string_at_eof;
+                        if (!multiline_string_at_eof) {
+                            should_exit = try processReplInput(ctx, &session, pending.items, report_config, &had_diagnostics);
+                            pending.clearRetainingCapacity();
+                        }
+                    },
+                    .invalid => {
+                        multiline_string_at_eof = false;
                         should_exit = try processReplInput(ctx, &session, pending.items, report_config, &had_diagnostics);
                         pending.clearRetainingCapacity();
                     },
@@ -16492,15 +16519,12 @@ fn processReplInput(
     return false;
 }
 
-/// Parse terminal-only commands before handing Roc source to `ReplSession`.
-/// Other frontends use their own controls and call language stepping directly.
+/// Parse terminal commands, sharing type-query syntax with formatter mode.
 fn parseReplCommand(input: []const u8) ?ReplSession.Command {
     const line = std.mem.trim(u8, input, " \t\r\n");
     if (std.mem.eql(u8, line, ":help")) return .help;
     if (std.mem.eql(u8, line, ":defs")) return .definitions;
-    if (std.mem.startsWith(u8, line, ":t ")) {
-        return .{ .type_of = std.mem.trim(u8, line[3..], " \t") };
-    }
+    if (ReplSession.parseTypeQuery(line)) |name| return .{ .type_of = name };
     if (std.mem.eql(u8, line, ":exit") or
         std.mem.eql(u8, line, ":quit") or
         std.mem.eql(u8, line, ":q") or

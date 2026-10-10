@@ -17025,8 +17025,7 @@ const ProcBodyBuilder = struct {
         };
         if (param_index == 0) return direct;
 
-        const target_rep = self.descriptorStorageRep(params[param_index].rep);
-        var source: ?ErasedArgumentDescriptorParamSource = null;
+        const target_rep = self.parent.descriptorIdentityRep(params[param_index].rep);
         for (params[0..param_index], 0..) |candidate, candidate_index| {
             const parent_rep = self.descriptorStorageRep(candidate.rep);
             const projected: ErasedArgumentDescriptorParamSource = if (try self.immediateNestedDescriptorIndexForRep(parent_rep, target_rep)) |nested_index| nested: {
@@ -17040,12 +17039,14 @@ const ProcBodyBuilder = struct {
                     .read = .nested,
                 };
             } else (try self.immediateTagPayloadDescriptorForRep(parent_rep, target_rep, candidate_index)) orelse continue;
-            if (source != null) {
-                boxyLowerInvariant("boxy erased argument descriptor had multiple direct parent parameters");
-            }
-            source = projected;
+            // Representations form a DAG: several earlier parents can contain
+            // this same exact target_rep, including its descriptor methods and
+            // opacity. Storage compatibility alone cannot select a source. The ABI chooses
+            // the first parent in published parameter order as its canonical
+            // source, just as a parent's nested slots use their published order.
+            return projected;
         }
-        return source orelse direct;
+        return direct;
     }
 
     /// The tag payload of `parent_rep_id`'s descriptor that describes
@@ -17061,7 +17062,7 @@ const ProcBodyBuilder = struct {
         defer read_path.deinit(self.parent.allocator);
         var active = collections.DenseMap(Plan.TypeRepId, void).init(self.parent.allocator);
         defer active.deinit();
-        if (!try self.findDescriptorReadPath(parent_rep_id, target_rep, &read_path, &active)) return null;
+        if (!try self.findDescriptorReadPathTo(parent_rep_id, .{ .identity = target_rep }, &read_path, &active)) return null;
         if (read_path.items.len != 1) return null;
         const payload = switch (read_path.items[0]) {
             .tag_payload => |payload| payload,
@@ -18485,7 +18486,9 @@ const ProcBodyBuilder = struct {
                 self.parent.result.store.getLocal(target).boxy_desc != null)
             {
                 const materialization = try self.descriptorMaterializationForConstructedRep(rep_id);
-                if (rep.descriptor == null and materialization.captures.len == 0) {
+                if (rep.descriptor == null and materialization.captures.len == 0 and
+                    self.parent.result.store.getLocal(target).boxy_desc == null)
+                {
                     target_desc_ref = materialization.desc;
                 } else {
                     const target_desc_info = try self.descriptorForConstructedTargetMaterialization(target, materialization);
@@ -19685,6 +19688,7 @@ const ProcBodyBuilder = struct {
         // Stage 0 lowers the final else; then each branch, from the last, lowers
         // its body (odd stages) and its condition (even stages).
         if (stage == 0) {
+            try self.reserveTagJoinResultDescriptor(task.target, self.repForType(task.if_ty));
             task.done = self.freshJoinPointId();
             task.index = task.branches.len;
             return .{ .child = .{ .expected = .{ .target = task.target, .expected_ty = task.if_ty, .expr_id = task.final_else, .next = try self.joinJump(task.done) } } };
@@ -27783,6 +27787,7 @@ const ProcBodyBuilder = struct {
             if (self.listMapCanReuseMatchBody(task.cond, task.branches)) |body| {
                 return .{ .tail = .{ .expected = .{ .target = task.target, .expected_ty = task.match_ty, .expr_id = body, .next = task.next } } };
             }
+            try self.reserveTagJoinResultDescriptor(task.target, self.repForType(task.match_ty));
             const cond_expr = self.module.checked_bodies.expr(task.cond);
             task.cond_rep = self.matchConditionRep(task.cond, self.repForType(cond_expr.ty));
             try self.reserveMatchBranchRepresentativeBindings(task.branches, task.cond_rep);
@@ -32278,6 +32283,21 @@ const ProcBodyBuilder = struct {
         read_path: *std.ArrayList(DescriptorReadStep),
         active: *collections.DenseMap(Plan.TypeRepId, void),
     ) Allocator.Error!bool {
+        return self.findDescriptorReadPathTo(root, .{ .storage = target_rep_id }, read_path, active);
+    }
+
+    const DescriptorReadTarget = union(enum) {
+        storage: Plan.TypeRepId,
+        identity: Plan.TypeRepId,
+    };
+
+    fn findDescriptorReadPathTo(
+        self: *ProcBodyBuilder,
+        root: Plan.TypeRepId,
+        target: DescriptorReadTarget,
+        read_path: *std.ArrayList(DescriptorReadStep),
+        active: *collections.DenseMap(Plan.TypeRepId, void),
+    ) Allocator.Error!bool {
         const allocator = self.parent.allocator;
         var frames: std.ArrayList(ReadPathFrame) = .empty;
         defer {
@@ -32290,7 +32310,7 @@ const ProcBodyBuilder = struct {
             }
             frames.deinit(allocator);
         }
-        if (try self.enterReadPath(root, target_rep_id, &frames, active)) |found| return found;
+        if (try self.enterReadPath(root, target, &frames, active)) |found| return found;
         while (frames.items.len != 0) {
             const top = &frames.items[frames.items.len - 1];
             if (top.stepped) {
@@ -32308,7 +32328,7 @@ const ProcBodyBuilder = struct {
             };
             try read_path.append(allocator, next.step);
             top.stepped = true;
-            if (try self.enterReadPath(next.rep, target_rep_id, &frames, active)) |found| {
+            if (try self.enterReadPath(next.rep, target, &frames, active)) |found| {
                 if (found) return true;
             }
         }
@@ -32320,13 +32340,17 @@ const ProcBodyBuilder = struct {
     fn enterReadPath(
         self: *ProcBodyBuilder,
         rep_id: Plan.TypeRepId,
-        target_rep_id: Plan.TypeRepId,
+        target: DescriptorReadTarget,
         frames: *std.ArrayList(ReadPathFrame),
         active: *collections.DenseMap(Plan.TypeRepId, void),
     ) Allocator.Error!?bool {
         const allocator = self.parent.allocator;
         const current_rep_identity = self.descriptorStorageRep(rep_id);
-        if (current_rep_identity == target_rep_id) return true;
+        const matches = switch (target) {
+            .storage => |rep| current_rep_identity == rep,
+            .identity => |rep| self.parent.descriptorIdentityRep(rep_id) == rep,
+        };
+        if (matches) return true;
         // An open record's descriptor describes the complete record its value
         // holds, whose nested positions its row's fields do not determine.
         if (self.repIsOpenRecord(current_rep_identity)) return false;
@@ -32450,7 +32474,7 @@ const ProcBodyBuilder = struct {
         parent_rep_id: Plan.TypeRepId,
         nested_rep_id: Plan.TypeRepId,
     ) Allocator.Error!?u32 {
-        const target_rep = self.descriptorStorageRep(nested_rep_id);
+        const target_rep = self.parent.descriptorIdentityRep(nested_rep_id);
         if (self.repIsOpenRecord(parent_rep_id)) return null;
         var slots = std.ArrayList(ProcedureBuilder.NestedDescriptorSlot).empty;
         defer slots.deinit(self.parent.allocator);
@@ -32460,7 +32484,7 @@ const ProcBodyBuilder = struct {
             &slots,
         );
         for (slots.items, 0..) |slot, position| {
-            if (self.descriptorStorageRep(self.parent.nestedDescriptorSlotDescRep(slot)) == target_rep) return @intCast(position);
+            if (self.parent.descriptorIdentityRep(self.parent.nestedDescriptorSlotDescRep(slot)) == target_rep) return @intCast(position);
         }
         return null;
     }
@@ -33071,6 +33095,23 @@ const ProcBodyBuilder = struct {
     /// release them.
     fn fieldLocalMayCarryDescriptor(self: *const ProcBodyBuilder, field_local: LIR.LocalId) bool {
         return self.parent.layoutNeedsNestedBoxyDesc(self.parent.result.store.getLocal(field_local).layout_idx);
+    }
+
+    /// A tag constructor carrying an aggregate payload materializes a descriptor
+    /// even for concrete types. Reserve the shared result before any arm so all
+    /// variants, including zero-sized ones, initialize the same join parameter.
+    fn reserveTagJoinResultDescriptor(self: *ProcBodyBuilder, target: LIR.LocalId, rep_id: Plan.TypeRepId) Allocator.Error!void {
+        if (self.parent.result.store.getLocal(target).boxy_desc != null) return;
+        const identity = self.descriptorStorageRep(rep_id);
+        const rep = self.parent.plan.representations.items[@backingInt(identity)];
+        if (rep.kind != .tag_union) return;
+        for (self.parent.plan.childSlice(rep.children)) |child| {
+            if (child.role != .tag_payload) continue;
+            const payload_layout = self.workerRuntimeLayoutForRep(child.rep).layoutIdx();
+            if (!self.parent.layoutNeedsNestedBoxyDesc(payload_layout)) continue;
+            self.parent.result.store.setLocalBoxyDesc(target, .{ .local = try self.addFrameLocal(.opaque_ptr) });
+            return;
+        }
     }
 
     fn aggregateFieldsMayCarryDescriptor(

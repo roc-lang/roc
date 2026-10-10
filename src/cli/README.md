@@ -13,3 +13,53 @@ The CLI is the main entry point for developers using Roc. Its responsibilities i
 - **Default-App Staging**: Turning a file that runs on the built-in Echo platform—a headerless file with `main!`, or an `app` header that names no platform—into an ordinary app rooted beside a copy of that platform, through `default_app.zig`
 
 The CLI coordinates between the compiler frontend (parsing, type checking) and backend (code generation, linking) to provide a seamless development experience.
+
+## REPL formatters
+
+`roc repl --formatter /path/to/formatter.roc` loads a Roc module exposing:
+
+```roc
+module [decode, encode]
+
+decode : Str -> Try(Str, Str)
+decode = |line| Ok(line)
+
+encode : { result : Str, stdout : Str, diagnostics : Str, value : [Other, Tag({ name : Str, payload : Try(Str, {}) })] } -> Str
+encode = |response| Json.to_str({
+    result: response.result,
+    stdout: response.stdout,
+    diagnostics: response.diagnostics,
+})
+```
+
+The formatter is compiled once and runs separately from the user's definitions.
+Its sibling imports resolve relative to the formatter file. Input is UTF-8 text,
+one request per line (LF or CRLF); EOF ends the process. The formatter decodes
+any multiline cell representation into source. `Ok(source)` evaluates that
+source; `Err(reply)` sends a response without evaluating anything. `encode`
+receives the last expression's inspected value, captured `dbg` output, and plain
+compiler diagnostics. Empty strings mean there is no value, output, or diagnostic.
+The compiler appends one newline to each reply; formatter replies themselves
+must not contain literal newlines. Formatter mode accepts `:t <identifier>`
+between statements, including after definitions in the same cell, and returns
+the checked type as plain result text. It does not evaluate the binding. There
+are no prompts, banners, or terminal lifecycle commands in formatter mode.
+
+Accepted definitions persist across requests. Within a cell, statements run in
+order and stop at the first diagnostic; previously accepted definitions remain.
+Invalid formatter signatures or formatter crashes terminate the process with a
+diagnostic on stderr. User-code diagnostics are encoded replies and leave the
+session usable. Formatter calls use the LIR interpreter; `--specialize` selects
+the normal lowering strategy. The protocol is independent of JSON and Jupyter.
+
+`value` describes the last expression's actual top-level value: `Other`, or
+`Tag({ name, payload })`. The payload is `Ok(text)` for exactly one Str argument,
+and `Err({})` for other types or arities. Nominal wrappers and nested tags are
+not unwrapped. This information comes from the checked constant store; inspection
+strings are never parsed to infer types. The expression runs once. Plugins decide
+which tag names and payloads represent rich output; the compiler has no MIME rules.
+
+The terminal REPL keeps consecutive multiline string lines in one statement.
+A blank line, a following non-string statement, or EOF submits the pending string.
+Formatter cells are complete requests, so a multiline string at the end of a cell
+is submitted immediately. String payloads retain their trailing spaces.
