@@ -20111,8 +20111,13 @@ fn widenedReachCopy(self: *Self, var_: Var, env: *Env, region: Region) std.mem.A
     if (self.widened_use_copies.get(resolved.var_)) |copy| return copy;
     const copy: Var = switch (resolved.desc.content) {
         // The copy's union is the alias's backing, widened; the alias's
-        // parameters describe the value's own row, not the widened one.
-        .alias => |alias| try self.widenedReachCopy(self.types.getAliasBackingVar(alias), env, region),
+        // parameters describe the value's own row, not the widened one. An
+        // alias whose backing widens nothing is the alias itself.
+        .alias => |alias| blk: {
+            const backing = self.types.getAliasBackingVar(alias);
+            const backing_copy = try self.widenedReachCopy(backing, env, region);
+            break :blk if (backing_copy == self.types.resolveVar(backing).var_) resolved.var_ else backing_copy;
+        },
         .structure => |flat| switch (flat) {
             .tag_union => try self.widenedRowCopy(resolved.var_, env, region),
             .nominal_type => |nominal| blk: {
@@ -20164,6 +20169,10 @@ fn widenedRowCopy(self: *Self, row: Var, env: *Env, region: Region) std.mem.Allo
             .rigid, .err, .field_presence => return self.types.resolveVar(row).var_,
         }
     }
+    // A row with no tags asserts that no value has it (design.md "Polarity"
+    // exempts `[]` from implicit opening for this reason), so there is no
+    // value to widen and the row stays shared.
+    if (self.widened_use_tags.items.len == tags_start) return self.types.resolveVar(row).var_;
     // Copying a payload appends to the type store and to these scratch lists,
     // so read the row's tags and each tag's payloads out of them first.
     const tags = try self.gpa.dupe(types_mod.Tag, self.widened_use_tags.items[tags_start..]);

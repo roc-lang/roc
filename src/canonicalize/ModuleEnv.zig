@@ -861,6 +861,7 @@ pub const RowCoercedUse = extern struct {
     /// var, or the imported value's local copy.
     value_var: u32,
 
+    /// The checked module's sorted table of row-coerced uses.
     pub const SafeList = collections.SafeList(@This());
 };
 

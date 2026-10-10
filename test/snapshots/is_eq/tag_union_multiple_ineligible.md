@@ -246,15 +246,15 @@ expect result == result
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool)]"))
-		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool)]"))
-		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool)]"))
-		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool)]"))
+		(patt (type "[Ok(Str)]"))
+		(patt (type "[Validate(Dec -> Bool)]"))
+		(patt (type "[Transform(a -> a)]"))
+		(patt (type "[Err(Str)]"))
 		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool)]")))
 	(expressions
-		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool)]"))
-		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool)]"))
-		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool)]"))
-		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool)]"))
+		(expr (type "[Ok(Str)]"))
+		(expr (type "[Validate(Dec -> Bool)]"))
+		(expr (type "[Transform(a -> a)]"))
+		(expr (type "[Err(Str)]"))
 		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool)]"))))
 ~~~
