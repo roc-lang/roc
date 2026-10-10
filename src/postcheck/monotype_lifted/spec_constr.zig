@@ -1309,8 +1309,10 @@ const InlineScopeRebasePair = struct {
 
 const Pass = struct {
     /// Containers of finished cloners, kept for the next clone (see
-    /// `ClonerScratch`).
-    spare_cloner_scratch: std.ArrayList(ClonerScratch) = .empty,
+    /// `ClonerScratch`). A fixed number are kept so returning a cloner never
+    /// allocates; beyond that a finished cloner's containers are freed.
+    spare_cloner_scratch: [max_spare_cloner_scratch]ClonerScratch = undefined,
+    spare_cloner_scratch_len: usize = 0,
     allocator: Allocator,
     arena: collections.SingleThreadArena,
     program: *Ast.Program,
@@ -1411,6 +1413,7 @@ const Pass = struct {
             defer pass.static_data_structure.deinit();
             defer pass.callable_workers.deinit();
             defer pass.loop_body_contents.deinit(scratch);
+            defer pass.releaseSpareClonerScratch();
             if (self.phase == .discovery) pass.pattern_requests = &output.requests;
             switch (self.phase) {
                 .discovery => {
@@ -1902,20 +1905,37 @@ const Pass = struct {
         return contents;
     }
 
+    const max_spare_cloner_scratch = 8;
+
     /// Empty cloner containers, reusing a finished cloner's when one is spare.
     fn takeClonerScratch(self: *Pass) ClonerScratch {
-        return self.spare_cloner_scratch.pop() orelse ClonerScratch.fresh(self.allocator);
+        if (self.spare_cloner_scratch_len > 0) {
+            self.spare_cloner_scratch_len -= 1;
+            return self.spare_cloner_scratch[self.spare_cloner_scratch_len];
+        }
+        return ClonerScratch.fresh(self.allocator);
     }
 
     /// Keep a finished cloner's containers for the next clone.
     fn returnClonerScratch(self: *Pass, scratch: *ClonerScratch) void {
+        if (self.spare_cloner_scratch_len == max_spare_cloner_scratch) {
+            scratch.deinit(self.allocator);
+            return;
+        }
         scratch.clear();
-        self.spare_cloner_scratch.append(self.allocator, scratch.*) catch scratch.deinit(self.allocator);
+        self.spare_cloner_scratch[self.spare_cloner_scratch_len] = scratch.*;
+        self.spare_cloner_scratch_len += 1;
+    }
+
+    /// Free every spare cloner's containers through the pass's current
+    /// allocator.
+    fn releaseSpareClonerScratch(self: *Pass) void {
+        for (self.spare_cloner_scratch[0..self.spare_cloner_scratch_len]) |*spare| spare.deinit(self.allocator);
+        self.spare_cloner_scratch_len = 0;
     }
 
     fn deinit(self: *Pass) void {
-        for (self.spare_cloner_scratch.items) |*scratch| scratch.deinit(self.allocator);
-        self.spare_cloner_scratch.deinit(self.allocator);
+        self.releaseSpareClonerScratch();
         self.loop_body_contents.deinit(self.allocator);
         self.static_data_structure.deinit();
         self.callable_sources.deinit();
@@ -5463,9 +5483,11 @@ const ClonerScratch = struct {
         };
     }
 
-    /// Empty every container, keeping its capacity.
+    /// Empty every container, keeping its capacity. The arena is released
+    /// outright: retaining its capacity may need a replacement chunk, and a
+    /// failed allocation would have nowhere to go from here.
     fn clear(self: *ClonerScratch) void {
-        _ = self.arena.reset(.retain_capacity);
+        _ = self.arena.reset(.free_all);
         self.subst.clearRetainingCapacity();
         self.inline_stack.clearRetainingCapacity();
         self.loop_stack.clearRetainingCapacity();
@@ -17133,7 +17155,10 @@ test "SpecConstr retained locals allocate by exact leaves not unrelated prefix" 
     var buffer: [4096]u8 = undefined;
     var bounded = std.heap.FixedBufferAllocator.init(&buffer);
     pass.allocator = bounded.allocator();
+    // The cloner's containers return to the pass when the cloner finishes,
+    // so they are released through the bounded allocator before it goes away.
     defer pass.allocator = allocator;
+    defer pass.releaseSpareClonerScratch();
     var cloner = Cloner.initForRewrite(&pass);
     defer cloner.deinit();
     const before_empty = bounded.end_index;
