@@ -3,7 +3,6 @@
 //! generalizes, and an annotation predeclared inside a body judges nothing that
 //! belongs to the enclosing body.
 
-const std = @import("std");
 const TestEnv = @import("./TestEnv.zig");
 
 test "a tuple access pinned later in its definition types that definition's scheme" {

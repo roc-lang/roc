@@ -1268,6 +1268,42 @@ constructs must not be independently selected, because that would change source
 behavior by running compile-time observables that the program would not
 evaluate.
 
+### Frame-Partitioned Phase State
+
+A fact recorded while one lambda, declaration, or binding group is being
+canonicalized or checked belongs to that frame, and no other frame may consume
+it. Shared storage that each consumer filters to find its own entries is
+forbidden: one consumer that forgets the filter resolves the fact against the
+wrong frame (a nested lambda's return constraint unified in an enclosing
+lambda's rank, a declaration satisfying its own right-hand-side lookup).
+
+Every field of `Can` and `Check` declares exactly one discipline in a
+`state_inventory` built with `base.state_discipline`. The inventory is
+exhaustive over the struct's fields, so an unclassified field or a stale name is
+a compile error. The disciplines are:
+
+- `input`: borrowed inputs, configuration, and result stores.
+- `scratch`: buffers used above a saved length and truncated back to it.
+- `frame_stack`: explicit stacks of open frames. A pop names the frame it
+  closes and asserts it is the innermost one, reporting both frames otherwise.
+- `frame_partitioned`: storage owned by one frame by construction. The frame
+  records where its entries start, or keys them by its identity, and consumes
+  exactly its own entries when it closes.
+- `lexical`: in-flight flags and current-item slots, saved and restored around
+  the construct that sets them.
+- `boundary`: work judged at each generalization boundary. Rank is the frame
+  owner: a boundary judges the entries at the rank it generalizes and leaves
+  entries at enclosing ranks to the boundary that owns them.
+- `settled`: work judged once against the final solved state. The field's doc
+  comment states why judging it any earlier would be wrong.
+- `fact`: facts, memos, and indices keyed by stable identities, meaning the
+  same thing to every frame.
+
+When canonicalizing a file or checking a module returns successfully, every
+`frame_stack` and `frame_partitioned` field must be empty. This is a debug
+assertion that names the field still holding entries, so a leaked frame is
+caught where the phase finishes rather than where a later frame misreads it.
+
 ### Type Declaration Template Validity
 
 Checking records type-declaration template validity while generating annotation

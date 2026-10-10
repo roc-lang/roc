@@ -330,9 +330,6 @@ once—the name-keyed re-resolution and double publication are deleted.
 ### Independent—start any time, in any order
 
 Small:
-- [small/frame-partitioned-checker-state.md](small/frame-partitioned-checker-state.md)—
-  inventory and convert frame-scoped checker/canonicalizer state to
-  dedicated frame storage (the 9929→10010 and 10001 shape).
 - [small/compact-constant-aggregates.md](small/compact-constant-aggregates.md)—
   the restored-constant (warm cache) path still builds non-packable
   constant lists through one-local-per-element static initializers; needs
@@ -358,6 +355,15 @@ empty; `boxy/lower.zig` folds branches into a sequential chain), so the
 true. Closing that is step 6 of
 [big/one-value-semantics-layer.md](big/one-value-semantics-layer.md).
 
+Frame-partitioned phase state has landed: every field of `Can` and `Check`
+is classified in a compile-checked state inventory (design.md
+"Frame-Partitioned Phase State"), frame stacks assert they close their
+innermost frame, and both phases assert at completion that no frame-owned
+state leaked. One obligation remains off main: the
+`iterative-checker-prologue-epilogue` branch carries the tag-and-filter
+version of the issue 9827 fix and must adopt per-frame return-constraint
+storage, and pass the issue 9827 repro, before it merges.
+
 Single-source builtin registration has landed: the seven hand-typed
 `roc_builtins_*` symbol/ABI tables now derive from one comptime registry
 (src/builtins/builtin_registry.zig), and the LowLevel-to-builtin member
@@ -372,5 +378,4 @@ front-loads leverage and keeps prerequisites satisfied:
 2. `small/pin-deferred-spec-requests.md`
 3. `small/hoist-consumes-dispatch-evidence.md`
 4. `small/hosted-extern-declared-abi.md`
-5. `small/frame-partitioned-checker-state.md`
-6. `small/compact-constant-aggregates.md`
+5. `small/compact-constant-aggregates.md`

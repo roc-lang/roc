@@ -618,7 +618,6 @@ const BlockLocalDef = struct {
 const CalledVia = base.CalledVia;
 
 const TypeVar = types.Var;
-const Tag = types.Tag;
 
 // Type aliases for ModuleEnv types
 const Pattern = CIR.Pattern;

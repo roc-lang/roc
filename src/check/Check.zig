@@ -30,8 +30,6 @@ const output_type_roots = @import("output_type_roots.zig");
 const dispatch_evidence = @import("dispatch_evidence.zig");
 const static_dispatch = @import("static_dispatch_registry.zig");
 
-const MkSafeList = collections.SafeList;
-
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 const DependencyGraph = can.DependencyGraph;
@@ -349,7 +347,14 @@ constraining_boundary_codecs: bool = false,
 /// error row as complete, so none of those requirements may wait for the
 /// final codec boundary.
 settling_codec_method_requirements_depth: u32 = 0,
+/// Validated boundary codec contracts, frozen once by
+/// `freezeBoundaryCodecDerivations` after every error-row relation has
+/// settled. Judging them at the end is correct because freezing records the
+/// final shape of each contract's roots; recorded earlier, a contract could
+/// miss rows that later relations add.
 boundary_codec_derivations: std.ArrayListUnmanaged(BoundaryCodecDerivation) = .empty,
+/// The generated codec calls each `boundary_codec_derivations` entry spans,
+/// frozen with it.
 boundary_codec_calls: std.ArrayListUnmanaged(ModuleEnv.GeneratedCodecCall) = .empty,
 /// Complete imported schemes, shared by ordinary lookups and method dispatch.
 /// Each source binding is copied once; each use freshly instantiates its type
@@ -383,7 +388,15 @@ reported_constraint_errors: std.AutoHashMap(ReportedConstraintError, void),
 /// these slots; constraint copying and unification therefore cannot manufacture
 /// or lose an expect context.
 expect_effect_slots: std.ArrayListUnmanaged(ExpectEffectSlot),
+/// Dispatch function vars seen inside an `expect`, each naming the expect
+/// slot it belongs to. Resolved once by `finalizeExpectEffectSlots` after the
+/// last type mutation: whether a dispatch is effectful is known only once its
+/// target has settled, and the slot identity keeps each watcher with its own
+/// expect.
 expect_dispatch_effect_watchers: std.ArrayListUnmanaged(ExpectDispatchWatcher),
+/// Committed successful dispatch edges, recorded only while an expect watcher
+/// exists. `finalizeExpectEffectSlots` normalizes them to roots once all roots
+/// have settled, so a watcher is matched against the final unification graph.
 successful_dispatch_fn_vars: std.ArrayListUnmanaged(Var),
 current_expect_effect_slot: ?ExpectEffectSlotId,
 /// Dense table of top-level patterns, and whether their defs have been processed.
@@ -9019,7 +9032,7 @@ fn judgeTupleAccessesAtBoundary(self: *Self, env: *Env) Allocator.Error!void {
                     }
                     break :resolution .pending;
                 },
-                else => break :resolution try self.resolvePendingTupleAccess(pending, env, false),
+                .alias, .field_presence, .structure, .err => break :resolution try self.resolvePendingTupleAccess(pending, env, false),
             }
         };
         switch (resolution) {
@@ -38594,15 +38607,6 @@ fn addSchemeDispatchRequirementsToBoundaryReachability(
     for (roots) |root| {
         try self.addSchemeRequirementRelationsToReachableSet(root.owner);
     }
-}
-
-/// Boundary reachability including the receiver-excluded relation overlay,
-/// which is merged into `boundary_reachable_vars` only after the `eql`-edge
-/// fixpoint's plain walks have all run.
-fn boundaryReachableIncludingRelations(self: *const Self, var_: Var) bool {
-    const root = self.types.resolveVar(var_).var_;
-    return self.boundary_reachable_vars.contains(root) or
-        self.scheme_relation_reachable_vars.contains(root);
 }
 
 fn assertSchemeRequirementBoundaryQuiescent(self: *const Self, roots: []const BoundaryRoot) void {
