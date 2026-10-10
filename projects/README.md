@@ -363,19 +363,14 @@ once—the name-keyed re-resolution and double publication are deleted.
 
 ### Independent—start any time, in any order
 
-Small:
-- [small/compact-constant-aggregates.md](small/compact-constant-aggregates.md)—
-  the restored-constant (warm cache) path still builds non-packable
-  constant lists through one-local-per-element static initializers; needs
-  a decision on freezing restored values without initializer LIR.
-
 Compact constant aggregates have landed for cold builds: constant lists of
 any shape cost the runtime program fixed-size LIR, a literal-count repeat
 of a runtime value is one builtin call, and the freezing, merging, and
 re-encoding steps that were quadratic in a list's pointer count are linear.
 The correction to the original doc: the per-element explosion it described
-no longer exists on the cold path; it survives only in the warm-cache
-restoration path above.
+no longer exists on the cold path; it survives only when a warm cache
+restores a non-packable constant list, which still builds it through a
+one-local-per-element static initializer.
 
 The decision-tree match compiler has landed for `.lss`: the direct
 solved-to-LIR lowering compiles `match` through one shared Maranget-style
@@ -410,4 +405,3 @@ front-loads leverage and keeps prerequisites satisfied:
 
 1. `small/rceffect-conformance.md`
 2. `small/pin-deferred-spec-requests.md`
-3. `small/compact-constant-aggregates.md`
