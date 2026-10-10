@@ -14993,6 +14993,17 @@ operand once, schedules that working variable against the backing, and defers
 its link action. Nested backing relations reuse the isolated variable instead
 of recursively entering the unifier or cloning it again at each nominal layer.
 
+Being uninhabited grants no exemption from unification. Both sides of a pair
+were lowered from one closed Monotype, and a slot Monotype sealed to the empty
+tag union is the same type as a source-level `[]`, so neither yields to a
+different peer. An empty tag row unifies only with another empty row; an empty
+row meeting a populated one is a compiler invariant violation. Every other
+uninhabited type, such as a record with an empty-row field, unifies
+structurally and joins the callable slots it contains. The one
+uninhabitedness-specific relation is a checked-public nominal backing: a
+proven-uninhabited structural type joins a nominal or opaque type whose
+inspectable public backing it stands for.
+
 Monotype Lifted types enter the solved store as lazy leaves that materialize one
 level when unification or a shape read touches them. A leaf that has never
 expanded stands for a fresh clone of its Monotype whose callable slots nothing

@@ -352,6 +352,12 @@ test "Lambda Solved unify does not yield explicit empty tag unions" {
     try expectNotContains(unify_source, "isEmptyTagUnion");
     try expectNotContains(unify_source, "empty tag union");
     try expectNotContains(solve_source, "fn isEmptyTagUnion");
+
+    // No uninhabited shape yields to its peer either: an empty row meets only
+    // an empty row, and every other uninhabited type unifies structurally.
+    const unify_roots = sourceSliceBetween(solve_source, "fn unifyRoots(", "fn joinsTypeRoots(");
+    try expectNotContains(unify_roots, "typeIsProvenUninhabited");
+    try expectContains(unify_roots, "Common.invariant(\"empty tag row failed Lambda Solved unification\")");
 }
 
 test "Monotype lowering does not use unsolved_monos side table" {

@@ -36,9 +36,6 @@ termination hazard, and one verification coverage gap):
 - [small/spec-constr-specialization-limits.md](small/spec-constr-specialization-limits.md)—
   termination budgets for call-pattern specialization (compile-time
   divergence is reachable today).
-- [small/empty-tag-union-yield-provenance.md](small/empty-tag-union-yield-provenance.md)—
-  key Lambda Solved's one unification escape hatch on carried provenance
-  instead of shape.
 - [small/pin-lambda-solved-invariants.md](small/pin-lambda-solved-invariants.md)—
   state, assert, and test the four invariants that make monomorphic
   lambda-set solving sound.
@@ -56,6 +53,14 @@ Within this batch the projects are independent.
 (`spec-constr-specialization-limits` used to be paired here with
 `spec-constr-static-match-soundness`, which has since landed and had its
 doc removed.)
+
+The empty-tag-union yield project has landed, by deletion rather than by
+carrying provenance. Sealing unresolved Monotype rows before publication had
+already removed every legitimate firing; a Debug corpus sweep (echo, fx, the
+remaining `test/` apps) found the yield, by then broadened to any proven
+uninhabited type, linking only identical uninhabited records. Lambda Solved
+now unifies uninhabited types structurally, and an empty row meeting a
+populated one is an invariant violation, so no provenance set is needed.
 
 A third batch came out of a whole-codebase competing-sources-of-truth
 audit (2026-07-18): a sweep of every subsystem for the same fact

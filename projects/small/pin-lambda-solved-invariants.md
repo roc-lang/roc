@@ -188,9 +188,6 @@ output on the corpus before/after, modulo the I3 caveat above).
 
 ## Related projects
 
-- [empty-tag-union-yield-provenance.md](./empty-tag-union-yield-provenance.md)—
-  the same stage's other shape-keyed assumption, split out because it
-  needs a carry-vs-verify design decision.
 - The landed divergence parity suite (`checkedExprDivergence` and the
   "checked divergence parity" tests in src/check/checked_artifact.zig)—the
   same producer/consumer parity discipline, written down in

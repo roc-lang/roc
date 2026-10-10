@@ -2247,14 +2247,6 @@ const Solver = struct {
             try self.pushUnifyPair(stack, a, backing);
             return;
         }
-        if (try self.typeIsProvenUninhabited(a)) {
-            self.program.types.set(a, .{ .link = b });
-            return;
-        }
-        if (try self.typeIsProvenUninhabited(b)) {
-            self.program.types.set(b, .{ .link = a });
-            return;
-        }
         if (try self.unifyInspectableNamedBacking(stack, finish_index, a, b, left, right, structural_isolated)) return;
         if (try self.unifyInspectableNamedBacking(stack, finish_index, b, a, right, left, structural_isolated)) return;
         if (try self.unifyPublicNamedBacking(a, b, right)) return;
@@ -2357,11 +2349,14 @@ const Solver = struct {
             .tag_union => |left_tags| {
                 if (right != .tag_union) Common.invariant("tag-union type failed Lambda Solved unification");
                 const right_tags = right.tag_union;
-                if (left_tags.count() == 0) {
-                    self.program.types.set(a, .{ .link = b });
-                    return;
-                }
-                if (right_tags.count() == 0) {
+                // Both sides were lowered from one closed Monotype, so an
+                // empty row meets only another empty row. It never yields to
+                // a populated peer: that would silently retype a slot an
+                // earlier stage got wrong.
+                if (left_tags.count() == 0 or right_tags.count() == 0) {
+                    if (left_tags.count() != right_tags.count()) {
+                        Common.invariant("empty tag row failed Lambda Solved unification");
+                    }
                     self.program.types.set(b, .{ .link = a });
                     return;
                 }
@@ -4746,6 +4741,54 @@ test "lambda set unification keeps members its captures merged in" {
         if (member.lambda == other_lambda) saw_other = true;
     }
     try std.testing.expect(saw_shared and saw_other);
+}
+
+test "uninhabited types unify structurally and join their callable slots" {
+    const allocator = std.testing.allocator;
+    var program = Ast.Program.init(allocator, emptyLiftedProgramForTest(allocator));
+    defer program.deinit();
+
+    const run_field = try program.lifted.names.internRecordFieldLabel("run");
+    const never_field = try program.lifted.names.internRecordFieldLabel("never");
+    const left_lambda: Common.Symbol = @fromBackingInt(1);
+    const right_lambda: Common.Symbol = @fromBackingInt(2);
+    const ret_ty = try program.types.add(.zst);
+
+    // `{ never : [], run : () -> {} }` has no values, but its function field
+    // still carries callable flow; each side names a different lambda.
+    const left_callable = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{
+        .lambda = left_lambda,
+        .captures = .empty(),
+    }}) });
+    const right_callable = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{
+        .lambda = right_lambda,
+        .captures = .empty(),
+    }}) });
+    const left_fn = try program.types.add(.{ .func = .{ .args = .empty(), .callable = left_callable, .ret = ret_ty } });
+    const right_fn = try program.types.add(.{ .func = .{ .args = .empty(), .callable = right_callable, .ret = ret_ty } });
+    const left_never = try program.types.add(.{ .tag_union = .empty() });
+    const right_never = try program.types.add(.{ .tag_union = .empty() });
+    const left = try program.types.add(.{ .record = try program.types.addFields(&.{
+        .{ .name = never_field, .ty = left_never, .default = null },
+        .{ .name = run_field, .ty = left_fn, .default = null },
+    }) });
+    const right = try program.types.add(.{ .record = try program.types.addFields(&.{
+        .{ .name = never_field, .ty = right_never, .default = null },
+        .{ .name = run_field, .ty = right_fn, .default = null },
+    }) });
+
+    var solver = try Solver.init(allocator, &program);
+    defer solver.deinit();
+    try std.testing.expect(try solver.typeIsProvenUninhabited(left));
+    try solver.unify(left, right);
+
+    // Being uninhabited never lets one side absorb the other unexamined: the
+    // records, their empty rows, and their callable slots all join.
+    try std.testing.expectEqual(program.types.root(left), program.types.root(right));
+    try std.testing.expectEqual(program.types.root(left_never), program.types.root(right_never));
+    try std.testing.expectEqual(program.types.root(left_callable), program.types.root(right_callable));
+    const members = program.types.view().memberSpan(program.types.rootContent(left_callable).lambda_set);
+    try std.testing.expectEqual(@as(usize, 2), members.len);
 }
 
 test "root-slot read unification shares callables without joining a lifted pair" {
