@@ -32,6 +32,7 @@ const base = @import("base");
 const TestPackFile = @import("backend").dev.PackFile;
 const bytebox = @import("bytebox");
 const builtins = @import("builtins");
+const msvc_runtime = @import("msvc_runtime");
 const BuiltinFn = builtins.builtin_registry.BuiltinFn;
 const shim_symbols = builtins.shim_symbols;
 
@@ -3302,7 +3303,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "integer SIMD runtime smoke passes (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/runtime_simd_smoke.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "Mismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "integer SIMD runtime smoke passes (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/runtime_simd_smoke.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "Mismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "integer SIMD runtime smoke passes (LLVM speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/cli/runtime_simd_smoke.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "Mismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "integer SIMD Windows cross-build reaches the linker without an LLVM panic", .backend = .speed, .body = .{ .command = .{ .args = &.{ "build", "--opt=speed", "--no-cache", "--target=x64win" }, .roc_file = "test/cli/runtime_simd_smoke.roc", .exit = .not_panic, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stdout, .text = "successfully building" }, .{ .stream = .stderr, .text = "WindowsSDKNotFound" } } }}, .not_contains = &.{ .{ .stream = .stderr, .text = "reached unreachable code" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "integer SIMD Windows cross-build links without an LLVM panic", .backend = .speed, .body = .{ .command = .{ .args = &.{ "build", "--opt=speed", "--no-cache", "--target=x64win" }, .roc_file = "test/cli/runtime_simd_smoke.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "reached unreachable code" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "match extension fixture runs (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/match_extension_codegen.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "match extension fixture runs (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/match_extension_codegen.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "match extension fixture runs (LLVM speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/cli/match_extension_codegen.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
@@ -5761,7 +5762,19 @@ fn copyNativeMuslTargetFile(
     filename: []const u8,
     dest_dir: []const u8,
 ) CliRunnerError!void {
-    const src = try std.fs.path.join(allocator, &.{ project_root_path, "test", "fx", "platform", "targets", target.roc_target, filename });
+    return copyFxTargetFile(io, allocator, target.roc_target, filename, dest_dir);
+}
+
+/// Copies one of the fx platform's link inputs for `roc_target` into
+/// `dest_dir`, for a staged platform that declares the same input.
+fn copyFxTargetFile(
+    io: std.Io,
+    allocator: Allocator,
+    roc_target: []const u8,
+    filename: []const u8,
+    dest_dir: []const u8,
+) CliRunnerError!void {
+    const src = try std.fs.path.join(allocator, &.{ project_root_path, "test", "fx", "platform", "targets", roc_target, filename });
     defer allocator.free(src);
     const dest = try std.fs.path.join(allocator, &.{ dest_dir, filename });
     defer allocator.free(dest);
@@ -9892,8 +9905,8 @@ fn customGlibcTargetNonLinux(io: std.Io, allocator: Allocator, env: *const CaseE
 
 /// Shared output on COFF: link the dylib test app and its host into one DLL.
 /// lld-link resolves the app/host symbol references in a single pass, the
-/// same as the ELF and Mach-O shared-library links. Windows-only: the link
-/// needs the native Windows SDK.
+/// same as the ELF and Mach-O shared-library links. Windows-only: it builds
+/// for the native target.
 fn customWindowsSharedLibrary(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     if (builtin.os.tag != .windows) return null;
 
@@ -12681,6 +12694,15 @@ fn runGlueRuntimeCase(
                     return addPreservedWorkDirMessage(allocator, customInfraFailure(allocator, &timer, "failed to copy glue runtime crt1.o: {}", .{err}), env.dirs.work_dir);
                 copyNativeMuslTargetFile(io, allocator, musl_target, "libc.a", target_dir) catch |err|
                     return addPreservedWorkDirMessage(allocator, customInfraFailure(allocator, &timer, "failed to copy glue runtime libc.a: {}", .{err}), env.dirs.work_dir);
+            }
+            if (target.kind == .windows) {
+                // An MSVC link uses only the inputs the platform declares, so
+                // the startup archive and import libraries the build prepared
+                // for fx sit beside the host library built below.
+                for (msvc_runtime.files) |filename| {
+                    copyFxTargetFile(io, allocator, target.roc_target, filename, target_dir) catch |err|
+                        return addPreservedWorkDirMessage(allocator, customInfraFailure(allocator, &timer, "failed to copy glue runtime {s}: {}", .{ filename, err }), env.dirs.work_dir);
+                }
             }
         },
         .wasm32 => {},

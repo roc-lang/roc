@@ -31398,6 +31398,15 @@ const BodyContext = struct {
 
     fn stepConstructor(self: *BodyContext, frame: *LowerFrame, task: *ConstructorTask, input: ?LowerResult) Allocator.Error!LowerStep {
         if (frame.cursor == 0) {
+            if (task.kind == .list) {
+                const element_node = try self.graph.listElementNode(task.node);
+                const element_content = try self.graph.content(try self.constructorRepresentationNode(element_node));
+                if (element_content == .primitive) {
+                    if (try self.lowerPackedNumeralList(task.children, element_content.primitive)) |data| {
+                        return loweredExprStep(try self.addConstructorExprAtNode(task.node, data));
+                    }
+                }
+            }
             const drafts = try self.beginConstructor(task);
             if (drafts.len != 0) {
                 frame.cursor = constructor_drafts_cursor;
@@ -48637,6 +48646,56 @@ const BodyContext = struct {
             // mapping (crash node / never-matching branch) is the behavior.
             .bool, .str, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => null,
         };
+    }
+
+    /// A list of checked builtin numerals is already literal data. Preserve
+    /// that fact before allocating per-element IR, using the same exact scalar
+    /// conversion as ordinary numeral lowering. Custom conversion roots and
+    /// dispatch plans remain computations and are not consumed here.
+    fn lowerPackedNumeralList(self: *BodyContext, items: []const checked.CheckedExprId, primitive: Type.Primitive) Allocator.Error!?BodyExprData {
+        if (items.len == 0) return null;
+        const scalar: check.ConstStore.ConstPackedScalar = switch (primitive) {
+            .u8 => .u8,
+            .u16 => .u16,
+            .u32 => .u32,
+            .u64 => .u64,
+            .u128 => .u128,
+            .i8 => .i8,
+            .i16 => .i16,
+            .i32 => .i32,
+            .i64 => .i64,
+            .i128 => .i128,
+            .f32 => .f32,
+            .f64 => .f64,
+            .dec => .dec,
+            .bool, .str, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return null,
+        };
+        for (items) |item| {
+            const expr = self.view.bodies.expr(item);
+            if (expr.data != .numeral) return null;
+            if (expr.data.numeral.plan != null or expr.data.numeral.conversion_root != null) return null;
+        }
+
+        const width = scalar.byteWidth();
+        const bytes = try self.allocator.alloc(u8, items.len * width);
+        defer self.allocator.free(bytes);
+        for (items, 0..) |item, index| {
+            const numeral = self.view.bodies.expr(item).data.numeral;
+            const bits = (try self.numeralScalarBits(numeral.literal, primitive)) orelse return null;
+            var encoded: [16]u8 = undefined;
+            switch (bits) {
+                .int => |value| std.mem.writeInt(i128, &encoded, value.toI128(), .little),
+                .f32 => |value| std.mem.writeInt(u32, encoded[0..4], @bitCast(value), .little),
+                .f64 => |value| std.mem.writeInt(u64, encoded[0..8], @bitCast(value), .little),
+                .dec => |value| std.mem.writeInt(i128, &encoded, value.num, .little),
+            }
+            @memcpy(bytes[index * width ..][0..width], encoded[0..width]);
+        }
+        return .{ .bytes_lit = .{
+            .literal = try self.addStringLiteral(bytes),
+            .len = @intCast(items.len),
+            .element = scalar,
+        } };
     }
 
     /// The expression flavor of `numeralScalarBits`; null passes through for

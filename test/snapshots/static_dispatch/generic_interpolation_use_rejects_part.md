@@ -118,7 +118,7 @@ NO CHANGE
 			(ty-lookup (name "Str") (builtin))))
 	(d-let
 		(p-assign (ident "bad"))
-		(e-call (constraint-fn-var 284)
+		(e-call (constraint-fn-var 277)
 			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-typed-int (value "42") (type "U64")))
 		(annotation

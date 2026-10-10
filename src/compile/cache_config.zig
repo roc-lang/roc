@@ -296,11 +296,13 @@ pub const Constants = struct {
     /// 136: Folded dispatch relations carry explicit target substitutions.
     /// 137: Module environments persist diagnostic host-return provenance.
     /// 138: Hosted Try errors no longer widen implicitly at question operators.
-    /// 139: Stored closure captures record whether each is a lexical capture
+    /// 139: Literal dispatch plans store an optional conversion function, absent
+    ///      for a proved concrete builtin numeral.
+    /// 140: Stored closure captures record whether each is a lexical capture
     ///      or a top-level compile-time root's recursive binding.
-    /// 140: Checked bodies gain the `row_coerce` expression form (design.md
+    /// 141: Checked bodies gain the `row_coerce` expression form (design.md
     ///      "Row Coercion Primitive").
-    pub const CACHE_VERSION = 140;
+    pub const CACHE_VERSION = 141;
 };
 
 /// Configuration for the Roc cache system.

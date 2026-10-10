@@ -8265,7 +8265,8 @@ const Lowerer = struct {
             return .{ .tail = try self.operandChain(where, lowered, null, null, hint) };
         }
         if (op == .list_map_can_reuse) {
-            const interchangeable = try self.listMapLayoutsInterchangeable(args);
+            var map_output_elem: ?layout.Idx = null;
+            const interchangeable = try self.listMapLayoutsInterchangeable(args, &map_output_elem);
             if (!interchangeable.get(.u32) and !interchangeable.get(.u64)) {
                 // Reuse is statically impossible (or disabled) on every
                 // width, so the runtime uniqueness check never needs to
@@ -8291,6 +8292,7 @@ const Lowerer = struct {
                 .rc_effect = op.rcEffect(),
                 .args = try self.result.store.addLocalSpan(lowered.ids),
                 .interchangeable = interchangeable,
+                .map_output_elem = map_output_elem,
                 .next = next,
             } }, where.source());
             return .{ .tail = try self.operandChain(where, lowered, null, null, current) };
@@ -8453,7 +8455,7 @@ const Lowerer = struct {
         // the two derivations demand the same set of functions.
         if (self.solved.lifted.listMapCanReuseMatch(scrutinee, branches_span)) |folded| {
             const args = self.solved.lifted.exprSpan(folded.call_args);
-            const interchangeable = try self.listMapLayoutsInterchangeable(args);
+            const interchangeable = try self.listMapLayoutsInterchangeable(args, null);
             // Reuse possible on at least one width keeps the match, so each
             // backend can decide per the width it is building.
             if (!interchangeable.get(.u32) and !interchangeable.get(.u64)) {
@@ -9919,7 +9921,7 @@ const Lowerer = struct {
     /// on that width, so the op resolves to a constant 0 there. Both bits are
     /// stored so the lowered op is target-independent: codegen selects the bit
     /// for the width it is building.
-    fn listMapLayoutsInterchangeable(self: *Lowerer, args: anytype) Common.LowerError!layout.WidthValues(bool) {
+    fn listMapLayoutsInterchangeable(self: *Lowerer, args: anytype, output_layout: ?*?layout.Idx) Common.LowerError!layout.WidthValues(bool) {
         const none = layout.WidthValues(bool).both(false, false);
         if (args.len != 2) Common.invariant("list_map_can_reuse reached LIR lowering with the wrong arity");
         if (!self.list_in_place_map) return none;
@@ -9937,6 +9939,7 @@ const Lowerer = struct {
         const out_elem_idx = self.result.layouts.runtimeRepresentationLayoutIdx(
             try self.layoutOfType(try self.lowerType(out_ret)),
         );
+        if (output_layout) |out| out.* = out_elem_idx;
 
         return layout.WidthValues(bool).both(
             self.listMapInterchangeableAtWidth(in_elem_idx, out_elem_idx, .u32),

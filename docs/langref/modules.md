@@ -564,6 +564,18 @@ because that's the order they get passed to the linker.
 Running `roc build` without a `--target` flag builds for the first target in this list that's
 compatible with the machine running the build.
 
+Linking takes nothing from a toolchain installed on the machine running the build: no system C runtime, SDK, or default library is searched for. On Linux, BSD, and Windows targets the link uses only the listed `inputs` and Roc's own objects. A macOS target additionally links `libSystem`, and the frameworks in a `macos-sysroot` directory the platform provides, from that sysroot or the minimal one bundled with Roc. A Windows target (`x64win`, `arm64win`, `x64mingw`, `arm64mingw`) therefore lists everything a Windows link needs:
+
+- the entry point the linker infers, `mainCRTStartup` (or `_DllMainCRTStartup` for a `Shared` output), from a startup object or archive;
+- whatever C runtime the host calls into;
+- import libraries for `kernel32` and `ntdll`, which Roc's runtime imports from, and for any other DLL the host uses.
+
+```roc
+x64win: { inputs: ["host.lib", app, "startup.lib", "ucrtbase.lib", "kernel32.lib", "ntdll.lib"] },
+```
+
+An import library can be generated from a module-definition file with `zig dlltool -m i386:x86-64 -d kernel32.def -l kernel32.lib`. Because no input comes from an installed toolchain, a Windows target builds the same on a machine without Visual Studio and when cross-compiling.
+
 ### Hosted type modules
 
 A platform's type modules can declare _hosted_ functions, which are implemented by the platform's
