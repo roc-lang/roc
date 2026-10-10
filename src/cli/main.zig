@@ -17408,6 +17408,12 @@ test "timings display every Monotype graph counter" {
 /// its own phase and excluded from Type Checking.
 fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {
     reporter.endWithBreakdownExcluding(&frontEndBreakdown(timing), timing.program_finalization_ns);
+    const slowest = timing.slowest_type_checks.slice();
+    var slowest_rows: [compile.package.SlowestTypeChecks.capacity]progress.SubTiming = undefined;
+    for (slowest, slowest_rows[0..slowest.len]) |*module, *row| {
+        row.* = .{ .name = module.name(), .ns = module.ns };
+    }
+    reporter.recordRankedTimings("Slowest Module Type Inference", slowest_rows[0..slowest.len]);
     const compile_time = timing.compile_time_evaluation;
     if (timing.program_finalization_ns != 0) {
         var subs_buf: [12]progress.SubTiming = undefined;
@@ -17498,6 +17504,8 @@ test "shared lowering reporting preserves counters for runtime reuse and continu
         defer reporter.deinit();
         reporter.start();
         reporter.begin("Type Checking");
+        var slowest_type_checks: compile.package.SlowestTypeChecks = .{};
+        slowest_type_checks.offer("pdf", "KernelFont", 7 * std.time.ns_per_ms);
         finishFrontEndPhase(&reporter, .{
             .tokenize_parse_ns = @as(u64, 0),
             .canonicalize_ns = @as(u64, 0),
@@ -17508,6 +17516,7 @@ test "shared lowering reporting preserves counters for runtime reuse and continu
             .program_finalization_ns = shared_input.total_ns,
             .compile_time_evaluation = shared_input,
             .compile_time_counters = shared_input,
+            .slowest_type_checks = slowest_type_checks,
         });
         var runtime = lir.CheckedPipeline.Timing.init(std.testing.io);
         if (case.runtime_continuation) runtime.addSnapshot(.{
@@ -17533,6 +17542,7 @@ test "shared lowering reporting preserves counters for runtime reuse and continu
             "Native artifact emission",
         }) |label| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, output, label));
         try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, output, "Test result cache"));
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, output, "pdf.KernelFont"));
         try std.testing.expect(std.mem.find(u8, output, "71") != null);
         try std.testing.expectEqual(
             @as(usize, if (case.runtime_continuation) 1 else 0),
