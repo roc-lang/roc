@@ -3624,13 +3624,6 @@ function's directed effect dependencies observes that enclosing rank, not the
 node's original inner-scope rank. The child-rank reduction cannot move a captured
 type back into an inner scope. Independent inner-scope variables remain eligible
 for generalization; captured variables wait for their owning boundary.
-Rank adjustment follows type structure only, never static-dispatch
-constraints: a variable an escaped variable's constraint mentions generalizes
-normally, and the constraint becomes a scheme requirement copied per
-instantiation (Pending Dispatch Requirements In Type Schemes). The one
-constraint-driven rank lowering is a literal-defaulting rule, not a
-generalization rule: an open literal resolves with the scope it is
-constrained against (see "Open Literals Resolve With Their Owning Scope").
 
 Roc generalization is exclusively rank-1. Quantification belongs to a value
 binding; an arbitrary expression does not acquire a scheme, and the result of
@@ -4559,22 +4552,7 @@ independent of whether a condition is selected as an independent root or covered
 by an enclosing root.
 
 Unguarded hoisted roots use the same compile-time constant rules as ordinary
-top-level constants, with one addition: a hoisted constant whose binder the
-checker recorded as a row-coerced local value (Polarity,
-`ModuleEnv.RowCoercedLocalValue`) is evaluated once at its binder's width, so an
-unconstrained row extension its type reaches—the row its scheme quantifies—is
-read as sealed to its row default both when the checker keeps the selected
-root (`Check.hoistedRootIsIntrinsicallyKept`, the `sealed_rows` walk) and
-when checked module data records its eligibility
-(`compileTimeRootIsSealedLocalValue`); a variable that does not seal, or a
-reachable callable slot, keeps it ineligible as for any hoisted constant.
-Without this a hardcoded document bound to such a local would be parsed at
-runtime instead of at build time. For the same reason the entry wrapper of
-such a root carries no scheme (`EvidencePass.templateEvaluatesSealedLocalValue`):
-nothing instantiates it, and a quantified row it carried would reach Boxy as a
-variable some scheme binds, so a body reading the evaluated value at the
-binder's type would need a descriptor no caller can supply instead of the
-row default. A failure produced while evaluating one is a checking-time
+top-level constants. A failure produced while evaluating one is a checking-time
 failure reported at the hoisted expression's original source region.
 
 Guarded roots are evaluated at compile time exactly like unguarded roots, and a
@@ -7570,7 +7548,7 @@ boundary does not open it.
 | Annotated thing | The opened extension | What a use may do |
 | --- | --- | --- |
 | A FUNCTION signature | A quantified flex in the generalized scheme, instantiated fresh at every call | Each caller may use the result at a wider union, independently of every other caller |
-| A VALUE binding, top-level or block-local | A quantified flex, exactly as for a function: the implicitly opened row counts as a type variable, so the value generalizes as if the row were written `..` (a local value quantifies the rows the row coercion can widen, see below) | Each use may use the value at a wider union, independently of every other use |
+| A top-level VALUE binding | A quantified flex, exactly as for a function: the implicitly opened row counts as a type variable, so the value generalizes as if the row were written `..` | Each use may use the value at a wider union, independently of every other use |
 | A HOST-BOUNDARY annotation (a hosted lambda, a `provides` def, a platform `requires` type) | None: the row is generated exactly as written (`AnnotationGenCtx.opening = .as_written`) | Nothing |
 
 A value binding otherwise generalizes only when its annotation writes a type
@@ -7678,12 +7656,10 @@ resolved declaration over EVERY declaration the spelling could reach (every
 same-named type declaration in the file, the `Builtin` type of that name, any
 import that could introduce it) and deletes only on a unanimous answer. It
 also keeps the `..` wherever the file alone cannot rule out a different
-meaning: a platform's `provides` definition, and an annotation-only
-definition outside an app (which may be hosted). Every other annotated
-definition—top-level, associated, or block-local, value or function—reads
-the same with or without the `..`: a function or a top-level value
-quantifies the row either way, and a local value's row either generalizes by
-the rule below or stays shared, exactly as its absence would. So the
+meaning: a block-local binding whose body is not a lambda (on a local value
+`..` opts into a quantified row), a platform's `provides` definition, and an
+annotation-only definition outside an app (which may be hosted). Every other
+top-level or associated definition, value or function, generalizes regardless. So the
 formatter may keep a `..` the checker reports, and never deletes one it does
 not; `src/check/test/redundant_open_fmt_test.zig` runs both on the same
 sources to hold that. A change to where the checker opens a row is a change
@@ -7695,11 +7671,11 @@ positions, shared across its sequential files and paths and released at invocati
 exit. Standalone formatting owns the same data for that call; independent
 workers never share mutable analysis state.
 
-The VALUE row above is decided before the value's body is checked. For a
-top-level value, `Check.predeclareAnnotatedDefSchemes` records every
-type-variable-free top-level annotation whose generation mints an implicitly
-opened extension (`Check.implicit_open_value_annotations`; an annotation that
-cannot be predeclared is generated speculatively for this alone), and
+The top-level VALUE row above is decided before the value's body is checked:
+`Check.predeclareAnnotatedDefSchemes` records every type-variable-free
+top-level annotation whose generation mints an implicitly opened extension
+(`Check.implicit_open_top_level_annotations`; an annotation that cannot be
+predeclared is generated speculatively for this alone), and
 `Check.isGeneralizableValueBinding` treats those exactly like a written type
 variable, so a predeclared scheme and the value's own scheme agree. The
 value's body is still bounded by the audit, and the value's checked type is
@@ -7713,63 +7689,15 @@ hole filled only by a constrained literal (`e : Try(_, [Boom])`,
 like any constrained top-level value; the Polymorphic Value report points at
 the hole and asks for the concrete type in its place.
 
-A block-local VALUE binding to a plain name follows the same rule, decided at
-its declaring statement from the same speculative generation
-(`Check.recordLocalValueAnnotation`, before the body pass regenerates the
-annotation; a local function keeps its own predeclaration; an annotated
-destructuring local is not expressible, since canonicalization attaches a
-block annotation only to a same-named plain binding), with one difference that
-follows from how it is lowered. A generalized local value is
-EVALUATED ONCE into its one binder, and each use WIDENS that value by a row
-coercion (Row Coercion Primitive): the checked body of every use of such a
-binding is `row_coerce { value }` whose child is the lookup at the binder's
-own type and whose own type is the use's instantiation
-(`CheckedBodyPayloadCopier.copyExprData`). The checker records exactly which
-bindings these are, as explicit checked-module data
-(`ModuleEnv.RowCoercedLocalValue`, recorded by
-`Check.recordRowCoercedLocalValue`): a local binding scheme whose right-hand
-side is not a function definition and that either has an annotation
-introducing no type variable of its own and is not a lookup of a callable, or
-has no annotation and aliases such a binding (`y = e`, which generalizes as a
-value alias and quantifies exactly the rows `e`'s scheme does). Hoist
-selection, compile-time root eligibility and checked-body construction all
-read that one record; no later stage re-derives it. The binder's quantified rows are related to no use and seal to
-their row defaults; Monotype lowers the child at its own graph cell and Boxy
-adapts the value's descriptor to the target's. So a local value quantifies
-exactly the opened rows the coercion can widen, and the checker decides that
-from the generated annotation type: `Check.markCoercionReach` walks it from
-the root as the coercion reaches rows—a tag union's extension and its tags'
-payloads, an alias's backing (where a marker resolved open also lives), and
-both arguments of `Try`, whose backing places each in a tag payload—and
-marks every minted extension it reaches
-(`ImplicitOpenExt.within_coercion_reach`). Reach is a property of positions,
-not of variables: one variable can sit at several positions (an alias
-parameter is the same variable at each of its uses in the backing, so in
-`Two(x) : [A(x), B(List(x))]` the `x` of `A(x)` is reached and the `x` of
-`List(x)` is not), so a second walk descends from every position the reach
-ended at and an extension it finds is outside the reach even when it is also
-reached. The checker's type store carries
-no other nominal's backing, so an argument of a user nominal, like a record
-field, a tuple item, a `List` item, or a function result, is outside the
-checker's reach; extending it needs a per-declaration reached-formal analysis
-in the shape of `annotation_positions`. A local value whose annotation mints
-no reached extension does not generalize by its rows (it may still by a
-written type variable), and every opened extension outside the reach, and
-every `_` hole, is kept at the enclosing rank when the right-hand side frame
-generalizes (`Check.shareLocalValueAnnotationVars`): those stay one variable
-shared by every use, sealed by Monotype's row defaults, so a use that needs
-them at another type is a Type Mismatch rather than a second evaluation. A
-local callable built by a block (`g = { k = 2; |n| … }`) is such a value: its
-result row is outside the reach and stays shared. A local whose annotation
-introduces its own type variable (`empty : List(a)`, `xs : List([A, B(a)])`)
-is checked exactly as before—it generalizes over everything its frame can
-quantify, none of its variables is kept shared—and its uses keep the plain
-lookup, since a quantified payload type has no coercion; the single-cell
-lowering is unchanged there. A local whose annotation mentions only the
-enclosing definition's type variables follows the rule above (those
-variables are not its own to quantify). A lookup of a
-callable under a function annotation is a scheme alias with its own
-instantiation scope (Procedure Aliases) and is unchanged.
+Local value bindings do not yet generalize by their implicitly opened rows.
+This is a known gap, not the intended language rule: a generalized local value
+lowers to a single Monotype cell, so generalizing it needs "evaluate once at
+the annotated width, widen at each use", which waits for row subsumption's
+widen-at-use lowering primitive (`row_widen`, Deferred: Row Subsumption).
+Until then those rows behave like inferred local rows, one variable shared by
+every use, and are sealed by Monotype's row defaults; a written `..` is how a
+local value opts into a quantified row. Locals follow the top-level rule once
+that primitive exists.
 
 An ALIAS carries its implicit row variables as hidden ordinary rigid
 parameters. `MyResult(a) : Try(a, [MyError])` has an additional internal
@@ -8112,16 +8040,17 @@ it (`test/fx-open/issue_9963_hosted_try_question_mark.roc`). No corpus program
 spells a NON-hosted closed forwarder, so subsumption needs a fixture of its
 own.
 
-#### Row Coercion Primitive
+#### Row Coercion Primitive (no producer yet)
 
 The lowering half of row subsumption exists ahead of the rule, so that the
 rule, when it lands, changes only which programs typecheck. It is a
 checker-stamped expression, `row_coerce { value }` in checked bodies
 (`CheckedExprData.row_coerce`), whose own type is the wider row a value is
-used at and whose child keeps its own closed row. Its one producer so far is
-the use of a generalized block-local value (Polarity: the value is evaluated
-once at its annotated width and widened at each use); no CIR form lowers to
-it, and the subsumption rule itself still awaits its checker half.
+used at and whose child keeps its own closed row. NOTHING EMITS IT YET: no
+checker site records a coercion, and no CIR form lowers to it. It exists so
+the pipeline below the checker is complete before the checker learns to
+coerce, and so that follow-ups (a local annotated value evaluated once at its
+annotated width and widened at each use) have a target shape to stamp.
 
 The coercion has a fixed REACH, which contains every position the Result-Row
 Widening Adapter re-tags (the direct result row and a `Try`'s error row).
@@ -8196,16 +8125,7 @@ control transfer.
   `lowerExprIntoRep` supply theirs, so a target stored at a generalized or
   boxed representation gets the one boundary straight into that storage. The
   target's descriptor is set from the child's representation exactly as
-  `lowerExprIntoRep` sets it. A coercion between two descriptor-carrying
-  representations of one storage layout—`Try(U8, [E2, E3])` into
-  `Try(U8, [E1, E2, E3])`, whose error rows live in erased payload boxes read
-  through descriptors—changes only how the value is described, and the shared
-  boundary adapts descriptors only into a target that already owns a
-  writable descriptor local; such a coercion adapts the value's descriptor to
-  the target representation's own directly (`rowCoerceAdaptsDescriptors`,
-  `assignRuntimeAdapterBoundary`), so a call argument the callee reads
-  through its static descriptor is re-tagged rather than copied. Before
-  lowering, `lowerRowCoerceInto` checks the
+  `lowerExprIntoRep` sets it. Before lowering, `lowerRowCoerceInto` checks the
   reach and the superset rule on the pair of the child's and the node's own
   representations (`assertRowCoerceReach`), because the shared boundary
   re-tags records and other aggregates structurally and accepts a pure
@@ -8228,23 +8148,20 @@ control transfer.
 - The Lambda Mono oracle re-tags by name through `convertValue`, as it does
   for a `?` return.
 
-The pipeline is exercised from source through generalized local values
+Because no checker emits the node, the pipeline is exercised by tests that
+stamp one onto a checked body after checking and before lowering it
 (`src/eval/test/lir_inline_test.zig`, "row coercion"), under both
 specialization strategies with leak checking, with source rows of two or more
 variants so the discriminant switch rather than the single-variant short cut
-is what runs. They cover a root row at a call argument, a constant local that
-is also a hoisting candidate, a `Try` error row, refcounted `Str` and `List`
-payloads, a row directly in a tag payload, a generic payload under an
-enclosing rigid, a `Try` holding a callable, a let-bound coercion that is
-itself a generalized local, and a use inside a closure. The producer's child
-is a lookup and never diverges, so the two divergent-child cases are still
-driven by stamping a coercion onto a checked body after checking
-(primitive-only scaffolding, kept for exactly those two). The rejected sides
-of the reach and superset rules are invariant panics, so they are not
+is what runs. They cover refcounted `Str` and `List` payloads, a row directly
+in a tag payload, a generic payload, coercions at a let binding and a call
+argument, and children that diverge statically and at runtime. The rejected
+sides of the reach and superset rules are invariant panics, so they are not
 exercised in-process; `solve.zig` pins the accepted side of the Lambda Solved
-relation, and `src/postcheck/structural_test.zig` pins the node's shape at
-every stage. This section adds no Rewrite Inventory entry: the primitive
-mutates no solved type graph.
+relation. Those tests are temporary scaffolding until the first producer
+lands; `src/postcheck/structural_test.zig` pins the node's shape at every
+stage. This section adds no Rewrite Inventory entry: the primitive mutates no
+solved type graph.
 
 ### Hosted Try Question Widening
 
@@ -9317,39 +9234,7 @@ Boundary literal defaulting protects variables in the callable relation but
 does not protect the receiver solely because it is the callable's first
 argument. A receiver owned by the current definition therefore defaults at that
 definition's boundary; a receiver owned by an enclosing scope remains outside
-the boundary's candidate universe.
-
-**Open Literals Resolve With Their Owning Scope.** A generalization boundary
-DEFAULTS the open literals it owns, so which literals it owns is a defaulting
-question, decided on settled ranks before any candidate is chosen
-(`Check.settleBoundaryRanks`). Unification lowers only the merged variable's
-own rank, so the boundary first runs generalization's rank adjustment over its
-pool (`Generalizer.settleRanksOfPool`): a literal structurally reachable from
-an enclosing scope's variable—a list pattern's item literal matched against an
-enclosing lambda's parameter, say—is lowered to that scope's rank. Rank
-adjustment follows type structure, not dispatch constraints, and for every
-other variable that is right: Roc supports a constraint on an escaped variable
-that mentions a quantified variable (it becomes a scheme requirement copied per
-instantiation), so `base = |g| weak.split_on(",").map(g)` stays polymorphic in
-`g`'s result even while `weak`'s type is still open. An open literal is
-different, because the boundary would default it, and defaulting it is
-premature while it is still constrained, through an escaped variable's dispatch
-constraints, against a type the enclosing scope owns. The rule: an open literal
-is resolved by the scope that owns the variables it is constrained against. So
-the boundary also lowers a still-open literal reachable through the dispatch
-constraints of an escaped variable to that variable's rank; it is neither
-generalized nor defaulted at the inner boundary. The `3` of `f({}).repeat(3)`
-escapes with its receiver and is decided with it (a `U64` once `Str.repeat` is
-selected), instead of being guessed as `Dec` before the relation the receiver
-carries out is discharged. A variable merged with such a literal is that
-literal: in `h = |n| { _ = x.combine(n); _ = [n, 1]; n }` with `x` an
-enclosing parameter, `n` is an open literal constrained against `x`, so it is
-resolved by the enclosing scope and `h` does not generalize over it (using
-`h` at `U8` and at `F64` is a Type Mismatch), whereas without the `[n, 1]`
-`h` generalizes over `n` as any variable does. No variable that is not an open
-literal is lowered through a constraint.
-
-This keeps literal settlement with the scope
+the boundary's candidate universe. This keeps literal settlement with the scope
 that declared the literal while preventing a literal inside a pending relation
 from being guessed before that relation is discharged. Traversal treats the
 receiver root as opaque rather than traversing it and deleting it afterward;
@@ -10625,23 +10510,6 @@ Other solved-graph mutations:
 - `constrainInterpolationPartToStr`—policy: Builtin Str Interpolation Part
   Compatibility (above). One commit-probe unifies the part with `Str` and
   validates every attached dispatch constraint; only full success is committed.
-- `settleBoundaryRanks`—policy: Open Literals Resolve With Their Owning
-  Scope (above). Lowers the rank of a still-open literal reachable through an
-  escaped variable's dispatch constraints to that variable's rank before the
-  boundary chooses its defaulting candidates; this changes which boundary
-  defaults the literal, so it changes checked output for error-free programs
-  (`fetch({}).repeat(3)` settles to `U64`, not `Dec`). Accepted and rejected
-  sides are pinned in `type_checking_integration.zig` ("polarity - a local
-  value matching an outer parameter…", "literal defaulting - an open literal
-  constrained against an enclosing variable…") and
-  `specialized_value_roots_test.zig` ("a literal in an escaped receiver's
-  dispatch constraint…").
-- `shareLocalValueAnnotationVars` (`setDescRank`)—policy: Polarity (block-local
-  value bindings, above). Keeps a local value annotation's `_` holes and its
-  opened extensions outside the row coercion's reach at the enclosing rank, so
-  its right-hand side frame quantifies exactly the rows the coercion widens.
-  Pinned by the `polarity - a local value…` tests in
-  `type_checking_integration.zig`.
 - Literal defaulting (`commitLiteralDefault`, `commitLiteralGroupDefault`)
 —policy: literal defaulting as declared in Static Dispatch At The
   Checked Boundary (the `LITERAL DEFAULTED` warning) and the numeric

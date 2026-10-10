@@ -551,11 +551,9 @@ test "open rows - platform provided definitions keep their `..`" {
     );
 }
 
-test "open rows - associated and block-local annotations drop their `..`" {
-    // An associated value is a top-level definition; a block-local function
-    // and a block-local value generalize or share their implicitly opened
-    // rows exactly as they would without the `..`, so it is redundant on
-    // every one of them (design.md "Polarity").
+test "open rows - associated annotations and block-local function annotations drop their `..`" {
+    // An associated value is a top-level definition; a block-local value
+    // keeps `..` as its opt-in to a quantified row.
     try expectFormatsTo(
         \\Thing := [T].{
         \\    fallback : [Bad, ..]
@@ -583,7 +581,7 @@ test "open rows - associated and block-local annotations drop their `..`" {
         \\        helper : Str -> [Worse]
         \\        helper = |_| Worse
         \\
-        \\        value : [Bad]
+        \\        value : [Bad, ..]
         \\        value = Bad
         \\
         \\        value

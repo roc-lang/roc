@@ -195,9 +195,7 @@ test "redundant open rows - same-named declarations that disagree" {
 
 test "redundant open rows - associated and block-local annotations" {
     // An associated value is a top-level definition and generalizes; a
-    // block-local function and a block-local value quantify or share their
-    // implicitly opened rows exactly as without the `..`, so the checker
-    // reports every one and the formatter drops every one.
+    // block-local value keeps `..` as its opt-in to a quantified row.
     try expectFormatterMatchesChecker(
         \\Thing := [T].{
         \\    fallback : [Bad, ..]

@@ -209,8 +209,40 @@ pub const Generalizer = struct {
     pub fn generalize(self: *Self, _: std.mem.Allocator, var_pool: *VarPool, rank_to_generalize: Rank) std.mem.Allocator.Error!void {
         if (rank_to_generalize == Rank.generalized) return;
 
-        try self.settleRanksOfPool(var_pool, rank_to_generalize);
+        std.debug.assert(var_pool.current_rank == rank_to_generalize);
         const rank_to_generalize_int = @intFromEnum(rank_to_generalize);
+
+        // Reset internal state from any previous generalization
+        self.reset();
+
+        // Prepare temporary pool to hold variables during processing
+        try self.tmp_var_pool.ensureRanksThrough(rank_to_generalize);
+        self.tmp_var_pool.current_rank = rank_to_generalize;
+
+        const vars_to_generalize = var_pool.getVarsForRank(rank_to_generalize);
+        try self.vars_to_generalized.ensureUnusedCapacity(@intCast(vars_to_generalize.len));
+
+        // Copy all variables at this rank into the temporary pool, resolving redirects
+        for (vars_to_generalize) |var_| {
+            const resolved = self.store.resolveVar(var_);
+            try self.tmp_var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
+            // Only add to vars_to_generalized if not already generalized.
+            // A var that was already generalized in a previous pass should not be
+            // re-processed (which could incorrectly change its rank).
+            if (resolved.desc.rank != .generalized) {
+                try self.vars_to_generalized.put(resolved.var_, {});
+            }
+        }
+
+        // Adjust ranks to maintain invariant: ranks never increase going deeper.
+        // Process from lowest to highest rank so that lower ranks are finalized first,
+        // ensuring we have accurate rank information when processing higher ranks.
+        for (self.tmp_var_pool.slice(), 0..) |vars_at_rank, group_rank_int| {
+            const group_rank: Rank = @enumFromInt(group_rank_int);
+            for (vars_at_rank.items) |var_| {
+                _ = try self.adjustRank(var_, group_rank);
+            }
+        }
 
         // Move variables from lower ranks (generalized through rank_to_generalize-1) back to main pool.
         // These are vars that were initially at rank_to_generalize but had their ranks
@@ -246,54 +278,6 @@ pub const Generalizer = struct {
         // Clear the rank we just processed from the main pool
         var_pool.ranks.items[rank_to_generalize_int].clearRetainingCapacity();
     }
-
-    /// Steps 1 and 2 of `generalize`, on their own: settle every var in the pool
-    /// entry for `rank` at its true rank—a var reachable from an outer-scope
-    /// variable is lowered to that scope's rank—without promoting anything.
-    /// A generalization boundary runs this before deciding its literal defaults
-    /// (`Check.defaultLiteralsAtGeneralizationBoundaryMultiRoot`), so a literal
-    /// that escapes through an outer variable reads as escaped rather than as
-    /// local to the boundary. Adjustment only lowers ranks to the rank the
-    /// following `generalize` would settle anyway, so running it early changes
-    /// no outcome of that call.
-    pub fn settleRanksOfPool(self: *Self, var_pool: *VarPool, rank: Rank) std.mem.Allocator.Error!void {
-        std.debug.assert(rank != Rank.generalized);
-        std.debug.assert(var_pool.current_rank == rank);
-        const rank_to_generalize = rank;
-
-        // Reset internal state from any previous generalization
-        self.reset();
-
-        // Prepare temporary pool to hold variables during processing
-        try self.tmp_var_pool.ensureRanksThrough(rank_to_generalize);
-        self.tmp_var_pool.current_rank = rank_to_generalize;
-
-        const vars_to_generalize = var_pool.getVarsForRank(rank_to_generalize);
-        try self.vars_to_generalized.ensureUnusedCapacity(@intCast(vars_to_generalize.len));
-
-        // Copy all variables at this rank into the temporary pool, resolving redirects
-        for (vars_to_generalize) |var_| {
-            const resolved = self.store.resolveVar(var_);
-            try self.tmp_var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
-            // Only add to vars_to_generalized if not already generalized.
-            // A var that was already generalized in a previous pass should not be
-            // re-processed (which could incorrectly change its rank).
-            if (resolved.desc.rank != .generalized) {
-                try self.vars_to_generalized.put(resolved.var_, {});
-            }
-        }
-
-        // Adjust ranks to maintain invariant: ranks never increase going deeper.
-        // Process from lowest to highest rank so that lower ranks are finalized first,
-        // ensuring we have accurate rank information when processing higher ranks.
-        for (self.tmp_var_pool.slice(), 0..) |vars_at_rank, group_rank_int| {
-            const group_rank: Rank = @enumFromInt(group_rank_int);
-            for (vars_at_rank.items) |var_| {
-                _ = try self.adjustRank(var_, group_rank);
-            }
-        }
-    }
-
     // adjust rank //
 
     /// Adjusts type variable ranks to prepare for generalization.

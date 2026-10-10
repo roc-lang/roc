@@ -2862,9 +2862,8 @@ test "check type - tag union - tag typo hint on an inline output union" {
 
 test "check type - tag union - tag typo hint on an explicit open ext" {
     // An anonymous `..` in an output position is generated like absence, so
-    // it carries the same hint. The `..` is redundant on a local value too,
-    // so the audit also warns, for the same extension, after the body check
-    // has refused the unlisted tag.
+    // it carries the same hint. On a local value binding it never warns
+    // redundant, so this is the only problem.
     const source =
         \\main = |_| {
         \\    color : [Red, Green, Blue, ..]
@@ -2872,7 +2871,7 @@ test "check type - tag union - tag typo hint on an explicit open ext" {
         \\    color
         \\}
     ;
-    try checkTypesModule(source, .{ .fail_with_all = &.{
+    try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\This expression produces the tag `Greeen` but the annotated tag union does not list it.
         \\```roc
@@ -2892,19 +2891,7 @@ test "check type - tag union - tag typo hint on an explicit open ext" {
         \\**Hint:** Maybe `Greeen` should be `Green`?
         \\
         \\
-        ,
-        \\**Redundant Open Tag Union**
-        \\This tag union has an explicit `..`, but it is already implicitly open.
-        \\```roc
-        \\    color : [Red, Green, Blue, ..]
-        \\```
-        \\                               ^^
-        \\
-        \\
-        \\Tag unions in output positions, like the return type of a function, are automatically open. Remove the `..` or bind it to a named type variable like `..others` if you want to refer to the extension elsewhere.
-        \\
-        \\
-    } }, "");
+    );
 }
 
 test "check type - tag union - no tag typo hint without a close match" {
@@ -9892,12 +9879,17 @@ fn expectPolymorphicValueHole(test_env: *TestEnv) TestEnv.TestEnvError!void {
     return error.TestUnexpectedResult;
 }
 
-test "check type - polarity - a local annotated value generalizes its implicitly opened row" {
-    // A local value binding follows the top-level rule: its implicitly
-    // opened row counts as a type variable, so `e : [Boom]` generalizes
-    // exactly as `e : [Boom, ..]` does and each use instantiates the row
-    // fresh. The value is evaluated once and each use widens it by a row
-    // coercion (design.md "Polarity", "Row Coercion Primitive").
+test "check type - polarity - a local annotated value shares its row across uses" {
+    // KNOWN GAP, not the intended language rule: local value bindings are not yet
+    // generalized by their implicitly opened rows, because a generalized
+    // local value lowers to a single Monotype cell and would need "evaluate
+    // once at the annotated width, widen at each use", which awaits row
+    // subsumption's `row_widen` lowering primitive (design.md "Deferred: Row
+    // Subsumption"). Until then the row behaves like an inferred local row,
+    // one variable shared by every use (sealed later by Monotype's row
+    // defaults): the first use widens it with `A`, which the second use's
+    // annotation does not list. This pins the gap; locals follow the
+    // top-level rule once that primitive exists.
     const source =
         \\f : Str -> ([A, Boom], [B, Boom])
         \\f = |_| {
@@ -9910,489 +9902,7 @@ test "check type - polarity - a local annotated value generalizes its implicitly
         \\    (a, b)
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Str -> ([A, Boom], [B, Boom])");
-}
-
-test "check type - polarity - a local annotated value is used at two closed rows" {
-    // Each use instantiates the local's row and unifies its own copy with a
-    // closed parameter row; the two copies are independent.
-    const source =
-        \\show_a : [A, Boom] -> Str
-        \\show_a = |_| "a"
-        \\
-        \\show_b : [B, Boom] -> Str
-        \\show_b = |_| "b"
-        \\
-        \\f : Str -> Str
-        \\f = |_| {
-        \\    e : [Boom]
-        \\    e = Boom
-        \\    Str.concat(show_a(e), show_b(e))
-        \\}
-    ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Str -> Str");
-}
-
-test "check type - polarity - a local value matching an outer parameter leaves its literals to the outer scope" {
-    // `input` belongs to the enclosing lambda (its type is still open when the
-    // body is checked), so the char literals of the list patterns relate to an
-    // outer-scope variable. They escape the local value's generalization
-    // boundary and are decided where `input` is (U8 here), never defaulted to
-    // Dec at the local's boundary.
-    const source =
-        \\apply : (i -> U64), i -> U64
-        \\apply = |g, x| g(x)
-        \\
-        \\count : U64
-        \\count = apply(
-        \\    |input| {
-        \\        r : Try([A, Other], [Bad(Str)])
-        \\        r = match input {
-        \\            ['A', ..] => Ok(A)
-        \\            _ => Ok(Other)
-        \\        }
-        \\        match r {
-        \\            Ok(A) => 1
-        \\            _ => 0
-        \\        }
-        \\    },
-        \\    [65.U8],
-        \\)
-    ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "U64");
-}
-
-test "check type - literal defaulting - a literal escaping through an outer variable is not defaulted at an inner boundary" {
-    // The local lambda `g` generalizes, but the literal in its list pattern
-    // relates to the enclosing lambda's parameter: it escapes `g`'s boundary.
-    const source =
-        \\apply : (i -> U64), i -> U64
-        \\apply = |g, x| g(x)
-        \\
-        \\count : U64
-        \\count = apply(
-        \\    |input| {
-        \\        g = |_| match input {
-        \\            ['A', ..] => 1
-        \\            _ => 0
-        \\        }
-        \\        g(0)
-        \\    },
-        \\    [65.U8],
-        \\)
-    ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "U64");
-}
-
-test "check type - literal defaulting - an open literal constrained against an enclosing variable resolves there" {
-    // design.md "Open Literals Resolve With Their Owning Scope". `n` is merged
-    // with the literal `1`, and the `map` constraint of the escaped receiver
-    // `weak.split_on(",")` relates it to the enclosing scope, so `h`'s
-    // boundary neither defaults nor generalizes it: the enclosing scope
-    // resolves it, and `h` used at `U8` and at `F64` is a Type Mismatch.
-    const rejected =
-        \\outer = |_unit| {
-        \\    weak = "a,b,c"
-        \\    h = |n| {
-        \\        _ = weak.split_on(",").map(|_| n)
-        \\        _ = [n, 1]
-        \\        n
-        \\    }
-        \\    (h(1.U8), h(2.F64))
-        \\}
-        \\
-        \\result = outer({})
-    ;
-    try checkTypesModule(rejected, .fail_first, "Type Mismatch");
-
-    // The same through a method on an enclosing parameter.
-    const rejected_param =
-        \\outer = |x| {
-        \\    h = |n| {
-        \\        _ = x.combine(n)
-        \\        _ = [n, 1]
-        \\        n
-        \\    }
-        \\    (h(1.U8), h(2.F64))
-        \\}
-    ;
-    try checkTypesModule(rejected_param, .fail_first, "Type Mismatch");
-
-    // Without the literal, `n` is an ordinary variable: the escaped
-    // receiver's constraint becomes a scheme requirement copied per
-    // instantiation and `h` generalizes over `n`.
-    const accepted =
-        \\outer = |_unit| {
-        \\    weak = "a,b,c"
-        \\    h = |n| {
-        \\        _ = weak.split_on(",").map(|_| n)
-        \\        n
-        \\    }
-        \\    (h(1.U8), h(2.F64))
-        \\}
-        \\
-        \\result = outer({})
-    ;
-    try checkTypesModule(accepted, .{ .pass = .last_def }, "(U8, F64)");
-}
-
-test "check type - literal defaulting - a literal pattern matched against an enclosing parameter resolves there" {
-    // A local lambda's boundary settles ranks before defaulting: the char
-    // literal is structurally reachable from the enclosing `input`, so it is
-    // resolved with `input` (U8 here), never defaulted to Dec at the local
-    // lambda's boundary.
-    const source =
-        \\apply : (i -> U64), i -> U64
-        \\apply = |g, x| g(x)
-        \\
-        \\count : U64
-        \\count = apply(
-        \\    |input| {
-        \\        classify = |_| match input {
-        \\            ['A', ..] => 1
-        \\            _ => 0
-        \\        }
-        \\        classify({})
-        \\    },
-        \\    [65.U8],
-        \\)
-    ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "U64");
-}
-
-test "check type - polarity - a local annotated value body is bounded" {
-    // The annotation bounds the local definition exactly as it bounds a
-    // top-level one: only uses widen the row.
-    const source =
-        \\f : Str -> [Boom]
-        \\f = |_| {
-        \\    e : [Boom]
-        \\    e = Bang
-        \\    e
-        \\}
-    ;
     try checkTypesModule(source, .fail_first, "Type Mismatch");
-}
-
-test "check type - polarity - a local value forwarding a closed row still closes it" {
-    // Known limitation, pending row subsumption (design.md "Deferred: Row
-    // Subsumption"), exactly as for a top-level value: the forwarded closed
-    // row binds the local's extension, so nothing is left to quantify.
-    const source =
-        \\first : [A, B] -> [A, B]
-        \\first = |x| x
-        \\
-        \\f : Str -> [A, B, C]
-        \\f = |_| {
-        \\    e : [A, B]
-        \\    e = first(A)
-        \\    e
-        \\}
-    ;
-    try checkTypesModule(source, .fail_first, "Type Mismatch");
-}
-
-test "check type - polarity - a local value's inference hole is shared by its uses" {
-    // A generalized local value is evaluated once, so a `_` hole—inferred
-    // from the body—stays one variable shared by every use while the opened
-    // error row still generalizes: the first use pins the hole to `U64` and
-    // the second use's `Str` is rejected, whereas two uses at different error
-    // rows are fine. (The hole sits under `List` because the payload of a tag
-    // the body never constructs is otherwise closed to `[]`, see
-    // `closeAbsentConstructedPayloadVars`.)
-    const rejected =
-        \\f : Str -> (Try(List(U64), [A, Boom]), Try(List(Str), [B, Boom]))
-        \\f = |_| {
-        \\    e : Try(List(_), [Boom])
-        \\    e = Err(Boom)
-        \\    a : Try(List(U64), [A, Boom])
-        \\    a = e
-        \\    b : Try(List(Str), [B, Boom])
-        \\    b = e
-        \\    (a, b)
-        \\}
-    ;
-    try checkTypesModule(rejected, .fail_first, "Type Mismatch");
-
-    const accepted =
-        \\f : Str -> (Try(List(U64), [A, Boom]), Try(List(U64), [B, Boom]))
-        \\f = |_| {
-        \\    e : Try(List(_), [Boom])
-        \\    e = Err(Boom)
-        \\    a : Try(List(U64), [A, Boom])
-        \\    a = e
-        \\    b : Try(List(U64), [B, Boom])
-        \\    b = e
-        \\    (a, b)
-        \\}
-    ;
-    try checkTypesModule(accepted, .{ .pass = .last_def }, "Str -> (Try(List(U64), [A, Boom]), Try(List(U64), [B, Boom]))");
-}
-
-test "check type - polarity - a local value's row outside the coercion's reach stays shared" {
-    // A row inside a `List` is outside the row coercion's reach (design.md
-    // "Row Coercion Primitive"), so a local value does not generalize it: the
-    // row is one variable shared by every use, and the first use's `A` is
-    // not in the second use's annotation.
-    const source =
-        \\f : Str -> (List([A, Boom]), List([B, Boom]))
-        \\f = |_| {
-        \\    xs : List([Boom])
-        \\    xs = [Boom]
-        \\    a : List([A, Boom])
-        \\    a = xs
-        \\    b : List([B, Boom])
-        \\    b = xs
-        \\    (a, b)
-        \\}
-    ;
-    try checkTypesModule(source, .fail_first, "Type Mismatch");
-    // Shared, not refused: the bound on the row ends with the binding's body
-    // check, so a single use may still widen it. That holds as well when the
-    // annotation mentions the enclosing definition's type variable, which
-    // generalizes the binding but leaves this row shared.
-    const one_use =
-        \\f : Str -> List([A, Boom])
-        \\f = |_| {
-        \\    xs : List([Boom])
-        \\    xs = [Boom]
-        \\    a : List([A, Boom])
-        \\    a = xs
-        \\    a
-        \\}
-    ;
-    try checkTypesModule(one_use, .{ .pass = .last_def }, "Str -> List([A, Boom])");
-    const one_use_rigid =
-        \\f : a -> List([A, Boom])
-        \\f = |x| {
-        \\    xs : (a, List([Boom]))
-        \\    xs = (x, [Boom])
-        \\    w : (a, List([A, Boom]))
-        \\    w = xs
-        \\    w.1
-        \\}
-    ;
-    try checkTypesModule(one_use_rigid, .{ .pass = .last_def }, "a -> List([A, Boom])");
-    const two_uses_rigid =
-        \\f : a -> (List([A, Boom]), List([B, Boom]))
-        \\f = |x| {
-        \\    xs : (a, List([Boom]))
-        \\    xs = (x, [Boom])
-        \\    v : (a, List([A, Boom]))
-        \\    v = xs
-        \\    w : (a, List([B, Boom]))
-        \\    w = xs
-        \\    (v.1, w.1)
-        \\}
-    ;
-    try checkTypesModule(two_uses_rigid, .fail_first, "Type Mismatch");
-}
-
-test "check type - polarity - a local value mentioning an enclosing rigid widens its shared row" {
-    // The annotation mentions only `f`'s `a`, so the binding generalizes and
-    // its `List` row, outside the coercion's reach, is kept shared. Its bound
-    // ends with the binding's body check, as a weak value's does, so the use
-    // may widen the shared row.
-    const source =
-        \\f : a -> List([A, Boom])
-        \\f = |x| {
-        \\    e : (a, List([Boom]))
-        \\    e = (x, [Boom])
-        \\    w : (a, List([A, Boom]))
-        \\    w = e
-        \\    w.1
-        \\}
-    ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "a -> List([A, Boom])");
-}
-
-test "check type - polarity - a local value's row through Try and an alias is within the reach" {
-    // `Try`'s arguments are tag payloads of its backing and an alias is
-    // stepped through, so a row written as an alias argument generalizes.
-    const source =
-        \\Res(e) : Try(Str, e)
-        \\
-        \\f : Str -> (Res([A, Boom]), Res([B, Boom]))
-        \\f = |_| {
-        \\    e : Res([Boom])
-        \\    e = Err(Boom)
-        \\    a : Res([A, Boom])
-        \\    a = e
-        \\    b : Res([B, Boom])
-        \\    b = e
-        \\    (a, b)
-        \\}
-    ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Str -> (Res([A, Boom]), Res([B, Boom]))");
-}
-
-test "check type - polarity - an alias parameter also under a List is outside the reach" {
-    // Reach is decided by position, not by variable: `x` is the same variable
-    // in `A(x)` (reached) and in `List(x)` (not reached), so the row opened
-    // on `[E]` stays shared. Two uses that need it at different rows are a
-    // Type Mismatch; a coercion could not widen the row inside the `List`.
-    const rejected =
-        \\Two(x) : [A(x), B(List(x))]
-        \\
-        \\show : Two([E, F]) -> Str
-        \\show = |_| "f"
-        \\
-        \\show2 : Two([E, G]) -> Str
-        \\show2 = |_| "g"
-        \\
-        \\f : Str -> Str
-        \\f = |_| {
-        \\    v : Two([E])
-        \\    v = A(E)
-        \\    Str.concat(show(v), show2(v))
-        \\}
-    ;
-    try checkTypesModule(rejected, .fail_first, "Type Mismatch");
-
-    // One use fixes the shared row, and nothing needs widening inside the List.
-    const single_use =
-        \\Two(x) : [A(x), B(List(x))]
-        \\
-        \\show : Two([E, F]) -> Str
-        \\show = |_| "f"
-        \\
-        \\f : Str -> Str
-        \\f = |_| {
-        \\    v : Two([E])
-        \\    v = A(E)
-        \\    show(v)
-        \\}
-    ;
-    try checkTypesModule(single_use, .{ .pass = .last_def }, "Str -> Str");
-
-    // When every position of `x` is reached, its row generalizes.
-    const accepted =
-        \\Two(x) : [A(x), B(x)]
-        \\
-        \\show : Two([E, F]) -> Str
-        \\show = |_| "f"
-        \\
-        \\show2 : Two([E, G]) -> Str
-        \\show2 = |_| "g"
-        \\
-        \\f : Str -> Str
-        \\f = |_| {
-        \\    v : Two([E])
-        \\    v = A(E)
-        \\    Str.concat(show(v), show2(v))
-        \\}
-    ;
-    try checkTypesModule(accepted, .{ .pass = .last_def }, "Str -> Str");
-}
-
-test "check type - polarity - a local value of a user nominal keeps its argument row shared" {
-    // A user nominal's argument is outside the checker's reach (the type
-    // store carries no other nominal's backing), so the row opened on `[E]`
-    // stays shared and two uses at different rows are a Type Mismatch.
-    const source =
-        \\Wrap(x) := [W(x)]
-        \\
-        \\show : Wrap([E, F]) -> Str
-        \\show = |_| "f"
-        \\
-        \\show2 : Wrap([E, G]) -> Str
-        \\show2 = |_| "g"
-        \\
-        \\f : Str -> Str
-        \\f = |_| {
-        \\    v : Wrap([E])
-        \\    v = Wrap.W(E)
-        \\    Str.concat(show(v), show2(v))
-        \\}
-    ;
-    try checkTypesModule(source, .fail_first, "Type Mismatch");
-}
-
-test "check type - polarity - a local value introducing a type variable generalizes as before" {
-    // `a` is the annotation's own variable, so the binding generalizes over
-    // it and over its opened row exactly as it did before local values
-    // generalized their opened rows: neither the row inside the `List` nor
-    // the payload is kept shared, and the two uses instantiate both.
-    const source =
-        \\g : List([A, B(U64), C]) -> U64
-        \\g = |l| List.len(l)
-        \\
-        \\h : List([A, B(Str), D]) -> U64
-        \\h = |l| List.len(l)
-        \\
-        \\f : Str -> U64
-        \\f = |_| {
-        \\    xs : List([A, B(a)])
-        \\    xs = [A]
-        \\    g(xs) + h(xs)
-        \\}
-    ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Str -> U64");
-}
-
-test "check type - polarity - a local callable value's result row stays shared" {
-    // A function result is outside the row coercion's reach, and a callable
-    // built by a block (not a lambda, so not a local procedure) is a value
-    // evaluated once: its result row stays shared across uses, so two closed
-    // uses at different rows are rejected.
-    const source =
-        \\show_a : [A, Boom] -> Str
-        \\show_a = |_| "a"
-        \\
-        \\show_b : [B, Boom] -> Str
-        \\show_b = |_| "b"
-        \\
-        \\f : Str -> Str
-        \\f = |_| {
-        \\    g : U64 -> [Boom]
-        \\    g = {
-        \\        k = 2
-        \\        |n| if n > k Boom else Boom
-        \\    }
-        \\    Str.concat(show_a(g(1)), show_b(g(2)))
-        \\}
-    ;
-    try checkTypesModule(source, .fail_first, "Type Mismatch");
-}
-
-test "check type - polarity - a local annotated recursive function widens its row per use" {
-    // A type-variable-free annotated local function predeclares its scheme,
-    // which quantifies the implicitly opened result row, so a recursive
-    // reference and both outer uses instantiate it independently.
-    const source =
-        \\show_a : [A, Done] -> Str
-        \\show_a = |_| "a"
-        \\
-        \\show_b : [B, Done] -> Str
-        \\show_b = |_| "b"
-        \\
-        \\f : U64 -> Str
-        \\f = |n| {
-        \\    go : U64 -> [Done]
-        \\    go = |k| if k == 0 Done else go(k - 1)
-        \\    Str.concat(show_a(go(n)), show_b(go(n)))
-        \\}
-    ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "U64 -> Str");
-}
-
-test "check type - polarity - a local value mentioning an enclosing rigid generalizes its reached row" {
-    // The annotation mentions the enclosing function's `a`, which already
-    // generalizes the binding; the opened error row is within the reach and
-    // quantifies, while `a` stays the enclosing rigid.
-    const source =
-        \\f : a -> (Try(a, [A, Boom]), Try(a, [B, Boom]))
-        \\f = |x| {
-        \\    e : Try(a, [Boom])
-        \\    e = Ok(x)
-        \\    first : Try(a, [A, Boom])
-        \\    first = e
-        \\    second : Try(a, [B, Boom])
-        \\    second = e
-        \\    (first, second)
-        \\}
-    ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "a -> (Try(a, [A, Boom]), Try(a, [B, Boom]))");
 }
 
 test "check type - polarity - an unannotated use of a generalized value does not widen it" {
@@ -10885,10 +10395,9 @@ test "check type - polarity - explicit anonymous ext on a top-level value warns 
     } }, "[Boom]");
 }
 
-test "check type - polarity - explicit anonymous ext on a local value is redundant" {
-    // A local value's implicitly opened row generalizes it exactly as a
-    // written `..` would, so the `..` adds nothing and warns, as on a
-    // top-level value.
+test "check type - polarity - explicit anonymous ext on a local value does not warn" {
+    // A local value's implicitly opened row does not generalize it; there
+    // `..` is the opt-in to a quantified row, so it is not redundant.
     const source =
         \\f : Str -> [A, B, Boom]
         \\f = |_| {
@@ -10897,27 +10406,7 @@ test "check type - polarity - explicit anonymous ext on a local value is redunda
         \\    e
         \\}
     ;
-    try checkTypesModule(source, .{ .pass_with_warnings = .{
-        .def = .last_def,
-        .warnings = &.{"Redundant Open Tag Union"},
-    } }, "Str -> [A, B, Boom]");
-}
-
-test "check type - polarity - explicit anonymous ext outside a local value's reach is redundant too" {
-    // The row stays shared either way—`..` in an output position is
-    // generated exactly as its absence is—so the `..` is still redundant.
-    const source =
-        \\f : Str -> List([A, Boom])
-        \\f = |_| {
-        \\    xs : List([Boom, ..])
-        \\    xs = [Boom]
-        \\    xs
-        \\}
-    ;
-    try checkTypesModule(source, .{ .pass_with_warnings = .{
-        .def = .last_def,
-        .warnings = &.{"Redundant Open Tag Union"},
-    } }, "Str -> List([A, Boom])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str -> [A, B, Boom]");
 }
 
 test "check type - polarity - explicit anonymous ext in an input position does not warn" {

@@ -952,20 +952,6 @@ pub const BindingScheme = extern struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
-/// A block-local value binding whose checked value is evaluated once into its
-/// binder and widened at each use by a row coercion (design.md "Polarity"):
-/// checking generalized it for its implicitly opened rows alone, each within
-/// the row coercion's reach, or it aliases such a binding. Checking records
-/// the binder pattern's node explicitly; checked-body construction lowers
-/// every use of the binder as a `row_coerce` of its one value and
-/// compile-time root eligibility reads its quantified rows as sealed. Kept
-/// sorted by `node_idx`, like `BindingScheme`.
-pub const RowCoercedLocalValue = extern struct {
-    node_idx: u32,
-
-    pub const SafeList = collections.SafeList(@This());
-};
-
 /// One generated-codec dispatch relation that remains part of a binding's
 /// scheme across checked-module boundaries. `scheme_root` preserves alias
 /// identity when a cached checked environment is rechecked, and
@@ -1144,8 +1130,6 @@ scheme_use_pairs: SchemeUsePair.SafeList,
 /// Exact source bindings that checking generalized into rank-1 type schemes.
 /// Sorted by source node for allocation-free cross-module lookup.
 binding_schemes: BindingScheme.SafeList,
-/// Checker-recorded row-coerced local value binders (`RowCoercedLocalValue`).
-row_coerced_local_values: RowCoercedLocalValue.SafeList,
 /// Generated-codec relations carried by those schemes. Sorted by source node;
 /// multiple requirements for one binding occupy one contiguous run.
 binding_scheme_codec_requirements: BindingSchemeCodecRequirement.SafeList,
@@ -1516,7 +1500,6 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.scheme_uses.relocate(offset);
     self.scheme_use_pairs.relocate(offset);
     self.binding_schemes.relocate(offset);
-    self.row_coerced_local_values.relocate(offset);
     self.binding_scheme_codec_requirements.relocate(offset);
     self.rejected_static_dispatches.relocate(offset);
     self.record_omitted_defaults.relocate(offset);
@@ -1621,7 +1604,6 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .scheme_uses = try SchemeUseRecord.SafeList.initCapacity(gpa, 8),
         .scheme_use_pairs = try SchemeUsePair.SafeList.initCapacity(gpa, 8),
         .binding_schemes = try BindingScheme.SafeList.initCapacity(gpa, 8),
-        .row_coerced_local_values = try RowCoercedLocalValue.SafeList.initCapacity(gpa, 4),
         .binding_scheme_codec_requirements = try BindingSchemeCodecRequirement.SafeList.initCapacity(gpa, 4),
         .generated_codec_derivations = try GeneratedCodecDerivation.SafeList.initCapacity(gpa, 4),
         .generated_codec_calls = try GeneratedCodecCall.SafeList.initCapacity(gpa, 16),
@@ -1657,7 +1639,6 @@ pub fn deinit(self: *Self) void {
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
     self.binding_schemes.deinit(self.gpa);
-    self.row_coerced_local_values.deinit(self.gpa);
     self.binding_scheme_codec_requirements.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
@@ -1763,7 +1744,6 @@ pub fn deinitCachedModule(self: *Self) void {
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
     self.binding_schemes.deinit(self.gpa);
-    self.row_coerced_local_values.deinit(self.gpa);
     self.binding_scheme_codec_requirements.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
@@ -4557,7 +4537,6 @@ pub const Serialized = extern struct {
     scheme_uses: SchemeUseRecord.SafeList.Serialized,
     scheme_use_pairs: SchemeUsePair.SafeList.Serialized,
     binding_schemes: BindingScheme.SafeList.Serialized,
-    row_coerced_local_values: RowCoercedLocalValue.SafeList.Serialized,
     binding_scheme_codec_requirements: BindingSchemeCodecRequirement.SafeList.Serialized,
     generated_codec_derivations: GeneratedCodecDerivation.SafeList.Serialized,
     generated_codec_calls: GeneratedCodecCall.SafeList.Serialized,
@@ -4680,7 +4659,6 @@ pub const Serialized = extern struct {
         try self.scheme_uses.serialize(&env.scheme_uses, allocator, writer);
         try self.scheme_use_pairs.serialize(&env.scheme_use_pairs, allocator, writer);
         try self.binding_schemes.serialize(&env.binding_schemes, allocator, writer);
-        try self.row_coerced_local_values.serialize(&env.row_coerced_local_values, allocator, writer);
         try self.binding_scheme_codec_requirements.serialize(&env.binding_scheme_codec_requirements, allocator, writer);
         try self.generated_codec_derivations.serialize(&env.generated_codec_derivations, allocator, writer);
         try self.generated_codec_calls.serialize(&env.generated_codec_calls, allocator, writer);
@@ -4755,7 +4733,6 @@ pub const Serialized = extern struct {
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
             .binding_schemes = self.binding_schemes.deserializeInto(base_addr),
-            .row_coerced_local_values = self.row_coerced_local_values.deserializeInto(base_addr),
             .binding_scheme_codec_requirements = self.binding_scheme_codec_requirements.deserializeInto(base_addr),
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
@@ -4832,7 +4809,6 @@ pub const Serialized = extern struct {
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
             .binding_schemes = self.binding_schemes.deserializeInto(base_addr),
-            .row_coerced_local_values = self.row_coerced_local_values.deserializeInto(base_addr),
             .binding_scheme_codec_requirements = self.binding_scheme_codec_requirements.deserializeInto(base_addr),
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
@@ -4912,7 +4888,6 @@ pub const Serialized = extern struct {
             .scheme_uses = try self.scheme_uses.deserializeWithCopy(base_addr, gpa),
             .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
             .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
-            .row_coerced_local_values = try self.row_coerced_local_values.deserializeWithCopy(base_addr, gpa),
             .binding_scheme_codec_requirements = try self.binding_scheme_codec_requirements.deserializeWithCopy(base_addr, gpa),
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
@@ -5004,7 +4979,6 @@ pub const Serialized = extern struct {
             .scheme_uses = try self.scheme_uses.deserializeWithCopy(base_addr, gpa),
             .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
             .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
-            .row_coerced_local_values = try self.row_coerced_local_values.deserializeWithCopy(base_addr, gpa),
             .binding_scheme_codec_requirements = try self.binding_scheme_codec_requirements.deserializeWithCopy(base_addr, gpa),
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
@@ -5218,27 +5192,6 @@ pub fn nodeIsBindingScheme(self: *const Self, node_idx: Node.Idx) bool {
     return findSortedByNode(
         BindingScheme,
         self.binding_schemes.items.items,
-        @intFromEnum(node_idx),
-    ) != null;
-}
-
-/// Record that `node_idx` binds a row-coerced local value
-/// (`RowCoercedLocalValue`). Checker-produced binding metadata.
-pub fn recordRowCoercedLocalValue(self: *Self, node_idx: Node.Idx) std.mem.Allocator.Error!void {
-    try upsertSortedByNode(
-        RowCoercedLocalValue,
-        &self.row_coerced_local_values,
-        self.gpa,
-        .{ .node_idx = @intFromEnum(node_idx) },
-    );
-}
-
-/// Whether checking recorded `node_idx` as the binder of a row-coerced local
-/// value (`RowCoercedLocalValue`).
-pub fn nodeIsRowCoercedLocalValue(self: *const Self, node_idx: Node.Idx) bool {
-    return findSortedByNode(
-        RowCoercedLocalValue,
-        self.row_coerced_local_values.items.items,
         @intFromEnum(node_idx),
     ) != null;
 }

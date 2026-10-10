@@ -158,10 +158,9 @@ const LowerModuleOptions = struct {
     promote_loop_appends: bool = true,
     prove_ranges: bool = false,
     imports: []const helpers.ModuleSource = &.{},
-    /// Primitive-only scaffolding: rewrites the root module's checked bodies
-    /// after checking and before lowering, for a checked-body shape no
-    /// producer emits (a `row_coerce` whose child diverges, design.md "Row
-    /// Coercion Primitive"). Remove with its last user.
+    /// TEMPORARY SCAFFOLDING: rewrites the root module's checked bodies after
+    /// checking and before lowering, for post-check forms no checker site emits
+    /// yet (design.md "Row Coercion Primitive"). Remove with its last user.
     checked_body_edit: ?*const fn (*check.CheckedArtifact.CheckedBodyStore) void = null,
 };
 
@@ -12696,16 +12695,14 @@ test "issue 11470: tagged shared error composition executes in both strategies" 
     }
 }
 
-/// Primitive-only scaffolding for design.md "Row Coercion Primitive": the one
-/// checker site that emits `row_coerce` wraps a local lookup, which never
-/// diverges, so the primitive's divergent-child paths are reachable only by
-/// stamping a coercion onto a checked body before lowering it. The source
-/// holds exactly one `match` whose every arm yields a tag (`B => B`); every
-/// other `match` in the source yields numbers. The stamp replaces that match
-/// with `row_coerce { value = cond }` and keeps the match's own, wider type,
-/// so the scrutinee's closed row is now used at the match's row. Every other
-/// row-coercion case is driven from source through a generalized local value
-/// (`expectRowCoercionResults`).
+/// TEMPORARY SCAFFOLDING for design.md "Row Coercion Primitive": no checker
+/// site emits `row_coerce` yet, so the row-coercion tests stamp one onto the
+/// checked body before lowering it. The source holds exactly one `match` whose
+/// every arm yields a tag (`B => B`, `Ok(v) => Ok(v)`); every other `match` in
+/// the source yields numbers. The stamp replaces that match with
+/// `row_coerce { value = cond }` and keeps the match's own, wider type, so the
+/// scrutinee's closed row is now used at the match's row. Delete this hook and
+/// drive the same cases from source once the local-value producer lands.
 ///
 /// Derived per-expression data keyed on the replaced id stays consistent:
 /// divergence is stored on the expression itself, and the stamp requires the
@@ -12746,15 +12743,10 @@ fn lowerStampedRowCoercion(allocator: Allocator, source: []const u8, strategy: b
     });
 }
 
-/// Lowers `source`, whose row coercions the checker emits for the uses of
-/// generalized local values (design.md "Polarity"), under both specialization
-/// strategies, and checks `main(mode) == result` for each `(mode, result)`
-/// pair without leaking.
-fn expectRowCoercionResults(source: []const u8, expectations: []const [2]u64) (TestError || eval.Interpreter.Error || eval.RuntimeHostEnv.LeakError)!void {
+fn expectStampedRowCoercionResults(source: []const u8, expectations: []const [2]u64) (TestError || eval.Interpreter.Error || eval.RuntimeHostEnv.LeakError)!void {
     const allocator = std.testing.allocator;
     for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
-        errdefer std.debug.print("row coercion case failed under the {s} strategy\n", .{@tagName(strategy)});
-        var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .specialization_strategy = strategy });
+        var lowered = try lowerStampedRowCoercion(allocator, source, strategy);
         defer lowered.deinit(allocator);
         const result = &lowered.lowered.lir_result;
         var runtime_env = eval.RuntimeHostEnv.init(allocator);
@@ -12785,74 +12777,44 @@ fn expectRowCoercionResults(source: []const u8, expectations: []const [2]u64) (T
     }
 }
 
-test "row coercion: a local value's closed tag row re-tags into a wider row in both strategies" {
-    // `v : [B, C]` is a generalized local value used at `[A, B, C]`, the
-    // parameter row of `classify`. `[B, C]` has two variants, so lowering
-    // emits the discriminant switch rather than the single-variant short
-    // cut, and every variant changes index: B is 0 in `[B, C]` and 1 in
-    // `[A, B, C]`. A lowering that copied the value through would read B as
-    // A (1) and C as B (2).
-    try expectRowCoercionResults(
-        \\classify : [A, B, C] -> U64
-        \\classify = |x| match x {
-        \\    A => 1
-        \\    B => 2
-        \\    C => 3
+test "row coercion: a closed tag row re-tags into a wider row in both strategies" {
+    // `[B, C]` has two variants, so lowering emits the discriminant switch
+    // rather than the single-variant short cut, and every variant changes
+    // index: B is 0 in `[B, C]` and 1 in `[A, B, C]`. A lowering that copied
+    // the value through would read B as A (1) and C as B (2).
+    try expectStampedRowCoercionResults(
+        \\widen : [B, C] -> [A, B, C]
+        \\widen = |x| match x {
+        \\    B => B
+        \\    C => C
         \\}
         \\
         \\main : U64 -> U64
-        \\main = |mode| {
-        \\    v : [B, C]
-        \\    v = if mode == 0 { B } else { C }
-        \\    classify(v)
+        \\main = |mode| match widen(if mode == 0 { B } else { C }) {
+        \\    A => 1
+        \\    B => 2
+        \\    C => 3
         \\}
     , &.{ .{ 0, 2 }, .{ 1, 3 } });
 }
 
-test "row coercion: a constant local value is coerced at two uses of different widths" {
-    // `v = B` reads nothing local, so it is also a hoisting candidate; each
-    // use still reads the one binder and re-tags it at its own row.
-    try expectRowCoercionResults(
-        \\classify_a : [A, B, C] -> U64
-        \\classify_a = |x| match x {
-        \\    A => 1
-        \\    B => 2
-        \\    C => 3
-        \\}
-        \\
-        \\classify_d : [B, C, D] -> U64
-        \\classify_d = |x| match x {
-        \\    B => 5
-        \\    C => 6
-        \\    D => 7
+test "row coercion: a Try error row re-tags inside the nominal in both strategies" {
+    // The coercion crosses the `Try` nominal into its `Err` payload: `[E2, E3]`
+    // widens to `[E1, E2, E3]` while the `Ok` payload is moved unchanged.
+    try expectStampedRowCoercionResults(
+        \\widen : Try(U8, [E2, E3]) -> Try(U8, [E1, E2, E3])
+        \\widen = |x| match x {
+        \\    Ok(v) => Ok(v)
+        \\    Err(E2) => Err(E2)
+        \\    Err(E3) => Err(E3)
         \\}
         \\
         \\main : U64 -> U64
-        \\main = |mode| {
-        \\    v : [B, C]
-        \\    v = B
-        \\    classify_a(v) + classify_d(v) * 10 + mode
-        \\}
-    , &.{ .{ 0, 52 }, .{ 1, 53 } });
-}
-
-test "row coercion: a local Try value's error row re-tags inside the nominal in both strategies" {
-    // The coercion crosses the `Try` nominal into its `Err` payload: `[E2, E3]`
-    // widens to `[E1, E2, E3]` while the `Ok` payload is moved unchanged.
-    try expectRowCoercionResults(
-        \\classify : Try(U8, [E1, E2, E3]) -> U64
-        \\classify = |x| match x {
+        \\main = |mode| match widen(if mode == 0 { Err(E2) } else if mode == 1 { Err(E3) } else { Ok(7) }) {
         \\    Ok(_) => 0
         \\    Err(E1) => 1
         \\    Err(E2) => 2
         \\    Err(E3) => 3
-        \\}
-        \\
-        \\main : U64 -> U64
-        \\main = |mode| {
-        \\    v : Try(U8, [E2, E3])
-        \\    v = if mode == 0 { Err(E2) } else if mode == 1 { Err(E3) } else { Ok(7) }
-        \\    classify(v)
         \\}
     , &.{ .{ 0, 2 }, .{ 1, 3 }, .{ 2, 0 } });
 }
@@ -12899,45 +12861,35 @@ fn expectStampedRowCoercionCrash(source: []const u8, expected_message: []const u
 test "row coercion: a refcounted Str payload moves through the re-tag without leaking" {
     // The Str is built at runtime and is long enough for heap storage, so ARC
     // over the `tag_payload_struct` read and the `assign_tag` actually runs.
-    try expectRowCoercionResults(
-        \\classify : [Bad, Ok(Str), Err(U64)] -> U64
-        \\classify = |x| match x {
-        \\    Bad => 0
-        \\    Ok(s) => s.count_utf8_bytes()
-        \\    Err(n) => n + 100
+    try expectStampedRowCoercionResults(
+        \\widen : [Ok(Str), Err(U64)] -> [Bad, Ok(Str), Err(U64)]
+        \\widen = |x| match x {
+        \\    Ok(s) => Ok(s)
+        \\    Err(n) => Err(n)
         \\}
         \\
         \\main : U64 -> U64
-        \\main = |mode| {
-        \\    v : [Ok(Str), Err(U64)]
-        \\    v = if mode == 0 { Ok("heap allocated string payload number ${mode.to_str()}") } else { Err(mode) }
-        \\    classify(v)
+        \\main = |mode| match widen(if mode == 0 { Ok("heap allocated string payload number ${mode.to_str()}") } else { Err(mode) }) {
+        \\    Bad => 0
+        \\    Ok(s) => s.count_utf8_bytes()
+        \\    Err(n) => n + 100
         \\}
     , &.{ .{ 0, 38 }, .{ 1, 101 } });
 }
 
 test "row coercion: a refcounted List payload moves through the re-tag without leaking" {
-    // `pick` builds the value so the local's initializer is a call: an `if`
-    // joining a payload-carrying branch with a payload-less one leaves the
-    // join's descriptor parameter unassigned under `.boxy` regardless of any
-    // coercion (a pre-existing Boxy defect, reproduced with an unannotated
-    // local), which this test is not about.
-    try expectRowCoercionResults(
-        \\classify : [Bad, Some(List(U64)), Empty] -> U64
-        \\classify = |x| match x {
+    try expectStampedRowCoercionResults(
+        \\widen : [Some(List(U64)), Empty] -> [Bad, Some(List(U64)), Empty]
+        \\widen = |x| match x {
+        \\    Some(l) => Some(l)
+        \\    Empty => Empty
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |mode| match widen(if mode == 0 { Some([mode, mode + 1, mode + 2]) } else { Empty }) {
         \\    Bad => 0
         \\    Some(l) => l.len()
         \\    Empty => 7
-        \\}
-        \\
-        \\pick : U64 -> [Some(List(U64)), Empty]
-        \\pick = |mode| if mode == 0 { Some([mode, mode + 1, mode + 2]) } else { Empty }
-        \\
-        \\main : U64 -> U64
-        \\main = |mode| {
-        \\    v : [Some(List(U64)), Empty]
-        \\    v = pick(mode)
-        \\    classify(v)
         \\}
     , &.{ .{ 0, 3 }, .{ 1, 7 } });
 }
@@ -12945,51 +12897,46 @@ test "row coercion: a refcounted List payload moves through the re-tag without l
 test "row coercion: a row directly in a tag payload re-tags too" {
     // Inside the declared reach: the inner `[B, C]` widens to `[A, B, C]`
     // (every inner variant changes index) while the outer row gains `Bad`
-    // (every outer variant changes index). Both rows of the local's
-    // annotation are implicitly open, so both are quantified and widened.
-    try expectRowCoercionResults(
-        \\classify : [Bad, Ok([A, B, C]), Err] -> U64
-        \\classify = |x| match x {
+    // (every outer variant changes index).
+    try expectStampedRowCoercionResults(
+        \\widen : [Ok([B, C]), Err] -> [Bad, Ok([A, B, C]), Err]
+        \\widen = |x| match x {
+        \\    Ok(B) => Ok(B)
+        \\    Ok(C) => Ok(C)
+        \\    Err => Err
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |mode| match widen(if mode == 0 { Ok(B) } else if mode == 1 { Ok(C) } else { Err }) {
         \\    Bad => 0
         \\    Ok(A) => 1
         \\    Ok(B) => 2
         \\    Ok(C) => 3
         \\    Err => 4
         \\}
-        \\
-        \\pick : U64 -> [Ok([B, C]), Err]
-        \\pick = |mode| if mode == 0 { Ok(B) } else if mode == 1 { Ok(C) } else { Err }
-        \\
-        \\main : U64 -> U64
-        \\main = |mode| {
-        \\    v : [Ok([B, C]), Err]
-        \\    v = pick(mode)
-        \\    classify(v)
-        \\}
     , &.{ .{ 0, 2 }, .{ 1, 3 }, .{ 2, 4 } });
 }
 
 test "row coercion: a generic payload crosses the re-tag" {
-    // `v`'s annotation mentions the enclosing `a`, which stays the enclosing
-    // rigid while the error row quantifies. `widen` is used at Str and U64,
-    // so `.boxy` lowers it once with a descriptor-carried payload.
-    try expectRowCoercionResults(
-        \\widen : a, U64 -> Try(a, [E1, E2, E3])
-        \\widen = |x, mode| {
-        \\    v : Try(a, [E2, E3])
-        \\    v = if mode == 0 { Err(E2) } else if mode == 1 { Err(E3) } else { Ok(x) }
-        \\    v
+    // `widen` is generic in its `Ok` payload and is used at Str and U64, so
+    // `.boxy` lowers it once with a descriptor-carried payload.
+    try expectStampedRowCoercionResults(
+        \\widen : Try(a, [E2, E3]) -> Try(a, [E1, E2, E3])
+        \\widen = |x| match x {
+        \\    Ok(v) => Ok(v)
+        \\    Err(E2) => Err(E2)
+        \\    Err(E3) => Err(E3)
         \\}
         \\
         \\main : U64 -> U64
         \\main = |mode| {
-        \\    text = match widen("generic payload string long enough ${mode.to_str()}", mode) {
+        \\    text = match widen(if mode == 0 { Err(E2) } else if mode == 1 { Err(E3) } else { Ok("generic payload string long enough ${mode.to_str()}") }) {
         \\        Ok(s) => s.count_utf8_bytes()
         \\        Err(E1) => 1
         \\        Err(E2) => 2
         \\        Err(E3) => 3
         \\    }
-        \\    number = match widen(mode, 2) {
+        \\    number = match widen(Ok(mode)) {
         \\        Ok(n) => n * 1000
         \\        Err(_) => 0
         \\    }
@@ -12999,9 +12946,7 @@ test "row coercion: a generic payload crosses the re-tag" {
 }
 
 test "row coercion: a let-bound coercion inside a body" {
-    // `y`'s annotation is implicitly open too, so `y` is itself a generalized
-    // local value and its use in `classify` is a second (identity) coercion.
-    try expectRowCoercionResults(
+    try expectStampedRowCoercionResults(
         \\classify : [A, B, C] -> U64
         \\classify = |v| match v {
         \\    A => 1
@@ -13014,16 +12959,17 @@ test "row coercion: a let-bound coercion inside a body" {
         \\    v : [B, C]
         \\    v = if mode == 0 { B } else { C }
         \\    y : [A, B, C]
-        \\    y = v
+        \\    y = match v {
+        \\        B => B
+        \\        C => C
+        \\    }
         \\    classify(y)
         \\}
     , &.{ .{ 0, 2 }, .{ 1, 3 } });
 }
 
-test "row coercion: a coercion inside a closure body" {
-    // The use sits in a lambda that captures `v`; the coercion is lowered in
-    // the lambda's body from the captured binder.
-    try expectRowCoercionResults(
+test "row coercion: a coercion in a call argument" {
+    try expectStampedRowCoercionResults(
         \\classify : [A, B, C] -> U64
         \\classify = |v| match v {
         \\    A => 1
@@ -13035,33 +12981,12 @@ test "row coercion: a coercion inside a closure body" {
         \\main = |mode| {
         \\    v : [B, C]
         \\    v = if mode == 0 { B } else { C }
-        \\    f = |k| classify(v) + k
-        \\    f(10)
+        \\    classify(match v {
+        \\        B => B
+        \\        C => C
+        \\    })
         \\}
-    , &.{ .{ 0, 12 }, .{ 1, 13 } });
-}
-
-test "row coercion: a Try holding a callable re-tags its error row" {
-    // The coerced value carries a callable in its `Ok` payload; the error
-    // row still widens at the call argument.
-    try expectRowCoercionResults(
-        \\classify : Try(U64 -> U64, [E1, E2]), U64 -> U64
-        \\classify = |x, n| match x {
-        \\    Ok(f) => f(n)
-        \\    Err(E1) => 1
-        \\    Err(E2) => 2
-        \\}
-        \\
-        \\pick : U64 -> Try(U64 -> U64, [E2])
-        \\pick = |mode| if mode == 0 { Ok(|n| n + 10) } else { Err(E2) }
-        \\
-        \\main : U64 -> U64
-        \\main = |mode| {
-        \\    f : Try(U64 -> U64, [E2])
-        \\    f = pick(mode)
-        \\    classify(f, mode)
-        \\}
-    , &.{ .{ 0, 10 }, .{ 1, 2 } });
+    , &.{ .{ 0, 2 }, .{ 1, 3 } });
 }
 
 test "row coercion: a statically divergent child crashes" {
