@@ -35,7 +35,76 @@ pub const TimingInfo = struct {
     /// Deterministic lowering and emission counters from all compile-time
     /// evaluation, whether run inside module checks or program finalization.
     compile_time_counters: eval.CompileTimeFinalization.TimingSnapshot = .{},
+    /// The modules whose type checking took longest.
+    slowest_type_checks: SlowestTypeChecks = .{},
 };
+
+/// One module's type-checking time: checking and checked-artifact
+/// publication, excluding compile-time evaluation run inside the check.
+/// The name is stored inline because the timing outlives the coordinator.
+pub const ModuleTypeCheckTiming = struct {
+    pub const max_name_len = 256;
+
+    name_buf: [max_name_len]u8 = undefined,
+    name_len: u16 = 0,
+    ns: u64,
+
+    /// `package.Module`, cut to `max_name_len` bytes.
+    pub fn init(package: []const u8, module: []const u8, ns: u64) ModuleTypeCheckTiming {
+        var result: ModuleTypeCheckTiming = .{ .ns = ns };
+        const written = std.fmt.bufPrint(&result.name_buf, "{s}.{s}", .{ package, module }) catch |err| switch (err) {
+            error.NoSpaceLeft => result.name_buf[0..],
+        };
+        result.name_len = @intCast(written.len);
+        return result;
+    }
+
+    pub fn name(self: *const ModuleTypeCheckTiming) []const u8 {
+        return self.name_buf[0..self.name_len];
+    }
+};
+
+/// The `capacity` slowest module type checks, slowest first. Ties keep the
+/// module that was offered first.
+pub const SlowestTypeChecks = struct {
+    pub const capacity = 10;
+
+    items: [capacity]ModuleTypeCheckTiming = undefined,
+    len: usize = 0,
+
+    pub fn offer(self: *SlowestTypeChecks, package: []const u8, module: []const u8, ns: u64) void {
+        var index = self.len;
+        while (index > 0 and self.items[index - 1].ns < ns) index -= 1;
+        if (index == capacity) return;
+        const last = @min(self.len, capacity - 1);
+        var shift = last;
+        while (shift > index) : (shift -= 1) self.items[shift] = self.items[shift - 1];
+        self.items[index] = .init(package, module, ns);
+        self.len = last + 1;
+    }
+
+    pub fn slice(self: *const SlowestTypeChecks) []const ModuleTypeCheckTiming {
+        return self.items[0..self.len];
+    }
+};
+
+test "SlowestTypeChecks keeps the slowest modules in descending order" {
+    var slowest: SlowestTypeChecks = .{};
+    var ns: u64 = 0;
+    while (ns < 2 * SlowestTypeChecks.capacity) : (ns += 1) {
+        // Interleave fast and slow modules so insertion order is not sorted.
+        const value = if (ns % 2 == 0) ns else 100 + ns;
+        slowest.offer("pkg", "Mod", value);
+    }
+    const items = slowest.slice();
+    try std.testing.expectEqual(@as(usize, SlowestTypeChecks.capacity), items.len);
+    try std.testing.expectEqual(@as(u64, 119), items[0].ns);
+    for (items[1..], items[0 .. items.len - 1]) |current, previous| {
+        try std.testing.expect(current.ns <= previous.ns);
+    }
+    try std.testing.expectEqual(@as(u64, 101), items[items.len - 1].ns);
+    try std.testing.expectEqualStrings("pkg.Mod", items[0].name());
+}
 const Allocator = std.mem.Allocator;
 
 const CoreCtx = @import("ctx").CoreCtx;

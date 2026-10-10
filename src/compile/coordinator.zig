@@ -714,6 +714,9 @@ pub const ModuleState = struct {
     depth: u32,
     /// Accumulated compile time for this module (parse + canonicalize + type-check)
     compile_time_ns: u64,
+    /// Time this build spent type checking this module and publishing its
+    /// checked artifact, excluding compile-time evaluation run inside the check.
+    type_check_ns: u64 = 0,
 
     pub fn init(name: []const u8, qualified_name: []const u8, path: []const u8) ModuleState {
         return .{
@@ -2319,11 +2322,52 @@ pub const Coordinator = struct {
         return false;
     }
 
+    /// The name a package goes by in timing output: the app's shorthand for
+    /// it, else the alphabetically first shorthand any package gives it,
+    /// else its registered name (a URL for downloaded packages).
+    fn packageTimingLabel(self: *const Coordinator, package_name: []const u8) []const u8 {
+        if (self.app_package_name) |app_package_name| {
+            if (std.mem.eql(u8, app_package_name, package_name)) return "app";
+            if (self.packages.get(app_package_name)) |app_pkg| {
+                if (shorthandFor(app_pkg, package_name)) |shorthand| return shorthand;
+            }
+        }
+        var best: ?[]const u8 = null;
+        var pkg_it = self.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            const shorthand = shorthandFor(entry.value_ptr.*, package_name) orelse continue;
+            if (best == null or std.mem.order(u8, shorthand, best.?) == .lt) best = shorthand;
+        }
+        return best orelse package_name;
+    }
+
+    /// The alphabetically first shorthand `pkg` declares for `package_name`.
+    fn shorthandFor(pkg: *const PackageState, package_name: []const u8) ?[]const u8 {
+        var best: ?[]const u8 = null;
+        var shorthand_it = pkg.shorthands.iterator();
+        while (shorthand_it.next()) |shorthand| {
+            if (!std.mem.eql(u8, shorthand.value_ptr.*, package_name)) continue;
+            const alias = shorthand.key_ptr.*;
+            if (best == null or std.mem.order(u8, alias, best.?) == .lt) best = alias;
+        }
+        return best;
+    }
+
     /// Return timing totals for frontend checking and post-check evaluation.
     pub fn getTimingInfo(self: *const Coordinator) compile_package.TimingInfo {
         var all_compile_time = eval.CompileTimeFinalization.Timing.init(self.roc_ctx.std_io);
         all_compile_time.addSnapshot(self.ctfe_timing.snapshot());
         all_compile_time.addSnapshot(self.module_ctfe_timing.snapshot());
+        var slowest_type_checks: compile_package.SlowestTypeChecks = .{};
+        var pkg_it = self.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            const pkg = entry.value_ptr.*;
+            const label = self.packageTimingLabel(pkg.name);
+            for (pkg.modules.items) |*mod| {
+                if (mod.type_check_ns == 0) continue;
+                slowest_type_checks.offer(label, mod.name, mod.type_check_ns);
+            }
+        }
         return .{
             .tokenize_parse_ns = self.total_parse_ns,
             .canonicalize_ns = self.total_canonicalize_ns,
@@ -2334,6 +2378,7 @@ pub const Coordinator = struct {
             .program_finalization_ns = self.program_finalization_ns,
             .compile_time_evaluation = self.ctfe_timing.snapshot(),
             .compile_time_counters = all_compile_time.snapshot(),
+            .slowest_type_checks = slowest_type_checks,
         };
     }
 
@@ -4810,6 +4855,7 @@ pub const Coordinator = struct {
         self.total_typecheck_ns += result.type_check_ns;
         self.total_typecheck_diag_ns += result.check_diagnostics_ns;
         mod.compile_time_ns += result.type_check_ns + result.check_diagnostics_ns;
+        mod.type_check_ns = result.type_check_ns + result.check_diagnostics_ns;
 
         // Record per-module compile time for min/max/avg stats
         const module_time = mod.compile_time_ns;
