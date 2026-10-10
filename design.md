@@ -127,6 +127,29 @@ receives an explicit trust-required error. Request registrations declare
 whether they require trust. This gate precedes compiler entry; it does not skip
 stages or produce partially checked modules as checked module data.
 
+## REPL formatter plugins
+
+`roc repl --formatter FILE` uses a checked Roc module as a line-oriented
+frontend. The module exposes `decode : Str -> Try(Str, Str)` and
+`encode : { result : Str, stdout : Str, diagnostics : Str } -> Str`.
+`Ok(source)` evaluates a cell in the process's persistent language session;
+`Err(reply)` answers immediately without changing that session. Each input line
+receives one output line. Replies must not contain literal newlines. EOF ends
+the session. Wire protocols, including JSON parsing and serialization, belong
+to the formatter, never to compiler-side dispatch.
+
+A compiler-owned, annotated wrapper checks both functions' signatures before
+lowering. The formatter is compiled once, in a separate scope, with sibling
+imports relative to its file. Calls use the LIR interpreter and explicit tuple
+field placements from committed layouts. User code cannot shadow formatter
+definitions. Compiler diagnostics for invalid plugins go to stderr and abort
+startup; language diagnostics from cells are passed to `encode` without color.
+Cells commit accepted definitions in order, stop at the first error, and expose
+the last expression's inspected text plus captured debug output. A standalone
+`:t <identifier>` line between statements uses the terminal REPL's checked
+binding type query without evaluating the binding. It replaces the cell's text
+result; subsequent statements still run.
+
 ## Core Principles
 
 Compiler stages after parsing and error reporting must not use workarounds,

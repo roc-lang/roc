@@ -147,6 +147,18 @@ pub const Command = union(enum) {
     exit,
 };
 
+/// Parse the read-only type query shared by terminal and formatter frontends.
+/// Commands occupy a physical line and are recognized only between statements.
+pub fn parseTypeQuery(input: []const u8) ?[]const u8 {
+    const line = std.mem.trim(u8, input, " \t\r\n");
+    if (line.len <= 2 or !std.mem.startsWith(u8, line, ":t") or
+        (line[2] != ' ' and line[2] != '\t') or std.mem.indexOfScalar(u8, line, '\n') != null)
+    {
+        return null;
+    }
+    return std.mem.trim(u8, line[3..], " \t");
+}
+
 pub fn init(
     allocator: Allocator,
     roc_ctx: CoreCtx,
@@ -260,6 +272,42 @@ fn prePublishedBuiltin(self: *ReplSession) eval.Inspected.PrePublishedBuiltin {
         .env = self.builtin_modules.builtin_module.env,
         .indices = self.builtin_modules.builtin_indices,
         .artifact = &self.builtin_modules.checked_artifact,
+    };
+}
+
+/// Create an independent scope sharing this session's published builtins.
+/// The parent must outlive the returned session.
+pub fn sibling(self: *ReplSession) ReplSession {
+    var result = initBorrowingBuiltins(self.allocator, self.roc_ctx, self.backend_kind, self.builtin_modules);
+    result.specialization_strategy = self.specialization_strategy;
+    return result;
+}
+
+/// Compile a frontend plugin against this scope's imports. Diagnostics retain
+/// their checked resources; the caller renders them before attempting execution.
+pub fn compileFrontend(self: *ReplSession, source: []const u8) ReplStepError!union(enum) {
+    compiled: eval.Inspected.CompiledTargetProgram,
+    diagnostics: eval.Inspected.ParsedResources,
+    import_error: []u8,
+} {
+    const imports = switch (try self.resolveImports()) {
+        .resolved => |sources| sources,
+        .failed => |message| return .{ .import_error = message },
+    };
+    defer self.freeModuleSources(imports);
+    return switch (try eval.Inspected.compileProgramForTargetWithBuiltinAndContextReporting(
+        self.allocator,
+        self.roc_ctx.std_io,
+        .module,
+        source,
+        imports,
+        .native,
+        self.prePublishedBuiltin(),
+        self.roc_ctx,
+        self.specialization_strategy,
+    )) {
+        .compiled => |program| .{ .compiled = program },
+        .diagnostics => |resources| .{ .diagnostics = resources },
     };
 }
 
@@ -443,6 +491,11 @@ pub fn splitInputIntoStatementsWithAllocator(allocator: Allocator, input: []cons
         }
         const trimmed_line = std.mem.trimEnd(u8, raw_line, "\r");
         if (std.mem.trim(u8, trimmed_line, " \t\r\n").len == 0 and current.items.len == 0) {
+            continue;
+        }
+
+        if (current.items.len == 0 and parseTypeQuery(trimmed_line) != null) {
+            try result.append(allocator, try allocator.dupe(u8, trimmed_line));
             continue;
         }
 
@@ -884,7 +937,8 @@ fn printDefs(self: *ReplSession, use_color: bool) ReplStepError![]u8 {
     return try out.toOwnedSlice(self.allocator);
 }
 
-fn printTypeOfVar(self: *ReplSession, name: []const u8, use_color: bool) ReplStepError![]u8 {
+/// Render a stored binding's checked type without evaluating its value.
+pub fn printTypeOfVar(self: *ReplSession, name: []const u8, use_color: bool) ReplStepError![]u8 {
     var out = std.ArrayList(u8).empty;
     defer out.deinit(self.allocator);
 

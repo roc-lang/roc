@@ -16343,7 +16343,7 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
     const stdin = std.Io.File.stdin();
     const stdin_is_tty = stdin.isTty(ctx.io.std_io) catch false;
     const stdout_is_tty = std.Io.File.stdout().isTty(ctx.io.std_io) catch false;
-    const mode: ReplMode = if (stdin_is_tty and stdout_is_tty) .interactive else .batch;
+    const mode: ReplMode = if (repl_args.formatter == null and stdin_is_tty and stdout_is_tty) .interactive else .batch;
     const report_config = replReportingConfig(ctx, mode);
     const use_color = mode == .interactive and ctx.usesColor(.stdout);
 
@@ -16374,6 +16374,14 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
         currentRuntimeSpecializationStrategy(repl_args.specialization_strategy),
     );
     defer session.deinit();
+
+    if (repl_args.formatter) |path| {
+        @import("ReplFormatter.zig").run(ctx, &session, path) catch |err| {
+            try ctx.io.stderr().print("REPL formatter `{s}` failed: {s}\n", .{ path, @errorName(err) });
+            return error.CliError;
+        };
+        return;
+    }
 
     if (mode == .interactive) {
         try stdout.writeAll(if (use_color) REPL_WELCOME_COLOR else REPL_WELCOME_PLAIN);
@@ -16499,15 +16507,12 @@ fn processReplInput(
     return false;
 }
 
-/// Parse terminal-only commands before handing Roc source to `ReplSession`.
-/// Other frontends use their own controls and call language stepping directly.
+/// Parse terminal commands, sharing type-query syntax with formatter mode.
 fn parseReplCommand(input: []const u8) ?ReplSession.Command {
     const line = std.mem.trim(u8, input, " \t\r\n");
     if (std.mem.eql(u8, line, ":help")) return .help;
     if (std.mem.eql(u8, line, ":defs")) return .definitions;
-    if (std.mem.startsWith(u8, line, ":t ")) {
-        return .{ .type_of = std.mem.trim(u8, line[3..], " \t") };
-    }
+    if (ReplSession.parseTypeQuery(line)) |name| return .{ .type_of = name };
     if (std.mem.eql(u8, line, ":exit") or
         std.mem.eql(u8, line, ":quit") or
         std.mem.eql(u8, line, ":q") or
