@@ -79,9 +79,9 @@ pub fn findLineStarts(gpa: Allocator, source: []const u8) Allocator.Error!collec
     {
         const expected_idx = line_starts.items.items.len;
         const idx = try line_starts.append(gpa, 0);
-        if (comptime builtin.mode == .Debug) {
-            std.debug.assert(@intFromEnum(idx) == expected_idx);
-        } else if (@intFromEnum(idx) != expected_idx) {
+        if (comptime builtin.mode == .debug) {
+            std.debug.assert(@backingInt(idx) == expected_idx);
+        } else if (@backingInt(idx) != expected_idx) {
             unreachable;
         }
     }
@@ -93,9 +93,9 @@ pub fn findLineStarts(gpa: Allocator, source: []const u8) Allocator.Error!collec
             // next line starts after the newline in the current position
             const expected_idx = line_starts.items.items.len;
             const idx = try line_starts.append(gpa, pos + 1);
-            if (comptime builtin.mode == .Debug) {
-                std.debug.assert(@intFromEnum(idx) == expected_idx);
-            } else if (@intFromEnum(idx) != expected_idx) {
+            if (comptime builtin.mode == .debug) {
+                std.debug.assert(@backingInt(idx) == expected_idx);
+            } else if (@backingInt(idx) != expected_idx) {
                 unreachable;
             }
         }
@@ -147,36 +147,36 @@ test "lineIdx" {
     {
         const expected_idx = line_starts.items.items.len;
         const idx = try line_starts.append(gpa, 0);
-        if (comptime builtin.mode == .Debug) {
-            std.debug.assert(@intFromEnum(idx) == expected_idx);
-        } else if (@intFromEnum(idx) != expected_idx) {
+        if (comptime builtin.mode == .debug) {
+            std.debug.assert(@backingInt(idx) == expected_idx);
+        } else if (@backingInt(idx) != expected_idx) {
             unreachable;
         }
     }
     {
         const expected_idx = line_starts.items.items.len;
         const idx = try line_starts.append(gpa, 10);
-        if (comptime builtin.mode == .Debug) {
-            std.debug.assert(@intFromEnum(idx) == expected_idx);
-        } else if (@intFromEnum(idx) != expected_idx) {
+        if (comptime builtin.mode == .debug) {
+            std.debug.assert(@backingInt(idx) == expected_idx);
+        } else if (@backingInt(idx) != expected_idx) {
             unreachable;
         }
     }
     {
         const expected_idx = line_starts.items.items.len;
         const idx = try line_starts.append(gpa, 20);
-        if (comptime builtin.mode == .Debug) {
-            std.debug.assert(@intFromEnum(idx) == expected_idx);
-        } else if (@intFromEnum(idx) != expected_idx) {
+        if (comptime builtin.mode == .debug) {
+            std.debug.assert(@backingInt(idx) == expected_idx);
+        } else if (@backingInt(idx) != expected_idx) {
             unreachable;
         }
     }
     {
         const expected_idx = line_starts.items.items.len;
         const idx = try line_starts.append(gpa, 30);
-        if (comptime builtin.mode == .Debug) {
-            std.debug.assert(@intFromEnum(idx) == expected_idx);
-        } else if (@intFromEnum(idx) != expected_idx) {
+        if (comptime builtin.mode == .debug) {
+            std.debug.assert(@backingInt(idx) == expected_idx);
+        } else if (@backingInt(idx) != expected_idx) {
             unreachable;
         }
     }
@@ -215,27 +215,27 @@ test "columnIdx" {
     {
         const expected_idx = line_starts.items.items.len;
         const idx = try line_starts.append(gpa, 0);
-        if (comptime builtin.mode == .Debug) {
-            std.debug.assert(@intFromEnum(idx) == expected_idx);
-        } else if (@intFromEnum(idx) != expected_idx) {
+        if (comptime builtin.mode == .debug) {
+            std.debug.assert(@backingInt(idx) == expected_idx);
+        } else if (@backingInt(idx) != expected_idx) {
             unreachable;
         }
     }
     {
         const expected_idx = line_starts.items.items.len;
         const idx = try line_starts.append(gpa, 10);
-        if (comptime builtin.mode == .Debug) {
-            std.debug.assert(@intFromEnum(idx) == expected_idx);
-        } else if (@intFromEnum(idx) != expected_idx) {
+        if (comptime builtin.mode == .debug) {
+            std.debug.assert(@backingInt(idx) == expected_idx);
+        } else if (@backingInt(idx) != expected_idx) {
             unreachable;
         }
     }
     {
         const expected_idx = line_starts.items.items.len;
         const idx = try line_starts.append(gpa, 20);
-        if (comptime builtin.mode == .Debug) {
-            std.debug.assert(@intFromEnum(idx) == expected_idx);
-        } else if (@intFromEnum(idx) != expected_idx) {
+        if (comptime builtin.mode == .debug) {
+            std.debug.assert(@backingInt(idx) == expected_idx);
+        } else if (@backingInt(idx) != expected_idx) {
             unreachable;
         }
     }
@@ -258,27 +258,27 @@ test "getLineText" {
     {
         const expected_idx = line_starts.items.items.len;
         const idx = try line_starts.append(gpa, 0);
-        if (comptime builtin.mode == .Debug) {
-            std.debug.assert(@intFromEnum(idx) == expected_idx);
-        } else if (@intFromEnum(idx) != expected_idx) {
+        if (comptime builtin.mode == .debug) {
+            std.debug.assert(@backingInt(idx) == expected_idx);
+        } else if (@backingInt(idx) != expected_idx) {
             unreachable;
         }
     }
     {
         const expected_idx = line_starts.items.items.len;
         const idx = try line_starts.append(gpa, 6);
-        if (comptime builtin.mode == .Debug) {
-            std.debug.assert(@intFromEnum(idx) == expected_idx);
-        } else if (@intFromEnum(idx) != expected_idx) {
+        if (comptime builtin.mode == .debug) {
+            std.debug.assert(@backingInt(idx) == expected_idx);
+        } else if (@backingInt(idx) != expected_idx) {
             unreachable;
         }
     }
     {
         const expected_idx = line_starts.items.items.len;
         const idx = try line_starts.append(gpa, 12);
-        if (comptime builtin.mode == .Debug) {
-            std.debug.assert(@intFromEnum(idx) == expected_idx);
-        } else if (@intFromEnum(idx) != expected_idx) {
+        if (comptime builtin.mode == .debug) {
+            std.debug.assert(@backingInt(idx) == expected_idx);
+        } else if (@backingInt(idx) != expected_idx) {
             unreachable;
         }
     }
@@ -299,27 +299,27 @@ test "get" {
     {
         const expected_idx = line_starts.items.items.len;
         const idx = try line_starts.append(gpa, 0);
-        if (comptime builtin.mode == .Debug) {
-            std.debug.assert(@intFromEnum(idx) == expected_idx);
-        } else if (@intFromEnum(idx) != expected_idx) {
+        if (comptime builtin.mode == .debug) {
+            std.debug.assert(@backingInt(idx) == expected_idx);
+        } else if (@backingInt(idx) != expected_idx) {
             unreachable;
         }
     }
     {
         const expected_idx = line_starts.items.items.len;
         const idx = try line_starts.append(gpa, 6);
-        if (comptime builtin.mode == .Debug) {
-            std.debug.assert(@intFromEnum(idx) == expected_idx);
-        } else if (@intFromEnum(idx) != expected_idx) {
+        if (comptime builtin.mode == .debug) {
+            std.debug.assert(@backingInt(idx) == expected_idx);
+        } else if (@backingInt(idx) != expected_idx) {
             unreachable;
         }
     }
     {
         const expected_idx = line_starts.items.items.len;
         const idx = try line_starts.append(gpa, 12);
-        if (comptime builtin.mode == .Debug) {
-            std.debug.assert(@intFromEnum(idx) == expected_idx);
-        } else if (@intFromEnum(idx) != expected_idx) {
+        if (comptime builtin.mode == .debug) {
+            std.debug.assert(@backingInt(idx) == expected_idx);
+        } else if (@backingInt(idx) != expected_idx) {
             unreachable;
         }
     }

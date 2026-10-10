@@ -71,7 +71,7 @@ test "issue 10940: explicit roots do not require a default app entrypoint" {
 
     var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
     defer build_env.deinit();
-    build_env.setRootValidation(.explicit_roots);
+    build_env.setEntryValidation(.explicit_roots);
 
     try build_env.build(main_path);
 
@@ -147,7 +147,7 @@ test "issue 10940: explicit roots do not automatically publish a defined main!" 
 
     var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
     defer build_env.deinit();
-    build_env.setRootValidation(.explicit_roots);
+    build_env.setEntryValidation(.explicit_roots);
 
     try build_env.build(main_path);
 

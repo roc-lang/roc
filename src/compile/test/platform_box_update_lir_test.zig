@@ -28,8 +28,8 @@ const Counts = struct {
     calls_to_unbox_proc: usize = 0,
 
     fn add(self: *Counts, other: Counts) void {
-        inline for (std.meta.fields(Counts)) |field| {
-            @field(self, field.name) += @field(other, field.name);
+        inline for (@typeInfo(Counts).@"struct".field_names) |field_name| {
+            @field(self, field_name) += @field(other, field_name);
         }
     }
 };
@@ -57,7 +57,7 @@ fn expectNoInlineOwnership(store: *const lir.LirStore, layouts: *const layout.St
     var found_list_set_body = false;
 
     for (store.getProcSpecs(), 0..) |_, index| {
-        const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const counts = try countProc(store, layouts, proc_id, unbox_proc, null);
         total.add(counts);
 
@@ -119,12 +119,14 @@ fn expectNoInlineOwnership(store: *const lir.LirStore, layouts: *const layout.St
 
     // The divergent pattern adapter exercises pairwise residual masks: Set
     // consumes points, Append consumes trail, and Other forwards the intact
-    // model. Every reachable edge stays retain-free in no-inline mode.
-    const pattern_active = try countReachableNamed(
+    // model. Every edge the host wrapper reaches stays retain-free in
+    // no-inline mode. The wrapper itself retains the model it hands back
+    // from the update's result record, which is not a dismantled container.
+    const pattern_active = try countReachableFromCallees(
         store,
         layouts,
         unbox_proc,
-        &.{"update_pattern_for_host!"},
+        "update_pattern_for_host!",
     );
     try std.testing.expectEqual(@as(usize, 0), active.box_retain);
     try std.testing.expect(active.list_retain > 0);
@@ -150,7 +152,7 @@ fn expectWrapperInlineOwnership(store: *const lir.LirStore, layouts: *const layo
     var total = Counts{};
 
     for (store.getProcSpecs(), 0..) |_, index| {
-        const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const counts = try countProc(store, layouts, proc_id, null, null);
         total.add(counts);
     }
@@ -172,7 +174,7 @@ fn expectWrapperInlineOwnership(store: *const lir.LirStore, layouts: *const layo
 
 fn findNamedProc(store: *const lir.LirStore, expected_name: []const u8) ?lir.LIR.LirProcSpecId {
     for (store.getProcSpecs(), 0..) |_, index| {
-        const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const name = store.procDebugName(proc_id) orelse continue;
         if (std.mem.eql(u8, name, expected_name)) return proc_id;
     }
@@ -224,7 +226,32 @@ fn countProc(
             if (low_level.op == .list_replace_unsafe) counts.list_replace += 1;
             if (low_level.op == .list_append_unsafe) counts.list_append += 1;
         }
-        try lir.BodyClone.appendSuccessors(@constCast(store), &work, stmt_id);
+        try lir.BodyClone.appendSuccessors(store, &work, stmt_id, std.testing.allocator);
+    }
+    return counts;
+}
+
+/// `countReachableNamed` over everything `name` calls, excluding `name`.
+fn countReachableFromCallees(
+    store: *const lir.LirStore,
+    layouts: *const layout.Store,
+    unbox_proc: ?lir.LIR.LirProcSpecId,
+    name: []const u8,
+) harness.LowerToLirHarnessError!Counts {
+    var work = std.ArrayList(lir.LIR.LirProcSpecId).empty;
+    defer work.deinit(std.testing.allocator);
+    var visited = collections.DenseMap(lir.LIR.LirProcSpecId, void).init(std.testing.allocator);
+    defer visited.deinit();
+
+    const root = findNamedProc(store, name) orelse return error.TestUnexpectedResult;
+    try visited.put(root, {});
+    _ = try countProc(store, layouts, root, unbox_proc, &work);
+
+    var counts = Counts{};
+    while (work.pop()) |proc_id| {
+        const entry = try visited.getOrPut(proc_id);
+        if (entry.found_existing) continue;
+        counts.add(try countProc(store, layouts, proc_id, unbox_proc, &work));
     }
     return counts;
 }

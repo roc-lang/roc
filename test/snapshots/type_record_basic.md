@@ -20,7 +20,7 @@ TYPE MISMATCH - type_record_basic.md:6:13:6:13
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 6 13) (end 6 45))
+		(region (start 6 21) (end 6 44))
 		(headline
 			(reflow "The")
 			(reflow " ")
@@ -153,15 +153,18 @@ main! = |_| getName({ namee: "luke", age: 21 })
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-runtime-error (tag "erroneous_value_expr")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt (type "{ age: U64, name: Str } -> Str"))
-		(patt (type "_arg -> Error")))
+		(patt (type "_arg -> _ret")))
 	(expressions
 		(expr (type "{ age: U64, name: Str } -> Str"))
-		(expr (type "_arg -> Error"))))
+		(expr (type "_arg -> _ret"))))
 ~~~

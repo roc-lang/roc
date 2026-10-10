@@ -190,6 +190,10 @@ pub const LirLoweringOptions = struct {
     dump_proc_identities: bool = false,
     prove_ranges: bool = false,
     allow_user_errors: bool = false,
+    /// Require a report with this title once checking finishes. A rejected
+    /// program uses this to pin that it reports its diagnostic and still
+    /// lowers to a checked crash.
+    expected_report_title: ?[]const u8 = null,
     /// Receives the expression count of the lifted program handed to lambda-set
     /// solving, for tests that assert on post-check program growth.
     lifted_expr_count_out: ?*usize = null,
@@ -272,6 +276,13 @@ pub fn runAppPathLoweredInspection(
 /// a focused invariant check against the actual lowered store and layout store.
 pub fn runAppPathLirInspection(app_path: []const u8, opts: LirLoweringOptions, inspect: LirInspectFn) LowerToLirHarnessError!void {
     try lowerAppPathToLir(std.testing.allocator, app_path, null, opts, inspect, null);
+}
+
+/// Lower an app whose body is `app_body` to LIR with explicit lowering
+/// options, then run a focused check against the whole lowered program, for
+/// tests that drive a backend over the result.
+pub fn runLoweredInspection(app_body: []const u8, opts: LirLoweringOptions, inspect: LoweredInspectFn) LowerToLirHarnessError!void {
+    try runToLirInspected(app_body, null, opts, null, inspect);
 }
 
 /// Lower an app whose body is `app_body` to LIR, then run a focused invariant
@@ -442,13 +453,13 @@ pub fn expectLirPassParallelismDeterministicLir(
             }
             try std.testing.expectEqual(metrics.tasks_committed, committed);
             inline for (phases) |phase| {
-                if (metrics.changed_by_phase[@intFromEnum(phase)] == 0) {
+                if (metrics.changed_by_phase[@backingInt(phase)] == 0) {
                     std.debug.print("No {s} LIR rewrites with {d} workers (reversed: {})\n", .{
                         @tagName(phase), workers, reverse,
                     });
                     std.debug.print("{s}\n", .{reference.written()});
                 }
-                try std.testing.expect(metrics.changed_by_phase[@intFromEnum(phase)] > 0);
+                try std.testing.expect(metrics.changed_by_phase[@backingInt(phase)] > 0);
             }
             if (expected_metrics) |expected| {
                 try std.testing.expectEqualDeep(expected, metrics);
@@ -504,14 +515,14 @@ pub fn expectSpecConstrParallelismDeterministicLir(
         try std.testing.expectEqual(@as(u64, 0), serial.patterns_admitted);
         inline for (.{ .discovery, .unused_loop_results }) |phase| {
             const typed_phase: lir.CheckedPipeline.SpecConstrPhase = phase;
-            try std.testing.expectEqual(@as(u64, 0), serial.changed_by_phase[@intFromEnum(typed_phase)]);
+            try std.testing.expectEqual(@as(u64, 0), serial.changed_by_phase[@backingInt(typed_phase)]);
         }
     }
     inline for (phases) |phase| {
-        if (serial.changed_by_phase[@intFromEnum(phase)] == 0) {
+        if (serial.changed_by_phase[@backingInt(phase)] == 0) {
             std.debug.print("No useful {s} SpecConstr work in serial fixture\n", .{@tagName(phase)});
         }
-        try std.testing.expect(serial.changed_by_phase[@intFromEnum(phase)] > 0);
+        try std.testing.expect(serial.changed_by_phase[@backingInt(phase)] > 0);
         if (phase == .discovery) {
             try std.testing.expect(serial.patterns_admitted > 0);
             try std.testing.expect(serial.patterns_recorded >= serial.patterns_admitted);
@@ -544,11 +555,11 @@ pub fn expectSpecConstrParallelismDeterministicLir(
             for (metrics.committed_by_phase) |count| committed += count;
             try std.testing.expectEqual(metrics.tasks_committed, committed);
             if (options.inline_mode == .none) {
-                try std.testing.expectEqual(metrics.tasks_committed, metrics.committed_by_phase[@intFromEnum(lir.CheckedPipeline.SpecConstrPhase.iterator_fusion)]);
+                try std.testing.expectEqual(metrics.tasks_committed, metrics.committed_by_phase[@backingInt(lir.CheckedPipeline.SpecConstrPhase.iterator_fusion)]);
             }
             inline for (phases) |phase| {
-                try std.testing.expect(metrics.committed_by_phase[@intFromEnum(phase)] > 0);
-                try std.testing.expect(metrics.changed_by_phase[@intFromEnum(phase)] > 0);
+                try std.testing.expect(metrics.committed_by_phase[@backingInt(phase)] > 0);
+                try std.testing.expect(metrics.changed_by_phase[@backingInt(phase)] > 0);
             }
             // Common work includes inline shard execution. Compare every common
             // field rather than allowing scheduling to change admission or IDs.
@@ -883,7 +894,7 @@ fn expectNamedWorkerLocalCommitted(
 ) LowerToLirHarnessError!void {
     var matching_names: usize = 0;
     for (0..store.localCount()) |index| {
-        const name = store.localName(@enumFromInt(@as(u32, @intCast(index)))) orelse continue;
+        const name = store.localName(@fromBackingInt(@intCast(@as(u32, @intCast(index))))) orelse continue;
         if (std.mem.eql(u8, name, "named_local")) matching_names += 1;
     }
     try std.testing.expectEqual(@as(usize, 1), matching_names);
@@ -978,6 +989,16 @@ fn runToLir(
     dump: ?*std.Io.Writer,
     opts: LirLoweringOptions,
     inspect: ?LirInspectFn,
+) LowerToLirHarnessError!void {
+    try runToLirInspected(app_body, dump, opts, inspect, null);
+}
+
+fn runToLirInspected(
+    app_body: []const u8,
+    dump: ?*std.Io.Writer,
+    opts: LirLoweringOptions,
+    inspect: ?LirInspectFn,
+    inspect_lowered: ?LoweredInspectFn,
 ) LowerToLirHarnessError!void {
     const gpa = std.testing.allocator;
     var tmp_dir = std.testing.tmpDir(.{});
@@ -1100,7 +1121,7 @@ fn runToLir(
     const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
     defer gpa.free(app_path);
 
-    try lowerAppPathToLir(gpa, app_path, dump, opts, inspect, null);
+    try lowerAppPathToLir(gpa, app_path, dump, opts, inspect, inspect_lowered);
 }
 
 fn lowerAppPathToLir(
@@ -1123,7 +1144,7 @@ fn lowerAppPathToLir(
         opts.specialization_workers,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
     );
@@ -1149,6 +1170,14 @@ fn lowerAppPathToLir(
     try coord.finishCheckedProgram(.executable_artifacts);
     if (!opts.allow_user_errors) {
         try std.testing.expect(!coord.hasUserErrors());
+    }
+    if (opts.expected_report_title) |title| {
+        var found = false;
+        var reports = coord.iterReports();
+        while (reports.next()) |entry| {
+            if (std.mem.eql(u8, entry.report.title, title)) found = true;
+        }
+        try std.testing.expect(found);
     }
 
     const root = coord.executableRootCheckedArtifact();
@@ -1260,7 +1289,7 @@ fn lowerAppPathToLir(
         const layouts = &lowered.lir_result.layouts;
         for (0..store.getProcSpecs().len) |index| {
             if (opts.dump_proc_identities) {
-                const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+                const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
                 const proc = store.getProcSpec(proc_id);
                 try writer.print("identity={x} symbol={d} debug_name={s} borrowed_params={x} ret_borrowed={} ret_lenders={x}\n", .{
                     &proc.identity.bytes,
@@ -1271,7 +1300,7 @@ fn lowerAppPathToLir(
                     proc.rc_ret_lenders,
                 });
             }
-            try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), writer);
+            try lir.DebugPrint.writeProc(gpa, store, layouts, @fromBackingInt(@intCast(@as(u32, @intCast(index)))), writer);
         }
     }
 

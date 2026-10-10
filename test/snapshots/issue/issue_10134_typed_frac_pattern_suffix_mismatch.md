@@ -19,7 +19,7 @@ TYPE MISMATCH - issue_10134_typed_frac_pattern_suffix_mismatch.md:2:16:2:16
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 2 16) (end 5 2))
+		(region (start 3 2) (end 3 9))
 		(headline
 			(reflow "The first pattern in this")
 			(reflow " ")

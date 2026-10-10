@@ -11,7 +11,8 @@ const RocList = abi.RocList;
 const RocStr = abi.RocStr;
 
 /// C-compatible allocator used by the standalone default-platform runtimes.
-pub const AllocFn = *const fn (usize, usize) callconv(.c) ?*anyopaque;
+/// Like `roc_alloc`, it never returns null.
+pub const AllocFn = *const fn (usize, usize) callconv(.c) *anyopaque;
 
 const replacement = "\xef\xbf\xbd";
 const small_str_flag: u8 = 0b1000_0000;
@@ -78,7 +79,7 @@ fn allocateList(length: usize, alloc: AllocFn) ?RocList {
     const data_size = length * @sizeOf(RocStr);
     if (data_size > std.math.maxInt(usize) - header_size) return null;
 
-    const allocation: [*]u8 = @ptrCast(alloc(header_size + data_size, @alignOf(RocStr)) orelse return null);
+    const allocation: [*]u8 = @ptrCast(alloc(header_size + data_size, @alignOf(RocStr)));
     const data = allocation + header_size;
     const header: [*]usize = @ptrCast(@alignCast(data));
     (header - 2)[0] = length;
@@ -229,7 +230,7 @@ fn allocateStr(length: usize, alloc: AllocFn) ?RocStr {
 
     if (length > std.math.maxInt(usize) >> capacity_shift) return null;
     if (length > std.math.maxInt(usize) - @sizeOf(usize)) return null;
-    const allocation: [*]u8 = @ptrCast(alloc(@sizeOf(usize) + length, @alignOf(usize)) orelse return null);
+    const allocation: [*]u8 = @ptrCast(alloc(@sizeOf(usize) + length, @alignOf(usize)));
     const data = allocation + @sizeOf(usize);
     const refcount: *usize = @ptrCast(@alignCast(data - @sizeOf(usize)));
     refcount.* = 1;
@@ -251,9 +252,9 @@ const test_allocator = std.testing.allocator;
 var test_allocation_bytes: [4096]u8 align(16) = undefined;
 var test_allocation_offset: usize = 0;
 
-fn testAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn testAlloc(length: usize, alignment: usize) callconv(.c) *anyopaque {
     const start = std.mem.alignForward(usize, test_allocation_offset, alignment);
-    if (start > test_allocation_bytes.len or length > test_allocation_bytes.len - start) return null;
+    if (start > test_allocation_bytes.len or length > test_allocation_bytes.len - start) @panic("roc_args test allocation buffer exhausted");
     test_allocation_offset = start + length;
     return @ptrCast(&test_allocation_bytes[start]);
 }

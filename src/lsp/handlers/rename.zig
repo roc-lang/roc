@@ -61,7 +61,7 @@ pub fn handler(comptime ServerType: type) type {
             };
 
             const resolved = outcome orelse {
-                try self.sendError(id, .request_failed, "this document does not currently compile, so it cannot be renamed safely");
+                try self.sendError(id, .request_failed, "this document could not be built, so it cannot be renamed safely");
                 return;
             };
 

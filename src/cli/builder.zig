@@ -48,6 +48,17 @@ pub const OptimizationLevel = enum {
     }
 };
 
+/// How the builtin bitcode merged into an app module is built.
+pub const LinkedBuiltins = struct {
+    /// Builtins reach the host via extern symbols (the symbol ABI).
+    host_call_extern: bool,
+    /// The SHA-256 rounds the target's CPU features select
+    /// (`builtins.sha256.Rounds.forCpu` of the CPU that `cpu` and `features`
+    /// name). The 64-bit builtin payload links the compression function built
+    /// for them.
+    sha256_rounds: builtins.sha256.Rounds,
+};
+
 /// Configuration for compiling LLVM bitcode to object files
 pub const CompileConfig = struct {
     input_path: []const u8,
@@ -59,16 +70,10 @@ pub const CompileConfig = struct {
     features: []const u8 = "",
     debug: bool = false, // Enable debug info generation in output
     fuzz: bool = false, // Enable libFuzzer-compatible sanitizer coverage
-    link_builtins: bool = false,
-    host_call_extern: bool = false, // Builtins reach the host via extern symbols (the symbol ABI)
+    link_builtins: ?LinkedBuiltins = null, // The builtin bitcode to merge into the app module, if any
     pic: bool = false, // Position-independent code (required for shared library output)
     no_target_libcalls: bool = false,
     lower_memory_intrinsics_to_loops: bool = false,
-
-    /// Check if compiling for the current machine
-    pub fn isNative(self: CompileConfig) bool {
-        return self.target == target.RocTarget.detectNative();
-    }
 };
 
 fn sanitizerCoverageOptions(enabled: bool) ZigLLVMCoverageOptions {
@@ -240,6 +245,7 @@ const llvm_externs = if (llvm_available) struct {
     extern fn LLVMCreateEnumAttribute(ctx: ?*anyopaque, kind: c_uint, value: u64) ?*anyopaque;
     extern fn LLVMGetModuleContext(module: ?*anyopaque) ?*anyopaque;
     extern fn LLVMAddAttributeAtIndex(fn_val: ?*anyopaque, idx: c_uint, attr: ?*anyopaque) void;
+    extern fn LLVMGetNamedFunction(module: ?*anyopaque, name: [*:0]const u8) ?*anyopaque;
     extern fn ZigLLVMRunGlobalDCE(module: ?*anyopaque) void;
 } else struct {};
 
@@ -254,6 +260,9 @@ const llvm_embedded = if (llvm_available) @import("llvm_embedded") else struct {
     pub const builtins64_extern_bc: []const u8 = "";
     pub const builtins32_core_extern_bc: []const u8 = "";
     pub const builtins64_core_extern_bc: []const u8 = "";
+    pub const sha256_portable_bc: []const u8 = "";
+    pub const sha256_x86_sha_bc: []const u8 = "";
+    pub const sha256_aarch64_sha2_bc: []const u8 = "";
 };
 
 const core_builtin_roots = builtin_registry.core_root_symbols;
@@ -283,6 +292,20 @@ fn selectBuiltinBitcode(ptr_width: u16, app_decls: *const std.StringHashMap(void
         32 => if (use_core) llvm_embedded.builtins32_core_bc else llvm_embedded.builtins32_bc,
         64 => if (use_core) llvm_embedded.builtins64_core_bc else llvm_embedded.builtins64_bc,
         else => "",
+    };
+}
+
+/// The payload defining the 64-bit builtin bitcode's SHA-256 compression for
+/// `rounds`. The 32-bit payload carries its portable rounds inline, since no
+/// 32-bit target has SHA-256 instructions Roc uses.
+fn selectSha256RoundsBitcode(ptr_width: u16, rounds: builtins.sha256.Rounds) ?[]const u8 {
+    return switch (ptr_width) {
+        64 => switch (rounds) {
+            .portable => llvm_embedded.sha256_portable_bc,
+            .x86_sha => llvm_embedded.sha256_x86_sha_bc,
+            .aarch64_sha2 => llvm_embedded.sha256_aarch64_sha2_bc,
+        },
+        else => null,
     };
 }
 
@@ -320,6 +343,9 @@ const LLVMInternalLinkage: c_int = 8;
 /// LLVM-C attribute index for function-level attributes (`~0U`).
 const LLVMAttributeFunctionIndex: c_uint = 0xFFFFFFFF;
 
+/// LLVM-C attribute index for return-value attributes.
+const LLVMAttributeReturnIndex: c_uint = 0;
+
 // LLVM archive kinds (object::Archive::Kind)
 const LLVMArchiveKindGNU: c_int = 0;
 const LLVMArchiveKindDarwin: c_int = 3;
@@ -343,10 +369,10 @@ pub fn writeStaticArchive(
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const output_z = try arena.dupeZ(u8, output_path);
+    const output_z = try arena.dupeSentinel(u8, output_path, 0);
     const names = try arena.alloc([*:0]const u8, input_paths.len);
     for (input_paths, 0..) |path, i| {
-        names[i] = try arena.dupeZ(u8, path);
+        names[i] = try arena.dupeSentinel(u8, path, 0);
     }
 
     const kind: c_int = if (roc_target.toOsTag() == .macos) LLVMArchiveKindDarwin else LLVMArchiveKindGNU;
@@ -396,7 +422,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     var mem_buf: ?*anyopaque = null;
     var error_message: [*:0]u8 = undefined;
 
-    const bitcode_path_z = try gpa.dupeZ(u8, config.input_path);
+    const bitcode_path_z = try gpa.dupeSentinel(u8, config.input_path, 0);
     defer gpa.free(bitcode_path_z);
 
     if (externs.LLVMCreateMemoryBufferWithContentsOfFile(bitcode_path_z.ptr, &mem_buf, &error_message) != 0) {
@@ -420,7 +446,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
 
     // 4. Get target triple and set it on the module
     const target_triple = config.target.toTriple();
-    const target_triple_z = try gpa.dupeZ(u8, target_triple);
+    const target_triple_z = try gpa.dupeSentinel(u8, target_triple, 0);
     defer gpa.free(target_triple_z);
 
     std.log.debug("Setting target triple on module: {s}", .{target_triple});
@@ -433,7 +459,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     // available_externally). Builtin aliases and definitions are internalized
     // after app references are resolved so LLVM and the final linker can remove
     // unused builtin code.
-    if (config.link_builtins) {
+    if (config.link_builtins) |linked_builtins| {
         var app_defs = std.StringHashMap(void).init(gpa);
         defer {
             var keys = app_defs.keyIterator();
@@ -485,7 +511,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
             try app_defs.put(name, {});
         }
 
-        const builtins_bc = selectBuiltinBitcode(config.target.ptrBitWidth(), &app_decls, config.host_call_extern);
+        const builtins_bc = selectBuiltinBitcode(config.target.ptrBitWidth(), &app_decls, linked_builtins.host_call_extern);
         if (builtins_bc.len == 0) {
             std.log.err("No embedded builtin bitcode for {d}-bit target pointers", .{config.target.ptrBitWidth()});
             return false;
@@ -496,6 +522,22 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
         if (externs.LLVMParseBitcode2(bc_buf, &builtins_module) == 0) {
             externs.LLVMSetTarget(builtins_module, target_triple_z.ptr);
             externs.LLVMSetDataLayout(builtins_module, externs.LLVMGetDataLayoutStr(module));
+            if (selectSha256RoundsBitcode(config.target.ptrBitWidth(), linked_builtins.sha256_rounds)) |rounds_bc| {
+                const rounds_buf = externs.LLVMCreateMemoryBufferWithMemoryRangeCopy(rounds_bc.ptr, rounds_bc.len, "roc-sha256-rounds-bc");
+                var rounds_module: ?*anyopaque = null;
+                if (externs.LLVMParseBitcode2(rounds_buf, &rounds_module) != 0) {
+                    std.log.err("Failed to parse SHA-256 rounds bitcode", .{});
+                    return false;
+                }
+                externs.LLVMSetTarget(rounds_module, target_triple_z.ptr);
+                externs.LLVMSetDataLayout(rounds_module, externs.LLVMGetDataLayoutStr(module));
+                // Linking destroys rounds_module; its definition then prunes
+                // and merges with the rest of the builtins.
+                if (externs.LLVMLinkModules2(builtins_module, rounds_module) != 0) {
+                    std.log.err("Failed to link SHA-256 rounds bitcode into builtin bitcode", .{});
+                    return false;
+                }
+            }
             if (externs.LLVMGetNamedGlobal(builtins_module, "llvm.used")) |used| {
                 externs.LLVMDeleteGlobal(used);
             }
@@ -607,6 +649,17 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
                         externs.LLVMSetLinkage(gv, LLVMInternalLinkage);
                     }
                 }
+
+                // The host ABI guarantees `roc_alloc` and `roc_realloc` never
+                // return null, which the builtins' Zig declarations cannot
+                // tell LLVM on their own.
+                const nonnull_kind = externs.LLVMGetEnumAttributeKindForName("nonnull", "nonnull".len);
+                const nonnull_attr = externs.LLVMCreateEnumAttribute(externs.LLVMGetModuleContext(module), nonnull_kind, 0);
+                for ([_][*:0]const u8{ builtins.shim_symbols.roc_alloc, builtins.shim_symbols.roc_realloc }) |symbol| {
+                    if (externs.LLVMGetNamedFunction(module, symbol)) |fv| {
+                        externs.LLVMAddAttributeAtIndex(fv, LLVMAttributeReturnIndex, nonnull_attr);
+                    }
+                }
                 externs.ZigLLVMRunGlobalDCE(module);
             } else {
                 std.log.err("Failed to link builtin bitcode into app module", .{});
@@ -629,9 +682,9 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     std.log.debug("LLVM target obtained successfully", .{});
 
     // 6. Create target machine
-    const cpu_z = try gpa.dupeZ(u8, config.cpu);
+    const cpu_z = try gpa.dupeSentinel(u8, config.cpu, 0);
     defer gpa.free(cpu_z);
-    const features_z = try gpa.dupeZ(u8, config.features);
+    const features_z = try gpa.dupeSentinel(u8, config.features, 0);
     defer gpa.free(features_z);
 
     std.log.debug("Creating target machine with CPU='{s}', Features='{s}'", .{ config.cpu, config.features });
@@ -657,7 +710,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     std.log.debug("Target machine created successfully", .{});
 
     // 7. Prepare output path
-    const object_path_z = try gpa.dupeZ(u8, config.output_path);
+    const object_path_z = try gpa.dupeSentinel(u8, config.output_path, 0);
     defer gpa.free(object_path_z);
 
     // 8. Emit object file
@@ -788,8 +841,7 @@ fn renderFileNotAccessibleError(
     try report.document.addLineBreak();
     try report.document.addText("    ");
     try report.document.addAnnotated(path, .path);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("Error: ");
     try report.document.addAnnotated(@errorName(err), .error_highlight);
     try report.document.addLineBreak();
@@ -837,8 +889,7 @@ fn renderTargetError(
     try report.document.addLineBreak();
     try report.document.addText("    ");
     try report.document.addAnnotated(triple, .emphasized);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("LLVM error: ");
     try report.document.addAnnotated(llvm_message, .error_highlight);
     try report.document.addLineBreak();
@@ -878,8 +929,7 @@ fn renderTargetMachineError(
     } else {
         try report.document.addText("(default)");
     }
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("This may indicate an unsupported target configuration.");
     try report.document.addLineBreak();
 
@@ -903,8 +953,7 @@ fn renderEmitError(
     try report.document.addLineBreak();
     try report.document.addText("    Output: ");
     try report.document.addAnnotated(output_path, .path);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("LLVM error: ");
     try report.document.addAnnotated(llvm_message, .error_highlight);
     try report.document.addLineBreak();

@@ -9,17 +9,19 @@ pub const Set = struct {
     low: u64 = 0,
     high: ?*const High = null,
 
+    const Words = Snapshot(u64, 0);
+
     const High = struct {
-        words: Snapshot(u64, 0),
-        last_word: u16,
-        count: u16,
+        words: Words,
+        last_word: u32,
+        count: u32,
     };
 
     pub fn isEmpty(self: Set) bool {
         return self.low == 0 and self.high == null;
     }
 
-    pub fn contains(self: Set, field: u16) bool {
+    pub fn contains(self: Set, field: u32) bool {
         const bit = @as(u64, 1) << @as(u6, @intCast(field % 64));
         if (field < 64) return self.low & bit != 0;
         const high = self.high orelse return false;
@@ -27,20 +29,30 @@ pub const Set = struct {
     }
 
     /// Use an arena that outlives every snapshot sharing this set.
-    pub fn withField(self: Set, allocator: std.mem.Allocator, field: u16) std.mem.Allocator.Error!Set {
+    pub fn withField(self: Set, allocator: std.mem.Allocator, field: u32) std.mem.Allocator.Error!Set {
         if (self.contains(field)) return self;
         var result = self;
         const bit = @as(u64, 1) << @as(u6, @intCast(field % 64));
         if (field < 64) {
             result.low |= bit;
         } else {
+            const word = field / 64;
             var high: High = if (self.high) |previous| previous.* else .{
-                .words = Snapshot(u64, 0).init(allocator, @as(usize, std.math.maxInt(u16)) / 64 + 1),
+                .words = Words.init(allocator, @as(usize, word) + 1),
                 .last_word = 0,
                 .count = 0,
             };
-            const word = field / 64;
             high.words.allocator = allocator;
+            // A snapshot's depth covers its highest word, so a set sized for
+            // its narrower fields is rebuilt deep enough for this one. Equal
+            // sets share their highest word and so their depth.
+            const needed = Words.init(allocator, @as(usize, word) + 1);
+            if (needed.depth > high.words.depth) {
+                var grown = needed;
+                var entries = high.words.iterator();
+                while (entries.next()) |entry| try grown.put(entry.index, entry.value);
+                high.words = grown;
+            }
             try high.words.put(word, high.words.get(word) | bit);
             high.last_word = @max(high.last_word, word);
             high.count += 1;
@@ -51,7 +63,7 @@ pub const Set = struct {
         return result;
     }
 
-    pub fn isSingleton(self: Set, field: u16) bool {
+    pub fn isSingleton(self: Set, field: u32) bool {
         const count: usize = @as(usize, @popCount(self.low)) + if (self.high) |high| high.count else @as(usize, 0);
         return count == 1 and self.contains(field);
     }
@@ -66,12 +78,13 @@ pub const Set = struct {
 
     pub fn hashInto(self: Set, hasher: *std.hash.Wyhash) void {
         hasher.update(std.mem.asBytes(&self.low));
-        const last_word: u16 = if (self.high) |high| high.last_word else 0;
+        const last_word: u32 = if (self.high) |high| high.last_word else 0;
         hasher.update(std.mem.asBytes(&last_word));
         if (self.high) |high| {
-            for (1..@as(usize, last_word) + 1) |index| {
-                const word = high.words.get(@intCast(index));
-                hasher.update(std.mem.asBytes(&word));
+            var entries = high.words.iterator();
+            while (entries.next()) |entry| {
+                hasher.update(std.mem.asBytes(&entry.index));
+                hasher.update(std.mem.asBytes(&entry.value));
             }
         }
     }
@@ -81,7 +94,7 @@ test "field claims preserve inline and wide identities across forks" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
-    const fields = [_]u16{ 0, 63, 64, 128, std.math.maxInt(u16) };
+    const fields = [_]u32{ 0, 63, 64, 128, std.math.maxInt(u16), std.math.maxInt(u32) - 1 };
     var forward: Set = .{};
     for (fields) |field| {
         const prior = forward;

@@ -31,7 +31,22 @@ TYPE MISMATCH - issue_9075.md:6:11:6:12
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "Dec")
+			(text "b")
+			(line-break)
+			(indent 1)
+			(text "  where [")
+			(line-break)
+			(indent 1)
+			(text "    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),")
+			(line-break)
+			(indent 1)
+			(text "    b.plus : b, c -> b,")
+			(line-break)
+			(indent 1)
+			(text "    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),")
+			(line-break)
+			(indent 1)
+			(text "  ]")
 			(annotation-end)
 			(line-break)
 			(line-break)
@@ -121,7 +136,7 @@ main = "${y}"
 				(p-assign (ident "thing"))
 				(p-assign (ident "f")))
 			(e-block
-				(e-call (constraint-fn-var 247)
+				(e-call (constraint-fn-var 252)
 					(e-lookup-local
 						(p-assign (ident "f")))
 					(e-lookup-local
@@ -136,7 +151,7 @@ main = "${y}"
 				(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))
 	(d-let
 		(p-assign (ident "y"))
-		(e-call (constraint-fn-var 270)
+		(e-call (constraint-fn-var 275)
 			(e-lookup-local
 				(p-assign (ident "call")))
 			(e-num (value "5"))
@@ -144,7 +159,7 @@ main = "${y}"
 				(args
 					(p-assign (ident "i")))
 				(e-block
-					(e-dispatch-call (method "plus") (constraint-fn-var 268)
+					(e-dispatch-call (method "plus") (constraint-fn-var 273)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "i"))))
@@ -157,7 +172,11 @@ main = "${y}"
 				(p-assign (ident "#interp_0"))
 				(e-lookup-local
 					(p-assign (ident "y"))))
-			(e-runtime-error (tag "erroneous_value_expr")))))
+			(e-runtime-error (tag "erroneous_value_expr")
+				(e-literal (string ""))
+				(e-lookup-local
+					(p-assign (ident "#interp_0")))
+				(e-literal (string ""))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -165,9 +184,9 @@ main = "${y}"
 	(defs
 		(patt (type "a, (a -> b) -> b"))
 		(patt (type "Dec"))
-		(patt (type "Error")))
+		(patt (type "Str")))
 	(expressions
 		(expr (type "a, (a -> b) -> b"))
 		(expr (type "Dec"))
-		(expr (type "Error"))))
+		(expr (type "Str"))))
 ~~~

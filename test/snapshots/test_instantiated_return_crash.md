@@ -23,7 +23,7 @@ TYPE MISMATCH - test_instantiated_return_crash.md:6:24:6:24
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 6 24) (end 6 36))
+		(region (start 6 26) (end 6 35))
 		(headline
 			(reflow "The")
 			(reflow " ")

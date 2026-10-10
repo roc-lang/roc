@@ -1,7 +1,7 @@
-import Elem exposing [Elem]
-import NodeValue exposing [NodeValue]
+import Elem
+import NodeValue
 import Node
-import Signal exposing [Signal]
+import Signal
 
 ## Dynamic structure and local state. State is introduced through an explicit
 ## closure binder (`Ui.state`): the binder is the construction site, which is the

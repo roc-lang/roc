@@ -89,9 +89,9 @@ main! = |_args| Ok({})
 			(e-block
 				(s-let
 					(p-assign (ident "total"))
-					(e-dispatch-call (method "plus") (constraint-fn-var 252)
+					(e-dispatch-call (method "plus") (constraint-fn-var 256)
 						(receiver
-							(e-dispatch-call (method "plus") (constraint-fn-var 250)
+							(e-dispatch-call (method "plus") (constraint-fn-var 254)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "base"))))

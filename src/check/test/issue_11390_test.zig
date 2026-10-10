@@ -31,10 +31,8 @@ test "issue 11390 recursive call to a lambda annotated with a nominal type repor
         \\This expression is used in an unexpected way.
         \\```roc
         \\    delA = |inner| match inner {
-        \\        RBMut.Node(x) => x |> delB
-        \\        Empty => Empty
-        \\    }
         \\```
+        \\           ^^^^^^^
         \\
         \\It has the type:
         \\
@@ -78,7 +76,7 @@ test "issue 11390 recursive call to a lambda annotated with a non-function type 
         \\```roc
         \\f = |x| g(x)
         \\```
-        \\    ^^^^^^^^
+        \\    ^^^
         \\
         \\It has the type:
         \\

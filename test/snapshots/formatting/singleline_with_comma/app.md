@@ -8,24 +8,11 @@ type=file
 app [a1!, a2!,] { pf: platform "../basic-cli/main.roc", a: "a", }
 ~~~
 # EXPECTED
-EXPOSED BUT NOT DEFINED - app.md:1:11:1:14
 EXPOSED BUT NOT DEFINED - app.md:1:6:1:9
+EXPOSED BUT NOT DEFINED - app.md:1:11:1:14
 # PROBLEMS
 ~~~clojure
 (reports
-	(report
-		(severity runtime_error)
-		(title "Exposed But Not Defined")
-		(region (start 1 11) (end 1 14))
-		(headline
-			(reflow "The mod header says that ")
-			(annotated symbol-unqualified "a2!")
-			(reflow " is exposed, but it is not defined anywhere in this mod."))
-		(document
-			(source-region (file "app.md") (start 1 11) (end 1 14) (annotation error) (line-text "app [a1!, a2!,] { pf: platform \"../basic-cli/main.roc\", a: \"a\", }"))
-			(reflow "You can fix this by either defining ")
-			(annotated symbol-unqualified "a2!")
-			(reflow " in this mod, or by removing it from the list of exposed values.")))
 	(report
 		(severity runtime_error)
 		(title "Exposed But Not Defined")
@@ -38,6 +25,19 @@ EXPOSED BUT NOT DEFINED - app.md:1:6:1:9
 			(source-region (file "app.md") (start 1 6) (end 1 9) (annotation error) (line-text "app [a1!, a2!,] { pf: platform \"../basic-cli/main.roc\", a: \"a\", }"))
 			(reflow "You can fix this by either defining ")
 			(annotated symbol-unqualified "a1!")
+			(reflow " in this mod, or by removing it from the list of exposed values.")))
+	(report
+		(severity runtime_error)
+		(title "Exposed But Not Defined")
+		(region (start 1 11) (end 1 14))
+		(headline
+			(reflow "The mod header says that ")
+			(annotated symbol-unqualified "a2!")
+			(reflow " is exposed, but it is not defined anywhere in this mod."))
+		(document
+			(source-region (file "app.md") (start 1 11) (end 1 14) (annotation error) (line-text "app [a1!, a2!,] { pf: platform \"../basic-cli/main.roc\", a: \"a\", }"))
+			(reflow "You can fix this by either defining ")
+			(annotated symbol-unqualified "a2!")
 			(reflow " in this mod, or by removing it from the list of exposed values."))))
 ~~~
 # TOKENS
@@ -72,8 +72,8 @@ app [
 	a1!,
 	a2!,
 ] {
-	pf: platform "../basic-cli/main.roc",
 	a: "a",
+	pf: platform "../basic-cli/main.roc",
 }
 ~~~
 # CANONICALIZE

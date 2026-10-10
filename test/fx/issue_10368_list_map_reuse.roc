@@ -1,5 +1,6 @@
 app [main!] { pf: platform "./platform/main.roc" }
 
+import pf.Stdin
 import pf.Stdout
 
 # Repro for https://github.com/roc-lang/roc/issues/10368
@@ -22,7 +23,8 @@ two_maps = |p| {
 }
 
 main! = || {
-    key = List.repeat(0x0b, 20)
+    # The key's length comes from stdin so both maps run at runtime.
+    key = List.repeat(0x0b, Stdin.line!().to_utf8().len())
     Stdout.line!("one map ${one_map(key)}")
     Stdout.line!("two maps ${two_maps(key)}")
 }

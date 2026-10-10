@@ -6,6 +6,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const protocol = @import("../protocol.zig");
+const position_params = @import("position_params.zig");
 const parse = @import("parse");
 const can = @import("can");
 const pos = @import("../position.zig");
@@ -16,36 +17,9 @@ const TokenizedRegion = AST.TokenizedRegion;
 pub fn handler(comptime ServerType: type) type {
     return struct {
         pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) (Allocator.Error || error{WriteFailed})!void {
-            const params = maybe_params orelse {
-                try self.sendError(id, .invalid_params, "selectionRange requires params");
-                return;
-            };
-
-            if (std.meta.activeTag(params) != .object) {
-                try self.sendError(id, .invalid_params, "selectionRange params must be an object");
-                return;
-            }
-            const obj = params.object;
-
-            // Extract textDocument.uri
-            const text_doc_value = obj.get("textDocument") orelse {
-                try self.sendError(id, .invalid_params, "missing textDocument");
-                return;
-            };
-            if (std.meta.activeTag(text_doc_value) != .object) {
-                try self.sendError(id, .invalid_params, "textDocument must be an object");
-                return;
-            }
-            const text_doc = text_doc_value.object;
-            const uri_value = text_doc.get("uri") orelse {
-                try self.sendError(id, .invalid_params, "missing uri");
-                return;
-            };
-            if (std.meta.activeTag(uri_value) != .string) {
-                try self.sendError(id, .invalid_params, "uri must be a string");
-                return;
-            }
-            const uri = uri_value.string;
+            const document = try position_params.parseDocument(self, id, "selectionRange", maybe_params) orelse return;
+            const uri = document.uri;
+            const obj = document.obj;
 
             // Extract positions array
             const positions_value = obj.get("positions") orelse {
@@ -157,7 +131,7 @@ fn freeSelectionRange(allocator: std.mem.Allocator, range: SelectionRange) void 
 /// Walks the AST to find all containing nodes (token, expression, statement, file).
 fn computeSelectionRange(allocator: std.mem.Allocator, source: []const u8, line: u32, character: u32) (Allocator.Error || error{ InvalidPosition, ParseFailed, NoRangeFound })!SelectionRange {
     // Build line offset table
-    const line_offsets = try pos.buildLineOffsets(allocator, source);
+    const line_offsets = try pos.LineOffsets.init(allocator, source);
     defer line_offsets.deinit();
 
     // Convert position to offset
@@ -300,14 +274,8 @@ fn collectContainingRegionsFromStatement(
                 try collectContainingRegionsFromExpr(allocator, ast, body, target_offset, regions);
             }
         },
-        .expr => |e| {
+        inline .expr, .crash, .dbg => |e| {
             try collectContainingRegionsFromExpr(allocator, ast, e.expr, target_offset, regions);
-        },
-        .crash => |c| {
-            try collectContainingRegionsFromExpr(allocator, ast, c.expr, target_offset, regions);
-        },
-        .dbg => |d| {
-            try collectContainingRegionsFromExpr(allocator, ast, d.expr, target_offset, regions);
         },
         .expect => |e| {
             try collectContainingRegionsFromExpr(allocator, ast, e.body, target_offset, regions);
@@ -332,18 +300,12 @@ fn getStatementRegion(stmt: AST.Statement) ?TokenizedRegion {
     return switch (stmt) {
         .decl => |d| d.region,
         .@"var" => |v| v.region,
-        .expr => |e| e.region,
-        .crash => |c| c.region,
-        .dbg => |d| d.region,
-        .expect => |e| e.region,
+        inline .expr, .crash, .dbg, .expect => |e| e.region,
         .@"for" => |f| f.region,
         .@"while" => |w| w.region,
         .@"return" => |r| r.region,
         .@"break" => |b| b.region,
-        .import => |i| i.region,
-        .type_decl => |t| t.region,
-        .malformed => |m| m.region,
-        .file_import => |fi| fi.region,
+        inline .import, .type_decl, .malformed, .file_import => |i| i.region,
         .type_anno => null, // Type annotations don't have a simple region
     };
 }
@@ -370,14 +332,8 @@ fn collectContainingRegionsFromExpr(
 
     // Recurse into child expressions
     switch (expr) {
-        .list => |l| {
+        inline .list, .tuple => |l| {
             const items = ast.store.exprSlice(l.items);
-            for (items) |item| {
-                try collectContainingRegionsFromExpr(allocator, ast, item, target_offset, regions);
-            }
-        },
-        .tuple => |t| {
-            const items = ast.store.exprSlice(t.items);
             for (items) |item| {
                 try collectContainingRegionsFromExpr(allocator, ast, item, target_offset, regions);
             }
@@ -447,11 +403,8 @@ fn collectContainingRegionsFromExpr(
         .arrow_call => |d| {
             try collectContainingRegionsFromExpr(allocator, ast, d.left, target_offset, regions);
         },
-        .unary_op => |u| {
+        inline .unary_op, .suffix_single_question => |u| {
             try collectContainingRegionsFromExpr(allocator, ast, u.expr, target_offset, regions);
-        },
-        .suffix_single_question => |s| {
-            try collectContainingRegionsFromExpr(allocator, ast, s.expr, target_offset, regions);
         },
         .if_then_else => |i| {
             try collectContainingRegionsFromExpr(allocator, ast, i.condition, target_offset, regions);
@@ -479,11 +432,8 @@ fn collectContainingRegionsFromExpr(
                 try collectContainingRegionsFromStatement(allocator, ast, stmt_idx, target_offset, regions);
             }
         },
-        .dbg => |d| {
+        inline .dbg, .crash => |d| {
             try collectContainingRegionsFromExpr(allocator, ast, d.expr, target_offset, regions);
-        },
-        .crash => |c| {
-            try collectContainingRegionsFromExpr(allocator, ast, c.expr, target_offset, regions);
         },
         .record_builder => |rb| {
             try collectContainingRegionsFromExpr(allocator, ast, rb.mapper, target_offset, regions);

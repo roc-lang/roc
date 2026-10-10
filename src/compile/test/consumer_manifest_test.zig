@@ -104,7 +104,7 @@ fn valueSlotForRoot(
         const owner = value.compile_time_root orelse continue;
         if (owner.role != .value) continue;
         if (!std.meta.eql(owner.module, module) or !owner.root.eql(.{ .checked = root })) continue;
-        return @enumFromInt(index);
+        return @fromBackingInt(@intCast(index));
     }
     return null;
 }
@@ -126,7 +126,7 @@ fn materializesRoot(
 fn countNamedProcs(store: *const lir.LirStore, expected: []const u8) usize {
     var count: usize = 0;
     for (0..store.procSpecCount()) |index| {
-        const name = store.procDebugName(@enumFromInt(index)) orelse continue;
+        const name = store.procDebugName(@fromBackingInt(@intCast(index))) orelse continue;
         if (std.mem.eql(u8, name, expected)) count += 1;
     }
     return count;
@@ -137,7 +137,7 @@ fn countNamedProcs(store: *const lir.LirStore, expected: []const u8) usize {
 fn countProcsNaming(store: *const lir.LirStore, fragment: []const u8) usize {
     var count: usize = 0;
     for (0..store.procSpecCount()) |index| {
-        const name = store.procDebugName(@enumFromInt(index)) orelse continue;
+        const name = store.procDebugName(@fromBackingInt(@intCast(index))) orelse continue;
         if (std.mem.find(u8, name, fragment) != null) count += 1;
     }
     return count;
@@ -211,7 +211,7 @@ test "compile-time consumer materializes only the evaluated values the program r
         1,
         roc_target.RocTarget.detectNative(),
         &builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         ctx,
     );
@@ -224,10 +224,9 @@ test "compile-time consumer materializes only the evaluated values the program r
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
 
-    // A separate runtime consumer continuing the compile-time Solved program
-    // (dev's Solved policy), so completed values are materialized for it
-    // rather than read out of the compile-time consumer's own slots.
-    const target: lir.CheckedPipeline.TargetConfig = .{ .inline_expects = .omit, .proc_debug_names = true, .inline_mode = .wrappers, .spec_constr_clone_inlining = .iterator_fusion };
+    // A separate runtime consumer, so completed values are materialized for
+    // it rather than read out of the compile-time consumer's own slots.
+    const target: lir.CheckedPipeline.TargetConfig = .{ .inline_expects = .omit, .proc_debug_names = true };
     coord.runtime_lowering = .{ .target = target };
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
@@ -277,10 +276,10 @@ test "one evaluated root has one completed-value slot however many places read i
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
         \\import Helper
-        \\main! = |_args| {
+        \\main! = |args| {
         \\    Echo.line!(Str.inspect(Helper.base_value))
         \\    Echo.line!(Str.inspect(Helper.doubled))
-        \\    Echo.line!(Str.inspect(Helper.offset))
+        \\    Echo.line!(Str.inspect((Helper.offset, args.len())))
         \\    Ok({})
         \\}
     });
@@ -295,7 +294,7 @@ test "one evaluated root has one completed-value slot however many places read i
         1,
         roc_target.RocTarget.detectNative(),
         &builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.os(allocator, allocator, io),
     );
@@ -308,9 +307,7 @@ test "one evaluated root has one completed-value slot however many places read i
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
 
-    // Dev's Solved policy: the runtime consumer continues the compile-time
-    // Solved program and reads the values materialized for it.
-    const target: lir.CheckedPipeline.TargetConfig = .{ .inline_expects = .omit, .proc_debug_names = true, .inline_mode = .wrappers, .spec_constr_clone_inlining = .iterator_fusion };
+    const target: lir.CheckedPipeline.TargetConfig = .{ .inline_expects = .omit, .proc_debug_names = true };
     coord.runtime_lowering = .{ .target = target };
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
@@ -336,9 +333,9 @@ test "one evaluated root has one completed-value slot however many places read i
     // creates one. A root this program never reads has none, so the shared
     // slot above is a reader's slot and the materialization request took it.
     const base_slot = valueSlotForRoot(host, helper.key, rootIdentity(try rootWithOrder(helper_roots, 0))).?;
-    try std.testing.expect(host.lir_result.static_data_values.items[@intFromEnum(base_slot)].accessor != null);
+    try std.testing.expect(host.lir_result.static_data_values.items[@backingInt(base_slot)].accessor != null);
     const offset_slot = valueSlotForRoot(host, helper.key, rootIdentity(try rootWithOrder(helper_roots, 2))).?;
-    try std.testing.expect(host.lir_result.static_data_values.items[@intFromEnum(offset_slot)].accessor == null);
+    try std.testing.expect(host.lir_result.static_data_values.items[@backingInt(offset_slot)].accessor == null);
 
     // `base_value` and `offset` commit the same eight-byte layout and are
     // distinct values, so layout agreement alone never merges two demands.
@@ -347,8 +344,8 @@ test "one evaluated root has one completed-value slot however many places read i
     for (helper_roots[1..]) |request| {
         const other = valueSlotForRoot(host, helper.key, rootIdentity(request)).?;
         try std.testing.expect(first != other);
-        const first_layout = host.lir_result.static_data_values.items[@intFromEnum(first)].layout_idx;
-        const other_layout = host.lir_result.static_data_values.items[@intFromEnum(other)].layout_idx;
+        const first_layout = host.lir_result.static_data_values.items[@backingInt(first)].layout_idx;
+        const other_layout = host.lir_result.static_data_values.items[@backingInt(other)].layout_idx;
         try std.testing.expectEqual(
             host.lir_result.layouts.layoutSize(host.lir_result.layouts.getLayout(first_layout)),
             host.lir_result.layouts.layoutSize(host.lir_result.layouts.getLayout(other_layout)),
@@ -407,7 +404,7 @@ test "a separate compile-time consumer lowers no runtime-only procedure" {
         1,
         roc_target.RocTarget.detectNative(),
         &builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.os(allocator, allocator, io),
     );
@@ -438,7 +435,7 @@ test "a separate compile-time consumer lowers no runtime-only procedure" {
     // Asserted while the compile-time program is still whole, before any
     // consumer has taken the runtime continuation or released this code.
     try std.testing.expect(session.host != null);
-    try std.testing.expect(session.runtime_prepared == null);
+    try std.testing.expect(session.runtime_prepared != null);
     try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
     try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
     try std.testing.expectEqual(@as(u32, 1), metrics.lir_continuations);
@@ -488,7 +485,7 @@ test "a separate runtime consumer keeps the producer's root order and test-plan 
         1,
         roc_target.RocTarget.detectNative(),
         &builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.os(allocator, allocator, io),
     );
@@ -539,14 +536,14 @@ test "a separate runtime consumer keeps the producer's root order and test-plan 
     try std.testing.expect(!coord.hasUserErrors());
     const session = &coord.program_session.?;
     try std.testing.expect(session.host != null);
-    try std.testing.expect(session.runtime_prepared == null);
+    try std.testing.expect(session.runtime_prepared != null);
 
     var runtime = try session.takeRuntime(allocator, requests, target);
     defer runtime.deinit();
-    // The runtime consumer specializes the checked modules itself, reading
-    // compile-time values from their constant stores.
-    try std.testing.expectEqual(@as(u32, 2), metrics.monotype_runs);
-    try std.testing.expectEqual(@as(u32, 2), metrics.solved_runs);
+    // One specialization serves both consumers: the runtime consumer
+    // continues the Solved program compile-time evaluation ran in.
+    try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
+    try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
     try std.testing.expectEqual(@as(usize, 2), runtime.lir_result.root_metadata.items.len);
     for (expects.items, plan_metadata.items, runtime.lir_result.root_metadata.items) |request, declared, metadata| {
         try std.testing.expectEqual(request.order, metadata.order);

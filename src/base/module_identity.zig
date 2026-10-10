@@ -27,6 +27,7 @@
 //! cross-artifact identity resolution mechanism—no name matching.
 
 const std = @import("std");
+const Sha256 = @import("sha256.zig").Sha256;
 
 /// The deep content hash of a module: SHA-256 of the module name, source
 /// bytes, and the sorted, deduplicated identity hashes of its resolved
@@ -40,7 +41,7 @@ pub const Idx = enum(u32) {
     _,
 
     /// Sentinel for "not yet assigned". Never valid as a table index.
-    pub const NONE: Idx = @enumFromInt(std.math.maxInt(u32));
+    pub const NONE: Idx = @fromBackingInt(@intCast(std.math.maxInt(u32)));
 
     pub fn isNone(self: Idx) bool {
         return self == NONE;
@@ -77,7 +78,7 @@ pub fn computeDeep(
     @memcpy(sorted, import_identities);
     std.mem.sortUnstable(Hash, sorted, {}, hashLessThan);
 
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = Sha256.init(.{});
     hasher.update(domain_tag);
     hashLenPrefixed(&hasher, module_name);
     hashLenPrefixed(&hasher, source);
@@ -110,7 +111,7 @@ fn hashLessThan(_: void, a: Hash, b: Hash) bool {
     return std.mem.order(u8, &a, &b) == .lt;
 }
 
-fn hashLenPrefixed(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
+fn hashLenPrefixed(hasher: *Sha256, bytes: []const u8) void {
     var len_bytes: [4]u8 = undefined;
     std.mem.writeInt(u32, &len_bytes, @intCast(bytes.len), .little);
     hasher.update(&len_bytes);
@@ -119,8 +120,8 @@ fn hashLenPrefixed(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void
 
 test "computeDeep is order- and duplicate-insensitive over imports" {
     const gpa = std.testing.allocator;
-    const a: Hash = [_]u8{1} ** 32;
-    const b: Hash = [_]u8{2} ** 32;
+    const a: Hash = @as([32]u8, @splat(1));
+    const b: Hash = @as([32]u8, @splat(2));
 
     const h1 = try computeDeep(gpa, "M", "x = 1", &.{ a, b });
     const h2 = try computeDeep(gpa, "M", "x = 1", &.{ b, a });
@@ -131,7 +132,7 @@ test "computeDeep is order- and duplicate-insensitive over imports" {
 
 test "computeDeep distinguishes name, source, and imports" {
     const gpa = std.testing.allocator;
-    const a: Hash = [_]u8{1} ** 32;
+    const a: Hash = @as([32]u8, @splat(1));
     const base_hash = try computeDeep(gpa, "M", "x = 1", &.{a});
 
     try std.testing.expect(!std.mem.eql(u8, &base_hash, &(try computeDeep(gpa, "N", "x = 1", &.{a}))));
@@ -150,7 +151,7 @@ test "computeDeep handles more imports than the inline buffer" {
     const gpa = std.testing.allocator;
     var many: [inline_import_capacity + 3]Hash = undefined;
     for (&many, 0..) |*h, i| {
-        h.* = [_]u8{@intCast(i)} ** 32;
+        h.* = @as([32]u8, @splat(@intCast(i)));
     }
     const h1 = try computeDeep(gpa, "M", "x = 1", &many);
     std.mem.reverse(Hash, &many);

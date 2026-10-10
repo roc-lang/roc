@@ -10,6 +10,10 @@ const CoreCtx = @import("ctx").CoreCtx;
 
 const Allocator = std.mem.Allocator;
 
+/// Name of the per-version subdirectory that holds per-invocation scratch
+/// directories (see `CacheConfig.getScratchDir`).
+pub const scratch_dir_name = "tmp";
+
 const CacheOs = enum { windows, macos, other };
 
 fn cacheOs(os: std.Target.Os.Tag) CacheOs {
@@ -41,6 +45,12 @@ fn cacheOs(os: std.Target.Os.Tag) CacheOs {
         .watchos,
         .uefi,
         .@"3ds",
+        .wiiu,
+        .@"switch",
+        .gba,
+        .psx,
+        .tios,
+        .ashetos,
         .ps3,
         .ps4,
         .ps5,
@@ -62,12 +72,6 @@ fn cacheOs(os: std.Target.Os.Tag) CacheOs {
 
 /// Cache configuration constants
 pub const Constants = struct {
-    /// Default cache directory name
-    pub const DEFAULT_CACHE_DIR = ".roc_cache";
-
-    /// Default file extension for cache files
-    pub const CACHE_FILE_EXT = ".rcache";
-
     /// Maximum cache file size (256MB)
     pub const MAX_CACHE_SIZE = 256 * 1024 * 1024;
 
@@ -235,7 +239,72 @@ pub const Constants = struct {
     /// 107: An expression that did not parse canonicalizes to a runtime error
     ///      carrying `expr_syntax_error`, and the canonicalize diagnostic tags
     ///      no stage produces are gone.
-    pub const CACHE_VERSION = 107;
+    /// 108: A source expression or statement replaced by a runtime error stays
+    ///      readable to source tooling.
+    /// 109: Every source node replaced by a runtime error, patterns included,
+    ///      stays readable through the node store's `replaced_source_nodes`,
+    ///      named by the `.malformed` payload.
+    /// 110: Expect roots reaching checked errors are ineligible for execution,
+    ///      including errors in referenced procedures and constants.
+    /// 111: Checked type keys refer to each context-free subtree by its own
+    ///      key, use one-byte tags and varint integers, and a synthetic
+    ///      function over composed children shares its source key.
+    /// 112: `for` nodes carry their `ForKind`, `ForLoopDispatchPlan` records its
+    ///      dispatched method names, and common idents include `Builtin.Stream`.
+    /// 113: `Stream` is a checked builtin nominal, so every module interns its
+    ///      unqualified and fully qualified type names as common identifiers.
+    /// 114: Combined with the Stream loop format, derived-method markers record
+    ///      their owner type declaration, and a type-rooted dispatch call can
+    ///      dispatch on an explicit type var. Version 113 is reserved for the
+    ///      separate Stream builtin change.
+    /// 115: Combine derived-method and Stream dispatch metadata with 32-bit
+    ///      representation counts, offsets, and discriminants.
+    /// 116: Combine Stream builtin identity with derived-method dispatch metadata.
+    /// 117: A type variable's rank is a full word, since valid source can nest
+    ///      generalization scopes past any narrower bound.
+    /// 118: Combine full-word type variable ranks with 32-bit representation
+    ///      counts, offsets, and discriminants.
+    /// 119: Checked type keys are computed by the shared key engine: equal
+    ///      recursive types share one key however they are unrolled, type
+    ///      variables are written as relative references, and a child is
+    ///      referred to by its key plus the variables it shares.
+    /// 120: Checking records each `to_inspect` method's use at result `Str`,
+    ///      and a method registry entry carries that use's instance type and
+    ///      evidence.
+    /// 121: Raw alias types record the source argument boundary before their
+    ///      hidden polarity parameters.
+    /// 122: Builtin indices include the Encoding and Json declarations.
+    /// 123: Exposed-item import checks carry local binding identities and exact
+    ///      source regions; main-type exposures are errors.
+    /// 125: Checked modules drop checked-error reachability templates, and
+    ///      compile-time values and test results record checked-error crashes.
+    /// 126: Evidence paths store shared prefixes instead of complete paths.
+    /// 127: Type descriptors mark declared nominal backing structure.
+    /// 128: Module environments carry no package-qualified module name, and
+    ///      checked procedure names use the module's own name.
+    /// 129: Interpolation plans validate segments before assembling values.
+    /// 130: Recursive value bindings, erased row evidence, and row-default
+    /// constraint discharge are explicit in checked artifacts.
+    /// 131: If-expression metadata records source, and, or or origin instead
+    ///      of a boolean warning flag.
+    /// 132: Scheme-use records of replayed uses name their source's
+    ///      substitution.
+    /// 133: Type descriptor flags mark deferred requirement callables.
+    /// 134: Hoisted roots record an unannotated top-level value that always
+    ///      crashes as a valueless binding.
+    /// 135: Canonicalization warns on redundant returns recorded by parsing.
+    /// 136: Folded dispatch relations carry explicit target substitutions.
+    /// 137: Module environments persist diagnostic host-return provenance.
+    /// 138: Hosted Try errors no longer widen implicitly at question operators.
+    /// 139: Literal dispatch plans store an optional conversion function, absent
+    ///      for a proved concrete builtin numeral.
+    /// 140: Stored closure captures record whether each is a lexical capture
+    ///      or a top-level compile-time root's recursive binding.
+    /// 141: Checked bodies gain the `row_coerce` expression form (design.md
+    ///      "Row Coercion Primitive").
+    /// 142: Module environments record the uses of top-level values that read
+    ///      the value through a row coercion.
+    pub const CACHE_VERSION = 142;
 };
 
 /// Configuration for the Roc cache system.
@@ -365,6 +434,20 @@ pub const CacheConfig = struct {
         return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "exe" });
     }
 
+    /// Get the scratch directory for per-invocation build outputs and runtime
+    /// executables. Each invocation creates its own unique subdirectory here.
+    ///
+    /// This lives under the user's own cache root rather than the system temp
+    /// directory, so no other user can create or rename entries along the path,
+    /// and executables built here are on the same filesystem as the exe cache
+    /// they get hardlinked into.
+    pub fn getScratchDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
+        const version_dir = try self.getVersionCacheDir(allocator);
+        defer allocator.free(version_dir);
+
+        return std.fs.path.join(allocator, &[_][]const u8{ version_dir, scratch_dir_name });
+    }
+
     /// Get the test cache directory (for cached test results).
     pub fn getTestCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         const version_dir = try self.getVersionCacheDir(allocator);
@@ -373,27 +456,9 @@ pub const CacheConfig = struct {
         return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "test" });
     }
 
-    /// Get the prepared Wasm host cache directory.
-    pub fn getWasmHostCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
-        const version_dir = try self.getVersionCacheDir(allocator);
-        defer allocator.free(version_dir);
-
-        return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "wasm-host" });
-    }
-
     /// Get the cache entries directory (alias for module cache dir).
     pub fn getCacheEntriesDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         return self.getModuleCacheDir(allocator);
-    }
-
-    /// Get maximum cache size in bytes.
-    pub fn getMaxSizeBytes(self: Self) u64 {
-        return @as(u64, self.max_size_mb) * 1024 * 1024;
-    }
-
-    /// Get maximum age in nanoseconds.
-    pub fn getMaxAgeNanos(self: Self) i64 {
-        return @as(i64, self.max_age_days) * 24 * 60 * 60 * 1_000_000_000;
     }
 };
 
@@ -427,11 +492,6 @@ pub const CacheStats = struct {
     /// no counter is ever shared between the two caches.
     pub const Kind = enum { checked, canonicalized };
 
-    /// Record a cache hit.
-    pub fn recordHit(self: *Self, bytes_read: u64) void {
-        self.recordHitFor(.checked, bytes_read);
-    }
-
     /// Record a cache miss.
     pub fn recordMiss(self: *Self) void {
         self.recordMissFor(.checked);
@@ -440,11 +500,6 @@ pub const CacheStats = struct {
     /// Record a cache invalidation.
     pub fn recordInvalidation(self: *Self) void {
         self.recordInvalidationFor(.checked);
-    }
-
-    /// Record a successful cache store.
-    pub fn recordStore(self: *Self, bytes_written: u64) void {
-        self.recordStoreFor(.checked, bytes_written);
     }
 
     /// Record a failed cache store.
@@ -503,30 +558,6 @@ pub const CacheStats = struct {
             .canonicalized => self.canonicalized_store_failures += 1,
         }
     }
-
-    /// Get total checked-cache operations.
-    pub fn getTotalOps(self: Self) u64 {
-        return self.hits + self.misses;
-    }
-
-    /// Get total canonicalized-cache operations.
-    pub fn getCanonicalizedTotalOps(self: Self) u64 {
-        return self.canonicalized_hits + self.canonicalized_misses;
-    }
-
-    /// Get checked-cache hit rate as a percentage.
-    pub fn getHitRate(self: Self) f64 {
-        const total = self.getTotalOps();
-        if (total == 0) return 0.0;
-        return (@as(f64, @floatFromInt(self.hits)) / @as(f64, @floatFromInt(total))) * 100.0;
-    }
-
-    /// Get canonicalized-cache hit rate as a percentage.
-    pub fn getCanonicalizedHitRate(self: Self) f64 {
-        const total = self.getCanonicalizedTotalOps();
-        if (total == 0) return 0.0;
-        return (@as(f64, @floatFromInt(self.canonicalized_hits)) / @as(f64, @floatFromInt(total))) * 100.0;
-    }
 };
 
 /// Get the platform-specific cache directory name.
@@ -538,38 +569,12 @@ pub fn getCacheDirName() []const u8 {
     };
 }
 
-/// Get the temporary directory for runtime executables.
-/// This is in the system temp dir, not the persistent cache.
-pub fn getTempDir(roc_ctx: CoreCtx, allocator: Allocator) Allocator.Error![]u8 {
-    const temp_base = switch (cacheOs(builtin.target.os.tag)) {
-        .windows => roc_ctx.getEnvVar("TEMP", allocator) catch
-            roc_ctx.getEnvVar("TMP", allocator) catch
-            try allocator.dupe(u8, "C:\\Windows\\Temp"),
-        .macos, .other => roc_ctx.getEnvVar("TMPDIR", allocator) catch
-            try allocator.dupe(u8, "/tmp"),
-    };
-    defer allocator.free(temp_base);
-
-    return std.fs.path.join(allocator, &[_][]const u8{ temp_base, "roc" });
-}
-
-/// Get the version-specific temporary directory for runtime executables.
-pub fn getVersionTempDir(roc_ctx: CoreCtx, allocator: Allocator) Allocator.Error![]u8 {
-    const temp_base = try getTempDir(roc_ctx, allocator);
-    defer allocator.free(temp_base);
-
-    const version_dir = try getCompilerVersionDir(allocator);
-    defer allocator.free(version_dir);
-
-    return std.fs.path.join(allocator, &[_][]const u8{ temp_base, version_dir });
-}
-
 /// Get a compiler version-specific directory name.
 ///
-/// Returns the human-readable compiler version string (e.g., "debug-abcd1234")
-/// to isolate cache entries between different compiler builds.
+/// Uses an explicit namespace prefix followed by the owning compiler's content
+/// identity. Older compilers recognize bare hexadecimal directories as legacy
+/// caches and delete them, so the prefix also preserves concurrent-version use.
+/// The directory spelling does not change semantic compatibility or cache keys.
 pub fn getCompilerVersionDir(allocator: Allocator) Allocator.Error![]u8 {
-    // Use build-time compiler version that includes git commit SHA
-    const version_info = build_options.compiler_version;
-    return allocator.dupe(u8, version_info);
+    return std.fmt.allocPrint(allocator, "compat-{s}", .{build_options.compiler_compatibility_id});
 }

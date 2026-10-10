@@ -155,26 +155,32 @@ static int check_canaries(const Allocation *allocation) {
     return 0;
 }
 
+/* roc_alloc and roc_realloc must not return to Roc without an allocation,
+   so an allocation failure traps with its report recorded. */
+static _Noreturn void abort_allocation(void) {
+    __builtin_trap();
+}
+
 static void *contract_alloc(size_t length, size_t alignment) {
     if (!is_power_of_two(alignment)) {
         record_allocator_failure("invalid alignment");
-        return NULL;
+        abort_allocation();
     }
     if (length > SIZE_MAX - CANARY_SIZE - CANARY_SIZE - alignment) {
         record_allocator_failure("allocation size overflow");
-        return NULL;
+        abort_allocation();
     }
 
     const size_t total = CANARY_SIZE + alignment - 1u + length + CANARY_SIZE;
     uint8_t *raw = (uint8_t *)bump_alloc(total == 0 ? 1 : total, alignment);
     if (raw == NULL) {
-        return NULL;
+        abort_allocation();
     }
 
     uint8_t *user = (uint8_t *)align_forward((uintptr_t)(raw + CANARY_SIZE), alignment);
     if (((uintptr_t)user % alignment) != 0) {
         record_allocator_failure("returned pointer is not aligned");
-        return NULL;
+        abort_allocation();
     }
 
     Allocation *slot = NULL;
@@ -186,7 +192,7 @@ static void *contract_alloc(size_t length, size_t alignment) {
     }
     if (slot == NULL) {
         record_allocator_failure("allocation table exhausted");
-        return NULL;
+        abort_allocation();
     }
 
     memory_set(user - CANARY_SIZE, CANARY_BYTE, CANARY_SIZE);
@@ -232,21 +238,18 @@ static void *contract_realloc(void *ptr, size_t new_length, size_t alignment) {
     Allocation *old = find_allocation(ptr);
     if (old == NULL) {
         record_allocator_failure("realloc unknown pointer");
-        return NULL;
+        abort_allocation();
     }
     if (old->alignment != alignment) {
         record_allocator_failure("realloc alignment mismatch");
-        return NULL;
+        abort_allocation();
     }
     if (check_canaries(old) != 0) {
-        return NULL;
+        abort_allocation();
     }
 
     const size_t copy_length = old->length < new_length ? old->length : new_length;
     void *new_ptr = contract_alloc(new_length, alignment);
-    if (new_ptr == NULL) {
-        return NULL;
-    }
     memory_copy(new_ptr, ptr, copy_length);
     if (!memory_equal(new_ptr, ptr, copy_length)) {
         record_allocator_failure("realloc did not preserve old bytes");

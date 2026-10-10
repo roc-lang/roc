@@ -64,8 +64,8 @@ EndOfFile,
 ~~~roc
 package
 	[
-		something,
 		SomeType,
+		something,
 	]
 	{
 		somePkg: "../main.roc",

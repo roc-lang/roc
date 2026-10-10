@@ -1,6 +1,6 @@
-import Elem exposing [Elem]
+import Elem
 import Node
-import Signal exposing [Signal]
+import Signal
 
 ## Static UI structure and attributes. Markup carries no identity; dynamic text
 ## and attributes reference signals, and event handlers carry reducer messages.

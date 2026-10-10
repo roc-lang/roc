@@ -1,7 +1,7 @@
-import HostedFunctionInfo exposing [HostedFunctionInfo]
-import ProvidesEntry exposing [ProvidesEntry]
-import TypeInfo exposing [TypeInfo]
-import Types exposing [Types]
+import HostedFunctionInfo
+import ProvidesEntry
+import TypeInfo
+import Types
 
 ## Normalized input shared by glue generators.
 ##

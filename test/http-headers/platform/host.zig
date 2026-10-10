@@ -45,6 +45,12 @@ fn classifyPlatformOs(os: std.Target.Os.Tag) PlatformOs {
         .watchos,
         .uefi,
         .@"3ds",
+        .wiiu,
+        .@"switch",
+        .gba,
+        .psx,
+        .tios,
+        .ashetos,
         .ps3,
         .ps4,
         .ps5,
@@ -199,7 +205,7 @@ fn panicImpl(msg: []const u8, addr: ?usize) noreturn {
     abortProcess();
 }
 
-fn hostAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn hostAlloc(length: usize, alignment: usize) callconv(.c) *anyopaque {
     _ = length;
     _ = alignment;
     rawWriteStderr("roc_alloc called\n");
@@ -213,7 +219,7 @@ fn hostDealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
     abortProcess();
 }
 
-fn hostRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn hostRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     _ = ptr;
     _ = new_length;
     _ = alignment;
@@ -646,7 +652,7 @@ const loopback_addr_network_order: u32 = 0x0100007f;
 
 const linux = struct {
     const os = std.os.linux;
-    const EINTR = @intFromEnum(os.E.INTR);
+    const EINTR = @backingInt(os.E.INTR);
 
     fn listenLoopback() ServerError!Listener {
         const socket_result = os.socket(os.AF.INET, os.SOCK.STREAM, 0);
@@ -666,7 +672,7 @@ const linux = struct {
             .family = os.AF.INET,
             .port = hostToNetwork16(0),
             .addr = loopback_addr_network_order,
-            .zero = .{0} ** 8,
+            .zero = @splat(0),
         };
         if (isErr(os.bind(fd, @ptrCast(&addr), @sizeOf(os.sockaddr.in)))) return error.BindFailed;
         if (isErr(os.listen(fd, listen_backlog))) return error.ListenFailed;
@@ -724,7 +730,7 @@ const linux = struct {
     }
 
     fn errno(result: usize) usize {
-        return @intFromEnum(os.errno(result));
+        return @backingInt(os.errno(result));
     }
 };
 
@@ -786,7 +792,7 @@ const darwin = struct {
             .family = AF_INET,
             .port = hostToNetwork16(0),
             .addr = .{ .s_addr = loopback_addr_network_order },
-            .zero = .{0} ** 8,
+            .zero = @splat(0),
         };
         if (bind(fd, @ptrCast(&addr), @sizeOf(SockAddrIn)) == -1) return error.BindFailed;
         if (listen(fd, listen_backlog) == -1) return error.ListenFailed;
@@ -907,7 +913,7 @@ const windows = struct {
             .family = AF_INET,
             .port = hostToNetwork16(0),
             .addr = .{ .s_addr = loopback_addr_network_order },
-            .zero = .{0} ** 8,
+            .zero = @splat(0),
         };
         if (bind(fd, @ptrCast(&addr), @sizeOf(SockAddrIn)) == SOCKET_ERROR) return error.BindFailed;
         if (listen(fd, listen_backlog) == SOCKET_ERROR) return error.ListenFailed;

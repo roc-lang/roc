@@ -36,8 +36,9 @@ pub const UseOrder = struct {
         id: u32,
         unresolved: []const u32,
     } = null,
-    /// Generation stamps: a statement is marked for the current local when
-    /// its stamp equals `generation`.
+    /// Generation stamps on block-first statements: a block's first
+    /// statement is marked for the current local when its stamp equals
+    /// `generation`.
     mark_gen: []u32,
     generation: u32,
     /// The local the current marks describe, and whether they were made
@@ -45,6 +46,11 @@ pub const UseOrder = struct {
     marked_local: u32,
     marked_uses: bool,
     work: std.ArrayList(u32),
+    /// The current marking's initial statements and the marked local's
+    /// definitions, as sorted `blockKey`s, so a query inside a block is a
+    /// binary search rather than a walk.
+    mark_initial: std.ArrayList(u64) = .empty,
+    mark_defs: std.ArrayList(u64) = .empty,
     /// Only the fixed-point workspace enables this cache. Each key names
     /// an immutable ordered-use question, independent of signatures/takes.
     use_answers: ?*std.AutoHashMap(UseQuery, bool) = null,
@@ -112,6 +118,14 @@ pub const UseOrder = struct {
         jump_join: []u32,
         /// Reverse edges of `forEachSuccessor`.
         preds: Rows,
+        /// Straight-line blocks: the first statement of each statement's
+        /// block, its position there, and (at block-first statements) the
+        /// block's last statement. Inside a block every statement's only
+        /// successor is the next one, reached by no other edge, so marking
+        /// and queries move between blocks and resolve positions inside one.
+        block_first: []u32,
+        block_pos: []u32,
+        block_last: []u32,
         /// Unknown successors conservatively count as used.
         unresolved: std.bit_set.DynamicBitSetUnmanaged,
         unresolved_list: []u32,
@@ -126,6 +140,9 @@ pub const UseOrder = struct {
                     self.tables.jump_join[self.tables.stmtIndex(stmt)] = no_local;
                     self.tables.mark_gen[self.tables.stmtIndex(stmt)] = 0;
                     self.tables.unresolved.unset(self.tables.stmtIndex(stmt));
+                    self.tables.block_first[self.tables.stmtIndex(stmt)] = no_local;
+                    self.tables.block_pos[self.tables.stmtIndex(stmt)] = 0;
+                    self.tables.block_last[self.tables.stmtIndex(stmt)] = no_local;
                 }
                 self.reads_of.clearIndex();
                 self.defs_of.clearIndex();
@@ -154,6 +171,9 @@ pub const UseOrder = struct {
         seen: std.bit_set.DynamicBitSetUnmanaged,
         unresolved: std.bit_set.DynamicBitSetUnmanaged,
         mark_gen: []u32,
+        block_first: []u32,
+        block_pos: []u32,
+        block_last: []u32,
 
         pub fn init(allocator: Allocator, store: *const LirStore) Allocator.Error!Scratch {
             return initTables(allocator, store, .with_marks);
@@ -166,7 +186,7 @@ pub const UseOrder = struct {
         }
 
         fn stmtIndex(self: *const Scratch, raw: u32) u32 {
-            return if (self.domain) |domain| domain.stmts.get(@enumFromInt(raw)).? else raw;
+            return if (self.domain) |domain| domain.stmts.get(@fromBackingInt(@intCast(raw))).? else raw;
         }
 
         fn initTablesInDomain(allocator: Allocator, store: *const LirStore, marks: Marks, domain: ?*Domain) Allocator.Error!Scratch {
@@ -186,7 +206,16 @@ pub const UseOrder = struct {
             var unresolved = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, stmt_count);
             errdefer unresolved.deinit(allocator);
             const mark_gen = try allocator.alloc(u32, if (marks == .with_marks) stmt_count else 0);
+            errdefer allocator.free(mark_gen);
             @memset(mark_gen, 0);
+            const block_first = try allocator.alloc(u32, stmt_count);
+            errdefer allocator.free(block_first);
+            @memset(block_first, no_local);
+            const block_pos = try allocator.alloc(u32, stmt_count);
+            errdefer allocator.free(block_pos);
+            @memset(block_pos, 0);
+            const block_last = try allocator.alloc(u32, stmt_count);
+            @memset(block_last, no_local);
             return .{
                 .domain = domain,
                 .jump_join = jump_join,
@@ -196,6 +225,9 @@ pub const UseOrder = struct {
                 .seen = seen,
                 .unresolved = unresolved,
                 .mark_gen = mark_gen,
+                .block_first = block_first,
+                .block_pos = block_pos,
+                .block_last = block_last,
             };
         }
 
@@ -207,6 +239,9 @@ pub const UseOrder = struct {
             self.seen.deinit(allocator);
             self.unresolved.deinit(allocator);
             allocator.free(self.mark_gen);
+            allocator.free(self.block_first);
+            allocator.free(self.block_pos);
+            allocator.free(self.block_last);
         }
     };
 
@@ -219,7 +254,7 @@ pub const UseOrder = struct {
 
         fn keyIndex(self: *const RowIndex, raw: u32) ?u32 {
             return if (self.domain) |domain|
-                if (self.statement_keys) domain.stmts.get(@enumFromInt(raw)) else domain.locals.get(@enumFromInt(raw))
+                if (self.statement_keys) domain.stmts.get(@fromBackingInt(@intCast(raw))) else domain.locals.get(@fromBackingInt(@intCast(raw)))
             else
                 raw;
         }
@@ -247,7 +282,7 @@ pub const UseOrder = struct {
         stmts: []u32,
 
         pub fn row(self: *const Rows, local: LIR.LocalId) []const u32 {
-            return self.rowAt(@intFromEnum(local));
+            return self.rowAt(@backingInt(local));
         }
 
         pub fn rowAt(self: *const Rows, key: u32) []const u32 {
@@ -331,7 +366,7 @@ pub const UseOrder = struct {
             errdefer for (member_list.items) |stmt| tables.seen.unset(tables.stmtIndex(stmt));
             for (lists) |list| {
                 for (list) |stmt_id| {
-                    const index = @intFromEnum(stmt_id);
+                    const index = @backingInt(stmt_id);
                     if (tables.seen.isSet(tables.stmtIndex(index))) continue;
                     try member_list.append(allocator, index);
                     tables.seen.set(tables.stmtIndex(index));
@@ -351,13 +386,13 @@ pub const UseOrder = struct {
             joins.clearRetainingCapacity();
             for (list) |stmt_id| {
                 const stmt = store.getCFStmt(stmt_id);
-                if (stmt == .join) try joins.put(stmt.join.id, @intFromEnum(stmt_id));
+                if (stmt == .join) try joins.put(stmt.join.id, @backingInt(stmt_id));
             }
             for (list) |stmt_id| {
                 const stmt = store.getCFStmt(stmt_id);
                 if (stmt != .jump) continue;
                 if (joins.get(stmt.jump.target)) |join_stmt| {
-                    tables.jump_join[tables.stmtIndex(@intFromEnum(stmt_id))] = join_stmt;
+                    tables.jump_join[tables.stmtIndex(@backingInt(stmt_id))] = join_stmt;
                 }
             }
         }
@@ -382,6 +417,7 @@ pub const UseOrder = struct {
         }
         const owned_unresolved = try allocator.dupe(u32, unresolved_list.items);
         unresolved_list.deinit(allocator);
+        buildBlocks(store, members, tables, &preds);
         // Only a reusable scratch needs `seen` for a later build, or the
         // member inventory to reset its entries on release.
         if (scratch == null) {
@@ -398,9 +434,66 @@ pub const UseOrder = struct {
             .defs_of = defs_of,
             .jump_join = tables.jump_join,
             .preds = preds,
+            .block_first = tables.block_first,
+            .block_pos = tables.block_pos,
+            .block_last = tables.block_last,
             .unresolved = tables.unresolved,
             .unresolved_list = owned_unresolved,
         };
+    }
+
+    /// The statement a straight-line block continues with after `stmt`: its
+    /// only successor, when that edge is not a jump (which can redefine a
+    /// join parameter) and no other edge reaches the successor.
+    fn blockContinuation(store: *const LirStore, tables: *const Scratch, preds: *const Rows, stmt: u32) ?u32 {
+        if (tables.unresolved.isSet(tables.stmtIndex(stmt))) return null;
+        if (store.getCFStmt(@fromBackingInt(@intCast(stmt))) == .jump) return null;
+        const Single = struct {
+            count: u32 = 0,
+            succ: u32 = no_local,
+            fn note(self_single: *@This(), succ: u32) void {
+                self_single.count += 1;
+                self_single.succ = succ;
+            }
+        };
+        var single = Single{};
+        _ = forEachSuccessor(store, tables, stmt, &single, Single.note);
+        if (single.count != 1) return null;
+        if (preds.rowAt(single.succ).len != 1) return null;
+        return single.succ;
+    }
+
+    fn isBlockStart(store: *const LirStore, tables: *const Scratch, preds: *const Rows, stmt: u32) bool {
+        const row = preds.rowAt(stmt);
+        if (row.len != 1) return true;
+        return blockContinuation(store, tables, preds, row[0]) != stmt;
+    }
+
+    /// Partition `members` into straight-line blocks. A cycle of statements
+    /// each continuing the next has no natural start, so any statement left
+    /// unassigned starts its own block.
+    fn buildBlocks(store: *const LirStore, members: []const u32, tables: *Scratch, preds: *const Rows) void {
+        for (members) |stmt| {
+            if (isBlockStart(store, tables, preds, stmt)) fillBlock(store, tables, preds, stmt);
+        }
+        for (members) |stmt| {
+            if (tables.block_first[tables.stmtIndex(stmt)] == no_local) fillBlock(store, tables, preds, stmt);
+        }
+    }
+
+    fn fillBlock(store: *const LirStore, tables: *Scratch, preds: *const Rows, first: u32) void {
+        var current = first;
+        var position: u32 = 0;
+        while (true) {
+            tables.block_first[tables.stmtIndex(current)] = first;
+            tables.block_pos[tables.stmtIndex(current)] = position;
+            const next = blockContinuation(store, tables, preds, current) orelse break;
+            if (tables.block_first[tables.stmtIndex(next)] != no_local) break;
+            if (isBlockStart(store, tables, preds, next)) break;
+            current = next;
+            position += 1;
+        }
+        tables.block_last[tables.stmtIndex(first)] = current;
     }
 
     /// Whether a statement contributes to the rows of `kind`.
@@ -421,11 +514,13 @@ pub const UseOrder = struct {
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_box,
+            .assign_boxy_record_update,
             .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
             .assign_boxy_eq,
+            .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
             .boxy_tag_match,
@@ -515,7 +610,7 @@ pub const UseOrder = struct {
     }
 
     fn localKey(local: LIR.LocalId) u32 {
-        return @intFromEnum(local);
+        return @backingInt(local);
     }
 
     fn stmtKey(stmt: u32) u32 {
@@ -527,7 +622,7 @@ pub const UseOrder = struct {
         var builder = Builder{ .allocator = allocator, .index = index };
         errdefer builder.abandon();
         for (members) |raw| {
-            const stmt = store.getCFStmt(@enumFromInt(raw));
+            const stmt = store.getCFStmt(@fromBackingInt(@intCast(raw)));
             if (!rowsInclude(stmt, kind)) continue;
             switch (kind) {
                 .reads => body_clone.forEachStmtRead(store, stmt, &builder, Builder.count),
@@ -536,7 +631,7 @@ pub const UseOrder = struct {
         }
         try builder.place();
         for (members) |raw| {
-            const stmt = store.getCFStmt(@enumFromInt(raw));
+            const stmt = store.getCFStmt(@fromBackingInt(@intCast(raw)));
             if (!rowsInclude(stmt, kind)) continue;
             builder.stmt = raw;
             switch (kind) {
@@ -585,10 +680,10 @@ pub const UseOrder = struct {
         defer seen.deinit();
         var stack = std.ArrayList(LIR.CFStmtId).empty;
         defer stack.deinit(allocator);
-        const first: usize = if (only_proc) |id| @intFromEnum(id) else 0;
+        const first: usize = if (only_proc) |id| @backingInt(id) else 0;
         const end = if (only_proc != null) first + 1 else store.procSpecCount();
         for (first..end) |proc_index| {
-            const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+            const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
             const body = proc.body orelse continue;
             var list = std.ArrayList(LIR.CFStmtId).empty;
             errdefer list.deinit(allocator);
@@ -614,6 +709,8 @@ pub const UseOrder = struct {
         // A whole order's marks live in its topology's tables.
         if (self.component == null) self.topology.deinit(self.allocator) else self.allocator.free(self.mark_gen);
         self.work.deinit(self.allocator);
+        self.mark_initial.deinit(self.allocator);
+        self.mark_defs.deinit(self.allocator);
     }
 
     fn markIndex(self: *const UseOrder, stmt: u32) u32 {
@@ -647,11 +744,11 @@ pub const UseOrder = struct {
     /// before `local` is redefined. Marks from the local's reads once and
     /// answers every later query about the same local from those marks.
     pub fn usesAfter(self: *UseOrder, from: u32, local: LIR.LocalId) Allocator.Error!bool {
-        const key: UseQuery = .{ .stmt = @enumFromInt(from), .local = local };
+        const key: UseQuery = .{ .stmt = @fromBackingInt(@intCast(from)), .local = local };
         if (self.use_answers) |answers| if (answers.get(key)) |answer| return answer;
-        if (self.marked_local != @intFromEnum(local) or !self.marked_uses) {
+        if (self.marked_local != @backingInt(local) or !self.marked_uses) {
             try self.markFrom(local, self.topology.reads_of.row(local));
-            self.marked_local = @intFromEnum(local);
+            self.marked_local = @backingInt(local);
             self.marked_uses = true;
         }
         const answer = self.after(from, local);
@@ -663,13 +760,38 @@ pub const UseOrder = struct {
     /// `local` is redefined, for `after` queries about that local.
     pub fn markAmong(self: *UseOrder, local: LIR.LocalId, among: []const u32) Allocator.Error!void {
         try self.markFrom(local, among);
-        self.marked_local = @intFromEnum(local);
+        self.marked_local = @backingInt(local);
         self.marked_uses = false;
     }
 
     /// Whether a marked statement can execute after `stmt`.
     pub fn after(self: *const UseOrder, stmt: u32, local: LIR.LocalId) bool {
         if (self.topology.unresolved.isSet(self.topology.tables.stmtIndex(stmt))) return true;
+        const index = self.topology.tables.stmtIndex(stmt);
+        const first = self.topology.block_first[index];
+        if (self.topology.block_last[self.topology.tables.stmtIndex(first)] != stmt) {
+            return self.markedWithin(first, self.topology.block_pos[index] + 1, local);
+        }
+        return self.exitMarked(stmt, local);
+    }
+
+    /// Whether the statement at `position` of the block starting at `first`
+    /// is marked: an initial statement at or after it comes before any
+    /// redefinition, or nothing in the rest of the block redefines the local
+    /// and the block's exit reaches a marked block.
+    fn markedWithin(self: *const UseOrder, first: u32, position: u32, local: LIR.LocalId) bool {
+        const key = self.blockKey(first, position);
+        const initial = nextInBlock(self.mark_initial.items, key);
+        const def = nextInBlock(self.mark_defs.items, key);
+        if (initial) |initial_key| {
+            if (def == null or initial_key <= def.?) return true;
+        }
+        if (def != null) return false;
+        return self.exitMarked(self.topology.block_last[self.topology.tables.stmtIndex(first)], local);
+    }
+
+    /// Whether an edge out of a block's last statement reaches a marked block.
+    fn exitMarked(self: *const UseOrder, last: u32, local: LIR.LocalId) bool {
         const Probe = struct {
             order: *const UseOrder,
             stmt: u32,
@@ -677,17 +799,44 @@ pub const UseOrder = struct {
             hit: bool,
             fn note(self_probe: *@This(), succ: u32) void {
                 if (self_probe.order.cutEdge(self_probe.stmt, succ, self_probe.local)) return;
-                if (self_probe.order.mark_gen[self_probe.order.markIndex(succ)] == self_probe.order.generation) self_probe.hit = true;
+                if (self_probe.order.blockMarked(succ)) self_probe.hit = true;
             }
         };
-        var probe = Probe{ .order = self, .stmt = stmt, .local = local, .hit = false };
-        _ = forEachSuccessor(self.topology.store, self.topology.tables, stmt, &probe, Probe.note);
+        var probe = Probe{ .order = self, .stmt = last, .local = local, .hit = false };
+        _ = forEachSuccessor(self.topology.store, self.topology.tables, last, &probe, Probe.note);
         return probe.hit;
+    }
+
+    /// The first key of `keys` (sorted) at or after `key` in the same block.
+    fn nextInBlock(keys: []const u64, key: u64) ?u64 {
+        var lo: usize = 0;
+        var hi: usize = keys.len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            if (keys[mid] < key) lo = mid + 1 else hi = mid;
+        }
+        if (lo == keys.len or keys[lo] >> 32 != key >> 32) return null;
+        return keys[lo];
+    }
+
+    fn blockKey(self: *const UseOrder, first: u32, position: u32) u64 {
+        return (@as(u64, self.markIndex(first)) << 32) | position;
+    }
+
+    fn stmtBlockKey(self: *const UseOrder, stmt: u32) u64 {
+        const index = self.topology.tables.stmtIndex(stmt);
+        return self.blockKey(self.topology.block_first[index], self.topology.block_pos[index]);
+    }
+
+    fn blockMarked(self: *const UseOrder, first: u32) bool {
+        std.debug.assert(self.topology.block_first[self.topology.tables.stmtIndex(first)] == first);
+        return self.mark_gen[self.markIndex(first)] == self.generation;
     }
 
     /// Backward reachability from `initial` and the unresolved statements:
     /// a statement is marked when executing from it reaches one of them
-    /// before `local` is redefined.
+    /// before `local` is redefined. Marks are kept per block, on the block's
+    /// first statement; positions inside a block are resolved by `after`.
     fn markFrom(self: *UseOrder, local: LIR.LocalId, initial: []const u32) Allocator.Error!void {
         self.generation +%= 1;
         if (self.generation == 0) {
@@ -695,39 +844,61 @@ pub const UseOrder = struct {
             self.generation = 1;
         }
         self.work.clearRetainingCapacity();
-        for (initial) |stmt| try self.mark(stmt);
-        if (self.component) |component| {
-            for (component.unresolved) |stmt| try self.mark(stmt);
-        } else {
-            for (self.topology.unresolved_list) |stmt| try self.mark(stmt);
-        }
-        while (self.work.pop()) |stmt| {
+        self.mark_initial.clearRetainingCapacity();
+        self.mark_defs.clearRetainingCapacity();
+        const unresolved = if (self.component) |component| component.unresolved else self.topology.unresolved_list;
+        try self.mark_initial.ensureUnusedCapacity(self.allocator, initial.len + unresolved.len);
+        for (initial) |stmt| self.mark_initial.appendAssumeCapacity(self.stmtBlockKey(stmt));
+        for (unresolved) |stmt| self.mark_initial.appendAssumeCapacity(self.stmtBlockKey(stmt));
+        std.mem.sortUnstable(u64, self.mark_initial.items, {}, std.sort.asc(u64));
+        const defs = self.topology.defs_of.row(local);
+        try self.mark_defs.ensureUnusedCapacity(self.allocator, defs.len);
+        for (defs) |stmt| self.mark_defs.appendAssumeCapacity(self.stmtBlockKey(stmt));
+        std.mem.sortUnstable(u64, self.mark_defs.items, {}, std.sort.asc(u64));
+
+        // A block is marked from its own initial statements when the first
+        // of them comes before any redefinition in the block.
+        for (initial) |stmt| try self.seedBlock(stmt);
+        for (unresolved) |stmt| try self.seedBlock(stmt);
+        while (self.work.pop()) |first| {
             if (builtin.is_test) self.backward_visits += 1;
-            for (self.topology.preds.rowAt(stmt)) |pred| {
-                if (self.mark_gen[self.markIndex(pred)] == self.generation) continue;
-                if (self.cutEdge(pred, stmt, local)) continue;
-                if (self.defines(pred, local)) continue;
-                try self.mark(pred);
+            for (self.topology.preds.rowAt(first)) |pred| {
+                if (self.cutEdge(pred, first, local)) continue;
+                const pred_first = self.topology.block_first[self.topology.tables.stmtIndex(pred)];
+                if (self.blockMarked(pred_first)) continue;
+                // A redefinition anywhere in the predecessor block stops the
+                // value from reaching its first statement through its exit.
+                if (nextInBlock(self.mark_defs.items, self.blockKey(pred_first, 0)) != null) continue;
+                try self.markBlock(pred_first);
             }
         }
     }
 
-    fn mark(self: *UseOrder, stmt: u32) Allocator.Error!void {
-        const index = self.markIndex(stmt);
-        if (self.mark_gen[index] == self.generation) return;
-        self.mark_gen[index] = self.generation;
-        try self.work.append(self.allocator, stmt);
+    fn seedBlock(self: *UseOrder, stmt: u32) Allocator.Error!void {
+        const first = self.topology.block_first[self.topology.tables.stmtIndex(stmt)];
+        if (self.blockMarked(first)) return;
+        const key = self.blockKey(first, 0);
+        const initial_key = nextInBlock(self.mark_initial.items, key).?;
+        if (nextInBlock(self.mark_defs.items, key)) |def_key| {
+            if (def_key < initial_key) return;
+        }
+        try self.markBlock(first);
+    }
+
+    fn markBlock(self: *UseOrder, first: u32) Allocator.Error!void {
+        self.mark_gen[self.markIndex(first)] = self.generation;
+        try self.work.append(self.allocator, first);
     }
 
     /// A jump into a join that declares `local` as a parameter redefines
     /// it, so that edge carries no use of the previous value.
     fn cutEdge(self: *const UseOrder, from: u32, to: u32, local: LIR.LocalId) bool {
-        const node = self.topology.store.getCFStmt(@enumFromInt(from));
+        const node = self.topology.store.getCFStmt(@fromBackingInt(@intCast(from)));
         if (node != .jump) return false;
         const join_stmt = self.topology.jump_join[self.topology.tables.stmtIndex(from)];
         if (join_stmt == no_local) return false;
-        const join = self.topology.store.getCFStmt(@enumFromInt(join_stmt)).join;
-        if (@intFromEnum(join.body) != to) return false;
+        const join = self.topology.store.getCFStmt(@fromBackingInt(@intCast(join_stmt))).join;
+        if (@backingInt(join.body) != to) return false;
         const params = self.topology.store.getLocalSpan(join.params);
         for (0..GuardedList.borrowLen(params)) |index| {
             if (GuardedList.at(params, index) == local) return true;
@@ -738,7 +909,7 @@ pub const UseOrder = struct {
     /// Calls `note(ctx, successor)` for each control-flow successor of
     /// `stmt`; returns true when an edge cannot be resolved.
     fn forEachSuccessor(store: *const LirStore, tables: *const Scratch, stmt: u32, ctx: anytype, comptime note: fn (@TypeOf(ctx), u32) void) bool {
-        switch (store.getCFStmt(@enumFromInt(stmt))) {
+        switch (store.getCFStmt(@fromBackingInt(@intCast(stmt)))) {
             inline .init_uninitialized,
             .assign_ref,
             .assign_literal,
@@ -748,11 +919,13 @@ pub const UseOrder = struct {
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_box,
+            .assign_boxy_record_update,
             .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
             .assign_boxy_eq,
+            .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
             .assign_call_dict,
@@ -770,41 +943,37 @@ pub const UseOrder = struct {
             .decref,
             .decref_if_initialized,
             .free,
-            => |node| note(ctx, @intFromEnum(node.next)),
+            => |node| note(ctx, @backingInt(node.next)),
             .switch_stmt => |node| {
-                if (node.continuation) |continuation| note(ctx, @intFromEnum(continuation));
-                note(ctx, @intFromEnum(node.default_branch));
+                if (node.continuation) |continuation| note(ctx, @backingInt(continuation));
+                note(ctx, @backingInt(node.default_branch));
                 const branches = store.getCFSwitchBranches(node.branches);
                 for (0..GuardedList.borrowLen(branches)) |index| {
-                    note(ctx, @intFromEnum(GuardedList.at(branches, index).body));
+                    note(ctx, @backingInt(GuardedList.at(branches, index).body));
                 }
             },
             .switch_initialized_payload => |node| {
-                note(ctx, @intFromEnum(node.initialized_branch));
-                note(ctx, @intFromEnum(node.uninitialized_branch));
+                note(ctx, @backingInt(node.initialized_branch));
+                note(ctx, @backingInt(node.uninitialized_branch));
             },
-            .str_match => |node| {
-                note(ctx, @intFromEnum(node.on_match));
-                note(ctx, @intFromEnum(node.on_miss));
-            },
-            .boxy_tag_match => |node| {
-                note(ctx, @intFromEnum(node.on_match));
-                note(ctx, @intFromEnum(node.on_miss));
+            inline .str_match, .boxy_tag_match => |node| {
+                note(ctx, @backingInt(node.on_match));
+                note(ctx, @backingInt(node.on_miss));
             },
             .str_match_set => |node| {
                 const arms = store.getStrMatchArms(node.arms);
                 for (0..GuardedList.borrowLen(arms)) |index| {
-                    note(ctx, @intFromEnum(GuardedList.at(arms, index).on_match));
+                    note(ctx, @backingInt(GuardedList.at(arms, index).on_match));
                 }
-                note(ctx, @intFromEnum(node.on_miss));
+                note(ctx, @backingInt(node.on_miss));
             },
             // A join's body runs only when jumped to; declaring the join
             // continues with its remainder.
-            .join => |node| note(ctx, @intFromEnum(node.remainder)),
+            .join => |node| note(ctx, @backingInt(node.remainder)),
             .jump => {
                 const join_stmt = tables.jump_join[tables.stmtIndex(stmt)];
                 if (join_stmt == no_local) return true;
-                note(ctx, @intFromEnum(store.getCFStmt(@enumFromInt(join_stmt)).join.body));
+                note(ctx, @backingInt(store.getCFStmt(@fromBackingInt(@intCast(join_stmt))).join.body));
             },
             .loop_continue, .loop_break => return true,
             .runtime_error,
@@ -866,11 +1035,13 @@ pub fn appendStructuralSuccessors(
         .assign_boxy_desc_ref,
         .assign_boxy_dict_ref,
         .assign_boxy_box,
+        .assign_boxy_record_update,
         .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
         .assign_boxy_eq,
+        .assign_boxy_hash,
         .assign_boxy_tag,
         .assign_boxy_tag_payload,
         .assign_call_dict,
@@ -931,11 +1102,11 @@ test "use order compact procedure domain matches dense queries and excludes unre
     try testing.expectEqual(@as(usize, 2), compact.topology.preds.index.len.len);
     for ([_]LIR.CFStmtId{ alias, done }) |stmt| {
         for ([_]LIR.LocalId{ input, view }) |local| {
-            try testing.expectEqual(try dense.usesAfter(@intFromEnum(stmt), local), try compact.usesAfter(@intFromEnum(stmt), local));
+            try testing.expectEqual(try dense.usesAfter(@backingInt(stmt), local), try compact.usesAfter(@backingInt(stmt), local));
         }
     }
-    try testing.expect(try compact.usesAfter(@intFromEnum(alias), view));
-    try testing.expect(!try compact.usesAfter(@intFromEnum(alias), input));
+    try testing.expect(try compact.usesAfter(@backingInt(alias), view));
+    try testing.expect(!try compact.usesAfter(@backingInt(alias), input));
 
     // Compact domains own both their remapping and topology storage. Every
     // partial construction and query must release both after allocation failure.
@@ -943,8 +1114,150 @@ test "use order compact procedure domain matches dense queries and excludes unre
         fn run(probe_allocator: Allocator, source: *const LirStore, id: LIR.LirProcSpecId, stmt: LIR.CFStmtId, local: LIR.LocalId) Allocator.Error!void {
             var order = try UseOrder.initFromStore(probe_allocator, source, id);
             defer order.deinit();
-            _ = try order.usesAfter(@intFromEnum(stmt), local);
+            _ = try order.usesAfter(@backingInt(stmt), local);
         }
     };
     try testing.checkAllAllocationFailures(allocator, Probe.run, .{ &store, proc, alias, view });
+}
+
+test "use order block queries agree with a statement-level search on random bodies" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    const Gen = struct {
+        store: *LirStore,
+        random: std.Random,
+        locals: [4]LIR.LocalId,
+        scope: std.ArrayList(LIR.JoinPointId) = .empty,
+        next_join: u32 = 0,
+
+        fn local(self: *@This()) LIR.LocalId {
+            return self.locals[self.random.uintLessThan(usize, self.locals.len)];
+        }
+
+        fn body(self: *@This(), depth: u32) Allocator.Error!LIR.CFStmtId {
+            const choice = self.random.uintLessThan(u32, 10);
+            if (depth == 0 or choice < 2) {
+                if (self.scope.items.len != 0 and choice % 2 == 0) {
+                    const target = self.scope.items[self.random.uintLessThan(usize, self.scope.items.len)];
+                    return try self.store.addCFStmt(.{ .jump = .{ .target = target } }, .test_fixture);
+                }
+                return try self.store.addCFStmt(.{ .ret = .{ .value = self.local() } }, .test_fixture);
+            }
+            if (choice < 6) {
+                var next = try self.body(depth - 1);
+                for (0..self.random.uintLessThan(usize, 4) + 1) |_| {
+                    next = try self.store.addCFStmt(.{ .assign_ref = .{
+                        .target = self.local(),
+                        .op = .{ .local = self.local() },
+                        .next = next,
+                    } }, .test_fixture);
+                }
+                return next;
+            }
+            if (choice < 8) {
+                const branch = try self.body(depth - 1);
+                const default_branch = try self.body(depth - 1);
+                return try self.store.addCFStmt(.{ .switch_stmt = .{
+                    .cond = self.local(),
+                    .branches = try self.store.addCFSwitchBranches(&.{.{ .value = 0, .body = branch }}),
+                    .default_branch = default_branch,
+                } }, .test_fixture);
+            }
+            const id: LIR.JoinPointId = @fromBackingInt(@intCast(self.next_join));
+            self.next_join += 1;
+            try self.scope.append(testing.allocator, id);
+            defer _ = self.scope.pop();
+            const join_body = try self.body(depth - 1);
+            const remainder = try self.body(depth - 1);
+            return try self.store.addCFStmt(.{ .join = .{
+                .id = id,
+                .params = try self.store.addLocalSpan(&.{self.local()}),
+                .body = join_body,
+                .remainder = remainder,
+            } }, .test_fixture);
+        }
+    };
+    var prng = std.Random.DefaultPrng.init(0x11698);
+    var visited = std.AutoHashMap(u32, void).init(allocator);
+    defer visited.deinit();
+    var stack = std.ArrayList(u32).empty;
+    defer stack.deinit(allocator);
+    var members = std.ArrayList(LIR.CFStmtId).empty;
+    defer members.deinit(allocator);
+    for (0..300) |_| {
+        var store = LirStore.init(allocator);
+        defer store.deinit();
+        var gen = Gen{ .store = &store, .random = prng.random(), .locals = undefined };
+        defer gen.scope.deinit(allocator);
+        for (&gen.locals) |*local| local.* = try store.addLocal(.{ .layout_idx = .u64 });
+        const body = try gen.body(6);
+        const proc = try store.addProcSpec(.{
+            .name = store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(11698),
+            .args = try store.addLocalSpan(gen.locals[0..1]),
+            .body = body,
+            .ret_layout = .u64,
+        }, .none);
+        var order = try UseOrder.initFromStore(allocator, &store, proc);
+        defer order.deinit();
+        members.clearRetainingCapacity();
+        for (0..store.cfStmtCount()) |index| try members.append(allocator, @fromBackingInt(@intCast(@as(u32, @intCast(index)))));
+        for (gen.locals) |local| {
+            for (members.items) |stmt| {
+                const expected = try referenceAfter(&order, &visited, &stack, @backingInt(stmt), local, null);
+                try testing.expectEqual(expected, try order.usesAfter(@backingInt(stmt), local));
+            }
+            // An explicit statement set marks the same way as a local's reads.
+            const among = [_]u32{ @backingInt(members.items[0]), @backingInt(members.items[members.items.len / 2]) };
+            try order.markAmong(local, &among);
+            for (members.items) |stmt| {
+                const expected = try referenceAfter(&order, &visited, &stack, @backingInt(stmt), local, &among);
+                try testing.expectEqual(expected, order.after(@backingInt(stmt), local));
+            }
+        }
+    }
+}
+
+/// Statement-level forward search: whether a target statement (a read of
+/// `local`, or a member of `among` when given) or an unresolved statement can
+/// execute after `stmt` before `local` is redefined.
+fn referenceAfter(
+    order: *const UseOrder,
+    visited: *std.AutoHashMap(u32, void),
+    stack: *std.ArrayList(u32),
+    stmt: u32,
+    local: LIR.LocalId,
+    among: ?[]const u32,
+) Allocator.Error!bool {
+    const topology = &order.topology;
+    if (topology.unresolved.isSet(topology.tables.stmtIndex(stmt))) return true;
+    visited.clearRetainingCapacity();
+    stack.clearRetainingCapacity();
+    const Push = struct {
+        order: *const UseOrder,
+        stack: *std.ArrayList(u32),
+        from: u32,
+        local: LIR.LocalId,
+        failed: bool = false,
+        fn note(self_push: *@This(), succ: u32) void {
+            if (self_push.order.cutEdge(self_push.from, succ, self_push.local)) return;
+            self_push.stack.append(std.testing.allocator, succ) catch {
+                self_push.failed = true;
+            };
+        }
+    };
+    var push = Push{ .order = order, .stack = stack, .from = stmt, .local = local };
+    _ = UseOrder.forEachSuccessor(topology.store, topology.tables, stmt, &push, Push.note);
+    while (stack.pop()) |current| {
+        if (push.failed) return error.OutOfMemory;
+        if (visited.contains(current)) continue;
+        try visited.put(current, {});
+        const target = if (among) |members| std.mem.findScalar(u32, members, current) != null else order.reads(current, local);
+        if (target or topology.unresolved.isSet(topology.tables.stmtIndex(current))) return true;
+        if (order.defines(current, local)) continue;
+        push.from = current;
+        _ = UseOrder.forEachSuccessor(topology.store, topology.tables, current, &push, Push.note);
+    }
+    if (push.failed) return error.OutOfMemory;
+    return false;
 }

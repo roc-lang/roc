@@ -52,10 +52,6 @@ EndOfFile,
 				(e-int (raw "0O0"))
 				".0"))))
 ~~~
-# FORMATTED
-~~~roc
-a = (0O0).0
-~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir

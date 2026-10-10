@@ -28,6 +28,40 @@ test "issue 10093: nested malformed nominal backing is invalid" {
     try test_env.assertNominalDeclValidity("T", false);
 }
 
+test "issue 10093: rejected declaration positions propagate through alias uses" {
+    const src =
+        \\Bad(a) := [Broken(missing), Keep(a)]
+        \\Wrapped(a) : Bad(a)
+        \\Closed(a) := Wrapped(a)
+        \\value : Str -> Wrapped([E])
+        \\value = |_| crash "unused"
+        \\closed : Closed([E]) -> Str
+        \\closed = |_| "ok"
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertOneCanError("Undeclared Type Variable");
+    try test_env.assertNominalDeclValidity("Bad", false);
+    try test_env.assertNominalDeclValidity("Closed", false);
+}
+
+test "issue 10093: valid declaration positions survive the same alias uses" {
+    const src =
+        \\Valid(a) := [Keep(a)]
+        \\Wrapped(a) : Valid(a)
+        \\Closed(a) := Wrapped(a)
+        \\value : Str -> Wrapped([E])
+        \\value = |_| crash "unused"
+        \\closed : Closed([E]) -> Str
+        \\closed = |_| "ok"
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    try test_env.assertNominalDeclValidity("Valid", true);
+    try test_env.assertNominalDeclValidity("Closed", true);
+}
+
 test "issue 10093: invalidity propagates through forward declaration dependencies" {
     const src =
         \\Outer := [Outer(Middle)]

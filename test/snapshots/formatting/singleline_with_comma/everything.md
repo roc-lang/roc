@@ -52,7 +52,7 @@ MOD NOT FOUND - everything.md:3:1:3:47
 NOT A WHERE ALIAS - everything.md:14:20:14:22
 NOT A WHERE ALIAS - everything.md:14:25:14:27
 DECLARATION HAS NO VALUE - everything.md:14:1:14:29
-NON EXHAUSTIVE MATCH - everything.md:23:2:28:3
+NON EXHAUSTIVE MATCH - everything.md:23:2:23:7
 # PROBLEMS
 ~~~clojure
 (reports
@@ -286,11 +286,11 @@ NON EXHAUSTIVE MATCH - everything.md:23:2:28:3
 	(report
 		(severity runtime_error)
 		(title "Non Exhaustive Match")
-		(region (start 23 2) (end 28 3))
+		(region (start 23 2) (end 23 7))
 		(headline
 			(reflow "This match expression doesn't cover all possible cases."))
 		(document
-			(source-region (file "everything.md") (start 23 2) (end 28 3) (annotation error) (line-text "\tmatch x {\n\t\tZ1((a, b,)) => a\n\t\tZ2(a, b,) => a\n\t\tZ3({ a, b, }) => a\n\t\tZ4([a, b,]) => a\n\t}"))
+			(source-region (file "everything.md") (start 23 2) (end 23 7) (annotation error) (line-text "\tmatch x {"))
 			(line-break)
 			(reflow "The value being matched on has type:")
 			(line-break)
@@ -668,7 +668,7 @@ h = |
 												(p-assign (ident "y"))))))))))
 				(s-let
 					(p-assign (ident "h2"))
-					(e-call (constraint-fn-var 363)
+					(e-call (constraint-fn-var 367)
 						(e-lookup-local
 							(p-assign (ident "h")))
 						(e-lookup-local

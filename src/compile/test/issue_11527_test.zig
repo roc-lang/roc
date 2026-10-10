@@ -77,7 +77,7 @@ fn expectConstantListNotRebuilt(target: lir.CheckedPipeline.TargetConfig) (harne
         1,
         roc_target.RocTarget.detectNative(),
         &builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.os(allocator, allocator, io),
     );
@@ -118,20 +118,16 @@ fn countStaticListReads(result: *const lir.Program.Result) usize {
         if (stmt != .assign_literal) continue;
         switch (stmt.assign_literal.value) {
             .static_data, .bytes_literal => count += 1,
-            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .null_ptr, .proc_ref => {},
+            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .proc_ref => {},
         }
     }
     return count;
 }
 
 test "issue 11527: a dev build does not rebuild a small uniform compile-time list constant at every use" {
-    // Dev's Solved policy is compile-time evaluation's, so the runtime
-    // consumer continues that Solved program.
     try expectConstantListNotRebuilt(.{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .iterator_fusion });
 }
 
 test "issue 11527: an optimized build does not rebuild a small uniform compile-time list constant at every use" {
-    // An optimized Solved policy differs from compile-time evaluation's, so
-    // the runtime consumer specializes the checked modules itself.
     try expectConstantListNotRebuilt(.{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .all_calls, .inline_expects = .omit });
 }

@@ -19,14 +19,14 @@ apply = |f, n| {
 use = |n| apply(describe, n)
 ~~~
 # EXPECTED
-CONFLICTING TAG - issue_11621_conflicting_tag_payloads.md:8:6:8:14
+CONFLICTING TAG - issue_11621_conflicting_tag_payloads.md:12:1:12:4
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
 		(title "Conflicting Tag")
-		(region (start 8 6) (end 8 14))
+		(region (start 12 1) (end 12 4))
 		(headline
 			(reflow "The")
 			(reflow " ")
@@ -39,9 +39,11 @@ CONFLICTING TAG - issue_11621_conflicting_tag_payloads.md:8:6:8:14
 			(reflow "payloads")
 			(reflow "."))
 		(document
-			(source-region (file "issue_11621_conflicting_tag_payloads.md") (start 8 6) (end 8 14) (annotation error) (line-text "\t_ = step(n)?"))
+			(source-region (file "issue_11621_conflicting_tag_payloads.md") (start 12 1) (end 12 4) (annotation error) (line-text "use = |n| apply(describe, n)"))
 			(line-break)
-			(reflow "Here it is:")
+			(reflow "One comes from here:")
+			(line-break)
+			(source-region (file "issue_11621_conflicting_tag_payloads.md") (start 8 6) (end 8 14) (annotation error) (line-text "\t_ = step(n)?"))
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
@@ -208,7 +210,7 @@ use = |n| apply(describe, n)
 			(e-if
 				(if-branches
 					(if-branch
-						(e-dispatch-call (method "is_gt") (constraint-fn-var 332)
+						(e-dispatch-call (method "is_gt") (constraint-fn-var 337)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "n"))))
@@ -239,7 +241,7 @@ use = |n| apply(describe, n)
 			(e-if
 				(if-branches
 					(if-branch
-						(e-dispatch-call (method "is_gt") (constraint-fn-var 376)
+						(e-dispatch-call (method "is_gt") (constraint-fn-var 378)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "n"))))
@@ -305,10 +307,10 @@ use = |n| apply(describe, n)
 													(args
 														(e-lookup-local
 															(p-assign (ident "#err")))))))))))))
-				(e-call (constraint-fn-var 457)
+				(e-call (constraint-fn-var 450)
 					(e-lookup-local
 						(p-assign (ident "f")))
-					(e-dispatch-call (method "plus") (constraint-fn-var 451)
+					(e-dispatch-call (method "plus") (constraint-fn-var 444)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "n"))))
@@ -319,7 +321,7 @@ use = |n| apply(describe, n)
 		(e-lambda
 			(args
 				(p-assign (ident "n")))
-			(e-call (constraint-fn-var 473)
+			(e-call (constraint-fn-var 466)
 				(e-lookup-local
 					(p-assign (ident "apply")))
 				(e-lookup-local

@@ -374,7 +374,7 @@ fn dummyProcSpec(raw: u64) LIR.LirProcSpec {
 
 fn dummyLiftedFn(raw: u32, ret: Mono.Type.TypeId) Lifted.Ast.Fn {
     return .{
-        .symbol = @enumFromInt(raw),
+        .symbol = @fromBackingInt(@intCast(raw)),
         .args = Lifted.Ast.Span(Lifted.Ast.TypedLocal).empty(),
         .captures = Lifted.Ast.Span(Lifted.Ast.TypedLocal).empty(),
         .body = .hosted,
@@ -391,7 +391,7 @@ fn dummyMonoExpr(ty: Mono.Type.TypeId) Mono.Ast.Expr {
 
 fn dummyMonoTypeField(raw: u32, ty: Mono.Type.TypeId) Mono.Type.Field {
     return .{
-        .name = @enumFromInt(raw),
+        .name = @fromBackingInt(@intCast(raw)),
         .ty = ty,
         .default = null,
     };

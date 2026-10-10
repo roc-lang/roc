@@ -6,11 +6,110 @@
 //! - Error handling
 
 const std = @import("std");
-const collections = @import("collections");
 const Allocator = std.mem.Allocator;
 const testing = std.testing;
 const unbundle = @import("unbundle.zig");
 const base58 = @import("base58");
+const test_support = @import("test_support.zig");
+
+test "bundle links - symlink followed by a file creates only a regular file" {
+    const bytes = try test_support.archive(testing.allocator, &.{
+        .{ .name = "a", .kind = .symlink, .data = "x" },
+        .{ .name = "a", .data = "regular file" },
+    });
+    defer testing.allocator.free(bytes);
+    const hash = test_support.hash(bytes);
+    var reader = std.Io.Reader.fixed(bytes);
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    var writer = unbundle.DirExtractWriter.init(tmp.dir, testing.io, testing.allocator);
+    defer writer.deinit();
+
+    _ = try unbundle.unbundleStream(testing.allocator, &reader, writer.extractWriter(), &hash, null, .{});
+
+    var iter = tmp.dir.iterate();
+    const entry = (try iter.next(testing.io)).?;
+    try testing.expectEqualStrings("a", entry.name);
+    try testing.expectEqual(std.Io.File.Kind.file, entry.kind);
+    try testing.expect(try iter.next(testing.io) == null);
+    const content = try tmp.dir.readFileAlloc(testing.io, "a", testing.allocator, .limited(1024));
+    defer testing.allocator.free(content);
+    try testing.expectEqualStrings("regular file", content);
+}
+
+test "bundle links - escaping symlink targets fail without writing outside extraction" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "x", .data = "outside sentinel" });
+    try tmp.dir.createDir(testing.io, "extract", .default_dir);
+    var extract = try tmp.dir.openDir(testing.io, "extract", .{ .iterate = true });
+    defer extract.close(testing.io);
+
+    const cases = [_]struct { target: []const u8, reason: unbundle.PathValidationReason }{
+        .{ .target = "../x", .reason = .path_traversal },
+        .{ .target = "/etc", .reason = .absolute_path },
+        .{ .target = "./x", .reason = .current_directory_reference },
+    };
+    for (cases) |case| {
+        const bytes = try test_support.archive(testing.allocator, &.{
+            .{ .name = "a", .kind = .symlink, .data = case.target },
+            .{ .name = "a", .data = "overwrite" },
+        });
+        defer testing.allocator.free(bytes);
+        const hash = test_support.hash(bytes);
+        var reader = std.Io.Reader.fixed(bytes);
+        var writer = unbundle.DirExtractWriter.init(extract, testing.io, testing.allocator);
+        defer writer.deinit();
+        var context: unbundle.ErrorContext = undefined;
+        try testing.expectError(error.InvalidPath, unbundle.unbundleStream(testing.allocator, &reader, writer.extractWriter(), &hash, &context, .{}));
+        try testing.expectEqual(case.reason, context.reason);
+        const sentinel = try tmp.dir.readFileAlloc(testing.io, "x", testing.allocator, .limited(1024));
+        defer testing.allocator.free(sentinel);
+        try testing.expectEqualStrings("outside sentinel", sentinel);
+        var iter = extract.iterate();
+        try testing.expect(try iter.next(testing.io) == null);
+    }
+}
+
+test "bundle links - hard links are rejected before a link is created" {
+    const bytes = try test_support.archive(testing.allocator, &.{
+        .{ .name = "target", .data = "original" },
+        .{ .name = "a", .kind = .hard_link, .data = "target" },
+        .{ .name = "after", .data = "must not be extracted" },
+    });
+    defer testing.allocator.free(bytes);
+
+    // The helper wraps tar bytes in a single raw Zstandard block. Pin the
+    // underlying rejection too, so a malformed checksum cannot pass this test.
+    var tar_reader = std.Io.Reader.fixed(bytes[12..]);
+    var name_buffer: [1024]u8 = undefined;
+    var link_buffer: [1024]u8 = undefined;
+    var iterator = std.tar.Iterator.init(&tar_reader, .{
+        .file_name_buffer = &name_buffer,
+        .link_name_buffer = &link_buffer,
+    });
+    const target = (try iterator.next()).?;
+    try testing.expectEqualStrings("target", target.name);
+    try testing.expectEqual(std.tar.FileKind.file, target.kind);
+    try testing.expectError(error.TarUnsupportedHeader, iterator.next());
+
+    const hash = test_support.hash(bytes);
+    var reader = std.Io.Reader.fixed(bytes);
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    var writer = unbundle.DirExtractWriter.init(tmp.dir, testing.io, testing.allocator);
+    defer writer.deinit();
+
+    try testing.expectError(error.InvalidTarHeader, unbundle.unbundleStream(testing.allocator, &reader, writer.extractWriter(), &hash, null, .{}));
+    var iter = tmp.dir.iterate();
+    const entry = (try iter.next(testing.io)).?;
+    try testing.expectEqualStrings("target", entry.name);
+    try testing.expectEqual(std.Io.File.Kind.file, entry.kind);
+    try testing.expect(try iter.next(testing.io) == null);
+    const content = try tmp.dir.readFileAlloc(testing.io, "target", testing.allocator, .limited(1024));
+    defer testing.allocator.free(content);
+    try testing.expectEqualStrings("original", content);
+}
 
 test "pathHasUnbundleErr - various invalid paths" {
     // Test path traversal
@@ -94,11 +193,75 @@ test "pathHasUnbundleErr - Windows reserved names" {
 }
 
 test "pathHasUnbundleErr - backslash handling" {
-    // On non-Windows, backslash should be rejected
-    if (@import("builtin").os.tag != .windows) {
-        const err = unbundle.pathHasUnbundleErr("path\\with\\backslash");
+    const builtin = @import("builtin");
+    // Components end at either separator on every host, so `..` and `.`
+    // cannot hide behind a backslash.
+    const attacks = [_]struct { path: []const u8, reason: unbundle.PathValidationReason }{
+        .{ .path = "..\\x", .reason = .path_traversal },
+        .{ .path = "a\\..\\..\\x", .reason = .path_traversal },
+        .{ .path = "a\\.\\x", .reason = .current_directory_reference },
+        .{ .path = "a/..\\x", .reason = .path_traversal },
+    };
+    for (attacks) |attack| {
+        const err = unbundle.pathHasUnbundleErr(attack.path).?;
+        try testing.expectEqual(attack.reason, err.reason);
+    }
+
+    const ordinary = unbundle.pathHasUnbundleErr("path\\with\\backslash");
+    if (builtin.os.tag == .windows) {
+        try testing.expect(ordinary == null);
+    } else {
+        try testing.expect(ordinary.?.reason == .contained_backslash_on_unix);
+    }
+}
+
+test "DirExtractWriter rejects traversal before creating a file or directory" {
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var writer = unbundle.DirExtractWriter.init(tmp.dir, io, testing.allocator);
+    defer writer.deinit();
+    try testing.expectError(error.FileCreateFailed, writer.extractWriter().createFile("../outside.txt"));
+    try testing.expectError(error.DirectoryCreateFailed, writer.extractWriter().makeDir("../outside"));
+    try testing.expectError(error.FileCreateFailed, writer.extractWriter().createFile("..\\outside.txt"));
+}
+
+test "DirExtractWriter does not follow links outside its root" {
+    if (@import("builtin").os.tag == .windows) return;
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.createDirPath(io, "extract");
+    try tmp.dir.createDirPath(io, "outside");
+    const outside_file = try tmp.dir.createFile(io, "outside/secret.txt", .{});
+    try outside_file.writeStreamingAll(io, "unchanged");
+    outside_file.close(io);
+
+    var extract_dir = try tmp.dir.openDir(io, "extract", .{});
+    defer extract_dir.close(io);
+    try extract_dir.symLink(io, "../outside", "linked_dir", .{ .is_directory = true });
+    try extract_dir.symLink(io, "../outside/secret.txt", "linked_file", .{});
+
+    var writer = unbundle.DirExtractWriter.init(extract_dir, io, testing.allocator);
+    defer writer.deinit();
+    try testing.expectError(error.DirectoryCreateFailed, writer.extractWriter().makeDir("linked_dir/nested"));
+    try testing.expectError(error.FileCreateFailed, writer.extractWriter().createFile("linked_dir/new.txt"));
+    try testing.expectError(error.FileCreateFailed, writer.extractWriter().createFile("linked_file"));
+
+    const content = try tmp.dir.readFileAlloc(io, "outside/secret.txt", testing.allocator, .limited(100));
+    defer testing.allocator.free(content);
+    try testing.expectEqualStrings("unchanged", content);
+}
+
+test "pathHasUnbundleErr - traversal behind a backslash separator" {
+    // Windows treats a backslash as a separator, so extraction there would
+    // follow these components out of the destination directory.
+    for ([_][]const u8{ "foo\\..\\..\\evil.txt", "..\\evil.txt", "foo/bar\\.." }) |path| {
+        const err = unbundle.pathHasUnbundleErr(path);
         try testing.expect(err != null);
-        try testing.expect(err.?.reason == .contained_backslash_on_unix);
+        try testing.expect(err.?.reason == .path_traversal);
     }
 }
 
@@ -134,12 +297,9 @@ test "validateBase58Hash - valid and invalid hashes" {
 }
 
 test "BufferExtractWriter - basic functionality" {
-    const allocator = testing.allocator;
-
-    var arena = collections.SingleThreadArena.init(allocator);
-    defer arena.deinit();
-    const alloc = arena.allocator();
-    var writer = unbundle.BufferExtractWriter.init(alloc);
+    // The testing allocator checks every free and reports leaks, which pins
+    // the writer's ownership of file contents and path keys.
+    var writer = unbundle.BufferExtractWriter.init(testing.allocator);
     defer writer.deinit();
 
     // Create a file
@@ -195,6 +355,13 @@ test "DirExtractWriter - basic functionality" {
     const content = try tmp.dir.readFileAlloc(io, "test.txt", testing.allocator, .limited(1024));
     defer testing.allocator.free(content);
     try testing.expectEqualStrings("Test content", content);
+
+    const replacement_writer = try writer.extractWriter().createFile("test.txt");
+    try replacement_writer.writeAll("New");
+    try writer.extractWriter().finishFile();
+    const replaced = try tmp.dir.readFileAlloc(io, "test.txt", testing.allocator, .limited(1024));
+    defer testing.allocator.free(replaced);
+    try testing.expectEqualStrings("New", replaced);
 
     // Create a file in a subdirectory (should create parent dirs)
     const file_writer2 = try writer.extractWriter().createFile("deep/nested/file.txt");
@@ -286,12 +453,9 @@ test "validateBase58Hash - edge cases" {
 }
 
 test "BufferExtractWriter - overwrite existing file" {
-    const allocator = testing.allocator;
-
-    var arena = collections.SingleThreadArena.init(allocator);
-    defer arena.deinit();
-    const alloc = arena.allocator();
-    var writer = unbundle.BufferExtractWriter.init(alloc);
+    // The testing allocator checks every free and reports leaks, which pins
+    // the writer's ownership of file contents and path keys.
+    var writer = unbundle.BufferExtractWriter.init(testing.allocator);
     defer writer.deinit();
 
     // Create a file with initial content
@@ -512,4 +676,87 @@ test "downloadAndExtract with bad archive returns error without crash" {
 
     try testing.expectError(download.DownloadError.InvalidTarHeader, result);
     try server_ctx.response_sent.wait(io);
+}
+
+test "download rejects a redirect to non-loopback HTTP before connecting" {
+    const io = testing.io;
+    var allocator = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(path);
+
+    const loopback = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
+    var server = try loopback.listen(io, .{ .reuse_address = true });
+    defer server.deinit(io);
+
+    const Server = struct {
+        server: *std.Io.net.Server,
+        fn run(self: *@This()) void {
+            const thread_io = testing.io;
+            const stream = self.server.accept(thread_io) catch return;
+            defer stream.close(thread_io);
+            var read_buffer: [1024]u8 = undefined;
+            var reader = stream.reader(thread_io, &read_buffer);
+            var request_buffer: [1024]u8 = undefined;
+            var slices = [_][]u8{&request_buffer};
+            _ = std.Io.Reader.readVec(&reader.interface, &slices) catch return;
+            var write_buffer: [512]u8 = undefined;
+            var writer = stream.writer(thread_io, &write_buffer);
+            writer.interface.writeAll("HTTP/1.1 302 Found\r\nLocation: http://example.com/6jk5DfVBwdRs9C5PwuFbvxNvFKAGcu5FHtK2cWsmqfSV.tar.zst\r\nContent-Length: 0\r\nConnection: close\r\n\r\n") catch return;
+            writer.interface.flush() catch return;
+        }
+    };
+    var context = Server{ .server = &server };
+    const thread = try std.Thread.spawn(.{}, Server.run, .{&context});
+    defer thread.join();
+
+    const url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/6jk5DfVBwdRs9C5PwuFbvxNvFKAGcu5FHtK2cWsmqfSV.tar.zst", .{server.socket.address.getPort()});
+    defer allocator.free(url);
+    try testing.expectError(error.InvalidUrl, download.downloadAndExtract(&allocator, io, url, path, .{}));
+}
+
+test "download follows a validated loopback redirect" {
+    const io = testing.io;
+    var allocator = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(path);
+
+    const loopback = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
+    var server = try loopback.listen(io, .{ .reuse_address = true });
+    defer server.deinit(io);
+
+    const Server = struct {
+        server: *std.Io.net.Server,
+        port: u16,
+        fn run(self: *@This()) void {
+            const thread_io = testing.io;
+            for (0..2) |hop| {
+                const stream = self.server.accept(thread_io) catch return;
+                defer stream.close(thread_io);
+                var read_buffer: [1024]u8 = undefined;
+                var reader = stream.reader(thread_io, &read_buffer);
+                var request_buffer: [1024]u8 = undefined;
+                var slices = [_][]u8{&request_buffer};
+                _ = std.Io.Reader.readVec(&reader.interface, &slices) catch return;
+                var write_buffer: [512]u8 = undefined;
+                var writer = stream.writer(thread_io, &write_buffer);
+                if (hop == 0) {
+                    writer.interface.print("HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{d}/next/6jk5DfVBwdRs9C5PwuFbvxNvFKAGcu5FHtK2cWsmqfSV.tar.zst\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", .{self.port}) catch return;
+                } else {
+                    writer.interface.writeAll("HTTP/1.1 200 OK\r\nContent-Length: 16\r\nConnection: close\r\n\r\nnot a roc bundle") catch return;
+                }
+                writer.interface.flush() catch return;
+            }
+        }
+    };
+    var context = Server{ .server = &server, .port = server.socket.address.getPort() };
+    const thread = try std.Thread.spawn(.{}, Server.run, .{&context});
+    defer thread.join();
+
+    const url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/6jk5DfVBwdRs9C5PwuFbvxNvFKAGcu5FHtK2cWsmqfSV.tar.zst", .{context.port});
+    defer allocator.free(url);
+    try testing.expectError(error.InvalidTarHeader, download.downloadAndExtract(&allocator, io, url, path, .{}));
 }

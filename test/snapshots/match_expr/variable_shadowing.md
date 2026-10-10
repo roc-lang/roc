@@ -11,26 +11,9 @@ match (value, other) {
 }
 ~~~
 # EXPECTED
-POLYMORPHIC VALUE - variable_shadowing.md:1:1:4:2
+NIL
 # PROBLEMS
-~~~clojure
-(reports
-	(report
-		(severity runtime_error)
-		(title "Polymorphic Value")
-		(region (start 1 1) (end 4 2))
-		(headline
-			(reflow "This top-level value still has an unresolved polymorphic type."))
-		(document
-			(source-region (file "variable_shadowing.md") (start 1 1) (end 4 2) (annotation error) (line-text "match (value, other) {\n    (Some(x), y) => x + y\n    (None, x) => x * 2\n}"))
-			(line-break)
-			(line-break)
-			(reflow "Its type is:")
-			(line-break)
-			(annotated code-block "a where [a.plus : a, _arg -> a, a.times : a, Dec -> a]")
-			(line-break)
-			(reflow "Add an annotation or use this value in a way that fixes its concrete type."))))
-~~~
+NIL
 # TOKENS
 ~~~zig
 KwMatch,OpenRound,LowerIdent,Comma,LowerIdent,CloseRound,OpenCurly,
@@ -87,13 +70,11 @@ match (value, other) {
 								(p-applied-tag)
 								(p-assign (ident "y"))))))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 224)
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "x"))))
-						(args
-							(e-lookup-local
-								(p-assign (ident "y")))))))
+					(e-binop (op "add")
+						(e-lookup-local
+							(p-assign (ident "x")))
+						(e-lookup-local
+							(p-assign (ident "y"))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -102,14 +83,12 @@ match (value, other) {
 								(p-applied-tag)
 								(p-assign (ident "x"))))))
 				(value
-					(e-dispatch-call (method "times") (constraint-fn-var 234)
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "x"))))
-						(args
-							(e-num (value "2")))))))))
+					(e-binop (op "mul")
+						(e-lookup-local
+							(p-assign (ident "x")))
+						(e-num (value "2"))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a where [a.plus : a, _arg -> a, a.times : a, Dec -> a]"))
+(expr (type "_a"))
 ~~~

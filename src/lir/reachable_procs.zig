@@ -65,15 +65,15 @@ pub fn collectProcDemand(
     var pass = try Pass.init(result, &frozen);
     defer pass.deinit();
     for (roots) |root| try pass.markProc(root);
-    for (0..materialized.len) |index| try pass.markFrozenExport(@enumFromInt(index));
+    for (0..materialized.len) |index| try pass.markFrozenExport(@fromBackingInt(@intCast(index)));
     try pass.markBoxyTableProcs();
     for (result.boxy_worker_procs.items) |proc| try pass.markProc(proc);
     try pass.drainProcQueue();
     var demanded = std.ArrayList(LIR.LirProcSpecId).empty;
     errdefer demanded.deinit(allocator);
     for (pass.reachable, 0..) |reachable, index| {
-        if (reachable and !result.store.getProcSpec(@enumFromInt(index)).is_static_initializer)
-            try demanded.append(allocator, @enumFromInt(index));
+        if (reachable and !result.store.getProcSpec(@fromBackingInt(@intCast(index))).is_static_initializer)
+            try demanded.append(allocator, @fromBackingInt(@intCast(index)));
     }
     return try demanded.toOwnedSlice(allocator);
 }
@@ -96,6 +96,7 @@ const Pass = struct {
     old_static_data_to_new: []?LIR.StaticDataId,
     proc_queue: std.ArrayList(LIR.LirProcSpecId),
     export_queue: std.ArrayList(LirProgram.StaticDataSymbolId),
+    plan_stack: std.ArrayList(LirProgram.ConstPlanId),
     stmt_stack: std.ArrayList(LIR.CFStmtId),
 
     fn init(result: *LirProgram.Result, frozen: ?*LirProgram.FrozenStaticData) Allocator.Error!Pass {
@@ -150,9 +151,9 @@ const Pass = struct {
         if (frozen) |data| {
             for (data.exports, 0..) |item, index| {
                 if (item.value_id) |value_id| {
-                    const raw = @intFromEnum(value_id);
+                    const raw = @backingInt(value_id);
                     if (raw >= static_data_count or static_data_exports[raw] != null) reachableProcInvariant("frozen data slot identity is missing or duplicated");
-                    static_data_exports[raw] = @enumFromInt(index);
+                    static_data_exports[raw] = @fromBackingInt(@intCast(index));
                 }
             }
         }
@@ -175,6 +176,7 @@ const Pass = struct {
             .old_static_data_to_new = old_static_data_to_new,
             .proc_queue = .empty,
             .export_queue = .empty,
+            .plan_stack = .empty,
             .stmt_stack = .empty,
         };
     }
@@ -186,6 +188,7 @@ const Pass = struct {
         self.stmt_stack.deinit(self.allocator);
         self.proc_queue.deinit(self.allocator);
         self.export_queue.deinit(self.allocator);
+        self.plan_stack.deinit(self.allocator);
         self.allocator.free(self.old_static_data_to_new);
         self.allocator.free(self.reachable_static_data);
         self.allocator.free(self.visited_plans);
@@ -218,7 +221,7 @@ const Pass = struct {
         }
         if (self.frozen) |data| {
             for (data.exports, 0..) |item, index| {
-                if (item.is_exported) try self.markFrozenExport(@enumFromInt(index));
+                if (item.is_exported) try self.markFrozenExport(@fromBackingInt(@intCast(index)));
             }
         }
         try self.markBoxyTableProcs();
@@ -234,7 +237,7 @@ const Pass = struct {
         self.remapStaticDataInitializers();
         try self.remapFrozenExports();
         try self.remapErasedFns();
-        self.remapBoxyTableProcs();
+        try self.remapBoxyTableProcs();
         self.remapComptimeSites();
         self.remapProcDebugNames();
         self.compactProcSpecs();
@@ -245,7 +248,7 @@ const Pass = struct {
     }
 
     fn markProc(self: *Pass, proc: LIR.LirProcSpecId) Allocator.Error!void {
-        const index = @intFromEnum(proc);
+        const index = @backingInt(proc);
         if (index >= self.reachable.len) reachableProcInvariant("proc reference exceeds proc_specs len");
         if (self.reachable[index]) return;
         self.reachable[index] = true;
@@ -268,7 +271,7 @@ const Pass = struct {
         }
 
         while (self.stmt_stack.pop()) |stmt_id| {
-            const stmt_index = @intFromEnum(stmt_id);
+            const stmt_index = @backingInt(stmt_id);
             if (stmt_index >= self.visited_stmts.len) reachableProcInvariant("stmt reference exceeds cf_stmts len");
             if (self.visited_stmts[stmt_index]) continue;
             self.visited_stmts[stmt_index] = true;
@@ -284,19 +287,17 @@ const Pass = struct {
                     } else if (s.value == .static_data) {
                         try self.markStaticData(s.value.static_data);
                     }
+                    // The fresh form stays available until ARC chooses.
+                    if (s.fresh_alternative) |fresh| try self.markProc(fresh);
                     try self.pushStmt(s.next);
                 },
-                .assign_call => |s| {
+                inline .assign_call, .assign_packed_erased_fn => |s| {
                     try self.markProc(s.proc);
                     try self.pushStmt(s.next);
                 },
                 .assign_call_erased => |s| try self.pushStmt(s.next),
-                .assign_packed_erased_fn => |s| {
-                    try self.markProc(s.proc);
-                    try self.pushStmt(s.next);
-                },
-                inline .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level => |s| try self.pushStmt(s.next),
-                .boxy_tag_match => |s| {
+                inline .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level => |s| try self.pushStmt(s.next),
+                inline .boxy_tag_match, .str_match => |s| {
                     try self.pushStmt(s.on_match);
                     try self.pushStmt(s.on_miss);
                 },
@@ -325,10 +326,6 @@ const Pass = struct {
                 .switch_initialized_payload => |s| {
                     try self.pushStmt(s.initialized_branch);
                     try self.pushStmt(s.uninitialized_branch);
-                },
-                .str_match => |s| {
-                    try self.pushStmt(s.on_match);
-                    try self.pushStmt(s.on_miss);
                 },
                 .str_match_set => |s| {
                     const arms = self.store.getStrMatchArms(s.arms);
@@ -361,47 +358,75 @@ const Pass = struct {
 
     fn markBoxyTableProcs(self: *Pass) Allocator.Error!void {
         for (self.result.boxy_method_slots.items) |slot| {
-            if (!slot.present or slot.structural_eq) continue;
+            if (!slot.present) continue;
             try self.markProc(slot.proc);
         }
     }
 
-    fn markConstPlan(self: *Pass, plan_id: LirProgram.ConstPlanId) Allocator.Error!void {
-        const index = @intFromEnum(plan_id);
-        if (index >= self.result.const_plans.items.len) reachableProcInvariant("const plan reference exceeds const_plans len");
-        if (self.visited_plans[index]) return;
-        self.visited_plans[index] = true;
+    /// Marks every procedure a const plan reaches. Reachability is a set, so
+    /// plans are visited from a worklist in any order.
+    fn markConstPlan(self: *Pass, root: LirProgram.ConstPlanId) Allocator.Error!void {
+        try self.plan_stack.append(self.allocator, root);
+        while (self.plan_stack.pop()) |plan_id| {
+            const index = @backingInt(plan_id);
+            if (index >= self.result.const_plans.items.len) reachableProcInvariant("const plan reference exceeds const_plans len");
+            if (self.visited_plans[index]) continue;
+            self.visited_plans[index] = true;
 
-        switch (self.result.const_plans.items[index]) {
-            .pending,
-            .layout_only,
-            .zst,
-            .scalar,
-            .str,
-            => {},
-            .list => |elem| try self.markConstPlan(elem),
-            .box => |boxed| try self.markConstPlan(boxed),
-            .tuple => |items| for (items) |item| try self.markConstPlan(item),
-            .record => |fields| for (fields) |field| try self.markConstPlan(field),
-            .tag_union => |variants| {
-                for (variants) |variant| {
-                    for (variant.payloads) |payload| try self.markConstPlan(payload);
-                }
-            },
-            .named => |named| try self.markConstPlan(named.backing),
-            .fn_value => |set_id| try self.markFnSet(set_id),
-            .erased_fn => |set_id| try self.markErasedFns(set_id),
+            switch (self.result.const_plans.items[index]) {
+                .pending,
+                .layout_only,
+                .zst,
+                .scalar,
+                .str,
+                => {},
+                .list => |elem| try self.plan_stack.append(self.allocator, elem),
+                .box => |boxed| try self.plan_stack.append(self.allocator, boxed),
+                .boxy_box => |boxed| try self.plan_stack.append(self.allocator, boxed.payload),
+                .tuple => |items| try self.plan_stack.appendSlice(self.allocator, items),
+                .record => |fields| try self.plan_stack.appendSlice(self.allocator, fields),
+                .tag_union => |variants| {
+                    for (variants) |variant| try self.plan_stack.appendSlice(self.allocator, variant.payloads);
+                },
+                .named => |named| try self.plan_stack.append(self.allocator, named.backing),
+                .fn_value => |set_id| {
+                    const set = self.result.fn_sets.items[@backingInt(set_id)];
+                    for (set.variants) |variant| {
+                        for (variant.captures) |capture| try self.plan_stack.append(self.allocator, capture.plan);
+                    }
+                },
+                .erased_fn => |set_id| {
+                    const set = self.result.erased_fns.items[@backingInt(set_id)];
+                    for (set.entries) |entry| {
+                        try self.markProc(entry.entry);
+                        for (entry.captures) |capture| try self.plan_stack.append(self.allocator, capture.plan);
+                        if (entry.boxy) |boxy| for (boxy.captures) |capture| switch (capture.value) {
+                            .value => |plan| try self.plan_stack.append(self.allocator, plan),
+                            .descriptor, .contents_descriptor, .dictionary => {},
+                        };
+                    }
+                },
+            }
         }
     }
 
-    fn markStaticData(self: *Pass, id: LIR.StaticDataId) Allocator.Error!void {
-        const index = @intFromEnum(id);
-        if (index >= self.result.static_data_values.items.len) reachableProcInvariant("static data reference exceeds static_data_values len");
-        if (self.reachable_static_data[index]) return;
-        self.reachable_static_data[index] = true;
-        if (self.result.static_data_values.items[index].compile_time_root) |root| {
-            if (root.role == .value) try self.markStaticData(root.role.value.failure_slot);
+    fn markStaticData(self: *Pass, root_id: LIR.StaticDataId) Allocator.Error!void {
+        // A value slot reaches its failure slot, which is marked next.
+        var next: ?LIR.StaticDataId = root_id;
+        while (next) |id| {
+            next = null;
+            const index = @backingInt(id);
+            if (index >= self.result.static_data_values.items.len) reachableProcInvariant("static data reference exceeds static_data_values len");
+            if (self.reachable_static_data[index]) return;
+            self.reachable_static_data[index] = true;
+            try self.markStaticDataOwner(index);
+            if (self.result.static_data_values.items[index].compile_time_root) |root| {
+                if (root.role == .value) next = root.role.value.failure_slot;
+            }
         }
+    }
+
+    fn markStaticDataOwner(self: *Pass, index: usize) Allocator.Error!void {
         if (self.static_data_exports[index]) |export_id| {
             try self.markFrozenExport(export_id);
         } else if (self.result.static_data_values.items[index].initializer) |initializer| {
@@ -417,12 +442,12 @@ const Pass = struct {
         const data = self.frozen.?;
         try self.export_queue.append(self.allocator, id);
         while (self.export_queue.pop()) |current| {
-            const index = @intFromEnum(current);
+            const index = @backingInt(current);
             if (index >= data.exports.len) reachableProcInvariant("frozen relocation references an unknown data symbol");
             if (self.reachable_exports[index]) continue;
             self.reachable_exports[index] = true;
             const item = data.exports[index];
-            if (item.value_id) |value_id| self.reachable_static_data[@intFromEnum(value_id)] = true;
+            if (item.value_id) |value_id| self.reachable_static_data[@backingInt(value_id)] = true;
             for (item.relocations) |relocation| {
                 if (relocation.procedure) |procedure| try self.markProc(procedure);
                 switch (relocation.target) {
@@ -433,26 +458,11 @@ const Pass = struct {
         }
     }
 
-    fn markFnSet(self: *Pass, set_id: LirProgram.FnSetId) Allocator.Error!void {
-        const set = self.result.fn_sets.items[@intFromEnum(set_id)];
-        for (set.variants) |variant| {
-            for (variant.captures) |capture| try self.markConstPlan(capture.plan);
-        }
-    }
-
-    fn markErasedFns(self: *Pass, set_id: LirProgram.ErasedFnsId) Allocator.Error!void {
-        const set = self.result.erased_fns.items[@intFromEnum(set_id)];
-        for (set.entries) |entry| {
-            try self.markProc(entry.entry);
-            for (entry.captures) |capture| try self.markConstPlan(capture.plan);
-        }
-    }
-
     fn assignCompactProcIds(self: *Pass) void {
         var next: u32 = 0;
         for (self.reachable, 0..) |is_reachable, old_index| {
             if (!is_reachable) continue;
-            self.old_to_new[old_index] = @enumFromInt(next);
+            self.old_to_new[old_index] = @fromBackingInt(@intCast(next));
             next += 1;
         }
     }
@@ -461,7 +471,7 @@ const Pass = struct {
         var next: u32 = 0;
         for (self.reachable_stmts, 0..) |is_reachable, old_index| {
             if (!is_reachable) continue;
-            self.old_stmt_to_new[old_index] = @enumFromInt(next);
+            self.old_stmt_to_new[old_index] = @fromBackingInt(@intCast(next));
             next += 1;
         }
     }
@@ -470,7 +480,7 @@ const Pass = struct {
         var next: u32 = 0;
         for (self.reachable_static_data, 0..) |is_reachable, old_index| {
             if (!is_reachable) continue;
-            self.old_static_data_to_new[old_index] = @enumFromInt(next);
+            self.old_static_data_to_new[old_index] = @fromBackingInt(@intCast(next));
             next += 1;
         }
     }
@@ -479,7 +489,7 @@ const Pass = struct {
         @memset(self.visited_stmts, false);
         for (0..self.store.procSpecCount()) |index| {
             if (!self.reachable[index]) continue;
-            const proc = self.store.getProcSpec(@enumFromInt(@as(u32, @intCast(index))));
+            const proc = self.store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
             if (proc.body) |body| try self.remapStmtProcRefs(body);
             const join_points = self.store.getJoinPointSpan(proc.join_points);
             for (0..join_points.len) |join_index| {
@@ -492,7 +502,7 @@ const Pass = struct {
     fn remapStmtProcRefs(self: *Pass, body: LIR.CFStmtId) Allocator.Error!void {
         try self.stmt_stack.append(self.allocator, body);
         while (self.stmt_stack.pop()) |stmt_id| {
-            const stmt_index = @intFromEnum(stmt_id);
+            const stmt_index = @backingInt(stmt_id);
             if (self.visited_stmts[stmt_index]) continue;
             self.visited_stmts[stmt_index] = true;
 
@@ -504,17 +514,12 @@ const Pass = struct {
                     } else if (s.value == .static_data) {
                         s.value.static_data = self.remapStaticData(s.value.static_data);
                     }
+                    if (s.fresh_alternative) |proc| s.fresh_alternative = self.remapProc(proc);
                     const next = s.next;
                     s.next = self.remapStmt(next);
                     try self.pushStmt(next);
                 },
-                .assign_call => |*s| {
-                    s.proc = self.remapProc(s.proc);
-                    const next = s.next;
-                    s.next = self.remapStmt(next);
-                    try self.pushStmt(next);
-                },
-                .assign_packed_erased_fn => |*s| {
+                inline .assign_call, .assign_packed_erased_fn => |*s| {
                     s.proc = self.remapProc(s.proc);
                     const next = s.next;
                     s.next = self.remapStmt(next);
@@ -544,7 +549,7 @@ const Pass = struct {
                     try self.pushStmt(initialized);
                     try self.pushStmt(uninitialized);
                 },
-                .str_match => |*s| {
+                inline .str_match, .boxy_tag_match => |*s| {
                     const on_match = s.on_match;
                     const on_miss = s.on_miss;
                     s.on_match = self.remapStmt(on_match);
@@ -578,11 +583,13 @@ const Pass = struct {
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
                 .assign_boxy_eq,
+                .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .assign_call_dict,
@@ -605,14 +612,6 @@ const Pass = struct {
                     s.next = self.remapStmt(next);
                     try self.pushStmt(next);
                 },
-                .boxy_tag_match => |*s| {
-                    const on_match = s.on_match;
-                    const on_miss = s.on_miss;
-                    s.on_match = self.remapStmt(on_match);
-                    s.on_miss = self.remapStmt(on_miss);
-                    try self.pushStmt(on_match);
-                    try self.pushStmt(on_miss);
-                },
                 .ret,
                 .jump,
                 .crash,
@@ -629,7 +628,7 @@ const Pass = struct {
     fn remapReachableProcStmtRefs(self: *Pass) void {
         for (0..self.store.procSpecCount()) |index| {
             if (!self.reachable[index]) continue;
-            const proc = self.store.getProcSpecPtr(@enumFromInt(@as(u32, @intCast(index))));
+            const proc = self.store.getProcSpecPtr(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
             if (proc.body) |body| proc.body = self.remapStmt(body);
             const join_points = self.store.getJoinPointSpanMut(proc.join_points);
             for (0..join_points.len) |join_index| {
@@ -646,8 +645,10 @@ const Pass = struct {
         // A specialization whose procedure was unreachable leaves the table.
         var kept: usize = 0;
         for (self.result.spec_procs.items) |spec_proc| {
-            const new_proc = self.old_to_new[@intFromEnum(spec_proc.proc)] orelse continue;
-            self.result.spec_procs.items[kept] = .{ .key = spec_proc.key, .proc = new_proc };
+            const new_proc = self.old_to_new[@backingInt(spec_proc.proc)] orelse continue;
+            var remapped = spec_proc;
+            remapped.proc = new_proc;
+            self.result.spec_procs.items[kept] = remapped;
             kept += 1;
         }
         self.result.spec_procs.shrinkRetainingCapacity(kept);
@@ -699,12 +700,12 @@ const Pass = struct {
             while (cursor < pending.items.len) : (cursor += 1) {
                 for (compact[pending.items[cursor]].relocations) |relocation| {
                     const target: usize = switch (relocation.target) {
-                        .data_symbol => |id| @intFromEnum(id),
+                        .data_symbol => |id| @backingInt(id),
                         .named => continue,
                     };
                     if (named[target]) continue;
                     named[target] = true;
-                    const name = try LirProgram.staticDataNodeSymbolName(allocator, @intFromEnum(slot), next);
+                    const name = try LirProgram.staticDataNodeSymbolName(allocator, @backingInt(slot), next);
                     next += 1;
                     allocator.free(compact[target].symbol_name);
                     compact[target].symbol_name = name;
@@ -722,7 +723,7 @@ const Pass = struct {
         var count: usize = 0;
         for (self.reachable_exports, 0..) |keep, index| {
             if (!keep) continue;
-            self.old_export_to_new[index] = @enumFromInt(count);
+            self.old_export_to_new[index] = @fromBackingInt(@intCast(count));
             count += 1;
         }
         const compact = try data.allocator.alloc(LirProgram.StaticDataExport, count);
@@ -771,7 +772,7 @@ const Pass = struct {
                         }
                     },
                     .data_symbol => |old_target| {
-                        dest.target = .{ .data_symbol = self.old_export_to_new[@intFromEnum(old_target)] orelse
+                        dest.target = .{ .data_symbol = self.old_export_to_new[@backingInt(old_target)] orelse
                             reachableProcInvariant("retained frozen relocation targets pruned data") };
                     },
                 }
@@ -787,7 +788,7 @@ const Pass = struct {
         for (compact) |item| {
             for (@constCast(item.relocations)) |*relocation| {
                 if (relocation.target == .data_symbol)
-                    relocation.target_symbol_name = compact[@intFromEnum(relocation.target.data_symbol)].symbol_name;
+                    relocation.target_symbol_name = compact[@backingInt(relocation.target.data_symbol)].symbol_name;
             }
         }
         for (data.exports, 0..) |item, index| {
@@ -816,8 +817,11 @@ const Pass = struct {
             if (kept_count == 0) {
                 for (old_entries) |entry| {
                     if (entry.captures.len > 0) self.allocator.free(entry.captures);
-                    if (entry.template.evidence.len > 0) self.allocator.free(entry.template.evidence);
-                    if (entry.template.evidence_frames.len > 0) self.allocator.free(entry.template.evidence_frames);
+                    if (entry.template) |template| {
+                        if (template.evidence.len > 0) self.allocator.free(template.evidence);
+                        if (template.evidence_frames.len > 0) self.allocator.free(template.evidence_frames);
+                    }
+                    if (entry.boxy) |boxy| self.allocator.free(boxy.captures);
                 }
                 if (old_entries.len > 0) self.allocator.free(old_entries);
                 set.entries = &.{};
@@ -833,8 +837,11 @@ const Pass = struct {
                     write += 1;
                 } else {
                     if (entry.captures.len > 0) self.allocator.free(entry.captures);
-                    if (entry.template.evidence.len > 0) self.allocator.free(entry.template.evidence);
-                    if (entry.template.evidence_frames.len > 0) self.allocator.free(entry.template.evidence_frames);
+                    if (entry.template) |template| {
+                        if (template.evidence.len > 0) self.allocator.free(template.evidence);
+                        if (template.evidence_frames.len > 0) self.allocator.free(template.evidence_frames);
+                    }
+                    if (entry.boxy) |boxy| self.allocator.free(boxy.captures);
                 }
             }
             if (old_entries.len > 0) self.allocator.free(old_entries);
@@ -842,9 +849,17 @@ const Pass = struct {
         }
     }
 
-    fn remapBoxyTableProcs(self: *Pass) void {
+    fn remapBoxyTableProcs(self: *Pass) Allocator.Error!void {
+        var origins: @TypeOf(self.result.boxy_frozen_method_origins) = .empty;
+        errdefer origins.deinit(self.allocator);
+        var entries = self.result.boxy_frozen_method_origins.iterator();
+        while (entries.next()) |entry| {
+            if (self.maybeRemapProc(entry.key_ptr.*)) |adapter| try origins.put(self.allocator, adapter, entry.value_ptr.*);
+        }
+        self.result.boxy_frozen_method_origins.deinit(self.allocator);
+        self.result.boxy_frozen_method_origins = origins;
         for (self.result.boxy_method_slots.items) |*slot| {
-            if (!slot.present or slot.structural_eq) continue;
+            if (!slot.present) continue;
             slot.proc = self.remapProc(slot.proc);
         }
     }
@@ -878,8 +893,8 @@ const Pass = struct {
 
         var selected_count: usize = 0;
         for (self.result.boxy_method_slots.items) |slot| {
-            if (!slot.present or slot.structural_eq) continue;
-            const proc_index = @intFromEnum(slot.proc);
+            if (!slot.present) continue;
+            const proc_index = @backingInt(slot.proc);
             if (proc_index >= proc_count) {
                 reachableProcInvariant("boxy method worker exceeds compact proc_specs len");
             }
@@ -890,7 +905,7 @@ const Pass = struct {
         try self.result.boxy_worker_procs.ensureTotalCapacity(self.allocator, selected_count);
         for (selected, 0..) |is_selected, proc_index| {
             if (!is_selected) continue;
-            self.result.boxy_worker_procs.appendAssumeCapacity(@enumFromInt(@as(u32, @intCast(proc_index))));
+            self.result.boxy_worker_procs.appendAssumeCapacity(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
         }
     }
 
@@ -912,13 +927,13 @@ const Pass = struct {
         const proc_count = self.store.procSpecCount();
         const stmt_count = self.store.cfStmtCount();
         for (self.result.root_procs.items) |proc| {
-            if (@intFromEnum(proc) >= proc_count) reachableProcInvariant("root proc exceeds compact proc_specs len");
+            if (@backingInt(proc) >= proc_count) reachableProcInvariant("root proc exceeds compact proc_specs len");
         }
         for (self.result.const_roots.items) |root| {
-            if (@intFromEnum(root.proc) >= proc_count) reachableProcInvariant("const root proc exceeds compact proc_specs len");
+            if (@backingInt(root.proc) >= proc_count) reachableProcInvariant("const root proc exceeds compact proc_specs len");
         }
         for (self.result.literal_roots.items) |root| {
-            if (@intFromEnum(root.proc) >= proc_count) reachableProcInvariant("literal root proc exceeds compact proc_specs len");
+            if (@backingInt(root.proc) >= proc_count) reachableProcInvariant("literal root proc exceeds compact proc_specs len");
         }
         for (self.result.requested_layouts.items) |request| {
             if (request.initializer) |initializer| {
@@ -926,7 +941,7 @@ const Pass = struct {
                 if (!self.store.getProcSpec(initializer).is_static_initializer) {
                     reachableProcInvariant("requested static initializer was marked as a runtime proc");
                 }
-                if (self.result.const_plans.items[@intFromEnum(request.plan)] != .layout_only) {
+                if (self.result.const_plans.items[@backingInt(request.plan)] != .layout_only) {
                     reachableProcInvariant("requested static initializer retained a ConstStore storage plan");
                 }
             }
@@ -944,7 +959,7 @@ const Pass = struct {
             if (entry.proc >= proc_count) reachableProcInvariant("proc debug name exceeds compact proc_specs len");
         }
         for (0..self.store.procSpecCount()) |proc_index| {
-            const proc = self.store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+            const proc = self.store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
             if (proc.body) |body| self.verifyStmtRef(body, stmt_count) else if (proc.hosted == null and !proc.external) {
                 reachableProcInvariant("retained Roc proc has no body");
             }
@@ -955,7 +970,7 @@ const Pass = struct {
             }
         }
         for (0..self.store.cfStmtCount()) |stmt_index| {
-            const stmt = self.store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+            const stmt = self.store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
             self.verifyStmtRefs(stmt, proc_count, stmt_count);
         }
     }
@@ -965,35 +980,35 @@ const Pass = struct {
     }
 
     fn maybeRemapProc(self: *Pass, old: LIR.LirProcSpecId) ?LIR.LirProcSpecId {
-        const index = @intFromEnum(old);
+        const index = @backingInt(old);
         if (index >= self.old_to_new.len) reachableProcInvariant("proc reference exceeds old proc_specs len");
         return self.old_to_new[index];
     }
 
     fn remapStaticData(self: *Pass, old: LIR.StaticDataId) LIR.StaticDataId {
-        const index = @intFromEnum(old);
+        const index = @backingInt(old);
         if (index >= self.old_static_data_to_new.len) reachableProcInvariant("static data reference exceeds old static_data_values len");
         return self.old_static_data_to_new[index] orelse reachableProcInvariant("reachable static data edge pointed at pruned static data");
     }
 
     fn remapStmt(self: *Pass, old: LIR.CFStmtId) LIR.CFStmtId {
-        const index = @intFromEnum(old);
+        const index = @backingInt(old);
         if (index >= self.old_stmt_to_new.len) reachableProcInvariant("stmt reference exceeds old cf_stmts len");
         return self.old_stmt_to_new[index] orelse reachableProcInvariant("reachable stmt edge pointed at pruned stmt");
     }
 
     fn verifyProcRef(_: *Pass, proc: LIR.LirProcSpecId, proc_count: usize) void {
-        if (@intFromEnum(proc) >= proc_count) reachableProcInvariant("stmt proc reference exceeds compact proc_specs len");
+        if (@backingInt(proc) >= proc_count) reachableProcInvariant("stmt proc reference exceeds compact proc_specs len");
     }
 
     fn verifyStaticDataRef(self: *Pass, id: LIR.StaticDataId) void {
-        if (@intFromEnum(id) >= self.result.static_data_values.items.len) {
+        if (@backingInt(id) >= self.result.static_data_values.items.len) {
             reachableProcInvariant("stmt static data reference exceeds compact static_data_values len");
         }
     }
 
     fn verifyStmtRef(_: *Pass, stmt: LIR.CFStmtId, stmt_count: usize) void {
-        if (@intFromEnum(stmt) >= stmt_count) reachableProcInvariant("stmt edge exceeds compact cf_stmts len");
+        if (@backingInt(stmt) >= stmt_count) reachableProcInvariant("stmt edge exceeds compact cf_stmts len");
     }
 
     fn verifyStmtRefs(self: *Pass, stmt: LIR.CFStmt, proc_count: usize, stmt_count: usize) void {
@@ -1004,13 +1019,10 @@ const Pass = struct {
                 } else if (s.value == .static_data) {
                     self.verifyStaticDataRef(s.value.static_data);
                 }
+                if (s.fresh_alternative) |proc| self.verifyProcRef(proc, proc_count);
                 self.verifyStmtRef(s.next, stmt_count);
             },
-            .assign_call => |s| {
-                self.verifyProcRef(s.proc, proc_count);
-                self.verifyStmtRef(s.next, stmt_count);
-            },
-            .assign_packed_erased_fn => |s| {
+            inline .assign_call, .assign_packed_erased_fn => |s| {
                 self.verifyProcRef(s.proc, proc_count);
                 self.verifyStmtRef(s.next, stmt_count);
             },
@@ -1020,11 +1032,13 @@ const Pass = struct {
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_box,
+            .assign_boxy_record_update,
             .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
             .assign_boxy_eq,
+            .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
             .assign_call_dict,
@@ -1056,11 +1070,7 @@ const Pass = struct {
                 self.verifyStmtRef(s.initialized_branch, stmt_count);
                 self.verifyStmtRef(s.uninitialized_branch, stmt_count);
             },
-            .str_match => |s| {
-                self.verifyStmtRef(s.on_match, stmt_count);
-                self.verifyStmtRef(s.on_miss, stmt_count);
-            },
-            .boxy_tag_match => |s| {
+            inline .str_match, .boxy_tag_match => |s| {
                 self.verifyStmtRef(s.on_match, stmt_count);
                 self.verifyStmtRef(s.on_miss, stmt_count);
             },
@@ -1090,8 +1100,8 @@ const Pass = struct {
 };
 
 fn reachableProcInvariant(msg: []const u8) noreturn {
-    if (@import("builtin").mode == .Debug) {
-        std.debug.panic("reachable procs invariant violated: {s}", .{msg});
+    if (@import("builtin").mode == .debug) {
+        base.invariant("reachable procs invariant violated: {s}", .{msg});
     }
     unreachable;
 }
@@ -1153,10 +1163,10 @@ test "reachable proc pass compacts proc specs and remaps root ids" {
 
     try std.testing.expectEqual(@as(usize, 2), result.store.procSpecCount());
     try std.testing.expectEqual(@as(usize, 3), result.store.cfStmtCount());
-    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(result.root_procs.items[0]));
+    try std.testing.expectEqual(@as(u32, 1), @backingInt(result.root_procs.items[0]));
     const compact_root = result.store.getProcSpec(result.root_procs.items[0]);
     const call = result.store.getCFStmt(compact_root.body.?).assign_call;
-    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(call.proc));
+    try std.testing.expectEqual(@as(u32, 0), @backingInt(call.proc));
 }
 
 test "reachable proc pass follows static initializer proc refs" {
@@ -1188,7 +1198,7 @@ test "reachable proc pass follows static initializer proc refs" {
         .is_static_initializer = true,
     }, .none);
 
-    const static_data: LIR.StaticDataId = @enumFromInt(@as(u32, @intCast(result.static_data_values.items.len)));
+    const static_data: LIR.StaticDataId = @fromBackingInt(@intCast(@as(u32, @intCast(result.static_data_values.items.len))));
     try result.static_data_values.append(std.testing.allocator, .{
         .initializer = initializer,
         .layout_idx = .zst,
@@ -1213,12 +1223,12 @@ test "reachable proc pass follows static initializer proc refs" {
 
     try std.testing.expectEqual(@as(usize, 3), result.store.procSpecCount());
     try std.testing.expectEqual(@as(usize, 1), result.static_data_values.items.len);
-    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(result.static_data_values.items[0].initializer.?));
-    try std.testing.expectEqual(@as(u32, 2), @intFromEnum(result.root_procs.items[0]));
+    try std.testing.expectEqual(@as(u32, 1), @backingInt(result.static_data_values.items[0].initializer.?));
+    try std.testing.expectEqual(@as(u32, 2), @backingInt(result.root_procs.items[0]));
     const compact_initializer = result.store.getProcSpec(result.static_data_values.items[0].initializer.?);
     try std.testing.expect(compact_initializer.is_static_initializer);
     const initializer_proc_ref = result.store.getCFStmt(compact_initializer.body.?).assign_literal.value.proc_ref;
-    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(initializer_proc_ref));
+    try std.testing.expectEqual(@as(u32, 0), @backingInt(initializer_proc_ref));
 }
 
 test "reachable proc pass follows packed erased callable refs in static initializers" {
@@ -1253,7 +1263,7 @@ test "reachable proc pass follows packed erased callable refs in static initiali
         .is_static_initializer = true,
     }, .none);
 
-    const static_data: LIR.StaticDataId = @enumFromInt(@as(u32, @intCast(result.static_data_values.items.len)));
+    const static_data: LIR.StaticDataId = @fromBackingInt(@intCast(@as(u32, @intCast(result.static_data_values.items.len))));
     try result.static_data_values.append(std.testing.allocator, .{
         .initializer = initializer,
         .layout_idx = .zst,
@@ -1278,12 +1288,12 @@ test "reachable proc pass follows packed erased callable refs in static initiali
 
     try std.testing.expectEqual(@as(usize, 3), result.store.procSpecCount());
     try std.testing.expectEqual(@as(usize, 1), result.static_data_values.items.len);
-    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(result.static_data_values.items[0].initializer.?));
-    try std.testing.expectEqual(@as(u32, 2), @intFromEnum(result.root_procs.items[0]));
+    try std.testing.expectEqual(@as(u32, 1), @backingInt(result.static_data_values.items[0].initializer.?));
+    try std.testing.expectEqual(@as(u32, 2), @backingInt(result.root_procs.items[0]));
     const compact_initializer = result.store.getProcSpec(result.static_data_values.items[0].initializer.?);
     try std.testing.expect(compact_initializer.is_static_initializer);
     const packed_erased_proc = result.store.getCFStmt(compact_initializer.body.?).assign_packed_erased_fn.proc;
-    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(packed_erased_proc));
+    try std.testing.expectEqual(@as(u32, 0), @backingInt(packed_erased_proc));
 }
 
 test "reachable proc pass publishes exact deduplicated boxy worker procs" {
@@ -1323,23 +1333,22 @@ test "reachable proc pass publishes exact deduplicated boxy worker procs" {
     }, .none);
     try result.root_procs.append(std.testing.allocator, root_proc);
 
-    // This pass only inspects each slot's presence, structural-equality status,
-    // and worker proc; method identities are deliberately never read here.
+    // This pass only inspects each slot's presence and worker proc; method
+    // identities are deliberately never read here.
     try result.boxy_method_slots.appendSlice(std.testing.allocator, &.{
         .{ .method = undefined, .proc = second_worker },
         .{ .method = undefined, .proc = second_worker },
         .{ .method = undefined, .proc = first_worker },
         .{ .present = false, .method = undefined, .proc = ignored_proc },
-        .{ .method = undefined, .proc = ignored_proc, .structural_eq = true },
     });
 
     try run(&result);
 
     try std.testing.expectEqual(@as(usize, 3), result.store.procSpecCount());
     try std.testing.expectEqual(@as(usize, 2), result.boxy_worker_procs.items.len);
-    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(result.boxy_worker_procs.items[0]));
-    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(result.boxy_worker_procs.items[1]));
-    try std.testing.expectEqual(@as(u32, 2), @intFromEnum(result.root_procs.items[0]));
+    try std.testing.expectEqual(@as(u32, 0), @backingInt(result.boxy_worker_procs.items[0]));
+    try std.testing.expectEqual(@as(u32, 1), @backingInt(result.boxy_worker_procs.items[1]));
+    try std.testing.expectEqual(@as(u32, 2), @backingInt(result.root_procs.items[0]));
 }
 
 test "frozen runtime data prunes witnesses and remaps callable and data identities" {
@@ -1364,9 +1373,9 @@ test "frozen runtime data prunes witnesses and remaps callable and data identiti
         .body = ret,
         .ret_layout = .zst,
     }, .none);
-    const discarded_slot: LIR.StaticDataId = @enumFromInt(result.static_data_values.items.len);
+    const discarded_slot: LIR.StaticDataId = @fromBackingInt(@intCast(result.static_data_values.items.len));
     try result.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = .zst });
-    const retained_slot: LIR.StaticDataId = @enumFromInt(result.static_data_values.items.len);
+    const retained_slot: LIR.StaticDataId = @fromBackingInt(@intCast(result.static_data_values.items.len));
     try result.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = .zst });
     const body = try result.store.addCFStmt(.{ .assign_literal = .{
         .target = local,
@@ -1400,7 +1409,7 @@ test "frozen runtime data prunes witnesses and remaps callable and data identiti
     root_relocations[0] = .{
         .offset = 0,
         .target_symbol_name = exports[2].symbol_name,
-        .target = .{ .data_symbol = @enumFromInt(2) },
+        .target = .{ .data_symbol = @fromBackingInt(@intCast(2)) },
     };
     exports[1].relocations = root_relocations;
     const shared_name = try allocator.dupe(u8, "callable");
@@ -1425,15 +1434,15 @@ test "frozen runtime data prunes witnesses and remaps callable and data identiti
     try runWithFrozen(&result, &frozen);
     try std.testing.expectEqual(@as(usize, 2), result.store.procSpecCount());
     try std.testing.expectEqual(@as(usize, 1), result.static_data_values.items.len);
-    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(result.root_procs.items[0]));
+    try std.testing.expectEqual(@as(u32, 1), @backingInt(result.root_procs.items[0]));
     try std.testing.expectEqual(@as(usize, 2), frozen.exports.len);
-    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(frozen.exports[0].value_id.?));
+    try std.testing.expectEqual(@as(u32, 0), @backingInt(frozen.exports[0].value_id.?));
     try std.testing.expectEqualStrings("roc__d0", frozen.exports[0].symbol_name);
     // The retained value's node is renamed after its new slot.
     try std.testing.expectEqualStrings("roc__d0_1", frozen.exports[1].symbol_name);
-    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(frozen.exports[0].relocations[0].target.data_symbol));
+    try std.testing.expectEqual(@as(u32, 1), @backingInt(frozen.exports[0].relocations[0].target.data_symbol));
     try std.testing.expectEqualStrings(frozen.exports[1].symbol_name, frozen.exports[0].relocations[0].target_symbol_name);
-    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(frozen.exports[1].relocations[0].procedure.?));
+    try std.testing.expectEqual(@as(u32, 0), @backingInt(frozen.exports[1].relocations[0].procedure.?));
     try std.testing.expectEqualStrings("callable", frozen.exports[1].relocations[0].target_symbol_name);
     try std.testing.expect(frozen.exports[1].relocations[0].owns_target_symbol_name);
     try std.testing.expectEqual(@as(u64, 7), result.store.getProcSpec(frozen.exports[1].relocations[0].procedure.?).native_code_revision);
@@ -1475,7 +1484,7 @@ test "CTFE code demand retains union identities and omits runtime-only procedure
     try std.testing.expectEqual(@as(usize, 3), result.store.procSpecCount());
     try std.testing.expectEqualSlices(LIR.LirProcSpecId, &.{ procs[0], procs[1] }, result.root_procs.items);
     for (result.store.getProcSpecs()) |proc| try std.testing.expectEqual(ret, proc.body.?);
-    try std.testing.expectEqual(@as(u32, 2), @intFromEnum(exports[0].relocations[0].procedure.?));
+    try std.testing.expectEqual(@as(u32, 2), @backingInt(exports[0].relocations[0].procedure.?));
 }
 
 test "erased callable pruning frees evidence for fully and partly discarded sets" {
@@ -1509,6 +1518,23 @@ test "erased callable pruning frees evidence for fully and partly discarded sets
     try run(&result);
     try std.testing.expectEqual(@as(usize, 0), result.erased_fns.items[0].entries.len);
     try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[1].entries.len);
-    try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[1].entries[0].template.evidence.len);
-    try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[1].entries[0].template.evidence_frames.len);
+    try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[1].entries[0].template.?.evidence.len);
+    try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[1].entries[0].template.?.evidence_frames.len);
+}
+
+test "reachable proc pass retains frozen method provenance after implementation inlining" {
+    const gpa = std.testing.allocator;
+    var result = try LirProgram.Result.init(gpa, @import("base").target.TargetUsize.native);
+    defer result.deinit();
+    const local = try result.store.addLocal(.{ .layout_idx = .zst });
+    const body = try result.store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
+    const implementation_identity = LIR.ProcIdentity.forTest(81);
+    _ = try result.store.addProcSpec(.{ .name = result.store.freshSyntheticSymbol(), .identity = implementation_identity, .args = .empty(), .body = body, .ret_layout = .zst }, .none);
+    const adapter = try result.store.addProcSpec(.{ .name = result.store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(82), .args = .empty(), .body = body, .ret_layout = .zst }, .none);
+    try result.root_procs.append(gpa, adapter);
+    const origin = LirProgram.BoxyFrozenMethodOrigin{ .worker = implementation_identity, .requirement_module = .{ .bytes = @splat(0) }, .requirement_type = @fromBackingInt(@intCast(1)), .callable_module = .{ .bytes = @splat(0) }, .callable_type = @fromBackingInt(@intCast(2)) };
+    try result.boxy_frozen_method_origins.put(gpa, adapter, origin);
+    try run(&result);
+    try std.testing.expectEqual(@as(usize, 1), result.store.procSpecCount());
+    try std.testing.expectEqualDeep(origin, result.boxy_frozen_method_origins.get(result.root_procs.items[0]).?);
 }

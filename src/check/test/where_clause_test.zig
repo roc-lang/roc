@@ -401,7 +401,7 @@ test "where clause - method signature mismatch" {
     try test_env_b.assertFirstTypeError("Type Mismatch");
 }
 
-test "where clause - discarded unpinned return type reports missing method" {
+test "where clause - discarded unpinned return type reports an undetermined type" {
     const source =
         \\Thing := [Thing]
         \\
@@ -424,7 +424,7 @@ test "where clause - discarded unpinned return type reports missing method" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("Missing Method");
+    try test_env.assertOneTypeError("Type Not Determined");
     try std.testing.expect(hasRuntimeErrorExpr(&test_env));
 }
 
@@ -551,11 +551,11 @@ test "where clause - inferred from method call without annotation" {
 fn hasRuntimeErrorExpr(test_env: *const TestEnv) bool {
     var raw_node_idx: u32 = 0;
     while (raw_node_idx < test_env.checker.cir.store.nodes.len()) : (raw_node_idx += 1) {
-        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(raw_node_idx));
         const node = test_env.checker.cir.store.nodes.get(node_idx);
         if (!std.mem.startsWith(u8, @tagName(node.tag), "expr_") and node.tag != .malformed) continue;
 
-        const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
+        const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(raw_node_idx));
         if (test_env.checker.cir.store.getExpr(expr_idx) == .e_runtime_error) return true;
     }
     return false;
@@ -861,4 +861,38 @@ test "where clause - partial method result hole preserves explicit purity" {
     var test_env = try TestEnv.init("PureMethodHole", source);
     defer test_env.deinit();
     try test_env.assertFirstTypeError("Type Mismatch");
+}
+
+// https://github.com/roc-lang/roc/issues/12022
+// https://github.com/roc-lang/roc/issues/12023
+
+const alias_receiver_item =
+    \\Item := [Item(U64)].{
+    \\    score : Item -> U64
+    \\    score = |Item.Item(n)| n
+    \\}
+    \\
+    \\Wrapper(a) : a
+    \\
+;
+
+test "where clause - a receiver typed by a transparent alias of the constrained variable dispatches through it" {
+    var test_env = try TestEnv.init("Test", alias_receiver_item ++
+        \\score_wrapped : Wrapper(a) -> U64 where [a.score : a -> U64]
+        \\score_wrapped = |value| value.score()
+        \\
+        \\answer = score_wrapped(Item.Item(42))
+    );
+    defer test_env.deinit();
+    try test_env.assertDefType("score_wrapped", "Wrapper(a) -> U64 where [a.score : a -> U64]");
+    try test_env.assertDefType("answer", "U64");
+}
+
+test "where clause - a receiver typed by a transparent alias of an unconstrained variable has no method" {
+    var test_env = try TestEnv.init("Test", alias_receiver_item ++
+        \\score_wrapped : Wrapper(a) -> U64
+        \\score_wrapped = |value| value.score()
+    );
+    defer test_env.deinit();
+    try test_env.assertFirstTypeError("Missing Method");
 }

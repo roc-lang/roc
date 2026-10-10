@@ -49,8 +49,19 @@ const max_hfa_floats = 4;
 /// Classify how the value of layout `idx` is passed or returned under AAPCS64.
 /// The layout must have runtime bits; zero-sized values are not passed at all and
 /// must be filtered out by the caller before classification.
-pub fn classifyType(store: *const Store, idx: Idx) Class {
-    const lay = store.getLayout(idx);
+pub fn classifyType(allocator: std.mem.Allocator, store: *const Store, start: Idx) std.mem.Allocator.Error!Class {
+    // Glue unwraps a single-variant union to its payload. Its layout has no
+    // runtime discriminant, so classification unwraps it too. In particular,
+    // a transparent vector is a direct Q-register value and a transparent
+    // float is a direct SIMD-register value.
+    var idx = start;
+    var lay = store.getLayout(idx);
+    while (lay.tag == .tag_union) {
+        const info = store.getTagUnionInfo(lay);
+        if (info.variants.len != 1 or info.data.discriminant_size != 0) break;
+        idx = info.variants.get(0).payload_layout;
+        lay = store.getLayout(idx);
+    }
     std.debug.assert(store.layoutSize(lay) > 0);
 
     switch (lay.tag) {
@@ -82,12 +93,12 @@ pub fn classifyType(store: *const Store, idx: Idx) Class {
             // members as vector/byte unions to pin that classification), whereas
             // only C toolchains implement AAPCS64's multi-member HVA register rule.
             var maybe_vector_kind: ?layout.Vector = null;
-            const vector_count = countVectors(store, idx, &maybe_vector_kind);
+            const vector_count = try countVectors(allocator, store, idx, &maybe_vector_kind);
             if (vector_count == 1) {
                 return .{ .vector = maybe_vector_kind.? };
             }
             var maybe_float_bits: ?u16 = null;
-            const float_count = countFloats(store, idx, &maybe_float_bits);
+            const float_count = try countFloats(allocator, store, idx, &maybe_float_bits);
             if (float_count >= 1 and float_count <= max_hfa_floats) {
                 return .{ .float_array = .{
                     .count = float_count,
@@ -96,17 +107,7 @@ pub fn classifyType(store: *const Store, idx: Idx) Class {
             }
             return classifyBySize(store, lay);
         },
-        .tag_union => {
-            // Glue unwraps a single-variant union to its payload. Its layout has
-            // no runtime discriminant, so classification must unwrap it too.
-            // In particular, a transparent vector is a direct Q-register value
-            // and a transparent float is a direct SIMD-register value.
-            const info = store.getTagUnionInfo(lay);
-            if (info.variants.len == 1 and info.data.discriminant_size == 0) {
-                return classifyType(store, info.variants.get(0).payload_layout);
-            }
-            return classifyBySize(store, lay);
-        },
+        .tag_union => return classifyBySize(store, lay),
         // Closures and erased callables carry pointers and are not homogeneous
         // aggregates, so classify them purely by size.
         .closure, .erased_callable => return classifyBySize(store, lay),
@@ -118,38 +119,44 @@ pub fn classifyType(store: *const Store, idx: Idx) Class {
 /// vectors, returning `invalid_float_count` (sentinel) the moment any other
 /// member (or unnamed padding) is seen. Exactly one vector member makes the
 /// aggregate a transparent Q-register value; two or more make it memory-class.
-/// Counting stops at two because higher counts classify identically.
-fn countVectors(store: *const Store, idx: Idx, maybe_kind: *?layout.Vector) u8 {
-    const lay = store.getLayout(idx);
-    switch (lay.tag) {
-        .struct_ => {
-            const struct_idx = lay.getStruct().idx;
-            const field_count = store.getStructData(struct_idx).fields.count;
-            var count: u8 = 0;
-            var i: u32 = 0;
-            while (i < field_count) : (i += 1) {
-                if (store.getStructFieldIsPadding(struct_idx, i)) return invalid_float_count;
-                const field_count_vectors = countVectors(store, store.getStructFieldLayout(struct_idx, i), maybe_kind);
-                if (field_count_vectors == invalid_float_count) return invalid_float_count;
-                count += field_count_vectors;
+/// Counting stops at two because higher counts classify identically. Members
+/// are visited in order on an explicit stack, so aggregate nesting never
+/// becomes native call depth.
+fn countVectors(allocator: std.mem.Allocator, store: *const Store, idx: Idx, maybe_kind: *?layout.Vector) std.mem.Allocator.Error!u8 {
+    var pending: std.ArrayList(Idx) = .empty;
+    defer pending.deinit(allocator);
+    try pending.append(allocator, idx);
+    var count: u8 = 0;
+    while (pending.pop()) |current| {
+        const lay = store.getLayout(current);
+        switch (lay.tag) {
+            .struct_ => {
+                const struct_idx = lay.getStruct().idx;
+                const field_count = store.getStructData(struct_idx).fields.count;
+                const start = pending.items.len;
+                var i: u32 = 0;
+                while (i < field_count) : (i += 1) {
+                    if (store.getStructFieldIsPadding(struct_idx, i)) return invalid_float_count;
+                    try pending.append(allocator, store.getStructFieldLayout(struct_idx, i));
+                }
+                std.mem.reverse(Idx, pending.items[start..]);
+            },
+            .scalar => {
+                const scalar = lay.getScalar();
+                if (scalar.tag != .vector) return invalid_float_count;
+                if (maybe_kind.* == null) maybe_kind.* = scalar.getVector();
+                count += 1;
                 if (count > 1) return count;
-            }
-            return count;
-        },
-        .scalar => {
-            const scalar = lay.getScalar();
-            if (scalar.tag != .vector) return invalid_float_count;
-            const kind = scalar.getVector();
-            if (maybe_kind.* == null) maybe_kind.* = kind;
-            return 1;
-        },
-        .tag_union => {
-            const info = store.getTagUnionInfo(lay);
-            if (info.variants.len != 1 or info.data.discriminant_size != 0) return invalid_float_count;
-            return countVectors(store, info.variants.get(0).payload_layout, maybe_kind);
-        },
-        .box, .box_of_zst, .erased_box, .list, .list_of_zst, .closure, .erased_callable, .zst, .ptr => return invalid_float_count,
+            },
+            .tag_union => {
+                const info = store.getTagUnionInfo(lay);
+                if (info.variants.len != 1 or info.data.discriminant_size != 0) return invalid_float_count;
+                try pending.append(allocator, info.variants.get(0).payload_layout);
+            },
+            .box, .box_of_zst, .erased_box, .list, .list_of_zst, .closure, .erased_callable, .zst, .ptr => return invalid_float_count,
+        }
     }
+    return count;
 }
 
 /// Size-based fallback for aggregates that are not homogeneous float aggregates.
@@ -166,53 +173,59 @@ const invalid_float_count = std.math.maxInt(u8);
 /// the moment a non-float member, a mismatched float width, or more than the HFA limit is
 /// seen. All members of an HFA must be the same IEEE float width; `maybe_float_bits` is
 /// threaded through to enforce that and to report the element width to the caller.
-fn countFloats(store: *const Store, idx: Idx, maybe_float_bits: *?u16) u8 {
-    const lay = store.getLayout(idx);
-    switch (lay.tag) {
-        .struct_ => {
-            const struct_idx = lay.getStruct().idx;
-            const field_count = store.getStructData(struct_idx).fields.count;
-            var count: u8 = 0;
-            var i: u32 = 0;
-            while (i < field_count) : (i += 1) {
-                // Unnamed padding is opaque, alignment-1 bytes, never a float
-                // member, so any padding makes the aggregate non-homogeneous (it
-                // falls back to size-based integer classification).
-                if (store.getStructFieldIsPadding(struct_idx, i)) return invalid_float_count;
-                const field_layout = store.getStructFieldLayout(struct_idx, i);
-                const field_count_floats = countFloats(store, field_layout, maybe_float_bits);
-                if (field_count_floats == invalid_float_count) return invalid_float_count;
-                count += field_count_floats;
+/// Members are visited in order on an explicit stack, so aggregate nesting never
+/// becomes native call depth.
+fn countFloats(allocator: std.mem.Allocator, store: *const Store, idx: Idx, maybe_float_bits: *?u16) std.mem.Allocator.Error!u8 {
+    var pending: std.ArrayList(Idx) = .empty;
+    defer pending.deinit(allocator);
+    try pending.append(allocator, idx);
+    var count: u8 = 0;
+    while (pending.pop()) |current| {
+        const lay = store.getLayout(current);
+        switch (lay.tag) {
+            .struct_ => {
+                const struct_idx = lay.getStruct().idx;
+                const field_count = store.getStructData(struct_idx).fields.count;
+                const start = pending.items.len;
+                var i: u32 = 0;
+                while (i < field_count) : (i += 1) {
+                    // Unnamed padding is opaque, alignment-1 bytes, never a float
+                    // member, so any padding makes the aggregate non-homogeneous (it
+                    // falls back to size-based integer classification).
+                    if (store.getStructFieldIsPadding(struct_idx, i)) return invalid_float_count;
+                    try pending.append(allocator, store.getStructFieldLayout(struct_idx, i));
+                }
+                std.mem.reverse(Idx, pending.items[start..]);
+            },
+            .scalar => {
+                const scalar = lay.getScalar();
+                // Only IEEE floats (f32/f64) count toward an HFA. Dec is i128-backed, so it is
+                // an integer member, not a float.
+                if (scalar.tag != .frac) return invalid_float_count;
+                const bits: u16 = switch (scalar.getFrac()) {
+                    .f32 => 32,
+                    .f64 => 64,
+                    .dec => return invalid_float_count,
+                };
+                if (maybe_float_bits.*) |existing| {
+                    if (existing != bits) return invalid_float_count;
+                } else {
+                    maybe_float_bits.* = bits;
+                }
+                count += 1;
                 if (count > max_hfa_floats) return invalid_float_count;
-            }
-            return count;
-        },
-        .scalar => {
-            const scalar = lay.getScalar();
-            // Only IEEE floats (f32/f64) count toward an HFA. Dec is i128-backed, so it is
-            // an integer member, not a float.
-            if (scalar.tag != .frac) return invalid_float_count;
-            const bits: u16 = switch (scalar.getFrac()) {
-                .f32 => 32,
-                .f64 => 64,
-                .dec => return invalid_float_count,
-            };
-            if (maybe_float_bits.*) |existing| {
-                if (existing != bits) return invalid_float_count;
-                return 1;
-            }
-            maybe_float_bits.* = bits;
-            return 1;
-        },
-        .tag_union => {
-            const info = store.getTagUnionInfo(lay);
-            if (info.variants.len != 1 or info.data.discriminant_size != 0) return invalid_float_count;
-            return countFloats(store, info.variants.get(0).payload_layout, maybe_float_bits);
-        },
-        // Anything else (pointer, list, box, non-transparent tag union, …)
-        // makes the aggregate non-homogeneous.
-        .box, .box_of_zst, .erased_box, .list, .list_of_zst, .closure, .erased_callable, .zst, .ptr => return invalid_float_count,
+            },
+            .tag_union => {
+                const info = store.getTagUnionInfo(lay);
+                if (info.variants.len != 1 or info.data.discriminant_size != 0) return invalid_float_count;
+                try pending.append(allocator, info.variants.get(0).payload_layout);
+            },
+            // Anything else (pointer, list, box, non-transparent tag union, …)
+            // makes the aggregate non-homogeneous.
+            .box, .box_of_zst, .erased_box, .list, .list_of_zst, .closure, .erased_callable, .zst, .ptr => return invalid_float_count,
+        }
     }
+    return count;
 }
 
 const testing = std.testing;
@@ -230,14 +243,14 @@ test "aarch64 classify: scalars pass by value" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
 
-    try testing.expectEqual(Class.byval, classifyType(&store, .i32));
-    try testing.expectEqual(Class.byval, classifyType(&store, .u8));
-    try testing.expectEqual(Class.byval, classifyType(&store, .i128));
-    try testing.expectEqual(Class.byval, classifyType(&store, .f32));
-    try testing.expectEqual(Class.byval, classifyType(&store, .f64));
-    try testing.expectEqual(Class.byval, classifyType(&store, .dec));
-    try testing.expectEqual(Class.byval, classifyType(&store, .opaque_ptr));
-    try testing.expectEqual(Class.byval, classifyType(&store, .u8x16));
+    try testing.expectEqual(Class.byval, try classifyType(testing.allocator, &store, .i32));
+    try testing.expectEqual(Class.byval, try classifyType(testing.allocator, &store, .u8));
+    try testing.expectEqual(Class.byval, try classifyType(testing.allocator, &store, .i128));
+    try testing.expectEqual(Class.byval, try classifyType(testing.allocator, &store, .f32));
+    try testing.expectEqual(Class.byval, try classifyType(testing.allocator, &store, .f64));
+    try testing.expectEqual(Class.byval, try classifyType(testing.allocator, &store, .dec));
+    try testing.expectEqual(Class.byval, try classifyType(testing.allocator, &store, .opaque_ptr));
+    try testing.expectEqual(Class.byval, try classifyType(testing.allocator, &store, .u8x16));
 }
 
 test "aarch64 classify: vector aggregates" {
@@ -247,27 +260,27 @@ test "aarch64 classify: vector aggregates" {
     // A single-vector aggregate is a transparent Q-register value, including
     // through a transparent single-variant tag wrapper.
     const one = try testStruct(&store, &.{.u16x8});
-    try testing.expectEqual(Class{ .vector = .u16x8 }, classifyType(&store, one));
+    try testing.expectEqual(Class{ .vector = .u16x8 }, try classifyType(testing.allocator, &store, one));
 
     const wrapped = try store.putTagUnion(&.{.i16x8});
-    try testing.expectEqual(Class.byval, classifyType(&store, wrapped));
+    try testing.expectEqual(Class.byval, try classifyType(testing.allocator, &store, wrapped));
 
     const wrapped_one = try testStruct(&store, &.{wrapped});
-    try testing.expectEqual(Class{ .vector = .i16x8 }, classifyType(&store, wrapped_one));
+    try testing.expectEqual(Class{ .vector = .i16x8 }, try classifyType(testing.allocator, &store, wrapped_one));
 
     // Aggregates with two or more vector members are memory-class at the host
     // boundary, regardless of nesting or lane kinds.
     const nested_pair = try testStruct(&store, &.{ one, one });
-    try testing.expectEqual(Class.memory, classifyType(&store, nested_pair));
+    try testing.expectEqual(Class.memory, try classifyType(testing.allocator, &store, nested_pair));
 
     const four = try testStruct(&store, &.{ .i32x4, .i32x4, .i32x4, .i32x4 });
-    try testing.expectEqual(Class.memory, classifyType(&store, four));
+    try testing.expectEqual(Class.memory, try classifyType(testing.allocator, &store, four));
 
     const mixed = try testStruct(&store, &.{ .u8x16, .i8x16 });
-    try testing.expectEqual(Class.memory, classifyType(&store, mixed));
+    try testing.expectEqual(Class.memory, try classifyType(testing.allocator, &store, mixed));
 
     const wrapped_pair = try testStruct(&store, &.{ wrapped, .u8x16 });
-    try testing.expectEqual(Class.memory, classifyType(&store, wrapped_pair));
+    try testing.expectEqual(Class.memory, try classifyType(testing.allocator, &store, wrapped_pair));
 }
 
 test "aarch64 classify: three-word aggregates go to memory" {
@@ -275,9 +288,9 @@ test "aarch64 classify: three-word aggregates go to memory" {
     defer store.deinit();
 
     // RocStr and RocList are 24 bytes (> 16), so they pass in memory.
-    try testing.expectEqual(Class.memory, classifyType(&store, .str));
+    try testing.expectEqual(Class.memory, try classifyType(testing.allocator, &store, .str));
     const list_idx = try store.insertLayout(Layout.list(.u8));
-    try testing.expectEqual(Class.memory, classifyType(&store, list_idx));
+    try testing.expectEqual(Class.memory, try classifyType(testing.allocator, &store, list_idx));
 }
 
 test "aarch64 classify: box is a single pointer" {
@@ -285,7 +298,7 @@ test "aarch64 classify: box is a single pointer" {
     defer store.deinit();
 
     const box_idx = try store.insertLayout(Layout.box(.u8));
-    try testing.expectEqual(Class.byval, classifyType(&store, box_idx));
+    try testing.expectEqual(Class.byval, try classifyType(testing.allocator, &store, box_idx));
 }
 
 test "aarch64 classify: small integer aggregates use registers" {
@@ -294,15 +307,15 @@ test "aarch64 classify: small integer aggregates use registers" {
 
     // Plant { x: i32, type: u32 } is 8 bytes -> one general-purpose register.
     const plant = try testStruct(&store, &.{ .i32, .u32 });
-    try testing.expectEqual(Class.integer, classifyType(&store, plant));
+    try testing.expectEqual(Class.integer, try classifyType(testing.allocator, &store, plant));
 
     // 16 bytes -> two general-purpose registers.
     const two_words = try testStruct(&store, &.{ .i64, .i64 });
-    try testing.expectEqual(Class.double_integer, classifyType(&store, two_words));
+    try testing.expectEqual(Class.double_integer, try classifyType(testing.allocator, &store, two_words));
 
     // 24 bytes -> memory.
     const three_words = try testStruct(&store, &.{ .i64, .i64, .i64 });
-    try testing.expectEqual(Class.memory, classifyType(&store, three_words));
+    try testing.expectEqual(Class.memory, try classifyType(testing.allocator, &store, three_words));
 }
 
 test "aarch64 classify: homogeneous float aggregates" {
@@ -310,21 +323,21 @@ test "aarch64 classify: homogeneous float aggregates" {
     defer store.deinit();
 
     const one_f64 = try testStruct(&store, &.{.f64});
-    try testing.expectEqual(Class{ .float_array = .{ .count = 1, .elem_bits = 64 } }, classifyType(&store, one_f64));
+    try testing.expectEqual(Class{ .float_array = .{ .count = 1, .elem_bits = 64 } }, try classifyType(testing.allocator, &store, one_f64));
 
     const two_f32 = try testStruct(&store, &.{ .f32, .f32 });
-    try testing.expectEqual(Class{ .float_array = .{ .count = 2, .elem_bits = 32 } }, classifyType(&store, two_f32));
+    try testing.expectEqual(Class{ .float_array = .{ .count = 2, .elem_bits = 32 } }, try classifyType(testing.allocator, &store, two_f32));
 
     const four_f64 = try testStruct(&store, &.{ .f64, .f64, .f64, .f64 });
-    try testing.expectEqual(Class{ .float_array = .{ .count = 4, .elem_bits = 64 } }, classifyType(&store, four_f64));
+    try testing.expectEqual(Class{ .float_array = .{ .count = 4, .elem_bits = 64 } }, try classifyType(testing.allocator, &store, four_f64));
 
     const wrapped_f64 = try store.putTagUnion(&.{.f64});
     const wrapped_pair = try testStruct(&store, &.{ wrapped_f64, .f64 });
-    try testing.expectEqual(Class{ .float_array = .{ .count = 2, .elem_bits = 64 } }, classifyType(&store, wrapped_pair));
+    try testing.expectEqual(Class{ .float_array = .{ .count = 2, .elem_bits = 64 } }, try classifyType(testing.allocator, &store, wrapped_pair));
 
     // Five floats exceeds the HFA limit (and is 40 bytes) -> memory.
     const five_f64 = try testStruct(&store, &.{ .f64, .f64, .f64, .f64, .f64 });
-    try testing.expectEqual(Class.memory, classifyType(&store, five_f64));
+    try testing.expectEqual(Class.memory, try classifyType(testing.allocator, &store, five_f64));
 }
 
 test "aarch64 classify: mixed and Dec aggregates are not HFAs" {
@@ -333,15 +346,15 @@ test "aarch64 classify: mixed and Dec aggregates are not HFAs" {
 
     // A float mixed with an int is not homogeneous: 8 bytes -> one register.
     const mixed = try testStruct(&store, &.{ .f32, .i32 });
-    try testing.expectEqual(Class.integer, classifyType(&store, mixed));
+    try testing.expectEqual(Class.integer, try classifyType(testing.allocator, &store, mixed));
 
     // Mismatched float widths are not homogeneous: 16 bytes -> two registers.
     const mismatched = try testStruct(&store, &.{ .f32, .f64 });
-    try testing.expectEqual(Class.double_integer, classifyType(&store, mismatched));
+    try testing.expectEqual(Class.double_integer, try classifyType(testing.allocator, &store, mismatched));
 
     // Dec is i128-backed, so a struct of one Dec is an integer aggregate (16 bytes).
     const one_dec = try testStruct(&store, &.{.dec});
-    try testing.expectEqual(Class.double_integer, classifyType(&store, one_dec));
+    try testing.expectEqual(Class.double_integer, try classifyType(testing.allocator, &store, one_dec));
 }
 
 test "aarch64 classify: unnamed padding makes an aggregate non-HFA" {
@@ -356,11 +369,11 @@ test "aarch64 classify: unnamed padding makes an aggregate non-HFA" {
         .{ .index = 1, .layout = .f32 },
         .{ .index = 2, .layout = .f32, .is_padding = true },
     });
-    try testing.expectEqual(Class.double_integer, classifyType(&store, padded));
+    try testing.expectEqual(Class.double_integer, try classifyType(testing.allocator, &store, padded));
 
     // Contrast: with all three as real float members it IS a 3×f32 HFA.
     const hfa = try testStruct(&store, &.{ .f32, .f32, .f32 });
-    try testing.expectEqual(Class{ .float_array = .{ .count = 3, .elem_bits = 32 } }, classifyType(&store, hfa));
+    try testing.expectEqual(Class{ .float_array = .{ .count = 3, .elem_bits = 32 } }, try classifyType(testing.allocator, &store, hfa));
 }
 
 test "aarch64 classify: Bool (a one-byte enum) uses one register" {
@@ -369,5 +382,5 @@ test "aarch64 classify: Bool (a one-byte enum) uses one register" {
 
     // Roc models Bool as a no-payload two-variant tag union, laid out as a single byte, so
     // it classifies as a one-register integer aggregate (ABI-equivalent to a byval u8).
-    try testing.expectEqual(Class.integer, classifyType(&store, .bool));
+    try testing.expectEqual(Class.integer, try classifyType(testing.allocator, &store, .bool));
 }

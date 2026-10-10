@@ -73,12 +73,12 @@ match person {
 								(p-assign (ident "userName"))))
 						(s-let
 							(p-assign (ident "#interp_1"))
-							(e-dispatch-call (method "to_str") (constraint-fn-var 230)
+							(e-method-call (method "to_str")
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "userAge"))))
 								(args)))
-						(e-interpolation (constraint-fn-var 249) (dispatcher-var 20)
+						(e-interpolation
 							(first
 								(e-literal (string "User ")))
 							(parts
@@ -91,5 +91,5 @@ match person {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Str"))
+(expr (type "_a"))
 ~~~

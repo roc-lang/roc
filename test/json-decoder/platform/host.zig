@@ -44,6 +44,12 @@ fn classifyHostOs(os: std.Target.Os.Tag) HostOs {
         .openbsd,
         .netbsd,
         .@"3ds",
+        .wiiu,
+        .@"switch",
+        .gba,
+        .psx,
+        .tios,
+        .ashetos,
         .ps3,
         .ps4,
         .ps5,
@@ -160,7 +166,7 @@ fn panicImpl(msg: []const u8, addr: ?usize) noreturn {
     abortProcess();
 }
 
-fn hostAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn hostAlloc(length: usize, alignment: usize) callconv(.c) *anyopaque {
     _ = length;
     _ = alignment;
     rawWriteStderr("roc_alloc called\n");
@@ -174,7 +180,7 @@ fn hostDealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
     abortProcess();
 }
 
-fn hostRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn hostRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     _ = ptr;
     _ = new_length;
     _ = alignment;
@@ -358,7 +364,7 @@ fn formatU64(value: u64, buffer: []u8) []const u8 {
 
 const linux = struct {
     const os = std.os.linux;
-    const EINTR = @intFromEnum(os.E.INTR);
+    const EINTR = @backingInt(os.E.INTR);
 
     fn rawRead(fd: c_int, buffer: []u8) HostError!usize {
         while (true) {
@@ -387,7 +393,7 @@ const linux = struct {
     }
 
     fn errno(result: usize) usize {
-        return @intFromEnum(os.errno(result));
+        return @backingInt(os.errno(result));
     }
 };
 

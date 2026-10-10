@@ -8,7 +8,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const Allocator = std.mem.Allocator;
-const debug_guards = builtin.mode == .Debug;
+const debug_guards = builtin.mode == .debug;
 
 /// Growable list wrapper that checks stale borrows in Debug and erases to `std.ArrayList` otherwise.
 pub fn List(comptime T: type, comptime list_name: []const u8) type {
@@ -136,11 +136,6 @@ pub fn List(comptime T: type, comptime list_name: []const u8) type {
             return self.__guarded_backing.toOwnedSlice(allocator);
         }
 
-        pub fn toOwnedSliceAssert(self: *Self) []T {
-            self.invalidateIfElementsCouldBeBorrowed();
-            return self.__guarded_backing.toOwnedSliceAssert();
-        }
-
         pub fn get(self: *const Self, index: usize) T {
             return self.__guarded_backing.items[index];
         }
@@ -200,26 +195,9 @@ pub fn List(comptime T: type, comptime list_name: []const u8) type {
             }
         }
 
-        pub fn borrowPtrConst(self: *const Self, index: usize) BorrowPtrConst(T, list_name) {
-            assertIndexInBounds(list_name, self.__guarded_backing.items.len, index);
-            if (debug_guards) {
-                return .{
-                    .list = self,
-                    .index = index,
-                    .generation = self.currentGeneration(),
-                };
-            } else {
-                return &self.__guarded_backing.items[index];
-            }
-        }
-
         pub fn dupeSpan(self: *const Self, allocator: Allocator, start: usize, span_len: usize) Allocator.Error![]T {
             assertRangeInBounds(list_name, self.__guarded_backing.items.len, start, span_len);
             return allocator.dupe(T, self.__guarded_backing.items[start..][0..span_len]);
-        }
-
-        pub fn markLen(self: *const Self) usize {
-            return self.__guarded_backing.items.len;
         }
 
         pub fn restoreLen(self: *Self, mark: usize) void {
@@ -232,14 +210,6 @@ pub fn List(comptime T: type, comptime list_name: []const u8) type {
 
         pub fn unsafeRawItemsMutForStore(self: *Self) []T {
             return self.__guarded_backing.items;
-        }
-
-        pub fn unsafeBackingForClone(self: *const Self) *const std.ArrayList(T) {
-            return &self.__guarded_backing;
-        }
-
-        pub fn unsafeBackingForStore(self: *Self) *std.ArrayList(T) {
-            return &self.__guarded_backing;
         }
 
         fn currentGeneration(self: *const Self) u64 {
@@ -409,11 +379,6 @@ pub fn BorrowPtr(comptime T: type, comptime list_name: []const u8) type {
         pub fn set(self: Self, value: T) void {
             self.assertCurrent("pointer set");
             self.list.__guarded_backing.items[self.index] = value;
-        }
-
-        pub fn ptrImmediate(self: Self) *T {
-            self.assertCurrent("immediate pointer access");
-            return &self.list.__guarded_backing.items[self.index];
         }
 
         fn assertCurrent(self: Self, operation: []const u8) void {

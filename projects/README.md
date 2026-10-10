@@ -72,34 +72,9 @@ batches and of each other:
 - [small/llvm-conversion-op-explicit-dispatch.md](small/llvm-conversion-op-explicit-dispatch.md)—
   end the LLVM backend's `@tagName`-substring dispatch for numeric
   conversion ops (the one backend exempt from switch exhaustiveness).
-- [small/bundle-unbundle-shared-path-rules.md](small/bundle-unbundle-shared-path-rules.md)—
-  one archive path-safety validator; the writer's and reader's
-  copies already disagree.
-- [small/nodestore-serde-enrollment.md](small/nodestore-serde-enrollment.md)—
-  comptime-drive NodeStore's eight hand-enumerated field lists;
-  derive the parse-side node counts.
-- [small/frontend-name-and-sentinel-single-sourcing.md](small/frontend-name-and-sentinel-single-sourcing.md)—
-  six frontend seams: duplicate NumKind map, hardcoded Bool
-  discriminant, method-name literals, hand-written builtin-name maps,
-  five row comparators, default-cased lowering switches.
-- [small/syntax-fact-single-sourcing.md](small/syntax-fact-single-sourcing.md)—
-  keyword spellings (tokenizer vs ~25 fmt literals), the
-  numeric-suffix bidirectional pair, the twice-scanned number
-  grammar.
-- [small/severity-and-report-collection.md](small/severity-and-report-collection.md)—
-  `Severity.isError`/`toLspSeverity` helpers; snapshot tool and
-  playground call the compiler's report-collection loop instead of
-  copying it.
-- [small/lsp-and-docs-truth-reuse.md](small/lsp-and-docs-truth-reuse.md)—
-  the forked doc-comment gatherer (LSP and docs already disagree on
-  `###`), three line/column implementations, the positional
-  semantic-token legend, the hand-copied completion roster.
 - [small/build-and-ci-single-lists.md](small/build-and-ci-single-lists.md)—
-  one module inventory (seven restatements plus minici's copy, with
-  existing test-coverage divergence), one CI gate list, one Zig pin.
-- [small/cli-declarative-flags.md](small/cli-declarative-flags.md)—
-  each subcommand's struct/parser/help triple becomes one table;
-  target rosters and defaults render from their enums.
+  the nightly and Nix CI legs name MiniCI jobs by hand instead of
+  invoking MiniCI's own gate list.
 
 A fourth batch (2026-07-20) targets operational robustness and
 build-throughput gaps rather than sources of truth. The projects are

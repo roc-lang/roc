@@ -85,7 +85,10 @@ NO CHANGE
 							(p-assign (ident "x"))))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-runtime-error (tag "erroneous_value_expr")
+			(e-lookup-local
+				(p-assign (ident "r")))
+			(e-num (value "1")))))
 ~~~
 # TYPES
 ~~~clojure

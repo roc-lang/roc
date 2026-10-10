@@ -12,7 +12,7 @@ a={
 ~~~
 # EXPECTED
 EMPTY TUPLE NOT ALLOWED - fuzz_crash_101.md:2:8:2:10
-TYPE MISMATCH - fuzz_crash_101.md:2:3:2:13
+TYPE MISMATCH - fuzz_crash_101.md:2:3:2:7
 # PROBLEMS
 ~~~clojure
 (reports
@@ -31,18 +31,18 @@ TYPE MISMATCH - fuzz_crash_101.md:2:3:2:13
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 2 3) (end 2 13))
+		(region (start 2 3) (end 2 7))
 		(headline
 			(reflow "This expression is used in an unexpected way."))
 		(document
-			(source-region (file "fuzz_crash_101.md") (start 2 3) (end 2 13) (annotation error) (line-text "r=|()|(()())"))
+			(source-region (file "fuzz_crash_101.md") (start 2 3) (end 2 7) (annotation error) (line-text "r=|()|(()())"))
 			(line-break)
 			(reflow "It has the type:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "() -> Error")
+			(text "() -> _ret")
 			(annotation-end)
 			(line-break)
 			(line-break)

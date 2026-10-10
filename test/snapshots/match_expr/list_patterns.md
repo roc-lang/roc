@@ -124,7 +124,7 @@ EndOfFile,
 ~~~roc
 match numbers {
 	[] => acc
-	[first, .. as rest] => 0
+	[first, .. as rest] => 0 # invalid rest pattern should error
 }
 ~~~
 # CANONICALIZE
@@ -154,5 +154,5 @@ match numbers {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "Dec"))
 ~~~

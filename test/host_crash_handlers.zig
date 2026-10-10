@@ -53,7 +53,7 @@ fn handleRocStackOverflow() noreturn {
 /// Callback for access violation in a Roc program.
 fn handleRocAccessViolation(fault_addr: usize, _: base.signal_handler.AccessViolationContext) noreturn {
     var addr_buf: [18]u8 = undefined;
-    const addr_str = base.signal_handler.formatHex(fault_addr, &addr_buf);
+    const addr_str = base.memory_fault.formatHex(fault_addr, &addr_buf);
     const headline = "\nSegmentation fault (SIGSEGV) in this Roc program.\nFault address: ";
 
     if (comptime builtin.os.tag == .windows) {

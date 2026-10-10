@@ -38,36 +38,36 @@ platform ""
 	provides { "roc_make_glue": make_glue_for_host }
 	targets: {}
 
-import Types exposing [Types]
-import File exposing [File]
-import TypeId exposing [TypeId]
-import AbiFieldLayout exposing [AbiFieldLayout]
-import AbiLayout exposing [AbiLayout]
-import AbiLayoutDetails exposing [AbiLayoutDetails]
-import AbiRecordLayout exposing [AbiRecordLayout]
-import AbiTagLayout exposing [AbiTagLayout]
-import AbiTagUnionLayout exposing [AbiTagUnionLayout]
-import AbiWidth exposing [AbiWidth]
-import ArgShape exposing [ArgShape]
-import CallableSignature exposing [CallableSignature]
-import ModuleTypeInfo exposing [ModuleTypeInfo]
-import FunctionInfo exposing [FunctionInfo]
-import HostedFunctionInfo exposing [HostedFunctionInfo]
-import GlueInput exposing [GlueInput]
-import HostRcPlan exposing [HostRcPlan]
-import RecordFieldInfo exposing [RecordFieldInfo]
-import FunctionSignature exposing [FunctionSignature]
-import ProvidedExport exposing [ProvidedExport]
-import RecordField exposing [RecordField]
-import RecordRepr exposing [RecordRepr]
-import TagUnionRepr exposing [TagUnionRepr]
-import TagVariant exposing [TagVariant]
-import TypeRepr exposing [TypeRepr]
-import ProvidesEntry exposing [ProvidesEntry]
-import TypeInfo exposing [TypeInfo]
-import TypeTable exposing [TypeTable]
-import TypeNamePlan exposing [TypeNamePlan]
-import RocName exposing [RocName]
+import Types
+import File
+import TypeId
+import AbiFieldLayout
+import AbiLayout
+import AbiLayoutDetails
+import AbiRecordLayout
+import AbiTagLayout
+import AbiTagUnionLayout
+import AbiWidth
+import ArgShape
+import CallableSignature
+import ModuleTypeInfo
+import FunctionInfo
+import HostedFunctionInfo
+import GlueInput
+import HostRcPlan
+import RecordFieldInfo
+import FunctionSignature
+import ProvidedExport
+import RecordField
+import RecordRepr
+import TagUnionRepr
+import TagVariant
+import TypeRepr
+import ProvidesEntry
+import TypeInfo
+import TypeTable
+import TypeNamePlan
+import RocName
 
 make_glue_for_host : List(Types) -> Try(List(File), Str)
 make_glue_for_host = |types_list| make_glue(types_list)

@@ -9,12 +9,12 @@ pub const FunctionIndex = enum(u32) {
 
     /// Return the raw wasm function index.
     pub fn raw(self: FunctionIndex) u32 {
-        return @intFromEnum(self);
+        return @backingInt(self);
     }
 
     /// Wrap a raw wasm function index.
     pub fn fromRaw(value: u32) FunctionIndex {
-        return @enumFromInt(value);
+        return @fromBackingInt(@intCast(value));
     }
 };
 
@@ -24,12 +24,12 @@ pub const LocalFunctionIndex = enum(u32) {
 
     /// Return the raw function-section-local index.
     pub fn raw(self: LocalFunctionIndex) u32 {
-        return @intFromEnum(self);
+        return @backingInt(self);
     }
 
     /// Wrap a raw function-section-local index.
     pub fn fromRaw(value: u32) LocalFunctionIndex {
-        return @enumFromInt(value);
+        return @fromBackingInt(@intCast(value));
     }
 };
 
@@ -39,12 +39,12 @@ pub const SymbolIndex = enum(u32) {
 
     /// Return the raw linking symbol index.
     pub fn raw(self: SymbolIndex) u32 {
-        return @intFromEnum(self);
+        return @backingInt(self);
     }
 
     /// Wrap a raw linking symbol index.
     pub fn fromRaw(value: u32) SymbolIndex {
-        return @enumFromInt(value);
+        return @fromBackingInt(@intCast(value));
     }
 };
 

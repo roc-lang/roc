@@ -6,6 +6,7 @@ const trmc_tests = @import("eval_trmc_tests.zig");
 const closure_recursion_tests = @import("eval_closure_recursion_tests.zig");
 const comptime_finalization_tests = @import("eval_comptime_finalization_tests.zig");
 const crypto_tests = @import("eval_crypto_tests.zig");
+const deep_nesting_tests = @import("eval_deep_nesting_tests.zig");
 const highest_lowest_tests = @import("eval_highest_lowest_tests.zig");
 const issue_tests = @import("eval_issue_tests.zig");
 const interpreter_style_tests = @import("eval_interpreter_style_tests.zig");
@@ -20,6 +21,42 @@ const simd_tests = @import("eval_simd_tests.zig");
 ///
 /// Every value-producing test is observed solely through `Str.inspect(...)`.
 const core_tests = [_]TestCase{
+    .{
+        .name = "issue 12029: a capturing lambda called in tail position replaces its caller's frame",
+        .source =
+        \\{
+        \\    count_down = |n, label| if n == 0 Str.count_utf8_bytes(label) else label |> (|kept| count_down(n - 1, Str.concat(kept, "")))
+        \\    count_down(50_000.U64, "a fairly long label that lives on the heap")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "42" },
+    },
+    .{
+        .name = "issue 12029: tail calls between functions run in constant stack",
+        .source_kind = .module,
+        .source =
+        \\is_even : U64 -> Bool
+        \\is_even = |n| if n == 0 True else is_odd(n - 1)
+        \\is_odd : U64 -> Bool
+        \\is_odd = |n| if n == 0 False else is_even(n - 1)
+        \\through_capturing_lambda = |n| if n == 0 0 else 0 |> (|_| through_capturing_lambda(n - 1))
+        \\ping : U64, List(U64), Str -> U64
+        \\ping = |n, acc, label| if n == 0 List.len(acc) + Str.count_utf8_bytes(label) else pong(n - 1, List.append(acc, n), label)
+        \\pong : U64, List(U64), Str -> U64
+        \\pong = |n, acc, label| if n == 0 List.len(acc) + Str.count_utf8_bytes(label) else ping(n - 1, acc, Str.concat(label, ""))
+        \\Big : { a : U64, b : U64, c : U64, d : Str }
+        \\big_a : U64, Big -> Big
+        \\big_a = |n, acc| if n == 0 acc else big_b(n - 1, { ..acc, a: acc.a + 1 })
+        \\big_b : U64, Big -> Big
+        \\big_b = |n, acc| if n == 0 acc else big_a(n - 1, { ..acc, b: acc.b + 2 })
+        \\main = {
+        \\    var $scale = 20_000.U64
+        \\    big = big_a($scale * 2, { a: 0, b: 0, c: 7, d: "kept" })
+        \\    is_even($scale * 5) and (through_capturing_lambda($scale * 5) == 0) and (ping($scale * 2, [], "a fairly long label that lives on the heap") == 20_042) and (big.a == 20_000) and (big.b == 40_000) and (big.d == "kept")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
     .{
         .name = "issue 11271: polymorphic record constructions materialize all defaults",
         .source_kind = .module,
@@ -1331,8 +1368,8 @@ const core_tests = [_]TestCase{
     .{ .name = "problem: int minus dec type mismatch", .source = "1.I64 - 2.0.Dec", .expected = .{ .problem = {} } },
     .{ .name = "problem: int times dec type mismatch", .source = "1.I64 * 2.0.Dec", .expected = .{ .problem = {} } },
     .{ .name = "problem: int div dec type mismatch", .source = "1.I64 / 2.0.Dec", .expected = .{ .problem = {} } },
-    .{ .name = "problem: F32.is_eq is intentionally unavailable", .source = "F32.is_eq(1.0.F32, 1.0.F32)", .expected = .{ .problem = {} } },
-    .{ .name = "problem: F64.is_eq is intentionally unavailable", .source = "F64.is_eq(1.0.F64, 1.0.F64)", .expected = .{ .problem = {} } },
+    .{ .name = "inspect: F32 opts in to qualified is_eq dispatch", .source = "F32.is_eq(1.0.F32, 1.0.F32)", .expected = .{ .inspect_str = "True" } },
+    .{ .name = "inspect: F64 opts in to qualified is_eq dispatch", .source = "F64.is_eq(1.0.F64, 1.0.F64)", .expected = .{ .inspect_str = "True" } },
     .{ .name = "inspect: F32 opts in to receiver is_eq dispatch", .source = "1.0.F32.is_eq(1.0.F32)", .expected = .{ .inspect_str = "True" } },
     .{
         .name = "pipe inserts its lhs and accepts optional direct empty parens",
@@ -2514,10 +2551,8 @@ const core_tests = [_]TestCase{
         \\Url := [Url(Str)].{
         \\    from_quote : Str -> Try(Url, [BadQuotedBytes(Str)])
         \\    from_quote = |str| Ok(Url(str))
-        \\    from_interpolation : Str, Iter((Str, Str)) -> Url
-        \\    from_interpolation = |first, rest| {
-        \\        Url.Url(rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment)))
-        \\    }
+        \\    from_interpolation : List(Str) -> Try((List(Str) -> Url), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |segments| Str.from_interpolation(segments).map_ok(|assemble| |values| Url.Url(assemble(values)))
         \\    inner : Url -> Str
         \\    inner = |Url.Url(str)| str
         \\}
@@ -2532,14 +2567,31 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "Url(\"https://example.com\")" },
     },
     .{
+        .name = "inspect: from_interpolation receives the literal segments and assembles the values",
+        .source_kind = .module,
+        .source =
+        \\Shape := [Shape(U64, List(Str))].{
+        \\    from_interpolation : List(Str) -> Try((List(Str) -> Shape), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |segments| Ok(|values| Shape.Shape(List.len(segments), values))
+        \\}
+        \\
+        \\main = {
+        \\    a = "one"
+        \\    b = "two"
+        \\    shape : Shape
+        \\    shape = "<${a}|${b}>"
+        \\    shape
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Shape(3, [\"one\", \"two\"])" },
+    },
+    .{
         .name = "inspect: generalized interpolation supports custom and builtin specializations",
         .source_kind = .module,
         .source =
         \\Wrapped := [Wrapped(Str)].{
-        \\    from_interpolation : Str, Iter((Str, Str)) -> Wrapped
-        \\    from_interpolation = |first, rest| {
-        \\        Wrapped.Wrapped(rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment)))
-        \\    }
+        \\    from_interpolation : List(Str) -> Try((List(Str) -> Wrapped), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |segments| Str.from_interpolation(segments).map_ok(|assemble| |values| Wrapped.Wrapped(assemble(values)))
         \\}
         \\
         \\wrapped_identity : Wrapped -> Wrapped
@@ -2558,35 +2610,111 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(Wrapped(\"hello world\"), \"hello world\")" },
     },
     .{
-        .name = "inspect: Try interpolation forwards to custom result type",
+        .name = "inspect: from_interpolation generic in its item counts the values",
         .source_kind = .module,
         .source =
-        \\Url := [Url(Str)].{
-        \\    from_interpolation : Str, Iter((Str, Str)) -> Try(Url, [InvalidUrl])
-        \\    from_interpolation = |first, rest| Ok(Url.Url(rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment))))
+        \\Count := [Count(U64)].{
+        \\    from_interpolation : List(Str) -> Try((List(item) -> Count), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |_segments| Ok(|values| Count.Count(List.len(values)))
         \\}
         \\
-        \\main = {
-        \\    domain = "example"
-        \\    url : Try(Url, [InvalidUrl])
-        \\    url = "https://${domain}.com"
-        \\    url
-        \\}
+        \\around = |f, x| f("a${x}b${x}c")
+        \\
+        \\count_identity : Count -> Count
+        \\count_identity = |c| c
+        \\
+        \\main = around(count_identity, 3.I64)
         ,
-        .expected = .{ .inspect_str = "Ok(Url(\"https://example.com\"))" },
+        .expected = .{ .inspect_str = "Count(2)" },
     },
     .{
-        .name = "problem: nested Try interpolation does not recursively satisfy forwarding",
+        .name = "inspect: from_interpolation generic in its item ignores the values",
+        .source_kind = .module,
+        .source =
+        \\Count := [Count(Str)].{
+        \\    from_interpolation : List(Str) -> Try((List(item) -> Count), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |_segments| Ok(|_| Count.Count("none"))
+        \\}
+        \\
+        \\main = {
+        \\    x = 3.I64
+        \\    c : Count
+        \\    c = "a${x}b${x}c"
+        \\    c
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Count(\"none\")" },
+    },
+    .{
+        .name = "inspect: from_interpolation generic in its item inspects the values",
+        .source_kind = .module,
+        .source =
+        \\Count := [Count(Str)].{
+        \\    from_interpolation : List(Str) -> Try((List(item) -> Count), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |_segments| Ok(|values| Count.Count(Str.inspect(values)))
+        \\}
+        \\
+        \\main = {
+        \\    x = 3.I64
+        \\    c : Count
+        \\    c = "a${x}b${x}c"
+        \\    c
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Count(\"[3, 3]\")" },
+    },
+    .{
+        .name = "inspect: from_interpolation generic in its item ignores the values (specialize=no)",
+        .source_kind = .module,
+        .source =
+        \\Count := [Count(Str)].{
+        \\    from_interpolation : List(Str) -> Try((List(item) -> Count), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |_segments| Ok(|_| Count.Count("none"))
+        \\}
+        \\
+        \\main = {
+        \\    x = 3.I64
+        \\    c : Count
+        \\    c = "a${x}b${x}c"
+        \\    c
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Count(\"none\")" },
+        .specialization_strategy = .boxy,
+        .skip = .{ .wasm = true },
+    },
+    .{
+        .name = "inspect: from_interpolation generic in its item inspects the values (specialize=no)",
+        .source_kind = .module,
+        .source =
+        \\Count := [Count(Str)].{
+        \\    from_interpolation : List(Str) -> Try((List(item) -> Count), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |_segments| Ok(|values| Count.Count(Str.inspect(values)))
+        \\}
+        \\
+        \\main = {
+        \\    x = 3.I64
+        \\    c : Count
+        \\    c = "a${x}b${x}c"
+        \\    c
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Count(\"[3, 3]\")" },
+        .specialization_strategy = .boxy,
+        .skip = .{ .wasm = true },
+    },
+    .{
+        .name = "problem: Try has no from_interpolation for an interpolation to target",
         .source_kind = .module,
         .source =
         \\Url := [Url(Str)].{
-        \\    from_interpolation : Str, Iter((Str, Str)) -> Try(Url, [InvalidUrl])
-        \\    from_interpolation = |first, rest| Ok(Url.Url(rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment))))
+        \\    from_interpolation : List(Str) -> Try((List(Str) -> Url), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |segments| Str.from_interpolation(segments).map_ok(|assemble| |values| Url.Url(assemble(values)))
         \\}
         \\
         \\main = {
         \\    domain = "example"
-        \\    url : Try(Try(Url, [InvalidUrl]), [Outer])
+        \\    url : Try(Url, [InvalidInterpolation(Str)])
         \\    url = "https://${domain}.com"
         \\    url
         \\}
@@ -2594,12 +2722,48 @@ const core_tests = [_]TestCase{
         .expected = .{ .problem = {} },
     },
     .{
-        .name = "inspect: suffixed interpolation accepts custom return type",
+        .name = "problem: from_interpolation must return its assembler wrapped in Try",
         .source_kind = .module,
         .source =
         \\Url := [Url(Str)].{
-        \\    from_interpolation : Str, Iter((Str, Str)) -> Try(Url, [InvalidUrl])
-        \\    from_interpolation = |first, rest| Ok(Url.Url(rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment))))
+        \\    from_interpolation : List(Str) -> (List(Str) -> Url)
+        \\    from_interpolation = |_segments| |values| Url.Url(Str.join_with(values, ""))
+        \\}
+        \\
+        \\main = {
+        \\    domain = "example"
+        \\    url : Url
+        \\    url = "https://${domain}.com"
+        \\    url
+        \\}
+        ,
+        .expected = .{ .problem = {} },
+    },
+    .{
+        .name = "problem: from_interpolation must use the InvalidInterpolation error",
+        .source_kind = .module,
+        .source =
+        \\Url := [Url(Str)].{
+        \\    from_interpolation : List(Str) -> Try((List(Str) -> Url), [InvalidUrl])
+        \\    from_interpolation = |_segments| Ok(|values| Url.Url(Str.join_with(values, "")))
+        \\}
+        \\
+        \\main = {
+        \\    domain = "example"
+        \\    url : Url
+        \\    url = "https://${domain}.com"
+        \\    url
+        \\}
+        ,
+        .expected = .{ .problem = {} },
+    },
+    .{
+        .name = "inspect: suffixed interpolation is the value its custom conversion assembles",
+        .source_kind = .module,
+        .source =
+        \\Url := [Url(Str)].{
+        \\    from_interpolation : List(Str) -> Try((List(Str) -> Url), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |segments| Str.from_interpolation(segments).map_ok(|assemble| |values| Url.Url(assemble(values)))
         \\}
         \\
         \\main = {
@@ -2607,7 +2771,7 @@ const core_tests = [_]TestCase{
         \\    "https://${domain}.com".Url
         \\}
         ,
-        .expected = .{ .inspect_str = "Ok(Url(\"https://example.com\"))" },
+        .expected = .{ .inspect_str = "Url(\"https://example.com\")" },
     },
     .{
         .name = "inspect: interpolation with adjacent and boundary interpolations",
@@ -2634,6 +2798,45 @@ const core_tests = [_]TestCase{
         \\force = |s| s
         \\
         \\main = force("nope")
+        ,
+        .expected = .problem,
+    },
+    .{
+        .name = "custom from_interpolation Err is a compile-time problem",
+        .source_kind = .module,
+        .source =
+        \\Strict := [Strict].{
+        \\    from_interpolation : List(Str) -> Try((List(Str) -> Strict), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |_segments| Err(InvalidInterpolation("Strict rejects every interpolation"))
+        \\}
+        \\
+        \\force : Strict -> Strict
+        \\force = |s| s
+        \\
+        \\name = "Roc"
+        \\
+        \\main = force("hello ${name}")
+        ,
+        .expected = .problem,
+    },
+    .{
+        .name = "custom from_interpolation rejects its literal segments at compile time inside a function",
+        .source_kind = .module,
+        .source =
+        \\Html := [Html(Str)].{
+        \\    from_interpolation : List(Str) -> Try((List(Str) -> Html), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |segments|
+        \\        if segments.any(|segment| segment.contains("<script")) {
+        \\            Err(InvalidInterpolation("Html literals can't contain script tags"))
+        \\        } else {
+        \\            Str.from_interpolation(segments).map_ok(|assemble| |values| Html.Html(assemble(values)))
+        \\        }
+        \\}
+        \\
+        \\render : Str -> Html
+        \\render = |body| "<script>${body}</script>"
+        \\
+        \\main = render("alert(1)")
         ,
         .expected = .problem,
     },
@@ -5692,6 +5895,201 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "12" },
     },
+    // A method bound to an exact procedure alias of a where-constrained
+    // generic procedure: the dispatch edge instantiates the alias's scheme, and
+    // the target's own evidence follows from its instantiated callable.
+    .{
+        .name = "where-clause dispatch through a method alias of a constrained generic procedure",
+        .source_kind = .module,
+        .source =
+        \\gen_range : num, num -> Iter(num)
+        \\    where [num.is_lt : num, num -> Bool, num.succ : num -> num]
+        \\gen_range = |lo, hi| Iter.custom(lo, Unknown, |c| if c < hi Ok((c, c.succ())) else Err(NoMore))
+        \\
+        \\Step :: { v : U64 }.{
+        \\    is_lt : Step, Step -> Bool
+        \\    is_lt = |a, b| a.v < b.v
+        \\    succ : Step -> Step
+        \\    succ = |a| Step.{ v: a.v + 1 }
+        \\    value : Step -> U64
+        \\    value = |a| a.v
+        \\    upto : Step, Step -> Iter(Step)
+        \\    upto = gen_range
+        \\}
+        \\
+        \\count : a, a -> U64
+        \\    where [a.upto : a, a -> Iter(a), a.value : a -> U64]
+        \\count = |lo, hi| {
+        \\    var $sum = 0
+        \\    for x in lo.upto(hi) {
+        \\        $sum = $sum + x.value()
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = count(Step.{ v: 1 }, Step.{ v: 5 })
+        ,
+        .expected = .{ .inspect_str = "10" },
+    },
+    .{
+        .name = "generic method alias with its own requirements dispatches at each instance",
+        .source_kind = .module,
+        .source =
+        \\Pair(a) :: { x : a, y : a }.{
+        \\    describe : Pair(a) -> Str
+        \\        where [a.to_str : a -> Str]
+        \\    describe = describe_pair
+        \\    first : Pair(a) -> a
+        \\    first = |Pair.{ x, y: _ }| x
+        \\    second : Pair(a) -> a
+        \\    second = |Pair.{ x: _, y }| y
+        \\}
+        \\
+        \\describe_pair : Pair(a) -> Str
+        \\    where [a.to_str : a -> Str]
+        \\describe_pair = |p| Str.concat(p.first().to_str(), p.second().to_str())
+        \\
+        \\show : t -> Str where [t.describe : t -> Str]
+        \\show = |v| v.describe()
+        \\
+        \\main = (show(Pair.{ x: 2.U64, y: 3 }), show(Pair.{ x: "a", y: "b" }), Pair.{ x: 4.U64, y: 5 }.describe())
+        ,
+        .expected = .{ .inspect_str = "(\"23\", \"ab\", \"45\")" },
+    },
+    // Calls through exact procedure aliases forward to the aliased procedure;
+    // an alias of a function-valued constant is still a call of that value.
+    .{
+        .name = "calls through local and top-level procedure aliases",
+        .source_kind = .module,
+        .source =
+        \\add_one : U64 -> U64
+        \\add_one = |x| x + 1
+        \\
+        \\inc : U64 -> U64
+        \\inc = add_one
+        \\
+        \\inc_again : U64 -> U64
+        \\inc_again = inc
+        \\
+        \\make_adder : U64 -> (U64 -> U64)
+        \\make_adder = |k| |x| x + k
+        \\
+        \\add_ten : U64 -> U64
+        \\add_ten = make_adder(10)
+        \\
+        \\plus_ten : U64 -> U64
+        \\plus_ten = add_ten
+        \\
+        \\gen_add : num, num -> num where [num.plus : num, num -> num]
+        \\gen_add = |a, b| a.plus(b)
+        \\
+        \\add_u64 : U64, U64 -> U64
+        \\add_u64 = gen_add
+        \\
+        \\run : U64 -> (U64, U64, U64, U64, U64, U64)
+        \\run = |n| {
+        \\    local_inc = add_one
+        \\    local_plus = plus_ten
+        \\    (inc(n), inc_again(n), local_inc(n), plus_ten(n), local_plus(n), add_u64(n, 5))
+        \\}
+        \\
+        \\main = run(1)
+        ,
+        .expected = .{ .inspect_str = "(2, 2, 2, 11, 11, 6)" },
+    },
+    // The completed callee's result representation is its own: joining the
+    // call's result with a list iterator in the caller must not rewrite the
+    // callee's specialization, which other callers share.
+    .{
+        .name = "nominal method delegating to a numeric range producer joins a list producer",
+        .source_kind = .module,
+        .source =
+        \\Span(num) :: { lower : num, upper : num, step : num }.{
+        \\    make : Span(num) -> Iter(num)
+        \\        where [num.range_iter : num, num, num, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(num)]
+        \\    make = |span| span.lower.range_iter(span.upper, span.step, Exclusive, To, Unknown)
+        \\}
+        \\
+        \\pick : List(U64), U64, Bool -> Iter(U64)
+        \\pick = |xs, n, flag| if flag { xs.iter() } else { Span.{ lower: 0, upper: n, step: 1 }.make() }
+        \\
+        \\sum_it : List(U64), U64, Bool -> U64
+        \\sum_it = |xs, n, flag| {
+        \\    var $sum = 0
+        \\    for x in pick(xs, n, flag) {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = (sum_it([1, 2, 3], 4, Bool.True), sum_it([1, 2, 3], 4, Bool.False))
+        ,
+        .expected = .{ .inspect_str = "(6, 6)" },
+    },
+    // Each loop is a fusion candidate whose continuation holds every later
+    // loop. Fusion copies only what a candidate rewrites, so the procedure
+    // grows linearly in the number of loops rather than doubling per loop.
+    .{
+        .name = "many sequential range loops in one procedure lower in linear size",
+        .source_kind = .module,
+        .source =
+        \\total : U64 -> U64
+        \\total = |n| {
+        \\    var $a = 0
+        \\    for item in (1.U64..=n) {
+        \\        $a = $a + item
+        \\    }
+        \\    var $b = 0
+        \\    for item in (1.U64..=n) {
+        \\        $b = $b + item
+        \\    }
+        \\    var $c = 0
+        \\    for item in (1.U64..=n) {
+        \\        $c = $c + item
+        \\    }
+        \\    var $d = 0
+        \\    for item in (1.U64..=n) {
+        \\        $d = $d + item
+        \\    }
+        \\    var $e = 0
+        \\    for item in (1.U64..=n) {
+        \\        $e = $e + item
+        \\    }
+        \\    var $f = 0
+        \\    for item in (1.U64..=n) {
+        \\        $f = $f + item
+        \\    }
+        \\    var $g = 0
+        \\    for item in (1.U64..=n) {
+        \\        $g = $g + item
+        \\    }
+        \\    var $h = 0
+        \\    for item in (1.U64..=n) {
+        \\        $h = $h + item
+        \\    }
+        \\    var $i = 0
+        \\    for item in (1.U64..=n) {
+        \\        $i = $i + item
+        \\    }
+        \\    var $j = 0
+        \\    for item in (1.U64..=n) {
+        \\        $j = $j + item
+        \\    }
+        \\    var $k = 0
+        \\    for item in (1.U64..=n) {
+        \\        $k = $k + item
+        \\    }
+        \\    var $l = 0
+        \\    for item in (1.U64..=n) {
+        \\        $l = $l + item
+        \\    }
+        \\    $a + $b + $c + $d + $e + $f + $g + $h + $i + $j + $k + $l
+        \\}
+        \\
+        \\main = total(3)
+        ,
+        .expected = .{ .inspect_str = "72" },
+    },
     .{
         .name = "for loop over a procedure joining two producer representations",
         .source_kind = .module,
@@ -7217,7 +7615,7 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(5, 108)" },
     },
     .{
-        .name = "inspect: generic dispatch preserves each capturing local method context",
+        .name = "inspect: a generic dispatch to a capturing local method is rejected",
         .source_kind = .module,
         .source =
         \\make = |offset| {
@@ -7231,7 +7629,7 @@ const core_tests = [_]TestCase{
         \\
         \\main = (make(10), make(20))
         ,
-        .expected = .{ .inspect_str = "(15, 25)" },
+        .expected = .{ .problem_and_crash = {} },
     },
     .{
         .name = "inspect: imported generic dispatch preserves caller local method target",
@@ -7868,4 +8266,4 @@ const core_tests = [_]TestCase{
     },
 };
 
-pub const tests = @import("eval_set_tests.zig").tests ++ core_tests ++ comptime_finalization_tests.tests ++ crypto_tests.tests ++ closure_recursion_tests.tests ++ recursive_data_tests.tests ++ low_level_tests.tests ++ match_tests.tests ++ highest_lowest_tests.tests ++ polymorphism_tests.tests ++ issue_tests.tests ++ interpreter_style_tests.tests ++ regression_repros.tests ++ trmc_tests.tests ++ iter_alloc_tests.tests ++ simd_tests.tests;
+pub const tests = @import("eval_set_tests.zig").tests ++ core_tests ++ comptime_finalization_tests.tests ++ crypto_tests.tests ++ deep_nesting_tests.tests ++ closure_recursion_tests.tests ++ recursive_data_tests.tests ++ low_level_tests.tests ++ match_tests.tests ++ highest_lowest_tests.tests ++ polymorphism_tests.tests ++ issue_tests.tests ++ interpreter_style_tests.tests ++ regression_repros.tests ++ trmc_tests.tests ++ iter_alloc_tests.tests ++ simd_tests.tests;

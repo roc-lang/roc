@@ -38,7 +38,7 @@ test "issue 11199: a call site supplying the field types of a generic record che
         1,
         roc_target.RocTarget.detectNative(),
         &builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
     );
@@ -150,7 +150,7 @@ fn expectForwardedSchemeDictionaries(plan: *const postcheck.Boxy.Plan.ProgramPla
         for (plan.directCallHiddenDictionaryArgSlice(call.hidden_dict_args)) |arg| {
             if (arg.source != .bound_dictionaries) continue;
             const source = arg.source.bound_dictionaries;
-            const caller = plan.workers.items[@intFromEnum(call.caller)];
+            const caller = plan.workers.items[@backingInt(call.caller)];
             for (plan.hiddenDictionaryParamSlice(caller.hidden_dicts)) |param| {
                 if (param.scheme_param != null and param.dictionaries.start == source.start) {
                     forwarded += 1;
@@ -222,7 +222,7 @@ test "issue 11199: a concrete unsupported field is rejected during checking" {
         1,
         roc_target.RocTarget.detectNative(),
         &builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
     );

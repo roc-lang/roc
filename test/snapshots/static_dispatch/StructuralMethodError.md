@@ -128,7 +128,9 @@ main = {
 			(s-let
 				(p-assign (ident "x"))
 				(e-empty_record))
-			(e-runtime-error (tag "erroneous_value_expr"))))
+			(e-runtime-error (tag "erroneous_value_expr")
+				(e-lookup-local
+					(p-assign (ident "x"))))))
 	(s-nominal-decl
 		(ty-header (name "Person"))
 		(ty-record)))

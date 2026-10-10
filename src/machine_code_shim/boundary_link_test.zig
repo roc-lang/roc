@@ -26,10 +26,9 @@ test "canonical symbols link through the shim and back to the host" {
     const fns = @extern(*const [*]const builtins.host_abi.HostedFn, .{ .name = symbols.roc_shim_hosted_fns });
     try std.testing.expectEqual(count.*, ops.hosted_fns.count);
     try std.testing.expectEqual(@intFromPtr(fns.*), @intFromPtr(ops.hosted_fns.fns));
-    try std.testing.expectEqual(@as(?*anyopaque, null), ops.roc_alloc(ops, 1, 1));
-    var byte: u8 = 0;
-    try std.testing.expectEqual(@as(?*anyopaque, null), ops.roc_realloc(ops, &byte, 1, 1));
-    ops.roc_dealloc(ops, &byte, 1);
+    const allocation = ops.roc_alloc(ops, 1, 1);
+    try std.testing.expectEqual(@intFromPtr(allocation), @intFromPtr(ops.roc_realloc(ops, allocation, 1, 1)));
+    ops.roc_dealloc(ops, allocation, 1);
     ops.roc_dbg(ops, "", 0);
     ops.roc_expect_failed(ops, "", 0);
 }

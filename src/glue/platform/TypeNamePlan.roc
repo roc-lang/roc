@@ -1,5 +1,5 @@
-import RocName exposing [RocName]
-import TypeTable exposing [TypeTable]
+import RocName
+import TypeTable
 
 ## Shared traversal for generated type names and platform aliases.
 ##

@@ -108,7 +108,7 @@ NO CHANGE
 			(args
 				(p-assign (ident "x"))
 				(p-assign (ident "y")))
-			(e-dispatch-call (method "times") (constraint-fn-var 232)
+			(e-dispatch-call (method "times") (constraint-fn-var 237)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -117,13 +117,30 @@ NO CHANGE
 						(p-assign (ident "y")))))))
 	(d-let
 		(p-assign (ident "print_number!"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-lambda
+			(args
+				(p-assign (ident "n")))
+			(e-runtime-error (tag "erroneous_value_expr"))))
 	(d-let
 		(p-assign (ident "process!"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-lambda
+			(args
+				(p-assign (ident "x")))
+			(e-call (constraint-fn-var 258)
+				(e-lookup-local
+					(p-assign (ident "print_number!")))
+				(e-call (constraint-fn-var 257)
+					(e-lookup-local
+						(p-assign (ident "multiply")))
+					(e-lookup-local
+						(p-assign (ident "x")))
+					(e-num (value "2"))))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-call (constraint-fn-var 275)
+			(e-lookup-local
+				(p-assign (ident "process!")))
+			(e-num (value "42"))))
 	(s-import (mod "pf.Stdout")
 		(exposes)))
 ~~~
@@ -132,12 +149,12 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "a, b -> a where [a.times : a, b -> a]"))
-		(patt (type "_arg -> Error"))
-		(patt (type "a -> Error where [a.times : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
-		(patt (type "Error")))
+		(patt (type "_arg -> _ret"))
+		(patt (type "a -> _ret where [a.times : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
+		(patt (type "_a")))
 	(expressions
 		(expr (type "a, b -> a where [a.times : a, b -> a]"))
-		(expr (type "_arg -> Error"))
-		(expr (type "a -> Error where [a.times : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
-		(expr (type "Error"))))
+		(expr (type "_arg -> _ret"))
+		(expr (type "a -> _ret where [a.times : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
+		(expr (type "_a"))))
 ~~~

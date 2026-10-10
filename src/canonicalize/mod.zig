@@ -85,7 +85,7 @@ pub fn canonicalizeExpr(
 ) std.mem.Allocator.Error!Can.CanonicalizedExpr {
     var czer = try Can.initModule(roc_ctx, module_env, parse_ast, context);
     defer czer.deinit();
-    const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+    const expr_idx: AST.Expr.Idx = @fromBackingInt(@intCast(parse_ast.root_node_idx));
     const result = try czer.canonicalizeExpr(expr_idx);
     if (module_env.store.scratch != null) {
         module_env.diagnostics = try module_env.store.diagnosticSpanFrom(0);
@@ -130,6 +130,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/string_pattern_test.zig"));
     std.testing.refAllDecls(@import("test/type_decl_stmt_test.zig"));
     std.testing.refAllDecls(@import("test/try_suffix_test.zig"));
+    std.testing.refAllDecls(@import("test/expect_control_flow_test.zig"));
     std.testing.refAllDecls(@import("test/local_let_scoping_test.zig"));
     std.testing.refAllDecls(@import("test/uninitialized_var_test.zig"));
     std.testing.refAllDecls(@import("test/while_loop_test.zig"));

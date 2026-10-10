@@ -26,8 +26,8 @@ platform ""
         },
     }
 
-import Msg exposing [Msg]
-import View exposing [View]
+import Msg
+import View
 
 init_for_host : {} -> Box(Model)
 init_for_host = |{}| Box.box((program.init)({}))

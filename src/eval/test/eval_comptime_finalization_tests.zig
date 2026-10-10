@@ -1121,7 +1121,7 @@ pub const tests = [_]TestCase{
         .source_kind = .module,
         .imports = &.{.{ .name = "MyTag", .source = "MyTag := [Foo({x: U64, y: U64}), Bar, Baz(Str)]\n" }},
         .source =
-        \\import MyTag exposing [MyTag]
+        \\import MyTag
         \\
         \\lookup = |items, idx| {
         \\    match List.get(items, idx) {
@@ -1159,7 +1159,7 @@ pub const tests = [_]TestCase{
             },
         },
         .source =
-        \\import Elem exposing [Elem, div, text]
+        \\import Elem exposing [div, text]
         \\
         \\main = match div([text("hello")]) {
         \\    Div(_) => "Div (correct)"

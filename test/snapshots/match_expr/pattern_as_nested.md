@@ -18,7 +18,7 @@ TYPE MISMATCH - pattern_as_nested.md:1:1:1:1
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 1 1) (end 4 2))
+		(region (start 3 5) (end 3 29))
 		(headline
 			(reflow "The")
 			(reflow " ")
@@ -32,7 +32,7 @@ TYPE MISMATCH - pattern_as_nested.md:1:1:1:1
 		(document
 			(source-underlines
 				(display (file "pattern_as_nested.md") (start 1 1) (end 4 2) (annotation dim) (line-text "match person {\n    { name, address: { city } as addr } as fullPerson => (fullPerson, addr, city)\n    { name } as simplePerson => (simplePerson, name, \"unknown\")\n}"))
-				(underline (start 3 5) (end 3 16) (annotation error)))
+				(underline (start 3 5) (end 3 29) (annotation error)))
 			(line-break)
 			(reflow "This")
 			(reflow " ")
@@ -194,5 +194,5 @@ match person {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "({ address: { city: a }, name: _field }, { city: a }, a)"))
+(expr (type "_a"))
 ~~~

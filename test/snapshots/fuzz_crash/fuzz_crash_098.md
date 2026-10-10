@@ -63,10 +63,6 @@ EndOfFile,
 						(e-int (raw "0")))
 					(segment (mode "required") (field "e")))))))
 ~~~
-# FORMATTED
-~~~roc
-a = ((0).e)
-~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir

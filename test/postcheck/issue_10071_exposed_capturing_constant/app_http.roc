@@ -1,6 +1,6 @@
 app [main] { pf: platform "./platform/main.roc" }
 
-import pf.Elem exposing [Elem]
+import pf.Elem
 import pf.Http
 
 main : {} -> Elem

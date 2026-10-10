@@ -66,10 +66,6 @@ EndOfFile,
 	(statements
 		(s-malformed (tag "incomplete_import"))))
 ~~~
-# FORMATTED
-~~~roc
-app [] { f: platform "" }
-~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir (empty true))

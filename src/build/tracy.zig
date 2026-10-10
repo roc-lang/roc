@@ -357,7 +357,7 @@ pub const PlotFill = enum(u1) {
 /// Configure how a plot will look.
 pub inline fn plot_config(comptime name: [:0]const u8, format_type: PlotFormatType, step: PlotStep, fill: PlotFill, color: u32) void {
     if (!enable) return;
-    ___tracy_emit_plot_config(name, @intFromEnum(format_type), @intFromEnum(step), @intFromEnum(fill), color);
+    ___tracy_emit_plot_config(name, @backingInt(format_type), @backingInt(step), @backingInt(fill), color);
 }
 
 /// Create a plot for a f32 value.

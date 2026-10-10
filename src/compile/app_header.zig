@@ -16,6 +16,7 @@ const std = @import("std");
 const base = @import("base");
 const parse = @import("parse");
 const can = @import("can");
+const reporting = @import("reporting");
 const compiler_platforms = @import("compiler_platforms.zig");
 
 const Allocator = std.mem.Allocator;
@@ -59,6 +60,7 @@ pub const AppHeaderInfo = struct {
 /// (`NotAnAppHeader`), an allocation failure, or an `Io.readFile` failure.
 pub const Error = error{
     NotAnAppHeader,
+    SourceTokenizationFailed,
     OutOfMemory,
 } || Io.ReadError;
 
@@ -75,6 +77,18 @@ pub fn parseAppHeader(
     arena: Allocator,
     app_path: []const u8,
 ) Error!AppHeaderInfo {
+    return parseAppHeaderReporting(io, gpa, arena, app_path, null);
+}
+
+/// Parse a header, retaining source diagnostics when tokenization rejects it.
+/// The caller owns reports and releases each report before freeing the list.
+pub fn parseAppHeaderReporting(
+    io: Io,
+    gpa: Allocator,
+    arena: Allocator,
+    app_path: []const u8,
+    reports: ?*std.ArrayList(reporting.Report),
+) Error!AppHeaderInfo {
     var source = try io.readFile(app_path, gpa);
     source = base.source_utils.normalizeLineEndingsRealloc(gpa, source) catch |err| {
         gpa.free(source);
@@ -88,6 +102,17 @@ pub fn parseAppHeader(
 
     const ast = parse.file(gpa, &env.common) catch return error.OutOfMemory;
     defer ast.deinit();
+    if (ast.tokenize_had_errors or ast.tokenize_diagnostics.items.len != 0) {
+        if (reports) |destination| {
+            try env.common.calcLineStarts(gpa);
+            for (ast.tokenize_diagnostics.items) |diagnostic| {
+                var report = try ast.tokenizeDiagnosticToReport(diagnostic, gpa, app_path);
+                errdefer report.deinit();
+                try destination.append(gpa, report);
+            }
+        }
+        return error.SourceTokenizationFailed;
+    }
 
     const file_node = ast.store.getFile();
     const header = ast.store.getHeader(file_node.header);

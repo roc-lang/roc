@@ -7,6 +7,7 @@
 //! arrays with values corresponding 1-to-1 to interned values, e.g. regions.
 
 const std = @import("std");
+const invariant = @import("invariant.zig").invariant;
 const builtin = @import("builtin");
 const collections = @import("collections");
 
@@ -38,18 +39,18 @@ pub const Idx = enum(u32) {
 };
 
 fn assertAppendIndex(expected: usize, idx: collections.SafeList(u8).Idx) void {
-    if (comptime builtin.mode == .Debug) {
-        std.debug.assert(@intFromEnum(idx) == expected);
-    } else if (@intFromEnum(idx) != expected) {
+    if (comptime builtin.mode == .debug) {
+        std.debug.assert(@backingInt(idx) == expected);
+    } else if (@backingInt(idx) != expected) {
         unreachable;
     }
 }
 
 fn assertAppendRange(expected_start: usize, expected_len: u32, range: collections.SafeList(u8).Range) void {
-    if (comptime builtin.mode == .Debug) {
-        std.debug.assert(@intFromEnum(range.start) == expected_start);
+    if (comptime builtin.mode == .debug) {
+        std.debug.assert(@backingInt(range.start) == expected_start);
         std.debug.assert(range.count == expected_len);
-    } else if (@intFromEnum(range.start) != expected_start or range.count != expected_len) {
+    } else if (@backingInt(range.start) != expected_start or range.count != expected_len) {
         unreachable;
     }
 }
@@ -108,9 +109,6 @@ const Policy = struct {
     pub fn count(self: *const SmallStringInterner) u32 {
         return self.entry_count;
     }
-    pub fn entryCount(self: *const SmallStringInterner, _: *const Index) u32 {
-        return self.entry_count;
-    }
     pub fn cellForId(id: Id) Cell {
         return id;
     }
@@ -118,11 +116,11 @@ const Policy = struct {
         return cell;
     }
     pub fn textForId(self: *const SmallStringInterner, id: Id) []const u8 {
-        return std.mem.sliceTo(self.bytes.items.items[@intFromEnum(id)..], 0);
+        return std.mem.sliceTo(self.bytes.items.items[@backingInt(id)..], 0);
     }
     pub fn appendEntry(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Id {
         assertSupportsInserts(self.supports_inserts);
-        const new_offset: Idx = @enumFromInt(self.bytes.len());
+        const new_offset: Idx = @fromBackingInt(@intCast(self.bytes.len()));
         {
             const expected_start = self.bytes.items.items.len;
             const range = try self.bytes.appendSlice(gpa, string);
@@ -144,8 +142,8 @@ const Policy = struct {
 fn assertSupportsInserts(supports_inserts: bool) void {
     if (supports_inserts) return;
 
-    if (comptime builtin.mode == .Debug) {
-        std.debug.panic("SmallStringInterner invariant violated: attempted to insert into frozen interner", .{});
+    if (comptime builtin.mode == .debug) {
+        invariant("SmallStringInterner invariant violated: attempted to insert into frozen interner", .{});
     }
     unreachable;
 }
@@ -247,47 +245,15 @@ pub fn lookup(self: *const SmallStringInterner, string: []const u8) ?Idx {
 /// reserved "unused" sentinel, and any offset at or beyond the bytes buffer was
 /// never produced by this interner—so an Idx from another store fails this.
 pub fn isInBounds(self: *const SmallStringInterner, idx: Idx) bool {
-    const offset = @intFromEnum(idx);
+    const offset = @backingInt(idx);
     return offset != 0 and offset < self.bytes.items.items.len;
 }
 
 /// Get a reference to the text for an interned string.
 pub fn getText(self: *const SmallStringInterner, idx: Idx) []u8 {
     const bytes_slice = self.bytes.items.items;
-    const start = @intFromEnum(idx);
+    const start = @backingInt(idx);
     return std.mem.sliceTo(bytes_slice[start..], 0);
-}
-
-/// Serialize this interner to the given CompactWriter. The resulting interner
-/// in the writer's buffer will have offsets instead of pointers. Calling any
-/// methods on it or dereferencing its internal "pointers" (which are now
-/// offsets) is illegal behavior!
-pub fn serialize(
-    self: *const SmallStringInterner,
-    allocator: std.mem.Allocator,
-    writer: *CompactWriter,
-) std.mem.Allocator.Error!*const SmallStringInterner {
-    // First, write the struct
-    const offset_self = try writer.appendAlloc(allocator, SmallStringInterner);
-
-    // Then serialize the bytes and probe-table SafeLists and update the struct
-    const serialized_bytes = try self.bytes.serialize(allocator, writer);
-    const serialized_index = try self.index.serialize(allocator, writer);
-
-    offset_self.* = .{
-        .bytes = serialized_bytes.*,
-        .index = serialized_index.*,
-        .entry_count = self.entry_count,
-    };
-
-    // Return the version of Self that's in the writer's buffer
-    return @constCast(offset_self);
-}
-
-/// Add the given offset to the memory addresses of all pointers in `self`.
-pub fn relocate(self: *SmallStringInterner, offset: isize) void {
-    self.bytes.relocate(offset);
-    self.index.relocate(offset);
 }
 
 /// Serialized representation of a SmallStringInterner
@@ -353,8 +319,8 @@ test "SmallStringInterner empty CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    const serialized = try original.serialize(arena_allocator, &writer);
-    try std.testing.expect(@intFromPtr(serialized) != 0);
+    const serialized = try writer.appendAlloc(arena_allocator, SmallStringInterner.Serialized);
+    try serialized.serialize(&original, arena_allocator, &writer);
 
     // Write to file
     try writer.writeGather(file, io);
@@ -365,10 +331,11 @@ test "SmallStringInterner empty CompactWriter roundtrip" {
 
     _ = try file.readPositionalAll(io, buffer, 0);
 
-    // Cast and relocate - empty interner should still work
+    // Deserialize - empty interner should still work
     // The SmallStringInterner struct is at the beginning of the buffer
-    const deserialized = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr)));
-    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+    const deserialized_serialized: *const SmallStringInterner.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    var deserialized_value = deserialized_serialized.deserializeInto(@intFromPtr(buffer.ptr));
+    const deserialized = &deserialized_value;
 
     // Verify empty - bytes starts with one zero byte, hash_table should be empty
     try std.testing.expectEqual(@as(usize, 1), deserialized.bytes.len());
@@ -423,8 +390,8 @@ test "SmallStringInterner basic CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    const serialized = try original.serialize(arena_allocator, &writer);
-    try std.testing.expect(@intFromPtr(serialized) != 0);
+    const serialized = try writer.appendAlloc(arena_allocator, SmallStringInterner.Serialized);
+    try serialized.serialize(&original, arena_allocator, &writer);
 
     // Write to file
     try writer.writeGather(file, io);
@@ -435,9 +402,10 @@ test "SmallStringInterner basic CompactWriter roundtrip" {
 
     _ = try file.readPositionalAll(io, buffer, 0);
 
-    // Cast and relocate
-    const deserialized = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr)));
-    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+    // Deserialize
+    const deserialized_serialized: *const SmallStringInterner.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    var deserialized_value = deserialized_serialized.deserializeInto(@intFromPtr(buffer.ptr));
+    const deserialized = &deserialized_value;
 
     // Verify all strings are accessible and correct
     for (test_strings[0..9], 0..) |expected_str, i| {
@@ -473,7 +441,7 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
 
     for (test_data) |data| {
         const idx = try original.insert(gpa, data.str);
-        try std.testing.expectEqual(@as(u32, data.expected_idx), @intFromEnum(idx));
+        try std.testing.expectEqual(@as(u32, data.expected_idx), @backingInt(idx));
     }
 
     // Verify the hash table is populated
@@ -496,8 +464,8 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    const serialized = try original.serialize(arena_allocator, &writer);
-    try std.testing.expect(@intFromPtr(serialized) != 0);
+    const serialized = try writer.appendAlloc(arena_allocator, SmallStringInterner.Serialized);
+    try serialized.serialize(&original, arena_allocator, &writer);
 
     // Write to file
     try writer.writeGather(file, io);
@@ -508,23 +476,24 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
 
     _ = try file.readPositionalAll(io, buffer, 0);
 
-    // Cast and relocate
-    const deserialized = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr)));
-    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+    // Deserialize
+    const deserialized_serialized: *const SmallStringInterner.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    var deserialized_value = deserialized_serialized.deserializeInto(@intFromPtr(buffer.ptr));
+    const deserialized = &deserialized_value;
 
     // Verify the entry count is preserved after deserialization
     try std.testing.expectEqual(original_entry_count, deserialized.entry_count);
 
     // But all strings should still be accessible
     // Note: Index 0 is reserved, so all indices are offset by 1
-    try std.testing.expectEqualStrings("first", deserialized.getText(@enumFromInt(1)));
-    try std.testing.expectEqualStrings("second", deserialized.getText(@enumFromInt(7)));
-    try std.testing.expectEqualStrings("third", deserialized.getText(@enumFromInt(14)));
-    try std.testing.expectEqualStrings("fourth", deserialized.getText(@enumFromInt(20)));
-    try std.testing.expectEqualStrings("fifth", deserialized.getText(@enumFromInt(27)));
-    try std.testing.expectEqualStrings("sixth", deserialized.getText(@enumFromInt(33)));
-    try std.testing.expectEqualStrings("seventh", deserialized.getText(@enumFromInt(39)));
-    try std.testing.expectEqualStrings("eighth", deserialized.getText(@enumFromInt(47)));
+    try std.testing.expectEqualStrings("first", deserialized.getText(@fromBackingInt(@intCast(1))));
+    try std.testing.expectEqualStrings("second", deserialized.getText(@fromBackingInt(@intCast(7))));
+    try std.testing.expectEqualStrings("third", deserialized.getText(@fromBackingInt(@intCast(14))));
+    try std.testing.expectEqualStrings("fourth", deserialized.getText(@fromBackingInt(@intCast(20))));
+    try std.testing.expectEqualStrings("fifth", deserialized.getText(@fromBackingInt(@intCast(27))));
+    try std.testing.expectEqualStrings("sixth", deserialized.getText(@fromBackingInt(@intCast(33))));
+    try std.testing.expectEqualStrings("seventh", deserialized.getText(@fromBackingInt(@intCast(39))));
+    try std.testing.expectEqualStrings("eighth", deserialized.getText(@fromBackingInt(@intCast(47))));
 
     // Verify the original had entries
     try std.testing.expect(original_entry_count > 0);
@@ -539,7 +508,7 @@ test "SmallStringInterner CompactWriter roundtrip" {
 
     const idx1 = try original.insert(gpa, "test1");
     const idx2 = try original.insert(gpa, "test2");
-    try std.testing.expect(@intFromEnum(idx1) < @intFromEnum(idx2));
+    try std.testing.expect(@backingInt(idx1) < @backingInt(idx2));
 
     // Create a temp file
     var tmp_dir = std.testing.tmpDir(.{});
@@ -557,8 +526,8 @@ test "SmallStringInterner CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    const serialized = try original.serialize(arena_allocator, &writer);
-    try std.testing.expect(@intFromPtr(serialized) != 0);
+    const serialized = try writer.appendAlloc(arena_allocator, SmallStringInterner.Serialized);
+    try serialized.serialize(&original, arena_allocator, &writer);
 
     // Write to file
     try writer.writeGather(file, io);
@@ -569,14 +538,15 @@ test "SmallStringInterner CompactWriter roundtrip" {
 
     _ = try file.readPositionalAll(io, buffer, 0);
 
-    // Cast and relocate
-    const deserialized = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr)));
-    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+    // Deserialize
+    const deserialized_serialized: *const SmallStringInterner.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    var deserialized_value = deserialized_serialized.deserializeInto(@intFromPtr(buffer.ptr));
+    const deserialized = &deserialized_value;
 
     // Verify strings are still accessible
     // Note: Index 0 is reserved for the unused marker, so strings start at index 1
-    try std.testing.expectEqualStrings("test1", deserialized.getText(@enumFromInt(1)));
-    try std.testing.expectEqualStrings("test2", deserialized.getText(@enumFromInt(7)));
+    try std.testing.expectEqualStrings("test1", deserialized.getText(@fromBackingInt(@intCast(1))));
+    try std.testing.expectEqualStrings("test2", deserialized.getText(@fromBackingInt(@intCast(7))));
 }
 
 test "SmallStringInterner edge cases CompactWriter roundtrip" {
@@ -623,8 +593,8 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    const serialized = try original.serialize(arena_allocator, &writer);
-    try std.testing.expect(@intFromPtr(serialized) != 0);
+    const serialized = try writer.appendAlloc(arena_allocator, SmallStringInterner.Serialized);
+    try serialized.serialize(&original, arena_allocator, &writer);
 
     // Write to file
     try writer.writeGather(file, io);
@@ -635,9 +605,10 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
 
     _ = try file.readPositionalAll(io, buffer, 0);
 
-    // Cast and relocate
-    const deserialized = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr)));
-    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+    // Deserialize
+    const deserialized_serialized: *const SmallStringInterner.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    var deserialized_value = deserialized_serialized.deserializeInto(@intFromPtr(buffer.ptr));
+    const deserialized = &deserialized_value;
 
     // Verify all edge cases
     for (edge_cases, 0..) |expected_str, i| {
@@ -756,15 +727,15 @@ test "SmallStringInterner multiple interners CompactWriter roundtrip" {
     // and then record the offset.
     try writer.padToAlignment(arena_allocator, @alignOf(SmallStringInterner));
     const offset1 = writer.total_bytes;
-    _ = try interner1.serialize(arena_allocator, &writer);
+    try (try writer.appendAlloc(arena_allocator, SmallStringInterner.Serialized)).serialize(&interner1, arena_allocator, &writer);
 
     try writer.padToAlignment(arena_allocator, @alignOf(SmallStringInterner));
     const offset2 = writer.total_bytes;
-    _ = try interner2.serialize(arena_allocator, &writer);
+    try (try writer.appendAlloc(arena_allocator, SmallStringInterner.Serialized)).serialize(&interner2, arena_allocator, &writer);
 
     try writer.padToAlignment(arena_allocator, @alignOf(SmallStringInterner));
     const offset3 = writer.total_bytes;
-    _ = try interner3.serialize(arena_allocator, &writer);
+    try (try writer.appendAlloc(arena_allocator, SmallStringInterner.Serialized)).serialize(&interner3, arena_allocator, &writer);
 
     // Write to file
     try writer.writeGather(file, io);
@@ -775,16 +746,19 @@ test "SmallStringInterner multiple interners CompactWriter roundtrip" {
 
     _ = try file.readPositionalAll(io, buffer, 0);
 
-    // Cast and relocate all three; every serialized pointer is an offset from the
+    // Deserialize all three; every serialized pointer is an offset from the
     // start of the whole buffer, so each root relocates by the same base address.
-    const deserialized1 = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr + offset1)));
-    deserialized1.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+    const deserialized1_serialized: *const SmallStringInterner.Serialized = @ptrCast(@alignCast(buffer.ptr + offset1));
+    var deserialized1_value = deserialized1_serialized.deserializeInto(@intFromPtr(buffer.ptr));
+    const deserialized1 = &deserialized1_value;
 
-    const deserialized2 = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr + offset2)));
-    deserialized2.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+    const deserialized2_serialized: *const SmallStringInterner.Serialized = @ptrCast(@alignCast(buffer.ptr + offset2));
+    var deserialized2_value = deserialized2_serialized.deserializeInto(@intFromPtr(buffer.ptr));
+    const deserialized2 = &deserialized2_value;
 
-    const deserialized3 = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr + offset3)));
-    deserialized3.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+    const deserialized3_serialized: *const SmallStringInterner.Serialized = @ptrCast(@alignCast(buffer.ptr + offset3));
+    var deserialized3_value = deserialized3_serialized.deserializeInto(@intFromPtr(buffer.ptr));
+    const deserialized3 = &deserialized3_value;
 
     // Verify interner 1
     try std.testing.expectEqualStrings("interner1_string1", deserialized1.getText(idx1_1));

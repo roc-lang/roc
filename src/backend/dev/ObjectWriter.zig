@@ -31,13 +31,7 @@ pub fn generateObjectFile(
 }
 
 /// DWARF debug sections to include in the object file.
-pub const DebugSections = struct {
-    line: []const u8,
-    abbrev: []const u8,
-    info: []const u8,
-    line_relocs: []const object.DebugReloc,
-    info_relocs: []const object.DebugReloc,
-};
+pub const DebugSections = object.DebugSections;
 
 /// Like `generateObjectFile`, with DWARF debug sections. COFF objects carry
 /// them as `.debug_*` sections the way MinGW toolchains do; lld-link keeps
@@ -58,7 +52,7 @@ pub fn generateObjectFileWithDebug(
     defer table.deinit(allocator);
     for (symbols, 0..) |symbol, ordinal| {
         const id = try table.internEmitted(allocator, symbol.name);
-        std.debug.assert(@intFromEnum(id) == ordinal);
+        std.debug.assert(@backingInt(id) == ordinal);
     }
     var indexed = try std.ArrayList(IndexedRelocation).initCapacity(allocator, relocations.len);
     defer indexed.deinit(allocator);
@@ -77,10 +71,13 @@ pub fn generateObjectFileWithDebug(
         .symbol = table.indices.get(rel.target_symbol_name).?,
         .addend = rel.addend,
     };
-    return generateIndexedObjectFileWithDebug(allocator, target, code, rodata, symbols, indexed.items, indexed_data, &.{}, debug, output);
+    return generateIndexedObjectFileWithDebug(allocator, target, code, rodata, 0, symbols, indexed.items, indexed_data, &.{}, debug, output);
 }
 
 /// Write producer-resolved relocations. Every target indexes the supplied symbol column.
+///
+/// `zero_fill_size` is the byte size of the object's zero-fill section, which
+/// symbols in `.zero_fill` address; the object stores no bytes for it.
 ///
 /// `unwind_functions` names every callable range code generation recorded,
 /// including reference-count helpers emitted inline after a procedure body
@@ -92,6 +89,7 @@ pub fn generateIndexedObjectFileWithDebug(
     target: RocTarget,
     code: []const u8,
     rodata: []const u8,
+    zero_fill_size: u64,
     symbols: []const Symbol,
     relocations: []const IndexedRelocation,
     rodata_relocations: []const IndexedDataRelocation,
@@ -117,7 +115,8 @@ pub fn generateIndexedObjectFileWithDebug(
 
             elf.setCode(code);
             elf.setRodata(rodata);
-            if (debug) |d| elf.setDebugSections(d.line, d.abbrev, d.info, d.line_relocs, d.info_relocs);
+            elf.setZeroFill(zero_fill_size);
+            if (debug) |d| elf.debug = d;
 
             // Add symbols
             for ([_]bool{ false, true }) |global| {
@@ -138,12 +137,12 @@ pub fn generateIndexedObjectFileWithDebug(
             }
             for (relocations) |rel| {
                 switch (rel) {
-                    .linked_function => |f| try elf.addTextRelocation(rel.getOffset(), target_indices[@intFromEnum(f.symbol)], if (cpu_arch == .x86_64) -4 else 0),
-                    .linked_data => |d| try elf.addTextDataRelocation(rel.getOffset(), target_indices[@intFromEnum(d.symbol)], d.kind),
+                    .linked_function => |f| try elf.addTextRelocation(rel.getOffset(), target_indices[@backingInt(f.symbol)], if (cpu_arch == .x86_64) -4 else 0),
+                    .linked_data => |d| try elf.addTextDataRelocation(rel.getOffset(), target_indices[@backingInt(d.symbol)], d.kind),
                     .local_data, .jmp_to_return, .retired => {},
                 }
             }
-            for (rodata_relocations) |rel| try elf.addRodataRelocation(rel.offset, target_indices[@intFromEnum(rel.symbol)], rel.addend);
+            for (rodata_relocations) |rel| try elf.addRodataRelocation(rel.offset, target_indices[@backingInt(rel.symbol)], rel.addend);
 
             try elf.write(output);
         },
@@ -159,21 +158,22 @@ pub fn generateIndexedObjectFileWithDebug(
 
             macho.setCode(code);
             macho.setRodata(rodata);
-            if (debug) |d| macho.setDebugSections(d.line, d.abbrev, d.info, d.line_relocs, d.info_relocs);
+            macho.setZeroFill(zero_fill_size);
+            if (debug) |d| macho.debug = d;
 
             const referenced = try allocator.alloc(bool, symbols.len);
             defer allocator.free(referenced);
             @memset(referenced, false);
             for (relocations) |rel| switch (rel) {
                 .linked_function => |f| {
-                    referenced[@intFromEnum(f.symbol)] = true;
+                    referenced[@backingInt(f.symbol)] = true;
                 },
                 .linked_data => |d| {
-                    referenced[@intFromEnum(d.symbol)] = true;
+                    referenced[@backingInt(d.symbol)] = true;
                 },
                 .local_data, .jmp_to_return, .retired => {},
             };
-            for (rodata_relocations) |rel| referenced[@intFromEnum(rel.symbol)] = true;
+            for (rodata_relocations) |rel| referenced[@backingInt(rel.symbol)] = true;
 
             // Add symbols (underscore prefix for C ABI is added in MachOWriter.write())
             for (symbols, 0..) |sym, ordinal| {
@@ -189,12 +189,12 @@ pub fn generateIndexedObjectFileWithDebug(
             }
             for (relocations) |rel| {
                 switch (rel) {
-                    .linked_function => |f| try macho.addTextRelocation(@intCast(rel.getOffset()), target_indices[@intFromEnum(f.symbol)], true),
-                    .linked_data => |d| try macho.addTextDataRelocation(@intCast(rel.getOffset()), target_indices[@intFromEnum(d.symbol)], true, d.kind),
+                    .linked_function => |f| try macho.addTextRelocation(@intCast(rel.getOffset()), target_indices[@backingInt(f.symbol)], true),
+                    .linked_data => |d| try macho.addTextDataRelocation(@intCast(rel.getOffset()), target_indices[@backingInt(d.symbol)], true, d.kind),
                     .local_data, .jmp_to_return, .retired => {},
                 }
             }
-            for (rodata_relocations) |rel| try macho.addRodataRelocation(@intCast(rel.offset), target_indices[@intFromEnum(rel.symbol)], true, rel.addend);
+            for (rodata_relocations) |rel| try macho.addRodataRelocation(@intCast(rel.offset), target_indices[@backingInt(rel.symbol)], true, rel.addend);
 
             try macho.write(output);
         },
@@ -210,7 +210,8 @@ pub fn generateIndexedObjectFileWithDebug(
 
             coff_writer.setCode(code);
             coff_writer.setRodata(rodata);
-            if (debug) |d| coff_writer.setDebugSections(d.line, d.abbrev, d.info, d.line_relocs, d.info_relocs);
+            coff_writer.setZeroFill(zero_fill_size);
+            if (debug) |d| coff_writer.debug = d;
 
             // Ranges the published symbols already describe, so recorded
             // ranges below are not emitted twice.
@@ -263,12 +264,12 @@ pub fn generateIndexedObjectFileWithDebug(
             }
             for (relocations) |rel| {
                 switch (rel) {
-                    .linked_function => |f| try coff_writer.addTextRelocation(@intCast(rel.getOffset()), target_indices[@intFromEnum(f.symbol)]),
-                    .linked_data => |d| try coff_writer.addTextDataRelocation(@intCast(rel.getOffset()), target_indices[@intFromEnum(d.symbol)], d.kind),
+                    .linked_function => |f| try coff_writer.addTextRelocation(@intCast(rel.getOffset()), target_indices[@backingInt(f.symbol)]),
+                    .linked_data => |d| try coff_writer.addTextDataRelocation(@intCast(rel.getOffset()), target_indices[@backingInt(d.symbol)], d.kind),
                     .local_data, .jmp_to_return, .retired => {},
                 }
             }
-            for (rodata_relocations) |rel| try coff_writer.addRdataRelocation(@intCast(rel.offset), target_indices[@intFromEnum(rel.symbol)], rel.addend);
+            for (rodata_relocations) |rel| try coff_writer.addRdataRelocation(@intCast(rel.offset), target_indices[@backingInt(rel.symbol)], rel.addend);
 
             try coff_writer.write(output);
         },
@@ -313,6 +314,9 @@ pub const IndexedDataRelocation = struct {
 pub const Section = enum {
     text,
     rodata,
+    /// Zero-initialized data the object declares by size alone: the file
+    /// holds no bytes for it and the loader maps zero pages.
+    zero_fill,
     undef,
 };
 
@@ -320,6 +324,7 @@ fn machoSectionNumber(section: Section) u8 {
     return switch (section) {
         .text => 1,
         .rodata => 2,
+        .zero_fill => object.macho.zero_fill_section_number,
         .undef => 0,
     };
 }
@@ -328,6 +333,7 @@ fn elfSection(section: Section) object.elf.Section {
     return switch (section) {
         .text => .text,
         .rodata => .rodata,
+        .zero_fill => .bss,
         .undef => .undef,
     };
 }
@@ -346,6 +352,7 @@ fn coffSection(section: Section) object.coff.Section {
     return switch (section) {
         .text => .text,
         .rodata => .rdata,
+        .zero_fill => .bss,
         .undef => .undef,
     };
 }
@@ -613,7 +620,7 @@ test "x86_64 windows object covers recorded helper ranges without symbols" {
     }) |case| {
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(allocator);
-        try generateIndexedObjectFileWithDebug(allocator, .x64win, code, &.{}, symbols, &.{}, &.{}, case.recorded, null, &output);
+        try generateIndexedObjectFileWithDebug(allocator, .x64win, code, &.{}, 0, symbols, &.{}, &.{}, case.recorded, null, &output);
 
         // No .rdata, so .pdata is the second section header; each x64 entry is 12 bytes.
         const num_sections = std.mem.readInt(u16, output.items[2..4], .little);
@@ -978,7 +985,7 @@ test "indexed object relocations preserve targets through format symbol ordering
         };
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(allocator);
-        try generateIndexedObjectFileWithDebug(allocator, target, &([_]u8{0} ** 32), &([_]u8{0} ** 32), &symbols, &relocations, &data_relocations, &.{}, null, &output);
+        try generateIndexedObjectFileWithDebug(allocator, target, &(@as([32]u8, @splat(0))), &(@as([32]u8, @splat(0))), 0, &symbols, &relocations, &data_relocations, &.{}, null, &output);
         const decoded = try TestObjectTables.read(target, output.items);
         const expected = [_][]const u8{ "local_data", "external_function", "local_data", "global_data" };
         try std.testing.expectEqual(@as(usize, 4), decoded.text.len / decoded.relocation_size);
@@ -1105,11 +1112,11 @@ test "separate static data objects expose private backing symbols to code object
     const relocations = [_]Compiler.StaticDataRelocation{.{
         .offset = 0,
         .target_symbol_name = "private_backing",
-        .target = .{ .data_symbol = @enumFromInt(private_export_index) },
+        .target = .{ .data_symbol = @fromBackingInt(@intCast(private_export_index)) },
     }};
     const exports = [_]Compiler.StaticDataExport{
-        .{ .symbol_name = "private_backing", .bytes = &([_]u8{0} ** 8), .alignment = 8, .is_global = false, .is_exported = false },
-        .{ .symbol_name = "public_root", .bytes = &([_]u8{0} ** 8), .alignment = 8, .relocations = &relocations },
+        .{ .symbol_name = "private_backing", .bytes = &(@as([8]u8, @splat(0))), .alignment = 8, .is_global = false, .is_exported = false },
+        .{ .symbol_name = "public_root", .bytes = &(@as([8]u8, @splat(0))), .alignment = 8, .relocations = &relocations },
     };
     var compiler = Compiler.ObjectFileCompiler.init(allocator);
     var result = try compiler.compileStaticDataObject(&exports, .x64linux);
@@ -1131,6 +1138,126 @@ test "separate static data objects expose private backing symbols to code object
     try std.testing.expectEqual(@as(usize, 2), found);
 }
 
+test "all-zero static data without relocations is declared as zero-fill, not stored" {
+    const allocator = std.testing.allocator;
+    const Compiler = @import("ObjectFileCompiler.zig");
+    const zeros = @as([65536]u8, @splat(0));
+    var exports: std.ArrayList(Compiler.StaticDataExport) = .empty;
+    defer exports.deinit(allocator);
+    // Capture the table's actual export index before adding its descriptor.
+    const table_id = exports.items.len;
+    try exports.append(allocator, .{ .symbol_name = "table", .bytes = &zeros, .symbol_offset = 8, .alignment = 8, .is_exported = false });
+    const relocations = [_]Compiler.StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "table", .target = .{ .data_symbol = @fromBackingInt(@intCast(table_id)) }, .addend = 8 }};
+    // The descriptor is zeroed too, but its relocation requires stored data.
+    try exports.append(allocator, .{ .symbol_name = "descriptor", .bytes = &(@as([24]u8, @splat(0))), .alignment = 8, .is_exported = false, .relocations = &relocations });
+    try exports.append(allocator, .{ .symbol_name = "filled", .bytes = &.{ 1, 2, 3, 4, 5, 6, 7, 8 }, .alignment = 8, .is_exported = false });
+    for ([_]RocTarget{ .x64linux, .x64mac, .x64win }) |target| {
+        var compiler = Compiler.ObjectFileCompiler.init(allocator);
+        var result = try compiler.compileStaticDataObject(exports.items, target);
+        defer result.deinit();
+        // The object declares the table's 64 KB and stores none of it.
+        try std.testing.expect(result.object_bytes.len < zeros.len);
+        const zero_fill = try zeroFillSection(target, result.object_bytes);
+        try std.testing.expectEqual(@as(u64, zeros.len), zero_fill.size);
+        try std.testing.expect(zero_fill.stores_no_bytes);
+        // The descriptor's relocation survives and names the table.
+        const decoded = try TestObjectTables.read(target, result.object_bytes);
+        try std.testing.expectEqual(@as(usize, 1), decoded.data.len / decoded.relocation_size);
+        // The table's symbol lives in the zero-fill section, past its header
+        // word; the other two stay in readonly data.
+        try std.testing.expectEqual(zero_fill.section_number, try symbolSectionNumber(decoded, "table"));
+        try std.testing.expect(zero_fill.section_number != try symbolSectionNumber(decoded, "descriptor"));
+        try std.testing.expect(zero_fill.section_number != try symbolSectionNumber(decoded, "filled"));
+    }
+}
+
+const ZeroFillSection = struct { size: u64, stores_no_bytes: bool, section_number: u32 };
+
+/// The zero-fill section an object declares: `.bss` on ELF and COFF,
+/// `__bss` on Mach-O.
+fn zeroFillSection(target: RocTarget, bytes: []const u8) error{ InvalidObjectFile, UnsupportedTarget, SectionNotFound }!ZeroFillSection {
+    switch (roc_target.classifyOs(target.toOsTag())) {
+        .linux => {
+            const e_shoff = std.mem.readInt(u64, bytes[40..48], .little);
+            const e_shentsize = std.mem.readInt(u16, bytes[58..60], .little);
+            const e_shnum = std.mem.readInt(u16, bytes[60..62], .little);
+            const e_shstrndx = std.mem.readInt(u16, bytes[62..64], .little);
+            const shstr_hdr = e_shoff + @as(u64, e_shstrndx) * e_shentsize;
+            const shstr = bytes[@intCast(std.mem.readInt(u64, bytes[@intCast(shstr_hdr + 24)..][0..8], .little))..];
+            for (0..e_shnum) |index| {
+                const header = bytes[@intCast(e_shoff + index * e_shentsize)..][0..64];
+                const name = std.mem.sliceTo(shstr[std.mem.readInt(u32, header[0..4], .little)..], 0);
+                if (!std.mem.eql(u8, name, ".bss")) continue;
+                return .{
+                    .size = std.mem.readInt(u64, header[32..40], .little),
+                    .stores_no_bytes = std.mem.readInt(u32, header[4..8], .little) == 8, // SHT_NOBITS
+                    .section_number = @intCast(index),
+                };
+            }
+            return error.SectionNotFound;
+        },
+        .macos => {
+            var command: usize = 32;
+            for (0..TestObjectTables.read32(bytes, 16)) |_| {
+                if (TestObjectTables.read32(bytes, command) == 0x19) {
+                    for (0..TestObjectTables.read32(bytes, command + 64)) |i| {
+                        const section = bytes[command + 72 + i * 80 ..][0..80];
+                        if (!std.mem.eql(u8, std.mem.sliceTo(section[0..16], 0), "__bss")) continue;
+                        return .{
+                            .size = std.mem.readInt(u64, section[40..48], .little),
+                            .stores_no_bytes = TestObjectTables.read32(section, 48) == 0 and TestObjectTables.read32(section, 64) & 0xff == 0x1, // no offset, S_ZEROFILL
+                            .section_number = @intCast(i + 1),
+                        };
+                    }
+                }
+                command += TestObjectTables.read32(bytes, command + 4);
+            }
+            return error.SectionNotFound;
+        },
+        .windows => {
+            const count = TestObjectTables.read16(bytes, 2);
+            for (0..count) |index| {
+                const header = bytes[20 + index * 40 ..][0..40];
+                if (!std.mem.eql(u8, std.mem.sliceTo(header[0..8], 0), ".bss")) continue;
+                return .{
+                    .size = TestObjectTables.read32(header, 16),
+                    .stores_no_bytes = TestObjectTables.read32(header, 20) == 0 and TestObjectTables.read32(header, 36) & 0x80 != 0, // no raw data, IMAGE_SCN_CNT_UNINITIALIZED_DATA
+                    .section_number = @intCast(index + 1),
+                };
+            }
+            return error.SectionNotFound;
+        },
+        .freebsd, .openbsd, .netbsd, .other => return error.UnsupportedTarget,
+    }
+}
+
+/// The section number of the named symbol in a decoded object.
+fn symbolSectionNumber(decoded: TestObjectTables, wanted: []const u8) error{SymbolNotFound}!u32 {
+    switch (decoded.format) {
+        .elf => for (0..decoded.symbols.len / 24) |index| {
+            const symbol = decoded.symbols[index * 24 ..][0..24];
+            const name = std.mem.sliceTo(decoded.strings[TestObjectTables.read32(symbol, 0)..], 0);
+            if (std.mem.eql(u8, name, wanted)) return @intCast(TestObjectTables.read16(symbol, 6));
+        },
+        .macho => for (0..decoded.symbols.len / 16) |index| {
+            const symbol = decoded.symbols[index * 16 ..][0..16];
+            const name = std.mem.sliceTo(decoded.strings[TestObjectTables.read32(symbol, 0)..], 0);
+            if (name.len == wanted.len + 1 and name[0] == '_' and std.mem.eql(u8, name[1..], wanted)) return symbol[5];
+        },
+        .coff => for (0..decoded.symbols.len / 18) |index| {
+            const symbol = decoded.symbols[index * 18 ..][0..18];
+            // A name longer than eight bytes is an offset into the string
+            // table, whose first four bytes are its own size.
+            const name = if (TestObjectTables.read32(symbol, 0) == 0)
+                std.mem.sliceTo(decoded.strings[TestObjectTables.read32(symbol, 4)..], 0)
+            else
+                std.mem.sliceTo(symbol[0..8], 0);
+            if (std.mem.eql(u8, name, wanted)) return @intCast(TestObjectTables.read16(symbol, 12));
+        },
+    }
+    return error.SymbolNotFound;
+}
+
 test "static data object collection scales linearly and preserves cyclic targets" {
     const allocator = std.testing.allocator;
     const small = @max(1, try fastestStaticObjectNs(allocator, 500));
@@ -1148,7 +1275,7 @@ fn fastestStaticObjectNs(allocator: Allocator, count: usize) (@import("ObjectFil
     defer allocator.free(names);
     for (exports, names, 0..) |*data_export, *name, i| data_export.* = .{
         .symbol_name = try std.fmt.bufPrint(name, "static_target_{d:0>7}", .{i}),
-        .bytes = &([_]u8{0} ** 8),
+        .bytes = &(@as([8]u8, @splat(0))),
         .alignment = 8,
         .is_global = i % 2 == 0,
     };
@@ -1157,7 +1284,7 @@ fn fastestStaticObjectNs(allocator: Allocator, count: usize) (@import("ObjectFil
         relocation.* = .{
             .offset = 0,
             .target_symbol_name = exports[next].symbol_name,
-            .target = .{ .data_symbol = @enumFromInt(next) },
+            .target = .{ .data_symbol = @fromBackingInt(@intCast(next)) },
             .addend = @intCast(i % 8),
         };
         data_export.relocations = relocations[i..][0..1];
@@ -1188,10 +1315,10 @@ test "object encoding preserves borrowed sections through addend patches and all
 
 fn exerciseBorrowedObjectSections(allocator: Allocator) (Allocator.Error || error{ UnsupportedTarget, InvalidObjectFile, SectionNotFound, TestExpectedEqual })!void {
     for ([_]RocTarget{ .x64linux, .arm64linux, .x64mac, .arm64mac, .x64win, .arm64win }) |target| {
-        var code = [_]u8{0} ** 16;
-        var data = [_]u8{0} ** 16;
-        var debug_line = [_]u8{0} ** 16;
-        var debug_info = [_]u8{0} ** 16;
+        var code = @as([16]u8, @splat(0));
+        var data = @as([16]u8, @splat(0));
+        var debug_line = @as([16]u8, @splat(0));
+        var debug_info = @as([16]u8, @splat(0));
         const symbols = [_]Symbol{.{ .name = "local_target", .section = .rodata, .offset = 8, .size = 8, .is_global = false, .is_function = false, .is_external = false }};
         const data_relocations = [_]DataRelocation{.{ .offset = 0, .target_symbol_name = "local_target", .addend = 7 }};
         const debug: DebugSections = .{
@@ -1207,10 +1334,10 @@ fn exerciseBorrowedObjectSections(allocator: Allocator) (Allocator.Error || erro
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(allocator);
         try generateObjectFileWithDebug(allocator, target, &code, &data, &symbols, &.{}, &data_relocations, debug, &output);
-        try std.testing.expectEqualSlices(u8, &([_]u8{0} ** 16), &code);
-        try std.testing.expectEqualSlices(u8, &([_]u8{0} ** 16), &data);
-        try std.testing.expectEqualSlices(u8, &([_]u8{0} ** 16), &debug_line);
-        try std.testing.expectEqualSlices(u8, &([_]u8{0} ** 16), &debug_info);
+        try std.testing.expectEqualSlices(u8, &(@as([16]u8, @splat(0))), &code);
+        try std.testing.expectEqualSlices(u8, &(@as([16]u8, @splat(0))), &data);
+        try std.testing.expectEqualSlices(u8, &(@as([16]u8, @splat(0))), &debug_line);
+        try std.testing.expectEqualSlices(u8, &(@as([16]u8, @splat(0))), &debug_info);
         const section = try readonlySection(target, output.items);
         const expected_addend: u64 = if (target.toOsTag() == .linux) 0 else 7;
         try std.testing.expectEqual(expected_addend, std.mem.readInt(u64, section[0..8], .little));

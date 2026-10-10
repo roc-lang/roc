@@ -32,7 +32,7 @@ TYPE MISMATCH - mutual_recursive_methods_underscore_hole_pinned_mismatch_issue_1
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 16 12) (end 16 43))
+		(region (start 16 34) (end 16 39))
 		(headline
 			(reflow "The")
 			(reflow " ")
@@ -269,7 +269,7 @@ run = |num| {
 									(e-num (value "0"))))
 							(e-tag (name "Ok")
 								(args
-									(e-call (constraint-fn-var 429)
+									(e-call (constraint-fn-var 417)
 										(e-lookup-external
 											(builtin))
 										(e-lookup-local
@@ -277,14 +277,14 @@ run = |num| {
 										(e-string
 											(e-literal (string ""))))))))
 					(if-else
-						(e-call (constraint-fn-var 451)
+						(e-call (constraint-fn-var 439)
 							(e-lookup-local
 								(p-assign (ident "mutual_recursive_methods_underscore_hole_pinned_mismatch_issue_11605.Client.second")))
 							(e-lookup-local
 								(p-assign (ident "client")))
 							(e-lookup-local
 								(p-assign (ident "items")))
-							(e-dispatch-call (method "minus") (constraint-fn-var 445)
+							(e-dispatch-call (method "minus") (constraint-fn-var 433)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "n"))))
@@ -310,7 +310,7 @@ run = |num| {
 				(p-assign (ident "client"))
 				(p-assign (ident "items"))
 				(p-assign (ident "n")))
-			(e-call (constraint-fn-var 474)
+			(e-call (constraint-fn-var 458)
 				(e-lookup-local
 					(p-assign (ident "mutual_recursive_methods_underscore_hole_pinned_mismatch_issue_11605.Client.first")))
 				(e-lookup-local
@@ -334,7 +334,21 @@ run = |num| {
 						(ty-rigid-var (name "others")))))))
 	(d-let
 		(p-assign (ident "run"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-lambda
+			(args
+				(p-assign (ident "num")))
+			(e-block
+				(s-let
+					(p-assign (ident "client"))
+					(e-nominal (nominal "Client")
+						(e-record
+							(fields
+								(field (name "effects")
+									(e-empty_record))))))
+				(s-let
+					(p-assign (ident "done"))
+					(e-runtime-error (tag "erroneous_value_expr")))
+				(e-runtime-error (tag "erroneous_value_expr"))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "U64") (builtin))

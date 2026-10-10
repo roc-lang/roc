@@ -10,7 +10,7 @@ app [main!] { pf: platform "./platform/main.roc" }
 # dangling (panic "index out of bounds: index 2863311530"—0xAAAAAAAA undefined
 # memory—or a SIGSEGV). The build must not panic or segfault.
 
-import pf.AnyValue exposing [AnyValue]
+import pf.AnyValue
 import pf.Stdout
 
 Expr := [

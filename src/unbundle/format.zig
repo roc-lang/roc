@@ -8,3 +8,7 @@ pub const TAR_EXTENSION = ".tar.zst";
 
 /// Size of the buffer used for streaming bundle/unbundle operations, in bytes.
 pub const STREAM_BUFFER_SIZE: usize = 64 * 1024;
+
+/// Longest archive entry path, in bytes, that `bundle` writes and `unbundle`
+/// extracts.
+pub const TAR_PATH_MAX_LENGTH: usize = 255;

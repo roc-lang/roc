@@ -65,7 +65,7 @@ test "issue 10395: platform requirement record with a function field lowers to L
         \\    }
         \\    hosted {}
         \\
-        \\import Widget exposing [Widget]
+        \\import Widget
         \\
         \\render_for_host : Str -> List(Widget)
         \\render_for_host = |s| (program.render)(s)

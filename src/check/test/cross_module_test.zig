@@ -45,7 +45,10 @@ test "cross-module - check type - monomorphic function fails" {
     ;
     var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
-    try test_env_b.assertOneTypeError("Type Mismatch");
+    // The result and the argument are independent mistakes. Rejecting the
+    // result poisons only this call's occurrence, not the instantiated
+    // callee, so the argument is still checked against `Str`.
+    try test_env_b.assertTypeErrorTitles(&.{ "Type Mismatch", "Type Mismatch" });
 }
 
 test "cross-module - check type - polymorphic function passes" {
@@ -160,7 +163,7 @@ test "cross-module - nested capturing closure publishes its dispatch relation" {
     ;
     var test_env_c = try TestEnv.initWithImport("C", source_c, "A", &test_env_a);
     defer test_env_c.deinit();
-    try test_env_c.assertOneTypeError("Missing Method");
+    try test_env_c.assertOneTypeError("Type Not Determined");
 }
 
 test "cross-module - optional record - one optional value shared by two exports unifies" {
@@ -561,5 +564,5 @@ test "cross-module - ambiguous instantiation of an imported where-clause scheme 
     var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
 
-    try test_env_b.assertOneTypeError("Missing Method");
+    try test_env_b.assertOneTypeError("Type Not Determined");
 }

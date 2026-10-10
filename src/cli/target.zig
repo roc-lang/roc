@@ -18,3 +18,4 @@ pub const TargetLinkSpec = compile.targets_config.TargetLinkSpec;
 pub const LinkItem = compile.targets_config.LinkItem;
 pub const OutputKind = compile.targets_config.OutputKind;
 pub const WasmTargetConfig = compile.targets_config.WasmTargetConfig;
+pub const InvalidTargetPathDiagnostic = compile.targets_config.InvalidTargetPathDiagnostic;

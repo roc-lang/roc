@@ -77,7 +77,15 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+package # Comment after keyword
+	[ # Comment after exposes open
+		SomeType, # Comment after last exposed item
+		something, # Comment after exposed item
+	]
+	{ # Comment after packages open
+		other: "../../other/main.roc", # Comment after last package
+		somePkg: "../main.roc", # Comment after package
+	}
 ~~~
 # CANONICALIZE
 ~~~clojure

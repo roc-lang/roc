@@ -8,51 +8,43 @@ type=snippet
 r = "a"..<"z"
 ~~~
 # EXPECTED
-MISSING METHOD - range_missing_method_error.md:1:5:1:14
+TYPE NOT DETERMINED - range_missing_method_error.md:1:5:1:8
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
-		(region (start 1 5) (end 1 14))
+		(title "Type Not Determined")
+		(region (start 1 5) (end 1 8))
 		(headline
-			(reflow "The value before this")
-			(reflow " ")
-			(annotated operator "..<")
-			(reflow " ")
-			(reflow "operator has a type that doesn't have a")
-			(reflow " ")
-			(annotated code "range_exclusive_to")
-			(reflow " ")
-			(reflow "method."))
+			(reflow "Nothing in this program determines the type of this string:"))
 		(document
-			(source-region (file "range_missing_method_error.md") (start 1 5) (end 1 14) (annotation error) (line-text "r = \"a\"..<\"z\""))
+			(source-region (file "range_missing_method_error.md") (start 1 5) (end 1 8) (annotation error) (line-text "r = \"a\"..<\"z\""))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "range_exclusive_to")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "Its type needs all of these:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "Str")
+			(text "num where [num.range_exclusive_to : num, num -> Range(num)]")
 			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "Without knowing which type it is, there's no way to tell which")
+			(reflow " ")
+			(annotated operator "..<")
+			(reflow " ")
+			(reflow "to use.")
 			(line-break)
 			(line-break)
 			(annotated emphasis "Hint:")
 			(reflow " ")
-			(reflow "The")
+			(reflow "None of the built-in string types")
+			(reflow " ")
+			(reflow "support")
 			(reflow " ")
 			(annotated operator "..<")
-			(reflow " ")
-			(reflow "operator calls a method named")
-			(reflow " ")
-			(annotated code "range_exclusive_to")
-			(reflow " ")
-			(reflow "on the value preceding it, passing the value after the operator as the one argument."))))
+			(reflow "."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -81,7 +73,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "r"))
-		(e-dispatch-call (method "range_exclusive_to") (constraint-fn-var 227)
+		(e-dispatch-call (method "range_exclusive_to") (constraint-fn-var 232)
 			(receiver
 				(e-runtime-error (tag "erroneous_value_expr")))
 			(args

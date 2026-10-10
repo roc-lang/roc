@@ -425,7 +425,7 @@ expect {
 	result : Try(Dict(U8, Str), [InvalidJson(Str)])
 	result = Json.parse("{\"999\":\"too big\"}")
 
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 
 expect {
@@ -484,14 +484,14 @@ expect {
 	result : Try((Str, U64), [InvalidJson(Str)])
 	result = Json.parse("[\"only\"]")
 
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 
 expect {
 	result : Try((Str, U64), [InvalidJson(Str)])
 	result = Json.parse("[\"too\",2,true]")
 
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 
 expect {
@@ -591,26 +591,26 @@ expect {
 	result : Try([Multi(Str, U64, Bool)], [InvalidJson(Str)])
 	result = Json.parse("\"Multi\"")
 
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 
 expect {
 	result : Try([Multi(Str, U64, Bool)], [InvalidJson(Str)])
 	result = Json.parse("{\"Multi\":[\"tag\",9]}")
 
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 
 expect {
 	result : Try([Multi(Str, U64, Bool)], [InvalidJson(Str)])
 	result = Json.parse("{\"Multi\":[\"tag\",9,true,0]}")
 
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 
 expect {
 	result : Try([Multi(Str, U64, Bool)], [InvalidJson(Str)])
 	result = Json.parse("{\"Multi\":[\"tag\",9,true] {}}")
 
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }

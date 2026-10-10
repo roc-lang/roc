@@ -15,7 +15,7 @@ const hosted_symbol = "roc_stdout_report";
 fn expectHostedArgKeepsCheckedHostAbiLayout(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
     var found: usize = 0;
     for (store.getProcSpecs(), 0..) |_, index| {
-        const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const spec = store.getProcSpec(proc_id);
         const hosted = spec.hosted orelse continue;
         if (!std.mem.eql(u8, store.getString(hosted.symbol), hosted_symbol)) continue;
@@ -27,7 +27,7 @@ fn expectHostedArgKeepsCheckedHostAbiLayout(store: *const lir.LirStore, layouts:
         try std.testing.expectEqual(layout.LayoutTag.tag_union, arg.tag);
         const info = layouts.getTagUnionInfo(arg);
         try std.testing.expectEqual(@as(u32, 32), info.byte_size);
-        try std.testing.expectEqual(@as(u16, 24), info.discriminant_offset);
+        try std.testing.expectEqual(@as(u32, 24), info.discriminant_offset);
     }
     try std.testing.expectEqual(@as(usize, 1), found);
 }
@@ -46,14 +46,14 @@ fn expectReturnAbi(lowered: *const lir.CheckedPipeline.LoweredProgram) harness.L
     const result = &lowered.lir_result;
     var found: usize = 0;
     for (result.store.getProcSpecs(), 0..) |_, index| {
-        const spec = result.store.getProcSpec(@enumFromInt(@as(u32, @intCast(index))));
+        const spec = result.store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
         if (spec.hosted) |hosted| {
             if (!std.mem.eql(u8, result.store.getString(hosted.symbol), "roc_stdout_line")) continue;
             const value = result.layouts.getLayout(spec.ret_layout);
             try std.testing.expectEqual(layout.LayoutTag.tag_union, value.tag);
             const info = result.layouts.getTagUnionInfo(value);
             try std.testing.expectEqual(@as(u32, 32), info.byte_size);
-            try std.testing.expectEqual(@as(u16, 24), info.discriminant_offset);
+            try std.testing.expectEqual(@as(u32, 24), info.discriminant_offset);
             found += 1;
         }
     }
@@ -64,7 +64,7 @@ fn expectReturnAbi(lowered: *const lir.CheckedPipeline.LoweredProgram) harness.L
     try std.testing.expectEqual(layout.LayoutTag.tag_union, value.tag);
     const info = result.layouts.getTagUnionInfo(value);
     try std.testing.expectEqual(@as(u32, 32), info.byte_size);
-    try std.testing.expectEqual(@as(u16, 24), info.discriminant_offset);
+    try std.testing.expectEqual(@as(u32, 24), info.discriminant_offset);
 }
 
 test "issue 11287: LSS hosted and exported results keep the checked host ABI" {
@@ -201,7 +201,7 @@ test "issue 11287: LSS passes the exact owned argument to the host" {
 fn expectHostedArg32(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
     var found: usize = 0;
     for (store.getProcSpecs(), 0..) |_, index| {
-        const spec = store.getProcSpec(@enumFromInt(@as(u32, @intCast(index))));
+        const spec = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
         const hosted = spec.hosted orelse continue;
         if (!std.mem.eql(u8, store.getString(hosted.symbol), hosted_symbol)) continue;
         const args = store.getLocalSpan(spec.args);
@@ -209,7 +209,7 @@ fn expectHostedArg32(store: *const lir.LirStore, layouts: *const layout.Store) h
         try std.testing.expectEqual(layout.LayoutTag.tag_union, value.tag);
         const info = layouts.getTagUnionInfo(value);
         try std.testing.expectEqual(@as(u32, 16), info.byte_size);
-        try std.testing.expectEqual(@as(u16, 12), info.discriminant_offset);
+        try std.testing.expectEqual(@as(u32, 12), info.discriminant_offset);
         found += 1;
     }
     try std.testing.expectEqual(@as(usize, 1), found);

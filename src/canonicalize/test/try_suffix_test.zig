@@ -142,7 +142,7 @@ fn moduleContainsExpectErr(source: []const u8) TrySuffixTestError!bool {
 
     var raw_node_idx: u32 = 0;
     while (raw_node_idx < env.store.nodes.len()) : (raw_node_idx += 1) {
-        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(raw_node_idx));
         if (env.store.nodes.get(node_idx).tag == .expr_expect_err) return true;
     }
 

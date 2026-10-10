@@ -1,4 +1,4 @@
-import NodeValue exposing [NodeValue]
+import NodeValue
 import Node
 
 ## Opaque, typed signal. Wraps a boxed pure `Node.SignalExpr` descriptor referencing

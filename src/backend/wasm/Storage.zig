@@ -153,7 +153,7 @@ pub fn allocAnonymousLocal(self: *Self, val_type: ValType) Allocator.Error!u32 {
 
 /// Look up the wasm-local binding a previous emission site made in this scope.
 pub fn getLocalInfo(self: *Self, local_id: LocalId) ?LocalInfo {
-    const row_index: usize = @intFromEnum(local_id);
+    const row_index: usize = @backingInt(local_id);
     if (row_index >= self.bindings.items.len) return null;
     if (builtin.is_test) self.rows_visited += 1;
     const row = self.bindings.items[row_index];
@@ -173,7 +173,7 @@ pub fn currentTypes(self: *const Self) []const ValType {
 
 /// Grow the column so `local_id` addresses a row, initializing only new rows.
 fn reserveBindingRow(self: *Self, local_id: LocalId) Allocator.Error!usize {
-    const row_index: usize = @intFromEnum(local_id);
+    const row_index: usize = @backingInt(local_id);
     const old_len = self.bindings.items.len;
     if (row_index >= old_len) {
         try self.bindings.resize(self.allocator, row_index + 1);
@@ -189,7 +189,7 @@ test "a nested scope neither sees nor leaks wasm local bindings" {
     var storage = Self.init(std.testing.allocator);
     defer storage.deinit();
 
-    const shared: LocalId = @enumFromInt(7);
+    const shared: LocalId = @fromBackingInt(@intCast(7));
     const outer_idx = try storage.allocLocal(shared, .i64);
     try std.testing.expectEqual(@as(u32, 0), outer_idx);
     try std.testing.expectEqual(LocalInfo{ .idx = outer_idx, .val_type = .i64 }, storage.getLocalInfo(shared).?);
@@ -211,7 +211,7 @@ test "entering and leaving a wasm local scope visits no binding rows" {
     defer storage.deinit();
 
     for (0..64) |i| {
-        _ = try storage.allocLocal(@enumFromInt(@as(u32, @intCast(i))), .i32);
+        _ = try storage.allocLocal(@fromBackingInt(@intCast(@as(u32, @intCast(i)))), .i32);
     }
 
     const before = storage.rows_visited;
@@ -227,16 +227,16 @@ test "a wasm local scope reuses local indices without clearing the column" {
     defer storage.deinit();
 
     const first = storage.beginScope();
-    _ = try storage.allocLocal(@enumFromInt(3), .i32);
+    _ = try storage.allocLocal(@fromBackingInt(@intCast(3)), .i32);
     _ = try storage.allocAnonymousLocal(.i64);
     try std.testing.expectEqual(@as(u32, 2), storage.nextLocalIdx());
     storage.endScope(first);
 
     const second = storage.beginScope();
     try std.testing.expectEqual(@as(u32, 0), storage.nextLocalIdx());
-    try std.testing.expectEqual(@as(?LocalInfo, null), storage.getLocalInfo(@enumFromInt(3)));
+    try std.testing.expectEqual(@as(?LocalInfo, null), storage.getLocalInfo(@fromBackingInt(@intCast(3))));
     const rows_before = storage.rows_visited;
-    const reused = try storage.allocLocal(@enumFromInt(3), .f64);
+    const reused = try storage.allocLocal(@fromBackingInt(@intCast(3)), .f64);
     try std.testing.expectEqual(@as(u32, 0), reused);
     // The row already exists, so binding it again initializes nothing new:
     // one write, no initialization.
@@ -248,7 +248,7 @@ test "three nesting levels each restore the enclosing binding of one local" {
     var storage = Self.init(std.testing.allocator);
     defer storage.deinit();
 
-    const shared: LocalId = @enumFromInt(4);
+    const shared: LocalId = @fromBackingInt(@intCast(4));
     const types = [_]ValType{ .i64, .i32, .f64 };
     var scopes: [types.len]Scope = undefined;
     var bindings: [types.len]LocalInfo = undefined;
@@ -279,7 +279,7 @@ test "a nested scope that fails to allocate still restores the enclosing binding
     var storage = Self.init(std.testing.allocator);
     defer storage.deinit();
 
-    const shared: LocalId = @enumFromInt(2);
+    const shared: LocalId = @fromBackingInt(@intCast(2));
     const outer_scope = storage.beginScope();
     const outer = try storage.allocLocal(shared, .i64);
     const outer_next = storage.nextLocalIdx();
@@ -289,12 +289,12 @@ test "a nested scope that fails to allocate still restores the enclosing binding
     // The rest of the nested scope runs out of memory partway through.
     storage.allocator = failing.allocator();
     // A LocalId far past the column's capacity, so growing it must allocate.
-    try std.testing.expectError(error.OutOfMemory, storage.allocLocal(@enumFromInt(1000), .f32));
+    try std.testing.expectError(error.OutOfMemory, storage.allocLocal(@fromBackingInt(@intCast(1000)), .f32));
     storage.allocator = std.testing.allocator;
     storage.endScope(inner_scope);
 
     try std.testing.expectEqual(LocalInfo{ .idx = outer, .val_type = .i64 }, storage.getLocalInfo(shared).?);
     try std.testing.expectEqual(outer_next, storage.nextLocalIdx());
-    try std.testing.expectEqual(@as(?LocalInfo, null), storage.getLocalInfo(@enumFromInt(1000)));
+    try std.testing.expectEqual(@as(?LocalInfo, null), storage.getLocalInfo(@fromBackingInt(@intCast(1000))));
     storage.endScope(outer_scope);
 }

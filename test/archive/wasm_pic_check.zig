@@ -133,7 +133,7 @@ fn countRelocations(obj: []const u8, counts: *Counts) ParseError!void {
         _ = try section.uleb(); // target section index
         const count = try section.uleb();
         for (0..count) |_| {
-            const reloc: Reloc = @enumFromInt(try section.byte());
+            const reloc: Reloc = @fromBackingInt(@intCast(try section.byte()));
             _ = try section.uleb(); // offset
             _ = try section.uleb(); // symbol index
             if (reloc.hasAddend()) try section.skipSleb();

@@ -5,6 +5,7 @@
 //! caller's responsibility.
 
 const std = @import("std");
+const base = @import("base");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const coff = @import("object/coff.zig");
@@ -84,8 +85,8 @@ const WindowsUnwindState = if (builtin.os.tag == .windows) struct {
         var total: usize = 0;
         for (functions) |function| {
             if (function.start_offset >= function.end_offset) {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic("JIT unwind invariant violated: invalid function range {d}-{d}", .{ function.start_offset, function.end_offset });
+                if (builtin.mode == .debug) {
+                    base.invariant("JIT unwind invariant violated: invalid function range {d}-{d}", .{ function.start_offset, function.end_offset });
                 }
                 unreachable;
             }
@@ -122,8 +123,8 @@ const WindowsUnwindState = if (builtin.os.tag == .windows) struct {
         var previous_end: u32 = 0;
         for (sorted_functions, 0..) |function, i| {
             if (function.start_offset >= function.end_offset or function.end_offset > code_size or function.start_offset < previous_end) {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic("JIT unwind invariant violated: invalid or overlapping function range {d}-{d} for code size {d}", .{ function.start_offset, function.end_offset, code_size });
+                if (builtin.mode == .debug) {
+                    base.invariant("JIT unwind invariant violated: invalid or overlapping function range {d}-{d} for code size {d}", .{ function.start_offset, function.end_offset, code_size });
                 }
                 unreachable;
             }
@@ -310,12 +311,6 @@ pub const ExecutableMemory = struct {
         return func();
     }
 
-    /// Call the code as a function that takes no arguments and returns f64
-    pub fn callReturnF64(self: *const Self) f64 {
-        const func: *const fn () callconv(.c) f64 = @ptrCast(@alignCast(self.entryPtr()));
-        return func();
-    }
-
     /// Call using the internal entrypoint convention:
     /// fn(ret_ptr, args_ptr) callconv(.c) void. The host the calling thread
     /// entered through `builtins.in_process_host` serves the code's host calls.
@@ -337,6 +332,12 @@ fn classifyMemoryOs(os: std.Target.Os.Tag) MemoryOs {
     return switch (os) {
         .macos, .ios, .tvos, .watchos, .linux, .freebsd, .openbsd, .netbsd => .posix,
         .windows => .windows,
+        .wiiu,
+        .@"switch",
+        .gba,
+        .psx,
+        .tios,
+        .ashetos,
         .freestanding,
         .other,
         .contiki,

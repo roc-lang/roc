@@ -36,7 +36,7 @@ OPTIONS:
 PREREQUISITES:
     - hyperfine (benchmark tool)
     - jq (JSON processor)
-    - zig (0.16.0) - only needed if not using --main-dir and --pr-dir
+    - zig (0.17.0) - only needed if not using --main-dir and --pr-dir
 
 EXAMPLES:
     $(basename "$0")                    # Compare current branch vs main
@@ -113,9 +113,6 @@ cleanup() {
     echo "  Done"
 }
 
-# Set up cleanup trap
-trap cleanup EXIT
-
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -156,6 +153,7 @@ parse_args() {
 
 main() {
     parse_args "$@"
+    trap cleanup EXIT
 
     cd "$REPO_ROOT"
 

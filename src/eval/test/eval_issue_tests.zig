@@ -266,6 +266,213 @@ const issue11377GenericNominalCollectionSource =
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
+        .name = "issue 11992: local value captures itself through a function field",
+        .source_kind = .module,
+        .source =
+        \\Thing := { call : {} -> [Again(Thing), Done] }
+        \\main = {
+        \\    thing : Thing
+        \\    thing = { call: |{}| Again(thing) }
+        \\    match (thing.call)({}) {
+        \\        Again(next) => match (next.call)({}) {
+        \\            Again(_) => "again twice"
+        \\            Done => "done"
+        \\        }
+        \\        Done => "done"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"again twice\"" },
+    },
+    .{
+        .name = "issue 11992: recursive local value also captures runtime values",
+        .source_kind = .module,
+        .source =
+        \\Thing := { call : {} -> [Again(Thing), Done], name : Str }
+        \\walk : Thing, U64, Str -> Str
+        \\walk = |t, n, acc| if n == 0 acc else match (t.call)({}) {
+        \\    Again(next) => walk(next, n - 1, acc.concat(next.name))
+        \\    Done => acc
+        \\}
+        \\make : Str -> Thing
+        \\make = |name| {
+        \\    thing : Thing
+        \\    thing = { call: |{}| Again(thing), name: name.concat("!") }
+        \\    thing
+        \\}
+        \\main = walk(make(Str.repeat("ab", 2)), 3, "")
+        ,
+        .expected = .{ .inspect_str = "\"abab!abab!abab!\"" },
+    },
+    .{
+        .name = "issue 11992: recursive tuple destructure captures a sibling binder",
+        .source_kind = .module,
+        .source =
+        \\make : U64 -> U64
+        \\make = |base| {
+        \\    (f, n) = (|{}| n + 1, base)
+        \\    f({})
+        \\}
+        \\main = make(41)
+        ,
+        .expected = .{ .inspect_str = "42" },
+    },
+    .{
+        .name = "issue 11992: recursive record destructure binds mutually recursive functions",
+        .source_kind = .module,
+        .source =
+        \\parity : U64 -> (Bool, Bool)
+        \\parity = |k| {
+        \\    { even, odd } = {
+        \\        even: |x| if x == 0 Bool.True else odd(x - 1),
+        \\        odd: |x| if x == 0 Bool.False else even(x - 1),
+        \\    }
+        \\    (even(k), odd(k))
+        \\}
+        \\main = parity(7)
+        ,
+        .expected = .{ .inspect_str = "(False, True)" },
+    },
+    .{
+        .name = "issue 11992: recursive destructure with record rest and nested tuple",
+        .source_kind = .module,
+        .source =
+        \\sums : U64 -> (U64, U64)
+        \\sums = |k| {
+        \\    { get, ..rest } = { get: |{}| rest.n + k, n: 5 }
+        \\    (g, (m, z)) = (|{}| m + z, (k, 3))
+        \\    (get({}), g({}))
+        \\}
+        \\main = sums(10)
+        ,
+        .expected = .{ .inspect_str = "(15, 13)" },
+    },
+    .{
+        .name = "issue 11992: recursive value from an if that reassigns a var",
+        .source_kind = .module,
+        .source =
+        \\Thing := { call : {} -> [Again(Thing), Done], n : U64 }
+        \\run : U64 -> (U64, U64)
+        \\run = |k| {
+        \\    var $count = 0
+        \\    thing : Thing
+        \\    thing = if k == 0 {
+        \\        $count = 5
+        \\        { call: |{}| Again(thing), n: 1 }
+        \\    } else {
+        \\        { call: |{}| Done, n: 2 }
+        \\    }
+        \\    match (thing.call)({}) {
+        \\        Again(next) => (next.n, $count)
+        \\        Done => (thing.n, $count)
+        \\    }
+        \\}
+        \\main = (run(0), run(1))
+        ,
+        .expected = .{ .inspect_str = "((1, 5), (2, 0))" },
+    },
+    .{
+        .name = "issue 11992: recursive value from a match that reassigns a var",
+        .source_kind = .module,
+        .source =
+        \\Thing := { call : {} -> [Again(Thing), Done], n : U64 }
+        \\run : U64 -> (U64, U64)
+        \\run = |k| {
+        \\    var $hits = 0
+        \\    thing : Thing
+        \\    thing = match k {
+        \\        10 => {
+        \\            $hits = $hits + 1
+        \\            { call: |{}| Again(thing), n: 7 }
+        \\        }
+        \\        _ => { call: |{}| Done, n: 8 }
+        \\    }
+        \\    match (thing.call)({}) {
+        \\        Again(next) => (next.n, $hits)
+        \\        Done => (thing.n, $hits)
+        \\    }
+        \\}
+        \\main = (run(10), run(3))
+        ,
+        .expected = .{ .inspect_str = "((7, 1), (8, 0))" },
+    },
+    .{
+        .name = "issue 11992: recursive tag destructure of a nominal value",
+        .source_kind = .module,
+        .source =
+        \\Thing := { call : {} -> [Again(Thing), Done], n : U64 }
+        \\run : U64 -> U64
+        \\run = |k| {
+        \\    Wrapped(t) = Wrapped(Thing.{ call: |{}| Again(t), n: k + 3 })
+        \\    match (t.call)({}) {
+        \\        Again(next) => next.n
+        \\        Done => 0
+        \\    }
+        \\}
+        \\main = run(4)
+        ,
+        .expected = .{ .inspect_str = "7" },
+    },
+    .{
+        .name = "issue 11992: unannotated local recursive value reports anonymous recursion",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    t = { call: |{}| Again(t), n: 3 }
+        \\    t.n
+        \\}
+        ,
+        .expected = .{ .problem = {} },
+    },
+    .{
+        .name = "issue 11737: independent calls select different nested method targets",
+        .source_kind = .module,
+        .source =
+        \\Runner :: {}.{
+        \\    run = |_, body| body({}).repeat(3)
+        \\}
+        \\demo = |runner| (runner.run(|{}| "a"), runner.run(|{}| [1.U64]))
+        \\main = demo(Runner.{})
+        ,
+        .expected = .{ .inspect_str = "(\"aaa\", [[1], [1], [1]])" },
+    },
+    .{
+        .name = "issue 11737: independent nominal calls preserve nested evidence and distinct results",
+        .source_kind = .module,
+        .source =
+        \\Db(deps) :: { deps : deps }.{
+        \\    run = |db, body| {
+        \\        fetch = db.deps.fetch
+        \\        repeated = fetch({}).repeat(3)
+        \\        (repeated, body({}))
+        \\    }
+        \\}
+        \\demo = |db| (db.run(|{}| "a"), db.run(|{}| 42.U64))
+        \\forward = |db| demo(db)
+        \\main = forward(Db.{ deps: { fetch: |{}| "x" } })
+        ,
+        .expected = .{ .inspect_str = "((\"xxx\", \"a\"), (\"xxx\", 42))" },
+    },
+    .{
+        .name = "issue 11737: stored generic function retains independent callable contracts",
+        .source_kind = .module,
+        .source =
+        \\Db(deps) :: { deps : deps }.{
+        \\    run = |db, body| {
+        \\        fetch = db.deps.fetch
+        \\        (fetch({}).concat("y"), body({}))
+        \\    }
+        \\}
+        \\demo = |db| (db.run(|{}| "a"), db.run(|{}| "b"))
+        \\saved = { invoke: demo }
+        \\main = {
+        \\    invoke = saved.invoke
+        \\    invoke(Db.{ deps: { fetch: |{}| "x" } })
+        \\}
+        ,
+        .expected = .{ .inspect_str = "((\"xy\", \"a\"), (\"xy\", \"b\"))" },
+    },
+    .{
         .name = "issue 11661: closure relaxation preserves previous loop list",
         .source_kind = .module,
         .source =
@@ -624,6 +831,33 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "[{ a: 3, b: 287454020, c: (-7, 2.5) }, { a: 3, b: 287454020, c: (-7, 2.5) }]" },
     },
     .{
+        // A compile-time list of copies that an in-place write consumes is
+        // built fresh by a seed append and a range fill; every copy and the
+        // length must match the static table it replaces.
+        .name = "consumed compile-time list of copies is filled, not looped",
+        .source_kind = .module,
+        .source =
+        \\table : List(U16)
+        \\table = List.repeat(513, 100)
+        \\main = {
+        \\    written = table.set(99, 7) ?? []
+        \\    (written.len(), written.get(0), written.get(50), written.get(98), written.get(99), written.count_if(|x| x == 513))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(100, Ok(513), Ok(513), Ok(513), Ok(7), 99)" },
+    },
+    .{
+        // A single copy is the seed alone.
+        .name = "consumed compile-time list of one copy is the seed append alone",
+        .source_kind = .module,
+        .source =
+        \\table : List(U64)
+        \\table = List.repeat(9, 1)
+        \\main = table.set(0, 4) ?? []
+        ,
+        .expected = .{ .inspect_str = "[4]" },
+    },
+    .{
         .name = "issue 11376: packed nominal constants preserve copy-on-write sharing",
         .source_kind = .module,
         .source =
@@ -958,6 +1192,75 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "(((\"capture\", 1.0), (\"capture\", \"a\")), ((42.0, 1.0), (42.0, \"a\")))" },
     },
     .{
+        // repro for https://github.com/roc-lang/roc/issues/12009
+        .name = "issue 12009: a Try whose caller match tag reachability folded hands its record fields on",
+        .source =
+        \\{
+        \\    step : List(U16), List(U16), U64 -> Try({ a : List(U16), b : List(U16) }, [Bug])
+        \\    step = |a, b0, i| {
+        \\        if i > 100 {
+        \\            return Ok({ a, b: b0 })
+        \\        } else {
+        \\        }
+        \\        var $b = b0
+        \\        var $j = 0.U64
+        \\        while $j < i {
+        \\            $b = match List.set($b, $j, $j.to_u16_wrap()) {
+        \\                Ok(next) => next
+        \\                Err(_) => crash "unreachable"
+        \\            }
+        \\            $j = $j + 1
+        \\        }
+        \\        Ok({ a, b: $b })
+        \\    }
+        \\
+        \\    var $a = List.repeat(0.U16, 8)
+        \\    var $b = List.repeat(0.U16, 8)
+        \\    var $i = 0.U64
+        \\    while $i < 8 {
+        \\        pair = match step($a, $b, $i) {
+        \\            Ok(p) => p
+        \\            Err(_) => crash "step"
+        \\        }
+        \\        $a = List.set(pair.a, $i, 2) ?? pair.a
+        \\        $b = pair.b
+        \\        $i = $i + 1
+        \\    }
+        \\    ($a.fold(0.U64, |acc, x| acc + x.to_u64()) + $b.fold(0.U64, |acc, x| acc + x.to_u64())).to_str()
+        \\}
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "37", .max_allocations = 2, .optimized = true } },
+    },
+    .{
+        .name = "issue 12009: a single-tag union returned from a call hands its record fields on",
+        .source =
+        \\{
+        \\    step : List(U16), List(U16), U64 -> [Pair({ a : List(U16), b : List(U16) })]
+        \\    step = |a, b0, i| {
+        \\        if i > 100 {
+        \\            return Pair({ a, b: b0 })
+        \\        } else {
+        \\        }
+        \\        Pair({ a, b: List.set(b0, i, i.to_u16_wrap()) ?? b0 })
+        \\    }
+        \\
+        \\    var $a = List.repeat(0.U16, 8)
+        \\    var $b = List.repeat(0.U16, 8)
+        \\    var $i = 0.U64
+        \\    while $i < 8 {
+        \\        pair = match step($a, $b, $i) {
+        \\            Pair(p) => p
+        \\        }
+        \\        $a = List.set(pair.a, $i, 2) ?? pair.a
+        \\        $b = pair.b
+        \\        $i = $i + 1
+        \\    }
+        \\    ($a.fold(0.U64, |acc, x| acc + x.to_u64()) + $b.fold(0.U64, |acc, x| acc + x.to_u64())).to_str()
+        \\}
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "44", .max_allocations = 2, .optimized = true } },
+    },
+    .{
         .name = "issue 10703: loop var aliasing an argument leaves argument reads loop-invariant",
         .source = issue10703LineLayoutSource,
         .expected = .{ .allocations_at_most = .{ .output = "820", .max_allocations = 32, .optimized = true } },
@@ -1238,7 +1541,7 @@ pub const tests = [_]TestCase{
             ,
         }},
         .source =
-        \\import Acct exposing [Acct]
+        \\import Acct
         \\
         \\describe : Acct -> U32
         \\describe = |{ id, balance }| id.to_u32() * 1000 + balance
@@ -1935,8 +2238,8 @@ pub const tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Wrap := [W(Str)].{
-        \\    from_interpolation : Str, Iter((Str, Str)) -> Wrap
-        \\    from_interpolation = |first, rest| W(Str.concat("<", Str.concat(Str.from_interpolation(first, rest), ">")))
+        \\    from_interpolation : List(Str) -> Try((List(Str) -> Wrap), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |segments| Str.from_interpolation(segments).map_ok(|assemble| |values| W(Str.concat("<", Str.concat(assemble(values), ">"))))
         \\
         \\    text : Wrap -> Str
         \\    text = |W(s)| s
@@ -2083,7 +2386,7 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "custom vector" },
     },
     .{
-        .name = "issue 11170: unconstrained custom inspect argument uses SIMD backing",
+        .name = "issue 11170: a custom inspect with an unconstrained argument is an inspect override",
         .source_kind = .module,
         .source =
         \\Vector := U64x2.{
@@ -2091,7 +2394,7 @@ pub const tests = [_]TestCase{
         \\}
         \\main = (Str.inspect(Vector.(U64x2.default())), Vector.to_inspect({}))
         ,
-        .expected = .{ .inspect_str = "(\"U64x2(0, 0)\", \"custom vector\")" },
+        .expected = .{ .inspect_str = "(\"custom vector\", \"custom vector\")" },
     },
     .{
         // https://github.com/roc-lang/roc/issues/11189
@@ -2365,7 +2668,7 @@ pub const tests = [_]TestCase{
             ,
         }},
         .source =
-        \\import Effect exposing [Effect]
+        \\import Effect
         \\
         \\Model : { query : Str, items : List(Str) }
         \\
@@ -3367,6 +3670,167 @@ pub const tests = [_]TestCase{
         .expected = .{ .problem_and_crash = {} },
     },
     .{
+        // repro for https://github.com/roc-lang/roc/issues/11502
+        // A rejected relation poisons only the use it rejected. Lowering
+        // `check` instantiates every parameter's type, so the parameter read
+        // by the rejected use must keep its declared type; the use itself
+        // becomes the runtime error.
+        .name = "issue 11502: rejected equality leaves its operand parameter's type intact",
+        .source_kind = .module,
+        .source =
+        \\M :: [].{
+        \\    Ref :: { value : Str }.{
+        \\        is_eq : Ref, Ref -> Bool
+        \\        is_eq = |left, right| left.value == right.value
+        \\    }
+        \\
+        \\    check : Ref, Str -> Bool
+        \\    check = |a, b| a == b
+        \\}
+        \\
+        \\main = M.check({ value: "x" }, "x")
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11502: rejected method call argument leaves its parameter's type intact",
+        .source_kind = .module,
+        .source =
+        \\M :: [].{
+        \\    Ref :: { value : Str }.{
+        \\        same : Ref, Ref -> Bool
+        \\        same = |left, right| left.value == right.value
+        \\    }
+        \\
+        \\    check : Ref, Str -> Bool
+        \\    check = |a, b| a.same(b)
+        \\}
+        \\
+        \\main = M.check({ value: "x" }, "x")
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11502: rejected arithmetic operand leaves its parameter's type intact",
+        .source_kind = .module,
+        .source =
+        \\M :: [].{
+        \\    check : I64, Str -> I64
+        \\    check = |n, s| n + s
+        \\}
+        \\
+        \\main = M.check(1, "x")
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11502: rejected if condition leaves its parameter's type intact",
+        .source_kind = .module,
+        .source =
+        \\M :: [].{
+        \\    check : Str, I64 -> I64
+        \\    check = |s, n| if s n else 2
+        \\}
+        \\
+        \\main = M.check("x", 1)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11502: rejected match guard leaves its parameter's type intact",
+        .source_kind = .module,
+        .source =
+        \\M :: [].{
+        \\    check : Str, I64 -> I64
+        \\    check = |s, n| match n {
+        \\        _ if s => 1
+        \\        _ => 2
+        \\    }
+        \\}
+        \\
+        \\main = M.check("x", 1)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11502: rejected list element leaves its parameter's type intact",
+        .source_kind = .module,
+        .source =
+        \\M :: [].{
+        \\    check : Str -> List(Bool)
+        \\    check = |s| [Bool.True, s]
+        \\}
+        \\
+        \\main = M.check("x").len()
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11502: body rejected by its annotation leaves the returned parameter's type intact",
+        .source_kind = .module,
+        .source =
+        \\M :: [].{
+        \\    check : Str -> Bool
+        \\    check = |s| s
+        \\}
+        \\
+        \\main = M.check("x")
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11502: rejected derived equality argument leaves the captured parameter's type intact",
+        .source_kind = .module,
+        .source =
+        \\M :: [].{
+        \\    check : Str -> Bool
+        \\    check = |b| {
+        \\        f = |a| a.is_eq(b)
+        \\        f({ v: "x" })
+        \\    }
+        \\}
+        \\
+        \\main = M.check("x")
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11502: rejected use of a top-level value leaves the value's type intact",
+        .source_kind = .module,
+        .source =
+        \\flag : Str
+        \\flag = "x"
+        \\
+        \\check : I64 -> I64
+        \\check = |n| if flag n else 2
+        \\
+        \\main = check(1)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11502: rejected use of an imported value becomes a runtime error",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Flag",
+            .source =
+            \\Flag := [].{
+            \\    flag : Str
+            \\    flag = "x"
+            \\}
+            ,
+        }},
+        .source =
+        \\import Flag
+        \\
+        \\check : I64 -> I64
+        \\check = |n| if Flag.flag n else 2
+        \\
+        \\main = check(1)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
         // repro for https://github.com/roc-lang/roc/issues/11489
         // An unannotated function whose local recursive helper appends a
         // freshly appended inner list to an outer accumulator in two match
@@ -3588,5 +4052,822 @@ pub const tests = [_]TestCase{
         \\main = sql.text
         ,
         .expected = .{ .inspect_str = "\"select 1\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11725
+        // `from_quote`'s `where` clause asks for a derived `parser_for` of a
+        // record row that the caller returns inside a tag union
+        // (`[Nope, Yes(row)]`); `run` converts a `from_quote` literal there.
+        // Expected: the program checks cleanly and `main` evaluates to `Nope`.
+        .name = "issue 11725: from_quote where clause derived parser_for of record row returned in tag union",
+        .source_kind = .module,
+        .source =
+        \\Fmt := {}.{
+        \\    parse_record_start = |_, s| Ok(Uncounted(s))
+        \\    parse_record_field = |_, _, s| Ok(Done(s))
+        \\    parse_record_after_field = |_, s| Ok(Continue(s))
+        \\    skip_record_field = |_, s| Ok(s)
+        \\}
+        \\
+        \\Sql(row) := {}.{
+        \\    from_quote : Str -> Try(Sql(row), [BadQuotedBytes(Str)])
+        \\        where [row.parser_for : Fmt -> ({} -> Try({ value : row, rest : {} }, _))]
+        \\    from_quote = |_| Ok(Sql.({}))
+        \\}
+        \\
+        \\query : Sql(row) -> [Nope, Yes(row)]
+        \\query = |_| Nope
+        \\
+        \\run : {} -> [Nope, Yes({})]
+        \\run = |_| query("")
+        \\
+        \\main = run({})
+        ,
+        .expected = .{ .inspect_str = "Nope" },
+    },
+    .{
+        .name = "issue 11725: from_numeral retains nested parser_for evidence",
+        .source_kind = .module,
+        .source =
+        \\Fmt := {}.{
+        \\    parse_record_start = |_, s| Ok(Uncounted(s))
+        \\    parse_record_field = |_, _, s| Ok(Done(s))
+        \\    parse_record_after_field = |_, s| Ok(Continue(s))
+        \\    skip_record_field = |_, s| Ok(s)
+        \\}
+        \\
+        \\Sql(row) := {}.{
+        \\    from_numeral : Numeral -> Try(Sql(row), [InvalidNumeral(Str)])
+        \\        where [row.parser_for : Fmt -> ({} -> Try({ value : row, rest : {} }, _))]
+        \\    from_numeral = |_| Ok(Sql.({}))
+        \\}
+        \\
+        \\query : Sql(row) -> [Nope, Yes(row)]
+        \\query = |_| Nope
+        \\
+        \\run : {} -> [Nope, Yes({})]
+        \\run = |_| query(0)
+        \\
+        \\main = run({})
+        ,
+        .expected = .{ .inspect_str = "Nope" },
+    },
+    .{
+        .name = "issue 11725: dependent from_quote rejection in an untaken branch is eager",
+        .source_kind = .module,
+        .source =
+        \\Fmt := {}.{
+        \\    parse_record_start = |_, s| Ok(Uncounted(s))
+        \\    parse_record_field = |_, _, s| Ok(Done(s))
+        \\    parse_record_after_field = |_, s| Ok(Continue(s))
+        \\    skip_record_field = |_, s| Ok(s)
+        \\}
+        \\
+        \\Sql(row) := {}.{
+        \\    from_quote : Str -> Try(Sql(row), [BadQuotedBytes(Str)])
+        \\        where [row.parser_for : Fmt -> ({} -> Try({ value : row, rest : {} }, _))]
+        \\    from_quote = |_| Err(BadQuotedBytes("rejected"))
+        \\}
+        \\
+        \\query : Sql(row) -> [Nope, Yes(row)]
+        \\query = |_| Nope
+        \\
+        \\run : {} -> [Nope, Yes({})]
+        \\run = |_| if False query("") else Nope
+        \\
+        \\main = run({})
+        ,
+        .expected = .problem,
+    },
+    .{
+        .name = "issue 11725: uninstantiated from_quote evidence has no conversion root",
+        .source_kind = .module,
+        .source =
+        \\Fmt := {}.{
+        \\    parse_record_start = |_, s| Ok(Uncounted(s))
+        \\    parse_record_field = |_, _, s| Ok(Done(s))
+        \\    parse_record_after_field = |_, s| Ok(Continue(s))
+        \\    skip_record_field = |_, s| Ok(s)
+        \\}
+        \\
+        \\Sql(row) := {}.{
+        \\    from_quote : Str -> Try(Sql(row), [BadQuotedBytes(Str)])
+        \\        where [row.parser_for : Fmt -> ({} -> Try({ value : row, rest : {} }, _))]
+        \\    from_quote = |_| Err(BadQuotedBytes("rejected"))
+        \\}
+        \\
+        \\query : Sql(row) -> [Nope, Yes(row)]
+        \\query = |_| Nope
+        \\
+        \\run : {} -> [Nope, Yes({})]
+        \\run = |_| query("")
+        \\
+        \\main = 0.I64
+        ,
+        .expected = .{ .inspect_str = "0" },
+    },
+    .{
+        .name = "issue 11725: from_quote codec evidence follows distinct row specializations",
+        .source_kind = .module,
+        .source =
+        \\Fmt := {}.{
+        \\    parse_record_start = |_, s| Ok(Uncounted(s))
+        \\    parse_record_field = |_, _, s| Ok(Done(s))
+        \\    parse_record_after_field = |_, s| Ok(Continue(s))
+        \\    skip_record_field = |_, s| Ok(s)
+        \\}
+        \\
+        \\Sql(row) := {}.{
+        \\    from_quote : Str -> Try(Sql(row), [BadQuotedBytes(Str)])
+        \\        where [row.parser_for : Fmt -> ({} -> Try({ value : row, rest : {} }, _))]
+        \\    from_quote = |_| Ok(Sql.({}))
+        \\}
+        \\
+        \\query : Sql(row) -> [Nope, Yes(row)]
+        \\query = |_| Nope
+        \\
+        \\run : {} -> [Nope, Yes(row)]
+        \\    where [row.parser_for : Fmt -> ({} -> Try({ value : row, rest : {} }, _))]
+        \\run = |_| query("")
+        \\
+        \\Row := {}.{
+        \\    parser_for : Fmt -> ({} -> Try({ value : Row, rest : {} }, [Bad]))
+        \\    parser_for = |_| |s| Ok({ value: Row.({}), rest: s })
+        \\}
+        \\
+        \\as_record : [Nope, Yes({})]
+        \\as_record = run({})
+        \\as_nominal : [Nope, Yes(Row)]
+        \\as_nominal = run({})
+        \\main = (as_record, as_nominal)
+        ,
+        .expected = .{ .inspect_str = "(Nope, Nope)" },
+    },
+    .{
+        // A `?` whose closed error row the enclosing annotated result rejects
+        // is a checked error that crashes when reached. The function keeps its
+        // body's result type, so a caller that widens the error row still
+        // specializes it, and the rejected return never flows a value.
+        .name = "rejected try suffix on a nominal payload function crashes at runtime",
+        .source_kind = .module,
+        .source =
+        \\Holder := [H({} -> Try(I64, [WrongArity, TypeMismatch]))].{
+        \\    run : Holder -> Try(I64, _)
+        \\    run = |h|
+        \\        match h {
+        \\            H(fn) => {
+        \\                n = fn({})?
+        \\                if n > 0 Ok(n) else Err(NotAFunction)
+        \\            }
+        \\        }
+        \\}
+        \\
+        \\main = Holder.run(H(|_| Err(WrongArity))) == Err(WrongArity)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "rejected try suffix on a function parameter crashes at runtime",
+        .source_kind = .module,
+        .source =
+        \\run : ({} -> Try(I64, [WrongArity, TypeMismatch])) -> Try(I64, _)
+        \\run = |fn| {
+        \\    n = fn({})?
+        \\    if n > 0 Ok(n) else Err(NotAFunction)
+        \\}
+        \\
+        \\main = run(|_| Err(WrongArity)) == Err(WrongArity)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11769
+        // A custom encoder_for calls another type's derived `encoder_for : _`
+        // by name, so both values encode through Flag's derived encoder.
+        .name = "issue 11769: custom encoder_for calls a derived encoder_for by name",
+        .source_kind = .module,
+        .source =
+        \\Flag := [On, Off].{
+        \\    encoder_for : _
+        \\}
+        \\
+        \\Wrap := [W(Flag)].{
+        \\    encoder_for = |encoding| {
+        \\        encode_flag = Flag.encoder_for(encoding)
+        \\        |W(flag), state| encode_flag(flag, state)
+        \\    }
+        \\}
+        \\
+        \\main : Str
+        \\main = "${Json.to_str(Flag.On)} ${Json.to_str(Wrap.W(Flag.Off))}"
+        ,
+        .expected = .{ .inspect_str = "\"\\\"On\\\" \\\"Off\\\"\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11769
+        // A builtin type's derived encoder_for, called by name.
+        .name = "issue 11769: custom encoder_for calls a builtin derived encoder_for by name",
+        .source_kind = .module,
+        .source =
+        \\Wrap := [W(Bool)].{
+        \\    encoder_for = |encoding| {
+        \\        encode_bool = Bool.encoder_for(encoding)
+        \\        |W(b), state| encode_bool(b, state)
+        \\    }
+        \\}
+        \\
+        \\main : Str
+        \\main = Json.to_str(Wrap.W(Bool.True))
+        ,
+        .expected = .{ .inspect_str = "\"true\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11769
+        // A record-backed derived encoder_for reached through a type alias.
+        .name = "issue 11769: derived encoder_for of a record backing called through a type alias",
+        .source_kind = .module,
+        .source =
+        \\Point := { x : I64, y : I64 }.{
+        \\    encoder_for : _
+        \\}
+        \\
+        \\P : Point
+        \\
+        \\Wrap := [W(Point)].{
+        \\    encoder_for = |encoding| {
+        \\        encode_point = P.encoder_for(encoding)
+        \\        |W(point), state| encode_point(point, state)
+        \\    }
+        \\}
+        \\
+        \\main : Str
+        \\main = Json.to_str(Wrap.W(Point.({ x: 1, y: 2 })))
+        ,
+        .expected = .{ .inspect_str = "\"{\\\"x\\\":1,\\\"y\\\":2}\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11769
+        // A parameterized owner's derived encoder_for, called by name.
+        .name = "issue 11769: derived encoder_for of a parameterized nominal called by name",
+        .source_kind = .module,
+        .source =
+        \\Pair(a) := [Pair(a, a)].{
+        \\    encoder_for : _
+        \\}
+        \\
+        \\Wrap := [W(Pair(Str))].{
+        \\    encoder_for = |encoding| {
+        \\        encode_pair = Pair.encoder_for(encoding)
+        \\        |W(pair), state| encode_pair(pair, state)
+        \\    }
+        \\}
+        \\
+        \\main : Str
+        \\main = Json.to_str(Wrap.W(Pair.Pair("a", "b")))
+        ,
+        .expected = .{ .inspect_str = "\"{\\\"Pair\\\":[\\\"a\\\",\\\"b\\\"]}\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11769
+        // A custom parser_for calls another type's derived parser_for by name.
+        .name = "issue 11769: custom parser_for calls a derived parser_for by name",
+        .source_kind = .module,
+        .source =
+        \\Flag := [On, Off].{
+        \\    parser_for : _
+        \\}
+        \\
+        \\Wrap := [W(Flag)].{
+        \\    parser_for = |format| {
+        \\        parse_flag = Flag.parser_for(format)
+        \\        |state| {
+        \\            parsed = parse_flag(state)?
+        \\            Ok({ value: W(parsed.value), rest: parsed.rest })
+        \\        }
+        \\    }
+        \\}
+        \\
+        \\main : Str
+        \\main = {
+        \\    decoded : Try(Wrap, [InvalidJson(Str)])
+        \\    decoded = Json.parse("\"Off\"")
+        \\    match decoded {
+        \\        Ok(W(Off)) => "off"
+        \\        Ok(W(On)) => "on"
+        \\        Err(_) => "failed"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"off\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11769
+        // Derived is_eq and to_hash called by name.
+        .name = "issue 11769: derived is_eq called by name",
+        .source_kind = .module,
+        .source =
+        \\Flag := [On, Off].{
+        \\    is_eq : _
+        \\}
+        \\
+        \\main : Bool
+        \\main = Flag.is_eq(Flag.On, Flag.On) and !Flag.is_eq(Flag.On, Flag.Off)
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11861
+        // A derived encoder_for called with a generic format belongs to the
+        // caller's scheme even when a numeric-default drain runs first, so an
+        // unused caller that feeds it the wrong value type still checks.
+        .name = "issue 11861: unused generic caller of a derived encoder_for with a mismatched value",
+        .source_kind = .module,
+        .source =
+        \\A := { x : U64 }.{
+        \\    encoder_for : _
+        \\}
+        \\
+        \\B := [W].{
+        \\    encoder_for = |e| {
+        \\        i = A.encoder_for(e)
+        \\        |W, s| i({ x: 1 }, s)
+        \\    }
+        \\}
+        \\
+        \\main : Str
+        \\main = "ok"
+        ,
+        .expected = .{ .inspect_str = "\"ok\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11861
+        // The derived encoder_for call relates its signature to the call, so
+        // the encoder takes an `A`, and the record literal passed to it is
+        // checked against `A` and constructs one.
+        .name = "issue 11861: using a generic caller of a derived encoder_for encodes the value it constructs",
+        .source_kind = .module,
+        .source =
+        \\A := { x : U64 }.{
+        \\    encoder_for : _
+        \\}
+        \\
+        \\B := [W].{
+        \\    encoder_for = |e| {
+        \\        i = A.encoder_for(e)
+        \\        |W, s| i({ x: 1 }, s)
+        \\    }
+        \\}
+        \\
+        \\main : Str
+        \\main = Json.to_str(B.W)
+        ,
+        .expected = .{ .inspect_str = "\"{\\\"x\\\":1}\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11770
+        // A method annotated `_` whose body is erroneous has no declared
+        // callable type, so its declaration is rejected like an unannotated
+        // one instead of publishing a lambda whose checked type is not a
+        // function.
+        .name = "issue 11770: erroneous method annotated with a hole dispatched through a where clause",
+        .source_kind = .module,
+        .source =
+        \\T := [T].{
+        \\    show : _
+        \\    show = |t| nope(t)
+        \\}
+        \\
+        \\render : a -> Str where [a.show : a -> Str]
+        \\render = |value| value.show()
+        \\
+        \\main = render(T.T)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11770: erroneous method annotated with a hole called on a value",
+        .source_kind = .module,
+        .source =
+        \\T := [T].{
+        \\    show : _
+        \\    show = |t| nope(t)
+        \\}
+        \\
+        \\show_it = |value| value.show()
+        \\
+        \\main = show_it(T.T)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11770: erroneous method annotated with a hole called through a type parameter",
+        .source_kind = .module,
+        .source =
+        \\T := [T].{
+        \\    show : _
+        \\    show = |t| nope(t)
+        \\}
+        \\
+        \\render : a -> Str where [a.show : a -> Str]
+        \\render = |value| {
+        \\    A : a
+        \\    A.show(value)
+        \\}
+        \\
+        \\main = render(T.T)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11770: method annotated with a hole calling a declaration with no value",
+        .source_kind = .module,
+        .source =
+        \\missing : T -> Str
+        \\
+        \\T := [T].{
+        \\    show : _
+        \\    show = |t| missing(t)
+        \\}
+        \\
+        \\render : a -> Str where [a.show : a -> Str]
+        \\render = |value| value.show()
+        \\
+        \\main = render(T.T)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11770: method annotated with a hole and a valid body dispatches through a where clause",
+        .source_kind = .module,
+        .source =
+        \\T := [T].{
+        \\    show : _
+        \\    show = |_t| "shown"
+        \\}
+        \\
+        \\render : a -> Str where [a.show : a -> Str]
+        \\render = |value| value.show()
+        \\
+        \\main = render(T.T)
+        ,
+        .expected = .{ .inspect_str = "\"shown\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11846
+        .name = "issue 11846: unused local annotated with a recursive alias",
+        .source_kind = .module,
+        .source =
+        \\T : T
+        \\
+        \\main = {
+        \\    x : T
+        \\    x = 1
+        \\
+        \\    {}
+        \\}
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11846: unused local annotated with an undeclared type",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    x : Nope
+        \\    x = 1
+        \\
+        \\    {}
+        \\}
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11844
+        .name = "issue 11844: top-level record destructure missing a field",
+        .source_kind = .module,
+        .source =
+        \\{ host, port } = { host: "localhost" }
+        \\
+        \\main = host
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11844: top-level record destructure using the missing field",
+        .source_kind = .module,
+        .source =
+        \\{ host, port } = { host: "localhost" }
+        \\
+        \\main = port
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11844: top-level tuple destructure with the wrong arity",
+        .source_kind = .module,
+        .source =
+        \\(a, b) = (1, 2, 3)
+        \\
+        \\main = a
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        // Concrete dispatch replay: later uses of `big` select each `step`
+        // from the first use's settled instance, and publish its `bump`.
+        .name = "issue 11801: replayed method chain computes each use's own values",
+        .source_kind = .module,
+        .source =
+        \\Wrap(a) := [W(a)].{
+        \\  step : Wrap(a) -> Wrap(a) where [a.bump : a -> a]
+        \\  step = |Wrap.W(x)| Wrap.W(x.bump())
+        \\}
+        \\
+        \\Cnt := [Cnt(I64)].{
+        \\  bump : Cnt -> Cnt
+        \\  bump = |Cnt.Cnt(n)| Cnt.Cnt(n + 1)
+        \\  pair_with : Cnt, b -> (Cnt, b)
+        \\  pair_with = |c, x| (c, x)
+        \\}
+        \\
+        \\big = |a| a.step().step().step()
+        \\
+        \\value : Wrap(Cnt) -> I64
+        \\value = |Wrap.W(Cnt.Cnt(n))| n
+        \\
+        \\small : (Cnt, U8)
+        \\small = Cnt.Cnt(1.I64).pair_with(200)
+        \\
+        \\wide : (Cnt, I32)
+        \\wide = Cnt.Cnt(2.I64).pair_with(-70000)
+        \\
+        \\main = (value(big(Wrap.W(Cnt.Cnt(0.I64)))), value(big(Wrap.W(Cnt.Cnt(10.I64)))), value(Wrap.W(Cnt.Cnt(5.I64)).step()), small.1, wide.1)
+        ,
+        .expected = .{ .inspect_str = "(3, 13, 6, 200, -70000)" },
+    },
+    .{
+        // Whole-use replay: the first use makes `big` replayable, the last
+        // `I64` use takes the second one's settled instance, and the `U8` use
+        // settles its own.
+        .name = "issue 11801: replayed uses compute each use's own values",
+        .source_kind = .module,
+        .source =
+        \\big = |a| a.map(|x| x + 1).map(|x| x * 2)
+        \\
+        \\main = (big([1.I64, 5]), big([2.I64]), big([3.U8]), big([4.I64]))
+        ,
+        .expected = .{ .inspect_str = "([4, 12], [6], [8], [10])" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/12051
+        // `List.get` and `List.set` return `Try`, so this insertion sort has
+        // type errors. With `replace` left unannotated, compilation must still
+        // report those problems and evaluation must reach the runtime error
+        // rather than segfaulting.
+        .name = "issue 12051: unannotated replace helper in insertion sort with type errors",
+        .source_kind = .module,
+        .source =
+        \\f : List(U64) -> List(U64)
+        \\f = |array| g(array, 1)
+        \\
+        \\g = |array, i| {
+        \\    if i < array.len() {
+        \\        x = array.get(i)
+        \\        (arr, j) = shift(array, x, i)
+        \\        g(replace(arr, j, x), i + 1)
+        \\    } else {
+        \\        array
+        \\    }
+        \\}
+        \\
+        \\shift = |array, x, j| {
+        \\    if array.get(j - 1) > x {
+        \\        shift(replace(array, j, array.get(j - 1)), x, j - 1)
+        \\    } else {
+        \\        (array, j)
+        \\    }
+        \\}
+        \\
+        \\replace = |array, idx, elem| array.set(idx, elem)
+        \\
+        \\main = f([2, 1])
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/12051
+        // The well-typed form of the same insertion sort keeps every helper
+        // unannotated, so its recursive calls forward the same dispatch
+        // evidence, and must sort correctly.
+        .name = "issue 12051: unannotated replace helper in well-typed insertion sort",
+        .source_kind = .module,
+        .source =
+        \\f : List(U64) -> List(U64)
+        \\f = |array| g(array, 1)
+        \\
+        \\g = |array, i| {
+        \\    if i < array.len() {
+        \\        x = array.get(i) ?? 0
+        \\        (arr, j) = shift(array, x, i)
+        \\        g(replace(arr, j, x), i + 1)
+        \\    } else {
+        \\        array
+        \\    }
+        \\}
+        \\
+        \\shift = |array, x, j| {
+        \\    if j > 0 and (array.get(j - 1) ?? 0) > x {
+        \\        shift(replace(array, j, array.get(j - 1) ?? 0), x, j - 1)
+        \\    } else {
+        \\        (array, j)
+        \\    }
+        \\}
+        \\
+        \\replace = |array, idx, elem| array.set(idx, elem) ?? array
+        \\
+        \\main = f([3, 1, 2])
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "issue 11993: method call on a nominal type declared in a function body",
+        .source_kind = .module,
+        .source =
+        \\run = |_| {
+        \\    Counter := { count : U64 }.{
+        \\        value = |counter| counter.count
+        \\    }
+        \\
+        \\    counter = Counter.{ count: 0 }
+        \\    count = counter.value()
+        \\    expect count == 0
+        \\    count
+        \\}
+        \\
+        \\main = run({})
+        ,
+        .expected = .{ .inspect_str = "0" },
+    },
+    .{
+        .name = "issue 11993: unannotated method of a function-body nominal type dispatched at a concrete type",
+        .source_kind = .module,
+        .source =
+        \\run = |_| {
+        \\    Counter := { count : U64 }.{
+        \\        value = |counter| counter.count + 1
+        \\    }
+        \\
+        \\    counter = Counter.{ count: 0 }
+        \\    counter.value()
+        \\}
+        \\
+        \\main = run({})
+        ,
+        .expected = .{ .inspect_str = "1" },
+    },
+    .{
+        .name = "issue 11993: a method of a function-body nominal type that captures a local is rejected",
+        .source_kind = .module,
+        .source =
+        \\run = |_| {
+        \\    offset = 1
+        \\    Counter := { count : U64 }.{
+        \\        value = |counter| counter.count + offset
+        \\    }
+        \\
+        \\    counter = Counter.{ count: 0 }
+        \\    count = counter.value()
+        \\    expect count == 1
+        \\    count
+        \\}
+        \\
+        \\main = run({})
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/12100
+        // Two custom `from_numeral` literals at the same nominal type, next to
+        // an `==` on that type, each get their own literal conversion and must
+        // evaluate the boolean expression.
+        .name = "issue 12100: two from_numeral literals beside == on the same nominal type",
+        .source_kind = .module,
+        .source =
+        \\One :: [].{
+        \\    Unit :: I64.{
+        \\        is_eq : _
+        \\
+        \\        from_numeral : Numeral -> Try(Unit, [InvalidNumeral(Str)])
+        \\        from_numeral = |_| Ok(Unit.(0))
+        \\
+        \\        is_lt : Unit, Unit -> Bool
+        \\        is_lt = |Unit.(a), Unit.(b)| a < b
+        \\    }
+        \\}
+        \\
+        \\check : { a : One.Unit, b : One.Unit } -> Bool
+        \\check = |{ a, b }| a < 0 or b < 0 or a == b
+        \\
+        \\main = check({ a: One.Unit.(1), b: One.Unit.(1) })
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/12100
+        // The two `+` relations merge into one declarative relation once `==`
+        // unifies their receivers; both dispatches must share its checked
+        // target instantiation, including the target's scheme variable.
+        .name = "issue 12100: two merged operator relations whose target has a scheme variable",
+        .source_kind = .module,
+        .source =
+        \\Unit :: I64.{
+        \\    is_eq : _
+        \\
+        \\    plus : Unit, List(x) -> Unit
+        \\    plus = |u, _| u
+        \\}
+        \\
+        \\check : { a : Unit, b : Unit } -> Bool
+        \\check = |{ a, b }| (a + []) == (b + []) and a == b
+        \\
+        \\main = check({ a: Unit.(1), b: Unit.(1) })
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        // A generalized function's literal conversion is committed per
+        // specialization: each use converts at its own type, and checking
+        // instantiates no target for the literal itself.
+        .name = "issue 12100: generalized function literal used at a custom numeral type and at Dec",
+        .source_kind = .module,
+        .source =
+        \\Unit :: I64.{
+        \\    from_numeral : Numeral -> Try(Unit, [InvalidNumeral(Str)])
+        \\    from_numeral = |_| Ok(Unit.(42))
+        \\
+        \\    to_i64 : Unit -> I64
+        \\    to_i64 = |Unit.(n)| n
+        \\}
+        \\
+        \\t = || 0
+        \\
+        \\main = {
+        \\    u : Unit
+        \\    u = t()
+        \\    d : Dec
+        \\    d = t()
+        \\    (u.to_i64(), d)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(42, 0.0)" },
+    },
+    .{
+        // A literal no use pins converts at its numeric default.
+        .name = "issue 12100: unpinned generalized function literal converts at its numeric default",
+        .source_kind = .module,
+        .source =
+        \\t = || 0
+        \\
+        \\main = t()
+        ,
+        .expected = .{ .inspect_str = "0.0" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/12095
+        // `f`'s body returns its closed parameter, which closes the result row,
+        // so its own recursive call cannot be used at a wider union. The use is
+        // reported and retired; reaching it at runtime crashes.
+        .name = "issue 12095: recursive call result used at a wider tag union than the body leaves open",
+        .source_kind = .module,
+        .source =
+        \\f : [A, C] -> [A, C]
+        \\f = |a| if a == A a else {
+        \\    _x = [f(A), B]
+        \\    a
+        \\}
+        \\
+        \\main = f(C)
+        ,
+        .expected = .problem_and_crash,
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/12095
+        // `f`'s body constructs its results, so the result row stays open and
+        // its recursive call may be used at a wider union.
+        .name = "issue 12095: recursive call result used at a wider tag union the body leaves open",
+        .source_kind = .module,
+        .source =
+        \\f : U8 -> [A, C]
+        \\f = |n| if n == 0 A else {
+        \\    xs = [f(n - 1), B]
+        \\    match xs {
+        \\        [A, ..] => C
+        \\        _ => A
+        \\    }
+        \\}
+        \\
+        \\main = f(2)
+        ,
+        .expected = .{ .inspect_str = "A" },
     },
 };

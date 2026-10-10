@@ -1,5 +1,5 @@
 # Run with: roc test main.roc --no-cache --specialize=no
-import Wrap exposing [Wrap]
+import Wrap
 
 # repro for https://github.com/roc-lang/roc/issues/11352
 retry : Try(Try(U64, [Unset]), [NoMatch]) -> Try(Try(U64, [Unset]), [NoMatch])

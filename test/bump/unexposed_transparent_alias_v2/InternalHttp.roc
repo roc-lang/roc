@@ -1,0 +1,3 @@
+InternalHttp :: [].{
+    TransportErr : [Timeout, NetworkError]
+}

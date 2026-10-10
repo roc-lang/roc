@@ -1,7 +1,7 @@
 app [program] { pf: platform "./main.roc" }
 
-import pf.Msg exposing [Msg]
-import pf.View exposing [View]
+import pf.Msg
+import pf.View
 
 Model := { count : I32 }
 

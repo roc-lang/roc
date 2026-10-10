@@ -95,7 +95,7 @@ fn expectPublishedPatterns(body: []const u8, expected_error: ?[]const u8) Patter
     const artifact = build.findModuleByPath(path).?.semanticData().?.checked_artifact.?;
     var found_good = false;
     for (0..artifact.checked_bodies.stored_exprs.items.len) |i| {
-        const expr = artifact.checked_bodies.expr(@enumFromInt(i));
+        const expr = artifact.checked_bodies.expr(@fromBackingInt(@intCast(i)));
         const text = source[expr.source_region.start.offset..expr.source_region.end.offset];
         if (std.mem.eql(u8, text, "123")) {
             try std.testing.expect(expr.data == .numeral);

@@ -494,20 +494,16 @@ EndOfFile,
 			(e-malformed (reason "expr_unexpected_token")))
 		(s-malformed (tag "statement_unexpected_token"))))
 ~~~
-# FORMATTED
-~~~roc
-x = ('a', 'é', '🚀', , , , , '\u(1F680)', , , '\\', '\'', , , )
-
-y =
-
-# Test backslash before EOF
-~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
 	(d-let
 		(p-assign (ident "x"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr")
+			(e-num (value "97"))
+			(e-num (value "233"))
+			(e-num (value "128640"))
+			(e-runtime-error (tag "expr_syntax_error"))))
 	(d-let
 		(p-assign (ident "y"))
 		(e-runtime-error (tag "expr_syntax_error"))))

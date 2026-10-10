@@ -23,7 +23,7 @@ TYPE MISMATCH - effectful_callback_through_pure_callback_annotation.md:9:8:9:8
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 9 8) (end 9 23))
+		(region (start 9 19) (end 9 22))
 		(headline
 			(reflow "The")
 			(reflow " ")
@@ -152,7 +152,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "k")))
-			(e-call (constraint-fn-var 285)
+			(e-call (constraint-fn-var 279)
 				(e-lookup-local
 					(p-assign (ident "k")))
 				(e-string
@@ -170,7 +170,7 @@ NO CHANGE
 			(args
 				(p-assign (ident "x"))
 				(p-assign (ident "f")))
-			(e-call (constraint-fn-var 296)
+			(e-call (constraint-fn-var 289)
 				(e-lookup-local
 					(p-assign (ident "call_with")))
 				(e-closure
@@ -180,7 +180,7 @@ NO CHANGE
 					(e-lambda
 						(args
 							(p-underscore))
-						(e-call (constraint-fn-var 295)
+						(e-call (constraint-fn-var 288)
 							(e-lookup-local
 								(p-assign (ident "f")))
 							(e-lookup-local

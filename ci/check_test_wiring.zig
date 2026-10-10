@@ -296,7 +296,7 @@ pub fn main(init: std.process.Init) !void {
         });
         try stdout.print("To fix:\n", .{});
         try stdout.print("1. Add missing std.testing.refAllDecls() calls to the appropriate mod.zig files\n", .{});
-        try stdout.print("2. Ensure all modules with tests are listed in src/build/modules.zig test_configs\n", .{});
+        try stdout.print("2. Ensure all modules with tests have a row in the module table in src/build/modules.zig\n", .{});
         try stdout.print("3. Remember that refAllDecls(@import(\"module\")) across module boundaries collects\n", .{});
         try stdout.print("   nothing; test decls only run when reachable inside the test binary's root module\n\n", .{});
         try stdout.flush();
@@ -458,7 +458,7 @@ fn enumerateBinaryTests(
 
 fn sendClientMessage(io: std.Io, file: std.Io.File, tag: std.zig.Client.Message.Tag) !void {
     var message: [8]u8 = undefined;
-    std.mem.writeInt(u32, message[0..4], @intFromEnum(tag), .little);
+    std.mem.writeInt(u32, message[0..4], @backingInt(tag), .little);
     std.mem.writeInt(u32, message[4..8], 0, .little);
     try file.writeStreamingAll(io, &message);
 }
@@ -674,14 +674,14 @@ fn collectFileTests(
 ) !bool {
     const source = try readSourceFile(allocator, std_io, path);
     defer allocator.free(source);
-    var tree = try Ast.parse(allocator, source, .zig);
+    var tree = try Ast.parse(allocator, source, .{ .mode = .zig });
     defer tree.deinit(allocator);
 
     var file_copy: ?[]const u8 = null;
     var has_test_decl = false;
     var has_unnamed_test = false;
     for (0..tree.nodes.len) |node_index| {
-        const node: Ast.Node.Index = @enumFromInt(node_index);
+        const node: Ast.Node.Index = @fromBackingInt(@intCast(node_index));
         if (tree.nodeTag(node) != .test_decl) continue;
         has_test_decl = true;
 
@@ -798,7 +798,7 @@ fn collectFileImports(
     };
     defer allocator.free(source);
 
-    var tree = try Ast.parse(allocator, source, .zig);
+    var tree = try Ast.parse(allocator, source, .{ .mode = .zig });
     defer tree.deinit(allocator);
 
     const tags = tree.tokens.items(.tag);
@@ -856,8 +856,9 @@ fn resolveImportPath(
 ///
 /// In addition to mod.zig imports, some tests are hooked up via explicit
 /// build roots. Any Zig file that is used as a
-/// `root_source_file = b.path("...")` should not be reported as missing
-/// wiring. These roots also act as aggregators for their own imports.
+/// `root_source_file = b.path("...")`, or named as the `root` of a module
+/// table row, should not be reported as missing wiring. These roots also act
+/// as aggregators for their own imports.
 fn markBuildRootsAsReferenced(
     allocator: Allocator,
     std_io: std.Io,
@@ -886,21 +887,28 @@ fn markBuildRootsFromFile(
     const source = try readSourceFile(allocator, std_io, build_path);
     defer allocator.free(source);
 
-    const pattern = ".root_source_file = b.path(\"";
-    var search_index: usize = 0;
+    // A root is named either directly at the `addModule`/`addTest` call or as
+    // the `root` of a row in the module table in `src/build/modules.zig`.
+    const patterns = [_][]const u8{
+        ".root_source_file = b.path(\"",
+        ".root = \"",
+    };
+    for (patterns) |pattern| {
+        var search_index: usize = 0;
 
-    while (std.mem.findPos(u8, source, search_index, pattern)) |match_pos| {
-        const literal_start = match_pos + pattern.len;
-        const literal_end = std.mem.findScalarPos(u8, source, literal_start, '"') orelse break;
-        const rel_path = source[literal_start..literal_end];
-        search_index = literal_end + 1;
+        while (std.mem.findPos(u8, source, search_index, pattern)) |match_pos| {
+            const literal_start = match_pos + pattern.len;
+            const literal_end = std.mem.findScalarPos(u8, source, literal_start, '"') orelse break;
+            const rel_path = source[literal_start..literal_end];
+            search_index = literal_end + 1;
 
-        if (!std.mem.endsWith(u8, rel_path, ".zig")) continue;
-        if (!std.mem.startsWith(u8, rel_path, "src/")) continue;
-        if (!fileExists(std_io, rel_path)) continue;
+            if (!std.mem.endsWith(u8, rel_path, ".zig")) continue;
+            if (!std.mem.startsWith(u8, rel_path, "src/")) continue;
+            if (!fileExists(std_io, rel_path)) continue;
 
-        try markReferenced(allocator, referenced, rel_path);
-        try enqueueForScan(allocator, scanned, scan_queue, rel_path);
+            try markReferenced(allocator, referenced, rel_path);
+            try enqueueForScan(allocator, scanned, scan_queue, rel_path);
+        }
     }
 }
 

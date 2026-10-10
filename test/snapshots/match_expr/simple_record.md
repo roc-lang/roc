@@ -18,7 +18,7 @@ TYPE MISMATCH - simple_record.md:1:1:1:1
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 1 1) (end 4 2))
+		(region (start 3 5) (end 3 12))
 		(headline
 			(reflow "The")
 			(reflow " ")

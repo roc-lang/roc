@@ -46,7 +46,7 @@ TYPE MISMATCH - type_local_scope_vars.md:19:14:19:14
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 19 14) (end 19 18))
+		(region (start 19 16) (end 19 17))
 		(headline
 			(reflow "The")
 			(reflow " ")
@@ -245,7 +245,7 @@ main! = |_| {}
 							(p-assign (ident "z")))))
 				(s-let
 					(p-assign (ident "result"))
-					(e-call (constraint-fn-var 271)
+					(e-call (constraint-fn-var 276)
 						(e-lookup-local
 							(p-assign (ident "f")))
 						(e-lookup-local
@@ -255,14 +255,14 @@ main! = |_| {}
 					(e-runtime-error (tag "erroneous_value_expr")))
 				(s-let
 					(p-assign (ident "_result3"))
-					(e-call (constraint-fn-var 278)
+					(e-call (constraint-fn-var 283)
 						(e-lookup-local
 							(p-assign (ident "g")))
 						(e-lookup-local
 							(p-assign (ident "a")))))
 				(s-let
 					(p-assign (ident "_result4"))
-					(e-call (constraint-fn-var 283)
+					(e-call (constraint-fn-var 288)
 						(e-lookup-local
 							(p-assign (ident "g")))
 						(e-lookup-local

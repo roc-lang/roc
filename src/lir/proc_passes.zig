@@ -12,12 +12,15 @@ const core = @import("lir_core");
 const layout = @import("layout");
 const BodyClone = @import("body_clone.zig");
 const Trmc = @import("trmc.zig");
+const PruneJoinParams = @import("prune_join_params.zig");
 const ScalarizeJoins = @import("scalarize_joins.zig");
 const LoopAppendPromote = @import("loop_append_promote.zig");
 const RangeProve = @import("range_prove.zig");
 const BoxReuse = @import("box_reuse.zig");
 const ForwardingJoinInline = @import("forwarding_join_inline.zig");
 const TagCaseFusion = @import("tag_case_fusion.zig");
+const BranchExpectation = @import("branch_expectation.zig");
+const KnownTagJump = @import("known_tag_jump.zig");
 
 const Allocator = std.mem.Allocator;
 const LIR = core.LIR;
@@ -26,16 +29,18 @@ const TaskExecutor = base.post_check_task_executor;
 
 /// Phase boundaries preserve the established optimization order.
 pub const Phase = enum {
+    branch_expectation,
     trmc,
     forwarding_join,
     tag_fusion,
+    prune_join_params,
     scalarize,
     loop_append,
     range,
     box_reuse,
 };
 
-const phase_count = std.meta.fields(Phase).len;
+const phase_count = @typeInfo(Phase).@"enum".field_names.len;
 
 /// Worker work only; inline execution leaves these counters zero.
 pub const ParallelMetrics = struct {
@@ -107,7 +112,7 @@ const TaskContext = struct {
     fn executeOnLane(self: *TaskContext, worker: TaskExecutor.Worker) Allocator.Error!void {
         const analysis = switch (self.phase) {
             .tag_fusion, .loop_append, .range, .box_reuse => try analysisForLane(worker.lane_state),
-            .trmc, .forwarding_join, .scalarize => null,
+            .branch_expectation, .trmc, .forwarding_join, .prune_join_params, .scalarize => null,
         };
         try self.execute(worker.allocator, worker.scratch, analysis);
     }
@@ -116,6 +121,7 @@ const TaskContext = struct {
         var shard = try self.source.cloneForProcRewrite(output_allocator, self.proc);
         errdefer shard.deinit();
         switch (self.phase) {
+            .branch_expectation => try BranchExpectation.runProc(&shard, self.proc, scratch_allocator),
             .trmc => self.trmc_report = try Trmc.runProc(&shard, self.layouts, self.proc, scratch_allocator),
             .forwarding_join, .tag_fusion => {
                 var joins = BodyClone.JoinParamIndex.init(scratch_allocator);
@@ -125,12 +131,20 @@ const TaskContext = struct {
                     try ForwardingJoinInline.runProc(&shard, self.layouts, self.proc, scratch_allocator, &joins);
                 } else {
                     try TagCaseFusion.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, &joins, analysis.?);
+                    try KnownTagJump.runProc(&shard, self.proc, scratch_allocator, &joins);
                 }
                 self.fresh_join_count = joins.next_join_point - self.first_fresh_join;
             },
+            .prune_join_params => try PruneJoinParams.runProc(&shard, self.proc, scratch_allocator),
             .scalarize => try ScalarizeJoins.runProc(&shard, self.layouts, self.proc, scratch_allocator),
             .loop_append => try LoopAppendPromote.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, analysis.?),
-            .range => try RangeProve.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, analysis.?),
+            .range => {
+                var joins = BodyClone.JoinParamIndex.init(scratch_allocator);
+                defer joins.deinit();
+                joins.next_join_point = self.first_fresh_join;
+                try RangeProve.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, analysis.?, &joins);
+                self.fresh_join_count = joins.next_join_point - self.first_fresh_join;
+            },
             .box_reuse => try BoxReuse.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, analysis.?),
         }
         self.changed = shard.procRewriteChanged();
@@ -151,7 +165,7 @@ pub fn run(
     switch (phase) {
         .trmc => try Trmc.prepareLayouts(store, layouts),
         .box_reuse => try BoxReuse.prepareLayouts(store, layouts),
-        .forwarding_join, .tag_fusion, .scalarize, .loop_append, .range => {},
+        .branch_expectation, .forwarding_join, .tag_fusion, .prune_join_params, .scalarize, .loop_append, .range => {},
     }
     var contexts = std.ArrayList(TaskContext).empty;
     defer {
@@ -159,16 +173,16 @@ pub fn run(
         contexts.deinit(allocator);
     }
     for (0..store.procSpecCount()) |index| {
-        const proc: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const body = switch (phase) {
             .forwarding_join => ForwardingJoinInline.rewritableProcBody(store, proc),
             .tag_fusion => TagCaseFusion.rewritableProcBody(store, proc),
             .scalarize => ScalarizeJoins.rewritableProcBody(store, proc),
-            .trmc, .loop_append, .range, .box_reuse => BodyClone.rewritableProcBody(store, proc),
+            .branch_expectation, .trmc, .prune_join_params, .loop_append, .range, .box_reuse => BodyClone.rewritableProcBody(store, proc),
         };
         if (body == null) continue;
         const admitted = phaseAdmits(store, phase, proc);
-        if (!admitted and builtin.mode != .Debug) continue;
+        if (!admitted and builtin.mode != .debug) continue;
         try contexts.append(allocator, .{
             .source = store,
             .layouts = layouts,
@@ -182,8 +196,8 @@ pub fn run(
     // Only the coordinator scans the phase's identity domain. Workers reserve
     // fresh joins above this boundary; ordered commit rebases only those IDs.
     const first_fresh_join = switch (phase) {
-        .forwarding_join, .tag_fusion => BodyClone.firstFreshJoinPoint(store),
-        .trmc, .scalarize, .loop_append, .range, .box_reuse => 0,
+        .forwarding_join, .tag_fusion, .range => BodyClone.firstFreshJoinPoint(store),
+        .branch_expectation, .trmc, .prune_join_params, .scalarize, .loop_append, .box_reuse => 0,
     };
     for (contexts.items) |*context| context.first_fresh_join = first_fresh_join;
     const prefix = store.captureBodyPrefix();
@@ -231,7 +245,7 @@ pub fn run(
         if (context.failed) return error.OutOfMemory;
         if (context.shard == null) invariant("LIR pass completed without a procedure rewrite");
     }
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         validateWritableOwnership(allocator, contexts.items) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.SharedWritableStatement => invariant("procedure-local LIR rewrites shared a writable statement"),
@@ -242,10 +256,10 @@ pub fn run(
     for (contexts.items) |*context| {
         const shard = &context.shard.?;
         if (context.verify_only) {
-            if (context.changed) std.debug.panic("LIR pass {s} rewrote procedure {d} whose shapes {any} excluded it from the phase", .{ @tagName(phase), @intFromEnum(context.proc), store.getProcSpec(context.proc).shapes });
+            if (context.changed) base.invariant("LIR pass {s} rewrote procedure {d} whose shapes {any} excluded it from the phase", .{ @tagName(phase), @backingInt(context.proc), store.getProcSpec(context.proc).shapes });
             if (parallel) if (metrics) |counts| {
                 counts.tasks_committed +|= 1;
-                counts.committed_by_phase[@intFromEnum(phase)] +|= 1;
+                counts.committed_by_phase[@backingInt(phase)] +|= 1;
             };
             shard.deinit();
             context.shard = null;
@@ -263,8 +277,8 @@ pub fn run(
         }
         if (parallel) if (metrics) |counts| {
             counts.tasks_committed +|= 1;
-            counts.committed_by_phase[@intFromEnum(phase)] +|= 1;
-            counts.changed_by_phase[@intFromEnum(phase)] +|= @intFromBool(context.changed);
+            counts.committed_by_phase[@backingInt(phase)] +|= 1;
+            counts.changed_by_phase[@backingInt(phase)] +|= @intFromBool(context.changed);
             counts.prepared_statement_rows +|= @intCast(shard.procRewriteStatementIds().len);
             counts.appended_statements +|= @intCast(shard.cf_stmts.len());
         };
@@ -279,12 +293,13 @@ pub fn run(
 fn phaseAdmits(store: *const LirStore, phase: Phase, proc: LIR.LirProcSpecId) bool {
     const shapes = store.getProcSpec(proc).shapes;
     return switch (phase) {
+        .branch_expectation => shapes.switch_stmt,
         .trmc => shapes.self_call,
         .loop_append => shapes.loop,
-        .forwarding_join => shapes.join_param,
+        .forwarding_join, .prune_join_params => shapes.join_param,
         .tag_fusion => shapes.join_param and shapes.switch_stmt,
         .scalarize => shapes.join_aggregate_param or shapes.struct_build or shapes.tag_build,
-        .range => shapes.checked_arithmetic or shapes.switch_stmt,
+        .range => shapes.checked_arithmetic or shapes.switch_stmt or shapes.unsigned_compare or shapes.simd_concat_shift,
         .box_reuse => shapes.box_box,
     };
 }
@@ -367,7 +382,7 @@ test "procedure rewrite ownership includes statements reached through shared met
 }
 
 fn invariant(comptime message: []const u8) noreturn {
-    if (builtin.mode == .Debug) @panic(message);
+    if (builtin.mode == .debug) @panic(message);
     unreachable;
 }
 
@@ -401,7 +416,7 @@ test "issue 11325 procedure counting reuses lane storage across distant local ID
             .source = &store,
             .layouts = &layouts,
             .phase = .box_reuse,
-            .proc = @enumFromInt(index),
+            .proc = @fromBackingInt(@intCast(index)),
         };
         _ = TaskContext.run(&context, .{
             .id = 0,

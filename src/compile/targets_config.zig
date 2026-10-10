@@ -13,6 +13,7 @@ const builtins = @import("builtins");
 const check = @import("check");
 const CoreCtx = @import("ctx").CoreCtx;
 const parse = @import("parse");
+const reporting = @import("reporting");
 const roc_target = @import("roc_target");
 
 const Allocator = std.mem.Allocator;
@@ -127,6 +128,92 @@ pub const TargetConfigResolveDiagnostic = struct {
     reason: TargetConfigResolveReason,
 };
 
+/// Which header string a rejected target path came from.
+pub const TargetPathField = enum {
+    inputs_dir,
+    input_file,
+};
+
+/// Why a target path string cannot stay inside the platform directory.
+pub const TargetPathProblem = enum {
+    absolute,
+    windows_prefix,
+    parent_component,
+
+    pub fn message(self: TargetPathProblem) []const u8 {
+        return switch (self) {
+            .absolute => "is an absolute path",
+            .windows_prefix => "starts with a drive letter or network share prefix",
+            .parent_component => "contains a `..` component",
+        };
+    }
+
+    /// Classify a header path string, returning null when it is a plain
+    /// relative path that stays inside the directory it is joined onto.
+    /// Both `/` and `\` count as separators so the answer is the same on
+    /// every host, whichever OS later resolves the joined path.
+    pub fn of(path: []const u8) ?TargetPathProblem {
+        if (path.len >= 2 and isPathSeparator(path[0]) and isPathSeparator(path[1])) return .windows_prefix;
+        if (path.len >= 1 and isPathSeparator(path[0])) return .absolute;
+        if (path.len >= 2 and std.ascii.isAlphabetic(path[0]) and path[1] == ':') return .windows_prefix;
+
+        var components = std.mem.tokenizeAny(u8, path, "/\\");
+        while (components.next()) |component| {
+            if (std.mem.eql(u8, component, "..")) return .parent_component;
+        }
+        return null;
+    }
+
+    fn isPathSeparator(byte: u8) bool {
+        return byte == '/' or byte == '\\';
+    }
+};
+
+/// A target path string in a platform header that `fromAST` rejected.
+pub const InvalidTargetPathDiagnostic = struct {
+    field: TargetPathField,
+    problem: TargetPathProblem,
+    /// The path as written, borrowed from the AST's source.
+    path: []const u8,
+    /// Source region of the path's string contents.
+    region: base.Region,
+
+    /// Build a report that points at the rejected string in the platform
+    /// source. `env` must be the environment the AST was parsed from, with
+    /// its line starts calculated.
+    pub fn toReport(
+        self: InvalidTargetPathDiagnostic,
+        allocator: Allocator,
+        env: *const base.CommonEnv,
+        filename: []const u8,
+    ) Allocator.Error!reporting.Report {
+        const field_description = switch (self.field) {
+            .inputs_dir => "The `inputs_dir`",
+            .input_file => "This target input file",
+        };
+        const headline = try std.fmt.allocPrint(
+            allocator,
+            "{s} path `{s}` {s}.",
+            .{ field_description, self.path, self.problem.message() },
+        );
+        defer allocator.free(headline);
+
+        var report = try reporting.Report.init(allocator, "Invalid Target Path", headline, .runtime_error);
+        errdefer report.deinit();
+        try report.document.addReflowingTextWithBackticks(
+            "Paths in a platform's `targets` section must be relative paths that stay inside the platform directory, so they cannot be absolute, start with a drive letter or network share, or contain `..` components.",
+        );
+        const region_info = base.RegionInfo.position(env.source, env.line_starts.items.items, self.region.start.offset, self.region.end.offset) catch {
+            return report;
+        };
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
+        try report.addSourceContext(region_info, owned_filename, env.source, env.line_starts.items.items);
+        return report;
+    }
+};
+
 /// Link specification for a single target.
 /// Contains the artifact kind and the ordered list of items to link for this target.
 pub const TargetLinkSpec = struct {
@@ -200,36 +287,6 @@ pub const TargetsConfig = struct {
             }
         }
         return null;
-    }
-
-    /// Get the default target based on the current system.
-    /// Returns the first target in the list that's compatible with the current host (OS and arch).
-    pub fn getDefaultTarget(self: TargetsConfig) ?RocTarget {
-        for (self.targets) |spec| {
-            if (spec.target.isCompatibleWithHost()) {
-                return spec.target;
-            }
-        }
-
-        return null;
-    }
-
-    /// Get the default target for commands that must execute the result on this host.
-    /// This excludes build-compatible targets such as wasm32 that are not native
-    /// process executables for the default `roc` command, and targets that don't produce executables.
-    pub fn getDefaultHostExecutableTarget(self: TargetsConfig) ?RocTarget {
-        for (self.targets) |spec| {
-            if (spec.output == .exe and spec.target.isExecutableOnHost()) {
-                return spec.target;
-            }
-        }
-
-        return null;
-    }
-
-    /// Check if a specific target is supported.
-    pub fn supportsTarget(self: TargetsConfig, target: RocTarget) bool {
-        return self.getLinkSpec(target) != null;
     }
 
     /// Get all supported targets.
@@ -313,7 +370,14 @@ pub const TargetsConfig = struct {
     /// empty `targets: {}` section returns a hostless config with zero targets.
     /// All string values are duped with the provided allocator, so the
     /// returned TargetsConfig owns its memory and is independent of the AST.
-    pub fn fromAST(allocator: Allocator, ast: anytype) Allocator.Error!?TargetsConfig {
+    /// Returns error.InvalidTargetPath, describing the offending string in
+    /// `diagnostic`, when `inputs_dir` or a target input file is not a
+    /// relative path that stays inside the platform directory.
+    pub fn fromAST(
+        allocator: Allocator,
+        ast: anytype,
+        diagnostic: *InvalidTargetPathDiagnostic,
+    ) (Allocator.Error || error{InvalidTargetPath})!?TargetsConfig {
         const NodeStore = parse.NodeStore;
 
         const store: *const NodeStore = &ast.store;
@@ -332,13 +396,16 @@ pub const TargetsConfig = struct {
 
         // Extract inputs_dir from string literal token (StringPart token)
         // Dupe the string so we own the memory
+        if (targets_section.inputs_dir) |tok_idx| {
+            try checkTargetPath(ast, tok_idx, .inputs_dir, diagnostic);
+        }
         const inputs_dir: ?[]const u8 = if (targets_section.inputs_dir) |tok_idx|
             try allocator.dupe(u8, ast.resolve(tok_idx))
         else
             null;
         errdefer if (inputs_dir) |fd| allocator.free(fd);
 
-        const target_specs = try parseTargetSpecs(allocator, store, ast, targets_section.entries);
+        const target_specs = try parseTargetSpecs(allocator, store, ast, targets_section.entries, diagnostic);
         errdefer freeTargetSpecs(allocator, target_specs);
 
         return TargetsConfig{
@@ -347,19 +414,38 @@ pub const TargetsConfig = struct {
         };
     }
 
+    fn checkTargetPath(
+        ast: anytype,
+        tok: parse.tokenize.Token.Idx,
+        field: TargetPathField,
+        diagnostic: *InvalidTargetPathDiagnostic,
+    ) error{InvalidTargetPath}!void {
+        const path = ast.resolve(tok);
+        const problem = TargetPathProblem.of(path) orelse return;
+        diagnostic.* = .{
+            .field = field,
+            .problem = problem,
+            .path = path,
+            .region = ast.tokens.resolve(tok),
+        };
+        return error.InvalidTargetPath;
+    }
+
     fn appendTargetFiles(
         allocator: Allocator,
         store: *const parse.NodeStore,
         ast: anytype,
         files: parse.AST.TargetFile.Span,
         link_items: *std.array_list.Managed(LinkItem),
-    ) Allocator.Error!void {
+        diagnostic: *InvalidTargetPathDiagnostic,
+    ) (Allocator.Error || error{InvalidTargetPath})!void {
         const file_indices = store.targetFileSlice(files);
         for (file_indices) |file_idx| {
             const target_file = store.getTargetFile(file_idx);
 
             switch (target_file) {
                 .string_literal => |maybe_tok| {
+                    if (maybe_tok) |tok| try checkTargetPath(ast, tok, .input_file, diagnostic);
                     const path = if (maybe_tok) |tok| ast.resolve(tok) else "";
                     try link_items.append(.{ .file_path = try allocator.dupe(u8, path) });
                 },
@@ -464,7 +550,8 @@ pub const TargetsConfig = struct {
         ast: anytype,
         config_idx: parse.AST.TargetConfig.Idx,
         link_items: *std.array_list.Managed(LinkItem),
-    ) Allocator.Error!?WasmTargetConfig {
+        diagnostic: *InvalidTargetPathDiagnostic,
+    ) (Allocator.Error || error{InvalidTargetPath})!?WasmTargetConfig {
         const config = store.getTargetConfig(config_idx);
         const entries = store.targetConfigEntrySlice(config.entries);
         var wasm = WasmTargetConfig{};
@@ -479,7 +566,7 @@ pub const TargetsConfig = struct {
             if (std.mem.eql(u8, name, "inputs")) {
                 if (value == .files) {
                     clearTargetFiles(allocator, link_items);
-                    try appendTargetFiles(allocator, store, ast, value.files, link_items);
+                    try appendTargetFiles(allocator, store, ast, value.files, link_items, diagnostic);
                 }
             } else if (std.mem.eql(u8, name, "exports")) {
                 if (value == .list) {
@@ -564,7 +651,8 @@ pub const TargetsConfig = struct {
         store: *const parse.NodeStore,
         ast: anytype,
         entries: parse.AST.TargetEntry.Span,
-    ) Allocator.Error![]const TargetLinkSpec {
+        diagnostic: *InvalidTargetPathDiagnostic,
+    ) (Allocator.Error || error{InvalidTargetPath})![]const TargetLinkSpec {
         const entry_indices = store.targetEntrySlice(entries);
 
         var specs = std.array_list.Managed(TargetLinkSpec).init(allocator);
@@ -589,7 +677,7 @@ pub const TargetsConfig = struct {
                 link_items.deinit();
             }
 
-            const wasm_config = try parseWasmConfig(allocator, store, ast, entry.config, &link_items);
+            const wasm_config = try parseWasmConfig(allocator, store, ast, entry.config, &link_items, diagnostic);
 
             try specs.append(.{
                 .target = target,
@@ -819,16 +907,8 @@ fn constUnsigned(
 
 fn scalarUnsigned(scalar: checked.ConstScalar, reason: *TargetConfigResolveReason) ?usize {
     const value: u128 = switch (scalar) {
-        .u8 => |v| v,
-        .u16 => |v| v,
-        .u32 => |v| v,
-        .u64 => |v| v,
-        .u128 => |v| v,
-        .i8 => |v| signedScalarUnsigned(v, reason) orelse return null,
-        .i16 => |v| signedScalarUnsigned(v, reason) orelse return null,
-        .i32 => |v| signedScalarUnsigned(v, reason) orelse return null,
-        .i64 => |v| signedScalarUnsigned(v, reason) orelse return null,
-        .i128 => |v| signedScalarUnsigned(v, reason) orelse return null,
+        inline .u8, .u16, .u32, .u64, .u128 => |v| v,
+        inline .i8, .i16, .i32, .i64, .i128 => |v| signedScalarUnsigned(v, reason) orelse return null,
         .dec_bits => |v| decScalarUnsigned(v, reason) orelse return null,
         .f32_bits, .f64_bits => {
             reason.* = .expected_unsigned_integer;
@@ -863,50 +943,6 @@ fn decScalarUnsigned(value: i128, reason: *TargetConfigResolveReason) ?u128 {
 
 // Tests
 const testing = std.testing;
-const builtin = @import("builtin");
-
-test "getDefaultTarget returns first compatible target" {
-    // Create a config with only x64glibc (not x64musl)
-    // On a Linux x64 system, both are compatible, but we only include glibc
-    const config = TargetsConfig{
-        .inputs_dir = "targets",
-        .targets = &.{
-            .{ .target = .x64glibc, .output = .exe, .items = &.{.app} },
-        },
-    };
-
-    // getDefaultTarget should return x64glibc if we're on Linux x64
-    // (since both x64musl and x64glibc are compatible with Linux x64)
-    if (builtin.target.os.tag == .linux and builtin.target.cpu.arch == .x86_64) {
-        const result = config.getDefaultTarget();
-        try testing.expect(result != null);
-        try testing.expectEqual(RocTarget.x64glibc, result.?);
-    }
-}
-
-test "getDefaultHostExecutableTarget excludes wasm" {
-    const config = TargetsConfig{
-        .inputs_dir = "targets",
-        .targets = &.{
-            .{ .target = .wasm32, .output = .exe, .items = &.{.app} },
-        },
-    };
-
-    try testing.expectEqual(RocTarget.wasm32, config.getDefaultTarget().?);
-    try testing.expect(config.getDefaultHostExecutableTarget() == null);
-}
-
-test "getDefaultHostExecutableTarget excludes non-exe outputs" {
-    const config = TargetsConfig{
-        .inputs_dir = "targets",
-        .targets = &.{
-            .{ .target = .x64mac, .output = .shared, .items = &.{.app} },
-            .{ .target = .arm64mac, .output = .shared, .items = &.{.app} },
-        },
-    };
-
-    try testing.expect(config.getDefaultHostExecutableTarget() == null);
-}
 
 test "getLinkSpec returns correct spec for supported target" {
     const config = TargetsConfig{
@@ -964,7 +1000,8 @@ test "fromAST accepts explicit hostless targets section" {
 
     try testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 
-    const maybe_config = try TargetsConfig.fromAST(allocator, ast);
+    var diagnostic: InvalidTargetPathDiagnostic = undefined;
+    const maybe_config = try TargetsConfig.fromAST(allocator, ast, &diagnostic);
     try testing.expect(maybe_config != null);
 
     const config = maybe_config.?;
@@ -1005,7 +1042,8 @@ test "fromAST captures explicit wasm exports" {
 
     try testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 
-    const maybe_config = try TargetsConfig.fromAST(allocator, ast);
+    var diagnostic: InvalidTargetPathDiagnostic = undefined;
+    const maybe_config = try TargetsConfig.fromAST(allocator, ast, &diagnostic);
     try testing.expect(maybe_config != null);
 
     const config = maybe_config.?;
@@ -1060,7 +1098,8 @@ test "fromAST captures punned wasm identifier config" {
 
     try testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 
-    const maybe_config = try TargetsConfig.fromAST(allocator, ast);
+    var diagnostic: InvalidTargetPathDiagnostic = undefined;
+    const maybe_config = try TargetsConfig.fromAST(allocator, ast, &diagnostic);
     try testing.expect(maybe_config != null);
 
     const config = maybe_config.?;
@@ -1149,4 +1188,169 @@ test "validateDeclaredTargetFilesExist uses default targets directory" {
     const missing_dir = validation.issues[0].missing_inputs_directory;
     try testing.expectEqualStrings("targets", missing_dir.inputs_dir);
     try testing.expect(std.mem.endsWith(u8, missing_dir.expected_path, "targets"));
+}
+
+fn platformSourceWithTargets(comptime targets: []const u8) []const u8 {
+    return
+    \\platform ""
+    \\    requires { main : {} }
+    \\    exposes []
+    \\    packages {}
+    \\    provides { "roc_main": main_for_host }
+    \\    targets: {
+    \\
+    ++ targets ++
+        \\    }
+        \\
+    ;
+}
+
+fn expectInvalidTargetPath(
+    comptime targets: []const u8,
+    expected_field: TargetPathField,
+    expected_problem: TargetPathProblem,
+    expected_path: []const u8,
+) (Allocator.Error || error{ TestExpectedEqual, TestExpectedError })!void {
+    const allocator = testing.allocator;
+
+    const source_copy = try allocator.dupe(u8, platformSourceWithTargets(targets));
+    defer allocator.free(source_copy);
+
+    var env = try base.CommonEnv.init(allocator, source_copy);
+    defer env.deinit(allocator);
+
+    const ast = try parse.file(allocator, &env);
+    defer ast.deinit();
+
+    try testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+
+    var diagnostic: InvalidTargetPathDiagnostic = undefined;
+    const result = TargetsConfig.fromAST(allocator, ast, &diagnostic);
+    if (result) |maybe_config| {
+        if (maybe_config) |config| config.deinit(allocator);
+        return error.TestExpectedError;
+    } else |err| {
+        try testing.expectEqual(error.InvalidTargetPath, err);
+    }
+
+    try testing.expectEqual(expected_field, diagnostic.field);
+    try testing.expectEqual(expected_problem, diagnostic.problem);
+    try testing.expectEqualStrings(expected_path, diagnostic.path);
+    try testing.expectEqualStrings(
+        expected_path,
+        source_copy[diagnostic.region.start.offset..diagnostic.region.end.offset],
+    );
+}
+
+test "fromAST rejects target file with leading parent component" {
+    try expectInvalidTargetPath(
+        \\        x64linux: { inputs: ["../../../../etc/secret.a", app] },
+        \\
+    , .input_file, .parent_component, "../../../../etc/secret.a");
+}
+
+test "fromAST rejects target file with parent component in the middle" {
+    try expectInvalidTargetPath(
+        \\        x64linux: { inputs: ["sub/../../escape.a", app] },
+        \\
+    , .input_file, .parent_component, "sub/../../escape.a");
+}
+
+test "fromAST rejects target file with backslash parent component" {
+    try expectInvalidTargetPath(
+        \\        x64linux: { inputs: ["sub\\..\\..\\escape.a", app] },
+        \\
+    , .input_file, .parent_component, "sub\\\\..\\\\..\\\\escape.a");
+}
+
+test "fromAST rejects absolute target file" {
+    try expectInvalidTargetPath(
+        \\        x64linux: { inputs: ["/abs/libhost.a", app] },
+        \\
+    , .input_file, .absolute, "/abs/libhost.a");
+}
+
+test "fromAST rejects target file with drive prefix" {
+    try expectInvalidTargetPath(
+        \\        x64linux: { inputs: ["C:\\x\\libhost.a", app] },
+        \\
+    , .input_file, .windows_prefix, "C:\\\\x\\\\libhost.a");
+}
+
+test "fromAST rejects target file with UNC prefix" {
+    try expectInvalidTargetPath(
+        \\        x64linux: { inputs: ["\\\\server\\share\\libhost.a", app] },
+        \\
+    , .input_file, .windows_prefix, "\\\\\\\\server\\\\share\\\\libhost.a");
+}
+
+test "fromAST rejects inputs_dir with leading parent component" {
+    try expectInvalidTargetPath(
+        \\        inputs_dir: "../../outside",
+        \\        x64linux: { inputs: ["libhost.a", app] },
+        \\
+    , .inputs_dir, .parent_component, "../../outside");
+}
+
+test "fromAST rejects inputs_dir with parent component in the middle" {
+    try expectInvalidTargetPath(
+        \\        inputs_dir: "targets/../..",
+        \\        x64linux: { inputs: ["libhost.a", app] },
+        \\
+    , .inputs_dir, .parent_component, "targets/../..");
+}
+
+test "fromAST rejects absolute inputs_dir" {
+    try expectInvalidTargetPath(
+        \\        inputs_dir: "/abs",
+        \\        x64linux: { inputs: ["libhost.a", app] },
+        \\
+    , .inputs_dir, .absolute, "/abs");
+}
+
+test "fromAST rejects inputs_dir with drive prefix" {
+    try expectInvalidTargetPath(
+        \\        inputs_dir: "C:\\x",
+        \\        x64linux: { inputs: ["libhost.a", app] },
+        \\
+    , .inputs_dir, .windows_prefix, "C:\\\\x");
+}
+
+test "fromAST rejects inputs_dir with UNC prefix" {
+    try expectInvalidTargetPath(
+        \\        inputs_dir: "\\\\server\\share",
+        \\        x64linux: { inputs: ["libhost.a", app] },
+        \\
+    , .inputs_dir, .windows_prefix, "\\\\\\\\server\\\\share");
+}
+
+test "fromAST accepts nested relative target paths" {
+    const allocator = testing.allocator;
+
+    const source_copy = try allocator.dupe(u8, platformSourceWithTargets(
+        \\        inputs_dir: "platform/targets/",
+        \\        x64linux: { inputs: ["sub/host.a", "./crt1.o", "..hidden/lib.a", app] },
+        \\
+    ));
+    defer allocator.free(source_copy);
+
+    var env = try base.CommonEnv.init(allocator, source_copy);
+    defer env.deinit(allocator);
+
+    const ast = try parse.file(allocator, &env);
+    defer ast.deinit();
+
+    try testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+
+    var diagnostic: InvalidTargetPathDiagnostic = undefined;
+    const config = (try TargetsConfig.fromAST(allocator, ast, &diagnostic)) orelse return error.TestUnexpectedResult;
+    defer config.deinit(allocator);
+
+    try testing.expectEqualStrings("platform/targets/", config.inputs_dir.?);
+    const items = config.targets[0].items;
+    try testing.expectEqual(@as(usize, 4), items.len);
+    try testing.expectEqualStrings("sub/host.a", items[0].file_path);
+    try testing.expectEqualStrings("./crt1.o", items[1].file_path);
+    try testing.expectEqualStrings("..hidden/lib.a", items[2].file_path);
+    try testing.expect(items[3] == .app);
 }

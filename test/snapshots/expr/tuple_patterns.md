@@ -103,7 +103,6 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 {
-
 	# Simple tuple destructuring
 	(x, y) = (1, 2)
 

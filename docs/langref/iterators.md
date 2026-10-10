@@ -130,7 +130,66 @@ it gives you `rest`, which you use to continue the iteration.
 `Iter` is for pure computations, so its functions (like the one passed to `map`) can't be
 [effectful](functions#effectful-functions). For sequences that involve effects, there's a separate
 [`Stream`](../Stream) type, whose functions can be effectful. [`Iter.stream`](../Iter#stream) turns an
-iterator into a stream.
+iterator into a stream, and [`Stream.custom`](../Stream#custom) builds one from a source whose items
+come from effects.
+
+Like iterators, streams are lazy. [`map`](../Stream#map), [`keep_if`](../Stream#keep_if),
+[`drop_if`](../Stream#drop_if), [`with_index`](../Stream#with_index),
+[`take_first`](../Stream#take_first), and [`drop_first`](../Stream#drop_first) each return a new stream
+without pulling any items, and the functions passed to them can be effectful.
+
+A stream's items are pulled when something consumes it: a [`for!` loop](loops#looping-over-streams-with-for),
+[`fold!`](../Stream#fold!), [`for_each!`](../Stream#for_each!), or [`collect!`](../Stream#collect!).
+Pulling runs effects, so all of these can only be used in effectful functions:
+
+```roc
+print_long_lines! : Stream(Str) => {}
+print_long_lines! = |lines| {
+    for! line in lines.keep_if(|line| line.count_utf8_bytes() > 80) {
+        Stdout.line!(line)
+    }
+}
+```
 
 Loops that perform effects on each item don't need a `Stream`, though; a `for` loop can call effectful
 functions on each item of an ordinary iterator.
+
+## Performance
+
+Even though iterators are values, and a chain like `.keep_if(…).map(…)` looks like it builds one
+iterator on top of another, none of those iterators exist at runtime. The compiler knows at
+compile time exactly which operations are in the chain, so it combines the whole chain into a
+single loop, the same way a [`for` loop](loops#performance) over a list or range compiles to a
+plain loop. For example, this:
+
+```roc
+total = [1, 2, 3, 4, 5, 6]
+    .iter()
+    .keep_if(|n| n % 2 == 0)
+    .map(|n| n * 10)
+    .sum()
+```
+
+compiles to a loop that goes through the list once, checking each element, multiplying the ones
+that pass, and adding them to a running total. No iterator gets allocated, and the functions
+passed to `keep_if` and `map` can be inlined into the loop body.
+
+This works for chains of up to 16 operations, including when you pass an iterator to a function
+or return one from a function. It doesn't work when the number of operations in the chain
+depends on something that's only known at runtime. For example, a recursive function that calls
+`map` once per recursive call might build a chain with any number of `map`s in it. Iterators like
+that (and chains longer than 16 operations) are stored on the heap instead, and getting each item
+involves an indirect function call per operation in the chain. They still work; they're just
+slower.
+
+### Collecting
+
+When you [`collect`](#collecting) an iterator into a list, the number of items the iterator says
+it will produce (the `Known(count)` or `Unknown` that [`Iter.custom`](#custom-iterators) takes)
+determines how the list gets allocated. If it's `Known`, the list's memory gets allocated once,
+at exactly the right size. If it's `Unknown` (for example, after a `keep_if`, since nobody knows
+in advance how many items will be kept), the list starts small and grows as items are added.
+
+So when you write a custom iterator, it's worth passing `Known(count)` whenever you know the count.
+Just make sure the count is exact, because collecting relies on the iterator producing exactly
+that many items.

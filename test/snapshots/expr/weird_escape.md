@@ -30,10 +30,6 @@ EndOfFile,
 ~~~clojure
 (e-string)
 ~~~
-# FORMATTED
-~~~roc
-""
-~~~
 # CANONICALIZE
 ~~~clojure
 (e-string)

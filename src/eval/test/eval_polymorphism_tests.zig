@@ -5,6 +5,30 @@ const TestCase = @import("parallel_runner.zig").TestCase;
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
+        .name = "boxy: root whose type quantifies an unconstrained variable",
+        .source_kind = .module,
+        .source = "main = []\n",
+        .expected = .{ .inspect_str = "[]" },
+        .specialization_strategy = .boxy,
+        .skip = .{ .wasm = true },
+    },
+    .{
+        .name = "boxy: root call whose result quantifies an unconstrained variable",
+        .source_kind = .module,
+        .source = "empty = |_x| []\nmain = empty(1.U64)\n",
+        .expected = .{ .inspect_str = "[]" },
+        .specialization_strategy = .boxy,
+        .skip = .{ .wasm = true },
+    },
+    .{
+        .name = "boxy: ambiguous tuple access leaves the root type unconstrained",
+        .source_kind = .module,
+        .source = "g = |p| p.0\nmain = g((7.U64, 8.U64))\n",
+        .expected = .{ .problem_and_crash = {} },
+        .specialization_strategy = .boxy,
+        .skip = .{ .wasm = true },
+    },
+    .{
         .name = "interpreter poly: return a function then call (int)",
         .source = "(|_| (|x| x))(0)(42)",
         .expected = .{ .inspect_str = "42.0" },

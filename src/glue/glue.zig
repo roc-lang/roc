@@ -455,8 +455,8 @@ fn compileGlueSpec(
     errdefer lowered.deinit();
 
     const glue_proc = selectGlueSpecRootProc(root_artifact, &lowered, builtins.shim_symbols.roc_make_glue) orelse {
-        if (builtin.mode == .Debug) {
-            std.debug.panic("glue invariant violated: glue spec produced no published make_glue platform root", .{});
+        if (builtin.mode == .debug) {
+            base.invariant("glue invariant violated: glue spec produced no published make_glue platform root", .{});
         }
         unreachable;
     };
@@ -626,9 +626,6 @@ fn runGlueSpecPlugin(
     const entry = lib.lookup(GlueEntryFn, builtins.shim_symbols.roc_make_glue) orelse return error.GluePluginUnavailable;
 
     runtime_env.resetObservation();
-    if (builtin.target.cpu.arch == .aarch64 and builtin.target.os.tag == .linux) {
-        runtime_env.setLongjmpOnCrash(false);
-    }
     var crash_boundary = runtime_env.enterCrashBoundary();
     defer crash_boundary.deinit();
 
@@ -766,6 +763,7 @@ fn buildGluePlugin(
         codegen.plugin_stamp_bytes = std.mem.asBytes(&stamp);
         codegen.plugin_stamp_alignment = @alignOf(GluePluginStampV1);
         codegen.emit_debug_info = opt == .dev;
+        codegen.unoptimized = opt == .dev;
         defer codegen.deinit();
 
         break :generate codegen.generateEntrypointModule("roc_glue_plugin", entrypoints[0..]) catch |err| switch (err) {
@@ -786,9 +784,7 @@ fn buildGluePlugin(
         error.MissingBuiltinBitcode,
         error.ModuleLinkFailed,
         error.NoBitcodeModules,
-        error.TempFileError,
         error.UnsupportedLlvmTriple,
-        error.WindowsSDKNotFound,
         => return error.CompilationFailed,
     };
 }
@@ -845,6 +841,9 @@ fn glueLlvmCompileOptions(opt: GlueOpt) llvm_compile.CompileOptions {
         },
         .debug = opt == .dev,
         .target_ptr_width_bits = targetPtrWidthBits(base.target.TargetUsize.native),
+        // The target machine names no CPU features, so LLVM assumes only its
+        // default CPU for the triple, which has no SHA-256 instructions.
+        .sha256_rounds = .portable,
     };
 }
 
@@ -889,7 +888,7 @@ fn gluePluginCacheTempPath(allocator: Allocator, cache_path: [:0]const u8) Alloc
         counter,
     });
     defer allocator.free(path);
-    return try allocator.dupeZ(u8, path);
+    return try allocator.dupeSentinel(u8, path, 0);
 }
 
 fn deleteGluePluginCacheEntry(plugin: BuiltGluePlugin, std_io: std.Io) void {
@@ -914,9 +913,9 @@ fn gluePluginStamp(
     return .{
         .magic = glue_plugin_stamp_magic,
         .size = @sizeOf(GluePluginStampV1),
-        .kind = @intFromEnum(GluePluginKind.glue),
+        .kind = @backingInt(GluePluginKind.glue),
         .abi_version = glue_plugin_abi_version,
-        .specialization_strategy_tag = @as(u32, @intFromEnum(specialization_strategy)) + 1,
+        .specialization_strategy_tag = @as(u32, @backingInt(specialization_strategy)) + 1,
         .target_hash = hashTarget(),
         .compiler_hash = hashCompiler(),
         .glue_platform_hash = compile.compiler_platforms.sourceHash(.glue),
@@ -926,7 +925,7 @@ fn gluePluginStamp(
 
 test "glue plugin output hash includes specialization strategy" {
     const artifact_key: CheckedArtifact.CheckedModuleArtifactKey = .{
-        .bytes = [_]u8{0x5a} ** 32,
+        .bytes = @as([32]u8, @splat(0x5a)),
     };
     const lss_hash = gluePluginOutputHash(artifact_key, gluePluginStamp(artifact_key, .lss));
     const boxy_hash = gluePluginOutputHash(artifact_key, gluePluginStamp(artifact_key, .boxy));
@@ -949,7 +948,7 @@ fn hashTarget() [32]u8 {
 
 fn hashCompiler() [32]u8 {
     var hasher = std.crypto.hash.Blake3.init(.{});
-    hashTaggedBytes(&hasher, "compiler-version", build_options.compiler_version);
+    hashTaggedBytes(&hasher, "compiler-version", build_options.compiler_compatibility_id);
     hashTaggedBytes(&hasher, "compiler-artifact-hash", &build_options.compiler_artifact_hash);
     var digest: [32]u8 = undefined;
     hasher.final(&digest);
@@ -1011,8 +1010,8 @@ fn reportUnresolvedTypeVariable(stderr: *std.Io.Writer, type_table: *const TypeT
 }
 
 fn glueInvariant(comptime message: []const u8, args: anytype) noreturn {
-    if (builtin.mode == .Debug) {
-        std.debug.panic("glue invariant violated: " ++ message, args);
+    if (builtin.mode == .debug) {
+        base.invariant("glue invariant violated: " ++ message, args);
     }
     unreachable;
 }
@@ -1093,7 +1092,7 @@ fn collectHostedProcGlobalIndices(
             return switch (std.mem.order(u8, a.sort_key, b.sort_key)) {
                 .lt => true,
                 .gt => false,
-                .eq => @intFromEnum(a.def_idx) < @intFromEnum(b.def_idx),
+                .eq => @backingInt(a.def_idx) < @backingInt(b.def_idx),
             };
         }
     };
@@ -1251,40 +1250,9 @@ fn hostedEntryKeyAllocFromAst(
 /// Parse a platform header to extract hosted entries and validate it's a platform file.
 fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8, std_io: std.Io) (Allocator.Error || error{ FileNotFound, ParseFailed, NotPlatformFile })!PlatformHeaderInfo {
     // Read source file
-    var source = std.Io.Dir.cwd().readFileAlloc(std_io, platform_path, gpa, .unlimited) catch |err| switch (err) {
-        error.FileNotFound => return error.FileNotFound,
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.Canceled,
-        error.ConnectionResetByPeer,
-        error.DeviceBusy,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileTooBig,
-        error.InputOutput,
-        error.IsDir,
-        error.LockViolation,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.NotOpenForReading,
-        error.OutOfMemory,
-        error.PathAlreadyExists,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.SocketUnconnected,
-        error.StreamTooLong,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        error.WouldBlock,
-        => return error.ParseFailed,
+    var source = std.Io.Dir.cwd().readFileAlloc(std_io, platform_path, gpa, .unlimited) catch |err| switch (base.read_file_failure.kind(err)) {
+        .file_not_found => return error.FileNotFound,
+        .out_of_memory, .other => return error.ParseFailed,
     };
     source = base.source_utils.normalizeLineEndingsRealloc(gpa, source) catch {
         gpa.free(source);
@@ -2647,7 +2615,7 @@ const TypeTable = struct {
         for (self.roots.keys(), self.roots.values()) |entry_idx, root| {
             const lowering = findLowering(lowerings.items, root.artifact) orelse unreachable;
             const layout_idx = lowering.root_layouts.get(root.checked_type) orelse
-                glueInvariant("compiler emitted no layout for requested glue root checked type {d}", .{@intFromEnum(root.checked_type)});
+                glueInvariant("compiler emitted no layout for requested glue root checked type {d}", .{@backingInt(root.checked_type)});
             try self.boxRootInPlace(&lowering.abi_layouts.layouts, entry_idx, layout_idx);
         }
 
@@ -3345,7 +3313,7 @@ const TypeTable = struct {
                 // Preserve the nominal application and open its declaration
                 // below so the generated representation retains its backing
                 // tag union instantiated with these arguments.
-                .try_, .iter => {},
+                .try_, .iter, .stream => {},
                 .dict,
                 .set,
                 .crypto_sha256_digest,
@@ -3791,7 +3759,7 @@ const GlueRocValueWriter = struct {
             glueInvariant("glue schema record '{s}' missing field '{s}'", .{ record_type_name, field_name });
         const record_layout = self.layouts.getLayout(record_layout_idx);
         if (record_layout.tag != .struct_) {
-            glueInvariant("glue record '{s}' used non-struct layout {d}", .{ record_type_name, @intFromEnum(record_layout_idx) });
+            glueInvariant("glue record '{s}' used non-struct layout {d}", .{ record_type_name, @backingInt(record_layout_idx) });
         }
         const offset = self.layouts.getStructFieldOffsetByOriginalIndex(record_layout.getStruct().idx, field_index);
         const field_layout = self.layouts.getStructFieldLayoutByOriginalIndex(record_layout.getStruct().idx, field_index);
@@ -3801,7 +3769,7 @@ const GlueRocValueWriter = struct {
         };
     }
 
-    fn tagIndex(self: *const GlueRocValueWriter, tag_union_type_name: []const u8, tag_name: []const u8) u16 {
+    fn tagIndex(self: *const GlueRocValueWriter, tag_union_type_name: []const u8, tag_name: []const u8) u32 {
         return self.schemas.tagUnion(tag_union_type_name).tagDiscriminant(tag_name) orelse
             glueInvariant("glue schema tag union '{s}' missing tag '{s}'", .{ tag_union_type_name, tag_name });
     }
@@ -3898,19 +3866,19 @@ const GlueRocValueWriter = struct {
         self.writeValue(slot.ptr, T, value);
     }
 
-    fn variantPayloadLayout(self: *const GlueRocValueWriter, tag_union_layout_idx: layout.Idx, tag_index: u16) layout.Idx {
+    fn variantPayloadLayout(self: *const GlueRocValueWriter, tag_union_layout_idx: layout.Idx, tag_index: u32) layout.Idx {
         const tag_union_layout = self.layouts.getLayout(tag_union_layout_idx);
         if (tag_union_layout.tag != .tag_union) {
             glueInvariant("glue expected tag-union layout, got {s}", .{@tagName(tag_union_layout.tag)});
         }
         const info = self.layouts.getTagUnionInfo(tag_union_layout);
         if (tag_index >= info.variants.len) {
-            glueInvariant("glue tag index {d} out of bounds for layout {d}", .{ tag_index, @intFromEnum(tag_union_layout_idx) });
+            glueInvariant("glue tag index {d} out of bounds for layout {d}", .{ tag_index, @backingInt(tag_union_layout_idx) });
         }
         return info.variants.get(tag_index).payload_layout;
     }
 
-    fn writeTagDiscriminant(self: *const GlueRocValueWriter, tag_union_base: [*]u8, tag_union_layout_idx: layout.Idx, tag_index: u16) void {
+    fn writeTagDiscriminant(self: *const GlueRocValueWriter, tag_union_base: [*]u8, tag_union_layout_idx: layout.Idx, tag_index: u32) void {
         const tag_union_layout = self.layouts.getLayout(tag_union_layout_idx);
         if (tag_union_layout.tag != .tag_union) {
             glueInvariant("glue expected tag-union layout, got {s}", .{@tagName(tag_union_layout.tag)});
@@ -4523,7 +4491,7 @@ fn checkedTypePayload(
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
     checked_type: CheckedArtifact.CheckedTypeId,
 ) CheckedArtifact.CheckedTypePayload {
-    const idx = @intFromEnum(checked_type);
+    const idx = @backingInt(checked_type);
     if (idx >= artifact.checked_types.payloadCount()) {
         glueInvariant("checked type id {d} out of bounds", .{idx});
     }
@@ -5134,14 +5102,14 @@ test "glue platform schema lock rejects field rename addition and type mutation"
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     const mutations = [_]struct { path: []const u8, source: []const u8 }{
-        .{ .path = "Types.roc", .source = "import ModuleTypeInfo exposing [ModuleTypeInfo]\nimport TypeInfo exposing [TypeInfo]\nimport ProvidesEntry exposing [ProvidesEntry]\nTypes := { modules : List(ModuleTypeInfo), provides_entries : List(ProvidesEntry), types : List(TypeInfo), added : U64 }" },
-        .{ .path = "ProvidesEntry.roc", .source = "import ProvidedExport exposing [ProvidedExport]\nProvidesEntry := { exported : ProvidedExport, ffi_symbol : Str, name : Str, type_id : U64 }" },
-        .{ .path = "ProvidedExport.roc", .source = "import FunctionSignature exposing [FunctionSignature]\nProvidedExport := [ProvidedData(U32), ProvidedProcedure(FunctionSignature)]" },
+        .{ .path = "Types.roc", .source = "import ModuleTypeInfo\nimport TypeInfo\nimport ProvidesEntry\nTypes := { modules : List(ModuleTypeInfo), provides_entries : List(ProvidesEntry), types : List(TypeInfo), added : U64 }" },
+        .{ .path = "ProvidesEntry.roc", .source = "import ProvidedExport\nProvidesEntry := { exported : ProvidedExport, ffi_symbol : Str, name : Str, type_id : U64 }" },
+        .{ .path = "ProvidedExport.roc", .source = "import FunctionSignature\nProvidedExport := [ProvidedData(U32), ProvidedProcedure(FunctionSignature)]" },
         .{ .path = "FunctionSignature.roc", .source = "FunctionSignature := { args : List(U64), result : U64 }" },
-        .{ .path = "CallableSignature.roc", .source = "import FunctionSignature exposing [FunctionSignature]\nCallableSignature := [Known(FunctionSignature), Opaque(U64)]" },
-        .{ .path = "TypeInfo.roc", .source = "import AbiLayout exposing [AbiLayout]\nimport HostRcPlan exposing [HostRcPlan]\nimport TypeRepr exposing [TypeRepr]\nTypeInfo := { layout : AbiLayout, rc : Bool, repr : TypeRepr }" },
-        .{ .path = "TypeInfo.roc", .source = "import HostRcPlan exposing [HostRcPlan]\nimport TypeRepr exposing [TypeRepr]\nTypeInfo := { layout : U64, rc : HostRcPlan, repr : TypeRepr }" },
-        .{ .path = "TypeInfo.roc", .source = "import AbiLayout exposing [AbiLayout]\nimport HostRcPlan exposing [HostRcPlan]\nTypeInfo := { layout : AbiLayout, rc : HostRcPlan, repr : U64 }" },
+        .{ .path = "CallableSignature.roc", .source = "import FunctionSignature\nCallableSignature := [Known(FunctionSignature), Opaque(U64)]" },
+        .{ .path = "TypeInfo.roc", .source = "import AbiLayout\nimport HostRcPlan\nimport TypeRepr\nTypeInfo := { layout : AbiLayout, rc : Bool, repr : TypeRepr }" },
+        .{ .path = "TypeInfo.roc", .source = "import HostRcPlan\nimport TypeRepr\nTypeInfo := { layout : U64, rc : HostRcPlan, repr : TypeRepr }" },
+        .{ .path = "TypeInfo.roc", .source = "import AbiLayout\nimport HostRcPlan\nTypeInfo := { layout : AbiLayout, rc : HostRcPlan, repr : U64 }" },
         .{ .path = "RecordField.roc", .source = "RecordField := { is_padding : Bool, name : Str, type_id : U32 }" },
         .{ .path = "HostRcPlan.roc", .source = "HostRcPlan := [RcNoop(U64), RcRefcounted]" },
     };
@@ -5163,8 +5131,8 @@ test "glue platform schema lock rejects field rename addition and type mutation"
         try tmp.dir.writeFile(io, .{ .sub_path = mutation_path, .data = mutation.source });
         try tmp.dir.writeFile(io, .{ .sub_path = "main.roc", .data =
             \\app [make_glue] { pf: platform "platform/main.roc" }
-            \\import pf.Types exposing [Types]
-            \\import pf.File exposing [File]
+            \\import pf.Types
+            \\import pf.File
             \\make_glue : List(Types) -> Try(List(File), Str)
             \\make_glue = |input| {
             \\    dbg input

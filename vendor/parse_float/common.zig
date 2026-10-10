@@ -64,8 +64,8 @@ pub fn Number(comptime T: type) type {
         exponent: i64,
         mantissa: mantissaType(T),
         negative: bool,
-        /// More than max_mantissa digits were found during parse
-        many_digits: bool,
+        /// A nonzero digit did not fit in `mantissa`, so the true magnitude exceeds it
+        truncated_nonzero: bool,
         /// The number was a hex-float (e.g. 0x1.234p567)
         hex: bool,
     };

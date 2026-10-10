@@ -139,6 +139,7 @@ const ExprNodeTag = enum {
     expr_method_eq,
     expr_type_method_call,
     expr_type_dispatch_call,
+    expr_type_dispatch_call_dispatcher,
     malformed,
 };
 
@@ -260,6 +261,7 @@ const DiagnosticNodeTag = enum {
     diag_unused_variable,
     diag_used_underscore_variable,
     diag_duplicate_record_field,
+    diag_duplicate_pattern_binder,
     diag_duplicate_tag,
     diag_crash_expects_string,
     diag_f64_pattern_literal,
@@ -269,6 +271,9 @@ const DiagnosticNodeTag = enum {
     diag_infinite_loop_never_exits,
     diag_trailing_try_suffix,
     diag_return_outside_fn,
+    diag_redundant_return,
+    diag_control_flow_in_expect,
+    diag_var_reassigned_in_expect,
     diag_mutually_recursive_type_aliases,
     diag_deprecated_number_suffix,
     diag_range_op_chained,
@@ -279,6 +284,10 @@ const DiagnosticNodeTag = enum {
 
 gpa: Allocator,
 nodes: Node.List,
+/// Source nodes replaced in place by `.malformed` runtime errors, each named
+/// by its replacement's `source_node_plus_one`. Compilation reads the
+/// replacement; source-level tools read through it to the code as written.
+replaced_source_nodes: Node.List,
 regions: Region.List,
 write_occurrences: collections.SafeList(WriteOccurrence),
 int128_values: collections.SafeList(i128), // Typed storage for large numeric literals
@@ -347,7 +356,9 @@ pub const SpanWithNode = extern struct {
 pub const LiteralDispatchPlan = extern struct {
     node_idx: u32,
     target_var: u32,
-    fn_var: u32,
+    /// Zero only for a proved concrete builtin numeral, which needs no
+    /// conversion signature. All deferred/custom/pattern conversions name one.
+    fn_var_plus_one: u32,
     kind_and_resolution: u32,
     pattern_context_plus_one: u32,
 
@@ -367,20 +378,25 @@ pub const LiteralDispatchPlan = extern struct {
     const resolution_shift = 1;
 
     fn packKindAndResolution(kind: Kind, resolution: Resolution) u32 {
-        return @intFromEnum(kind) | (@intFromEnum(resolution) << resolution_shift);
+        return @backingInt(kind) | (@backingInt(resolution) << resolution_shift);
+    }
+
+    /// The conversion obligation, absent for a validated concrete builtin numeral.
+    pub fn fnVar(self: LiteralDispatchPlan) ?types.Var {
+        return if (self.fn_var_plus_one == 0) null else @fromBackingInt(@intCast(self.fn_var_plus_one - 1));
     }
 
     pub fn dispatchKind(self: LiteralDispatchPlan) Kind {
-        return @enumFromInt(self.kind_and_resolution & 1);
+        return @fromBackingInt(@intCast(self.kind_and_resolution & 1));
     }
 
     pub fn dispatchResolution(self: LiteralDispatchPlan) Resolution {
-        return @enumFromInt(self.kind_and_resolution >> resolution_shift);
+        return @fromBackingInt(@intCast(self.kind_and_resolution >> resolution_shift));
     }
 
     pub fn patternContext(self: LiteralDispatchPlan, store: *const NodeStore) ?*const LiteralPatternContext {
         if (self.pattern_context_plus_one == 0) return null;
-        return store.literal_pattern_contexts.get(@enumFromInt(self.pattern_context_plus_one - 1));
+        return store.literal_pattern_contexts.get(@fromBackingInt(@intCast(self.pattern_context_plus_one - 1)));
     }
 
     pub fn patternFailureOwner(self: LiteralDispatchPlan, store: *const NodeStore) ?u32 {
@@ -406,14 +422,14 @@ comptime {
 }
 
 /// Canonical and checked data owned by a compiler-created interpolation expression.
-/// Optional type variables use zero for null and otherwise store `@intFromEnum(var) + 1`.
+/// Optional type variables use zero for null and otherwise store `@backingInt(var) + 1`.
 pub const InterpolationData = extern struct {
     parts_start: u32,
     parts_len: u32,
     method_region_start: u32,
     method_region_end: u32,
     constraint_fn_var_plus_one: u32,
-    step_fn_var_plus_one: u32,
+    assembler_fn_var_plus_one: u32,
     dispatcher_var_plus_one: u32,
 };
 
@@ -440,12 +456,12 @@ pub const MatchData = extern struct {
 };
 
 /// If expression data.
-/// Stores branches span, final else, and whether to warn for untaken compile-time branches.
+/// Stores branches span, final else, and the construct the `if` canonicalizes.
 pub const IfData = extern struct {
     branches_start: u32,
     branches_len: u32,
     final_else: u32,
-    warn_unused_branches: u32,
+    origin: u32,
 };
 
 /// Match branch data.
@@ -647,180 +663,95 @@ pub fn init(gpa: Allocator) Allocator.Error!NodeStore {
     return try NodeStore.initCapacity(gpa, 128);
 }
 
+/// Names of `T`'s backing-list fields in declaration order, for `T` either
+/// `NodeStore` or `NodeStore.Serialized`: every field except the allocator and
+/// the scratch buffers. Construction, `clone`, `deinit`, and the `Serialized`
+/// conversions visit exactly these, so declaring a list in both structs is all
+/// it takes to enroll it.
+fn backingLists(comptime T: type) []const []const u8 {
+    comptime {
+        const fields = std.meta.fieldNames(T);
+        var names: [fields.len - 2][]const u8 = undefined;
+        var count: usize = 0;
+        for (fields) |name| {
+            if (std.mem.eql(u8, name, "gpa") or std.mem.eql(u8, name, "scratch")) continue;
+            names[count] = name;
+            count += 1;
+        }
+        const result = names;
+        return &result;
+    }
+}
+
+/// How many nodes a store holds per entry of each backing list: `initCapacity`
+/// reserves `capacity / divisor` entries. Lists not named here start empty.
+const nodes_per_list_entry = .{
+    .nodes = 1,
+    .regions = 1,
+    .int128_values = 8,
+    .literal_dispatch_plans = 8,
+    .interpolation_data = 16,
+    .span2_data = 4,
+    .span_with_node_data = 4,
+    .method_call_data = 8,
+    .match_data = 8,
+    .if_data = 8,
+    .match_branch_data = 8,
+    .closure_data = 16,
+    .zero_arg_tag_data = 16,
+    .def_data = 8,
+    .import_data = 16,
+    .type_apply_data = 16,
+    .pattern_list_data = 16,
+    .pattern_str_interpolation_data = 32,
+    .pattern_str_interpolation_steps = 16,
+    .where_clause_owners = 16,
+    .index_data = 4,
+};
+
+/// A store whose backing lists are all empty and which has no scratch buffers.
+fn initEmpty(gpa: Allocator) NodeStore {
+    var store: NodeStore = undefined;
+    store.gpa = gpa;
+    store.scratch = null;
+    inline for (comptime backingLists(NodeStore)) |name| @field(store, name) = .{};
+    return store;
+}
+
 /// Initializes the NodeStore with a specified capacity.
 pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
-    var nodes = try Node.List.initCapacity(gpa, capacity);
-    errdefer nodes.deinit(gpa);
-    var regions = try Region.List.initCapacity(gpa, capacity);
-    errdefer regions.deinit(gpa);
-    var int128_values = try collections.SafeList(i128).initCapacity(gpa, capacity / 8);
-    errdefer int128_values.deinit(gpa);
-    const literal_pattern_contexts = collections.SafeList(LiteralPatternContext){};
-    var literal_dispatch_plans = try collections.SafeList(LiteralDispatchPlan).initCapacity(gpa, capacity / 8);
-    errdefer literal_dispatch_plans.deinit(gpa);
-    var interpolation_data = try collections.SafeList(InterpolationData).initCapacity(gpa, capacity / 16);
-    errdefer interpolation_data.deinit(gpa);
-    var span2_data = try collections.SafeList(Span2).initCapacity(gpa, capacity / 4);
-    errdefer span2_data.deinit(gpa);
-    var span_with_node_data = try collections.SafeList(SpanWithNode).initCapacity(gpa, capacity / 4);
-    errdefer span_with_node_data.deinit(gpa);
-    var method_call_data = try collections.SafeList(MethodCallData).initCapacity(gpa, capacity / 8);
-    errdefer method_call_data.deinit(gpa);
-    var match_data = try collections.SafeList(MatchData).initCapacity(gpa, capacity / 8);
-    errdefer match_data.deinit(gpa);
-    var if_data = try collections.SafeList(IfData).initCapacity(gpa, capacity / 8);
-    errdefer if_data.deinit(gpa);
-    var match_branch_data = try collections.SafeList(MatchBranchData).initCapacity(gpa, capacity / 8);
-    errdefer match_branch_data.deinit(gpa);
-    var closure_data = try collections.SafeList(ClosureData).initCapacity(gpa, capacity / 16);
-    errdefer closure_data.deinit(gpa);
-    var zero_arg_tag_data = try collections.SafeList(ZeroArgTagData).initCapacity(gpa, capacity / 16);
-    errdefer zero_arg_tag_data.deinit(gpa);
-    var def_data = try collections.SafeList(DefData).initCapacity(gpa, capacity / 8);
-    errdefer def_data.deinit(gpa);
-    var import_data = try collections.SafeList(ImportData).initCapacity(gpa, capacity / 16);
-    errdefer import_data.deinit(gpa);
-    var type_apply_data = try collections.SafeList(TypeApplyData).initCapacity(gpa, capacity / 16);
-    errdefer type_apply_data.deinit(gpa);
-    var pattern_list_data = try collections.SafeList(PatternListData).initCapacity(gpa, capacity / 16);
-    errdefer pattern_list_data.deinit(gpa);
-    var pattern_str_interpolation_data = try collections.SafeList(PatternStrInterpolationData).initCapacity(gpa, capacity / 32);
-    errdefer pattern_str_interpolation_data.deinit(gpa);
-    var pattern_str_interpolation_steps = try collections.SafeList(PatternStrInterpolationStepData).initCapacity(gpa, capacity / 16);
-    errdefer pattern_str_interpolation_steps.deinit(gpa);
-    var where_clause_owners = try collections.SafeList(WhereClauseOwnerData).initCapacity(gpa, capacity / 16);
-    errdefer where_clause_owners.deinit(gpa);
-    var index_data = try collections.SafeList(u32).initCapacity(gpa, capacity / 4);
-    errdefer index_data.deinit(gpa);
-    const scratch = try Scratch.init(gpa);
-    errdefer scratch.deinit(gpa);
-
-    return .{
-        .gpa = gpa,
-        .nodes = nodes,
-        .regions = regions,
-        .write_occurrences = .{},
-        .int128_values = int128_values,
-        .literal_dispatch_plans = literal_dispatch_plans,
-        .literal_pattern_contexts = literal_pattern_contexts,
-        .interpolation_data = interpolation_data,
-        .span2_data = span2_data,
-        .span_with_node_data = span_with_node_data,
-        .method_call_data = method_call_data,
-        .match_data = match_data,
-        .if_data = if_data,
-        .match_branch_data = match_branch_data,
-        .closure_data = closure_data,
-        .zero_arg_tag_data = zero_arg_tag_data,
-        .def_data = def_data,
-        .import_data = import_data,
-        .type_apply_data = type_apply_data,
-        .pattern_list_data = pattern_list_data,
-        .pattern_str_interpolation_data = pattern_str_interpolation_data,
-        .pattern_str_interpolation_steps = pattern_str_interpolation_steps,
-        .where_clause_owners = where_clause_owners,
-        .index_data = index_data,
-        .scratch = scratch,
-    };
+    var store = initEmpty(gpa);
+    errdefer store.deinit();
+    inline for (comptime std.meta.fieldNames(@TypeOf(nodes_per_list_entry))) |name| {
+        @field(store, name) = try @FieldType(NodeStore, name).initCapacity(gpa, capacity / @field(nodes_per_list_entry, name));
+    }
+    store.scratch = try Scratch.init(gpa);
+    return store;
 }
 
 /// Public function `clone`.
 pub fn clone(self: *const NodeStore, gpa: Allocator) Allocator.Error!NodeStore {
-    var cloned = NodeStore{
-        .gpa = gpa,
-        .nodes = try self.nodes.clone(gpa),
-        .regions = try self.regions.clone(gpa),
-        .write_occurrences = try self.write_occurrences.clone(gpa),
-        .int128_values = try self.int128_values.clone(gpa),
-        .literal_dispatch_plans = try self.literal_dispatch_plans.clone(gpa),
-        .literal_pattern_contexts = try self.literal_pattern_contexts.clone(gpa),
-        .interpolation_data = try self.interpolation_data.clone(gpa),
-        .span2_data = try self.span2_data.clone(gpa),
-        .span_with_node_data = try self.span_with_node_data.clone(gpa),
-        .method_call_data = try self.method_call_data.clone(gpa),
-        .match_data = try self.match_data.clone(gpa),
-        .if_data = try self.if_data.clone(gpa),
-        .match_branch_data = try self.match_branch_data.clone(gpa),
-        .closure_data = try self.closure_data.clone(gpa),
-        .zero_arg_tag_data = try self.zero_arg_tag_data.clone(gpa),
-        .def_data = try self.def_data.clone(gpa),
-        .import_data = try self.import_data.clone(gpa),
-        .type_apply_data = try self.type_apply_data.clone(gpa),
-        .pattern_list_data = try self.pattern_list_data.clone(gpa),
-        .pattern_str_interpolation_data = try self.pattern_str_interpolation_data.clone(gpa),
-        .pattern_str_interpolation_steps = try self.pattern_str_interpolation_steps.clone(gpa),
-        .where_clause_owners = try self.where_clause_owners.clone(gpa),
-        .index_data = try self.index_data.clone(gpa),
-        .scratch = null,
-    };
+    var cloned = initEmpty(gpa);
     errdefer cloned.deinit();
+    inline for (comptime backingLists(NodeStore)) |name| {
+        @field(cloned, name) = try @field(self, name).clone(gpa);
+    }
     return cloned;
 }
 
 /// Deinitializes the NodeStore, freeing any allocated resources.
 pub fn deinit(store: *NodeStore) void {
-    store.nodes.deinit(store.gpa);
-    store.regions.deinit(store.gpa);
-    store.write_occurrences.deinit(store.gpa);
-    store.int128_values.deinit(store.gpa);
-    store.literal_dispatch_plans.deinit(store.gpa);
-    store.literal_pattern_contexts.deinit(store.gpa);
-    store.interpolation_data.deinit(store.gpa);
-    store.span2_data.deinit(store.gpa);
-    store.span_with_node_data.deinit(store.gpa);
-    store.method_call_data.deinit(store.gpa);
-    store.match_data.deinit(store.gpa);
-    store.if_data.deinit(store.gpa);
-    store.match_branch_data.deinit(store.gpa);
-    store.closure_data.deinit(store.gpa);
-    store.zero_arg_tag_data.deinit(store.gpa);
-    store.def_data.deinit(store.gpa);
-    store.import_data.deinit(store.gpa);
-    store.type_apply_data.deinit(store.gpa);
-    store.pattern_list_data.deinit(store.gpa);
-    store.pattern_str_interpolation_data.deinit(store.gpa);
-    store.pattern_str_interpolation_steps.deinit(store.gpa);
-    store.where_clause_owners.deinit(store.gpa);
-    store.index_data.deinit(store.gpa);
+    inline for (comptime backingLists(NodeStore)) |name| @field(store, name).deinit(store.gpa);
     if (store.scratch) |scratch| {
         scratch.deinit(store.gpa);
     }
-}
-
-/// Add the given offset to the memory addresses of all pointers in `self`.
-/// This is used when loading a NodeStore from shared memory at a different address.
-pub fn relocate(store: *NodeStore, offset: isize) void {
-    store.nodes.relocate(offset);
-    store.regions.relocate(offset);
-    store.write_occurrences.relocate(offset);
-    store.int128_values.relocate(offset);
-    store.literal_dispatch_plans.relocate(offset);
-    store.literal_pattern_contexts.relocate(offset);
-    store.interpolation_data.relocate(offset);
-    store.span2_data.relocate(offset);
-    store.span_with_node_data.relocate(offset);
-    store.method_call_data.relocate(offset);
-    store.match_data.relocate(offset);
-    store.if_data.relocate(offset);
-    store.match_branch_data.relocate(offset);
-    store.closure_data.relocate(offset);
-    store.zero_arg_tag_data.relocate(offset);
-    store.def_data.relocate(offset);
-    store.import_data.relocate(offset);
-    store.type_apply_data.relocate(offset);
-    store.pattern_list_data.relocate(offset);
-    store.pattern_str_interpolation_data.relocate(offset);
-    store.pattern_str_interpolation_steps.relocate(offset);
-    store.where_clause_owners.relocate(offset);
-    store.index_data.relocate(offset);
-    // scratch is null for deserialized NodeStores, no need to relocate
 }
 
 /// Compile-time constants for union variant counts to ensure we don't miss cases
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 89;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 93;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 59;
 /// Count of the statement nodes in the ModuleEnv
@@ -832,37 +763,37 @@ pub const MODULEENV_PATTERN_NODE_COUNT = 20;
 
 comptime {
     // Check the number of CIR.Diagnostic nodes
-    const diagnostic_fields = @typeInfo(CIR.Diagnostic).@"union".fields;
+    const diagnostic_fields = @typeInfo(CIR.Diagnostic).@"union".field_names;
     std.debug.assert(diagnostic_fields.len == MODULEENV_DIAGNOSTIC_NODE_COUNT);
 }
 
 comptime {
     // Check the number of CIR.Expr nodes
-    const expr_fields = @typeInfo(CIR.Expr).@"union".fields;
+    const expr_fields = @typeInfo(CIR.Expr).@"union".field_names;
     std.debug.assert(expr_fields.len == MODULEENV_EXPR_NODE_COUNT);
 }
 
 comptime {
     // Check the number of CIR.Statement nodes
-    const statement_fields = @typeInfo(CIR.Statement).@"union".fields;
+    const statement_fields = @typeInfo(CIR.Statement).@"union".field_names;
     std.debug.assert(statement_fields.len == MODULEENV_STATEMENT_NODE_COUNT);
 }
 
 comptime {
     // Check the number of CIR.TypeAnno nodes
-    const type_anno_fields = @typeInfo(CIR.TypeAnno).@"union".fields;
+    const type_anno_fields = @typeInfo(CIR.TypeAnno).@"union".field_names;
     std.debug.assert(type_anno_fields.len == MODULEENV_TYPE_ANNO_NODE_COUNT);
 }
 
 comptime {
     // Check the number of CIR.Pattern nodes
-    const pattern_fields = @typeInfo(CIR.Pattern).@"union".fields;
+    const pattern_fields = @typeInfo(CIR.Pattern).@"union".field_names;
     std.debug.assert(pattern_fields.len == MODULEENV_PATTERN_NODE_COUNT);
 }
 
 /// Helper function to get a region by node index, handling the type conversion
 pub fn getRegionAt(store: *const NodeStore, node_idx: Node.Idx) Region {
-    const idx: Region.Idx = @enumFromInt(@intFromEnum(node_idx));
+    const idx: Region.Idx = @fromBackingInt(@intCast(@backingInt(node_idx)));
     return store.regions.get(idx).*;
 }
 
@@ -870,7 +801,7 @@ pub fn getRegionAt(store: *const NodeStore, node_idx: Node.Idx) Region {
 /// created at the first use of a name and becomes that name's binder once the
 /// declaration is reached, at which point it belongs at the declaration.
 pub fn setRegionAt(store: *NodeStore, node_idx: Node.Idx, region: Region) void {
-    const idx: Region.Idx = @enumFromInt(@intFromEnum(node_idx));
+    const idx: Region.Idx = @fromBackingInt(@intCast(@backingInt(node_idx)));
     store.regions.set(idx, region);
 }
 
@@ -923,7 +854,7 @@ fn setLiteralDispatchPlanPlusOne(store: *NodeStore, node_idx: Node.Idx, plan_plu
     var node = store.nodes.get(node_idx);
     const payload = node.getPayload();
     const tag = narrowNodeTag(LiteralNodeTag, node.tag) orelse
-        std.debug.panic("literal dispatch plan attached to non-literal node {s}", .{@tagName(node.tag)});
+        base.invariant("literal dispatch plan attached to non-literal node {s}", .{@tagName(node.tag)});
     switch (tag) {
         .expr_num => {
             var data = payload.expr_num;
@@ -1010,47 +941,48 @@ pub fn recordLiteralDispatchPlan(
     node_idx: Node.Idx,
     kind: LiteralDispatchPlan.Kind,
     target_var: types.Var,
-    fn_var: types.Var,
+    fn_var: ?types.Var,
     pattern_failure_owner: ?u32,
 ) Allocator.Error!void {
+    std.debug.assert(fn_var != null or (kind == .numeral and pattern_failure_owner == null));
     const node = store.nodes.get(node_idx);
     std.debug.assert(literalDispatchKindForTag(node.tag) == kind);
     std.debug.assert(narrowNodeTag(PatternNodeTag, node.tag) == null or pattern_failure_owner != null);
 
     const plan_plus_one = literalDispatchPlanPlusOne(node);
     const context_plus_one = if (plan_plus_one != 0)
-        store.literal_dispatch_plans.get(@enumFromInt(plan_plus_one - 1)).pattern_context_plus_one
+        store.literal_dispatch_plans.get(@fromBackingInt(@intCast(plan_plus_one - 1))).pattern_context_plus_one
     else if (pattern_failure_owner) |owner|
-        @intFromEnum(try store.literal_pattern_contexts.append(store.gpa, .{ .failure_owner = owner })) + 1
+        @backingInt(try store.literal_pattern_contexts.append(store.gpa, .{ .failure_owner = owner })) + 1
     else
         0;
     if (pattern_failure_owner) |owner| {
         std.debug.assert(context_plus_one != 0);
-        store.literal_pattern_contexts.get(@enumFromInt(context_plus_one - 1)).failure_owner = owner;
+        store.literal_pattern_contexts.get(@fromBackingInt(@intCast(context_plus_one - 1))).failure_owner = owner;
     } else std.debug.assert(context_plus_one == 0);
     var plan = LiteralDispatchPlan{
-        .node_idx = @intFromEnum(node_idx),
-        .target_var = @intFromEnum(target_var),
-        .fn_var = @intFromEnum(fn_var),
+        .node_idx = @backingInt(node_idx),
+        .target_var = @backingInt(target_var),
+        .fn_var_plus_one = if (fn_var) |var_| @backingInt(var_) + 1 else 0,
         .kind_and_resolution = LiteralDispatchPlan.packKindAndResolution(kind, .unresolved),
         .pattern_context_plus_one = context_plus_one,
     };
     if (plan_plus_one != 0) {
-        plan.setResolution(store.literal_dispatch_plans.get(@enumFromInt(plan_plus_one - 1)).dispatchResolution());
-        store.literal_dispatch_plans.set(@enumFromInt(plan_plus_one - 1), plan);
+        plan.setResolution(store.literal_dispatch_plans.get(@fromBackingInt(@intCast(plan_plus_one - 1))).dispatchResolution());
+        store.literal_dispatch_plans.set(@fromBackingInt(@intCast(plan_plus_one - 1)), plan);
         return;
     }
 
     const plan_idx = try store.literal_dispatch_plans.append(store.gpa, plan);
-    setLiteralDispatchPlanPlusOne(store, node_idx, @intFromEnum(plan_idx) + 1);
+    setLiteralDispatchPlanPlusOne(store, node_idx, @backingInt(plan_idx) + 1);
 }
 
 /// Retain the exact equality constraint created for this literal pattern.
 pub fn recordLiteralPatternEquality(store: *NodeStore, node_idx: Node.Idx, fn_var: types.Var) void {
     const plan = store.literalDispatchPlanForNode(node_idx) orelse unreachable;
     std.debug.assert(plan.pattern_context_plus_one != 0);
-    const context = store.literal_pattern_contexts.get(@enumFromInt(plan.pattern_context_plus_one - 1));
-    context.equality_fn_var_plus_one = @intFromEnum(fn_var) + 1;
+    const context = store.literal_pattern_contexts.get(@fromBackingInt(@intCast(plan.pattern_context_plus_one - 1)));
+    context.equality_fn_var_plus_one = @backingInt(fn_var) + 1;
 }
 
 /// Finalize the checker-owned resolution for a live literal plan. An
@@ -1066,16 +998,16 @@ pub fn finalizeLiteralDispatchResolution(
     const plan_plus_one = literalDispatchPlanPlusOne(node);
     if (plan_plus_one == 0) return;
 
-    var plan = store.literal_dispatch_plans.get(@enumFromInt(plan_plus_one - 1)).*;
+    var plan = store.literal_dispatch_plans.get(@fromBackingInt(@intCast(plan_plus_one - 1))).*;
     const previous = plan.dispatchResolution();
     if (previous != .unresolved and previous != resolution) {
-        std.debug.panic(
+        base.invariant(
             "literal dispatch plan for node {d} finalized twice ({s}, then {s})",
-            .{ @intFromEnum(node_idx), @tagName(previous), @tagName(resolution) },
+            .{ @backingInt(node_idx), @tagName(previous), @tagName(resolution) },
         );
     }
     plan.setResolution(resolution);
-    store.literal_dispatch_plans.set(@enumFromInt(plan_plus_one - 1), plan);
+    store.literal_dispatch_plans.set(@fromBackingInt(@intCast(plan_plus_one - 1)), plan);
 }
 
 /// Return the checked dispatch evidence owned by a literal node, if any.
@@ -1083,8 +1015,8 @@ pub fn literalDispatchPlanForNode(store: *const NodeStore, node_idx: Node.Idx) ?
     const node = store.nodes.get(node_idx);
     const plan_plus_one = literalDispatchPlanPlusOne(node);
     if (plan_plus_one == 0) return null;
-    const plan = store.literal_dispatch_plans.get(@enumFromInt(plan_plus_one - 1)).*;
-    std.debug.assert(plan.node_idx == @intFromEnum(node_idx));
+    const plan = store.literal_dispatch_plans.get(@fromBackingInt(@intCast(plan_plus_one - 1))).*;
+    std.debug.assert(plan.node_idx == @backingInt(node_idx));
     std.debug.assert(plan.dispatchKind() == literalDispatchKindForTag(node.tag).?);
     return plan;
 }
@@ -1092,9 +1024,9 @@ pub fn literalDispatchPlanForNode(store: *const NodeStore, node_idx: Node.Idx) ?
 /// The dense set of live literal dispatch plans. Every record is owned by the
 /// node named in `node_idx`; node replacement removes its record immediately.
 pub fn literalDispatchPlans(store: *const NodeStore) []const LiteralDispatchPlan {
-    if (@import("builtin").mode == .Debug) {
+    if (@import("builtin").mode == .debug) {
         for (store.literal_dispatch_plans.items.items, 0..) |plan, plan_index| {
-            const owner = store.nodes.get(@enumFromInt(plan.node_idx));
+            const owner = store.nodes.get(@fromBackingInt(@intCast(plan.node_idx)));
             std.debug.assert(literalDispatchPlanPlusOne(owner) == @as(u32, @intCast(plan_index + 1)));
             std.debug.assert(literalDispatchKindForTag(owner.tag).? == plan.dispatchKind());
         }
@@ -1112,14 +1044,14 @@ pub fn retireLiteralDispatchPlan(store: *NodeStore, node_idx: Node.Idx) ?Literal
 
     const plan_index: usize = plan_plus_one - 1;
     const plans = &store.literal_dispatch_plans.items;
-    std.debug.assert(plans.items[plan_index].node_idx == @intFromEnum(node_idx));
+    std.debug.assert(plans.items[plan_index].node_idx == @backingInt(node_idx));
     const retired = plans.items[plan_index];
     const last_index = plans.items.len - 1;
     setLiteralDispatchPlanPlusOne(store, node_idx, 0);
     if (plan_index != last_index) {
         const moved = plans.items[last_index];
         plans.items[plan_index] = moved;
-        setLiteralDispatchPlanPlusOne(store, @enumFromInt(moved.node_idx), @intCast(plan_index + 1));
+        setLiteralDispatchPlanPlusOne(store, @fromBackingInt(@intCast(moved.node_idx)), @intCast(plan_index + 1));
     }
     _ = plans.pop();
     return retired;
@@ -1127,38 +1059,38 @@ pub fn retireLiteralDispatchPlan(store: *NodeStore, node_idx: Node.Idx) ?Literal
 
 /// Helper function to get a region by pattern index
 pub fn getPatternRegion(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) Region {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(pattern_idx)));
     return store.getRegionAt(node_idx);
 }
 
 /// Helper function to get a region by expression index
 pub fn getExprRegion(store: *const NodeStore, expr_idx: CIR.Expr.Idx) Region {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
     return store.getRegionAt(node_idx);
 }
 
 /// Returns the exact source region of one field-access path segment.
 pub fn getFieldAccessSegmentRegion(store: *const NodeStore, segment_idx: CIR.Expr.FieldAccessSegment.Idx) Region {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(segment_idx));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(segment_idx)));
     std.debug.assert(store.nodes.get(node_idx).tag == .field_access_segment);
     return store.getRegionAt(node_idx);
 }
 
 /// Helper function to get a region by statement index
 pub fn getStatementRegion(store: *const NodeStore, stmt_idx: CIR.Statement.Idx) Region {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(stmt_idx));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(stmt_idx)));
     return store.getRegionAt(node_idx);
 }
 
 /// Helper function to get a region by type annotation index
 pub fn getTypeAnnoRegion(store: *const NodeStore, type_anno_idx: CIR.TypeAnno.Idx) Region {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(type_anno_idx));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(type_anno_idx)));
     return store.getRegionAt(node_idx);
 }
 
 /// Helper function to get a region by  annotation index
 pub fn getAnnotationRegion(store: *const NodeStore, anno_idx: CIR.Annotation.Idx) Region {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(anno_idx));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(anno_idx)));
     return store.getRegionAt(node_idx);
 }
 
@@ -1187,8 +1119,8 @@ comptime {
     // The binop range starts after the unit (payload-less) tags; keep the offset
     // in sync so a new unit variant can't collide with a `Binop.Op` slot.
     var unit_count: u32 = 0;
-    for (@typeInfo(CIR.Expr.SurfaceOrigin).@"union".fields) |field| {
-        if (field.type == void) unit_count += 1;
+    for (@typeInfo(CIR.Expr.SurfaceOrigin).@"union".field_types) |field_type| {
+        if (field_type == void) unit_count += 1;
     }
     std.debug.assert(surface_origin_binop_offset == unit_count);
 }
@@ -1198,7 +1130,7 @@ pub fn encodeSurfaceOrigin(origin: CIR.Expr.SurfaceOrigin) u32 {
     return switch (origin) {
         .method_call => 0,
         .unary_minus => 1,
-        .binop => |op| surface_origin_binop_offset + @as(u32, @intFromEnum(op)),
+        .binop => |op| surface_origin_binop_offset + @as(u32, @backingInt(op)),
     };
 }
 
@@ -1207,7 +1139,7 @@ pub fn decodeSurfaceOrigin(encoded: u32) CIR.Expr.SurfaceOrigin {
     return switch (encoded) {
         0 => .method_call,
         1 => .unary_minus,
-        else => .{ .binop = @enumFromInt(encoded - surface_origin_binop_offset) },
+        else => .{ .binop = @fromBackingInt(@intCast(encoded - surface_origin_binop_offset)) },
     };
 }
 
@@ -1233,22 +1165,32 @@ fn getMethodNameRegion(store: *const NodeStore, data_idx: u32) Region {
 
 /// Retrieves a statement node from the store.
 pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.Statement {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(statement));
-    const node = store.nodes.get(node_idx);
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(statement)));
+    return @call(.always_inline, statementFromNode, .{ store, store.nodes.get(node_idx) });
+}
+
+/// Retrieves a statement as written in source, reading through a runtime
+/// error put in its place.
+pub fn getSourceStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.Statement {
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(statement)));
+    return store.statementFromNode(store.sourceNode(node_idx));
+}
+
+fn statementFromNode(store: *const NodeStore, node: Node) CIR.Statement {
     const payload = node.getPayload();
 
     const tag = narrowNodeTag(StatementNodeTag, node.tag) orelse
-        std.debug.panic("unreachable, node is not a statement tag: {}", .{node.tag});
+        base.invariant("unreachable, node is not a statement tag: {}", .{node.tag});
     switch (tag) {
         .statement_decl => {
             const p = payload.statement_decl;
             return CIR.Statement{ .s_decl = .{
-                .pattern = @enumFromInt(p.pattern),
-                .expr = @enumFromInt(p.expr),
+                .pattern = @fromBackingInt(@intCast(p.pattern)),
+                .expr = @fromBackingInt(@intCast(p.expr)),
                 .anno = blk: {
                     const anno_data = store.span2_data.items.items[p.anno_span2_idx];
                     if (anno_data.start != 0) {
-                        break :blk @as(CIR.Annotation.Idx, @enumFromInt(anno_data.len));
+                        break :blk @as(CIR.Annotation.Idx, @fromBackingInt(@intCast(anno_data.len)));
                     } else {
                         break :blk null;
                     }
@@ -1258,12 +1200,12 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
         .statement_var => {
             const p = payload.statement_var;
             return CIR.Statement{ .s_var = .{
-                .pattern_idx = @enumFromInt(p.pattern_idx),
-                .expr = @enumFromInt(p.expr),
+                .pattern_idx = @fromBackingInt(@intCast(p.pattern_idx)),
+                .expr = @fromBackingInt(@intCast(p.expr)),
                 .anno = blk: {
                     const anno_data = store.span2_data.items.items[p.anno_span2_idx];
                     if (anno_data.start != 0) {
-                        break :blk @enumFromInt(anno_data.len);
+                        break :blk @fromBackingInt(@intCast(anno_data.len));
                     } else {
                         break :blk null;
                     }
@@ -1273,11 +1215,11 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
         .statement_var_uninitialized => {
             const p = payload.statement_var_uninitialized;
             return CIR.Statement{ .s_var_uninitialized = .{
-                .pattern_idx = @enumFromInt(p.pattern_idx),
+                .pattern_idx = @fromBackingInt(@intCast(p.pattern_idx)),
                 .anno = blk: {
                     const anno_data = store.span2_data.items.items[p.anno_span2_idx];
                     if (anno_data.start != 0) {
-                        break :blk @enumFromInt(anno_data.len);
+                        break :blk @fromBackingInt(@intCast(anno_data.len));
                     } else {
                         break :blk null;
                     }
@@ -1287,69 +1229,70 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
         .statement_reassign => {
             const p = payload.statement_reassign;
             return CIR.Statement{ .s_reassign = .{
-                .pattern_idx = @enumFromInt(p.pattern_idx),
-                .expr = @enumFromInt(p.expr),
+                .pattern_idx = @fromBackingInt(@intCast(p.pattern_idx)),
+                .expr = @fromBackingInt(@intCast(p.expr)),
             } };
         },
         .statement_crash => {
             const p = payload.statement_crash;
             return CIR.Statement{ .s_crash = .{
-                .msg = @enumFromInt(p.msg),
+                .msg = @fromBackingInt(@intCast(p.msg)),
             } };
         },
         .statement_dbg => {
             const p = payload.statement_single_expr;
             return CIR.Statement{ .s_dbg = .{
-                .expr = @enumFromInt(p.expr),
+                .expr = @fromBackingInt(@intCast(p.expr)),
             } };
         },
         .statement_expr => {
             const p = payload.statement_single_expr;
             return .{ .s_expr = .{
-                .expr = @enumFromInt(p.expr),
+                .expr = @fromBackingInt(@intCast(p.expr)),
             } };
         },
         .statement_expect => {
             const p = payload.statement_single_expr;
             return CIR.Statement{ .s_expect = .{
-                .body = @enumFromInt(p.expr),
+                .body = @fromBackingInt(@intCast(p.expr)),
             } };
         },
         .statement_for => {
             const p = payload.statement_for;
             return CIR.Statement{ .s_for = .{
-                .patt = @enumFromInt(p.patt),
-                .expr = @enumFromInt(p.expr),
-                .body = @enumFromInt(p.body),
+                .kind = @fromBackingInt(@intCast(p.kind)),
+                .patt = @fromBackingInt(@intCast(p.patt)),
+                .expr = @fromBackingInt(@intCast(p.expr)),
+                .body = @fromBackingInt(@intCast(p.body)),
             } };
         },
         .statement_while => {
             const p = payload.statement_while;
             return CIR.Statement{ .s_while = .{
-                .cond = @enumFromInt(p.cond),
-                .body = @enumFromInt(p.body),
+                .cond = @fromBackingInt(@intCast(p.cond)),
+                .body = @fromBackingInt(@intCast(p.body)),
             } };
         },
         .statement_infinite_loop => {
             const p = payload.statement_while;
             return CIR.Statement{ .s_infinite_loop = .{
-                .cond = @enumFromInt(p.cond),
-                .body = @enumFromInt(p.body),
+                .cond = @fromBackingInt(@intCast(p.cond)),
+                .body = @fromBackingInt(@intCast(p.body)),
             } };
         },
         .statement_breakable_loop => {
             const p = payload.statement_while;
             return CIR.Statement{ .s_breakable_loop = .{
-                .cond = @enumFromInt(p.cond),
-                .body = @enumFromInt(p.body),
+                .cond = @fromBackingInt(@intCast(p.cond)),
+                .body = @fromBackingInt(@intCast(p.body)),
             } };
         },
         .statement_break => return CIR.Statement{ .s_break = .{} },
         .statement_return => {
             const p = payload.statement_return;
             return CIR.Statement{ .s_return = .{
-                .expr = @enumFromInt(p.expr),
-                .lambda = @enumFromInt(p.lambda),
+                .expr = @fromBackingInt(@intCast(p.expr)),
+                .lambda = @fromBackingInt(@intCast(p.lambda)),
             } };
         },
         .statement_import => {
@@ -1372,8 +1315,8 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             const p = payload.statement_alias_decl;
             return CIR.Statement{
                 .s_alias_decl = .{
-                    .header = @enumFromInt(p.header),
-                    .anno = @enumFromInt(p.anno),
+                    .header = @fromBackingInt(@intCast(p.header)),
+                    .anno = @fromBackingInt(@intCast(p.anno)),
                 },
             };
         },
@@ -1381,8 +1324,8 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             const p = payload.statement_nominal_decl;
             return CIR.Statement{
                 .s_nominal_decl = .{
-                    .header = @enumFromInt(p.header),
-                    .anno = @enumFromInt(p.anno),
+                    .header = @fromBackingInt(@intCast(p.header)),
+                    .anno = @fromBackingInt(@intCast(p.anno)),
                     .is_opaque = p.is_opaque != 0,
                 },
             };
@@ -1391,8 +1334,8 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             const p = payload.statement_where_alias_decl;
             return CIR.Statement{
                 .s_where_alias_decl = .{
-                    .header = @enumFromInt(p.header),
-                    .receiver = @enumFromInt(p.receiver),
+                    .header = @fromBackingInt(@intCast(p.header)),
+                    .receiver = @fromBackingInt(@intCast(p.receiver)),
                     .where = store.loadWhereClauseSpan(p.where_span_idx),
                 },
             };
@@ -1408,7 +1351,7 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             return CIR.Statement{
                 .s_type_anno = .{
                     .name = @bitCast(p.name),
-                    .anno = @enumFromInt(p.anno),
+                    .anno = @fromBackingInt(@intCast(p.anno)),
                     .where = where_clause,
                 },
             };
@@ -1419,14 +1362,15 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
                 .s_type_var_alias = .{
                     .alias_name = @bitCast(p.alias_name),
                     .type_var_name = @bitCast(p.type_var_name),
-                    .type_var_anno = @enumFromInt(p.type_var_anno),
+                    .type_var_anno = @fromBackingInt(@intCast(p.type_var_anno)),
                 },
             };
         },
         .malformed => {
-            const p = payload.diag_single_value;
+            const p = payload.malformed;
             return CIR.Statement{ .s_runtime_error = .{
-                .diagnostic = @enumFromInt(p.value),
+                .diagnostic = @fromBackingInt(p.diagnostic),
+                .evaluated = .{ .span = .{ .start = p.evaluated_start, .len = p.evaluated_len } },
             } };
         },
     }
@@ -1434,18 +1378,28 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
 
 /// Retrieves an expression node from the store.
 pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr));
-    const node = store.nodes.get(node_idx);
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr)));
+    return @call(.always_inline, exprFromNode, .{ store, node_idx, store.nodes.get(node_idx) });
+}
+
+/// Retrieves an expression as written in source, reading through a runtime
+/// error put in its place.
+pub fn getSourceExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr)));
+    return store.exprFromNode(node_idx, store.sourceNode(node_idx));
+}
+
+fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Expr {
     const payload = node.getPayload();
 
     const tag = narrowNodeTag(ExprNodeTag, node.tag) orelse
-        std.debug.panic("unreachable, node is not an expression tag: {}", .{node.tag});
+        base.invariant("unreachable, node is not an expression tag: {}", .{node.tag});
     switch (tag) {
         .expr_var => {
             const p = payload.expr_var;
             return CIR.Expr{
                 .e_lookup_local = .{
-                    .pattern_idx = @enumFromInt(p.pattern_idx),
+                    .pattern_idx = @fromBackingInt(@intCast(p.pattern_idx)),
                 },
             };
         },
@@ -1453,7 +1407,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const p = payload.expr_external_lookup;
             // Handle external lookups
             return CIR.Expr{ .e_lookup_external = .{
-                .module_idx = @enumFromInt(p.module_idx),
+                .module_idx = @fromBackingInt(@intCast(p.module_idx)),
                 .target_node_idx = @intCast(p.target_node_idx),
                 .ident_idx = @bitCast(p.ident_idx),
                 .region = store.getRegionAt(node_idx),
@@ -1462,7 +1416,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_deferred_import_ref => {
             const p = payload.expr_deferred_import_ref;
             return CIR.Expr{ .e_deferred_import_ref = .{
-                .ref = @enumFromInt(p.ref),
+                .ref = @fromBackingInt(@intCast(p.ref)),
                 .backing = null,
             } };
         },
@@ -1470,10 +1424,10 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const p = payload.expr_deferred_nominal_external;
             const backing = store.span2_data.items.items[p.backing_span2_idx];
             return CIR.Expr{ .e_deferred_import_ref = .{
-                .ref = @enumFromInt(p.ref),
+                .ref = @fromBackingInt(@intCast(p.ref)),
                 .backing = .{
-                    .expr = @enumFromInt(backing.start),
-                    .ty = @enumFromInt(backing.len),
+                    .expr = @fromBackingInt(@intCast(backing.start)),
+                    .ty = @fromBackingInt(@intCast(backing.len)),
                 },
             } };
         },
@@ -1488,7 +1442,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_associated_lookup => {
             const p = payload.expr_associated_lookup;
             return CIR.Expr{ .e_lookup_associated = .{
-                .module_idx = @enumFromInt(p.module_idx),
+                .module_idx = @fromBackingInt(@intCast(p.module_idx)),
                 .type_node_idx = p.type_node_idx,
                 .type_ident = @bitCast(p.type_ident),
                 .item_ident = @bitCast(p.item_ident),
@@ -1497,9 +1451,9 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_associated_lookup_resolved => {
             const p = payload.expr_associated_lookup_resolved;
             return CIR.Expr{ .e_lookup_associated_resolved = .{
-                .module_identity = @enumFromInt(p.module_identity),
+                .module_identity = @fromBackingInt(@intCast(p.module_identity)),
                 .target_node_idx = p.target_node_idx,
-                .target_def_idx = @enumFromInt(p.target_def_idx),
+                .target_def_idx = @fromBackingInt(@intCast(p.target_def_idx)),
                 .source_ident = @bitCast(p.source_ident),
             } };
         },
@@ -1512,8 +1466,8 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_num => {
             const p = payload.expr_num;
-            const kind: CIR.NumKind = @enumFromInt(p.kind);
-            const val_kind: CIR.IntValue.IntKind = @enumFromInt(p.val_kind);
+            const kind: CIR.NumKind = @fromBackingInt(@intCast(p.kind));
+            const val_kind: CIR.IntValue.IntKind = @fromBackingInt(@intCast(p.val_kind));
             const value = store.int128_values.items.items[p.int128_idx];
 
             return CIR.Expr{
@@ -1543,7 +1497,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const p = payload.expr_tuple_access;
             return CIR.Expr{
                 .e_tuple_access = .{
-                    .tuple = @enumFromInt(p.tuple),
+                    .tuple = @fromBackingInt(@intCast(p.tuple)),
                     .elem_index = p.elem_index,
                 },
             };
@@ -1555,13 +1509,13 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
 
             return CIR.Expr{
                 .e_call = .{
-                    .func = @enumFromInt(p.func),
+                    .func = @fromBackingInt(@intCast(p.func)),
                     .args = .{ .span = .{ .start = args_span.start, .len = args_span.len } },
-                    .called_via = @enumFromInt(p.called_via),
+                    .called_via = @fromBackingInt(@intCast(p.called_via)),
                     .constraint_fn_var = if (p.constraint_fn_var_plus_one == 0)
                         null
                     else
-                        @enumFromInt(p.constraint_fn_var_plus_one - 1),
+                        @fromBackingInt(@intCast(p.constraint_fn_var_plus_one - 1)),
                 },
             };
         },
@@ -1618,7 +1572,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .e_typed_int = .{
                     .value = .{
                         .bytes = @bitCast(value),
-                        .kind = @enumFromInt(p.val_kind),
+                        .kind = @fromBackingInt(@intCast(p.val_kind)),
                     },
                     .type_name = @bitCast(p.type_name),
                 },
@@ -1631,7 +1585,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .e_typed_frac = .{
                     .value = .{
                         .bytes = @bitCast(value),
-                        .kind = @enumFromInt(p.val_kind),
+                        .kind = @fromBackingInt(@intCast(p.val_kind)),
                     },
                     .type_name = @bitCast(p.type_name),
                 },
@@ -1645,11 +1599,11 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_string_segment => {
             const p = payload.expr_string_segment;
-            return CIR.Expr.initStrSegment(@enumFromInt(p.segment_idx));
+            return CIR.Expr.initStrSegment(@fromBackingInt(@intCast(p.segment_idx)));
         },
         .expr_bytes_literal => {
             const p = payload.expr_string_segment;
-            return .{ .e_bytes_literal = .{ .literal = @enumFromInt(p.segment_idx) } };
+            return .{ .e_bytes_literal = .{ .literal = @fromBackingInt(@intCast(p.segment_idx)) } };
         },
         .expr_string => {
             const p = payload.expr_string;
@@ -1668,9 +1622,9 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const p = payload.expr_nominal;
             return CIR.Expr{
                 .e_nominal = .{
-                    .nominal_type_decl = @enumFromInt(p.nominal_type_decl),
-                    .backing_expr = @enumFromInt(p.backing_expr),
-                    .backing_type = @enumFromInt(p.backing_type),
+                    .nominal_type_decl = @fromBackingInt(@intCast(p.nominal_type_decl)),
+                    .backing_expr = @fromBackingInt(@intCast(p.backing_expr)),
+                    .backing_type = @fromBackingInt(@intCast(p.backing_type)),
                 },
             };
         },
@@ -1681,10 +1635,10 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
 
             return CIR.Expr{
                 .e_nominal_external = .{
-                    .module_idx = @enumFromInt(p.module_idx),
+                    .module_idx = @fromBackingInt(@intCast(p.module_idx)),
                     .target_node_idx = @intCast(p.target_node_idx),
-                    .backing_expr = @enumFromInt(backing.start),
-                    .backing_type = @enumFromInt(backing.len),
+                    .backing_expr = @fromBackingInt(@intCast(backing.start)),
+                    .backing_type = @fromBackingInt(@intCast(backing.len)),
                 },
             };
         },
@@ -1692,9 +1646,9 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const p = payload.expr_bin_op;
             return CIR.Expr{
                 .e_binop = CIR.Expr.Binop.init(
-                    @enumFromInt(p.op),
-                    @enumFromInt(p.lhs),
-                    @enumFromInt(p.rhs),
+                    @fromBackingInt(@intCast(p.op)),
+                    @fromBackingInt(@intCast(p.lhs)),
+                    @fromBackingInt(@intCast(p.rhs)),
                 ),
             };
         },
@@ -1705,7 +1659,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
 
             return CIR.Expr{
                 .e_closure = .{
-                    .lambda_idx = @enumFromInt(cd.lambda_idx),
+                    .lambda_idx = @fromBackingInt(@intCast(cd.lambda_idx)),
                     .captures = .{ .span = .{ .start = cd.captures_start, .len = cd.captures_len } },
                     .tag_name = @bitCast(cd.tag_name),
                 },
@@ -1716,7 +1670,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{
                 .e_lambda = .{
                     .args = .{ .span = .{ .start = p.args_start, .len = p.args_len } },
-                    .body = @enumFromInt(p.body),
+                    .body = @fromBackingInt(@intCast(p.body)),
                 },
             };
         },
@@ -1725,7 +1679,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{
                 .e_block = .{
                     .stmts = .{ .span = .{ .start = p.stmts_start, .len = p.stmts_len } },
-                    .final_expr = @enumFromInt(p.final_expr),
+                    .final_expr = @fromBackingInt(@intCast(p.final_expr)),
                 },
             };
         },
@@ -1739,7 +1693,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const p = payload.expr_record;
             // Retrieve fields span and ext from span_with_node_data
             const fields_ext = store.span_with_node_data.items.items[p.fields_ext_idx];
-            const ext = if (fields_ext.node == 0) null else @as(CIR.Expr.Idx, @enumFromInt(fields_ext.node));
+            const ext = if (fields_ext.node == 0) null else @as(CIR.Expr.Idx, @fromBackingInt(@intCast(fields_ext.node)));
             const unsets = store.span2_data.items.items[p.unsets_span2_idx];
 
             return CIR.Expr{
@@ -1757,9 +1711,9 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
 
             return CIR.Expr{
                 .e_match = CIR.Expr.Match{
-                    .cond = @enumFromInt(md.cond),
+                    .cond = @fromBackingInt(@intCast(md.cond)),
                     .branches = .{ .span = .{ .start = md.branches_start, .len = md.branches_len } },
-                    .exhaustive = @enumFromInt(md.exhaustive),
+                    .exhaustive = @fromBackingInt(@intCast(md.exhaustive)),
                     .is_try_suffix = md.is_try_suffix != 0,
                     .skip_exhaustiveness = md.skip_exhaustiveness != 0,
                 },
@@ -1773,8 +1727,8 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{
                 .e_zero_argument_tag = .{
                     .closure_name = @bitCast(zat.closure_name),
-                    .variant_var = @enumFromInt(zat.variant_var),
-                    .ext_var = @enumFromInt(zat.ext_var),
+                    .variant_var = @fromBackingInt(@intCast(zat.variant_var)),
+                    .ext_var = @fromBackingInt(@intCast(zat.ext_var)),
                     .name = @bitCast(zat.name),
                 },
             };
@@ -1782,26 +1736,26 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_crash => {
             const p = payload.expr_crash;
             return CIR.Expr{ .e_crash = .{
-                .msg = @enumFromInt(p.msg),
+                .msg = @fromBackingInt(@intCast(p.msg)),
             } };
         },
         .expr_dbg => {
             const p = payload.expr_dbg;
             return CIR.Expr{ .e_dbg = .{
-                .expr = @enumFromInt(p.expr),
+                .expr = @fromBackingInt(@intCast(p.expr)),
             } };
         },
         .expr_expect_err => {
             const p = payload.expr_expect_err;
             return CIR.Expr{ .e_expect_err = .{
-                .expr = @enumFromInt(p.expr),
-                .snippet = @enumFromInt(p.snippet),
+                .expr = @fromBackingInt(@intCast(p.expr)),
+                .snippet = @fromBackingInt(@intCast(p.snippet)),
             } };
         },
         .expr_unary_minus => {
             const p = payload.expr_unary;
             return CIR.Expr{ .e_unary_minus = .{
-                .expr = @enumFromInt(p.expr),
+                .expr = @fromBackingInt(@intCast(p.expr)),
             } };
         },
         .expr_static_dispatch,
@@ -1823,22 +1777,23 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const p = payload.expr_anno_only;
             return CIR.Expr{ .e_anno_only = .{
                 .ident = @bitCast(p.ident),
-                .kind = @enumFromInt(p.kind),
+                .kind = @fromBackingInt(@intCast(p.kind)),
             } };
         },
         .expr_derived_method => {
             const p = payload.expr_derived_method;
             return CIR.Expr{ .e_derived_method = .{
                 .ident = @bitCast(p.ident),
-                .kind = @enumFromInt(p.kind),
+                .kind = @fromBackingInt(@intCast(p.kind)),
+                .owner = @fromBackingInt(@intCast(p.owner)),
             } };
         },
         .expr_return => {
             const p = payload.expr_return;
             return CIR.Expr{ .e_return = .{
-                .expr = @enumFromInt(p.expr),
-                .lambda = @enumFromInt(p.lambda),
-                .context = @enumFromInt(p.context),
+                .expr = @fromBackingInt(@intCast(p.expr)),
+                .lambda = @fromBackingInt(@intCast(p.lambda)),
+                .context = @fromBackingInt(@intCast(p.context)),
             } };
         },
         .expr_break => {
@@ -1858,22 +1813,23 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const args_span = store.span2_data.items.items[p.args_span2_idx];
 
             return CIR.Expr{ .e_run_low_level = .{
-                .op = @enumFromInt(p.op),
+                .op = @fromBackingInt(@intCast(p.op)),
                 .args = .{ .span = .{ .start = args_span.start, .len = args_span.len } },
             } };
         },
         .expr_expect => {
             const p = payload.expr_expect;
             return CIR.Expr{ .e_expect = .{
-                .body = @enumFromInt(p.body),
+                .body = @fromBackingInt(@intCast(p.body)),
             } };
         },
         .expr_for => {
             const p = payload.expr_for;
             return CIR.Expr{ .e_for = .{
-                .patt = @enumFromInt(p.patt),
-                .expr = @enumFromInt(p.expr),
-                .body = @enumFromInt(p.body),
+                .kind = @fromBackingInt(@intCast(p.kind)),
+                .patt = @fromBackingInt(@intCast(p.patt)),
+                .expr = @fromBackingInt(@intCast(p.expr)),
+                .body = @fromBackingInt(@intCast(p.body)),
             } };
         },
         .expr_if_then_else => {
@@ -1882,16 +1838,16 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
 
             return CIR.Expr{ .e_if = .{
                 .branches = .{ .span = .{ .start = if_data.branches_start, .len = if_data.branches_len } },
-                .final_else = @enumFromInt(if_data.final_else),
-                .warn_unused_branches = if_data.warn_unused_branches != 0,
+                .final_else = @fromBackingInt(if_data.final_else),
+                .origin = @fromBackingInt(if_data.origin),
             } };
         },
         .expr_field_access => {
             const p = payload.expr_field_access;
             return CIR.Expr{ .e_field_access = .{
-                .receiver = @enumFromInt(p.receiver),
+                .receiver = @fromBackingInt(@intCast(p.receiver)),
                 .segments = .{
-                    .start = @enumFromInt(p.segments_start),
+                    .start = @fromBackingInt(@intCast(p.segments_start)),
                     .len = p.segments_len,
                 },
             } };
@@ -1899,7 +1855,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_method_call => {
             const p = payload.expr_method_call;
             return CIR.Expr{ .e_method_call = .{
-                .receiver = @enumFromInt(p.receiver),
+                .receiver = @fromBackingInt(@intCast(p.receiver)),
                 .method_name = @bitCast(p.method_name),
                 .method_name_region = store.getMethodNameRegion(p.method_call_data_idx),
                 .args = store.getMethodCallArgs(p.method_call_data_idx),
@@ -1908,11 +1864,11 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_dispatch_call => {
             const p = payload.expr_dispatch_call;
             return CIR.Expr{ .e_dispatch_call = .{
-                .receiver = @enumFromInt(p.receiver),
+                .receiver = @fromBackingInt(@intCast(p.receiver)),
                 .method_name = @bitCast(p.method_name),
                 .method_name_region = store.getMethodNameRegion(p.method_call_data_idx),
                 .args = store.getMethodCallArgs(p.method_call_data_idx),
-                .constraint_fn_var = @enumFromInt(p.constraint_fn_var),
+                .constraint_fn_var = @fromBackingInt(@intCast(p.constraint_fn_var)),
                 .surface_origin = store.getMethodCallSurfaceOrigin(p.method_call_data_idx),
             } };
         },
@@ -1920,7 +1876,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const p = payload.expr_interpolation;
             const data = store.interpolation_data.items.items[p.interpolation_data_idx];
             return CIR.Expr{ .e_interpolation = .{
-                .first = @enumFromInt(p.first),
+                .first = @fromBackingInt(@intCast(p.first)),
                 .parts = .{ .span = .{
                     .start = data.parts_start,
                     .len = data.parts_len,
@@ -1932,96 +1888,71 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .constraint_fn_var = if (data.constraint_fn_var_plus_one == 0)
                     null
                 else
-                    @enumFromInt(data.constraint_fn_var_plus_one - 1),
-                .step_fn_var = if (data.step_fn_var_plus_one == 0)
+                    @fromBackingInt(data.constraint_fn_var_plus_one - 1),
+                .assembler_fn_var = if (data.assembler_fn_var_plus_one == 0)
                     null
                 else
-                    @enumFromInt(data.step_fn_var_plus_one - 1),
+                    @fromBackingInt(data.assembler_fn_var_plus_one - 1),
                 .dispatcher_var = if (data.dispatcher_var_plus_one == 0)
                     null
                 else
-                    @enumFromInt(data.dispatcher_var_plus_one - 1),
+                    @fromBackingInt(@intCast(data.dispatcher_var_plus_one - 1)),
             } };
         },
         .expr_structural_eq => {
             const p = payload.expr_structural_eq;
             return CIR.Expr{ .e_structural_eq = .{
-                .lhs = @enumFromInt(p.lhs),
-                .rhs = @enumFromInt(p.rhs),
+                .lhs = @fromBackingInt(@intCast(p.lhs)),
+                .rhs = @fromBackingInt(@intCast(p.rhs)),
                 .negated = p.negated != 0,
             } };
         },
         .expr_structural_hash => {
             const p = payload.expr_structural_hash;
             return CIR.Expr{ .e_structural_hash = .{
-                .value = @enumFromInt(p.value),
-                .hasher = @enumFromInt(p.hasher),
+                .value = @fromBackingInt(@intCast(p.value)),
+                .hasher = @fromBackingInt(@intCast(p.hasher)),
             } };
         },
         .expr_method_eq => {
             const p = payload.expr_method_eq;
             return CIR.Expr{ .e_method_eq = .{
-                .lhs = @enumFromInt(p.lhs),
-                .rhs = @enumFromInt(p.rhs),
+                .lhs = @fromBackingInt(@intCast(p.lhs)),
+                .rhs = @fromBackingInt(@intCast(p.rhs)),
                 .negated = p.negated != 0,
-                .constraint_fn_var = @enumFromInt(p.constraint_fn_var),
+                .constraint_fn_var = @fromBackingInt(@intCast(p.constraint_fn_var)),
             } };
         },
         .expr_type_method_call => {
             const p = payload.expr_type_method_call;
             return CIR.Expr{ .e_type_method_call = .{
-                .type_dispatch_stmt = @enumFromInt(p.type_dispatch_stmt),
+                .type_dispatch_stmt = @fromBackingInt(@intCast(p.type_dispatch_stmt)),
                 .method_name = @bitCast(p.method_name),
                 .method_name_region = store.getMethodNameRegion(p.method_call_data_idx),
                 .args = store.getMethodCallArgs(p.method_call_data_idx),
             } };
         },
-        .expr_type_dispatch_call => {
+        .expr_type_dispatch_call, .expr_type_dispatch_call_dispatcher => {
             const p = payload.expr_type_dispatch_call;
             return CIR.Expr{ .e_type_dispatch_call = .{
-                .type_dispatch_stmt = @enumFromInt(p.type_dispatch_stmt),
+                .owner = if (tag == .expr_type_dispatch_call)
+                    .{ .statement = @fromBackingInt(@intCast(p.owner)) }
+                else
+                    .{ .dispatcher = @fromBackingInt(@intCast(p.owner)) },
                 .method_name = @bitCast(p.method_name),
                 .method_name_region = store.getMethodNameRegion(p.method_call_data_idx),
                 .args = store.getMethodCallArgs(p.method_call_data_idx),
-                .constraint_fn_var = @enumFromInt(p.constraint_fn_var),
+                .constraint_fn_var = @fromBackingInt(@intCast(p.constraint_fn_var)),
             } };
         },
         .malformed => {
-            const p = payload.diag_single_value;
+            const p = payload.malformed;
             return CIR.Expr{ .e_runtime_error = .{
-                .diagnostic = @enumFromInt(p.value),
+                .diagnostic = @fromBackingInt(p.diagnostic),
+                .evaluated = .{ .span = .{ .start = p.evaluated_start, .len = p.evaluated_len } },
             } };
         },
     }
-}
-
-/// Replaces an existing expression with an e_zero_argument_tag expression in-place.
-/// This is used for constant folding tag unions (like Bool) during compile-time evaluation.
-/// Note: This modifies only the CIR node and should only be called after type-checking
-/// is complete. Type information is stored separately and remains unchanged.
-pub fn replaceExprWithZeroArgumentTag(
-    store: *NodeStore,
-    expr_idx: CIR.Expr.Idx,
-    closure_name: Ident.Idx,
-    variant_var: types.Var,
-    ext_var: types.Var,
-    name: Ident.Idx,
-) Allocator.Error!void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-
-    const zero_arg_tag_idx: u32 = @intCast(store.zero_arg_tag_data.len());
-    _ = try store.zero_arg_tag_data.append(store.gpa, .{
-        .closure_name = @bitCast(closure_name),
-        .variant_var = @intFromEnum(variant_var),
-        .ext_var = @intFromEnum(ext_var),
-        .name = @bitCast(name),
-    });
-
-    var node = Node.init(.expr_zero_argument_tag);
-    node.setPayload(.{ .expr_zero_argument_tag = .{
-        .zero_arg_tag_idx = zero_arg_tag_idx,
-    } });
-    store.nodes.set(node_idx, node);
 }
 
 /// Replaces an imported-type associated lookup with its exact checked target.
@@ -2033,12 +1964,12 @@ pub fn replaceExprWithResolvedAssociatedLookup(
     target_def_idx: CIR.Def.Idx,
     source_ident: Ident.Idx,
 ) void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
     var node = Node.init(.expr_associated_lookup_resolved);
     node.setPayload(.{ .expr_associated_lookup_resolved = .{
-        .module_identity = @intFromEnum(module_identity),
-        .target_node_idx = @intFromEnum(target_node_idx),
-        .target_def_idx = @intFromEnum(target_def_idx),
+        .module_identity = @backingInt(module_identity),
+        .target_node_idx = @backingInt(target_node_idx),
+        .target_def_idx = @backingInt(target_def_idx),
         .source_ident = @bitCast(source_ident),
     } });
     store.nodes.set(node_idx, node);
@@ -2052,10 +1983,10 @@ pub fn resolveDeferredExprToExternalLookup(
     target_node_idx: u32,
     ident_idx: Ident.Idx,
 ) void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
     var node = Node.init(.expr_external_lookup);
     node.setPayload(.{ .expr_external_lookup = .{
-        .module_idx = @intFromEnum(module_idx),
+        .module_idx = @backingInt(module_idx),
         .target_node_idx = target_node_idx,
         .ident_idx = @bitCast(ident_idx),
     } });
@@ -2068,9 +1999,9 @@ pub fn resolveDeferredExprToStringSegment(
     expr_idx: CIR.Expr.Idx,
     literal: base.StringLiteral.Idx,
 ) void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
     var node = Node.init(.expr_string_segment);
-    node.setPayload(.{ .expr_string_segment = .{ .segment_idx = @intFromEnum(literal) } });
+    node.setPayload(.{ .expr_string_segment = .{ .segment_idx = @backingInt(literal) } });
     store.nodes.set(node_idx, node);
 }
 
@@ -2080,9 +2011,9 @@ pub fn resolveDeferredExprToBytesLiteral(
     expr_idx: CIR.Expr.Idx,
     literal: base.StringLiteral.Idx,
 ) void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
     var node = Node.init(.expr_bytes_literal);
-    node.setPayload(.{ .expr_string_segment = .{ .segment_idx = @intFromEnum(literal) } });
+    node.setPayload(.{ .expr_string_segment = .{ .segment_idx = @backingInt(literal) } });
     store.nodes.set(node_idx, node);
 }
 
@@ -2096,10 +2027,10 @@ pub fn resolveDeferredExprToAssociatedLookup(
     type_ident: Ident.Idx,
     item_ident: Ident.Idx,
 ) void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
     var node = Node.init(.expr_associated_lookup);
     node.setPayload(.{ .expr_associated_lookup = .{
-        .module_idx = @intFromEnum(module_idx),
+        .module_idx = @backingInt(module_idx),
         .type_node_idx = type_node_idx,
         .type_ident = @bitCast(type_ident),
         .item_ident = @bitCast(item_ident),
@@ -2117,15 +2048,15 @@ pub fn resolveDeferredExprToNominalExternal(
     backing_expr: CIR.Expr.Idx,
     backing_type: CIR.Expr.NominalBackingType,
 ) Allocator.Error!void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
     const backing_span2_idx: u32 = @intCast(store.span2_data.len());
     _ = try store.span2_data.append(store.gpa, .{
-        .start = @intFromEnum(backing_expr),
-        .len = @intFromEnum(backing_type),
+        .start = @backingInt(backing_expr),
+        .len = @backingInt(backing_type),
     });
     var node = Node.init(.expr_nominal_external);
     node.setPayload(.{ .expr_nominal_external = .{
-        .module_idx = @intFromEnum(module_idx),
+        .module_idx = @backingInt(module_idx),
         .target_node_idx = target_node_idx,
         .backing_span2_idx = backing_span2_idx,
     } });
@@ -2142,15 +2073,15 @@ pub fn resolveDeferredPatternToNominalExternal(
     backing_pattern: CIR.Pattern.Idx,
     backing_type: CIR.Expr.NominalBackingType,
 ) Allocator.Error!void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(pattern_idx)));
     const backing_span2_idx: u32 = @intCast(store.span2_data.len());
     _ = try store.span2_data.append(store.gpa, .{
-        .start = @intFromEnum(backing_pattern),
-        .len = @intFromEnum(backing_type),
+        .start = @backingInt(backing_pattern),
+        .len = @backingInt(backing_type),
     });
     var node = Node.init(.pattern_nominal_external);
     node.setPayload(.{ .pattern_nominal_external = .{
-        .module_idx = @intFromEnum(module_idx),
+        .module_idx = @backingInt(module_idx),
         .target_node_idx = target_node_idx,
         .backing_span2_idx = backing_span2_idx,
     } });
@@ -2165,14 +2096,14 @@ pub fn resolveDeferredTypeAnnoLookupBase(
     module_idx: CIR.Import.Idx,
     target_node_idx: u32,
 ) void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(anno_idx));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(anno_idx)));
     var node = store.nodes.get(node_idx);
     var p = node.getPayload().ty_lookup;
     store.span2_data.items.items[p.base_span2_idx] = .{
-        .start = @intFromEnum(module_idx),
+        .start = @backingInt(module_idx),
         .len = target_node_idx,
     };
-    p.base = @intFromEnum(CIR.TypeAnno.LocalOrExternal.Tag.external);
+    p.base = @backingInt(CIR.TypeAnno.LocalOrExternal.Tag.external);
     node.setPayload(.{ .ty_lookup = p });
     store.nodes.set(node_idx, node);
 }
@@ -2185,12 +2116,12 @@ pub fn resolveDeferredTypeAnnoApplyBase(
     module_idx: CIR.Import.Idx,
     target_node_idx: u32,
 ) void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(anno_idx));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(anno_idx)));
     const node = store.nodes.get(node_idx);
     const p = node.getPayload().ty_apply;
     const apply_data = &store.type_apply_data.items.items[p.type_apply_data_idx];
-    apply_data.base_tag = @intFromEnum(CIR.TypeAnno.LocalOrExternal.Tag.external);
-    apply_data.value1 = @intFromEnum(module_idx);
+    apply_data.base_tag = @backingInt(CIR.TypeAnno.LocalOrExternal.Tag.external);
+    apply_data.value1 = @backingInt(module_idx);
     apply_data.value2 = target_node_idx;
 }
 
@@ -2202,14 +2133,14 @@ pub fn resolveDeferredTypeAnnoLookupBaseIdentity(
     module_identity: base.ModuleIdentity.Idx,
     target_node_idx: u32,
 ) void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(anno_idx));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(anno_idx)));
     var node = store.nodes.get(node_idx);
     var p = node.getPayload().ty_lookup;
     store.span2_data.items.items[p.base_span2_idx] = .{
-        .start = @intFromEnum(module_identity),
+        .start = @backingInt(module_identity),
         .len = target_node_idx,
     };
-    p.base = @intFromEnum(CIR.TypeAnno.LocalOrExternal.Tag.external_identity);
+    p.base = @backingInt(CIR.TypeAnno.LocalOrExternal.Tag.external_identity);
     node.setPayload(.{ .ty_lookup = p });
     store.nodes.set(node_idx, node);
 }
@@ -2223,12 +2154,12 @@ pub fn resolveDeferredTypeAnnoApplyBaseIdentity(
     module_identity: base.ModuleIdentity.Idx,
     target_node_idx: u32,
 ) void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(anno_idx));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(anno_idx)));
     const node = store.nodes.get(node_idx);
     const p = node.getPayload().ty_apply;
     const apply_data = &store.type_apply_data.items.items[p.type_apply_data_idx];
-    apply_data.base_tag = @intFromEnum(CIR.TypeAnno.LocalOrExternal.Tag.external_identity);
-    apply_data.value1 = @intFromEnum(module_identity);
+    apply_data.base_tag = @backingInt(CIR.TypeAnno.LocalOrExternal.Tag.external_identity);
+    apply_data.value1 = @backingInt(module_identity);
     apply_data.value2 = target_node_idx;
 }
 
@@ -2238,36 +2169,10 @@ pub fn replaceTypeAnnoWithRuntimeError(
     anno_idx: CIR.TypeAnno.Idx,
     diagnostic_idx: CIR.Diagnostic.Idx,
 ) void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(anno_idx));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(anno_idx)));
     var node = Node.init(.ty_malformed);
     node.setPayload(.{ .ty_malformed = .{
-        .diagnostic = @intFromEnum(diagnostic_idx),
-    } });
-    store.nodes.set(node_idx, node);
-}
-
-/// Replaces an existing expression with an e_tuple expression in-place.
-/// This is used for constant folding tuples during compile-time evaluation.
-/// The elem_indices slice contains the indices of the tuple element expressions.
-/// Note: This modifies only the CIR node and should only be called after type-checking
-/// is complete. Type information is stored separately and remains unchanged.
-pub fn replaceExprWithTuple(
-    store: *NodeStore,
-    expr_idx: CIR.Expr.Idx,
-    elem_indices: []const CIR.Expr.Idx,
-) Allocator.Error!void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-
-    // Store element indices in index_data
-    const index_data_start = store.index_data.len();
-    for (elem_indices) |elem_idx| {
-        _ = try store.index_data.append(store.gpa, @intFromEnum(elem_idx));
-    }
-
-    var node = Node.init(.expr_tuple);
-    node.setPayload(.{ .expr_tuple = .{
-        .elems_start = @intCast(index_data_start),
-        .elems_len = @intCast(elem_indices.len),
+        .diagnostic = @backingInt(diagnostic_idx),
     } });
     store.nodes.set(node_idx, node);
 }
@@ -2282,11 +2187,11 @@ pub fn replaceExprWithStructuralEq(
     rhs: CIR.Expr.Idx,
     negated: bool,
 ) void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
     var node = Node.init(.expr_structural_eq);
     node.setPayload(.{ .expr_structural_eq = .{
-        .lhs = @intFromEnum(lhs),
-        .rhs = @intFromEnum(rhs),
+        .lhs = @backingInt(lhs),
+        .rhs = @backingInt(rhs),
         .negated = @intFromBool(negated),
     } });
     store.nodes.set(node_idx, node);
@@ -2301,11 +2206,11 @@ pub fn replaceExprWithStructuralHash(
     value: CIR.Expr.Idx,
     hasher: CIR.Expr.Idx,
 ) void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
     var node = Node.init(.expr_structural_hash);
     node.setPayload(.{ .expr_structural_hash = .{
-        .value = @intFromEnum(value),
-        .hasher = @intFromEnum(hasher),
+        .value = @backingInt(value),
+        .hasher = @backingInt(hasher),
     } });
     store.nodes.set(node_idx, node);
 }
@@ -2319,7 +2224,7 @@ pub fn replaceExprWithCallConstraint(
     called_via: base.CalledVia,
     constraint_fn_var: types.Var,
 ) Allocator.Error!void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
     const args_span2_idx: u32 = @intCast(store.span2_data.len());
     _ = try store.span2_data.append(store.gpa, .{
         .start = args.span.start,
@@ -2327,10 +2232,10 @@ pub fn replaceExprWithCallConstraint(
     });
     var node = Node.init(.expr_call);
     node.setPayload(.{ .expr_call = .{
-        .func = @intFromEnum(func),
+        .func = @backingInt(func),
         .args_span2_idx = args_span2_idx,
-        .called_via = @intFromEnum(called_via),
-        .constraint_fn_var_plus_one = @intFromEnum(constraint_fn_var) + 1,
+        .called_via = @backingInt(called_via),
+        .constraint_fn_var_plus_one = @backingInt(constraint_fn_var) + 1,
     } });
     store.nodes.set(node_idx, node);
 }
@@ -2344,13 +2249,54 @@ pub fn replaceExprWithMethodEq(
     negated: bool,
     constraint_fn_var: types.Var,
 ) void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
     var node = Node.init(.expr_method_eq);
     node.setPayload(.{ .expr_method_eq = .{
-        .lhs = @intFromEnum(lhs),
-        .rhs = @intFromEnum(rhs),
+        .lhs = @backingInt(lhs),
+        .rhs = @backingInt(rhs),
         .negated = @intFromBool(negated),
-        .constraint_fn_var = @intFromEnum(constraint_fn_var),
+        .constraint_fn_var = @backingInt(constraint_fn_var),
+    } });
+    store.nodes.set(node_idx, node);
+}
+
+/// Rewrites a call into a method call on `receiver`, keeping the call's
+/// arguments. Used when the deferred import drain finds that the callee of
+/// `Alias.Path.U.v(...)` is the member `v` accessed on the qualified tag
+/// `Alias.Path.U`.
+pub fn replaceCallWithMethodCall(
+    store: *NodeStore,
+    call_idx: CIR.Expr.Idx,
+    receiver: CIR.Expr.Idx,
+    method_name: base.Ident.Idx,
+    method_name_region: Region,
+) Allocator.Error!void {
+    const args = store.getExpr(call_idx).e_call.args;
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(call_idx)));
+    const method_call_data_idx = try store.addMethodCallData(args, method_name_region, .method_call);
+    var node = Node.init(.expr_method_call);
+    node.setPayload(.{ .expr_method_call = .{
+        .receiver = @backingInt(receiver),
+        .method_name = @bitCast(method_name),
+        .method_call_data_idx = method_call_data_idx,
+    } });
+    store.nodes.set(node_idx, node);
+}
+
+/// Rewrites a deferred import reference into a field access on `receiver`.
+pub fn resolveDeferredExprToFieldAccess(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    receiver: CIR.Expr.Idx,
+    segments: CIR.Expr.FieldAccessSegment.Span,
+) void {
+    std.debug.assert(segments.len > 0);
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
+    var node = Node.init(.expr_field_access);
+    node.setPayload(.{ .expr_field_access = .{
+        .receiver = @backingInt(receiver),
+        .segments_start = @backingInt(segments.start),
+        .segments_len = segments.len,
     } });
     store.nodes.set(node_idx, node);
 }
@@ -2366,14 +2312,14 @@ pub fn replaceExprWithDispatchCall(
     constraint_fn_var: types.Var,
     surface_origin: CIR.Expr.SurfaceOrigin,
 ) Allocator.Error!void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
     const method_call_data_idx = try store.addMethodCallData(args, method_name_region, surface_origin);
     var node = Node.init(.expr_dispatch_call);
     node.setPayload(.{ .expr_dispatch_call = .{
-        .receiver = @intFromEnum(receiver),
+        .receiver = @backingInt(receiver),
         .method_name = @bitCast(method_name),
         .method_call_data_idx = method_call_data_idx,
-        .constraint_fn_var = @intFromEnum(constraint_fn_var),
+        .constraint_fn_var = @backingInt(constraint_fn_var),
     } });
     store.nodes.set(node_idx, node);
 }
@@ -2386,75 +2332,60 @@ pub fn replaceExprWithInterpolationConstraint(
     parts: CIR.Expr.Span,
     method_name_region: Region,
     constraint_fn_var: types.Var,
-    step_fn_var: types.Var,
+    assembler_fn_var: types.Var,
     dispatcher_var: types.Var,
 ) Allocator.Error!void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
     const interpolation_data_idx: u32 = @intCast(store.interpolation_data.len());
     _ = try store.interpolation_data.append(store.gpa, .{
         .parts_start = parts.span.start,
         .parts_len = parts.span.len,
         .method_region_start = method_name_region.start.offset,
         .method_region_end = method_name_region.end.offset,
-        .constraint_fn_var_plus_one = @intFromEnum(constraint_fn_var) + 1,
-        .step_fn_var_plus_one = @intFromEnum(step_fn_var) + 1,
-        .dispatcher_var_plus_one = @intFromEnum(dispatcher_var) + 1,
+        .constraint_fn_var_plus_one = @backingInt(constraint_fn_var) + 1,
+        .assembler_fn_var_plus_one = @backingInt(assembler_fn_var) + 1,
+        .dispatcher_var_plus_one = @backingInt(dispatcher_var) + 1,
     });
     var node = Node.init(.expr_interpolation);
     node.setPayload(.{ .expr_interpolation = .{
-        .first = @intFromEnum(first),
+        .first = @backingInt(first),
         .interpolation_data_idx = interpolation_data_idx,
     } });
     store.nodes.set(node_idx, node);
+}
+
+fn typeDispatchCallNodeTag(owner: CIR.TypeDispatchOwner) Node.Tag {
+    return switch (owner) {
+        .statement => .expr_type_dispatch_call,
+        .dispatcher => .expr_type_dispatch_call_dispatcher,
+    };
+}
+
+fn typeDispatchOwnerBits(owner: CIR.TypeDispatchOwner) u32 {
+    return switch (owner) {
+        .statement => |stmt| @backingInt(stmt),
+        .dispatcher => |dispatcher| @backingInt(dispatcher),
+    };
 }
 
 /// Replaces an existing expression with unresolved type dispatch metadata.
 pub fn replaceExprWithTypeDispatchCall(
     store: *NodeStore,
     expr_idx: CIR.Expr.Idx,
-    type_dispatch_stmt: CIR.Statement.Idx,
+    owner: CIR.TypeDispatchOwner,
     method_name: base.Ident.Idx,
     method_name_region: Region,
     args: CIR.Expr.Span,
     constraint_fn_var: types.Var,
 ) Allocator.Error!void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
     const method_call_data_idx = try store.addMethodCallData(args, method_name_region, .method_call);
-    var node = Node.init(.expr_type_dispatch_call);
+    var node = Node.init(typeDispatchCallNodeTag(owner));
     node.setPayload(.{ .expr_type_dispatch_call = .{
-        .type_dispatch_stmt = @intFromEnum(type_dispatch_stmt),
+        .owner = typeDispatchOwnerBits(owner),
         .method_name = @bitCast(method_name),
         .method_call_data_idx = method_call_data_idx,
-        .constraint_fn_var = @intFromEnum(constraint_fn_var),
-    } });
-    store.nodes.set(node_idx, node);
-}
-
-/// Replaces an existing expression with an if expression in-place.
-/// Replaces an existing expression with an e_tag expression in-place.
-/// This is used for constant folding tag unions with payloads during compile-time evaluation.
-/// The arg_indices slice contains the indices of the tag argument expressions.
-/// Note: This modifies only the CIR node and should only be called after type-checking
-/// is complete. Type information is stored separately and remains unchanged.
-pub fn replaceExprWithTag(
-    store: *NodeStore,
-    expr_idx: CIR.Expr.Idx,
-    name: Ident.Idx,
-    arg_indices: []const CIR.Expr.Idx,
-) Allocator.Error!void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-
-    // Store argument indices in index_data
-    const index_data_start = store.index_data.len();
-    for (arg_indices) |arg_idx| {
-        _ = try store.index_data.append(store.gpa, @intFromEnum(arg_idx));
-    }
-
-    var node = Node.init(.expr_tag);
-    node.setPayload(.{ .expr_tag = .{
-        .name = @bitCast(name),
-        .args_start = @intCast(index_data_start),
-        .args_len = @intCast(arg_indices.len),
+        .constraint_fn_var = @backingInt(constraint_fn_var),
     } });
     store.nodes.set(node_idx, node);
 }
@@ -2462,54 +2393,124 @@ pub fn replaceExprWithTag(
 /// Replaces an existing expression with an in-place runtime error node.
 /// Used when an earlier compilation stage has already determined that the
 /// expression is erroneous and later stages must observe an explicit crash.
+/// The expression as written stays readable through `getSourceExpr`.
 pub fn replaceExprWithRuntimeError(
     store: *NodeStore,
     expr_idx: CIR.Expr.Idx,
     diagnostic_idx: CIR.Diagnostic.Idx,
-) void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+) Allocator.Error!void {
+    try store.replaceExprWithRuntimeErrorAfter(expr_idx, diagnostic_idx, .{ .span = .{ .start = 0, .len = 0 } });
+}
+
+/// Replaces an existing expression with an in-place runtime error node that
+/// evaluates `evaluated` (`CIR.Expr.e_runtime_error.evaluated`) before it
+/// crashes.
+pub fn replaceExprWithRuntimeErrorAfter(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    diagnostic_idx: CIR.Diagnostic.Idx,
+    evaluated: CIR.Expr.Span,
+) Allocator.Error!void {
+    const node_idx: Node.Idx = @fromBackingInt(@backingInt(expr_idx));
     _ = store.retireLiteralDispatchPlan(node_idx);
-    var node = Node.init(.malformed);
-    node.setPayload(.{ .diag_single_value = .{
-        .value = @intFromEnum(diagnostic_idx),
-    } });
-    store.nodes.set(node_idx, node);
+    try store.replaceSourceNodeWithRuntimeError(node_idx, diagnostic_idx, evaluated);
 }
 
 /// Replaces an existing statement with an in-place runtime error node after
 /// checking has rejected the statement and recorded its diagnostic.
+/// The statement as written stays readable through `getSourceStatement`.
 pub fn replaceStatementWithRuntimeError(
     store: *NodeStore,
     stmt_idx: CIR.Statement.Idx,
     diagnostic_idx: CIR.Diagnostic.Idx,
-) void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(stmt_idx));
-    var node = Node.init(.malformed);
-    node.setPayload(.{ .diag_single_value = .{
-        .value = @intFromEnum(diagnostic_idx),
-    } });
-    store.nodes.set(node_idx, node);
+    evaluated: CIR.Expr.Span,
+) Allocator.Error!void {
+    try store.replaceSourceNodeWithRuntimeError(@fromBackingInt(@backingInt(stmt_idx)), diagnostic_idx, evaluated);
 }
 
 /// Replace a rejected literal leaf while retaining the surrounding definition
 /// pattern and its binder identities. Retire the leaf's evidence atomically.
+/// The pattern as written stays readable through `getSourcePattern`.
 pub fn replacePatternWithRuntimeError(
     store: *NodeStore,
     pattern_idx: CIR.Pattern.Idx,
     diagnostic_idx: CIR.Diagnostic.Idx,
-) void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
+) Allocator.Error!void {
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(pattern_idx)));
     _ = store.retireLiteralDispatchPlan(node_idx);
+    try store.replaceSourceNodeWithRuntimeError(node_idx, diagnostic_idx, .{ .span = .{ .start = 0, .len = 0 } });
+}
+
+/// Keep the node being replaced in `replaced_source_nodes` and put a runtime
+/// error in its place. Callers retire the node's checked metadata first, so
+/// the kept node carries only source structure. Replacing a node that is
+/// already a runtime error keeps the source node it was replaced from.
+fn replaceSourceNodeWithRuntimeError(
+    store: *NodeStore,
+    node_idx: Node.Idx,
+    diagnostic_idx: CIR.Diagnostic.Idx,
+    evaluated: CIR.Expr.Span,
+) Allocator.Error!void {
+    const replaced = store.nodes.get(node_idx);
+    const source_node_plus_one: u32 = if (replaced.tag == .malformed)
+        replaced.getPayload().malformed.source_node_plus_one
+    else
+        @backingInt(try store.replaced_source_nodes.append(store.gpa, replaced)) + 1;
     var node = Node.init(.malformed);
-    node.setPayload(.{ .pattern_malformed = .{ .diagnostic = @intFromEnum(diagnostic_idx) } });
+    node.setPayload(.{ .malformed = .{
+        .diagnostic = @backingInt(diagnostic_idx),
+        .source_node_plus_one = source_node_plus_one,
+        .evaluated_start = evaluated.span.start,
+        .evaluated_len = evaluated.span.len,
+    } });
     store.nodes.set(node_idx, node);
+}
+
+/// Settle a deferred import reference expression that resolves to nothing as
+/// a runtime error. The deferred node is a placeholder for the resolved form,
+/// not source structure, so nothing is kept for it.
+pub fn settleDeferredExprAsRuntimeError(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    diagnostic_idx: CIR.Diagnostic.Idx,
+) void {
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
+    const tag = store.nodes.get(node_idx).tag;
+    std.debug.assert(tag == .expr_deferred_import_ref or tag == .expr_deferred_nominal_external);
+    var node = Node.init(.malformed);
+    node.setPayload(.{ .malformed = .{ .diagnostic = @backingInt(diagnostic_idx) } });
+    store.nodes.set(node_idx, node);
+}
+
+/// Settle a deferred import reference pattern that resolves to nothing as a
+/// runtime error. Like `settleDeferredExprAsRuntimeError`, nothing is kept.
+pub fn settleDeferredPatternAsRuntimeError(
+    store: *NodeStore,
+    pattern_idx: CIR.Pattern.Idx,
+    diagnostic_idx: CIR.Diagnostic.Idx,
+) void {
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(pattern_idx)));
+    std.debug.assert(store.nodes.get(node_idx).tag == .pattern_deferred_import_ref);
+    var node = Node.init(.malformed);
+    node.setPayload(.{ .malformed = .{ .diagnostic = @backingInt(diagnostic_idx) } });
+    store.nodes.set(node_idx, node);
+}
+
+/// The node at `node_idx` as written in source: the node a runtime error
+/// replaced, if one did, and otherwise the node itself.
+fn sourceNode(store: *const NodeStore, node_idx: Node.Idx) Node {
+    const node = store.nodes.get(node_idx);
+    if (node.tag != .malformed) return node;
+    const source_node_plus_one = node.getPayload().malformed.source_node_plus_one;
+    if (source_node_plus_one == 0) return node;
+    return store.replaced_source_nodes.get(@fromBackingInt(@intCast(source_node_plus_one - 1)));
 }
 
 /// Updates the body of an e_lambda expression.
 /// Used when the lambda was created with a placeholder body and needs to be updated
 /// after the actual body is canonicalized.
 pub fn updateLambdaBody(store: *NodeStore, lambda_idx: CIR.Expr.Idx, body_idx: CIR.Expr.Idx) void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(lambda_idx));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(lambda_idx)));
     var node = store.nodes.get(node_idx);
 
     std.debug.assert(node.tag == .expr_lambda);
@@ -2518,28 +2519,14 @@ pub fn updateLambdaBody(store: *NodeStore, lambda_idx: CIR.Expr.Idx, body_idx: C
     node.setPayload(.{ .expr_lambda = .{
         .args_start = p.args_start,
         .args_len = p.args_len,
-        .body = @intFromEnum(body_idx),
+        .body = @backingInt(body_idx),
     } });
     store.nodes.set(node_idx, node);
 }
 
-/// Get the more-specific expr index. Used to make error messages nicer.
-///
-/// For example, if the provided expr is a `block`, then this will return the
-/// expr idx of the last expr in that block. This allows the error message to
-/// reference the exact expr that has a problem, making the problem easier to
-/// understand.
-///
-/// But for most exprs, this just returns the same expr idx provided.
-pub fn getExprSpecific(store: *const NodeStore, expr_idx: CIR.Expr.Idx) CIR.Expr.Idx {
-    const expr = store.getExpr(expr_idx);
-    if (expr == .e_block) return expr.e_block.final_expr;
-    return expr_idx;
-}
-
 /// Retrieves a 'when' branch from the store.
 pub fn getMatchBranch(store: *const NodeStore, branch: CIR.Expr.Match.Branch.Idx) CIR.Expr.Match.Branch {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(branch));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(branch)));
     const node = store.nodes.get(node_idx);
     const payload = node.getPayload();
 
@@ -2551,15 +2538,15 @@ pub fn getMatchBranch(store: *const NodeStore, branch: CIR.Expr.Match.Branch.Idx
 
     return CIR.Expr.Match.Branch{
         .patterns = .{ .span = .{ .start = mbd.patterns_start, .len = mbd.patterns_len } },
-        .value = @enumFromInt(mbd.value),
-        .guard = if (mbd.guard == 0) null else @enumFromInt(mbd.guard),
-        .redundant = @enumFromInt(mbd.redundant),
+        .value = @fromBackingInt(@intCast(mbd.value)),
+        .guard = if (mbd.guard == 0) null else @fromBackingInt(@intCast(mbd.guard)),
+        .redundant = @fromBackingInt(@intCast(mbd.redundant)),
     };
 }
 
 /// Retrieves a pattern of a 'match' branch from the store.
 pub fn getMatchBranchPattern(store: *const NodeStore, branch_pat: CIR.Expr.Match.BranchPattern.Idx) CIR.Expr.Match.BranchPattern {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(branch_pat));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(branch_pat)));
     const node = store.nodes.get(node_idx);
     const payload = node.getPayload();
 
@@ -2567,7 +2554,7 @@ pub fn getMatchBranchPattern(store: *const NodeStore, branch_pat: CIR.Expr.Match
 
     const p = payload.match_branch_pattern;
     return CIR.Expr.Match.BranchPattern{
-        .pattern = @enumFromInt(p.pattern),
+        .pattern = @fromBackingInt(@intCast(p.pattern)),
         .degenerate = p.degenerate != 0,
     };
 }
@@ -2581,32 +2568,32 @@ pub fn matchBranchSlice(store: *const NodeStore, span: CIR.Expr.Match.Branch.Spa
 
 /// Retrieves a 'where' clause from the store.
 pub fn getWhereClause(store: *const NodeStore, whereClause: CIR.WhereClause.Idx) CIR.WhereClause {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(whereClause));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(whereClause)));
     const node = store.nodes.get(node_idx);
     const payload = node.getPayload();
 
     const tag = narrowNodeTag(WhereNodeTag, node.tag) orelse
-        std.debug.panic("unreachable, node is not a where tag: {}", .{node.tag});
+        base.invariant("unreachable, node is not a where tag: {}", .{node.tag});
     switch (tag) {
         .where_method => {
             const p = payload.where_clause;
             return CIR.WhereClause{ .w_method = .{
-                .var_ = @enumFromInt(p.var_idx),
+                .var_ = @fromBackingInt(@intCast(p.var_idx)),
                 .method_name = @bitCast(p.name),
-                .anno = @enumFromInt(p.anno),
+                .anno = @fromBackingInt(@intCast(p.anno)),
             } };
         },
         .where_alias => {
             const p = payload.where_alias;
 
             return CIR.WhereClause{ .w_alias = .{
-                .var_ = @enumFromInt(p.var_idx),
-                .alias = @enumFromInt(p.alias_idx),
+                .var_ = @fromBackingInt(@intCast(p.var_idx)),
+                .alias = @fromBackingInt(@intCast(p.alias_idx)),
             } };
         },
         .where_malformed => {
             const p = payload.diag_single_value;
-            const diagnostic = @as(CIR.Diagnostic.Idx, @enumFromInt(p.value));
+            const diagnostic = @as(CIR.Diagnostic.Idx, @fromBackingInt(@intCast(p.value)));
 
             return CIR.WhereClause{ .w_malformed = .{
                 .diagnostic = diagnostic,
@@ -2622,9 +2609,18 @@ fn isPatternTag(tag: Node.Tag) bool {
 
 /// Retrieves a pattern from the store.
 pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pattern {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
-    const node = store.nodes.get(node_idx);
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(pattern_idx)));
+    return @call(.always_inline, patternFromNode, .{ store, store.nodes.get(node_idx) });
+}
 
+/// Retrieves a pattern as written in source, reading through a runtime error
+/// put in its place.
+pub fn getSourcePattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pattern {
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(pattern_idx)));
+    return store.patternFromNode(store.sourceNode(node_idx));
+}
+
+fn patternFromNode(store: *const NodeStore, node: Node) CIR.Pattern {
     // Safety check: Handle cross-module node index issues where a pattern index
     // might point to a non-pattern node (e.g., type_header from another module)
     if (!isPatternTag(node.tag)) {
@@ -2636,7 +2632,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
     const payload = node.getPayload();
 
     const tag = narrowNodeTag(PatternNodeTag, node.tag) orelse
-        std.debug.panic("unreachable, node is not a pattern tag: {}", .{node.tag});
+        base.invariant("unreachable, node is not a pattern tag: {}", .{node.tag});
     switch (tag) {
         .pattern_identifier => {
             const p = payload.pattern_identifier;
@@ -2659,7 +2655,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             return CIR.Pattern{
                 .as = .{
                     .ident = @bitCast(p.ident),
-                    .pattern = @enumFromInt(p.pattern),
+                    .pattern = @fromBackingInt(@intCast(p.pattern)),
                 },
             };
         },
@@ -2676,9 +2672,9 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             const p = payload.pattern_nominal;
             return CIR.Pattern{
                 .nominal = .{
-                    .nominal_type_decl = @enumFromInt(p.nominal_type_decl),
-                    .backing_pattern = @enumFromInt(p.backing_pattern),
-                    .backing_type = @enumFromInt(p.backing_type),
+                    .nominal_type_decl = @fromBackingInt(@intCast(p.nominal_type_decl)),
+                    .backing_pattern = @fromBackingInt(@intCast(p.backing_pattern)),
+                    .backing_type = @fromBackingInt(@intCast(p.backing_type)),
                 },
             };
         },
@@ -2689,10 +2685,10 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
 
             return CIR.Pattern{
                 .nominal_external = .{
-                    .module_idx = @enumFromInt(p.module_idx),
+                    .module_idx = @fromBackingInt(@intCast(p.module_idx)),
                     .target_node_idx = @intCast(p.target_node_idx),
-                    .backing_pattern = @enumFromInt(backing.start),
-                    .backing_type = @enumFromInt(backing.len),
+                    .backing_pattern = @fromBackingInt(@intCast(backing.start)),
+                    .backing_type = @fromBackingInt(@intCast(backing.len)),
                 },
             };
         },
@@ -2700,9 +2696,9 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             const p = payload.pattern_deferred_import_ref;
             const backing = store.span2_data.items.items[p.backing_span2_idx];
             return CIR.Pattern{ .deferred_import_ref = .{
-                .ref = @enumFromInt(p.ref),
-                .backing_pattern = @enumFromInt(backing.start),
-                .backing_type = @enumFromInt(backing.len),
+                .ref = @fromBackingInt(@intCast(p.ref)),
+                .backing_pattern = @fromBackingInt(@intCast(backing.start)),
+                .backing_type = @fromBackingInt(@intCast(backing.len)),
             } };
         },
         .pattern_record_destructure => {
@@ -2719,7 +2715,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
 
             const rest_info = if (list_data.has_rest != 0) blk: {
                 const rest_pattern = if (list_data.has_pattern != 0)
-                    @as(CIR.Pattern.Idx, @enumFromInt(list_data.pattern_idx))
+                    @as(CIR.Pattern.Idx, @fromBackingInt(@intCast(list_data.pattern_idx)))
                 else
                     null;
                 break :blk @as(@FieldType(@FieldType(CIR.Pattern, "list"), "rest_info"), .{
@@ -2749,8 +2745,8 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
 
             return CIR.Pattern{
                 .num_literal = .{
-                    .value = .{ .bytes = @bitCast(value), .kind = @enumFromInt(p.value_kind) },
-                    .kind = @enumFromInt(p.kind),
+                    .value = .{ .bytes = @bitCast(value), .kind = @fromBackingInt(@intCast(p.value_kind)) },
+                    .kind = @fromBackingInt(@intCast(p.kind)),
                 },
             };
         },
@@ -2801,24 +2797,24 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
         .pattern_str_literal => {
             const p = payload.pattern_str_literal;
             return CIR.Pattern{ .str_literal = .{
-                .literal = @enumFromInt(p.literal),
+                .literal = @fromBackingInt(@intCast(p.literal)),
             } };
         },
         .pattern_str_interpolation => {
             const p = payload.pattern_str_interpolation;
             const data = store.pattern_str_interpolation_data.items.items[p.data_idx];
             return CIR.Pattern{ .str_interpolation = .{
-                .prefix = @enumFromInt(data.prefix),
+                .prefix = @fromBackingInt(@intCast(data.prefix)),
                 .steps = .{ .span = .{ .start = data.steps_start, .len = data.steps_len } },
-                .end = @enumFromInt(data.end),
+                .end = @fromBackingInt(@intCast(data.end)),
             } };
         },
 
         .pattern_underscore => return CIR.Pattern{ .underscore = {} },
         .malformed => {
-            const p = payload.diag_single_value;
+            const p = payload.malformed;
             return CIR.Pattern{ .runtime_error = .{
-                .diagnostic = @enumFromInt(p.value),
+                .diagnostic = @fromBackingInt(@intCast(p.diagnostic)),
             } };
         },
     }
@@ -2826,31 +2822,31 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
 
 /// Retrieves a type annotation from the store.
 pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.TypeAnno {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(typeAnno));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(typeAnno)));
     const node = store.nodes.get(node_idx);
     const payload = node.getPayload();
 
     const tag = narrowNodeTag(TypeAnnoNodeTag, node.tag) orelse
-        std.debug.panic("unreachable, node is not a type annotation tag: {}", .{node.tag});
+        base.invariant("unreachable, node is not a type annotation tag: {}", .{node.tag});
     switch (tag) {
         .ty_apply => {
             const p = payload.ty_apply;
             const apply_data = store.type_apply_data.items.items[p.type_apply_data_idx];
-            const base_enum: CIR.TypeAnno.LocalOrExternal.Tag = @enumFromInt(apply_data.base_tag);
+            const base_enum: CIR.TypeAnno.LocalOrExternal.Tag = @fromBackingInt(@intCast(apply_data.base_tag));
             const type_base: CIR.TypeAnno.LocalOrExternal = switch (base_enum) {
-                .builtin => .{ .builtin = @enumFromInt(apply_data.value1) },
-                .local => .{ .local = .{ .decl_idx = @enumFromInt(apply_data.value1) } },
+                .builtin => .{ .builtin = @fromBackingInt(@intCast(apply_data.value1)) },
+                .local => .{ .local = .{ .decl_idx = @fromBackingInt(@intCast(apply_data.value1)) } },
                 .external => .{ .external = .{
-                    .module_idx = @enumFromInt(apply_data.value1),
+                    .module_idx = @fromBackingInt(@intCast(apply_data.value1)),
                     .target_node_idx = @intCast(apply_data.value2),
                 } },
                 .external_identity => .{ .external_identity = .{
-                    .module_identity = @enumFromInt(apply_data.value1),
+                    .module_identity = @fromBackingInt(@intCast(apply_data.value1)),
                     .target_node_idx = apply_data.value2,
                 } },
                 .pending => .{ .pending = .{
-                    .module_idx = @enumFromInt(apply_data.value1),
-                    .ref = @enumFromInt(apply_data.value2),
+                    .module_idx = @fromBackingInt(@intCast(apply_data.value1)),
+                    .ref = @fromBackingInt(@intCast(apply_data.value2)),
                 } },
             };
 
@@ -2869,28 +2865,28 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
         .ty_rigid_var_lookup => {
             const p = payload.ty_rigid_var_lookup;
             return CIR.TypeAnno{ .rigid_var_lookup = .{
-                .ref = @enumFromInt(p.ref),
+                .ref = @fromBackingInt(@intCast(p.ref)),
             } };
         },
         .ty_underscore => return CIR.TypeAnno{ .underscore = {} },
         .ty_lookup => {
             const p = payload.ty_lookup;
             const base_data = store.span2_data.items.items[p.base_span2_idx];
-            const base_enum: CIR.TypeAnno.LocalOrExternal.Tag = @enumFromInt(p.base);
+            const base_enum: CIR.TypeAnno.LocalOrExternal.Tag = @fromBackingInt(@intCast(p.base));
             const type_base: CIR.TypeAnno.LocalOrExternal = switch (base_enum) {
-                .builtin => .{ .builtin = @enumFromInt(base_data.start) },
-                .local => .{ .local = .{ .decl_idx = @enumFromInt(base_data.start) } },
+                .builtin => .{ .builtin = @fromBackingInt(@intCast(base_data.start)) },
+                .local => .{ .local = .{ .decl_idx = @fromBackingInt(@intCast(base_data.start)) } },
                 .external => .{ .external = .{
-                    .module_idx = @enumFromInt(base_data.start),
+                    .module_idx = @fromBackingInt(@intCast(base_data.start)),
                     .target_node_idx = @intCast(base_data.len),
                 } },
                 .external_identity => .{ .external_identity = .{
-                    .module_identity = @enumFromInt(base_data.start),
+                    .module_identity = @fromBackingInt(@intCast(base_data.start)),
                     .target_node_idx = base_data.len,
                 } },
                 .pending => .{ .pending = .{
-                    .module_idx = @enumFromInt(base_data.start),
-                    .ref = @enumFromInt(base_data.len),
+                    .module_idx = @fromBackingInt(@intCast(base_data.start)),
+                    .ref = @fromBackingInt(@intCast(base_data.len)),
                 } },
             };
 
@@ -2903,7 +2899,7 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
             const p = payload.ty_tag_union;
             return CIR.TypeAnno{ .tag_union = .{
                 .tags = .{ .span = .{ .start = p.tags_start, .len = p.tags_len } },
-                .ext = if (p.ext_plus_one != 0) @enumFromInt(p.ext_plus_one - 1) else null,
+                .ext = if (p.ext_plus_one != 0) @fromBackingInt(@intCast(p.ext_plus_one - 1)) else null,
             } };
         },
         .ty_tag => {
@@ -2924,7 +2920,7 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
             return CIR.TypeAnno{
                 .record = .{
                     .fields = .{ .span = .{ .start = p.fields_start, .len = p.fields_len } },
-                    .ext = if (p.ext_plus_one != 0) @enumFromInt(p.ext_plus_one - 1) else null,
+                    .ext = if (p.ext_plus_one != 0) @fromBackingInt(@intCast(p.ext_plus_one - 1)) else null,
                 },
             };
         },
@@ -2933,26 +2929,26 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
             const fn_info = store.span2_data.items.items[p.fn_info_span2_idx];
             return CIR.TypeAnno{ .@"fn" = .{
                 .args = .{ .span = .{ .start = p.args_start, .len = p.args_len } },
-                .ret = @enumFromInt(fn_info.len),
+                .ret = @fromBackingInt(@intCast(fn_info.len)),
                 .effectful = fn_info.start != 0,
             } };
         },
         .ty_parens => {
             const p = payload.ty_parens;
             return CIR.TypeAnno{ .parens = .{
-                .anno = @enumFromInt(p.anno),
+                .anno = @fromBackingInt(@intCast(p.anno)),
             } };
         },
         .ty_malformed => {
             const p = payload.diag_single_value;
             return CIR.TypeAnno{ .malformed = .{
-                .diagnostic = @enumFromInt(p.value),
+                .diagnostic = @fromBackingInt(@intCast(p.value)),
             } };
         },
         .malformed => {
-            const p = payload.diag_single_value;
+            const p = payload.malformed;
             return CIR.TypeAnno{ .malformed = .{
-                .diagnostic = @enumFromInt(p.value),
+                .diagnostic = @fromBackingInt(@intCast(p.diagnostic)),
             } };
         },
     }
@@ -2960,7 +2956,7 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
 
 /// Retrieves a type header from the store.
 pub fn getTypeHeader(store: *const NodeStore, typeHeader: CIR.TypeHeader.Idx) CIR.TypeHeader {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(typeHeader));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(typeHeader)));
     const node = store.nodes.get(node_idx);
     const payload = node.getPayload();
 
@@ -2981,13 +2977,13 @@ pub fn getTypeHeader(store: *const NodeStore, typeHeader: CIR.TypeHeader.Idx) CI
 
 /// Retrieves an annotation record field from the store.
 pub fn getAnnoRecordField(store: *const NodeStore, annoRecordField: CIR.TypeAnno.RecordField.Idx) CIR.TypeAnno.RecordField {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(annoRecordField));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(annoRecordField)));
     const node = store.nodes.get(node_idx);
     if (node.tag == .ty_record_field) {
         const p = node.getPayload().ty_record_field;
         return .{
             .name = @bitCast(p.name),
-            .ty = @enumFromInt(p.ty),
+            .ty = @fromBackingInt(@intCast(p.ty)),
             .is_optional = p.is_optional,
             .is_unnamed = p.is_unnamed,
         };
@@ -2996,23 +2992,23 @@ pub fn getAnnoRecordField(store: *const NodeStore, annoRecordField: CIR.TypeAnno
     const p = node.getPayload().ty_record_field_defaulted;
     return .{
         .name = @bitCast(p.name),
-        .ty = @enumFromInt(p.ty),
+        .ty = @fromBackingInt(@intCast(p.ty)),
         .is_optional = false,
         .is_unnamed = false,
-        .default_value = @enumFromInt(p.default_value),
+        .default_value = @fromBackingInt(@intCast(p.default_value)),
     };
 }
 
 /// Retrieves an annotation from the store.
 pub fn getAnnotation(store: *const NodeStore, annotation: CIR.Annotation.Idx) CIR.Annotation {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(annotation));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(annotation)));
     const node = store.nodes.get(node_idx);
     const payload = node.getPayload();
 
     std.debug.assert(node.tag == .annotation);
 
     const p = payload.annotation;
-    const anno: CIR.TypeAnno.Idx = @enumFromInt(p.anno);
+    const anno: CIR.TypeAnno.Idx = @fromBackingInt(@intCast(p.anno));
 
     const where_clause = if (p.flags.has_where)
         store.loadWhereClauseSpan(p.where_span2_idx)
@@ -3036,12 +3032,12 @@ pub fn getAnnotation(store: *const NodeStore, annotation: CIR.Annotation.Idx) CI
 
 /// Retrieves an exposed item from the store.
 pub fn getExposedItem(store: *const NodeStore, exposedItem: CIR.ExposedItem.Idx) CIR.ExposedItem {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(exposedItem));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(exposedItem)));
     const node = store.nodes.get(node_idx);
     const payload = node.getPayload();
 
     const tag = narrowNodeTag(ExposedItemNodeTag, node.tag) orelse
-        std.debug.panic("Expected exposed_item node, got {s}\n", .{@tagName(node.tag)});
+        base.invariant("Expected exposed_item node, got {s}\n", .{@tagName(node.tag)});
     switch (tag) {
         .exposed_item => {
             const p = payload.exposed_item;
@@ -3049,7 +3045,7 @@ pub fn getExposedItem(store: *const NodeStore, exposedItem: CIR.ExposedItem.Idx)
                 .name = @bitCast(p.name),
                 .alias = if (p.alias == 0) null else @bitCast(p.alias),
                 .is_wildcard = p.flags & 1 != 0,
-                .kind = @enumFromInt((p.flags >> 1) & 1),
+                .kind = @fromBackingInt(@intCast((p.flags >> 1) & 1)),
             };
         },
     }
@@ -3063,7 +3059,7 @@ pub fn addStatement(store: *NodeStore, statement: CIR.Statement, region: base.Re
     const node = try store.makeStatementNode(statement);
     const node_idx = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
-    return @enumFromInt(@intFromEnum(node_idx));
+    return @fromBackingInt(@intCast(@backingInt(node_idx)));
 }
 
 /// Set a statement idx to the provided statement
@@ -3075,12 +3071,7 @@ pub fn addStatement(store: *NodeStore, statement: CIR.Statement, region: base.Re
 /// 4. Update the placeholder node with the actual annotation
 pub fn setStatementNode(store: *NodeStore, stmt_idx: CIR.Statement.Idx, statement: CIR.Statement) Allocator.Error!void {
     const node = try store.makeStatementNode(statement);
-    store.nodes.set(@enumFromInt(@intFromEnum(stmt_idx)), node);
-}
-
-/// Replaces an existing expression node with a runtime error expression.
-pub fn setExprRuntimeError(store: *NodeStore, expr_idx: CIR.Expr.Idx, diagnostic_idx: CIR.Diagnostic.Idx) void {
-    store.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
+    store.nodes.set(@fromBackingInt(@intCast(@backingInt(stmt_idx))), node);
 }
 
 /// Creates a statement node, but does not append to the store.
@@ -3095,14 +3086,14 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             const anno_span2_idx: u32 = @intCast(store.span2_data.len());
             const anno_data: Span2 = if (s.anno) |anno| .{
                 .start = 1,
-                .len = @intFromEnum(anno),
+                .len = @backingInt(anno),
             } else .{ .start = 0, .len = 0 };
             _ = try store.span2_data.append(store.gpa, anno_data);
 
             node.tag = .statement_decl;
             node.setPayload(.{ .statement_decl = .{
-                .pattern = @intFromEnum(s.pattern),
-                .expr = @intFromEnum(s.expr),
+                .pattern = @backingInt(s.pattern),
+                .expr = @backingInt(s.expr),
                 .anno_span2_idx = anno_span2_idx,
             } });
         },
@@ -3110,14 +3101,14 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             const anno_span2_idx: u32 = @intCast(store.span2_data.len());
             const anno_data: Span2 = if (s.anno) |anno| .{
                 .start = 1,
-                .len = @intFromEnum(anno),
+                .len = @backingInt(anno),
             } else .{ .start = 0, .len = 0 };
             _ = try store.span2_data.append(store.gpa, anno_data);
 
             node.tag = .statement_var;
             node.setPayload(.{ .statement_var = .{
-                .pattern_idx = @intFromEnum(s.pattern_idx),
-                .expr = @intFromEnum(s.expr),
+                .pattern_idx = @backingInt(s.pattern_idx),
+                .expr = @backingInt(s.expr),
                 .anno_span2_idx = anno_span2_idx,
             } });
         },
@@ -3125,74 +3116,75 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             const anno_span2_idx: u32 = @intCast(store.span2_data.len());
             const anno_data: Span2 = if (s.anno) |anno| .{
                 .start = 1,
-                .len = @intFromEnum(anno),
+                .len = @backingInt(anno),
             } else .{ .start = 0, .len = 0 };
             _ = try store.span2_data.append(store.gpa, anno_data);
 
             node.tag = .statement_var_uninitialized;
             node.setPayload(.{ .statement_var_uninitialized = .{
-                .pattern_idx = @intFromEnum(s.pattern_idx),
+                .pattern_idx = @backingInt(s.pattern_idx),
                 .anno_span2_idx = anno_span2_idx,
             } });
         },
         .s_reassign => |s| {
             node.tag = .statement_reassign;
             node.setPayload(.{ .statement_reassign = .{
-                .pattern_idx = @intFromEnum(s.pattern_idx),
-                .expr = @intFromEnum(s.expr),
+                .pattern_idx = @backingInt(s.pattern_idx),
+                .expr = @backingInt(s.expr),
             } });
         },
         .s_crash => |s| {
             node.tag = .statement_crash;
             node.setPayload(.{ .statement_crash = .{
-                .msg = @intFromEnum(s.msg),
+                .msg = @backingInt(s.msg),
             } });
         },
         .s_dbg => |s| {
             node.tag = .statement_dbg;
             node.setPayload(.{ .statement_single_expr = .{
-                .expr = @intFromEnum(s.expr),
+                .expr = @backingInt(s.expr),
             } });
         },
         .s_expr => |s| {
             node.tag = .statement_expr;
             node.setPayload(.{ .statement_single_expr = .{
-                .expr = @intFromEnum(s.expr),
+                .expr = @backingInt(s.expr),
             } });
         },
         .s_expect => |s| {
             node.tag = .statement_expect;
             node.setPayload(.{ .statement_single_expr = .{
-                .expr = @intFromEnum(s.body),
+                .expr = @backingInt(s.body),
             } });
         },
         .s_for => |s| {
             node.tag = .statement_for;
             node.setPayload(.{ .statement_for = .{
-                .patt = @intFromEnum(s.patt),
-                .expr = @intFromEnum(s.expr),
-                .body = @intFromEnum(s.body),
+                .patt = @backingInt(s.patt),
+                .expr = @backingInt(s.expr),
+                .body = @backingInt(s.body),
+                .kind = @backingInt(s.kind),
             } });
         },
         .s_while => |s| {
             node.tag = .statement_while;
             node.setPayload(.{ .statement_while = .{
-                .cond = @intFromEnum(s.cond),
-                .body = @intFromEnum(s.body),
+                .cond = @backingInt(s.cond),
+                .body = @backingInt(s.body),
             } });
         },
         .s_infinite_loop => |s| {
             node.tag = .statement_infinite_loop;
             node.setPayload(.{ .statement_while = .{
-                .cond = @intFromEnum(s.cond),
-                .body = @intFromEnum(s.body),
+                .cond = @backingInt(s.cond),
+                .body = @backingInt(s.body),
             } });
         },
         .s_breakable_loop => |s| {
             node.tag = .statement_breakable_loop;
             node.setPayload(.{ .statement_while = .{
-                .cond = @intFromEnum(s.cond),
-                .body = @intFromEnum(s.body),
+                .cond = @backingInt(s.cond),
+                .body = @backingInt(s.body),
             } });
         },
         .s_break => {
@@ -3201,8 +3193,8 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
         .s_return => |s| {
             node.tag = .statement_return;
             node.setPayload(.{ .statement_return = .{
-                .expr = @intFromEnum(s.expr),
-                .lambda = @intFromEnum(s.lambda),
+                .expr = @backingInt(s.expr),
+                .lambda = @backingInt(s.lambda),
             } });
         },
         .s_import => |s| {
@@ -3231,23 +3223,23 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
         .s_alias_decl => |s| {
             node.tag = .statement_alias_decl;
             node.setPayload(.{ .statement_alias_decl = .{
-                .header = @intFromEnum(s.header),
-                .anno = @intFromEnum(s.anno),
+                .header = @backingInt(s.header),
+                .anno = @backingInt(s.anno),
             } });
         },
         .s_nominal_decl => |s| {
             node.tag = .statement_nominal_decl;
             node.setPayload(.{ .statement_nominal_decl = .{
-                .header = @intFromEnum(s.header),
-                .anno = @intFromEnum(s.anno),
+                .header = @backingInt(s.header),
+                .anno = @backingInt(s.anno),
                 .is_opaque = if (s.is_opaque) 1 else 0,
             } });
         },
         .s_where_alias_decl => |s| {
             node.tag = .statement_where_alias_decl;
             node.setPayload(.{ .statement_where_alias_decl = .{
-                .header = @intFromEnum(s.header),
-                .receiver = @intFromEnum(s.receiver),
+                .header = @backingInt(s.header),
+                .receiver = @backingInt(s.receiver),
                 .where_span_idx = try store.storeWhereClauseSpan(s.where),
             } });
         },
@@ -3260,7 +3252,7 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
                 0;
 
             node.setPayload(.{ .statement_type_anno = .{
-                .anno = @intFromEnum(s.anno),
+                .anno = @backingInt(s.anno),
                 .name = @bitCast(s.name),
                 .where_span2_idx_plus_one = where_span2_idx_plus_one,
             } });
@@ -3270,13 +3262,15 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             node.setPayload(.{ .statement_type_var_alias = .{
                 .alias_name = @bitCast(s.alias_name),
                 .type_var_name = @bitCast(s.type_var_name),
-                .type_var_anno = @intFromEnum(s.type_var_anno),
+                .type_var_anno = @backingInt(s.type_var_anno),
             } });
         },
         .s_runtime_error => |s| {
             node.tag = .malformed;
-            node.setPayload(.{ .diag_single_value = .{
-                .value = @intFromEnum(s.diagnostic),
+            node.setPayload(.{ .malformed = .{
+                .diagnostic = @backingInt(s.diagnostic),
+                .evaluated_start = s.evaluated.span.start,
+                .evaluated_len = s.evaluated.span.len,
             } });
         },
     }
@@ -3295,14 +3289,14 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_lookup_local => |local| {
             node.tag = .expr_var;
             node.setPayload(.{ .expr_var = .{
-                .pattern_idx = @intFromEnum(local.pattern_idx),
+                .pattern_idx = @backingInt(local.pattern_idx),
             } });
         },
         .e_lookup_external => |e| {
             // For external lookups, store the module index, target node index, and ident
             node.tag = .expr_external_lookup;
             node.setPayload(.{ .expr_external_lookup = .{
-                .module_idx = @intFromEnum(e.module_idx),
+                .module_idx = @backingInt(e.module_idx),
                 .target_node_idx = e.target_node_idx,
                 .ident_idx = @bitCast(e.ident_idx),
             } });
@@ -3312,17 +3306,17 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 node.tag = .expr_deferred_nominal_external;
                 const backing_span2_idx: u32 = @intCast(store.span2_data.len());
                 _ = try store.span2_data.append(store.gpa, .{
-                    .start = @intFromEnum(backing.expr),
-                    .len = @intFromEnum(backing.ty),
+                    .start = @backingInt(backing.expr),
+                    .len = @backingInt(backing.ty),
                 });
                 node.setPayload(.{ .expr_deferred_nominal_external = .{
-                    .ref = @intFromEnum(e.ref),
+                    .ref = @backingInt(e.ref),
                     .backing_span2_idx = backing_span2_idx,
                 } });
             } else {
                 node.tag = .expr_deferred_import_ref;
                 node.setPayload(.{ .expr_deferred_import_ref = .{
-                    .ref = @intFromEnum(e.ref),
+                    .ref = @backingInt(e.ref),
                 } });
             }
         },
@@ -3337,7 +3331,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_lookup_associated => |e| {
             node.tag = .expr_associated_lookup;
             node.setPayload(.{ .expr_associated_lookup = .{
-                .module_idx = @intFromEnum(e.module_idx),
+                .module_idx = @backingInt(e.module_idx),
                 .type_node_idx = e.type_node_idx,
                 .type_ident = @bitCast(e.type_ident),
                 .item_ident = @bitCast(e.item_ident),
@@ -3346,9 +3340,9 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_lookup_associated_resolved => |e| {
             node.tag = .expr_associated_lookup_resolved;
             node.setPayload(.{ .expr_associated_lookup_resolved = .{
-                .module_identity = @intFromEnum(e.module_identity),
+                .module_identity = @backingInt(e.module_identity),
                 .target_node_idx = e.target_node_idx,
-                .target_def_idx = @intFromEnum(e.target_def_idx),
+                .target_def_idx = @backingInt(e.target_def_idx),
                 .source_ident = @bitCast(e.source_ident),
             } });
         },
@@ -3364,8 +3358,8 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             const int128_idx: u32 = @intCast(store.int128_values.len());
             _ = try store.int128_values.append(store.gpa, @bitCast(e.value.bytes));
             node.setPayload(.{ .expr_num = .{
-                .kind = @intFromEnum(e.kind),
-                .val_kind = @intFromEnum(e.value.kind),
+                .kind = @backingInt(e.kind),
+                .val_kind = @backingInt(e.value.kind),
                 .int128_idx = int128_idx,
             } });
         },
@@ -3389,7 +3383,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_tuple_access => |e| {
             node.tag = .expr_tuple_access;
             node.setPayload(.{ .expr_tuple_access = .{
-                .tuple = @intFromEnum(e.tuple),
+                .tuple = @backingInt(e.tuple),
                 .elem_index = e.elem_index,
             } });
         },
@@ -3438,7 +3432,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             _ = try store.int128_values.append(store.gpa, @bitCast(e.value.bytes));
             node.setPayload(.{ .expr_typed_int = .{
                 .type_name = @bitCast(e.type_name),
-                .val_kind = @intFromEnum(e.value.kind),
+                .val_kind = @backingInt(e.value.kind),
                 .int128_idx = int128_idx,
             } });
         },
@@ -3448,7 +3442,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             _ = try store.int128_values.append(store.gpa, @bitCast(e.value.bytes));
             node.setPayload(.{ .expr_typed_frac = .{
                 .type_name = @bitCast(e.type_name),
-                .val_kind = @intFromEnum(e.value.kind),
+                .val_kind = @backingInt(e.value.kind),
                 .int128_idx = int128_idx,
             } });
         },
@@ -3461,13 +3455,13 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_str_segment => |e| {
             node.tag = .expr_string_segment;
             node.setPayload(.{ .expr_string_segment = .{
-                .segment_idx = @intFromEnum(e.literal),
+                .segment_idx = @backingInt(e.literal),
             } });
         },
         .e_bytes_literal => |e| {
             node.tag = .expr_bytes_literal;
             node.setPayload(.{ .expr_string_segment = .{
-                .segment_idx = @intFromEnum(e.literal),
+                .segment_idx = @backingInt(e.literal),
             } });
         },
         .e_str => |e| {
@@ -3488,20 +3482,20 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_nominal => |e| {
             node.tag = .expr_nominal;
             node.setPayload(.{ .expr_nominal = .{
-                .nominal_type_decl = @intFromEnum(e.nominal_type_decl),
-                .backing_expr = @intFromEnum(e.backing_expr),
-                .backing_type = @intFromEnum(e.backing_type),
+                .nominal_type_decl = @backingInt(e.nominal_type_decl),
+                .backing_expr = @backingInt(e.backing_expr),
+                .backing_type = @backingInt(e.backing_type),
             } });
         },
         .e_nominal_external => |e| {
             node.tag = .expr_nominal_external;
             const backing_span2_idx: u32 = @intCast(store.span2_data.len());
             _ = try store.span2_data.append(store.gpa, .{
-                .start = @intFromEnum(e.backing_expr),
-                .len = @intFromEnum(e.backing_type),
+                .start = @backingInt(e.backing_expr),
+                .len = @backingInt(e.backing_type),
             });
             node.setPayload(.{ .expr_nominal_external = .{
-                .module_idx = @intFromEnum(e.module_idx),
+                .module_idx = @backingInt(e.module_idx),
                 .target_node_idx = @intCast(e.target_node_idx),
                 .backing_span2_idx = backing_span2_idx,
             } });
@@ -3510,8 +3504,8 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             std.debug.assert(e.segments.len > 0);
             node.tag = .expr_field_access;
             node.setPayload(.{ .expr_field_access = .{
-                .receiver = @intFromEnum(e.receiver),
-                .segments_start = @intFromEnum(e.segments.start),
+                .receiver = @backingInt(e.receiver),
+                .segments_start = @backingInt(e.segments.start),
                 .segments_len = e.segments.len,
             } });
         },
@@ -3519,7 +3513,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.tag = .expr_method_call;
             const method_call_data_idx = try store.addMethodCallData(e.args, e.method_name_region, .method_call);
             node.setPayload(.{ .expr_method_call = .{
-                .receiver = @intFromEnum(e.receiver),
+                .receiver = @backingInt(e.receiver),
                 .method_name = @bitCast(e.method_name),
                 .method_call_data_idx = method_call_data_idx,
             } });
@@ -3528,10 +3522,10 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.tag = .expr_dispatch_call;
             const method_call_data_idx = try store.addMethodCallData(e.args, e.method_name_region, e.surface_origin);
             node.setPayload(.{ .expr_dispatch_call = .{
-                .receiver = @intFromEnum(e.receiver),
+                .receiver = @backingInt(e.receiver),
                 .method_name = @bitCast(e.method_name),
                 .method_call_data_idx = method_call_data_idx,
-                .constraint_fn_var = @intFromEnum(e.constraint_fn_var),
+                .constraint_fn_var = @backingInt(e.constraint_fn_var),
             } });
         },
         .e_interpolation => |e| {
@@ -3542,81 +3536,83 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .parts_len = e.parts.span.len,
                 .method_region_start = e.method_name_region.start.offset,
                 .method_region_end = e.method_name_region.end.offset,
-                .constraint_fn_var_plus_one = if (e.constraint_fn_var) |var_| @intFromEnum(var_) + 1 else 0,
-                .step_fn_var_plus_one = if (e.step_fn_var) |var_| @intFromEnum(var_) + 1 else 0,
-                .dispatcher_var_plus_one = if (e.dispatcher_var) |var_| @intFromEnum(var_) + 1 else 0,
+                .constraint_fn_var_plus_one = if (e.constraint_fn_var) |var_| @backingInt(var_) + 1 else 0,
+                .assembler_fn_var_plus_one = if (e.assembler_fn_var) |var_| @backingInt(var_) + 1 else 0,
+                .dispatcher_var_plus_one = if (e.dispatcher_var) |var_| @backingInt(var_) + 1 else 0,
             });
             node.setPayload(.{ .expr_interpolation = .{
-                .first = @intFromEnum(e.first),
+                .first = @backingInt(e.first),
                 .interpolation_data_idx = interpolation_data_idx,
             } });
         },
         .e_structural_eq => |e| {
             node.tag = .expr_structural_eq;
             node.setPayload(.{ .expr_structural_eq = .{
-                .lhs = @intFromEnum(e.lhs),
-                .rhs = @intFromEnum(e.rhs),
+                .lhs = @backingInt(e.lhs),
+                .rhs = @backingInt(e.rhs),
                 .negated = @intFromBool(e.negated),
             } });
         },
         .e_structural_hash => |e| {
             node.tag = .expr_structural_hash;
             node.setPayload(.{ .expr_structural_hash = .{
-                .value = @intFromEnum(e.value),
-                .hasher = @intFromEnum(e.hasher),
+                .value = @backingInt(e.value),
+                .hasher = @backingInt(e.hasher),
             } });
         },
         .e_method_eq => |e| {
             node.tag = .expr_method_eq;
             node.setPayload(.{ .expr_method_eq = .{
-                .lhs = @intFromEnum(e.lhs),
-                .rhs = @intFromEnum(e.rhs),
+                .lhs = @backingInt(e.lhs),
+                .rhs = @backingInt(e.rhs),
                 .negated = @intFromBool(e.negated),
-                .constraint_fn_var = @intFromEnum(e.constraint_fn_var),
+                .constraint_fn_var = @backingInt(e.constraint_fn_var),
             } });
         },
         .e_type_method_call => |e| {
             node.tag = .expr_type_method_call;
             const method_call_data_idx = try store.addMethodCallData(e.args, e.method_name_region, .method_call);
             node.setPayload(.{ .expr_type_method_call = .{
-                .type_dispatch_stmt = @intFromEnum(e.type_dispatch_stmt),
+                .type_dispatch_stmt = @backingInt(e.type_dispatch_stmt),
                 .method_name = @bitCast(e.method_name),
                 .method_call_data_idx = method_call_data_idx,
             } });
         },
         .e_type_dispatch_call => |e| {
-            node.tag = .expr_type_dispatch_call;
+            node.tag = typeDispatchCallNodeTag(e.owner);
             const method_call_data_idx = try store.addMethodCallData(e.args, e.method_name_region, .method_call);
             node.setPayload(.{ .expr_type_dispatch_call = .{
-                .type_dispatch_stmt = @intFromEnum(e.type_dispatch_stmt),
+                .owner = typeDispatchOwnerBits(e.owner),
                 .method_name = @bitCast(e.method_name),
                 .method_call_data_idx = method_call_data_idx,
-                .constraint_fn_var = @intFromEnum(e.constraint_fn_var),
+                .constraint_fn_var = @backingInt(e.constraint_fn_var),
             } });
         },
         .e_runtime_error => |e| {
             node.tag = .malformed;
-            node.setPayload(.{ .diag_single_value = .{
-                .value = @intFromEnum(e.diagnostic),
+            node.setPayload(.{ .malformed = .{
+                .diagnostic = @backingInt(e.diagnostic),
+                .evaluated_start = e.evaluated.span.start,
+                .evaluated_len = e.evaluated.span.len,
             } });
         },
         .e_crash => |c| {
             node.tag = .expr_crash;
             node.setPayload(.{ .expr_crash = .{
-                .msg = @intFromEnum(c.msg),
+                .msg = @backingInt(c.msg),
             } });
         },
         .e_dbg => |d| {
             node.tag = .expr_dbg;
             node.setPayload(.{ .expr_dbg = .{
-                .expr = @intFromEnum(d.expr),
+                .expr = @backingInt(d.expr),
             } });
         },
         .e_expect_err => |e| {
             node.tag = .expr_expect_err;
             node.setPayload(.{ .expr_expect_err = .{
-                .expr = @intFromEnum(e.expr),
-                .snippet = @intFromEnum(e.snippet),
+                .expr = @backingInt(e.expr),
+                .snippet = @backingInt(e.snippet),
             } });
         },
         .e_ellipsis => {
@@ -3626,22 +3622,23 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.tag = .expr_anno_only;
             node.setPayload(.{ .expr_anno_only = .{
                 .ident = @bitCast(anno.ident),
-                .kind = @intFromEnum(anno.kind),
+                .kind = @backingInt(anno.kind),
             } });
         },
         .e_derived_method => |derived| {
             node.tag = .expr_derived_method;
             node.setPayload(.{ .expr_derived_method = .{
                 .ident = @bitCast(derived.ident),
-                .kind = @intFromEnum(derived.kind),
+                .kind = @backingInt(derived.kind),
+                .owner = @backingInt(derived.owner),
             } });
         },
         .e_return => |ret| {
             node.tag = .expr_return;
             node.setPayload(.{ .expr_return = .{
-                .expr = @intFromEnum(ret.expr),
-                .lambda = @intFromEnum(ret.lambda),
-                .context = @intFromEnum(ret.context),
+                .expr = @backingInt(ret.expr),
+                .lambda = @backingInt(ret.lambda),
+                .context = @backingInt(ret.context),
             } });
         },
         .e_break => {
@@ -3666,7 +3663,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             _ = try store.span2_data.append(store.gpa, .{ .start = run_ll.args.span.start, .len = run_ll.args.span.len });
 
             node.setPayload(.{ .expr_run_low_level = .{
-                .op = @intFromEnum(run_ll.op),
+                .op = @backingInt(run_ll.op),
                 .args_span2_idx = span2_idx,
             } });
         },
@@ -3674,10 +3671,10 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.tag = .expr_match;
             const match_data_idx: u32 = @intCast(store.match_data.len());
             _ = try store.match_data.append(store.gpa, .{
-                .cond = @intFromEnum(e.cond),
+                .cond = @backingInt(e.cond),
                 .branches_start = e.branches.span.start,
                 .branches_len = e.branches.span.len,
-                .exhaustive = @intFromEnum(e.exhaustive),
+                .exhaustive = @backingInt(e.exhaustive),
                 .is_try_suffix = @intFromBool(e.is_try_suffix),
                 .skip_exhaustiveness = @intFromBool(e.skip_exhaustiveness),
             });
@@ -3692,8 +3689,8 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             _ = try store.if_data.append(store.gpa, .{
                 .branches_start = e.branches.span.start,
                 .branches_len = e.branches.span.len,
-                .final_else = @intFromEnum(e.final_else),
-                .warn_unused_branches = @intFromBool(e.warn_unused_branches),
+                .final_else = @backingInt(e.final_else),
+                .origin = @backingInt(e.origin),
             });
 
             node.setPayload(.{ .expr_if_then_else = .{
@@ -3706,11 +3703,11 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             _ = try store.span2_data.append(store.gpa, .{ .start = e.args.span.start, .len = e.args.span.len });
 
             node.setPayload(.{ .expr_call = .{
-                .func = @intFromEnum(e.func),
+                .func = @backingInt(e.func),
                 .args_span2_idx = span2_idx,
-                .called_via = @intFromEnum(e.called_via),
+                .called_via = @backingInt(e.called_via),
                 .constraint_fn_var_plus_one = if (e.constraint_fn_var) |var_|
-                    @intFromEnum(var_) + 1
+                    @backingInt(var_) + 1
                 else
                     0,
             } });
@@ -3718,7 +3715,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_record => |e| {
             node.tag = .expr_record;
             const fields_ext_idx: u32 = @intCast(store.span_with_node_data.len());
-            const ext_value = if (e.ext) |ext| @intFromEnum(ext) else 0;
+            const ext_value = if (e.ext) |ext| @backingInt(ext) else 0;
             _ = try store.span_with_node_data.append(store.gpa, .{
                 .start = e.fields.span.start,
                 .len = e.fields.span.len,
@@ -3740,8 +3737,8 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             const zero_arg_tag_idx: u32 = @intCast(store.zero_arg_tag_data.len());
             _ = try store.zero_arg_tag_data.append(store.gpa, .{
                 .closure_name = @bitCast(e.closure_name),
-                .variant_var = @intFromEnum(e.variant_var),
-                .ext_var = @intFromEnum(e.ext_var),
+                .variant_var = @backingInt(e.variant_var),
+                .ext_var = @backingInt(e.ext_var),
                 .name = @bitCast(e.name),
             });
 
@@ -3753,7 +3750,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.tag = .expr_closure;
             const closure_data_idx: u32 = @intCast(store.closure_data.len());
             _ = try store.closure_data.append(store.gpa, .{
-                .lambda_idx = @intFromEnum(e.lambda_idx),
+                .lambda_idx = @backingInt(e.lambda_idx),
                 .captures_start = e.captures.span.start,
                 .captures_len = e.captures.span.len,
                 .tag_name = @bitCast(e.tag_name),
@@ -3768,21 +3765,21 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.setPayload(.{ .expr_lambda = .{
                 .args_start = e.args.span.start,
                 .args_len = e.args.span.len,
-                .body = @intFromEnum(e.body),
+                .body = @backingInt(e.body),
             } });
         },
         .e_binop => |e| {
             node.tag = .expr_bin_op;
             node.setPayload(.{ .expr_bin_op = .{
-                .op = @intFromEnum(e.op),
-                .lhs = @intFromEnum(e.lhs),
-                .rhs = @intFromEnum(e.rhs),
+                .op = @backingInt(e.op),
+                .lhs = @backingInt(e.lhs),
+                .rhs = @backingInt(e.rhs),
             } });
         },
         .e_unary_minus => |e| {
             node.tag = .expr_unary_minus;
             node.setPayload(.{ .expr_unary = .{
-                .expr = @intFromEnum(e.expr),
+                .expr = @backingInt(e.expr),
             } });
         },
         .e_block => |e| {
@@ -3790,21 +3787,22 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.setPayload(.{ .expr_block = .{
                 .stmts_start = e.stmts.span.start,
                 .stmts_len = e.stmts.span.len,
-                .final_expr = @intFromEnum(e.final_expr),
+                .final_expr = @backingInt(e.final_expr),
             } });
         },
         .e_expect => |e| {
             node.tag = .expr_expect;
             node.setPayload(.{ .expr_expect = .{
-                .body = @intFromEnum(e.body),
+                .body = @backingInt(e.body),
             } });
         },
         .e_for => |e| {
             node.tag = .expr_for;
             node.setPayload(.{ .expr_for = .{
-                .patt = @intFromEnum(e.patt),
-                .expr = @intFromEnum(e.expr),
-                .body = @intFromEnum(e.body),
+                .patt = @backingInt(e.patt),
+                .expr = @backingInt(e.expr),
+                .body = @backingInt(e.body),
+                .kind = @backingInt(e.kind),
             } });
         },
     }
@@ -3813,7 +3811,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
     // External lookups carry their source region explicitly.
     const actual_region = if (expr == .e_lookup_external) expr.e_lookup_external.region else region;
     _ = try store.regions.append(store.gpa, actual_region);
-    return @enumFromInt(@intFromEnum(node_idx));
+    return @fromBackingInt(@intCast(@backingInt(node_idx)));
 }
 
 /// Adds a record field to the store.
@@ -3824,12 +3822,12 @@ pub fn addRecordField(store: *NodeStore, recordField: CIR.RecordField, region: b
     var node = Node.init(.record_field);
     node.setPayload(.{ .record_field = .{
         .name = @bitCast(recordField.name),
-        .expr = @intFromEnum(recordField.value),
+        .expr = @backingInt(recordField.value),
     } });
 
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
-    return @enumFromInt(@intFromEnum(nid));
+    return @fromBackingInt(@intCast(@backingInt(nid)));
 }
 
 /// Adds an unset record field (`name: _`) to the store.
@@ -3844,7 +3842,7 @@ pub fn addUnsetField(store: *NodeStore, unset_field: CIR.UnsetField, region: bas
 
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
-    return @enumFromInt(@intFromEnum(nid));
+    return @fromBackingInt(@intCast(@backingInt(nid)));
 }
 
 /// Adds a record destructuring to the store.
@@ -3856,9 +3854,9 @@ pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.Pattern.RecordD
 
     // Store kind in span2_data: (kind_tag, pattern_idx)
     const kind_data: Span2 = switch (record_destruct.kind) {
-        .Required => |pattern_idx| .{ .start = 0, .len = @intFromEnum(pattern_idx) },
-        .SubPattern => |pattern_idx| .{ .start = 1, .len = @intFromEnum(pattern_idx) },
-        .Rest => |pattern_idx| .{ .start = 2, .len = @intFromEnum(pattern_idx) },
+        .Required => |pattern_idx| .{ .start = 0, .len = @backingInt(pattern_idx) },
+        .SubPattern => |pattern_idx| .{ .start = 1, .len = @backingInt(pattern_idx) },
+        .Rest => |pattern_idx| .{ .start = 2, .len = @backingInt(pattern_idx) },
     };
     _ = try store.span2_data.append(store.gpa, kind_data);
 
@@ -3871,7 +3869,7 @@ pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.Pattern.RecordD
 
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
-    return @enumFromInt(@intFromEnum(nid));
+    return @fromBackingInt(@intCast(@backingInt(nid)));
 }
 
 /// Adds a capture to the store.
@@ -3883,12 +3881,12 @@ pub fn addCapture(store: *NodeStore, capture: CIR.Expr.Capture, region: base.Reg
     node.setPayload(.{ .lambda_capture = .{
         .name = @bitCast(capture.name),
         .scope_depth = capture.scope_depth,
-        .pattern_idx = @intFromEnum(capture.pattern_idx),
+        .pattern_idx = @backingInt(capture.pattern_idx),
     } });
 
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
-    return @enumFromInt(@intFromEnum(nid));
+    return @fromBackingInt(@intCast(@backingInt(nid)));
 }
 
 /// Adds a 'match' branch to the store.
@@ -3897,13 +3895,13 @@ pub fn addCapture(store: *NodeStore, capture: CIR.Expr.Capture, region: base.Reg
 /// corresponding function in `ModuleEnv`.
 pub fn addMatchBranch(store: *NodeStore, branch: CIR.Expr.Match.Branch, region: base.Region) Allocator.Error!CIR.Expr.Match.Branch.Idx {
     const match_branch_idx: u32 = @intCast(store.match_branch_data.len());
-    const guard_idx = if (branch.guard) |g| @intFromEnum(g) else 0;
+    const guard_idx = if (branch.guard) |g| @backingInt(g) else 0;
     _ = try store.match_branch_data.append(store.gpa, .{
         .patterns_start = branch.patterns.span.start,
         .patterns_len = branch.patterns.span.len,
-        .value = @intFromEnum(branch.value),
+        .value = @backingInt(branch.value),
         .guard = guard_idx,
-        .redundant = @intFromEnum(branch.redundant),
+        .redundant = @backingInt(branch.redundant),
     });
 
     var node = Node.init(.match_branch);
@@ -3913,7 +3911,7 @@ pub fn addMatchBranch(store: *NodeStore, branch: CIR.Expr.Match.Branch, region: 
 
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
-    return @enumFromInt(@intFromEnum(nid));
+    return @fromBackingInt(@intCast(@backingInt(nid)));
 }
 
 /// Adds a 'match' branch to the store.
@@ -3923,12 +3921,12 @@ pub fn addMatchBranch(store: *NodeStore, branch: CIR.Expr.Match.Branch, region: 
 pub fn addMatchBranchPattern(store: *NodeStore, branchPattern: CIR.Expr.Match.BranchPattern, region: base.Region) Allocator.Error!CIR.Expr.Match.BranchPattern.Idx {
     var node = Node.init(.match_branch_pattern);
     node.setPayload(.{ .match_branch_pattern = .{
-        .pattern = @intFromEnum(branchPattern.pattern),
+        .pattern = @backingInt(branchPattern.pattern),
         .degenerate = @intFromBool(branchPattern.degenerate),
     } });
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
-    return @enumFromInt(@intFromEnum(nid));
+    return @fromBackingInt(@intCast(@backingInt(nid)));
 }
 
 /// Adds a 'where' clause to the store.
@@ -3942,29 +3940,29 @@ pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause, region: b
         .w_method => |where_method| {
             node.tag = .where_method;
             node.setPayload(.{ .where_clause = .{
-                .var_idx = @intFromEnum(where_method.var_),
+                .var_idx = @backingInt(where_method.var_),
                 .name = @bitCast(where_method.method_name),
-                .anno = @intFromEnum(where_method.anno),
+                .anno = @backingInt(where_method.anno),
             } });
         },
         .w_alias => |where_alias| {
             node.tag = .where_alias;
             node.setPayload(.{ .where_alias = .{
-                .var_idx = @intFromEnum(where_alias.var_),
-                .alias_idx = @intFromEnum(where_alias.alias),
+                .var_idx = @backingInt(where_alias.var_),
+                .alias_idx = @backingInt(where_alias.alias),
             } });
         },
         .w_malformed => |malformed| {
             node.tag = .where_malformed;
             node.setPayload(.{ .where_malformed = .{
-                .diagnostic = @intFromEnum(malformed.diagnostic),
+                .diagnostic = @backingInt(malformed.diagnostic),
             } });
         },
     }
 
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
-    return @enumFromInt(@intFromEnum(nid));
+    return @fromBackingInt(@intCast(@backingInt(nid)));
 }
 
 /// Adds a pattern to the store.
@@ -3991,7 +3989,7 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
             node.tag = .pattern_as;
             node.setPayload(.{ .pattern_as = .{
                 .ident = @bitCast(p.ident),
-                .pattern = @intFromEnum(p.pattern),
+                .pattern = @backingInt(p.pattern),
             } });
         },
         .applied_tag => |p| {
@@ -4005,20 +4003,20 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
         .nominal => |n| {
             node.tag = .pattern_nominal;
             node.setPayload(.{ .pattern_nominal = .{
-                .nominal_type_decl = @intFromEnum(n.nominal_type_decl),
-                .backing_pattern = @intFromEnum(n.backing_pattern),
-                .backing_type = @intFromEnum(n.backing_type),
+                .nominal_type_decl = @backingInt(n.nominal_type_decl),
+                .backing_pattern = @backingInt(n.backing_pattern),
+                .backing_type = @backingInt(n.backing_type),
             } });
         },
         .nominal_external => |n| {
             node.tag = .pattern_nominal_external;
             const backing_span2_idx: u32 = @intCast(store.span2_data.len());
             _ = try store.span2_data.append(store.gpa, .{
-                .start = @intFromEnum(n.backing_pattern),
-                .len = @intFromEnum(n.backing_type),
+                .start = @backingInt(n.backing_pattern),
+                .len = @backingInt(n.backing_type),
             });
             node.setPayload(.{ .pattern_nominal_external = .{
-                .module_idx = @intFromEnum(n.module_idx),
+                .module_idx = @backingInt(n.module_idx),
                 .target_node_idx = @intCast(n.target_node_idx),
                 .backing_span2_idx = backing_span2_idx,
             } });
@@ -4027,11 +4025,11 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
             node.tag = .pattern_deferred_import_ref;
             const backing_span2_idx: u32 = @intCast(store.span2_data.len());
             _ = try store.span2_data.append(store.gpa, .{
-                .start = @intFromEnum(p.backing_pattern),
-                .len = @intFromEnum(p.backing_type),
+                .start = @backingInt(p.backing_pattern),
+                .len = @backingInt(p.backing_type),
             });
             node.setPayload(.{ .pattern_deferred_import_ref = .{
-                .ref = @intFromEnum(p.ref),
+                .ref = @backingInt(p.ref),
                 .backing_span2_idx = backing_span2_idx,
             } });
         },
@@ -4051,7 +4049,7 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
                 .has_rest = 1,
                 .rest_index = rest.index,
                 .has_pattern = if (rest.pattern != null) 1 else 0,
-                .pattern_idx = if (rest.pattern) |pattern_idx| @intFromEnum(pattern_idx) else 0,
+                .pattern_idx = if (rest.pattern) |pattern_idx| @backingInt(pattern_idx) else 0,
             } else .{
                 .patterns_start = p.patterns.span.start,
                 .patterns_len = p.patterns.span.len,
@@ -4078,8 +4076,8 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
             const int128_idx: u32 = @intCast(store.int128_values.len());
             _ = try store.int128_values.append(store.gpa, @bitCast(p.value.bytes));
             node.setPayload(.{ .pattern_num_literal = .{
-                .kind = @intFromEnum(p.kind),
-                .value_kind = @intFromEnum(p.value.kind),
+                .kind = @backingInt(p.kind),
+                .value_kind = @backingInt(p.value.kind),
                 .int128_idx = int128_idx,
             } });
         },
@@ -4107,17 +4105,17 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
         .str_literal => |p| {
             node.tag = .pattern_str_literal;
             node.setPayload(.{ .pattern_str_literal = .{
-                .literal = @intFromEnum(p.literal),
+                .literal = @backingInt(p.literal),
             } });
         },
         .str_interpolation => |p| {
             node.tag = .pattern_str_interpolation;
             const data_idx: u32 = @intCast(store.pattern_str_interpolation_data.len());
             _ = try store.pattern_str_interpolation_data.append(store.gpa, .{
-                .prefix = @intFromEnum(p.prefix),
+                .prefix = @backingInt(p.prefix),
                 .steps_start = p.steps.span.start,
                 .steps_len = p.steps.span.len,
-                .end = @intFromEnum(p.end),
+                .end = @backingInt(p.end),
             });
             node.setPayload(.{ .pattern_str_interpolation = .{
                 .data_idx = data_idx,
@@ -4142,15 +4140,15 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
         },
         .runtime_error => |e| {
             node.tag = .malformed;
-            node.setPayload(.{ .pattern_malformed = .{
-                .diagnostic = @intFromEnum(e.diagnostic),
+            node.setPayload(.{ .malformed = .{
+                .diagnostic = @backingInt(e.diagnostic),
             } });
         },
     }
 
     const node_idx = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
-    return @enumFromInt(@intFromEnum(node_idx));
+    return @fromBackingInt(@intCast(@backingInt(node_idx)));
 }
 
 /// Adds a type annotation to the store.
@@ -4167,33 +4165,33 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
             const apply_data: TypeApplyData = switch (a.base) {
                 .builtin => |builtin_type| .{
                     .args_len = a.args.span.len,
-                    .base_tag = @intFromEnum(CIR.TypeAnno.LocalOrExternal.Tag.builtin),
-                    .value1 = @intFromEnum(builtin_type),
+                    .base_tag = @backingInt(CIR.TypeAnno.LocalOrExternal.Tag.builtin),
+                    .value1 = @backingInt(builtin_type),
                     .value2 = 0,
                 },
                 .local => |local| .{
                     .args_len = a.args.span.len,
-                    .base_tag = @intFromEnum(CIR.TypeAnno.LocalOrExternal.Tag.local),
-                    .value1 = @intFromEnum(local.decl_idx),
+                    .base_tag = @backingInt(CIR.TypeAnno.LocalOrExternal.Tag.local),
+                    .value1 = @backingInt(local.decl_idx),
                     .value2 = 0,
                 },
                 .external => |ext| .{
                     .args_len = a.args.span.len,
-                    .base_tag = @intFromEnum(CIR.TypeAnno.LocalOrExternal.Tag.external),
-                    .value1 = @intFromEnum(ext.module_idx),
+                    .base_tag = @backingInt(CIR.TypeAnno.LocalOrExternal.Tag.external),
+                    .value1 = @backingInt(ext.module_idx),
                     .value2 = @intCast(ext.target_node_idx),
                 },
                 .external_identity => |ext| .{
                     .args_len = a.args.span.len,
-                    .base_tag = @intFromEnum(CIR.TypeAnno.LocalOrExternal.Tag.external_identity),
-                    .value1 = @intFromEnum(ext.module_identity),
+                    .base_tag = @backingInt(CIR.TypeAnno.LocalOrExternal.Tag.external_identity),
+                    .value1 = @backingInt(ext.module_identity),
                     .value2 = ext.target_node_idx,
                 },
                 .pending => |pend| .{
                     .args_len = a.args.span.len,
-                    .base_tag = @intFromEnum(CIR.TypeAnno.LocalOrExternal.Tag.pending),
-                    .value1 = @intFromEnum(pend.module_idx),
-                    .value2 = @intFromEnum(pend.ref),
+                    .base_tag = @backingInt(CIR.TypeAnno.LocalOrExternal.Tag.pending),
+                    .value1 = @backingInt(pend.module_idx),
+                    .value2 = @backingInt(pend.ref),
                 },
             };
             _ = try store.type_apply_data.append(store.gpa, apply_data);
@@ -4212,7 +4210,7 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
         .rigid_var_lookup => |tv| {
             node.tag = .ty_rigid_var_lookup;
             node.setPayload(.{ .ty_rigid_var = .{
-                .name = @intFromEnum(tv.ref),
+                .name = @backingInt(tv.ref),
             } });
         },
         .underscore => {
@@ -4223,30 +4221,30 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
             const base_span2_idx: u32 = @intCast(store.span2_data.len());
             const base_data: Span2 = switch (t.base) {
                 .builtin => |builtin_type| .{
-                    .start = @intFromEnum(builtin_type),
+                    .start = @backingInt(builtin_type),
                     .len = 0,
                 },
                 .local => |local| .{
-                    .start = @intFromEnum(local.decl_idx),
+                    .start = @backingInt(local.decl_idx),
                     .len = 0,
                 },
                 .external => |ext| .{
-                    .start = @intFromEnum(ext.module_idx),
+                    .start = @backingInt(ext.module_idx),
                     .len = @intCast(ext.target_node_idx),
                 },
                 .external_identity => |ext| .{
-                    .start = @intFromEnum(ext.module_identity),
+                    .start = @backingInt(ext.module_identity),
                     .len = ext.target_node_idx,
                 },
                 .pending => |pend| .{
-                    .start = @intFromEnum(pend.module_idx),
-                    .len = @intFromEnum(pend.ref),
+                    .start = @backingInt(pend.module_idx),
+                    .len = @backingInt(pend.ref),
                 },
             };
             _ = try store.span2_data.append(store.gpa, base_data);
             node.setPayload(.{ .ty_lookup = .{
                 .name = @bitCast(t.name),
-                .base = @intFromEnum(@as(CIR.TypeAnno.LocalOrExternal.Tag, std.meta.activeTag(t.base))),
+                .base = @backingInt(@as(CIR.TypeAnno.LocalOrExternal.Tag, std.meta.activeTag(t.base))),
                 .base_span2_idx = base_span2_idx,
             } });
         },
@@ -4255,7 +4253,7 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
             node.setPayload(.{ .ty_tag_union = .{
                 .tags_start = tu.tags.span.start,
                 .tags_len = tu.tags.span.len,
-                .ext_plus_one = if (tu.ext) |ext| @intFromEnum(ext) + 1 else 0,
+                .ext_plus_one = if (tu.ext) |ext| @backingInt(ext) + 1 else 0,
             } });
         },
         .tag => |t| {
@@ -4278,7 +4276,7 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
             node.setPayload(.{ .ty_record = .{
                 .fields_start = r.fields.span.start,
                 .fields_len = r.fields.span.len,
-                .ext_plus_one = if (r.ext) |ext| @intFromEnum(ext) + 1 else 0,
+                .ext_plus_one = if (r.ext) |ext| @backingInt(ext) + 1 else 0,
             } });
         },
         .@"fn" => |f| {
@@ -4286,7 +4284,7 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
             const fn_info_span2_idx: u32 = @intCast(store.span2_data.len());
             _ = try store.span2_data.append(store.gpa, .{
                 .start = if (f.effectful) 1 else 0,
-                .len = @intFromEnum(f.ret),
+                .len = @backingInt(f.ret),
             });
             node.setPayload(.{ .ty_fn = .{
                 .args_start = f.args.span.start,
@@ -4297,20 +4295,20 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
         .parens => |p| {
             node.tag = .ty_parens;
             node.setPayload(.{ .ty_parens = .{
-                .anno = @intFromEnum(p.anno),
+                .anno = @backingInt(p.anno),
             } });
         },
         .malformed => |m| {
             node.tag = .ty_malformed;
             node.setPayload(.{ .ty_malformed = .{
-                .diagnostic = @intFromEnum(m.diagnostic),
+                .diagnostic = @backingInt(m.diagnostic),
             } });
         },
     }
 
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
-    return @enumFromInt(@intFromEnum(nid));
+    return @fromBackingInt(@intCast(@backingInt(nid)));
 }
 
 /// Adds a type header to the store.
@@ -4334,7 +4332,7 @@ pub fn addTypeHeader(store: *NodeStore, typeHeader: CIR.TypeHeader, region: base
 
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
-    return @enumFromInt(@intFromEnum(nid));
+    return @fromBackingInt(@intCast(@backingInt(nid)));
 }
 
 /// Adds an annotation record field to the store.
@@ -4349,15 +4347,15 @@ pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.TypeAnno.Recor
         var defaulted_node = Node.init(.ty_record_field_defaulted);
         defaulted_node.setPayload(.{ .ty_record_field_defaulted = .{
             .name = @bitCast(annoRecordField.name),
-            .ty = @intFromEnum(annoRecordField.ty),
-            .default_value = @intFromEnum(default_idx),
+            .ty = @backingInt(annoRecordField.ty),
+            .default_value = @backingInt(default_idx),
         } });
         break :blk defaulted_node;
     } else blk: {
         var plain_node = Node.init(.ty_record_field);
         plain_node.setPayload(.{ .ty_record_field = .{
             .name = @bitCast(annoRecordField.name),
-            .ty = @intFromEnum(annoRecordField.ty),
+            .ty = @backingInt(annoRecordField.ty),
             .is_optional = annoRecordField.is_optional,
             .is_unnamed = annoRecordField.is_unnamed,
         } });
@@ -4366,7 +4364,7 @@ pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.TypeAnno.Recor
 
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
-    return @enumFromInt(@intFromEnum(nid));
+    return @fromBackingInt(@intCast(@backingInt(nid)));
 }
 
 /// Drop the `??` default from a defaulted annotation record field, degrading
@@ -4375,7 +4373,7 @@ pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.TypeAnno.Recor
 /// "Defaulted Fields"); the default expression node stays in the store (it
 /// was canonicalized and diagnosed) but nothing references it.
 pub fn dropAnnoRecordFieldDefault(store: *NodeStore, field_idx: CIR.TypeAnno.RecordField.Idx) void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(field_idx));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(field_idx)));
     var node = store.nodes.get(node_idx);
     std.debug.assert(node.tag == .ty_record_field_defaulted);
     const payload = node.getPayload().ty_record_field_defaulted;
@@ -4398,9 +4396,9 @@ pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation, region: base
 
     // Derive the type-variable flags once, here, so the check phase can read them
     // off the annotation rather than re-walking the type tree (see getAnnotation).
-    const mentions_type_var = store.typeAnnoHasTypeVar(annotation.anno, .any);
-    const introduces_type_var = store.typeAnnoHasTypeVar(annotation.anno, .introduced_only);
-    const contains_underscore = store.annotationContainsUnderscore(annotation.anno, annotation.where);
+    const mentions_type_var = try store.typeAnnoTreeHas(annotation.anno, mentionsTypeVar);
+    const introduces_type_var = try store.typeAnnoTreeHas(annotation.anno, introducesTypeVar);
+    const contains_underscore = try store.annotationContainsUnderscore(annotation.anno, annotation.where);
 
     const where_span2_idx: u32 = if (annotation.where) |where_clause|
         try store.storeWhereClauseSpan(where_clause)
@@ -4417,7 +4415,7 @@ pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation, region: base
     } else 0;
 
     node.setPayload(.{ .annotation = .{
-        .anno = @intFromEnum(annotation.anno),
+        .anno = @backingInt(annotation.anno),
         .where_span2_idx = where_span2_idx,
         .name_region_span2_idx = name_region_span2_idx,
         .flags = .{
@@ -4431,7 +4429,7 @@ pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation, region: base
 
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
-    return @enumFromInt(@intFromEnum(nid));
+    return @fromBackingInt(@intCast(@backingInt(nid)));
 }
 
 fn storeWhereClauseSpan(store: *NodeStore, where: CIR.WhereClause.Span) Allocator.Error!u32 {
@@ -4459,44 +4457,71 @@ fn loadWhereClauseSpan(store: *const NodeStore, idx: u32) CIR.WhereClause.Span {
     };
 }
 
-/// Which type-variable occurrences to count when scanning an annotation.
-pub const TypeVarScan = enum {
-    /// Any type variable: a fresh introduction (`.rigid_var`) or a reference to
-    /// an enclosing-scope variable (`.rigid_var_lookup`).
-    any,
-    /// Only a type variable this annotation *introduces* (`.rigid_var`), not one
-    /// it references from an enclosing scope.
-    introduced_only,
-};
-
-/// Returns true if the type annotation mentions a type variable (a user-written
-/// var like `a`, or an anonymous open-extension var from `..`). `.any` is the
-/// pre-filter for value generalization; `.introduced_only` detects a variable the
-/// annotation introduces but cannot bind (used to reject one on a mutable `var`).
-fn typeAnnoHasTypeVar(store: *const NodeStore, anno_idx: CIR.TypeAnno.Idx, comptime scan: TypeVarScan) bool {
-    return switch (store.getTypeAnno(anno_idx)) {
-        .rigid_var => true,
-        .rigid_var_lookup => scan == .any,
+/// Whether a type annotation mentions a type variable (a user-written var like
+/// `a`, or an anonymous open-extension var from `..`), introduced by the
+/// annotation or looked up from an enclosing one.
+fn mentionsTypeVar(anno: CIR.TypeAnno) ?bool {
+    return switch (anno) {
+        .rigid_var, .rigid_var_lookup => true,
         .underscore, .lookup, .malformed => false,
-        .apply => |a| store.anyTypeAnnoHasTypeVar(a.args, scan),
-        .tag_union => |tu| store.anyTypeAnnoHasTypeVar(tu.tags, scan) or
-            (if (tu.ext) |ext| store.typeAnnoHasTypeVar(ext, scan) else false),
-        .tag => |t| store.anyTypeAnnoHasTypeVar(t.args, scan),
-        .tuple => |t| store.anyTypeAnnoHasTypeVar(t.elems, scan),
-        .record => |r| blk: {
-            for (store.sliceAnnoRecordFields(r.fields)) |field_idx| {
-                if (store.typeAnnoHasTypeVar(store.getAnnoRecordField(field_idx).ty, scan)) break :blk true;
-            }
-            break :blk if (r.ext) |ext| store.typeAnnoHasTypeVar(ext, scan) else false;
-        },
-        .@"fn" => |f| store.anyTypeAnnoHasTypeVar(f.args, scan) or store.typeAnnoHasTypeVar(f.ret, scan),
-        .parens => |p| store.typeAnnoHasTypeVar(p.anno, scan),
+        .apply, .tag_union, .tag, .tuple, .record, .@"fn", .parens => null,
     };
 }
 
-fn anyTypeAnnoHasTypeVar(store: *const NodeStore, annos: CIR.TypeAnno.Span, comptime scan: TypeVarScan) bool {
-    for (store.sliceTypeAnnos(annos)) |anno_idx| {
-        if (store.typeAnnoHasTypeVar(anno_idx, scan)) return true;
+/// Whether a type annotation *introduces* a type variable (`.rigid_var`), not
+/// one it references from an enclosing scope. Detects a variable the
+/// annotation introduces but its binding cannot quantify (rejected on a
+/// mutable `var` and on a value binding that does not generalize).
+fn introducesTypeVar(anno: CIR.TypeAnno) ?bool {
+    return switch (anno) {
+        .rigid_var => true,
+        .rigid_var_lookup, .underscore, .lookup, .malformed => false,
+        .apply, .tag_union, .tag, .tuple, .record, .@"fn", .parens => null,
+    };
+}
+
+/// Whether a type annotation contains an `_` inference hole.
+fn containsUnderscore(anno: CIR.TypeAnno) ?bool {
+    return switch (anno) {
+        .underscore => true,
+        .rigid_var, .rigid_var_lookup, .lookup, .malformed => false,
+        .apply, .tag_union, .tag, .tuple, .record, .@"fn", .parens => null,
+    };
+}
+
+/// Whether some node of the annotation tree at `root` satisfies `leaf`, which
+/// decides leaf nodes and returns null for nodes decided by their children.
+fn typeAnnoTreeHas(store: *const NodeStore, root: CIR.TypeAnno.Idx, comptime leaf: fn (CIR.TypeAnno) ?bool) Allocator.Error!bool {
+    var pending: std.ArrayList(CIR.TypeAnno.Idx) = .empty;
+    defer pending.deinit(store.gpa);
+    try pending.append(store.gpa, root);
+    while (pending.pop()) |anno_idx| {
+        const anno = store.getTypeAnno(anno_idx);
+        if (leaf(anno)) |decided| {
+            if (decided) return true;
+            continue;
+        }
+        switch (anno) {
+            .apply => |a| try pending.appendSlice(store.gpa, store.sliceTypeAnnos(a.args)),
+            .tag_union => |tu| {
+                try pending.appendSlice(store.gpa, store.sliceTypeAnnos(tu.tags));
+                if (tu.ext) |ext| try pending.append(store.gpa, ext);
+            },
+            .tag => |t| try pending.appendSlice(store.gpa, store.sliceTypeAnnos(t.args)),
+            .tuple => |t| try pending.appendSlice(store.gpa, store.sliceTypeAnnos(t.elems)),
+            .record => |r| {
+                for (store.sliceAnnoRecordFields(r.fields)) |field_idx| {
+                    try pending.append(store.gpa, store.getAnnoRecordField(field_idx).ty);
+                }
+                if (r.ext) |ext| try pending.append(store.gpa, ext);
+            },
+            .@"fn" => |f| {
+                try pending.appendSlice(store.gpa, store.sliceTypeAnnos(f.args));
+                try pending.append(store.gpa, f.ret);
+            },
+            .parens => |p| try pending.append(store.gpa, p.anno),
+            .rigid_var, .rigid_var_lookup, .underscore, .lookup, .malformed => {},
+        }
     }
     return false;
 }
@@ -4505,45 +4530,18 @@ fn anyTypeAnnoHasTypeVar(store: *const NodeStore, annos: CIR.TypeAnno.Span, comp
 /// tree (`anno`) or in any where-clause method signature. Derived once by
 /// `addAnnotation` so the check phase can read `Annotation.contains_underscore`
 /// instead of re-walking the tree.
-fn annotationContainsUnderscore(store: *const NodeStore, anno_idx: CIR.TypeAnno.Idx, where: ?CIR.WhereClause.Span) bool {
-    if (store.typeAnnoContainsUnderscore(anno_idx)) return true;
+fn annotationContainsUnderscore(store: *const NodeStore, anno_idx: CIR.TypeAnno.Idx, where: ?CIR.WhereClause.Span) Allocator.Error!bool {
+    if (try store.typeAnnoTreeHas(anno_idx, containsUnderscore)) return true;
     if (where) |where_span| {
         for (store.sliceWhereClauses(where_span)) |where_idx| {
             switch (store.getWhereClause(where_idx)) {
                 .w_method => |method| {
-                    if (store.typeAnnoContainsUnderscore(method.var_)) return true;
-                    if (store.typeAnnoContainsUnderscore(method.anno)) return true;
+                    if (try store.typeAnnoTreeHas(method.var_, containsUnderscore)) return true;
+                    if (try store.typeAnnoTreeHas(method.anno, containsUnderscore)) return true;
                 },
                 .w_alias, .w_malformed => {},
             }
         }
-    }
-    return false;
-}
-
-fn typeAnnoContainsUnderscore(store: *const NodeStore, anno_idx: CIR.TypeAnno.Idx) bool {
-    return switch (store.getTypeAnno(anno_idx)) {
-        .underscore => true,
-        .rigid_var, .rigid_var_lookup, .lookup, .malformed => false,
-        .apply => |a| store.anyTypeAnnoContainsUnderscore(a.args),
-        .tag_union => |tu| store.anyTypeAnnoContainsUnderscore(tu.tags) or
-            (if (tu.ext) |ext| store.typeAnnoContainsUnderscore(ext) else false),
-        .tag => |t| store.anyTypeAnnoContainsUnderscore(t.args),
-        .tuple => |t| store.anyTypeAnnoContainsUnderscore(t.elems),
-        .record => |r| blk: {
-            for (store.sliceAnnoRecordFields(r.fields)) |field_idx| {
-                if (store.typeAnnoContainsUnderscore(store.getAnnoRecordField(field_idx).ty)) break :blk true;
-            }
-            break :blk if (r.ext) |ext| store.typeAnnoContainsUnderscore(ext) else false;
-        },
-        .@"fn" => |f| store.anyTypeAnnoContainsUnderscore(f.args) or store.typeAnnoContainsUnderscore(f.ret),
-        .parens => |p| store.typeAnnoContainsUnderscore(p.anno),
-    };
-}
-
-fn anyTypeAnnoContainsUnderscore(store: *const NodeStore, annos: CIR.TypeAnno.Span) bool {
-    for (store.sliceTypeAnnos(annos)) |anno_idx| {
-        if (store.typeAnnoContainsUnderscore(anno_idx)) return true;
     }
     return false;
 }
@@ -4557,12 +4555,12 @@ pub fn addExposedItem(store: *NodeStore, exposedItem: CIR.ExposedItem, region: b
     node.setPayload(.{ .exposed_item = .{
         .name = @bitCast(exposedItem.name),
         .alias = if (exposedItem.alias) |alias| @bitCast(alias) else 0,
-        .flags = @as(u32, @intFromBool(exposedItem.is_wildcard)) | (@as(u32, @intFromEnum(exposedItem.kind)) << 1),
+        .flags = @as(u32, @intFromBool(exposedItem.is_wildcard)) | (@as(u32, @backingInt(exposedItem.kind)) << 1),
     } });
 
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
-    return @enumFromInt(@intFromEnum(nid));
+    return @fromBackingInt(@intCast(@backingInt(nid)));
 }
 
 /// Adds a definition to the store.
@@ -4574,10 +4572,10 @@ pub fn addDef(store: *NodeStore, def: CIR.Def, region: base.Region) Allocator.Er
 
     const def_data_idx: u32 = @intCast(store.def_data.len());
     const kind_encoded = def.kind.encode();
-    const anno_idx = if (def.annotation) |anno| @intFromEnum(anno) else 0;
+    const anno_idx = if (def.annotation) |anno| @backingInt(anno) else 0;
     _ = try store.def_data.append(store.gpa, .{
-        .pattern = @intFromEnum(def.pattern),
-        .expr = @intFromEnum(def.expr),
+        .pattern = @backingInt(def.pattern),
+        .expr = @backingInt(def.expr),
         .kind_0 = kind_encoded[0],
         .kind_1 = kind_encoded[1],
         .anno_idx = anno_idx,
@@ -4589,12 +4587,12 @@ pub fn addDef(store: *NodeStore, def: CIR.Def, region: base.Region) Allocator.Er
 
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
-    return @enumFromInt(@intFromEnum(nid));
+    return @fromBackingInt(@intCast(@backingInt(nid)));
 }
 
 /// Retrieves a definition from the store.
 pub fn getDef(store: *const NodeStore, def_idx: CIR.Def.Idx) CIR.Def {
-    const nid: Node.Idx = @enumFromInt(@intFromEnum(def_idx));
+    const nid: Node.Idx = @fromBackingInt(@intCast(@backingInt(def_idx)));
     const node = store.nodes.get(nid);
 
     std.debug.assert(node.tag == .def);
@@ -4604,11 +4602,11 @@ pub fn getDef(store: *const NodeStore, def_idx: CIR.Def.Idx) CIR.Def {
     const dd = store.def_data.items.items[payload.def.def_data_idx];
 
     const kind = CIR.Def.Kind.decode(.{ dd.kind_0, dd.kind_1 });
-    const annotation = if (dd.anno_idx == 0) null else @as(CIR.Annotation.Idx, @enumFromInt(dd.anno_idx));
+    const annotation = if (dd.anno_idx == 0) null else @as(CIR.Annotation.Idx, @fromBackingInt(@intCast(dd.anno_idx)));
 
     return CIR.Def{
-        .pattern = @enumFromInt(dd.pattern),
-        .expr = @enumFromInt(dd.expr),
+        .pattern = @fromBackingInt(@intCast(dd.pattern)),
+        .expr = @fromBackingInt(@intCast(dd.expr)),
         .annotation = annotation,
         .kind = kind,
     };
@@ -4617,19 +4615,19 @@ pub fn getDef(store: *const NodeStore, def_idx: CIR.Def.Idx) CIR.Def {
 /// Updates the expression field of an existing definition.
 /// This is used during constant folding to replace expressions with their folded equivalents.
 pub fn setDefExpr(store: *NodeStore, def_idx: CIR.Def.Idx, new_expr: CIR.Expr.Idx) void {
-    const nid: Node.Idx = @enumFromInt(@intFromEnum(def_idx));
+    const nid: Node.Idx = @fromBackingInt(@intCast(@backingInt(def_idx)));
     const node = store.nodes.get(nid);
 
     std.debug.assert(node.tag == .def);
 
     const payload = node.getPayload();
     // Update expr field in def_data list
-    store.def_data.items.items[payload.def.def_data_idx].expr = @intFromEnum(new_expr);
+    store.def_data.items.items[payload.def.def_data_idx].expr = @backingInt(new_expr);
 }
 
 /// Retrieves one segment of a flattened field-access path.
 pub fn getFieldAccessSegment(store: *const NodeStore, segment_idx: CIR.Expr.FieldAccessSegment.Idx) CIR.Expr.FieldAccessSegment {
-    const nid: Node.Idx = @enumFromInt(@intFromEnum(segment_idx));
+    const nid: Node.Idx = @fromBackingInt(@intCast(@backingInt(segment_idx)));
     const node = store.nodes.get(nid);
 
     std.debug.assert(node.tag == .field_access_segment);
@@ -4637,13 +4635,13 @@ pub fn getFieldAccessSegment(store: *const NodeStore, segment_idx: CIR.Expr.Fiel
 
     return .{
         .name = @bitCast(payload.name),
-        .mode = @enumFromInt(payload.mode),
+        .mode = @fromBackingInt(@intCast(payload.mode)),
     };
 }
 
 /// Retrieves a capture from the store.
 pub fn getCapture(store: *const NodeStore, capture_idx: CIR.Expr.Capture.Idx) CIR.Expr.Capture {
-    const nid: Node.Idx = @enumFromInt(@intFromEnum(capture_idx));
+    const nid: Node.Idx = @fromBackingInt(@intCast(@backingInt(capture_idx)));
     const node = store.nodes.get(nid);
 
     std.debug.assert(node.tag == .lambda_capture);
@@ -4652,23 +4650,23 @@ pub fn getCapture(store: *const NodeStore, capture_idx: CIR.Expr.Capture.Idx) CI
     return CIR.Expr.Capture{
         .name = @bitCast(payload.lambda_capture.name),
         .scope_depth = payload.lambda_capture.scope_depth,
-        .pattern_idx = @enumFromInt(payload.lambda_capture.pattern_idx),
+        .pattern_idx = @fromBackingInt(@intCast(payload.lambda_capture.pattern_idx)),
     };
 }
 
 /// Retrieves a record field from the store.
 pub fn getRecordField(store: *const NodeStore, idx: CIR.RecordField.Idx) CIR.RecordField {
-    const node = store.nodes.get(@enumFromInt(@intFromEnum(idx)));
+    const node = store.nodes.get(@fromBackingInt(@intCast(@backingInt(idx))));
     const payload = node.getPayload();
     return CIR.RecordField{
         .name = @bitCast(payload.record_field.name),
-        .value = @enumFromInt(payload.record_field.expr),
+        .value = @fromBackingInt(@intCast(payload.record_field.expr)),
     };
 }
 
 /// Retrieves an unset record field from the store.
 pub fn getUnsetField(store: *const NodeStore, idx: CIR.UnsetField.Idx) CIR.UnsetField {
-    const node = store.nodes.get(@enumFromInt(@intFromEnum(idx)));
+    const node = store.nodes.get(@fromBackingInt(@intCast(@backingInt(idx))));
     const payload = node.getPayload();
     return CIR.UnsetField{
         .name = @bitCast(payload.record_unset_field.name),
@@ -4677,7 +4675,7 @@ pub fn getUnsetField(store: *const NodeStore, idx: CIR.UnsetField.Idx) CIR.Unset
 
 /// Retrieves a record destructure from the store.
 pub fn getRecordDestruct(store: *const NodeStore, idx: CIR.Pattern.RecordDestruct.Idx) CIR.Pattern.RecordDestruct {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(idx));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(idx)));
     const node = store.nodes.get(node_idx);
 
     std.debug.assert(node.tag == .record_destruct);
@@ -4687,9 +4685,9 @@ pub fn getRecordDestruct(store: *const NodeStore, idx: CIR.Pattern.RecordDestruc
     const kind_data = store.span2_data.items.items[payload.record_destruct.kind_span2_idx];
 
     const kind = switch (kind_data.start) {
-        0 => CIR.Pattern.RecordDestruct.Kind{ .Required = @enumFromInt(kind_data.len) },
-        1 => CIR.Pattern.RecordDestruct.Kind{ .SubPattern = @enumFromInt(kind_data.len) },
-        2 => CIR.Pattern.RecordDestruct.Kind{ .Rest = @enumFromInt(kind_data.len) },
+        0 => CIR.Pattern.RecordDestruct.Kind{ .Required = @fromBackingInt(@intCast(kind_data.len)) },
+        1 => CIR.Pattern.RecordDestruct.Kind{ .SubPattern = @fromBackingInt(@intCast(kind_data.len)) },
+        2 => CIR.Pattern.RecordDestruct.Kind{ .Rest = @fromBackingInt(@intCast(kind_data.len)) },
         else => unreachable,
     };
 
@@ -4702,22 +4700,22 @@ pub fn getRecordDestruct(store: *const NodeStore, idx: CIR.Pattern.RecordDestruc
 
 /// Retrieves an if branch from the store.
 pub fn getIfBranch(store: *const NodeStore, if_branch_idx: CIR.Expr.IfBranch.Idx) CIR.Expr.IfBranch {
-    const nid: Node.Idx = @enumFromInt(@intFromEnum(if_branch_idx));
+    const nid: Node.Idx = @fromBackingInt(@intCast(@backingInt(if_branch_idx)));
     const node = store.nodes.get(nid);
 
     std.debug.assert(node.tag == .if_branch);
 
     const payload = node.getPayload();
     return CIR.Expr.IfBranch{
-        .cond = @enumFromInt(payload.if_branch.cond),
-        .body = @enumFromInt(payload.if_branch.body),
+        .cond = @fromBackingInt(@intCast(payload.if_branch.cond)),
+        .body = @fromBackingInt(@intCast(payload.if_branch.body)),
     };
 }
 
 /// Check if a raw node index refers to a definition node.
 /// This is useful when exposed items might be either definitions or type declarations.
 pub fn isDefNode(store: *const NodeStore, node_idx: u32) bool {
-    const nid: Node.Idx = @enumFromInt(node_idx);
+    const nid: Node.Idx = @fromBackingInt(@intCast(node_idx));
     const node = store.nodes.get(nid);
     return node.tag == .def;
 }
@@ -4753,7 +4751,7 @@ pub fn spanFrom(store: *NodeStore, comptime field_name: []const u8, comptime Spa
     const index_start = store.index_data.len();
     std.debug.assert(end >= i);
     while (i < end) {
-        _ = try store.index_data.append(store.gpa, @intFromEnum(scratch_field.items.items[i]));
+        _ = try store.index_data.append(store.gpa, @backingInt(scratch_field.items.items[i]));
         i += 1;
     }
     return .{ .span = .{ .start = @intCast(index_start), .len = @as(u32, @intCast(end)) - start } };
@@ -4798,7 +4796,7 @@ pub fn startFieldAccessPath(store: *NodeStore, segment_count: u32) Allocator.Err
     try store.regions.items.ensureUnusedCapacity(store.gpa, @as(usize, segment_count) + 1);
 
     return .{
-        .start = @enumFromInt(start),
+        .start = @fromBackingInt(@intCast(start)),
         .segment_count = segment_count,
     };
 }
@@ -4810,7 +4808,7 @@ pub fn appendFieldAccessPathSegmentAssumeCapacity(
     segment: CIR.Expr.FieldAccessSegment,
     region: Region,
 ) CIR.Expr.FieldAccessSegment.Idx {
-    const start = @intFromEnum(builder.start);
+    const start = @backingInt(builder.start);
     std.debug.assert(store.nodes.len() == store.regions.len());
     std.debug.assert(store.nodes.len() >= start);
     const appended = store.nodes.len() - start;
@@ -4819,19 +4817,19 @@ pub fn appendFieldAccessPathSegmentAssumeCapacity(
     var node = Node.init(.field_access_segment);
     node.setPayload(.{ .field_access_segment = .{
         .name = @bitCast(segment.name),
-        .mode = @intFromEnum(segment.mode),
+        .mode = @backingInt(segment.mode),
     } });
 
     const node_idx = store.nodes.appendAssumeCapacity(node);
     const region_idx = store.regions.appendAssumeCapacity(region);
-    std.debug.assert(@intFromEnum(node_idx) == start + appended);
-    std.debug.assert(@intFromEnum(region_idx) == start + appended);
-    return @enumFromInt(@intFromEnum(node_idx));
+    std.debug.assert(@backingInt(node_idx) == start + appended);
+    std.debug.assert(@backingInt(region_idx) == start + appended);
+    return @fromBackingInt(@intCast(@backingInt(node_idx)));
 }
 
 /// Finishes a source-ordered path and returns its direct node-index span.
 pub fn finishFieldAccessPath(store: *NodeStore, builder: FieldAccessPathBuilder) CIR.Expr.FieldAccessSegment.Span {
-    const start = @intFromEnum(builder.start);
+    const start = @backingInt(builder.start);
     std.debug.assert(store.nodes.len() == store.regions.len());
     std.debug.assert(store.nodes.len() == start + builder.segment_count);
     return .{ .start = builder.start, .len = builder.segment_count };
@@ -4839,7 +4837,7 @@ pub fn finishFieldAccessPath(store: *NodeStore, builder: FieldAccessPathBuilder)
 
 /// Rolls back a path whose construction failed before it was finalized.
 pub fn rollbackFieldAccessPath(store: *NodeStore, builder: FieldAccessPathBuilder) void {
-    const start: usize = @intFromEnum(builder.start);
+    const start: usize = @backingInt(builder.start);
     const end = start + builder.segment_count;
     std.debug.assert(store.nodes.items.len >= start);
     std.debug.assert(store.nodes.items.len <= end);
@@ -4852,7 +4850,7 @@ pub fn rollbackFieldAccessPath(store: *NodeStore, builder: FieldAccessPathBuilde
 pub fn appendExprSpan(store: *NodeStore, exprs: []const CIR.Expr.Idx) Allocator.Error!CIR.Expr.Span {
     const index_start = store.index_data.len();
     for (exprs) |expr| {
-        _ = try store.index_data.append(store.gpa, @intFromEnum(expr));
+        _ = try store.index_data.append(store.gpa, @backingInt(expr));
     }
     return .{ .span = .{ .start = @intCast(index_start), .len = @intCast(exprs.len) } };
 }
@@ -4899,9 +4897,9 @@ pub fn fieldAccessSegmentAt(
     position: u32,
 ) CIR.Expr.FieldAccessSegment.Idx {
     std.debug.assert(position < span.len);
-    const raw = std.math.add(u32, @intFromEnum(span.start), position) catch unreachable;
-    const segment_idx: CIR.Expr.FieldAccessSegment.Idx = @enumFromInt(raw);
-    const node_idx: Node.Idx = @enumFromInt(raw);
+    const raw = std.math.add(u32, @backingInt(span.start), position) catch unreachable;
+    const segment_idx: CIR.Expr.FieldAccessSegment.Idx = @fromBackingInt(@intCast(raw));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(raw));
     std.debug.assert(raw < store.nodes.len());
     std.debug.assert(store.nodes.get(node_idx).tag == .field_access_segment);
     return segment_idx;
@@ -5066,10 +5064,10 @@ pub fn whereClauseSpanFrom(store: *NodeStore, start: u32, root_annos: []const CI
     for (grouped.keys(), grouped.values()) |owner, owned_clauses| {
         const clauses_start: u32 = @intCast(store.index_data.len());
         for (owned_clauses.items) |where_idx| {
-            _ = try store.index_data.append(store.gpa, @intFromEnum(where_idx));
+            _ = try store.index_data.append(store.gpa, @backingInt(where_idx));
         }
         _ = try store.where_clause_owners.append(store.gpa, .{
-            .rigid_var = @intFromEnum(owner),
+            .rigid_var = @backingInt(owner),
             .clauses_start = clauses_start,
             .clauses_len = @intCast(owned_clauses.items.len),
             .owned_by_annotation = reachable.contains(owner),
@@ -5245,20 +5243,15 @@ pub fn strPatternStepSpanFromSlice(store: *NodeStore, steps: []const CIR.Pattern
     const start: u32 = @intCast(store.pattern_str_interpolation_steps.len());
     for (steps) |step| {
         const capture_plus_one: u32 = if (step.capture) |capture|
-            @intFromEnum(capture) + 1
+            @backingInt(capture) + 1
         else
             0;
         _ = try store.pattern_str_interpolation_steps.append(store.gpa, .{
             .capture_plus_one = capture_plus_one,
-            .delimiter = @intFromEnum(step.delimiter),
+            .delimiter = @backingInt(step.delimiter),
         });
     }
     return .{ .span = .{ .start = start, .len = @intCast(steps.len) } };
-}
-
-/// Clears scratch definitions starting from a specified index.
-pub fn clearScratchDefsFrom(store: *NodeStore, start: u32) void {
-    store.clearScratchFrom("defs", start);
 }
 
 /// Creates a slice corresponding to a span.
@@ -5270,7 +5263,7 @@ pub fn sliceFromSpan(store: *const NodeStore, comptime T: type, span: base.DataS
 /// Retrieve one item from a span without borrowing the backing index storage.
 pub fn getFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan, offset: usize) T {
     std.debug.assert(offset < span.len);
-    return @as(T, @enumFromInt(store.index_data.items.items[span.start + offset]));
+    return @as(T, @fromBackingInt(@intCast(store.index_data.items.items[span.start + offset])));
 }
 
 /// Returns a slice of definitions from the store.
@@ -5286,11 +5279,6 @@ pub fn defAt(store: *const NodeStore, span: CIR.Def.Span, offset: usize) CIR.Def
 /// Returns a slice of expressions from the store.
 pub fn sliceExpr(store: *const NodeStore, span: CIR.Expr.Span) []CIR.Expr.Idx {
     return store.sliceFromSpan(CIR.Expr.Idx, span.span);
-}
-
-/// Returns a single expression index from a span.
-pub fn exprAt(store: *const NodeStore, span: CIR.Expr.Span, offset: usize) CIR.Expr.Idx {
-    return store.getFromSpan(CIR.Expr.Idx, span.span, offset);
 }
 
 /// Returns a slice of `CanIR.Pattern.Idx`
@@ -5343,26 +5331,6 @@ pub fn sliceMatchBranchPatterns(store: *const NodeStore, span: CIR.Expr.Match.Br
     return store.sliceFromSpan(CIR.Expr.Match.BranchPattern.Idx, span.span);
 }
 
-/// Creates a slice corresponding to a span.
-pub fn firstFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) T {
-    return @as(T, @enumFromInt(store.index_data.items.items[span.start]));
-}
-
-/// Creates a slice corresponding to a span.
-pub fn lastFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) T {
-    return @as(T, @enumFromInt(store.index_data.items.items[span.start + span.len - 1]));
-}
-
-/// Retrieve a slice of IfBranch Idx's from a span
-pub fn firstFromIfBranches(store: *const NodeStore, span: CIR.Expr.IfBranch.Span) CIR.Expr.IfBranch.Idx {
-    return store.firstFromSpan(CIR.Expr.IfBranch.Idx, span.span);
-}
-
-/// Retrieve a slice of IfBranch Idx's from a span
-pub fn lastFromStatements(store: *const NodeStore, span: CIR.Statement.Span) CIR.Statement.Idx {
-    return store.lastFromSpan(CIR.Statement.Idx, span.span);
-}
-
 /// Returns a slice of if branches from the store.
 pub fn scratchIfBranchTop(store: *NodeStore) u32 {
     return store.scratchTop("if_branches");
@@ -5385,12 +5353,12 @@ pub fn ifBranchSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Expr.
 pub fn addIfBranch(store: *NodeStore, if_branch: CIR.Expr.IfBranch, region: base.Region) Allocator.Error!CIR.Expr.IfBranch.Idx {
     var node = Node.init(.if_branch);
     node.setPayload(.{ .if_branch = .{
-        .cond = @intFromEnum(if_branch.cond),
-        .body = @intFromEnum(if_branch.body),
+        .cond = @backingInt(if_branch.cond),
+        .body = @backingInt(if_branch.body),
     } });
     const node_idx = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
-    return @enumFromInt(@intFromEnum(node_idx));
+    return @fromBackingInt(@intCast(@backingInt(node_idx)));
 }
 
 /// Returns a slice of diagnostics from the store.
@@ -5450,8 +5418,8 @@ pub fn getStrPatternStep(store: *const NodeStore, span: CIR.Pattern.StrPatternSt
         .capture = if (item.capture_plus_one == 0)
             null
         else
-            @as(CIR.Pattern.Idx, @enumFromInt(item.capture_plus_one - 1)),
-        .delimiter = @enumFromInt(item.delimiter),
+            @as(CIR.Pattern.Idx, @fromBackingInt(@intCast(item.capture_plus_one - 1))),
+        .delimiter = @fromBackingInt(@intCast(item.delimiter)),
     };
 }
 
@@ -5486,28 +5454,58 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
         .not_implemented => |r| {
             node.tag = .diag_not_implemented;
             region = r.region;
-            node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.feature) } });
+            node.setPayload(.{ .diag_single_value = .{ .value = @backingInt(r.feature) } });
         },
-        .invalid_num_literal => |r| {
-            node.tag = .diag_invalid_num_literal;
+        inline .invalid_num_literal,
+        .empty_tuple,
+        .erroneous_value_expr,
+        .expr_not_canonicalized,
+        .expr_syntax_error,
+        .unreachable_string_pattern_capture,
+        .pattern_arg_invalid,
+        .pattern_not_canonicalized,
+        .if_expr_without_else,
+        .malformed_type_annotation,
+        .malformed_where_clause,
+        .where_clause_not_allowed_in_type_decl,
+        .open_ext_not_allowed_in_type_decl,
+        .unnamed_field_not_allowed_in_structural_record,
+        .optional_field_cannot_have_default,
+        .unnamed_field_cannot_have_default,
+        .default_not_allowed_in_structural_record,
+        .default_not_allowed_on_local_type_decl,
+        .execution_requires_app_or_default_app,
+        .module_header_deprecated,
+        .var_across_function_boundary,
+        .crash_expects_string,
+        .f64_pattern_literal,
+        .break_outside_loop,
+        .infinite_loop_never_exits,
+        .trailing_try_suffix,
+        .redundant_return,
+        .range_op_chained,
+        => |r, tag| {
+            node.tag = @field(Node.Tag, "diag_" ++ @tagName(tag));
             region = r.region;
         },
-        .empty_tuple => |r| {
-            node.tag = .diag_empty_tuple;
-            region = r.region;
-        },
-        .ident_already_in_scope => |r| {
-            node.tag = .diag_ident_already_in_scope;
+        inline .ident_already_in_scope,
+        .provided_value_is_required,
+        .ident_not_in_scope,
+        .read_uninitialized_var,
+        .self_referential_definition,
+        .circular_value_definition,
+        .local_reference_before_definition,
+        .erroneous_value_use,
+        .qualified_ident_does_not_exist,
+        .unused_variable,
+        .used_underscore_variable,
+        => |r, tag| {
+            node.tag = @field(Node.Tag, "diag_" ++ @tagName(tag));
             region = r.region;
             node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
         },
         .exposed_but_not_implemented => |r| {
             node.tag = .diagnostic_exposed_but_not_implemented;
-            region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
-        },
-        .provided_value_is_required => |r| {
-            node.tag = .diag_provided_value_is_required;
             region = r.region;
             node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
         },
@@ -5521,124 +5519,25 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             });
             node.setPayload(.{ .diag_single_ident_extra = .{ .ident = @bitCast(r.ident), .region_span2_idx = region_span2_idx } });
         },
-        .ident_not_in_scope => |r| {
-            node.tag = .diag_ident_not_in_scope;
-            region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
-        },
-        .read_uninitialized_var => |r| {
-            node.tag = .diag_read_uninitialized_var;
-            region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
-        },
-        .self_referential_definition => |r| {
-            node.tag = .diag_self_referential_definition;
-            region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
-        },
-        .circular_value_definition => |r| {
-            node.tag = .diag_circular_value_definition;
-            region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
-        },
-        .local_reference_before_definition => |r| {
-            node.tag = .diag_local_reference_before_definition;
-            region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
-        },
         .mutually_recursive_local_definitions => |r| {
             node.tag = .diag_mutually_recursive_local_definitions;
             region = r.region;
             node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.ident1), .ident2 = @bitCast(r.ident2) } });
         },
-        .erroneous_value_use => |r| {
-            node.tag = .diag_erroneous_value_use;
-            region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
-        },
-        .erroneous_value_expr => |r| {
-            node.tag = .diag_erroneous_value_expr;
-            region = r.region;
-        },
-        .qualified_ident_does_not_exist => |r| {
-            node.tag = .diag_qualified_ident_does_not_exist;
-            region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
-        },
         .invalid_top_level_statement => |r| {
             node.tag = .diag_invalid_top_level_statement;
             region = r.region;
-            node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.stmt) } });
+            node.setPayload(.{ .diag_single_value = .{ .value = @backingInt(r.stmt) } });
         },
         .invalid_associated_statement => |r| {
             node.tag = .diag_invalid_associated_statement;
             region = r.region;
-            node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.stmt) } });
-        },
-        .expr_not_canonicalized => |r| {
-            node.tag = .diag_expr_not_canonicalized;
-            region = r.region;
-        },
-        .expr_syntax_error => |r| {
-            node.tag = .diag_expr_syntax_error;
-            region = r.region;
-        },
-        .unreachable_string_pattern_capture => |r| {
-            node.tag = .diag_unreachable_string_pattern_capture;
-            region = r.region;
-        },
-        .pattern_arg_invalid => |r| {
-            node.tag = .diag_pattern_arg_invalid;
-            region = r.region;
-        },
-        .pattern_not_canonicalized => |r| {
-            node.tag = .diag_pattern_not_canonicalized;
-            region = r.region;
-        },
-        .if_expr_without_else => |r| {
-            node.tag = .diag_if_expr_without_else;
-            region = r.region;
-        },
-        .malformed_type_annotation => |r| {
-            node.tag = .diag_malformed_type_annotation;
-            region = r.region;
-        },
-        .malformed_where_clause => |r| {
-            node.tag = .diag_malformed_where_clause;
-            region = r.region;
-        },
-        .where_clause_not_allowed_in_type_decl => |r| {
-            node.tag = .diag_where_clause_not_allowed_in_type_decl;
-            region = r.region;
+            node.setPayload(.{ .diag_single_value = .{ .value = @backingInt(r.stmt) } });
         },
         .where_alias_constraint_not_on_receiver => |r| {
             node.tag = .diag_where_alias_constraint_not_on_receiver;
             region = r.region;
             node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.receiver_name) } });
-        },
-        .open_ext_not_allowed_in_type_decl => |r| {
-            node.tag = .diag_open_ext_not_allowed_in_type_decl;
-            region = r.region;
-        },
-        .unnamed_field_not_allowed_in_structural_record => |r| {
-            node.tag = .diag_unnamed_field_not_allowed_in_structural_record;
-            region = r.region;
-        },
-        .optional_field_cannot_have_default => |r| {
-            node.tag = .diag_optional_field_cannot_have_default;
-            region = r.region;
-        },
-        .unnamed_field_cannot_have_default => |r| {
-            node.tag = .diag_unnamed_field_cannot_have_default;
-            region = r.region;
-        },
-        .default_not_allowed_in_structural_record => |r| {
-            node.tag = .diag_default_not_allowed_in_structural_record;
-            region = r.region;
-        },
-        .default_not_allowed_on_local_type_decl => |r| {
-            node.tag = .diag_default_not_allowed_on_local_type_decl;
-            region = r.region;
         },
         .record_default_reference_cycle => |r| {
             node.tag = .diag_record_default_reference_cycle;
@@ -5670,18 +5569,10 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             region = r.region;
             node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.module_name) } });
         },
-        .execution_requires_app_or_default_app => |r| {
-            node.tag = .diag_execution_requires_app_or_default_app;
-            region = r.region;
-        },
         .type_name_case_mismatch => |r| {
             node.tag = .diag_type_name_case_mismatch;
             region = r.region;
             node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.module_name), .ident2 = @bitCast(r.type_name) } });
-        },
-        .module_header_deprecated => |r| {
-            node.tag = .diag_module_header_deprecated;
-            region = r.region;
         },
         .roc_version_mismatch => |r| {
             node.tag = .diag_roc_version_mismatch;
@@ -5698,10 +5589,6 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             region = r.region;
             node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.type_name), .ident2 = @bitCast(r.alias) } });
         },
-        .var_across_function_boundary => |r| {
-            node.tag = .diag_var_across_function_boundary;
-            region = r.region;
-        },
         .shadowing_warning => |r| {
             node.tag = .diag_shadowing_warning;
             region = r.region;
@@ -5712,7 +5599,7 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             region = r.region;
             node.setPayload(.{ .diag_two_idents = .{
                 .ident1 = @bitCast(r.ident),
-                .ident2 = @intFromEnum(r.mutability),
+                .ident2 = @backingInt(r.mutability),
             } });
         },
         .type_redeclared => |r| {
@@ -5743,22 +5630,22 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
         .file_import_not_found => |r| {
             node.tag = .diag_file_import_not_found;
             region = r.region;
-            node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.path) } });
+            node.setPayload(.{ .diag_single_value = .{ .value = @backingInt(r.path) } });
         },
         .file_import_io_error => |r| {
             node.tag = .diag_file_import_io_error;
             region = r.region;
-            node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.path) } });
+            node.setPayload(.{ .diag_single_value = .{ .value = @backingInt(r.path) } });
         },
         .file_import_absolute_path => |r| {
             node.tag = .diag_file_import_absolute_path;
             region = r.region;
-            node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.path) } });
+            node.setPayload(.{ .diag_single_value = .{ .value = @backingInt(r.path) } });
         },
         .file_import_not_utf8 => |r| {
             node.tag = .diag_file_import_not_utf8;
             region = r.region;
-            node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.path) } });
+            node.setPayload(.{ .diag_single_value = .{ .value = @backingInt(r.path) } });
         },
         .module_not_found => |r| {
             node.tag = .diag_module_not_found;
@@ -5806,7 +5693,7 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             node.setPayload(.{ .diag_internal_builtin_type = .{
                 .parent_name = @bitCast(r.parent_name),
                 .nested_name = @bitCast(r.nested_name),
-                .kind = @intFromEnum(r.kind),
+                .kind = @backingInt(r.kind),
             } });
         },
         .nested_value_not_found => |r| {
@@ -5853,33 +5740,20 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             });
             node.setPayload(.{ .diag_two_idents_extra = .{ .ident1 = @bitCast(r.name), .ident2 = @bitCast(r.parameter_name), .region_span2_idx = region_span2_idx } });
         },
-        .unused_variable => |r| {
-            node.tag = .diag_unused_variable;
-            region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
-        },
-        .used_underscore_variable => |r| {
-            node.tag = .diag_used_underscore_variable;
-            region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
-        },
         .duplicate_record_field => |r| {
             node.tag = .diag_duplicate_record_field;
             region = r.duplicate_region;
             node.setPayload(.{ .diag_ident_with_region = .{ .ident = @bitCast(r.field_name), .region_start = r.original_region.start.offset, .region_end = r.original_region.end.offset } });
         },
+        .duplicate_pattern_binder => |r| {
+            node.tag = .diag_duplicate_pattern_binder;
+            region = r.duplicate_region;
+            node.setPayload(.{ .diag_ident_with_region = .{ .ident = @bitCast(r.ident), .region_start = r.original_region.start.offset, .region_end = r.original_region.end.offset } });
+        },
         .duplicate_tag => |r| {
             node.tag = .diag_duplicate_tag;
             region = r.duplicate_region;
             node.setPayload(.{ .diag_ident_with_region = .{ .ident = @bitCast(r.tag_name), .region_start = r.original_region.start.offset, .region_end = r.original_region.end.offset } });
-        },
-        .crash_expects_string => |r| {
-            node.tag = .diag_crash_expects_string;
-            region = r.region;
-        },
-        .f64_pattern_literal => |r| {
-            node.tag = .diag_f64_pattern_literal;
-            region = r.region;
         },
         .type_var_starting_with_dollar => |r| {
             node.tag = .diag_type_var_starting_with_dollar;
@@ -5889,24 +5763,22 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
         .underscore_in_type_declaration => |r| {
             node.tag = .diag_underscore_in_type_declaration;
             region = r.region;
-            node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.declared) } });
-        },
-        .break_outside_loop => |r| {
-            node.tag = .diag_break_outside_loop;
-            region = r.region;
-        },
-        .infinite_loop_never_exits => |r| {
-            node.tag = .diag_infinite_loop_never_exits;
-            region = r.region;
-        },
-        .trailing_try_suffix => |r| {
-            node.tag = .diag_trailing_try_suffix;
-            region = r.region;
+            node.setPayload(.{ .diag_single_value = .{ .value = @backingInt(r.declared) } });
         },
         .return_outside_fn => |r| {
             node.tag = .diag_return_outside_fn;
             region = r.region;
-            node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.context) } });
+            node.setPayload(.{ .diag_single_value = .{ .value = @backingInt(r.context) } });
+        },
+        .control_flow_in_expect => |r| {
+            node.tag = .diag_control_flow_in_expect;
+            region = r.region;
+            node.setPayload(.{ .diag_single_value = .{ .value = @backingInt(r.kind) } });
+        },
+        .var_reassigned_in_expect => |r| {
+            node.tag = .diag_var_reassigned_in_expect;
+            region = r.region;
+            node.setPayload(.{ .diag_ident_with_region = .{ .ident = @bitCast(r.ident), .region_start = r.declaration_region.start.offset, .region_end = r.declaration_region.end.offset } });
         },
         .mutually_recursive_type_aliases => |r| {
             node.tag = .diag_mutually_recursive_type_aliases;
@@ -5921,18 +5793,14 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
         .deprecated_number_suffix => |r| {
             node.tag = .diag_deprecated_number_suffix;
             region = r.region;
-            node.setPayload(.{ .diag_two_enums = .{ .enum1 = @intFromEnum(r.suffix), .enum2 = @intFromEnum(r.suggested) } });
-        },
-        .range_op_chained => |r| {
-            node.tag = .diag_range_op_chained;
-            region = r.region;
+            node.setPayload(.{ .diag_two_enums = .{ .enum1 = @backingInt(r.suffix), .enum2 = @backingInt(r.suggested) } });
         },
     }
 
-    const nid = @intFromEnum(try store.nodes.append(store.gpa, node));
+    const nid = @backingInt(try store.nodes.append(store.gpa, node));
     _ = try store.regions.append(store.gpa, region);
 
-    return @enumFromInt(nid);
+    return @fromBackingInt(@intCast(nid));
 }
 
 /// Creates a malformed node that represents a runtime error in the IR.
@@ -5953,8 +5821,8 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
 /// corresponding function in `ModuleEnv`.
 pub fn addMalformed(store: *NodeStore, diagnostic_idx: CIR.Diagnostic.Idx, region: Region) Allocator.Error!Node.Idx {
     var malformed_node = Node.init(.malformed);
-    malformed_node.setPayload(.{ .diag_single_value = .{
-        .value = @intFromEnum(diagnostic_idx),
+    malformed_node.setPayload(.{ .malformed = .{
+        .diagnostic = @backingInt(diagnostic_idx),
     } });
     const malformed_nid = try store.nodes.append(store.gpa, malformed_node);
     _ = try store.regions.append(store.gpa, region);
@@ -5966,32 +5834,64 @@ pub fn addMalformed(store: *NodeStore, diagnostic_idx: CIR.Diagnostic.Idx, regio
 /// This function extracts the stored diagnostic data from nodes with .diag_* tags.
 /// It reconstructs the original CIR.Diagnostic from the node's stored data.
 pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CIR.Diagnostic {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(diagnostic));
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(diagnostic)));
     const node = store.nodes.get(node_idx);
     const payload = node.getPayload();
 
     const tag = narrowNodeTag(DiagnosticNodeTag, node.tag) orelse
-        @panic("getDiagnostic called with non-diagnostic node - this indicates a compiler bug");
+        base.invariant("{s}", .{"getDiagnostic called with non-diagnostic node - this indicates a compiler bug"});
     switch (tag) {
         .diag_not_implemented => return CIR.Diagnostic{ .not_implemented = .{
-            .feature = @enumFromInt(payload.diag_single_value.value),
+            .feature = @fromBackingInt(@intCast(payload.diag_single_value.value)),
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_invalid_num_literal => return CIR.Diagnostic{ .invalid_num_literal = .{
+        inline .diag_invalid_num_literal,
+        .diag_empty_tuple,
+        .diag_erroneous_value_expr,
+        .diag_expr_not_canonicalized,
+        .diag_expr_syntax_error,
+        .diag_unreachable_string_pattern_capture,
+        .diag_pattern_arg_invalid,
+        .diag_pattern_not_canonicalized,
+        .diag_if_expr_without_else,
+        .diag_var_across_function_boundary,
+        .diag_malformed_type_annotation,
+        .diag_malformed_where_clause,
+        .diag_where_clause_not_allowed_in_type_decl,
+        .diag_open_ext_not_allowed_in_type_decl,
+        .diag_unnamed_field_not_allowed_in_structural_record,
+        .diag_optional_field_cannot_have_default,
+        .diag_unnamed_field_cannot_have_default,
+        .diag_default_not_allowed_in_structural_record,
+        .diag_default_not_allowed_on_local_type_decl,
+        .diag_execution_requires_app_or_default_app,
+        .diag_module_header_deprecated,
+        .diag_crash_expects_string,
+        .diag_f64_pattern_literal,
+        .diag_break_outside_loop,
+        .diag_infinite_loop_never_exits,
+        .diag_trailing_try_suffix,
+        .diag_redundant_return,
+        .diag_range_op_chained,
+        => |diag_tag| return @unionInit(CIR.Diagnostic, @tagName(diag_tag)["diag_".len..], .{
             .region = store.getRegionAt(node_idx),
-        } },
-        .diag_empty_tuple => return CIR.Diagnostic{ .empty_tuple = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_ident_already_in_scope => return CIR.Diagnostic{ .ident_already_in_scope = .{
+        }),
+        inline .diag_ident_already_in_scope,
+        .diag_provided_value_is_required,
+        .diag_ident_not_in_scope,
+        .diag_read_uninitialized_var,
+        .diag_self_referential_definition,
+        .diag_circular_value_definition,
+        .diag_local_reference_before_definition,
+        .diag_erroneous_value_use,
+        .diag_qualified_ident_does_not_exist,
+        .diag_unused_variable,
+        .diag_used_underscore_variable,
+        => |diag_tag| return @unionInit(CIR.Diagnostic, @tagName(diag_tag)["diag_".len..], .{
             .ident = @bitCast(payload.diag_single_ident.ident),
             .region = store.getRegionAt(node_idx),
-        } },
+        }),
         .diagnostic_exposed_but_not_implemented => return CIR.Diagnostic{ .exposed_but_not_implemented = .{
-            .ident = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_provided_value_is_required => return CIR.Diagnostic{ .provided_value_is_required = .{
             .ident = @bitCast(payload.diag_single_ident.ident),
             .region = store.getRegionAt(node_idx),
         } },
@@ -6007,69 +5907,17 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
                 },
             } };
         },
-        .diag_ident_not_in_scope => return CIR.Diagnostic{ .ident_not_in_scope = .{
-            .ident = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_read_uninitialized_var => return CIR.Diagnostic{ .read_uninitialized_var = .{
-            .ident = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_self_referential_definition => return CIR.Diagnostic{ .self_referential_definition = .{
-            .ident = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_circular_value_definition => return CIR.Diagnostic{ .circular_value_definition = .{
-            .ident = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_local_reference_before_definition => return CIR.Diagnostic{ .local_reference_before_definition = .{
-            .ident = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
         .diag_mutually_recursive_local_definitions => return CIR.Diagnostic{ .mutually_recursive_local_definitions = .{
             .ident1 = @bitCast(payload.diag_two_idents.ident1),
             .ident2 = @bitCast(payload.diag_two_idents.ident2),
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_erroneous_value_use => return CIR.Diagnostic{ .erroneous_value_use = .{
-            .ident = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_erroneous_value_expr => return CIR.Diagnostic{ .erroneous_value_expr = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_qualified_ident_does_not_exist => return CIR.Diagnostic{ .qualified_ident_does_not_exist = .{
-            .ident = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
         .diag_invalid_top_level_statement => return CIR.Diagnostic{ .invalid_top_level_statement = .{
-            .stmt = @enumFromInt(payload.diag_single_value.value),
+            .stmt = @fromBackingInt(@intCast(payload.diag_single_value.value)),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_invalid_associated_statement => return CIR.Diagnostic{ .invalid_associated_statement = .{
-            .stmt = @enumFromInt(payload.diag_single_value.value),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_expr_not_canonicalized => return CIR.Diagnostic{ .expr_not_canonicalized = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_expr_syntax_error => return CIR.Diagnostic{ .expr_syntax_error = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_unreachable_string_pattern_capture => return CIR.Diagnostic{ .unreachable_string_pattern_capture = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_pattern_arg_invalid => return CIR.Diagnostic{ .pattern_arg_invalid = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_pattern_not_canonicalized => return CIR.Diagnostic{ .pattern_not_canonicalized = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_if_expr_without_else => return CIR.Diagnostic{ .if_expr_without_else = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_var_across_function_boundary => return CIR.Diagnostic{ .var_across_function_boundary = .{
+            .stmt = @fromBackingInt(@intCast(payload.diag_single_value.value)),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_shadowing_warning => {
@@ -6087,7 +5935,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             const p = payload.diag_two_idents;
             return CIR.Diagnostic{ .binding_name_does_not_match_mutability = .{
                 .ident = @bitCast(p.ident1),
-                .mutability = @enumFromInt(p.ident2),
+                .mutability = @fromBackingInt(@intCast(p.ident2)),
                 .region = store.getRegionAt(node_idx),
             } };
         },
@@ -6111,19 +5959,19 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_file_import_not_found => return CIR.Diagnostic{ .file_import_not_found = .{
-            .path = @enumFromInt(payload.diag_single_value.value),
+            .path = @fromBackingInt(@intCast(payload.diag_single_value.value)),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_file_import_io_error => return CIR.Diagnostic{ .file_import_io_error = .{
-            .path = @enumFromInt(payload.diag_single_value.value),
+            .path = @fromBackingInt(@intCast(payload.diag_single_value.value)),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_file_import_absolute_path => return CIR.Diagnostic{ .file_import_absolute_path = .{
-            .path = @enumFromInt(payload.diag_single_value.value),
+            .path = @fromBackingInt(@intCast(payload.diag_single_value.value)),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_file_import_not_utf8 => return CIR.Diagnostic{ .file_import_not_utf8 = .{
-            .path = @enumFromInt(payload.diag_single_value.value),
+            .path = @fromBackingInt(@intCast(payload.diag_single_value.value)),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_module_not_found => return CIR.Diagnostic{ .module_not_found = .{
@@ -6188,7 +6036,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             return CIR.Diagnostic{ .internal_builtin_type = .{
                 .parent_name = @as(base.Ident.Idx, @bitCast(p.parent_name)),
                 .nested_name = @as(base.Ident.Idx, @bitCast(p.nested_name)),
-                .kind = @enumFromInt(p.kind),
+                .kind = @fromBackingInt(@intCast(p.kind)),
                 .region = store.getRegionAt(node_idx),
             } };
         },
@@ -6212,35 +6060,8 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .name = @bitCast(payload.diag_single_ident.ident),
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_malformed_type_annotation => return CIR.Diagnostic{ .malformed_type_annotation = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_malformed_where_clause => return CIR.Diagnostic{ .malformed_where_clause = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_where_clause_not_allowed_in_type_decl => return CIR.Diagnostic{ .where_clause_not_allowed_in_type_decl = .{
-            .region = store.getRegionAt(node_idx),
-        } },
         .diag_where_alias_constraint_not_on_receiver => return CIR.Diagnostic{ .where_alias_constraint_not_on_receiver = .{
             .receiver_name = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_open_ext_not_allowed_in_type_decl => return CIR.Diagnostic{ .open_ext_not_allowed_in_type_decl = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_unnamed_field_not_allowed_in_structural_record => return CIR.Diagnostic{ .unnamed_field_not_allowed_in_structural_record = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_optional_field_cannot_have_default => return CIR.Diagnostic{ .optional_field_cannot_have_default = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_unnamed_field_cannot_have_default => return CIR.Diagnostic{ .unnamed_field_cannot_have_default = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_default_not_allowed_in_structural_record => return CIR.Diagnostic{ .default_not_allowed_in_structural_record = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_default_not_allowed_on_local_type_decl => return CIR.Diagnostic{ .default_not_allowed_on_local_type_decl = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_record_default_reference_cycle => return CIR.Diagnostic{ .record_default_reference_cycle = .{
@@ -6267,9 +6088,6 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .module_name = @bitCast(payload.diag_single_ident.ident),
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_execution_requires_app_or_default_app => return CIR.Diagnostic{ .execution_requires_app_or_default_app = .{
-            .region = store.getRegionAt(node_idx),
-        } },
         .diag_type_name_case_mismatch => {
             const p = payload.diag_two_idents;
             return CIR.Diagnostic{ .type_name_case_mismatch = .{
@@ -6278,9 +6096,6 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
                 .region = store.getRegionAt(node_idx),
             } };
         },
-        .diag_module_header_deprecated => return CIR.Diagnostic{ .module_header_deprecated = .{
-            .region = store.getRegionAt(node_idx),
-        } },
         .diag_roc_version_mismatch => {
             const p = payload.diag_two_idents;
             return CIR.Diagnostic{ .roc_version_mismatch = .{
@@ -6355,18 +6170,21 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
                 },
             } };
         },
-        .diag_unused_variable => return CIR.Diagnostic{ .unused_variable = .{
-            .ident = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_used_underscore_variable => return CIR.Diagnostic{ .used_underscore_variable = .{
-            .ident = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
         .diag_duplicate_record_field => {
             const p = payload.diag_ident_with_region;
             return CIR.Diagnostic{ .duplicate_record_field = .{
                 .field_name = @bitCast(p.ident),
+                .duplicate_region = store.getRegionAt(node_idx),
+                .original_region = .{
+                    .start = .{ .offset = p.region_start },
+                    .end = .{ .offset = p.region_end },
+                },
+            } };
+        },
+        .diag_duplicate_pattern_binder => {
+            const p = payload.diag_ident_with_region;
+            return CIR.Diagnostic{ .duplicate_pattern_binder = .{
+                .ident = @bitCast(p.ident),
                 .duplicate_region = store.getRegionAt(node_idx),
                 .original_region = .{
                     .start = .{ .offset = p.region_start },
@@ -6385,12 +6203,6 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
                 },
             } };
         },
-        .diag_crash_expects_string => return CIR.Diagnostic{ .crash_expects_string = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_f64_pattern_literal => return CIR.Diagnostic{ .f64_pattern_literal = .{
-            .region = store.getRegionAt(node_idx),
-        } },
         .diag_type_var_starting_with_dollar => {
             const p = payload.diag_two_idents;
             return CIR.Diagnostic{ .type_var_starting_with_dollar = .{
@@ -6400,23 +6212,32 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             } };
         },
         .diag_underscore_in_type_declaration => return CIR.Diagnostic{ .underscore_in_type_declaration = .{
-            .declared = @enumFromInt(payload.diag_single_value.value),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_break_outside_loop => return CIR.Diagnostic{ .break_outside_loop = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_infinite_loop_never_exits => return CIR.Diagnostic{ .infinite_loop_never_exits = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_trailing_try_suffix => return CIR.Diagnostic{ .trailing_try_suffix = .{
+            .declared = @fromBackingInt(@intCast(payload.diag_single_value.value)),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_return_outside_fn => {
             const p = payload.diag_single_value;
             return CIR.Diagnostic{ .return_outside_fn = .{
                 .region = store.getRegionAt(node_idx),
-                .context = @enumFromInt(p.value),
+                .context = @fromBackingInt(@intCast(p.value)),
+            } };
+        },
+        .diag_control_flow_in_expect => {
+            const p = payload.diag_single_value;
+            return CIR.Diagnostic{ .control_flow_in_expect = .{
+                .region = store.getRegionAt(node_idx),
+                .kind = @fromBackingInt(@intCast(p.value)),
+            } };
+        },
+        .diag_var_reassigned_in_expect => {
+            const p = payload.diag_ident_with_region;
+            return CIR.Diagnostic{ .var_reassigned_in_expect = .{
+                .ident = @bitCast(p.ident),
+                .region = store.getRegionAt(node_idx),
+                .declaration_region = .{
+                    .start = .{ .offset = p.region_start },
+                    .end = .{ .offset = p.region_end },
+                },
             } };
         },
         .diag_mutually_recursive_type_aliases => {
@@ -6435,60 +6256,17 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_deprecated_number_suffix => {
             const p = payload.diag_two_enums;
             return CIR.Diagnostic{ .deprecated_number_suffix = .{
-                .suffix = @enumFromInt(p.enum1),
-                .suggested = @enumFromInt(p.enum2),
+                .suffix = @fromBackingInt(@intCast(p.enum1)),
+                .suggested = @fromBackingInt(@intCast(p.enum2)),
                 .region = store.getRegionAt(node_idx),
             } };
         },
-        .diag_range_op_chained => return CIR.Diagnostic{ .range_op_chained = .{
-            .region = store.getRegionAt(node_idx),
-        } },
     }
 }
 
 /// Computes the span of a diagnostic starting from a given index.
 pub fn diagnosticSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Diagnostic.Span {
     return try store.spanFrom("diagnostics", CIR.Diagnostic.Span, start);
-}
-
-/// Ensure the node store has capacity for at least the requested number of
-/// slots. Then return the *final* index.
-pub fn predictNodeIndex(store: *NodeStore, count: u32) Allocator.Error!Node.Idx {
-    const start_idx = store.nodes.len();
-    try store.nodes.ensureTotalCapacity(store.gpa, start_idx + count);
-    // Return where the LAST node will actually be placed
-    return @enumFromInt(start_idx + count - 1);
-}
-
-/// Adds an type variable slot to the store.
-///
-/// IMPORTANT: You should not use this function directly! Instead, use it's
-/// corresponding function in `ModuleEnv`.
-pub fn addTypeVarSlot(store: *NodeStore, parent_node_idx: Node.Idx, region: base.Region) Allocator.Error!Node.Idx {
-    var node = Node.init(.type_var_slot);
-    node.setPayload(.{ .type_var_slot = .{
-        .parent_node_idx = @intFromEnum(parent_node_idx),
-    } });
-    const nid = try store.nodes.append(store.gpa, node);
-    _ = try store.regions.append(store.gpa, region);
-    return @enumFromInt(@intFromEnum(nid));
-}
-
-/// Given a target node idx, check that the it is in bounds
-/// If it is, do nothing
-/// If it's not, then fill in the store with type_var_slots for all missing
-/// intervening nodes, *up to and including* the provided node
-pub fn fillInTypeVarSlotsThru(store: *NodeStore, target_idx: Node.Idx, parent_node_idx: Node.Idx, region: Region) Allocator.Error!void {
-    const idx = @intFromEnum(target_idx);
-    try store.nodes.items.ensureTotalCapacity(store.gpa, idx);
-    while (store.nodes.items.len <= idx) {
-        var node = Node.init(.type_var_slot);
-        node.setPayload(.{ .type_var_slot = .{
-            .parent_node_idx = @intFromEnum(parent_node_idx),
-        } });
-        store.nodes.items.appendAssumeCapacity(node);
-        _ = try store.regions.append(store.gpa, region);
-    }
 }
 
 /// Return the current top index for scratch match branches.
@@ -6532,6 +6310,7 @@ pub const Serialized = extern struct {
     literal_pattern_contexts: collections.SafeList(LiteralPatternContext).Serialized,
     interpolation_data: collections.SafeList(InterpolationData).Serialized,
     nodes: Node.List.Serialized,
+    replaced_source_nodes: Node.List.Serialized,
     regions: Region.List.Serialized,
     write_occurrences: collections.SafeList(WriteOccurrence).Serialized,
     span2_data: collections.SafeList(Span2).Serialized,
@@ -6552,6 +6331,10 @@ pub const Serialized = extern struct {
     index_data: collections.SafeList(u32).Serialized,
     scratch: u64, // Reserve enough space for a 64-bit pointer
 
+    comptime {
+        collections.serde_validation.assertBidirectionalFieldSet(NodeStore, Serialized, &.{}, &.{}, &.{});
+    }
+
     /// Serialize a NodeStore into this Serialized struct, appending data to the writer
     pub fn serialize(
         self: *Serialized,
@@ -6559,115 +6342,33 @@ pub const Serialized = extern struct {
         allocator: Allocator,
         writer: *CompactWriter,
     ) Allocator.Error!void {
-        // Serialize int128_values FIRST to ensure 16-byte alignment (i128 requires it)
-        try self.int128_values.serialize(&store.int128_values, allocator, writer);
-        try self.literal_dispatch_plans.serialize(&store.literal_dispatch_plans, allocator, writer);
-        try self.literal_pattern_contexts.serialize(&store.literal_pattern_contexts, allocator, writer);
-        try self.interpolation_data.serialize(&store.interpolation_data, allocator, writer);
-        // Serialize nodes
-        try self.nodes.serialize(&store.nodes, allocator, writer);
-        // Serialize regions
-        try self.regions.serialize(&store.regions, allocator, writer);
-        try self.write_occurrences.serialize(&store.write_occurrences, allocator, writer);
-        // Serialize span2_data
-        try self.span2_data.serialize(&store.span2_data, allocator, writer);
-        // Serialize span_with_node_data
-        try self.span_with_node_data.serialize(&store.span_with_node_data, allocator, writer);
-        // Serialize method_call_data
-        try self.method_call_data.serialize(&store.method_call_data, allocator, writer);
-        // Serialize match_data
-        try self.match_data.serialize(&store.match_data, allocator, writer);
-        // Serialize if_data
-        try self.if_data.serialize(&store.if_data, allocator, writer);
-        // Serialize match_branch_data
-        try self.match_branch_data.serialize(&store.match_branch_data, allocator, writer);
-        // Serialize closure_data
-        try self.closure_data.serialize(&store.closure_data, allocator, writer);
-        // Serialize zero_arg_tag_data
-        try self.zero_arg_tag_data.serialize(&store.zero_arg_tag_data, allocator, writer);
-        // Serialize def_data
-        try self.def_data.serialize(&store.def_data, allocator, writer);
-        // Serialize import_data
-        try self.import_data.serialize(&store.import_data, allocator, writer);
-        // Serialize type_apply_data
-        try self.type_apply_data.serialize(&store.type_apply_data, allocator, writer);
-        // Serialize pattern_list_data
-        try self.pattern_list_data.serialize(&store.pattern_list_data, allocator, writer);
-        // Serialize pattern_str_interpolation_data
-        try self.pattern_str_interpolation_data.serialize(&store.pattern_str_interpolation_data, allocator, writer);
-        // Serialize pattern_str_interpolation_steps
-        try self.pattern_str_interpolation_steps.serialize(&store.pattern_str_interpolation_steps, allocator, writer);
-        // Serialize canonical where-clause ownership
-        try self.where_clause_owners.serialize(&store.where_clause_owners, allocator, writer);
-        // Serialize index_data
-        try self.index_data.serialize(&store.index_data, allocator, writer);
+        // Lists are written in this struct's field order, so int128_values
+        // goes first to ensure 16-byte alignment (i128 requires it).
+        inline for (comptime backingLists(Serialized)) |name| {
+            try @field(self, name).serialize(&@field(store, name), allocator, writer);
+        }
     }
 
     /// Deserialize into a NodeStore value (no in-place modification of cache buffer).
     /// The base_addr parameter is the base address of the serialized buffer in memory.
-    /// WARNING: The returned NodeStore points into the cache buffer and is read-only.
+    /// WARNING: The returned NodeStore points into the cache buffer and is read-only,
+    /// so it has no scratch memory.
     /// Use deserializeWithCopy() if the store needs to be mutable.
     pub fn deserializeInto(self: *const Serialized, base_addr: usize, gpa: Allocator) NodeStore {
-        return NodeStore{
-            .gpa = gpa,
-            .nodes = self.nodes.deserializeInto(base_addr),
-            .regions = self.regions.deserializeInto(base_addr),
-            .write_occurrences = self.write_occurrences.deserializeInto(base_addr),
-            .int128_values = self.int128_values.deserializeInto(base_addr),
-            .literal_dispatch_plans = self.literal_dispatch_plans.deserializeInto(base_addr),
-            .literal_pattern_contexts = self.literal_pattern_contexts.deserializeInto(base_addr),
-            .interpolation_data = self.interpolation_data.deserializeInto(base_addr),
-            .span2_data = self.span2_data.deserializeInto(base_addr),
-            .span_with_node_data = self.span_with_node_data.deserializeInto(base_addr),
-            .method_call_data = self.method_call_data.deserializeInto(base_addr),
-            .match_data = self.match_data.deserializeInto(base_addr),
-            .if_data = self.if_data.deserializeInto(base_addr),
-            .match_branch_data = self.match_branch_data.deserializeInto(base_addr),
-            .closure_data = self.closure_data.deserializeInto(base_addr),
-            .zero_arg_tag_data = self.zero_arg_tag_data.deserializeInto(base_addr),
-            .def_data = self.def_data.deserializeInto(base_addr),
-            .import_data = self.import_data.deserializeInto(base_addr),
-            .type_apply_data = self.type_apply_data.deserializeInto(base_addr),
-            .pattern_list_data = self.pattern_list_data.deserializeInto(base_addr),
-            .pattern_str_interpolation_data = self.pattern_str_interpolation_data.deserializeInto(base_addr),
-            .pattern_str_interpolation_steps = self.pattern_str_interpolation_steps.deserializeInto(base_addr),
-            .where_clause_owners = self.where_clause_owners.deserializeInto(base_addr),
-            .index_data = self.index_data.deserializeInto(base_addr),
-            .scratch = null, // A deserialized NodeStore is read-only, so it has no need for scratch memory!
-        };
+        var store = initEmpty(gpa);
+        inline for (comptime backingLists(NodeStore)) |name| {
+            @field(store, name) = @field(self, name).deserializeInto(base_addr);
+        }
+        return store;
     }
 
     /// Deserialize into a NodeStore value with fresh memory allocation for fields that may need to grow.
     /// Use this for cache modules where regions may need to be extended during type checking.
     pub fn deserializeWithCopy(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!NodeStore {
-        return NodeStore{
-            .gpa = gpa,
-            .nodes = self.nodes.deserializeInto(base_addr),
-            // Regions needs to be mutable (grown during type checking)
-            .regions = try self.regions.deserializeWithCopy(base_addr, gpa),
-            .write_occurrences = self.write_occurrences.deserializeInto(base_addr),
-            .int128_values = self.int128_values.deserializeInto(base_addr),
-            .literal_dispatch_plans = self.literal_dispatch_plans.deserializeInto(base_addr),
-            .literal_pattern_contexts = self.literal_pattern_contexts.deserializeInto(base_addr),
-            .interpolation_data = self.interpolation_data.deserializeInto(base_addr),
-            .span2_data = self.span2_data.deserializeInto(base_addr),
-            .span_with_node_data = self.span_with_node_data.deserializeInto(base_addr),
-            .method_call_data = self.method_call_data.deserializeInto(base_addr),
-            .match_data = self.match_data.deserializeInto(base_addr),
-            .if_data = self.if_data.deserializeInto(base_addr),
-            .match_branch_data = self.match_branch_data.deserializeInto(base_addr),
-            .closure_data = self.closure_data.deserializeInto(base_addr),
-            .zero_arg_tag_data = self.zero_arg_tag_data.deserializeInto(base_addr),
-            .def_data = self.def_data.deserializeInto(base_addr),
-            .import_data = self.import_data.deserializeInto(base_addr),
-            .type_apply_data = self.type_apply_data.deserializeInto(base_addr),
-            .pattern_list_data = self.pattern_list_data.deserializeInto(base_addr),
-            .pattern_str_interpolation_data = self.pattern_str_interpolation_data.deserializeInto(base_addr),
-            .pattern_str_interpolation_steps = self.pattern_str_interpolation_steps.deserializeInto(base_addr),
-            .where_clause_owners = self.where_clause_owners.deserializeInto(base_addr),
-            .index_data = self.index_data.deserializeInto(base_addr),
-            .scratch = null,
-        };
+        var store = self.deserializeInto(base_addr, gpa);
+        // Regions needs to be mutable (grown during type checking)
+        store.regions = try self.regions.deserializeWithCopy(base_addr, gpa);
+        return store;
     }
 
     /// Deserialize into a NodeStore that owns every list it holds and carries
@@ -6675,40 +6376,65 @@ pub const Serialized = extern struct {
     /// regions, and extra data to it. `deinit` releases it exactly like a
     /// freshly constructed `NodeStore`.
     pub fn deserializeOwned(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!NodeStore {
-        var store = NodeStore{
-            .gpa = gpa,
-            .nodes = try self.nodes.deserializeWithCopy(base_addr, gpa),
-            .regions = try self.regions.deserializeWithCopy(base_addr, gpa),
-            .write_occurrences = try self.write_occurrences.deserializeWithCopy(base_addr, gpa),
-            .int128_values = try self.int128_values.deserializeWithCopy(base_addr, gpa),
-            .literal_dispatch_plans = try self.literal_dispatch_plans.deserializeWithCopy(base_addr, gpa),
-            .literal_pattern_contexts = try self.literal_pattern_contexts.deserializeWithCopy(base_addr, gpa),
-            .interpolation_data = try self.interpolation_data.deserializeWithCopy(base_addr, gpa),
-            .span2_data = try self.span2_data.deserializeWithCopy(base_addr, gpa),
-            .span_with_node_data = try self.span_with_node_data.deserializeWithCopy(base_addr, gpa),
-            .method_call_data = try self.method_call_data.deserializeWithCopy(base_addr, gpa),
-            .match_data = try self.match_data.deserializeWithCopy(base_addr, gpa),
-            .if_data = try self.if_data.deserializeWithCopy(base_addr, gpa),
-            .match_branch_data = try self.match_branch_data.deserializeWithCopy(base_addr, gpa),
-            .closure_data = try self.closure_data.deserializeWithCopy(base_addr, gpa),
-            .zero_arg_tag_data = try self.zero_arg_tag_data.deserializeWithCopy(base_addr, gpa),
-            .def_data = try self.def_data.deserializeWithCopy(base_addr, gpa),
-            .import_data = try self.import_data.deserializeWithCopy(base_addr, gpa),
-            .type_apply_data = try self.type_apply_data.deserializeWithCopy(base_addr, gpa),
-            .pattern_list_data = try self.pattern_list_data.deserializeWithCopy(base_addr, gpa),
-            .pattern_str_interpolation_data = try self.pattern_str_interpolation_data.deserializeWithCopy(base_addr, gpa),
-            .pattern_str_interpolation_steps = try self.pattern_str_interpolation_steps.deserializeWithCopy(base_addr, gpa),
-            .where_clause_owners = try self.where_clause_owners.deserializeWithCopy(base_addr, gpa),
-            .index_data = try self.index_data.deserializeWithCopy(base_addr, gpa),
-            .scratch = null,
-        };
+        var store = initEmpty(gpa);
         errdefer store.deinit();
-
+        inline for (comptime backingLists(NodeStore)) |name| {
+            @field(store, name) = try @field(self, name).deserializeWithCopy(base_addr, gpa);
+        }
         try store.ensureScratch();
-
         return store;
     }
 };
+
+test "NodeStore round-trips every backing list" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+    const lists = comptime backingLists(NodeStore);
+
+    // Every list gets a distinct, nonzero number of entries, so a conversion
+    // that skips a list or crosses two of them changes a length.
+    var original = initEmpty(gpa);
+    defer original.deinit();
+    inline for (lists, 1..) |name, entry_count| {
+        const Entry = @FieldType(Serialized, name).SerializedElement;
+        for (0..entry_count) |_| _ = try @field(original, name).append(gpa, std.mem.zeroes(Entry));
+    }
+
+    var cloned = try original.clone(gpa);
+    defer cloned.deinit();
+
+    var writer = CompactWriter.init();
+    defer writer.deinit(gpa);
+    const serialized = try writer.appendAlloc(gpa, Serialized);
+    try serialized.serialize(&original, gpa, &writer);
+    const buffer = try gpa.alignedAlloc(u8, .@"16", @intCast(writer.total_bytes));
+    defer gpa.free(buffer);
+    _ = try writer.writeToBuffer(buffer);
+    const loaded: *const Serialized = @ptrCast(@alignCast(buffer.ptr));
+    const base_addr = @intFromPtr(buffer.ptr);
+
+    const borrowed = loaded.deserializeInto(base_addr, gpa);
+    var regions_owned = try loaded.deserializeWithCopy(base_addr, gpa);
+    defer regions_owned.regions.deinit(gpa);
+    var owned = try loaded.deserializeOwned(base_addr, gpa);
+    defer owned.deinit();
+
+    inline for (lists, 1..) |name, entry_count| {
+        inline for (.{ &cloned, &borrowed, &regions_owned, &owned }) |store| {
+            try testing.expectEqual(@as(u64, entry_count), @field(store, name).len());
+        }
+    }
+
+    // Serializing the reloaded store reproduces the original bytes.
+    var rewriter = CompactWriter.init();
+    defer rewriter.deinit(gpa);
+    const reserialized = try rewriter.appendAlloc(gpa, Serialized);
+    try reserialized.serialize(&owned, gpa, &rewriter);
+    const rebuffer = try gpa.alignedAlloc(u8, .@"16", @intCast(rewriter.total_bytes));
+    defer gpa.free(rebuffer);
+    _ = try rewriter.writeToBuffer(rebuffer);
+    try testing.expectEqualSlices(u8, buffer, rebuffer);
+}
 
 test "NodeStore empty CompactWriter roundtrip" {
     const testing = std.testing;
@@ -6769,12 +6495,12 @@ test "NodeStore basic CompactWriter roundtrip" {
         .expr_num = .{
             .kind = 0, // Integer kind
             .val_kind = 0,
-            .int128_idx = @intFromEnum(int128_idx),
+            .int128_idx = @backingInt(int128_idx),
         },
     });
     const node1_idx = try original.nodes.append(gpa, node1);
-    try original.recordLiteralDispatchPlan(node1_idx, .numeral, @enumFromInt(7), @enumFromInt(9), 11);
-    original.recordLiteralPatternEquality(node1_idx, @enumFromInt(13));
+    try original.recordLiteralDispatchPlan(node1_idx, .numeral, @fromBackingInt(@intCast(7)), @fromBackingInt(@intCast(9)), 11);
+    original.recordLiteralPatternEquality(node1_idx, @fromBackingInt(@intCast(13)));
     original.finalizeLiteralDispatchResolution(node1_idx, .builtin_direct);
 
     // Add a region
@@ -6824,7 +6550,7 @@ test "NodeStore basic CompactWriter roundtrip" {
     const literal_plan = deserialized.literalDispatchPlanForNode(node1_idx).?;
     try testing.expectEqual(LiteralDispatchPlan.Kind.numeral, literal_plan.dispatchKind());
     try testing.expectEqual(@as(u32, 7), literal_plan.target_var);
-    try testing.expectEqual(@as(u32, 9), literal_plan.fn_var);
+    try testing.expectEqual(@as(u32, 9), @backingInt(literal_plan.fnVar().?));
     try testing.expectEqual(LiteralDispatchPlan.Resolution.builtin_direct, literal_plan.dispatchResolution());
     try testing.expectEqual(@as(?u32, 11), literal_plan.patternFailureOwner(&deserialized));
     try testing.expectEqual(@as(u32, 14), literal_plan.patternContext(&deserialized).?.equality_fn_var_plus_one);
@@ -6853,17 +6579,17 @@ test "literal dispatch plans are retired with their owning nodes" {
     } }, Region.zero());
 
     try store.recordLiteralDispatchPlan(
-        @enumFromInt(@intFromEnum(quote_expr)),
+        @fromBackingInt(@intCast(@backingInt(quote_expr))),
         .quote,
-        @enumFromInt(1),
-        @enumFromInt(2),
+        @fromBackingInt(@intCast(1)),
+        @fromBackingInt(@intCast(2)),
         null,
     );
     try store.recordLiteralDispatchPlan(
-        @enumFromInt(@intFromEnum(numeral_expr)),
+        @fromBackingInt(@intCast(@backingInt(numeral_expr))),
         .numeral,
-        @enumFromInt(3),
-        @enumFromInt(4),
+        @fromBackingInt(@intCast(3)),
+        @fromBackingInt(@intCast(4)),
         17,
     );
     try testing.expectEqual(@as(usize, 2), store.literalDispatchPlans().len);
@@ -6872,17 +6598,17 @@ test "literal dispatch plans are retired with their owning nodes" {
         .region = Region.zero(),
     } });
 
-    store.replaceExprWithRuntimeError(quote_expr, runtime_error_diagnostic);
-    try testing.expect(store.literalDispatchPlanForNode(@enumFromInt(@intFromEnum(quote_expr))) == null);
+    try store.replaceExprWithRuntimeError(quote_expr, runtime_error_diagnostic);
+    try testing.expect(store.literalDispatchPlanForNode(@fromBackingInt(@intCast(@backingInt(quote_expr)))) == null);
     try testing.expectEqual(@as(usize, 1), store.literalDispatchPlans().len);
 
-    const numeral_plan = store.literalDispatchPlanForNode(@enumFromInt(@intFromEnum(numeral_expr))).?;
+    const numeral_plan = store.literalDispatchPlanForNode(@fromBackingInt(@intCast(@backingInt(numeral_expr)))).?;
     try testing.expectEqual(LiteralDispatchPlan.Kind.numeral, numeral_plan.dispatchKind());
     try testing.expectEqual(@as(?u32, 17), numeral_plan.patternFailureOwner(&store));
     try testing.expectEqual(@as(u32, 3), numeral_plan.target_var);
-    try testing.expectEqual(@as(u32, 4), numeral_plan.fn_var);
+    try testing.expectEqual(@as(u32, 4), @backingInt(numeral_plan.fnVar().?));
 
-    store.replaceExprWithRuntimeError(numeral_expr, runtime_error_diagnostic);
+    try store.replaceExprWithRuntimeError(numeral_expr, runtime_error_diagnostic);
     try testing.expectEqual(@as(usize, 0), store.literalDispatchPlans().len);
 }
 
@@ -6928,14 +6654,14 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     var required_segment_node = Node.init(.field_access_segment);
     required_segment_node.setPayload(.{ .field_access_segment = .{
         .name = 41,
-        .mode = @intFromEnum(CIR.Expr.FieldAccessMode.required),
+        .mode = @backingInt(CIR.Expr.FieldAccessMode.required),
     } });
     const required_segment_node_idx = try original.nodes.append(gpa, required_segment_node);
 
     var optional_segment_node = Node.init(.field_access_segment);
     optional_segment_node.setPayload(.{ .field_access_segment = .{
         .name = 42,
-        .mode = @intFromEnum(CIR.Expr.FieldAccessMode.optional),
+        .mode = @backingInt(CIR.Expr.FieldAccessMode.optional),
     } });
     const optional_segment_node_idx = try original.nodes.append(gpa, optional_segment_node);
 
@@ -7001,10 +6727,10 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     const retrieved_float_value: f64 = @bitCast(retrieved_u64);
     try testing.expectApproxEqAbs(float_value, retrieved_float_value, 0.0001);
 
-    const required_segment = deserialized.getFieldAccessSegment(@enumFromInt(@intFromEnum(required_segment_node_idx)));
+    const required_segment = deserialized.getFieldAccessSegment(@fromBackingInt(@intCast(@backingInt(required_segment_node_idx))));
     try testing.expectEqual(@as(u32, 41), @as(u32, @bitCast(required_segment.name)));
     try testing.expectEqual(CIR.Expr.FieldAccessMode.required, required_segment.mode);
-    const optional_segment = deserialized.getFieldAccessSegment(@enumFromInt(@intFromEnum(optional_segment_node_idx)));
+    const optional_segment = deserialized.getFieldAccessSegment(@fromBackingInt(@intCast(@backingInt(optional_segment_node_idx))));
     try testing.expectEqual(@as(u32, 42), @as(u32, @bitCast(optional_segment.name)));
     try testing.expectEqual(CIR.Expr.FieldAccessMode.optional, optional_segment.mode);
 

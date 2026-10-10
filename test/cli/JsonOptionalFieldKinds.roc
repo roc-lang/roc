@@ -92,7 +92,7 @@ expect {
 expect {
 	result : Try(CountOnly, [InvalidJson(Str)])
 	result = Json.parse("{\"count\":null}")
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 
 # A record whose fields can all self-fill parses with a closed error row:

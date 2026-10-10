@@ -247,21 +247,6 @@ pub const DocumentElement = union(enum) {
             => null,
         };
     }
-
-    /// Returns true if this element represents actual content.
-    pub fn hasContent(self: DocumentElement) bool {
-        return switch (self) {
-            .text, .annotated, .raw, .reflowing_text, .link, .vertical_stack, .horizontal_concat, .source_code_region, .source_code_multi_region, .source_location => true,
-            .line_break,
-            .indent,
-            .space,
-            .horizontal_rule,
-            .annotation_start,
-            .annotation_end,
-            .source_code_with_underlines,
-            => false,
-        };
-    }
 };
 
 /// A document composed of structured elements that can be rendered.
@@ -282,11 +267,7 @@ pub const Document = struct {
             switch (element) {
                 .text => |text| self.allocator.free(text),
                 .annotated => |annotated| self.allocator.free(annotated.content),
-                .raw => |raw| self.allocator.free(raw),
-                .reflowing_text => |text| self.allocator.free(text),
-                .link => |url| self.allocator.free(url),
-                .vertical_stack => |stack| self.allocator.free(stack),
-                .horizontal_concat => |concat| self.allocator.free(concat),
+                inline .raw, .reflowing_text, .link, .vertical_stack, .horizontal_concat => |raw| self.allocator.free(raw),
                 .source_code_multi_region => |multi| self.allocator.free(multi.regions),
                 .source_code_region => |region| {
                     self.allocator.free(region.line_text);
@@ -468,13 +449,6 @@ pub const Document = struct {
         try self.endAnnotation();
     }
 
-    /// Add a formatted string to the document.
-    pub fn addFormattedText(self: *Document, comptime fmt: []const u8, args: anytype) std.mem.Allocator.Error!void {
-        const text = try std.fmt.allocPrint(self.allocator, fmt, args);
-        defer self.allocator.free(text);
-        try self.addText(text);
-    }
-
     /// Add multiple line breaks.
     pub fn addLineBreaks(self: *Document, count: u32) std.mem.Allocator.Error!void {
         var i: u32 = 0;
@@ -533,11 +507,6 @@ pub const Document = struct {
     /// Add a suggestion with proper styling.
     pub fn addSuggestion(self: *Document, suggestion: []const u8) std.mem.Allocator.Error!void {
         try self.addAnnotated(suggestion, .suggestion);
-    }
-
-    /// Add a qualified symbol with proper styling.
-    pub fn addQualifiedSymbol(self: *Document, symbol: []const u8) std.mem.Allocator.Error!void {
-        try self.addAnnotated(symbol, .symbol_qualified);
     }
 
     /// Add an unqualified symbol with proper styling.
@@ -676,152 +645,6 @@ pub const Document = struct {
     /// Render the document to the specified writer and target format.
     pub fn render(self: *const Document, writer: anytype, target: RenderTarget, _: ReportingConfig) std.mem.Allocator.Error!void {
         try renderDocument(self, writer, target);
-    }
-};
-
-/// A document builder that provides a fluent interface for creating documents.
-pub const DocumentBuilder = struct {
-    document: Document,
-
-    pub fn init(allocator: Allocator) DocumentBuilder {
-        return DocumentBuilder{
-            .document = Document.init(allocator),
-        };
-    }
-
-    pub fn deinit(self: *DocumentBuilder) void {
-        self.document.deinit();
-    }
-
-    pub fn text(self: *DocumentBuilder, content: []const u8) std.mem.Allocator.Error!*DocumentBuilder {
-        try self.document.addText(content);
-        return self;
-    }
-
-    pub fn annotated(self: *DocumentBuilder, content: []const u8, annotation: Annotation) std.mem.Allocator.Error!*DocumentBuilder {
-        try self.document.addAnnotated(content, annotation);
-        return self;
-    }
-
-    pub fn lineBreak(self: *DocumentBuilder) std.mem.Allocator.Error!*DocumentBuilder {
-        try self.document.addLineBreak();
-        return self;
-    }
-
-    pub fn indent(self: *DocumentBuilder, levels: u32) std.mem.Allocator.Error!*DocumentBuilder {
-        try self.document.addIndent(levels);
-        return self;
-    }
-
-    pub fn space(self: *DocumentBuilder, count: u32) std.mem.Allocator.Error!*DocumentBuilder {
-        try self.document.addSpace(count);
-        return self;
-    }
-
-    pub fn rule(self: *DocumentBuilder, width: ?u32) std.mem.Allocator.Error!*DocumentBuilder {
-        try self.document.addHorizontalRule(width);
-        return self;
-    }
-
-    pub fn keyword(self: *DocumentBuilder, kw: []const u8) std.mem.Allocator.Error!*DocumentBuilder {
-        try self.document.addKeyword(kw);
-        return self;
-    }
-
-    pub fn typeText(self: *DocumentBuilder, type_name: []const u8) std.mem.Allocator.Error!*DocumentBuilder {
-        try self.document.addType(type_name);
-        return self;
-    }
-
-    pub fn errorText(self: *DocumentBuilder, message: []const u8) std.mem.Allocator.Error!*DocumentBuilder {
-        try self.document.addError(message);
-        return self;
-    }
-
-    pub fn warning(self: *DocumentBuilder, message: []const u8) std.mem.Allocator.Error!*DocumentBuilder {
-        try self.document.addWarning(message);
-        return self;
-    }
-
-    pub fn suggestion(self: *DocumentBuilder, sug: []const u8) std.mem.Allocator.Error!*DocumentBuilder {
-        try self.document.addSuggestion(sug);
-        return self;
-    }
-
-    pub fn reflow(self: *DocumentBuilder, content: []const u8) std.mem.Allocator.Error!*DocumentBuilder {
-        try self.document.addReflowingText(content);
-        return self;
-    }
-
-    pub fn qualifiedSymbol(self: *DocumentBuilder, symbol: []const u8) std.mem.Allocator.Error!*DocumentBuilder {
-        try self.document.addQualifiedSymbol(symbol);
-        return self;
-    }
-
-    pub fn unqualifiedSymbol(self: *DocumentBuilder, symbol: []const u8) std.mem.Allocator.Error!*DocumentBuilder {
-        try self.document.addUnqualifiedSymbol(symbol);
-        return self;
-    }
-
-    pub fn moduleName(self: *DocumentBuilder, module_name: []const u8) std.mem.Allocator.Error!*DocumentBuilder {
-        try self.document.addModuleName(module_name);
-        return self;
-    }
-
-    pub fn recordField(self: *DocumentBuilder, field_name: []const u8) std.mem.Allocator.Error!*DocumentBuilder {
-        try self.document.addRecordField(field_name);
-        return self;
-    }
-
-    pub fn tagName(self: *DocumentBuilder, tag_name: []const u8) std.mem.Allocator.Error!*DocumentBuilder {
-        try self.document.addTagName(tag_name);
-        return self;
-    }
-
-    pub fn binaryOperator(self: *DocumentBuilder, operator: []const u8) std.mem.Allocator.Error!*DocumentBuilder {
-        try self.document.addBinaryOperator(operator);
-        return self;
-    }
-
-    pub fn link(self: *DocumentBuilder, url: []const u8) std.mem.Allocator.Error!*DocumentBuilder {
-        try self.document.addLink(url);
-        return self;
-    }
-
-    pub fn verticalStack(self: *DocumentBuilder, elements: []const DocumentElement) std.mem.Allocator.Error!*DocumentBuilder {
-        try self.document.addVerticalStack(elements);
-        return self;
-    }
-
-    pub fn horizontalConcat(self: *DocumentBuilder, elements: []const DocumentElement) std.mem.Allocator.Error!*DocumentBuilder {
-        try self.document.addHorizontalConcat(elements);
-        return self;
-    }
-
-    pub fn sourceRegion(
-        self: *DocumentBuilder,
-        region_info: RegionInfo,
-        annotation: Annotation,
-        filename: ?[]const u8,
-        source: []const u8,
-        line_starts: []const u32,
-    ) std.mem.Allocator.Error!*DocumentBuilder {
-        try self.document.addSourceRegion(region_info, annotation, filename, source, line_starts);
-        return self;
-    }
-
-    pub fn sourceMultiRegion(
-        self: *DocumentBuilder,
-        source: []const u8,
-        regions: []const SourceRegion,
-        filename: ?[]const u8,
-    ) std.mem.Allocator.Error!*DocumentBuilder {
-        try self.document.addSourceMultiRegion(source, regions, filename);
-        return self;
-    }
-
-    pub fn build(self: *DocumentBuilder) Document {
-        return self.document;
     }
 };
 

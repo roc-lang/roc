@@ -104,7 +104,7 @@ expect round_trip_i128(I128.lowest) and round_trip_i128(I128.highest)
 expect {
 	result : Try(U8, [InvalidJson(Str)])
 	result = Json.parse("256")
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 
 expect {
@@ -114,13 +114,13 @@ expect {
 	too_low : Try(I8, [InvalidJson(Str)])
 	too_low = Json.parse("-129")
 
-	too_high == Err(Json.invalid_json) and too_low == Err(Json.invalid_json)
+	too_high == Err(Json.invalid_json({})) and too_low == Err(Json.invalid_json({}))
 }
 
 expect {
 	result : Try(U16, [InvalidJson(Str)])
 	result = Json.parse("65536")
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 
 expect {
@@ -130,13 +130,13 @@ expect {
 	too_low : Try(I16, [InvalidJson(Str)])
 	too_low = Json.parse("-32769")
 
-	too_high == Err(Json.invalid_json) and too_low == Err(Json.invalid_json)
+	too_high == Err(Json.invalid_json({})) and too_low == Err(Json.invalid_json({}))
 }
 
 expect {
 	result : Try(U32, [InvalidJson(Str)])
 	result = Json.parse("4294967296")
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 
 expect {
@@ -146,13 +146,13 @@ expect {
 	too_low : Try(I32, [InvalidJson(Str)])
 	too_low = Json.parse("-2147483649")
 
-	too_high == Err(Json.invalid_json) and too_low == Err(Json.invalid_json)
+	too_high == Err(Json.invalid_json({})) and too_low == Err(Json.invalid_json({}))
 }
 
 expect {
 	result : Try(U64, [InvalidJson(Str)])
 	result = Json.parse("18446744073709551616")
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 
 expect {
@@ -162,13 +162,13 @@ expect {
 	too_low : Try(I64, [InvalidJson(Str)])
 	too_low = Json.parse("-9223372036854775809")
 
-	too_high == Err(Json.invalid_json) and too_low == Err(Json.invalid_json)
+	too_high == Err(Json.invalid_json({})) and too_low == Err(Json.invalid_json({}))
 }
 
 expect {
 	result : Try(U128, [InvalidJson(Str)])
 	result = Json.parse("340282366920938463463374607431768211456")
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 
 expect {
@@ -178,5 +178,5 @@ expect {
 	too_low : Try(I128, [InvalidJson(Str)])
 	too_low = Json.parse("-170141183460469231731687303715884105729")
 
-	too_high == Err(Json.invalid_json) and too_low == Err(Json.invalid_json)
+	too_high == Err(Json.invalid_json({})) and too_low == Err(Json.invalid_json({}))
 }

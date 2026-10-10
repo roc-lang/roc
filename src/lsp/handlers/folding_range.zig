@@ -5,6 +5,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const protocol = @import("../protocol.zig");
+const position_params = @import("position_params.zig");
 const parse = @import("parse");
 const can = @import("can");
 const pos = @import("../position.zig");
@@ -14,36 +15,8 @@ const Token = parse.tokenize.Token;
 pub fn handler(comptime ServerType: type) type {
     return struct {
         pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) (Allocator.Error || error{WriteFailed})!void {
-            const params = maybe_params orelse {
-                try self.sendError(id, .invalid_params, "foldingRange requires params");
-                return;
-            };
-
-            if (std.meta.activeTag(params) != .object) {
-                try self.sendError(id, .invalid_params, "foldingRange params must be an object");
-                return;
-            }
-            const obj = params.object;
-
-            // Extract textDocument.uri
-            const text_doc_value = obj.get("textDocument") orelse {
-                try self.sendError(id, .invalid_params, "missing textDocument");
-                return;
-            };
-            if (std.meta.activeTag(text_doc_value) != .object) {
-                try self.sendError(id, .invalid_params, "textDocument must be an object");
-                return;
-            }
-            const text_doc = text_doc_value.object;
-            const uri_value = text_doc.get("uri") orelse {
-                try self.sendError(id, .invalid_params, "missing uri");
-                return;
-            };
-            if (std.meta.activeTag(uri_value) != .string) {
-                try self.sendError(id, .invalid_params, "uri must be a string");
-                return;
-            }
-            const uri = uri_value.string;
+            const document = try position_params.parseDocument(self, id, "foldingRange", maybe_params) orelse return;
+            const uri = document.uri;
 
             // Get the document text from the store
             const doc = self.doc_store.get(uri);
@@ -70,7 +43,7 @@ const FoldingRange = struct {
 /// Extract folding ranges from source code by finding matching brackets.
 fn extractFoldingRanges(allocator: std.mem.Allocator, source: []const u8) Allocator.Error![]FoldingRange {
     // Build line offset table
-    const line_offsets = try pos.buildLineOffsets(allocator, source);
+    const line_offsets = try pos.LineOffsets.init(allocator, source);
     defer line_offsets.deinit();
 
     // Track bracket positions for folding

@@ -17,9 +17,6 @@ pub const BASE_PTR_REG: GeneralReg = .FP; // X29
 /// Stack pointer register
 pub const STACK_PTR_REG: GeneralReg = .ZRSP; // SP (encoded as 31)
 
-/// Link register (return address)
-pub const LINK_REG: GeneralReg = .LR; // X30
-
 /// Registers used for passing integer/pointer arguments (in order)
 pub const GENERAL_PARAM_REGS = [_]GeneralReg{
     .X0, // 1st argument
@@ -54,10 +51,6 @@ pub const FLOAT_RETURN_REGS = [_]FloatReg{
     .V0, .V1, .V2, .V3, .V4, .V5, .V6, .V7,
 };
 
-/// Indirect result location register
-/// When a function returns a large aggregate, X8 points to the memory location
-pub const INDIRECT_RESULT_REG: GeneralReg = .XR; // X8
-
 /// Caller-saved (volatile) general registers
 pub const CALLER_SAVED_GENERAL = [_]GeneralReg{
     .X0, .X1, .X2,  .X3,  .X4,  .X5,  .X6,  .X7,
@@ -88,9 +81,6 @@ pub const SHADOW_SPACE_SIZE: u8 = 0;
 
 /// Stack alignment requirement (16 bytes)
 pub const STACK_ALIGNMENT: u8 = 16;
-
-/// Platform register (reserved, do not use)
-pub const PLATFORM_REG: GeneralReg = .PR; // X18
 
 /// Check if a general register is callee-saved
 pub fn isCalleeSaved(reg: GeneralReg) bool {
@@ -134,21 +124,21 @@ pub const DEFAULT_FREE_FLOAT_REGS = [_]FloatReg{
 /// which gets clobbered whenever the emitter uses X9 as scratch. This
 /// mirrors the R11 exclusion in the x86_64 masks.
 pub const CALLER_SAVED_GENERAL_MASK: u32 =
-    (1 << @intFromEnum(GeneralReg.X0)) |
-    (1 << @intFromEnum(GeneralReg.X1)) |
-    (1 << @intFromEnum(GeneralReg.X2)) |
-    (1 << @intFromEnum(GeneralReg.X3)) |
-    (1 << @intFromEnum(GeneralReg.X4)) |
-    (1 << @intFromEnum(GeneralReg.X5)) |
-    (1 << @intFromEnum(GeneralReg.X6)) |
-    (1 << @intFromEnum(GeneralReg.X7)) |
-    (1 << @intFromEnum(GeneralReg.XR)) |
-    (1 << @intFromEnum(GeneralReg.X10)) |
-    (1 << @intFromEnum(GeneralReg.X11)) |
-    (1 << @intFromEnum(GeneralReg.X12)) |
-    (1 << @intFromEnum(GeneralReg.X13)) |
-    (1 << @intFromEnum(GeneralReg.X14)) |
-    (1 << @intFromEnum(GeneralReg.X15));
+    (1 << @backingInt(GeneralReg.X0)) |
+    (1 << @backingInt(GeneralReg.X1)) |
+    (1 << @backingInt(GeneralReg.X2)) |
+    (1 << @backingInt(GeneralReg.X3)) |
+    (1 << @backingInt(GeneralReg.X4)) |
+    (1 << @backingInt(GeneralReg.X5)) |
+    (1 << @backingInt(GeneralReg.X6)) |
+    (1 << @backingInt(GeneralReg.X7)) |
+    (1 << @backingInt(GeneralReg.XR)) |
+    (1 << @backingInt(GeneralReg.X10)) |
+    (1 << @backingInt(GeneralReg.X11)) |
+    (1 << @backingInt(GeneralReg.X12)) |
+    (1 << @backingInt(GeneralReg.X13)) |
+    (1 << @backingInt(GeneralReg.X14)) |
+    (1 << @backingInt(GeneralReg.X15));
 // NOTE: IP0 (X16) and IP1 (X17) are NOT included here because they are used
 // as scratch registers by ldrRegMemSoff/strRegMemSoff for large offsets.
 

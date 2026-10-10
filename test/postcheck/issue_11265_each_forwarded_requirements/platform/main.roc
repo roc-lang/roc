@@ -11,8 +11,8 @@ platform ""
 		wasm32: { inputs: [app], output: Archive },
 	}
 
-import NodeValue exposing [NodeValue]
-import Elem exposing [Elem]
+import NodeValue
+import Elem
 import Node
 import Signal
 import Ui

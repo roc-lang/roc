@@ -191,7 +191,7 @@ expect result == result
 				(e-lambda
 					(args
 						(p-assign (ident "n")))
-					(e-dispatch-call (method "is_gt") (constraint-fn-var 262)
+					(e-dispatch-call (method "is_gt") (constraint-fn-var 267)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "n"))))
@@ -236,21 +236,25 @@ expect result == result
 					(e-lookup-local
 						(p-assign (ident "w")))))))
 	(s-expect
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-runtime-error (tag "erroneous_value_expr")
+			(e-lookup-local
+				(p-assign (ident "result")))
+			(e-lookup-local
+				(p-assign (ident "result"))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool)]"))
-		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool)]"))
-		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool)]"))
-		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool)]"))
+		(patt (type "[Ok(Str)]"))
+		(patt (type "[Validate(Dec -> Bool)]"))
+		(patt (type "[Transform(a -> a)]"))
+		(patt (type "[Err(Str)]"))
 		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool)]")))
 	(expressions
-		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool)]"))
-		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool)]"))
-		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool)]"))
-		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool)]"))
+		(expr (type "[Ok(Str)]"))
+		(expr (type "[Validate(Dec -> Bool)]"))
+		(expr (type "[Transform(a -> a)]"))
+		(expr (type "[Err(Str)]"))
 		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool)]"))))
 ~~~

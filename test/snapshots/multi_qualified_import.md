@@ -110,10 +110,10 @@ MOD NOT FOUND - multi_qualified_import.md:3:16:3:23
 		(title "Does Not Exist")
 		(region (start 4 16) (end 4 45))
 		(headline
-			(annotated code "Json.defaultEncoder")
+			(annotated code "Json.Core.Utf8.defaultEncoder")
 			(reflow " does not exist."))
 		(document
-			(annotated code "Json")
+			(annotated code "Json.Core.Utf8")
 			(reflow " is in scope, but it has no associated ")
 			(annotated code "defaultEncoder")
 			(reflow ".")

@@ -22,7 +22,7 @@ TYPE MISMATCH - issue_10788_nominal_pattern_backing_mismatch.md:4:10:4:10
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 4 10) (end 7 3))
+		(region (start 5 3) (end 5 10))
 		(headline
 			(reflow "The first pattern in this")
 			(reflow " ")

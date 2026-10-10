@@ -8,6 +8,7 @@ mod abi;
 use core::ffi::c_void;
 use core::fmt::{self, Write};
 use core::ptr;
+use core::ptr::NonNull;
 
 const MAX_ALLOCATIONS: usize = 512;
 const CANARY_SIZE: usize = 16;
@@ -133,21 +134,28 @@ impl ContractEnv {
         true
     }
 
-    fn alloc(&mut self, length: usize, alignment: usize) -> *mut c_void {
+    /// `roc_alloc` and `roc_realloc` must not return to Roc without an
+    /// allocation, so an allocator failure ends the program with its report.
+    fn abort_allocation(&self) -> ! {
+        write_stderr(&self.report[..self.report_len]);
+        exit_failure()
+    }
+
+    fn alloc(&mut self, length: usize, alignment: usize) -> NonNull<c_void> {
         if alignment == 0 || (alignment & (alignment - 1)) != 0 {
             self.allocator_fail(format_args!("invalid alignment {alignment}"));
-            return ptr::null_mut();
+            self.abort_allocation();
         }
         if length > usize::MAX - CANARY_SIZE - CANARY_SIZE - alignment {
             self.allocator_fail(format_args!("allocation size overflow length={length} alignment={alignment}"));
-            return ptr::null_mut();
+            self.abort_allocation();
         }
 
         let total = CANARY_SIZE + alignment - 1 + length + CANARY_SIZE;
         let raw = unsafe { malloc(total) as *mut u8 };
         if raw.is_null() {
             self.allocator_fail(format_args!("malloc failed length={length} alignment={alignment}"));
-            return ptr::null_mut();
+            self.abort_allocation();
         }
 
         let user_addr = align_forward(unsafe { raw.add(CANARY_SIZE) } as usize, alignment);
@@ -155,13 +163,13 @@ impl ContractEnv {
         if user_addr % alignment != 0 {
             unsafe { free(raw as *mut c_void) };
             self.allocator_fail(format_args!("returned pointer is not aligned to {alignment}"));
-            return ptr::null_mut();
+            self.abort_allocation();
         }
 
         let Some(slot) = self.allocations.iter_mut().find(|allocation| !allocation.live) else {
             unsafe { free(raw as *mut c_void) };
             self.allocator_fail(format_args!("allocation table exhausted"));
-            return ptr::null_mut();
+            self.abort_allocation();
         };
 
         unsafe {
@@ -179,7 +187,7 @@ impl ContractEnv {
         };
         self.alloc_count += 1;
         self.live_alloc_count += 1;
-        user as *mut c_void
+        unsafe { NonNull::new_unchecked(user as *mut c_void) }
     }
 
     fn dealloc(&mut self, ptr: *mut c_void, alignment: usize) {
@@ -211,7 +219,7 @@ impl ContractEnv {
         self.live_alloc_count -= 1;
     }
 
-    fn realloc(&mut self, ptr: *mut c_void, new_length: usize, alignment: usize) -> *mut c_void {
+    fn realloc(&mut self, ptr: *mut c_void, new_length: usize, alignment: usize) -> NonNull<c_void> {
         if ptr.is_null() {
             return self.alloc(new_length, alignment);
         }
@@ -221,7 +229,7 @@ impl ContractEnv {
             .position(|allocation| allocation.live && allocation.user == ptr as *mut u8)
         else {
             self.allocator_fail(format_args!("realloc unknown pointer {ptr:p}"));
-            return ptr::null_mut();
+            self.abort_allocation();
         };
         let old = self.allocations[index];
         if old.alignment != alignment {
@@ -229,17 +237,14 @@ impl ContractEnv {
                 "realloc alignment mismatch allocated={} requested={alignment}",
                 old.alignment
             ));
-            return ptr::null_mut();
+            self.abort_allocation();
         }
         if !self.check_canaries(&old) {
-            return ptr::null_mut();
+            self.abort_allocation();
         }
 
         let copy_length = old.length.min(new_length);
-        let new_ptr = self.alloc(new_length, alignment);
-        if new_ptr.is_null() {
-            return ptr::null_mut();
-        }
+        let new_ptr = self.alloc(new_length, alignment).as_ptr();
         unsafe {
             ptr::copy_nonoverlapping(old.user, new_ptr as *mut u8, copy_length);
             let old_bytes = core::slice::from_raw_parts(old.user, copy_length);
@@ -249,7 +254,7 @@ impl ContractEnv {
             }
         }
         self.dealloc(ptr, alignment);
-        new_ptr
+        unsafe { NonNull::new_unchecked(new_ptr) }
     }
 }
 
@@ -294,7 +299,7 @@ fn align_forward(value: usize, alignment: usize) -> usize {
     (value + alignment - 1) & !(alignment - 1)
 }
 
-extern "C" fn host_alloc(host: *mut abi::RocHost, length: usize, alignment: usize) -> *mut c_void {
+extern "C" fn host_alloc(host: *mut abi::RocHost, length: usize, alignment: usize) -> NonNull<c_void> {
     let env = unsafe { &mut *((*host).env as *mut ContractEnv) };
     env.alloc(length, alignment)
 }
@@ -304,7 +309,7 @@ extern "C" fn host_dealloc(host: *mut abi::RocHost, ptr: *mut c_void, alignment:
     env.dealloc(ptr, alignment);
 }
 
-extern "C" fn host_realloc(host: *mut abi::RocHost, ptr: *mut c_void, new_length: usize, alignment: usize) -> *mut c_void {
+extern "C" fn host_realloc(host: *mut abi::RocHost, ptr: *mut c_void, new_length: usize, alignment: usize) -> NonNull<c_void> {
     let env = unsafe { &mut *((*host).env as *mut ContractEnv) };
     env.realloc(ptr, new_length, alignment)
 }
@@ -330,7 +335,7 @@ extern "C" fn host_crashed(host: *mut abi::RocHost, bytes: *const u8, len: usize
 }
 
 #[no_mangle]
-pub extern "C" fn roc_alloc(length: usize, alignment: usize) -> *mut c_void {
+pub extern "C" fn roc_alloc(length: usize, alignment: usize) -> NonNull<c_void> {
     env_mut().alloc(length, alignment)
 }
 
@@ -340,7 +345,7 @@ pub extern "C" fn roc_dealloc(ptr: *mut c_void, alignment: usize) {
 }
 
 #[no_mangle]
-pub extern "C" fn roc_realloc(ptr: *mut c_void, new_length: usize, alignment: usize) -> *mut c_void {
+pub extern "C" fn roc_realloc(ptr: *mut c_void, new_length: usize, alignment: usize) -> NonNull<c_void> {
     env_mut().realloc(ptr, new_length, alignment)
 }
 

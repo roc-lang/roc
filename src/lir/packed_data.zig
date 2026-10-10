@@ -29,47 +29,59 @@ pub const Plan = struct {
         self.regions.deinit(self.allocator);
     }
 
-    fn appendLayout(self: *Plan, layouts: *const layout.Store, idx: layout.Idx, offset: u32) std.mem.Allocator.Error!void {
-        const value = layouts.getLayout(idx);
-        switch (value.tag) {
-            .zst => {},
-            .scalar => {
-                switch (value.getScalar().tag) {
-                    .int, .frac, .vector => {},
-                    .str, .opaque_ptr => unreachable,
-                }
-                const width = layouts.layoutSize(value);
-                const leaf = Leaf{ .packed_offset = self.packed_width, .memory_offset = offset, .width = width };
-                try self.leaves.append(self.allocator, leaf);
-                self.packed_width = std.math.add(u32, self.packed_width, width) catch unreachable;
-                if (self.regions.items.len != 0) {
-                    const last = &self.regions.items[self.regions.items.len - 1];
-                    if (last.memory_offset + last.width == offset) {
-                        last.width += width;
-                        return;
+    /// Appends the product's scalar leaves in canonical field order. Nested
+    /// products are expanded from a worklist: each struct's fields are pushed
+    /// in reverse canonical order so the first field is expanded next.
+    fn appendLayout(self: *Plan, layouts: *const layout.Store, root: layout.Idx, root_offset: u32) std.mem.Allocator.Error!void {
+        const Pending = struct { layout_idx: layout.Idx, offset: u32 };
+        const Field = struct { index: u32, layout_idx: layout.Idx, offset: u32 };
+        var pending: std.ArrayList(Pending) = .empty;
+        defer pending.deinit(self.allocator);
+        var fields: std.ArrayList(Field) = .empty;
+        defer fields.deinit(self.allocator);
+        try pending.append(self.allocator, .{ .layout_idx = root, .offset = root_offset });
+        while (pending.pop()) |next| {
+            const offset = next.offset;
+            const value = layouts.getLayout(next.layout_idx);
+            switch (value.tag) {
+                .zst => {},
+                .scalar => {
+                    switch (value.getScalar().tag) {
+                        .int, .frac, .vector => {},
+                        .str, .opaque_ptr => unreachable,
                     }
-                }
-                try self.regions.append(self.allocator, leaf);
-            },
-            .struct_ => {
-                const info = layouts.getStructInfo(value);
-                const Field = struct { index: u16, layout_idx: layout.Idx, offset: u32 };
-                var fields: std.ArrayList(Field) = .empty;
-                defer fields.deinit(self.allocator);
-                try fields.ensureTotalCapacity(self.allocator, info.fields.len);
-                for (0..info.fields.len) |i| {
-                    const field = info.fields.get(@intCast(i));
-                    if (field.is_padding) continue;
-                    fields.appendAssumeCapacity(.{ .index = field.index, .layout_idx = field.layout, .offset = layouts.getStructFieldOffset(value.getStruct().idx, @intCast(i)) });
-                }
-                std.mem.sort(Field, fields.items, {}, struct {
-                    fn less(_: void, a: Field, b: Field) bool {
-                        return a.index < b.index;
+                    const width = layouts.layoutSize(value);
+                    const leaf = Leaf{ .packed_offset = self.packed_width, .memory_offset = offset, .width = width };
+                    try self.leaves.append(self.allocator, leaf);
+                    self.packed_width = std.math.add(u32, self.packed_width, width) catch unreachable;
+                    if (self.regions.items.len != 0) {
+                        const last = &self.regions.items[self.regions.items.len - 1];
+                        if (last.memory_offset + last.width == offset) {
+                            last.width += width;
+                            continue;
+                        }
                     }
-                }.less);
-                for (fields.items) |field| try self.appendLayout(layouts, field.layout_idx, offset + field.offset);
-            },
-            .box, .box_of_zst, .list, .list_of_zst, .closure, .tag_union, .ptr, .erased_box, .erased_callable => unreachable,
+                    try self.regions.append(self.allocator, leaf);
+                },
+                .struct_ => {
+                    const info = layouts.getStructInfo(value);
+                    fields.clearRetainingCapacity();
+                    try fields.ensureTotalCapacity(self.allocator, info.fields.len);
+                    for (0..info.fields.len) |i| {
+                        const field = info.fields.get(@intCast(i));
+                        if (field.is_padding) continue;
+                        fields.appendAssumeCapacity(.{ .index = field.index, .layout_idx = field.layout, .offset = layouts.getStructFieldOffset(value.getStruct().idx, @intCast(i)) });
+                    }
+                    std.mem.sort(Field, fields.items, {}, struct {
+                        fn less(_: void, a: Field, b: Field) bool {
+                            return a.index > b.index;
+                        }
+                    }.less);
+                    try pending.ensureUnusedCapacity(self.allocator, fields.items.len);
+                    for (fields.items) |field| pending.appendAssumeCapacity(.{ .layout_idx = field.layout_idx, .offset = offset + field.offset });
+                },
+                .box, .box_of_zst, .list, .list_of_zst, .closure, .tag_union, .ptr, .erased_box, .erased_callable => unreachable,
+            }
         }
     }
 
