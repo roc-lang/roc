@@ -812,9 +812,21 @@ const FutureFields = struct {
     nodes: std.ArrayList(Node) = .empty,
     edges: std.ArrayList(Edge) = .empty,
     work: std.ArrayList(u32) = .empty,
+    /// The structural successors of statements whose successors do not depend
+    /// on the candidate, recorded the first time any candidate's walk reaches
+    /// them. The store does not change while dismantling is computed, so
+    /// every later candidate reads them back instead of decoding the
+    /// statement again.
+    successor_spans: collections.DenseMap(LIR.CFStmtId, SuccessorSpan),
+    successor_pool: std.ArrayList(LIR.CFStmtId) = .empty,
+
+    const SuccessorSpan = struct { start: u32, len: u32 };
 
     fn init(gpa: Allocator) FutureFields {
-        return .{ .indices = collections.DenseMap(LIR.CFStmtId, u32).init(gpa) };
+        return .{
+            .indices = collections.DenseMap(LIR.CFStmtId, u32).init(gpa),
+            .successor_spans = collections.DenseMap(LIR.CFStmtId, SuccessorSpan).init(gpa),
+        };
     }
 
     fn deinit(self: *FutureFields, gpa: Allocator) void {
@@ -822,6 +834,18 @@ const FutureFields = struct {
         self.nodes.deinit(gpa);
         self.edges.deinit(gpa);
         self.work.deinit(gpa);
+        self.successor_spans.deinit();
+        self.successor_pool.deinit(gpa);
+    }
+
+    /// The structural successors of `stmt`, recorded on first use.
+    fn structuralSuccessors(self: *FutureFields, gpa: Allocator, store: *const LirStore, stmt: LIR.CFStmtId) Error![]const LIR.CFStmtId {
+        if (self.successor_spans.get(stmt)) |span| return self.successor_pool.items[span.start..][0..span.len];
+        const start = self.successor_pool.items.len;
+        try body_clone.appendSuccessors(store, &self.successor_pool, stmt, gpa);
+        const len = self.successor_pool.items.len - start;
+        try self.successor_spans.put(stmt, .{ .start = @intCast(start), .len = @intCast(len) });
+        return self.successor_pool.items[start..][0..len];
     }
 
     fn clear(self: *FutureFields) void {
@@ -892,8 +916,6 @@ const FutureFields = struct {
                 _ = try self.node(gpa, store.getCFStmtImmediate(read.key_ptr.*).assign_ref.next);
             }
         }
-        var successors = std.ArrayList(LIR.CFStmtId).empty;
-        defer successors.deinit(gpa);
         // Node insertion is the finite discovery worklist. No statement is
         // decoded again when another consuming read reaches the same region.
         var index: u32 = 0;
@@ -964,9 +986,7 @@ const FutureFields = struct {
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
                 => {
-                    successors.clearRetainingCapacity();
-                    try body_clone.appendSuccessors(store, &successors, cursor, gpa);
-                    for (successors.items) |next| try self.edge(gpa, index, next, ~@as(u64, 0));
+                    for (try self.structuralSuccessors(gpa, store, cursor)) |next| try self.edge(gpa, index, next, ~@as(u64, 0));
                 },
             }
         }
