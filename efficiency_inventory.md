@@ -154,7 +154,7 @@ stages it touches; the instruction-count effect is reported in "Results".
 - category A, B; runs per `instantiateVar` / `instantiateTypeScheme` / `instantiateDeferredCallable` call — i.e. per use of any polymorphic binding, per nominal backing open, per …; impact high (every instantiation pays ~4 mallocs + ~4 frees + hash …; risk low
 - Finding: `instantiateVarHelp` (line 890) creates `marker_choices: AutoHashMapUnmanaged(Var, bool)` on the stack and `collectMarkerChoices` (lines 772-780) creates `pending: ArrayList(Item)`, `visited: AutoHashMapUnmanaged(Item, void)` (keyed by {Var, polarity, reach} — a Var plus two small enums), and `binders: ArrayList(Var)`, all `deinit`ed at return. That is four heap-allocated containers (hash maps grow by rehash) …
 - Fix: move all four into `instantiate.Scratch` (already on the store and already holds `reach_*` DenseMaps for exactly this purpose) with `clearRetainingCapacity` semantics proportional to the last walk; replace `visited` with `DenseMap(Var, u8)` where bit `(polarity*2+reach)` marks visitation, and `marker_choices` with `DenseMap(Var, bool)`. Also `collectMarkerChoices` returns early when `polarity_var_ident == null`, so …
-- Status: open
+- Status: fixed (fix 2)
 
 ### src/types/instantiate.zig:97 — `rigid_subs` AutoHashMap(Ident.Idx, Var) rebuilt per nominal-backing open
 - category A; runs per `openNominalBacking` call (every time the checker needs a nominal's backing: unify against nominal, field access through nominal, method dispatch, derive); impact medium (1 alloc + hash growth per backing open; backing …; risk low
@@ -208,13 +208,13 @@ stages it touches; the instruction-count effect is reported in "Results".
 - category F, E; runs `Env.reset` runs on every `env_pool.acquire()` (per top-level group/def check, line 11670/16768); `clearClean` iterates every list in the map (line 6746) and …; impact medium; risk low
 - Finding: each env carries a map of trigger-key -> heap list of positions; `clearClean` walks all values calling `clearRetainingCapacity` on each (O(number of distinct keys ever seen by that env)) rather than O(live entries). Lists are never freed until env deinit, so an env that once saw many keys keeps paying the walk on every reset.
 - Fix: flat `positions: ArrayListUnmanaged(u32)` + `heads: AutoHashMapUnmanaged(u64, u32)` (hash key is legitimate) with `next` chaining; reset becomes two `clearRetainingCapacity` calls. Or track the live-key list and clear only those.
-- Status: open
+- Status: fixed (fix 8)
 
 ### src/check/Check.zig:18091 + 25009 — per-`checkExpr` heap `create(ExprKernelActivity)` + fresh `activities` ArrayList + fresh `tasks` ArrayList
 - category A; runs per `checkExpr`/`checkExprWithFunctionOwner` call (per top-level def body via `DefActivity` line 17022, plus every other checkExpr entry: expect bodies, …; impact medium (allocation per def; amortized growth repeated per …; risk low
 - Finding: `runCheckActivities` (18091) creates a stack-local `std.ArrayList(CheckActivity)` and `newExprKernelActivity` (25009) does `gpa.create(ExprKernelActivity)`; the activity's `tasks: std.ArrayList(ExprTask)` starts `.empty` and grows by doubling on every entry. Each def body therefore pays: 1 create + 1 destroy + 2 ArrayList growth sequences (activities, tasks) from zero capacity. These should be single reusable stacks …
 - Fix: add `activity_stack: ArrayListUnmanaged(CheckActivity)` and `expr_kernel_pool: ArrayListUnmanaged(ExprKernelActivity)` (or a single `tasks` stack shared by all kernels since kernels nest strictly) to `Self`; `runCheckActivities` records the base length and truncates on exit (including the errdefer abort path). Verify the abort path (`abortCheckActivity`) still sees exactly the activities pushed by this call.
-- Status: open
+- Status: fixed (fix 7)
 
 ### src/check/Check.zig:24932 — `ExprTask` carries a full `ExprCheckFrame` plus a `union(enum)` state sized by its largest variant
 - category C; runs one `ExprTask` pushed per CIR expression that has children (every call, block, lambda, match, if, record, list, binop, ...); impact medium-high (the task stack is pushed/popped once per …; risk medium
@@ -292,7 +292,7 @@ stages it touches; the instruction-count effect is reported in "Results".
 - category A; runs per lambda/def whose constructed tags are checked for absent payloads (30803, 30829: per `closeAbsentConstructedPayloadVars*` call, i.e. per lambda body and …; impact medium; risk low
 - Finding: `std.heap.ArenaAllocator.init(self.gpa)` (the std arena pays atomics per alloc; `base.SingleThreadArena` exists and is already used by `exhaustive.checkMatch`) plus a fresh `exhaustive.NominalOpenCache` per call, both discarded after one query.
 - Fix: use `base.SingleThreadArena` retained on `Self` with `reset(.retain_capacity)` per call; keep one `NominalOpenCache` per module (it caches nominal backing openings, which are module-stable) and reuse it in `checkMatch`/`checkDestructure` call sites (29602, 30900) too.
-- Status: open
+- Status: fixed (fix 15: arena); cache reuse open
 
 ### src/check/Check.zig:29602 — `exhaustive.NominalOpenCache.init` per match expression
 - category A; runs per `match` and per destructuring pattern (29602, 30900); impact medium; risk medium (must respect the cache's read …
@@ -436,13 +436,13 @@ stages it touches; the instruction-count effect is reported in "Results".
 - category E; runs per record-vs-record unify (every record literal, every record access against a record type, every row extension); impact medium-high (records are ubiquitous; each sort does O(n log …; risk low (order must be identical: rank …
 - Finding: "Sort the fields (gathering maintains partial order, but unification may create unsorted unions)" — both runs are sorted with a comparison sort that calls `Ident.textOrder(store.getText(a), store.getText(b))`, i.e. two string lookups and a byte comparison per comparison. The tag path (3585-3594) at least checks `ordered` first and skips the sort; the record path does not.
 - Fix: (1) add the same "already ordered" pre-check used for tags; (2) compare by the ident store's precomputed text ranks (`base.TextRankCache` / `Ident.Store.textRanks` exist for exactly this; design.md says row ordering uses rank comparison) instead of re-reading text; (3) when rows come from the store already sorted (the common case: `mkRecord` sorts), skip entirely.
-- Status: open
+- Status: fixed (fix 5)
 
 ### src/check/unify.zig:3822-3829 — `std.mem.sort` of constraint index runs on every constraint-bearing flex/rigid unification
 - category E; runs per unify of two constrained variables (every method call on a polymorphic receiver, every numeric literal unify); impact medium; risk low
 - Finding: both `a_indices` and `b_indices` are sorted with `ConstraintOrder.lessThan` (which reads `fn_name` text and origin tags) so same-name groups can be matched linearly. Constraint lists are short (1-5) but this runs extremely often; a comparison sort with text lookups is heavier than an insertion sort on precomputed name ranks.
 - Fix: precompute the sort key once per constraint (`(name_rank: u32, is_method_call: u1, producer_index)`) into a scratch `[]u64` and sort that (or insertion-sort for n <= 8); or keep constraint ranges sorted at append time so only merges are needed.
-- Status: open
+- Status: fixed (fix 6)
 
 ### src/check/unify.zig:2980 — `demandPureFunction` allocates `std.ArrayList(PureDemand)` per call
 - category A; runs per function-effect demand (per call whose callee effect must be pure; per `fn_unbound` resolution); impact low-medium; risk low
@@ -466,7 +466,7 @@ stages it touches; the instruction-count effect is reported in "Results".
 - category B; runs per occurs check (per unify that merges structure: the occurs check runs after each structural union), `reset` clears both maps (O(capacity) each) per check; impact medium-high (occurs runs per structural unify); risk low
 - Finding: two dense-id-keyed hash maps; `visited` is pre-sized to 64 at init and grows with the deepest type ever checked; every `reset` walks the whole table.
 - Fix: `DenseMap(DescStoreIdx, void)` + `DenseMap(Var, u32)` (O(live) clear) or an epoch-stamped `[]u32` column over descs/vars owned by the scratch and grown to `store.len()`.
-- Status: open
+- Status: fixed (fix 3)
 
 ### src/check/copy_import.zig — no per-node allocations found beyond store appends
 - category —; runs per imported var
@@ -638,7 +638,7 @@ stages it touches; the instruction-count effect is reported in "Results".
 - category A, B; runs per lambda (14107) and per match branch (14524/14573) canonicalized — i.e. per function literal and per branch in the module; impact medium; risk low
 - Finding: `base.Scratch.SetView.init` allocates a hash set sized to the bound-var run, then it is probed per free variable and destroyed. Bound-var runs are typically 1-5 entries; a linear scan (`containsFrom`, which the same loop already uses for captures) would beat hashing for those sizes, and for large runs a bitset over `nodes.len()` is O(1) per probe without allocation.
 - Fix: use `containsFrom` when the run is short (<= 16) and otherwise a reusable `DynamicBitSetUnmanaged`/`DenseMap(Pattern.Idx, void)` on `Self` cleared via the entries list; remove `SetView` if no other caller remains.
-- Status: open
+- Status: fixed (fix 9)
 
 ### src/canonicalize/Can.zig:11355-11380 — `runExprKernel` builds an 8 KiB `BufferFirstAllocator` + `std.heap.ArenaAllocator` + `ExprKernelWork` (~60 ArrayLists) per `canonicalizeExpr` call
 - category A; runs per `canonicalizeExpr` entry (18 call sites: per top-level def body, per annotation default, per associated item, per expect body, ...); impact medium; risk medium (nesting of kernel entries must …
@@ -796,7 +796,7 @@ stages it touches; the instruction-count effect is reported in "Results".
 - category B, A; runs per call site (Can.zig lambda/branch capture analysis; see the Can finding); impact medium (via its callers); risk low
 - Finding: a hash set built from a scratch range per query.
 - Fix: see Can.zig:14107 finding; remove `SetView` once unused.
-- Status: open
+- Status: fixed (fix 9)
 
 ### src/base/Ident.zig:173-179 — `Ident.Store.attributes: SafeList(Attributes)` is a parallel 1-byte column duplicating bits already packed in `Ident.Idx`
 - category C, H; runs per ident inserted; read by `lookup` to reconstruct an `Idx` from text; impact low (1 byte/ident) but removes a serialized column; risk medium (the `reserved` bit is not …
@@ -1512,7 +1512,7 @@ stages it touches; the instruction-count effect is reported in "Results".
 - category B; runs 68 declarations across postcheck, most of them per-procedure or per-specialization scratch maps (NodeId, TypeId, TypeRepId, LocalId, ExprId, TermId, …; impact medium (many are on hot per-node paths; see individual …; risk low
 - Finding: `ci/zig_lints.zig:508` searches for the literal `"HashMap("`, so `std.AutoHashMapUnmanaged(NodeId, usize)` (lower.zig:19428), `AutoHashMapUnmanaged(checked.CheckedExprId, DirectCallRequest)` (lower.zig:19476), `AutoHashMapUnmanaged(TypeRepId, ...)` (boxy/plan.zig x20), `AutoHashMapUnmanaged(LIR.LocalId, ...)` (boxy/lower.zig:15617, 34468, 34593), `AutoHashMapUnmanaged(Ast.LocalId, std.ArrayList(...))` …
 - Fix: convert each to `collections.DenseMap(K, V)` (same `get/put/getOrPut/remove/iterator` surface) or to a column on the owning store; for the `void`-valued sets use `collections.ScopedBitSet`/`DynamicBitSetUnmanaged` with an epoch. Also extend the lint to match `HashMapUnmanaged(` so the contract is enforced. Semantics are unchanged as long as iteration order is not observable (check each `iterator()` consumer; …
-- Status: open
+- Status: open (lint gap noted; converted case by case)
 
 ### src/collections/VersionedMap.zig:17-30 (used by every BodyContext via BinderMap/TypedBinders/LocalProcContexts) — 72-byte change records and usize slots for u32 payloads
 - category C; runs one `Change` per `BinderMap.put`/`restore` (per pattern binder bound, per child context fork), one `Slot` per distinct key; impact medium; risk low
@@ -1578,7 +1578,7 @@ stages it touches; the instruction-count effect is reported in "Results".
 - category A/E; runs per ordinary specialization job (every reuse of a `BodyDraftStore` by the queued spec-job driver); impact medium; risk low
 - Finding: `template_spec_lookup`, `nested_spec_lookup`, `nested_spec_families`, `template_specs_by_template` (and each of its value ArrayLists), `template_spec_by_fn`, and `closed_direct_specializations` are all `deinit`ed and re-created with `.init(self.allocator)`, so every job regrows every table from zero capacity. The preceding lines (17680-17692) do the same for the proof columns (`.deinit` then `= .empty`).
 - Fix: `clearRetainingCapacity()` on each (DenseMap and AutoHashMap both support it; for the map-of-ArrayLists either clear each value list in place and keep them, or replace the structure per the entry below). Verify `assertGraphStateDiscarded` still sees `count() == 0`.
-- Status: open
+- Status: fixed (fix 10)
 
 ### src/postcheck/monotype/lower.zig:49546-49566 — `resolved_callable_vectors`: map of ArrayLists with linear candidate scan
 - category E/F; runs per callable evidence resolution with replacements (per dispatch edge through a callable parameter); impact low-medium; risk low
@@ -1626,7 +1626,7 @@ stages it touches; the instruction-count effect is reported in "Results".
 - category A/G; runs per re-entrant lowering call: `lowerExpr` (33662), `lowerExprAtTypeCell` (46202, 7 callers), `lowerDispatchOperandAtType` (46128, 8 callers), …; impact medium; risk low
 - Finding: `var frames: std.ArrayList(LowerFrame) = .empty; defer frames.deinit(...)` — `LowerFrame` is `{ctx ptr, cursor u8, task: LowerTask}` and `LowerTask` is a union whose largest inline members (`MatchTask` ~150 B with an embedded `ArrayListUnmanaged`, `DispatchLowerTask` ~140 B with an embedded `ArrayList`, `CallLowerTask`, `BlockTask` already boxed) make each frame on the order of 200-300 bytes; every `runLower` …
 - Fix: keep one `frames` stack on the `BodyContext` (or the Builder, since nested contexts share the allocator) and run each `runLower` on top of it from a base index (`frames.items.len` at entry; pop back to it on exit/errdefer). Shrink the union by boxing `MatchTask`/`DispatchLowerTask` like `BlockTask`/`NestedFnTask`, or by moving their growable members (`pending`, `pre_lowered`) into context-owned scratch stacks …
-- Status: open
+- Status: fixed (fix 11)
 
 ### src/postcheck/monotype/lower.zig:31162-31166 (boxLowerTask, 20 sites), 23642-23646 (boxInstTask, 5 sites) — per-node heap boxes for block/nested-fn/hosted-evidence/loop tasks
 - category F; runs per block expression, per nested function value, per loop, per nominal instantiation (`InstNominalTask`, `InstDeclBackingTask`, `InstDeclaredOrderTask`); impact low-medium; risk low
@@ -1692,7 +1692,7 @@ stages it touches; the instruction-count effect is reported in "Results".
 - category B/A; runs per public/private tag-row pairing, per record-row pairing, per request-container join (each relation of two rows); impact medium (row relations are the dominant unify work for …; risk low
 - Finding: `var private_positions: AutoHashMapUnmanaged(names.TagNameId, u32) = .empty; ... ensureTotalCapacity(...)` allocates and frees a hash table per relation and hashes dense `TagNameId`/`RecordFieldNameId`s. The graph already owns `row_label_right_generation`/`row_label_right_index`/`row_label_left_generation` + `row_label_generation` (2110-2116) for exactly this "pair labels without clearing" job.
 - Fix: reuse the generation-stamped label columns (grow to `max(label id)+1` once, bump `row_label_generation` per relation) at these three sites. Same pairing result.
-- Status: open
+- Status: fixed (fix 12)
 
 ### src/postcheck/monotype/solve.zig:755-770 (`containsIterator`), 7831 (`TypeUninhabitedScan.visiting`), 636-642 (`EquivalenceRenumberer` maps) — per-walk `AutoHashMapUnmanaged` keyed by dense `Type.TypeId`/`NodeId`
 - category B/A; runs `containsIterator` per open node renumbered in `equivalenceIdentityInto`; the type-uninhabited scan per finished-type inhabitation query; renumberer maps per …; impact low-medium; risk low
@@ -1963,7 +1963,7 @@ stages it touches; the instruction-count effect is reported in "Results".
 - category E (per procedure, proportional to the whole program); runs per Lambda Mono function specialization (`lowerQueuedFns` calls `lowerFnSpec` for every queued spec); impact high for large programs with many specializations (the …; risk low
 - Finding: `local_map`, `expr_map`, `pat_map`, `stmt_map` are allocated once at `init` (277-291) over every lifted local/expr/pat/stmt in the program, then `@memset(..., null)` at the start of every function spec, so lowering F specializations costs O(F x (locals + exprs + pats + stmts)) bytes of zeroing regardless of body size; with 8-byte optionals that is 32 bytes per node per spec.
 - Fix: epoch-stamped columns (`map_epoch: []u32` + value column; a slot is live when its epoch equals the current spec's), or `collections.DenseMap` per spec (clearing proportional to the entries the spec wrote), or at least restrict the memset to the id ranges the source function's body occupies (lifted bodies are contiguous ranges? verify with `Lifted.Fn` layout). Same results.
-- Status: open
+- Status: fixed (fix 1)
 
 ### src/postcheck/lambda_mono/lower.zig:1372-1441 — per-node `alloc`+`free` of a `lowered` slice just to call `addXSpan`
 - category A/D; runs per lowered list/tuple/record/call/block/pattern/branch node (every node with children); impact medium; risk low
@@ -2062,7 +2062,7 @@ stages it touches; the instruction-count effect is reported in "Results".
 - category B; runs per statement read/write in every per-procedure pass that uses `cloneForProcRewrite` (branch_expectation, trmc, forwarding_join, tag_fusion, known_tag_jump, …; impact high; risk low
 - Finding: `RewriteKeys` maps a global `CFStmtId` to a dense position among the rows this rewrite prepared. The rows are exactly the statements reachable from one procedure, which are (after lowering) mostly a contiguous range, and the ids are sorted in `finish()`. A hash map is used so the worker does not allocate a global-sized index; but the per-read probe plus `getOrPut` in `prepare` is paid on every access. …
 - Fix: since ids are sorted and unique after `finish`, replace the map with a binary search over `ids` for lookups (log n with no hashing) or, better, an epoch-stamped dense column shared per worker lane (`lane_state`) sized to the coordinator's `cf_stmts.len()` once per phase: `position_of[id]` with a stamp per entry; clearing is O(prepared ids). The design.md "short-lived scope over a larger ID domain uses a paged, …
-- Status: open
+- Status: fixed (fix 13)
 
 ### src/lir/LirStore.zig:297 — `cloneForProcRewrite` prepares and later materializes the whole reachable statement set even when the pass changes nothing
 - category A/E; runs per procedure per phase (10 phases x every procedure with a body).; impact medium; risk medium
@@ -2103,7 +2103,7 @@ stages it touches; the instruction-count effect is reported in "Results".
 - category A; runs per procedure x 3 phases (source prep, planning, emission), plus per `prepareSourceLiveness`/`solveLoopLiveness` call.; impact high (ARC is the largest post-check pass; every allocation …; risk low
 - Finding: `runArcTasks`'s callback (line 838) passes only `worker.allocator` to `context.execute`; `SourceCache.execute` (line 913) and `EmissionOwner.plan` (line 970) each do `std.heap.ArenaAllocator.init(allocator)`. `SourceLiveness.scratch_allocator` is that same output allocator, and `prepareSourceLiveness` (line 7320), the loop-liveness builder (line 7728 `LivenessCertificate`, line 7882) create further …
 - Fix: thread `worker.scratch` into `execute(worker)` for the three ARC task contexts; use it for `scratch_arena`, `work`, `loop_edge_nodes`, `pred_counts`, `pred_writes`, `reached`, the materialize task list (line 2133) and solver task list (line 2879); switch the retained arenas (`SourceCache.arena`, `EmissionOwner.arena`) to `base.SingleThreadArena`. Verify: nothing retained in `Completion.value` points into scratch …
-- Status: open
+- Status: partly fixed (fix 15: arenas are single-thread; scratch threading still open)
 
 ### src/lir/arc.zig:1107 — `computeBoxyRcDescs` duplicates the `boxy_desc` column of every local
 - category D; runs once per `insert` call (per program), O(locals) x 28 bytes.; impact low (one-off, but 28 bytes x locals; on a large program …; risk low
@@ -2270,7 +2270,7 @@ stages it touches; the instruction-count effect is reported in "Results".
 - category B; runs `takeAt(stmt)` / `ownedOnlyTake(stmt)` / `completeTakeAt(stmt)` are consulted per `assign_ref` statement per emission (procedures x ownership variants); …; impact medium; risk low
 - Finding: `takes`, `owned_only_takes`, `complete_takes: AutoHashMapUnmanaged(CFStmtId, …)`, `containers`, `owned_only_containers`, `projection_units`, `projection_aliases: AutoHashMapUnmanaged(LocalId, …)`. The `Unmanaged` spelling escapes the `HashMap(...Id` lint. The sets are sparse (few takes per program), but they are read on hot per-statement paths. A `DenseMap(CFStmtId, Take)` or a `take_bindings`-style dense column …
 - Fix: `collections.DenseMap` for the statement- and local-keyed tables; for `takes`, additionally a `DynamicBitSet` over statements so the common miss is one bit test.
-- Status: open
+- Status: fixed (fix 17)
 
 ### src/lir/arc_dismantle.zig:1651 — `compute` allocates ~25 store-sized arrays with memsets and several per-proc/per-statement hash maps (`param_bodies`, `read_kinds`, `body_states`, `proc_joins: []AutoHashMapUnmanaged`)
 - category A/B/F; runs once per program; `proc_joins` is one hash map per procedure (2196-2201), `body_states: AutoHashMapUnmanaged(CFStmtId, FlowState)` (2241), `read_kinds: …; impact low-medium; risk low
@@ -2584,7 +2584,7 @@ stages it touches; the instruction-count effect is reported in "Results".
 - category A; runs per phase (one arena) in serial mode; per task in parallel mode.; impact low-medium; risk low
 - Finding: `var scratch = std.heap.ArenaAllocator.init(allocator)` reset per task; `base.SingleThreadArena` avoids the atomics on every scratch allocation of every pass. The parallel executor's worker scratch (src/base/post_check_task_executor.zig:69) is passed through to the passes correctly; ARC and uniqueness tasks ignore it (see arc.zig:836 and arc_solve.zig:4874 findings).
 - Fix: `base.SingleThreadArena` here; thread `worker.scratch` into ARC/uniqueness.
-- Status: open
+- Status: fixed (fix 15)
 
 ### src/lir/LirStore.zig:1300 — `spanRange` + `add*Span` helpers append element-by-element after `ensureUnusedCapacity` (pattern across `addLocalSpan`, `addU64Span`, `addU32Span`, `addCFSwitchBranches`, `addStrMatchArms`, `addJoinPointSpan`)
 - category G; runs per span append (per statement with operands).; impact low; risk low
@@ -2727,7 +2727,7 @@ stages it touches; the instruction-count effect is reported in "Results".
 - category B/H; runs per `roc_alloc`/`roc_dealloc`/`roc_realloc` during compile-time evaluation (every list/str/box allocation); impact high (two hash operations per Roc allocation across all …; risk low
 - Finding: `CompilerHost.rocAlloc` does `allocateBytes` then `self.allocations.put(@intFromPtr(ptr), {size, alignment})`; `rocDealloc` does `fetchRemove`; `rocRealloc` does alloc + fetchRemove + memcpy + free + put (lines 80-115). The map exists for two reasons: `rocRealloc` needs the old size (the RocOps realloc callback does not pass it), and `freeRemainingAllocations` frees leftovers at deinit. …
 - Fix: Store the size and alignment in a header word immediately before the returned pointer (allocate `header + alignForward(size)`), read it back in realloc/dealloc, and drop the map. For leftover freeing in `CompilerHost`, back allocations with a `base.SingleThreadArena` (as `CompileTimeHost` already does) so deinit is a single arena release; or keep an intrusive doubly linked list through the headers if individual …
-- Status: open
+- Status: fixed (fix 14)
 
 ### src/eval/runtime_host.zig:153 — Runtime host tracks every allocation in a hash map too
 - category B/H; runs per Roc allocation in interpreted `roc run`/`roc test` runs (`allocation_tracker: AutoHashMap(usize, AllocationInfo)`, `allocation_call_count`); impact medium; risk low

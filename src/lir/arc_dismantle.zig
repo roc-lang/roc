@@ -239,18 +239,18 @@ pub const Dismantles = struct {
     arena: base.SingleThreadArena,
     /// `assign_ref .field` statements whose reads consume the container's
     /// stored unit; emission skips their retain.
-    takes: std.AutoHashMapUnmanaged(LIR.CFStmtId, Take),
+    takes: collections.DenseMap(LIR.CFStmtId, Take),
     /// Dismantlable containers and their committed field-place domains.
-    containers: std.AutoHashMapUnmanaged(LIR.LocalId, Container),
+    containers: collections.DenseMap(LIR.LocalId, Container),
     /// Takes on containers that are proc parameters solved borrowed: valid
     /// only in emissions where the demand vector overrides the parameter to
     /// owned (mode-specialized variants). The value is the parameter local,
     /// so emission can check the override for the current variant.
-    owned_only_takes: std.AutoHashMapUnmanaged(LIR.CFStmtId, Take),
+    owned_only_takes: collections.DenseMap(LIR.CFStmtId, Take),
     /// Containers behind `owned_only_takes`, keyed by the container local:
     /// the parameter itself, or a projection binding whose takes that
     /// parameter's owned override activates.
-    owned_only_containers: std.AutoHashMapUnmanaged(LIR.LocalId, Container),
+    owned_only_containers: collections.DenseMap(LIR.LocalId, Container),
     /// Parameter positions whose owned variant activates an exact field take,
     /// indexed directly by source procedure id.
     owned_only_param_benefits: []arc_sig.ParamMask,
@@ -271,25 +271,25 @@ pub const Dismantles = struct {
     /// of another local. Moving one of these locals moves the root's unit
     /// directly when that unit is present; otherwise the ordinary retain is
     /// preserved.
-    projection_units: std.AutoHashMapUnmanaged(LIR.LocalId, LIR.LocalId),
+    projection_units: collections.DenseMap(LIR.LocalId, LIR.LocalId),
     /// Complete projection reads whose owned target can receive the root's
     /// unit directly. The solve-time transfer still checks path liveness and
     /// keeps the ordinary retain when the root must survive.
-    complete_takes: std.AutoHashMapUnmanaged(LIR.CFStmtId, LIR.LocalId),
+    complete_takes: collections.DenseMap(LIR.CFStmtId, LIR.LocalId),
     /// Later complete projections rewritten to explicit aliases of the
     /// dominating projected container that owns their representation.
-    projection_aliases: std.AutoHashMapUnmanaged(LIR.LocalId, LIR.LocalId),
+    projection_aliases: collections.DenseMap(LIR.LocalId, LIR.LocalId),
 
     pub fn deinit(self: *Dismantles) void {
         const gpa = self.arena.child_allocator;
-        self.takes.deinit(gpa);
-        self.containers.deinit(gpa);
-        self.owned_only_takes.deinit(gpa);
-        self.owned_only_containers.deinit(gpa);
+        self.takes.deinit();
+        self.containers.deinit();
+        self.owned_only_takes.deinit();
+        self.owned_only_containers.deinit();
         self.field_restitution_args.deinit(gpa);
-        self.projection_units.deinit(gpa);
-        self.complete_takes.deinit(gpa);
-        self.projection_aliases.deinit(gpa);
+        self.projection_units.deinit();
+        self.complete_takes.deinit();
+        self.projection_aliases.deinit();
         self.arena.deinit();
     }
 
@@ -880,13 +880,13 @@ const FutureFields = struct {
         store: *const LirStore,
         solution: *const arc_solve.Solution,
         local: LIR.LocalId,
-        reads: *const std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind),
-        joins: *const std.AutoHashMapUnmanaged(u32, LIR.CFStmtId),
+        reads: *const collections.DenseMap(LIR.CFStmtId, ReadKind),
+        joins: *const collections.DenseMap(u32, LIR.CFStmtId),
         receipts: []const FieldRestitution,
         redefinition: ?LIR.CFStmtId,
     ) Error!void {
         self.clear();
-        var read_it = reads.iterator();
+        var read_it = reads.constIterator();
         while (read_it.next()) |read| {
             if (read.value_ptr.consuming) {
                 _ = try self.node(gpa, store.getCFStmt(read.key_ptr.*).assign_ref.next);
@@ -985,8 +985,8 @@ fn fieldObservedAfter(
     local: LIR.LocalId,
     bit: u64,
     start: LIR.CFStmtId,
-    reads: *const std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind),
-    joins: *const std.AutoHashMapUnmanaged(u32, LIR.CFStmtId),
+    reads: *const collections.DenseMap(LIR.CFStmtId, ReadKind),
+    joins: *const collections.DenseMap(u32, LIR.CFStmtId),
     receipts: []const FieldRestitution,
     redefinition: ?LIR.CFStmtId,
     visits: *usize,
@@ -1080,7 +1080,7 @@ fn collectProcJoinBodies(
     gpa: Allocator,
     store: *const LirStore,
     root: LIR.CFStmtId,
-    joins: *std.AutoHashMapUnmanaged(u32, LIR.CFStmtId),
+    joins: *collections.DenseMap(u32, LIR.CFStmtId),
     epochs: []u32,
     epoch: u32,
     stack: *std.ArrayList(LIR.CFStmtId),
@@ -1092,7 +1092,7 @@ fn collectProcJoinBodies(
         epochs[stmt_index] = epoch;
         const stmt = store.getCFStmt(stmt_id);
         if (stmt == .join) {
-            const entry = try joins.getOrPut(gpa, @backingInt(stmt.join.id));
+            const entry = try joins.getOrPut(@backingInt(stmt.join.id));
             if (entry.found_existing) {
                 if (entry.value_ptr.* != stmt.join.body) dismantleInvariant("procedure contains two bodies for one join identity");
             } else {
@@ -1131,10 +1131,10 @@ test "future field uses resolve joins in their procedure" {
         .body = exit,
         .remainder = back_edge,
     } }, .test_fixture);
-    var loop_joins = std.AutoHashMapUnmanaged(u32, LIR.CFStmtId).empty;
-    defer loop_joins.deinit(gpa);
-    var other_joins = std.AutoHashMapUnmanaged(u32, LIR.CFStmtId).empty;
-    defer other_joins.deinit(gpa);
+    var loop_joins = collections.DenseMap(u32, LIR.CFStmtId).init(gpa);
+    defer loop_joins.deinit();
+    var other_joins = collections.DenseMap(u32, LIR.CFStmtId).init(gpa);
+    defer other_joins.deinit();
     const epochs = try gpa.alloc(u32, store.cfStmtCount());
     defer gpa.free(epochs);
     @memset(epochs, 0);
@@ -1145,9 +1145,9 @@ test "future field uses resolve joins in their procedure" {
     try std.testing.expectEqual(read, loop_joins.get(0).?);
     try std.testing.expectEqual(exit, other_joins.get(0).?);
 
-    var reads = std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind).empty;
-    defer reads.deinit(gpa);
-    try reads.put(gpa, read, .{ .bit = 1, .consuming = true });
+    var reads = collections.DenseMap(LIR.CFStmtId, ReadKind).init(gpa);
+    defer reads.deinit();
+    try reads.put(read, .{ .bit = 1, .consuming = true });
     const solution: arc_solve.Solution = undefined;
     var future = FutureFields.init(gpa);
     defer future.deinit(gpa);
@@ -1204,15 +1204,15 @@ test "future field observations agree with per-read traversal across joins rebin
         .body = nested,
         .remainder = jump,
     } }, .test_fixture);
-    var joins = std.AutoHashMapUnmanaged(u32, LIR.CFStmtId).empty;
-    defer joins.deinit(gpa);
-    try joins.put(gpa, @backingInt(outer_id), nested);
-    try joins.put(gpa, @backingInt(nested_id), branch);
-    var reads = std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind).empty;
-    defer reads.deinit(gpa);
-    try reads.put(gpa, read, .{ .bit = 1, .consuming = false });
+    var joins = collections.DenseMap(u32, LIR.CFStmtId).init(gpa);
+    defer joins.deinit();
+    try joins.put(@backingInt(outer_id), nested);
+    try joins.put(@backingInt(nested_id), branch);
+    var reads = collections.DenseMap(LIR.CFStmtId, ReadKind).init(gpa);
+    defer reads.deinit();
+    try reads.put(read, .{ .bit = 1, .consuming = false });
     // Models the already-expanded borrowed descendant/whole-value mentions.
-    try reads.put(gpa, rebind, .{ .bit = 2, .consuming = false });
+    try reads.put(rebind, .{ .bit = 2, .consuming = false });
     const starts = [_]LIR.CFStmtId{ exit, boundary, jump, rebind, read, branch, nested_jump, nested, outer };
     for (starts) |start| {
         const probe = try store.addCFStmt(.{ .assign_ref = .{
@@ -1220,7 +1220,7 @@ test "future field observations agree with per-read traversal across joins rebin
             .op = .{ .field = .{ .source = local, .field_idx = 2 } },
             .next = start,
         } }, .test_fixture);
-        try reads.put(gpa, probe, .{ .bit = 4, .consuming = true });
+        try reads.put(probe, .{ .bit = 4, .consuming = true });
     }
     // These queries consume only join membership and the outcome signature
     // table; keep unrelated solver state undefined so accidental access fails.
@@ -1251,7 +1251,7 @@ test "future field observations agree with per-read traversal across joins rebin
         if (configuration & 16 != 0) solution.join_param.set(0) else solution.join_param.unset(0);
         store.getCFStmtPtr(boundary).* = if (configuration & 1 != 0) .loop_break else .loop_continue;
         store.getCFStmtPtr(rebind).set_local.target = if (configuration & 32 != 0) local else other;
-        try joins.put(gpa, 0, if (configuration & 64 != 0) nested else exit);
+        try joins.put(0, if (configuration & 64 != 0) nested else exit);
         try future.compute(gpa, &store, &solution, local, &reads, &joins, &receipts, null);
         try std.testing.expectEqual(if (configuration & 16 != 0) ~@as(u64, 0) else @as(u64, 0), future.observed(boundary));
         for (starts) |start| {
@@ -1280,10 +1280,10 @@ test "future field observations share CFG discovery across many consuming reads"
             .next = start,
         } }, .test_fixture);
     }
-    var reads = std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind).empty;
-    defer reads.deinit(gpa);
-    try reads.put(gpa, exit, .{ .bit = 2, .consuming = false });
-    const joins = std.AutoHashMapUnmanaged(u32, LIR.CFStmtId).empty;
+    var reads = collections.DenseMap(LIR.CFStmtId, ReadKind).init(gpa);
+    defer reads.deinit();
+    try reads.put(exit, .{ .bit = 2, .consuming = false });
+    var joins = collections.DenseMap(u32, LIR.CFStmtId).init(gpa);
     var solution: arc_solve.Solution = undefined;
     solution.leader = &.{};
     solution.join_param = .{};
@@ -1298,7 +1298,7 @@ test "future field observations share CFG discovery across many consuming reads"
                 .op = .{ .field = .{ .source = local, .field_idx = 0 } },
                 .next = start,
             } }, .test_fixture);
-            try reads.put(gpa, probe, .{ .bit = 1, .consuming = true });
+            try reads.put(probe, .{ .bit = 1, .consuming = true });
         }
         var old_visits: usize = 0;
         for (0..count) |_| {
@@ -1661,8 +1661,8 @@ pub fn compute(
     // Proc parameters are defined by the proc entry rather than a statement;
     // remember each parameter's body so its spine has a start. A local that
     // parameterizes more than one proc spec never dismantles.
-    var param_bodies = std.AutoHashMapUnmanaged(LIR.LocalId, ?LIR.CFStmtId).empty;
-    defer param_bodies.deinit(gpa);
+    var param_bodies = collections.DenseMap(LIR.LocalId, ?LIR.CFStmtId).init(gpa);
+    defer param_bodies.deinit();
     const is_param = try gpa.alloc(bool, store.localCount());
     defer gpa.free(is_param);
     @memset(is_param, false);
@@ -1682,7 +1682,7 @@ pub fn compute(
         for (0..GuardedList.borrowLen(params)) |position| {
             const param = GuardedList.at(params, position);
             is_param[@backingInt(param)] = true;
-            const slot = try param_bodies.getOrPut(gpa, param);
+            const slot = try param_bodies.getOrPut(param);
             if (slot.found_existing) {
                 slot.value_ptr.* = null;
             } else {
@@ -2171,17 +2171,17 @@ pub fn compute(
     // and build the output.
     var result = Dismantles{
         .arena = base.SingleThreadArena.init(gpa),
-        .takes = .empty,
-        .containers = .empty,
-        .owned_only_takes = .empty,
-        .owned_only_containers = .empty,
+        .takes = .init(gpa),
+        .containers = .init(gpa),
+        .owned_only_takes = .init(gpa),
+        .owned_only_containers = .init(gpa),
         .owned_only_param_benefits = &.{},
         .take_bindings = &.{},
         .owned_only_binding_roots = &.{},
         .field_restitution_args = .empty,
-        .projection_units = .empty,
-        .complete_takes = .empty,
-        .projection_aliases = .empty,
+        .projection_units = .init(gpa),
+        .complete_takes = .init(gpa),
+        .projection_aliases = .init(gpa),
     };
     errdefer result.deinit();
     result.owned_only_param_benefits = try result.arena.allocator().alloc(arc_sig.ParamMask, store.procSpecCount());
@@ -2191,14 +2191,14 @@ pub fn compute(
     result.owned_only_binding_roots = try result.arena.allocator().alloc(u32, store.localCount());
     @memset(result.owned_only_binding_roots, no_index);
 
-    var read_kinds = std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind).empty;
-    defer read_kinds.deinit(gpa);
-    const proc_joins = try gpa.alloc(std.AutoHashMapUnmanaged(u32, LIR.CFStmtId), store.procSpecCount());
+    var read_kinds = collections.DenseMap(LIR.CFStmtId, ReadKind).init(gpa);
+    defer read_kinds.deinit();
+    const proc_joins = try gpa.alloc(collections.DenseMap(u32, LIR.CFStmtId), store.procSpecCount());
     defer {
-        for (proc_joins) |*joins| joins.deinit(gpa);
+        for (proc_joins) |*joins| joins.deinit();
         gpa.free(proc_joins);
     }
-    @memset(proc_joins, .empty);
+    for (proc_joins) |*joins| joins.* = .init(gpa);
     const joins_ready = try gpa.alloc(bool, store.procSpecCount());
     defer gpa.free(joins_ready);
     @memset(joins_ready, false);
@@ -2235,8 +2235,8 @@ pub fn compute(
     }
     var future_fields = FutureFields.init(gpa);
     defer future_fields.deinit(gpa);
-    var body_states = std.AutoHashMapUnmanaged(LIR.CFStmtId, FlowState).empty;
-    defer body_states.deinit(gpa);
+    var body_states = collections.DenseMap(LIR.CFStmtId, FlowState).init(gpa);
+    defer body_states.deinit();
     const FlowFrame = struct { cursor: LIR.CFStmtId, state: FlowState };
     var flow_frames = std.ArrayList(FlowFrame).empty;
     defer flow_frames.deinit(gpa);
@@ -2417,7 +2417,7 @@ pub fn compute(
             const bit = @as(u64, 1) << @intCast(read.field_idx);
             if (rc_mask & bit == 0) continue;
             const consuming = !solution.isBorrowed(read.target) or analysis.owned_demand[@backingInt(read.target)];
-            try read_kinds.put(gpa, read.stmt, .{
+            try read_kinds.put(read.stmt, .{
                 .bit = bit,
                 .consuming = consuming,
             });
@@ -2459,7 +2459,7 @@ pub fn compute(
         // may run before it on any path, so the value it moves or observes
         // is the intact container.
         for (candidate.whole_uses.items) |stmt| {
-            const slot = try read_kinds.getOrPut(gpa, stmt);
+            const slot = try read_kinds.getOrPut(stmt);
             if (slot.found_existing) {
                 slot.value_ptr.bit = ~@as(u64, 0);
                 slot.value_ptr.consuming = false;
@@ -2486,7 +2486,7 @@ pub fn compute(
                 var mention = analysis.mention_heads[borrower];
                 while (mention != no_index) {
                     const edge = analysis.mention_edges.items[mention];
-                    const slot = try read_kinds.getOrPut(gpa, @fromBackingInt(@intCast(edge.stmt)));
+                    const slot = try read_kinds.getOrPut(@fromBackingInt(@intCast(edge.stmt)));
                     if (!slot.found_existing) {
                         slot.value_ptr.* = .{ .bit = bit, .consuming = false };
                     } else if (slot.value_ptr.consuming) {
@@ -2624,7 +2624,7 @@ pub fn compute(
                         // return would. Reads living past it are never
                         // visited, which keeps their fields residual.
                         const body = join_bodies.get(@backingInt(stmt.target)) orelse break :chain;
-                        const slot = try body_states.getOrPut(gpa, body);
+                        const slot = try body_states.getOrPut(body);
                         if (slot.found_existing) {
                             const merged = FlowState.meet(slot.value_ptr.*, state);
                             if (FlowState.eql(merged, slot.value_ptr.*)) break :chain;
@@ -2697,7 +2697,7 @@ pub fn compute(
             // Publishing the binding edge makes the ordinary ARC transfer and
             // certifier machinery carry that unit; no retain is suppressed
             // without the explicit complete-projection receipt.
-            try result.complete_takes.put(gpa, candidate.def_stmt, activation_root);
+            try result.complete_takes.put(candidate.def_stmt, activation_root);
             if (owned_only) {
                 result.owned_only_binding_roots[@backingInt(local)] = @backingInt(activation_root);
             } else {
@@ -2711,7 +2711,7 @@ pub fn compute(
             if (solution.isBorrowed(read.target) and !analysis.owned_demand[@backingInt(read.target)]) continue;
             const take = Take{ .root = local, .field_mask = bit };
             if (owned_only) {
-                try result.owned_only_takes.put(gpa, read.stmt, take);
+                try result.owned_only_takes.put(read.stmt, take);
                 // A target solved owned holds its own unit in every emission;
                 // the take only spares its retain. Only a target solved
                 // borrowed needs its binding overridden to owned, and a
@@ -2725,7 +2725,7 @@ pub fn compute(
                 }
                 result.owned_only_binding_roots[target_index] = @backingInt(activation_root);
             } else {
-                try result.takes.put(gpa, read.stmt, take);
+                try result.takes.put(read.stmt, take);
                 result.take_bindings[@backingInt(read.target)] = true;
             }
         }
@@ -2751,7 +2751,7 @@ pub fn compute(
         }
         if (union_root) |view_root_entry| {
             const root_local: LIR.LocalId = @fromBackingInt(@intCast(analysis.view_root[@backingInt(local)]));
-            try result.containers.put(gpa, root_local, .{
+            try result.containers.put(root_local, .{
                 .fields = stored_fields,
                 .full_mask = rc_mask,
                 .payload_view = .{
@@ -2760,9 +2760,9 @@ pub fn compute(
                 },
             });
         } else if (owned_only) {
-            try result.owned_only_containers.put(gpa, local, .{ .fields = stored_fields, .full_mask = rc_mask });
+            try result.owned_only_containers.put(local, .{ .fields = stored_fields, .full_mask = rc_mask });
         } else {
-            try result.containers.put(gpa, local, .{ .fields = stored_fields, .full_mask = rc_mask });
+            try result.containers.put(local, .{ .fields = stored_fields, .full_mask = rc_mask });
         }
     }
 
@@ -2784,7 +2784,7 @@ pub fn compute(
         const stmt = store.getCFStmtPtr(@fromBackingInt(@intCast(stmt_index)));
         if (stmt.* != .assign_ref) dismantleInvariant("projected alias definition stopped being a reference read");
         stmt.assign_ref.op = .{ .local = representative_local };
-        try result.projection_aliases.put(gpa, @fromBackingInt(@intCast(@as(u32, @intCast(local_index)))), representative_local);
+        try result.projection_aliases.put(@fromBackingInt(@intCast(@as(u32, @intCast(local_index)))), representative_local);
     }
 
     // Variant admission consumes the exact owned-only benefit without
@@ -2964,7 +2964,7 @@ pub fn compute(
         const local: LIR.LocalId = @fromBackingInt(@intCast(entry.key_ptr.*));
         if (!solution.isBorrowed(local) or solution.isJoinParam(local)) continue;
         if (result.isTakeBinding(local) or result.owned_only_binding_roots[@backingInt(local)] != no_index) continue;
-        try result.projection_units.put(gpa, local, @fromBackingInt(@intCast(origin.root)));
+        try result.projection_units.put(local, @fromBackingInt(@intCast(origin.root)));
     }
     for (place_edges.items) |edge| {
         if (edge.kind != .projection) continue;
@@ -2975,7 +2975,7 @@ pub fn compute(
         if (solution.isBorrowed(target)) continue;
         const origin = places.get(edge.source) orelse continue;
         if (origin.root == ambiguous_index) continue;
-        try result.complete_takes.put(gpa, @fromBackingInt(@intCast(edge.kind.projection)), @fromBackingInt(@intCast(origin.root)));
+        try result.complete_takes.put(@fromBackingInt(@intCast(edge.kind.projection)), @fromBackingInt(@intCast(origin.root)));
 
         // A complete projection can move its root's exact unit in an owned
         // parameter emission. Publish that mechanical capability to variant

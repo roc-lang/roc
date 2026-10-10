@@ -3447,7 +3447,7 @@ pub const Coordinator = struct {
             return;
         };
         defer manager.allocator.free(directory);
-        var arena = std.heap.ArenaAllocator.init(manager.allocator);
+        var arena = base.SingleThreadArena.init(manager.allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
         var writer = CompactWriter.init();
@@ -3484,8 +3484,8 @@ pub const Coordinator = struct {
             manager.stats.recordInvalidation();
             return null;
         }
-        const arena = self.gpa.create(std.heap.ArenaAllocator) catch return null;
-        arena.* = std.heap.ArenaAllocator.init(self.gpa);
+        const arena = self.gpa.create(base.SingleThreadArena) catch return null;
+        arena.* = base.SingleThreadArena.init(self.gpa);
         var installed = false;
         defer if (!installed) {
             arena.deinit();
