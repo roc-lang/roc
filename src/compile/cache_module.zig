@@ -5,11 +5,10 @@
 
 const std = @import("std");
 const can = @import("can");
-const check = @import("check");
 const collections = @import("collections");
 const ctx_mod = @import("ctx");
 
-const Constants = @import("cache_config.zig").Constants;
+const cache_versioning = @import("cache_versioning.zig");
 const CoreCtx = ctx_mod.CoreCtx;
 
 const ModuleEnv = can.ModuleEnv;
@@ -17,19 +16,6 @@ const Allocator = std.mem.Allocator;
 
 /// Magic number for cache validation
 const CACHE_MAGIC: u32 = 0x524F4343; // "ROCC" in ASCII
-
-/// The cache header's layout-version hash, computed at comptime. It changes when
-/// the struct layout changes, enabling automatic cache invalidation. Delegates to
-/// the shared `check.layoutVersionHash`, which recurses into nested aggregates and
-/// serialized element layouts, so a change nested inside a field's type also
-/// invalidates the cache. `cache_version` is a manual discriminant for semantic
-/// changes the structural walk cannot observe.
-fn computeVersionHash(comptime StructType: type, comptime cache_version: u32) [32]u8 {
-    return check.layoutVersionHash(StructType, cache_version);
-}
-
-/// Version hash of ModuleEnv.Serialized computed at comptime
-pub const MODULE_ENV_VERSION_HASH: [32]u8 = computeVersionHash(ModuleEnv.Serialized, Constants.CACHE_VERSION);
 
 /// Cache header that gets written to disk before the cached data
 pub const Header = struct {
@@ -76,7 +62,7 @@ pub const Header = struct {
         if (header.magic != CACHE_MAGIC) return InitError.InvalidMagic;
 
         // Validate version hash
-        if (!std.mem.eql(u8, &header.version_hash, &MODULE_ENV_VERSION_HASH)) {
+        if (!std.mem.eql(u8, &header.version_hash, &cache_versioning.module_env_layout)) {
             return InitError.InvalidVersionHash;
         }
 
@@ -127,7 +113,7 @@ pub const CacheModule = struct {
         const header = @as(*Header, @ptrCast(cache_data.ptr));
         header.* = Header{
             .magic = CACHE_MAGIC,
-            .version_hash = MODULE_ENV_VERSION_HASH,
+            .version_hash = cache_versioning.module_env_layout,
             .data_size = @intCast(total_data_size),
             .error_count = error_count,
             .warning_count = warning_count,
@@ -304,18 +290,6 @@ pub const Diagnostics = struct {
     header_size: u32,
     data_size: u32,
 };
-
-test "MODULE_ENV_VERSION_HASH golden value" {
-    // Tripwire: an *accidental* change to `ModuleEnv.Serialized`'s layout silently
-    // invalidates every on-disk module cache. It flips this hash and fails here. On
-    // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
-    // golden bytes below with the ones this assertion prints.
-    const golden: [32]u8 = .{
-        0x4B, 0x01, 0x77, 0xDC, 0xDD, 0x76, 0x51, 0x09, 0x91, 0x1B, 0xF8, 0xF5, 0x1A, 0x3D, 0xEF, 0x48,
-        0x5D, 0xB3, 0xE4, 0x50, 0x0B, 0xAD, 0xBF, 0x5D, 0x13, 0x5F, 0x9F, 0xF6, 0x31, 0x34, 0xA6, 0x97,
-    };
-    try std.testing.expectEqualSlices(u8, &golden, &MODULE_ENV_VERSION_HASH);
-}
 
 test "readFromFileMapped memory-maps a cache file copy-on-write" {
     if (comptime !CoreCtx.can_map_files) return;

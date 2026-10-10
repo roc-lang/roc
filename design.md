@@ -3712,6 +3712,28 @@ data emitter. The checked cache must not store native pointer-width padding,
 static refcount words, allocation headers, or any other runtime `RocStr` layout
 bytes.
 
+### Cache Admission Versioning
+
+A serialization root is a `Serialized` type whose bytes are admitted from outside
+the running compiler: `ModuleEnv.Serialized`, `CheckedModuleArtifact.Serialized`,
+and `PlatformPairing.Serialized`. Each root declares a `root_contract`
+(`collections.serde_validation.RootContract`) naming its owner type and every
+owner field it deliberately does not persist, every serialized field with no
+owner field, and every rename. A root's layout fingerprint
+(`check.rootLayoutVersionHash`) exists only for a type that declares the
+contract, and computing it runs the owner/serialized field-set audit, so a field
+added to an owner without a persistence decision is a compile error for every
+root that could silently drop it. There is no way to fingerprint an unregistered
+type, and an unfingerprinted type is admitted by no cache entry.
+
+`compile/cache_versioning.zig` is the only place fingerprints are composed. Each
+cache entry kind (checked module, platform pairing, canonicalized module) has one
+entry-version hash folding the kind's domain tag, its envelope and record format
+versions, and the fingerprint of every root its bodies hold. Entry headers carry
+that hash, and admission compares it and nothing else, so a fingerprint not folded
+there guards no entry. The builtin blob's trailer is the single
+`CheckedModuleArtifact.Serialized` fingerprint, compared directly.
+
 ### Fully Defined Persisted Bytes
 
 This section governs the raw-byte boundaries: the paths that persist a value by

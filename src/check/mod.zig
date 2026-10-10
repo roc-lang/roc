@@ -31,10 +31,10 @@ pub const HoistRoots = @import("hoist_roots.zig");
 pub const RequirementSolution = @import("requirement_solution.zig");
 pub const ConstStore = @import("const_store.zig");
 pub const CheckedArtifact = @import("checked_artifact.zig");
-/// Generic comptime layout fingerprint for a `Serialized` type (recurses into nested
-/// aggregates and `SerializedElement`s). Shared so both the checked-artifact cache and
-/// the ModuleEnv cache invalidate on any layout change, not just a top-level one.
-pub const layoutVersionHash = @import("artifact_serialize.zig").layoutVersionHash;
+/// Comptime layout fingerprint for a registered serialization root (recurses into
+/// nested aggregates and `SerializedElement`s), so every admitted blob invalidates on
+/// any layout change, not just a top-level one.
+pub const rootLayoutVersionHash = @import("artifact_serialize.zig").rootLayoutVersionHash;
 /// Checked module data exported under the post-check-facing name.
 pub const CheckedModule = CheckedArtifact;
 

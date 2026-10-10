@@ -10,6 +10,8 @@ const Sha256 = @import("base").Sha256;
 const can = @import("can");
 const check = @import("check");
 
+const cache_versioning = @import("cache_versioning.zig");
+
 const CheckedArtifact = check.CheckedArtifact;
 
 /// Names one module's canonicalization output in the canonicalized-module cache.
@@ -97,6 +99,19 @@ pub fn checkedModuleArtifactKey(input: CacheKeyInput) CheckedModuleArtifactKey {
         input.checking_context_identity,
         input.direct_import_artifact_keys,
     );
+}
+
+/// Names one exact platform/app composition in the platform-pairing cache: the
+/// two immutable checked-module keys, under the pairing entry's version hash.
+pub fn platformPairingCacheKey(platform: CheckedModuleArtifactKey, app: CheckedModuleArtifactKey) CheckedModuleArtifactKey {
+    var hasher = Sha256.init(.{});
+    hasher.update("roc-platform-pairing");
+    hasher.update(&cache_versioning.entryVersionHash(.platform_pairing));
+    hasher.update(&platform.bytes);
+    hasher.update(&app.bytes);
+    var key = CheckedModuleArtifactKey{};
+    hasher.final(&key.bytes);
+    return key;
 }
 
 /// Public `eql` function.

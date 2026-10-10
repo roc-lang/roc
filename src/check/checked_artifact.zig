@@ -27086,19 +27086,11 @@ fn pairingFieldNameEql(comptime a: []const u8, comptime b: []const u8) bool {
 /// Source environments, declarations, and unchanged body and type columns stay
 /// owned by the platform. A hit installs the finished view without evaluation.
 pub const PlatformPairing = struct {
-    // Bump for changes to the borrowed-column mask interpretation as well as
-    // other semantics not visible in the serialized layout fingerprint.
-    const version_hash = artifact_serialize.layoutVersionHash(Serialized, 2);
-
-    pub fn cacheKey(platform: CheckedModuleArtifactKey, app: CheckedModuleArtifactKey) CheckedModuleArtifactKey {
-        var hash = base.Sha256.init(.{});
-        hash.update("roc-platform-pairing");
-        hash.update(&CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
-        hash.update(&version_hash);
-        hash.update(&platform.bytes);
-        hash.update(&app.bytes);
-        return .{ .bytes = hash.finalResult() };
-    }
+    /// Comptime fingerprint of `Serialized`'s layout. The compiler's cache
+    /// versioning folds it into the platform-pairing cache entry's admission hash.
+    // Bump the version for changes to the borrowed-column mask interpretation as
+    // well as other semantics not visible in the serialized layout fingerprint.
+    pub const SERIALIZED_VERSION_HASH: [32]u8 = artifact_serialize.rootLayoutVersionHash(Serialized, 2);
 
     pub const Serialized = extern struct {
         relation: [32]u8,
@@ -27126,6 +27118,62 @@ pub const PlatformPairing = struct {
         const_store: ConstStore.Serialized,
         exported_const_templates: ExportedConstTemplateTable.Serialized,
         compile_time_debug: CompileTimeDebugStore.Serialized,
+
+        /// Every artifact column is either persisted here, carrying the app
+        /// substitution or the composition's evaluation results, or borrowed
+        /// unchanged from the exact platform the cache key names.
+        pub const root_contract: collections.serde_validation.RootContract = .{
+            .Owner = CheckedModuleArtifact,
+            .owner_only_fields = &.{
+                // Platform identity and source: borrowed from the platform.
+                "key",
+                "module_identity",
+                "direct_import_artifact_keys",
+                "public_api_dependencies",
+                "module_env",
+                "exports",
+                "provides_requires",
+                // Recorded as `relation`; the rest is borrowed from the platform.
+                "checking_context_identity",
+                // Persisted as the `body_*` columns; the rest is borrowed.
+                "checked_bodies",
+                // Persisted as `templates`; the rest is borrowed.
+                "checked_procedure_templates",
+                // Pairing-independent checked metadata: borrowed from the platform.
+                "evaluation_diagnostics",
+                "checked_const_bodies",
+                "exported_procedure_templates",
+                "exported_procedure_bindings",
+                "method_registry",
+                "static_dispatch_plans",
+                "nested_proc_sites",
+                "top_level_procedure_bindings",
+                "callable_eval_templates",
+                "hosted_procs",
+                "hosted_bindings",
+                "platform_required_declarations",
+                "platform_type_inputs",
+                "platform_requirement_solutions",
+                "interface_capabilities",
+                "top_level_values",
+                "hoisted_constants",
+                // Runtime ownership and preparation state, not checked data.
+                "evaluation_state",
+                "serialized_backing",
+                "serialized_backing_is_static",
+                "pairing_arena",
+            },
+            .serialized_only_fields = &.{
+                "relation", // `checking_context_identity.platform_app_relation`.
+                "borrowed_types", // Which `checked_types` columns are borrowed.
+                "has_dependent_evaluation", // Whether the evaluation columns are persisted.
+                "templates", // `checked_procedure_templates.templates`.
+                "body_exprs", // `checked_bodies.stored_exprs`.
+                "body_statements", // `checked_bodies.stored_statements`.
+                "body_patterns", // `checked_bodies.stored_patterns`.
+                "body_field_access_segments", // `checked_bodies.field_access_segment_pool`.
+            },
+        };
 
         pub fn serialize(self: *Serialized, artifact: *const CheckedModuleArtifact, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
             std.debug.assert(artifact.pairing_arena != null and artifact.evaluation_state == .finalized);
@@ -33722,22 +33770,18 @@ pub const CheckedModuleArtifact = struct {
         const_store: ConstStore.Serialized,
         compile_time_debug: CompileTimeDebugStore.Serialized,
 
-        comptime {
-            const owner_only_fields = [_][]const u8{
+        pub const root_contract: collections.serde_validation.RootContract = .{
+            .Owner = CheckedModuleArtifact,
+            .owner_only_fields = &.{
                 "module_env", // Written as the checked-cache env blob and injected during artifact deserialize.
                 "serialized_backing", // Runtime ownership for relocated cache/static bytes, not checked data.
-                "pairing_arena",
+                "pairing_arena", // Runtime ownership of an installed platform pairing's relocated bytes.
                 "evaluation_state", // Process-local preparation state; cached output is finalized.
                 "serialized_backing_is_static", // Runtime ownership mode for `serialized_backing`.
-            };
-            collections.serde_validation.assertBidirectionalFieldSet(
-                CheckedModuleArtifact,
-                Serialized,
-                &owner_only_fields,
-                &.{},
-                &.{},
-            );
+            },
+        };
 
+        comptime {
             // The TRUE total relocation fixup count: 1 (`direct_import_artifact_keys`)
             // + the recursive sum of every sub-store, now including the `SafeList`/
             // interner base pointers (`canonical_names` = 22 via its 7 interners +
@@ -34025,15 +34069,15 @@ pub const CheckedModuleArtifact = struct {
     // one-byte tags and varint integers.
     const serialized_layout_version: u32 = 107;
 
-    /// Comptime fingerprint of `Serialized`'s layout, mirroring
-    /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
-    /// artifact blob and stored in the on-disk module-cache header, then validated
-    /// on load (`expectSerializedVersion`), so an artifact serialized by a compiler
+    /// Comptime fingerprint of `Serialized`'s layout. It is appended to the baked
+    /// builtin artifact blob and validated on load (`expectSerializedVersion`), and
+    /// the compiler's cache versioning folds it into the admission hash of every
+    /// cache entry holding an artifact body, so an artifact serialized by a compiler
     /// with a different `Serialized` layout is rejected rather than relocated into a
     /// mismatched struct (a real hazard during development, where
     /// a reported release version can remain unchanged between rebuilds).
     pub const SERIALIZED_VERSION_HASH: [32]u8 =
-        artifact_serialize.layoutVersionHash(Serialized, serialized_layout_version);
+        artifact_serialize.rootLayoutVersionHash(Serialized, serialized_layout_version);
 
     // A-11: validate the entire serialized sub-store tree at compile time—every
     // field must be a relocatable marker or relocation-invariant POD (a raw pointer

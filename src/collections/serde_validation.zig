@@ -45,6 +45,7 @@ pub fn assertBidirectionalFieldSet(
     comptime renames: []const FieldRename,
 ) void {
     comptime {
+        @setEvalBranchQuota(1_000_000);
         if (@typeInfo(Owner) != .@"struct") {
             @compileError("field-set audit owner must be a struct: " ++ @typeName(Owner));
         }
@@ -79,6 +80,75 @@ pub fn assertBidirectionalFieldSet(
                 "' is neither serialized nor explicitly owner-only in " ++ @typeName(Owner));
         }
     }
+}
+
+/// The contract a serialization root declares as its `root_contract` decl.
+///
+/// A serialization root is a `Serialized` type whose bytes are admitted from
+/// outside the running compiler (a cache entry body or a baked blob), so its
+/// layout carries a version fingerprint. The fingerprint is available only for
+/// a type that declares this contract (`assertRegisteredRoot`), which makes
+/// every root's owner/serialized field-set audit unconditional: a root cannot
+/// be admitted without being audited.
+pub const RootContract = struct {
+    /// The in-memory type whose fields the root persists.
+    Owner: type,
+    /// Owner fields the root deliberately does not persist.
+    owner_only_fields: []const []const u8 = &.{},
+    /// Root fields with no owner field of the same name.
+    serialized_only_fields: []const []const u8 = &.{},
+    /// Owner fields persisted under a different serialized name.
+    renames: []const FieldRename = &.{},
+};
+
+/// Whether `Serialized` declares a `RootContract`.
+pub fn isRegisteredRoot(comptime Serialized: type) bool {
+    return comptime @typeInfo(Serialized) == .@"struct" and
+        @hasDecl(Serialized, "root_contract") and
+        @TypeOf(Serialized.root_contract) == RootContract;
+}
+
+/// `@compileError` unless `Serialized` declares a `RootContract`, then run the
+/// contract's owner/serialized field-set audit.
+pub fn assertRegisteredRoot(comptime Serialized: type) void {
+    comptime {
+        if (!isRegisteredRoot(Serialized)) {
+            @compileError("serialization root '" ++ @typeName(Serialized) ++
+                "' has no `pub const root_contract: serde_validation.RootContract`; " ++
+                "declare one so its field set is audited before its bytes can be admitted");
+        }
+        const contract = Serialized.root_contract;
+        assertBidirectionalFieldSet(
+            contract.Owner,
+            Serialized,
+            contract.owner_only_fields,
+            contract.serialized_only_fields,
+            contract.renames,
+        );
+    }
+}
+
+test "only types declaring a root contract are registered serialization roots" {
+    const Owner = struct { a: u32, b: u32 };
+    const RegisteredRoot = struct {
+        a: u32,
+        b: u32,
+
+        pub const root_contract: RootContract = .{ .Owner = Owner };
+    };
+    const UnregisteredRoot = struct { a: u32, b: u32 };
+    const WrongContractType = struct {
+        a: u32,
+        b: u32,
+
+        pub const root_contract = .{ .Owner = Owner };
+    };
+
+    comptime assertRegisteredRoot(RegisteredRoot);
+    try @import("std").testing.expect(comptime isRegisteredRoot(RegisteredRoot));
+    try @import("std").testing.expect(!comptime isRegisteredRoot(UnregisteredRoot));
+    try @import("std").testing.expect(!comptime isRegisteredRoot(WrongContractType));
+    try @import("std").testing.expect(!comptime isRegisteredRoot(u32));
 }
 
 fn comptimeHasRelocationMarker(comptime T: type) bool {
