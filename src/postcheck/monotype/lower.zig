@@ -10715,6 +10715,7 @@ const Builder = struct {
                     if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
                     if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
                     if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
+                    if (!nestedSpecReusableAt(source_ctx.draft, spec, request_owner)) continue;
                     const spec_request = try draftNestedSpecRequestNode(source_ctx.draft, source_ctx.graph, spec);
                     if (!try source_ctx.graph.typeIsResolved(spec_request)) continue;
                     const spec_fn_ty = try source_ctx.activeTypeFromNode(spec_request);
@@ -10736,6 +10737,7 @@ const Builder = struct {
                         if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
                         if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
                         if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
+                        if (!nestedSpecReusableAt(source_ctx.draft, spec, request_owner)) continue;
                         if (signature_relation == .exact_graph and
                             source_ctx.draft.fns.items[@backingInt(spec.fn_id)].signature_relation != .exact_graph)
                         {
@@ -10773,6 +10775,7 @@ const Builder = struct {
                             if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
                             if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
                             if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
+                            if (!nestedSpecReusableAt(source_ctx.draft, spec, request_owner)) continue;
                             if (signature_relation == .exact_graph and
                                 source_ctx.draft.fns.items[@backingInt(spec.fn_id)].signature_relation != .exact_graph)
                             {
@@ -13029,6 +13032,7 @@ const Builder = struct {
             const binder = capture.id.binder();
             const lowered_ty = try fn_ctx.lowerConstCaptureType(store_view, capture.ty);
             const local = try fn_ctx.addFreshLocalWithBinder(self.symbols.fresh(), lowered_ty, binder);
+            fn_ctx.draft.locals.items[@backingInt(local)].capture_kind = capture.kind;
             try fn_ctx.bindLocalName(local, binder);
             const previous = fn_ctx.binders.get(binder);
             try fn_ctx.binders.put(binder, local);
@@ -13241,6 +13245,7 @@ const Builder = struct {
             const lowered_ty = try fn_ctx.lowerConstCaptureType(store_view, capture.ty);
             const capture_cell = try fn_ctx.draftTypeCell(lowered_ty);
             const local = try fn_ctx.addFreshLocalWithBinderCell(self.symbols.fresh(), capture_cell, binder);
+            fn_ctx.draft.locals.items[@backingInt(local)].capture_kind = capture.kind;
             try fn_ctx.bindLocalName(local, binder);
             const previous = fn_ctx.binders.get(binder);
             try fn_ctx.binders.put(binder, local);
@@ -14405,6 +14410,10 @@ const DraftLocal = struct {
     binder: ?checked.PatternBinderId = null,
     capture_id: ?checked.CaptureId = null,
     checked_capture_id: ?checked.CaptureId = null,
+    /// Whether this local, when captured, is a lexical value or the recursive
+    /// binding reserved for a top-level compile-time root. Set where the
+    /// binding is reserved and carried to the stored closure's captures.
+    capture_kind: checked.ConstCaptureKind = .lexical,
 };
 
 const DraftTypedLocal = struct {
@@ -15541,6 +15550,10 @@ const ActiveCallableEvalBinding = struct {
     root: checked.ComptimeRootId,
     request_node: NodeId,
     local: DraftLocalId,
+    /// Owner whose body the reserved local is bound in. A read from deeper
+    /// in the ownership chain makes every function between them lexically
+    /// dependent (`BodyDraftStore.markRecursiveBindingRead`).
+    owner: DraftOwner,
     used: bool = false,
 };
 
@@ -16321,6 +16334,17 @@ const DraftStructuralEqMethodCall = struct {
     callee: DraftFnSlot,
 };
 
+/// Whether a request lowered in `request_owner` may reuse nested
+/// specialization `spec` of the same lexical owner. A body that reads an
+/// enclosing expansion's recursive-binding local names that local directly
+/// (it is not a checked capture), and a second expansion under the same owner
+/// reserves a different local; only a request inside `spec`'s own body is
+/// lowered where the local it names is in scope.
+fn nestedSpecReusableAt(draft: *const BodyDraftStore, spec: *const DraftNestedSpec, request_owner: DraftOwner) bool {
+    if (!spec.reads_recursive_binding) return true;
+    return draft.ownerDescendsFromDraftFn(request_owner, spec.fn_id);
+}
+
 const DraftNestedSpec = struct {
     state: DraftSpecState,
     nested: Ast.NestedFn,
@@ -16343,6 +16367,11 @@ const DraftNestedSpec = struct {
     lexical_owner: DraftOwner,
     requires_local: bool,
     local_context_dependent: bool,
+    /// Whether this body reads a recursive-binding local reserved by an
+    /// enclosing expansion (`BodyDraftStore.markRecursiveBindingRead`). That
+    /// local belongs to one expansion, so this body is reused only by a
+    /// request lowered inside its own body, where the same local is in scope.
+    reads_recursive_binding: bool = false,
     symbol: Common.Symbol,
     fn_id: DraftFnId,
     /// Exact alpha-normalized shape of the unresolved request before this nested
@@ -17132,6 +17161,58 @@ const BodyDraftStore = struct {
         return id;
     }
 
+    /// Record that the body being lowered reads a recursive-binding local
+    /// reserved in `binding_owner`'s body: a callable-eval binding, an active
+    /// constant binding, or an active ConstStore node binding.
+    ///
+    /// Such a local is not a checked capture. Whether a body names it depends
+    /// on the context the body was lowered in, so every function between
+    /// the read and `binding_owner` is lexically dependent: its specialization
+    /// identity omits the local, so it must never be merged with, or
+    /// committed as, an equal-looking specialization lowered elsewhere,
+    /// where that local is not in scope.
+    fn markRecursiveBindingRead(self: *BodyDraftStore, binding_owner: DraftOwner) void {
+        var cursor = self.current_owner;
+        var remaining = self.fns.items.len + 1;
+        while (remaining > 0) : (remaining -= 1) {
+            if (std.meta.eql(cursor, binding_owner)) return;
+            switch (cursor) {
+                .root, .reserved_fn => Common.invariant("recursive binding read was outside the ownership chain of its binding"),
+                .draft_fn => |fn_id| {
+                    const raw = @backingInt(fn_id);
+                    if (raw >= self.fns.items.len) {
+                        Common.invariant("draft owner ancestry referenced an unknown function");
+                    }
+                    self.markDraftFnLexicallyDependent(fn_id);
+                    cursor = self.fns.items[raw].parent_owner;
+                },
+            }
+        }
+        Common.invariant("draft function ownership ancestry contained a cycle");
+    }
+
+    fn markDraftFnLexicallyDependent(self: *BodyDraftStore, fn_id: DraftFnId) void {
+        for (self.nested_specs.items) |*spec| {
+            if (spec.fn_id != fn_id) continue;
+            spec.requires_local = true;
+            spec.local_context_dependent = true;
+            spec.reads_recursive_binding = true;
+            return;
+        }
+        for (self.template_specs.items) |*spec| {
+            if (spec.fn_id != fn_id) continue;
+            // Only a lexically dependent procedure body stays inside its
+            // owner; a context-free one becomes a top-level definition, which
+            // can name no enclosing local.
+            if (!spec.local_context_dependent) {
+                Common.invariant("context-free procedure body read an enclosing recursive binding");
+            }
+            spec.requires_local = true;
+            return;
+        }
+        Common.invariant("draft function had no owning nested or template specialization");
+    }
+
     /// Return whether `owner` is currently lowering inside `ancestor`'s body.
     /// Draft function parents are recorded at creation, so a partial interface
     /// match can only be classified as recursion through an explicit active
@@ -17500,6 +17581,15 @@ const BodyDraftStore = struct {
     fn setLocalName(self: *BodyDraftStore, id: DraftLocalId, name: []const u8) Allocator.Error!void {
         if (name.len == 0) return;
         self.local_names.items[@backingInt(id)] = try self.addSourceText(name);
+    }
+
+    /// Mark `id` as the recursive binding reserved for top-level root `root`
+    /// of `module`, so a closure capturing it stores that capture kind.
+    fn setLocalRecursiveBinding(self: *BodyDraftStore, id: DraftLocalId, module: checked.ModuleId, root: checked.ComptimeRootId) void {
+        self.locals.items[@backingInt(id)].capture_kind = .{ .recursive_binding = .{
+            .module = .{ .bytes = module.bytes },
+            .root = root,
+        } };
     }
 
     fn setLocalCaptureId(self: *BodyDraftStore, id: DraftLocalId, capture_id: u32) void {
@@ -17918,6 +18008,7 @@ const BodyDraftStore = struct {
                 .binder = local.binder,
                 .capture_id = durable_capture_id,
                 .checked_capture_id = local.checked_capture_id,
+                .capture_kind = local.capture_kind,
             });
             const local_name = self.sourceText(self.local_names.items[index]);
             program.local_names.appendAssumeCapacity(if (local_name.len == 0) "" else try program.allocator.dupe(u8, local_name));
@@ -21255,11 +21346,15 @@ const BodyContext = struct {
         }
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .draft_ir);
         defer timing_scope.end();
-        const inherited_capture_id = if (binder) |source_binder| blk: {
-            const existing = self.binders.get(source_binder) orelse break :blk null;
-            break :blk self.draft.locals.items[@backingInt(existing)].capture_id;
-        } else null;
-        return try self.draft.addLocal(symbol, ty, binder, inherited_capture_id);
+        const existing = if (binder) |source_binder| self.binders.get(source_binder) else null;
+        const inherited_capture_id = if (existing) |local| self.draft.locals.items[@backingInt(local)].capture_id else null;
+        const id = try self.draft.addLocal(symbol, ty, binder, inherited_capture_id);
+        // A new version of a binding keeps that binding's capture identity,
+        // including whether it is a root's recursive binding.
+        if (existing) |local| {
+            self.draft.locals.items[@backingInt(id)].capture_kind = self.draft.locals.items[@backingInt(local)].capture_kind;
+        }
+        return id;
     }
 
     /// Materialize a new runtime binding from checked capture provenance even
@@ -34555,6 +34650,7 @@ const BodyContext = struct {
 
             try relateRequestComponent(self.graph, active.request_node, request_fn_node);
             self.draft.active_callable_eval_bindings.items[index].used = true;
+            self.draft.markRecursiveBindingRead(active.owner);
             return try self.addExprWithTypeCell(
                 DraftTypeCell.fromGraphNode(request_fn_node),
                 .{ .local = active.local },
@@ -34581,11 +34677,13 @@ const BodyContext = struct {
             DraftTypeCell.fromGraphNode(request_fn_node),
             binder,
         );
+        self.draft.setLocalRecursiveBinding(local, view.key, root_id);
         try self.draft.active_callable_eval_bindings.append(self.allocator, .{
             .module = view.key,
             .root = root_id,
             .request_node = request_fn_node,
             .local = local,
+            .owner = self.draft.current_owner,
         });
         return local;
     }
@@ -34642,6 +34740,7 @@ const BodyContext = struct {
                 break :blk reserved;
             };
             self.draft.active_const_node_bindings.items[index].used = true;
+            self.draft.markRecursiveBindingRead(active.owner);
             return try self.addExprWithTypeCell(request_cell, .{ .local = local });
         }
 
@@ -42711,6 +42810,7 @@ const BodyContext = struct {
             const active = self.draft.active_const_bindings.items[index];
             if (constUseEql(active.const_use, const_use.const_ref)) {
                 self.draft.active_const_bindings.items[index].used = true;
+                self.draft.markRecursiveBindingRead(active.owner);
                 try self.materializeActiveConstBinding(id);
                 return active.local;
             }
@@ -42726,6 +42826,7 @@ const BodyContext = struct {
             const active = self.draft.active_const_bindings.items[index];
             if (moduleBytesEqual(checked.constModuleId(active.const_use).bytes, self.view.key.bytes) and active.binder == binder) {
                 self.draft.active_const_bindings.items[index].used = true;
+                self.draft.markRecursiveBindingRead(active.owner);
                 try self.materializeActiveConstBinding(id);
                 return;
             }
@@ -42733,7 +42834,14 @@ const BodyContext = struct {
         }
     }
 
-    fn topLevelConstBinderForUse(store_view: ModuleView, const_use: checked.ConstLocator) ?checked.PatternBinderId {
+    /// The binder a top-level constant's recursive binding is keyed by, and the
+    /// compile-time root that binding belongs to.
+    const TopLevelConstBinding = struct {
+        binder: checked.PatternBinderId,
+        root: checked.ComptimeRootId,
+    };
+
+    fn topLevelConstBinderForUse(store_view: ModuleView, const_use: checked.ConstLocator) ?TopLevelConstBinding {
         const owner = switch (const_use.owner) {
             .top_level_binding => |owner| owner,
             // A hoisted extraction root binds its result pattern. A reference
@@ -42750,7 +42858,8 @@ const BodyContext = struct {
                 if (raw_pattern >= store_view.bodies.pattern_binder_by_pattern.len) {
                     Common.invariant("hoisted const result pattern was outside the binder index");
                 }
-                return store_view.bodies.pattern_binder_by_pattern[raw_pattern];
+                const binder = store_view.bodies.pattern_binder_by_pattern[raw_pattern] orelse return null;
+                return .{ .binder = binder, .root = entry.root };
             },
         };
         if (!moduleBytesEqual(checked.constModuleId(const_use).bytes, store_view.key.bytes)) {
@@ -42771,7 +42880,7 @@ const BodyContext = struct {
             Common.invariant("top-level const template root had a mismatched checked pattern");
         }
         return switch (store_view.bodies.pattern(pattern).data) {
-            .assign => |binder| binder,
+            .assign => |binder| .{ .binder = binder, .root = root_id },
             .pending, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => Common.invariant("top-level const root pattern was not a binder"),
         };
     }
@@ -42805,12 +42914,14 @@ const BodyContext = struct {
         cell: DraftTypeCell,
         scope: *ActiveConstBindingScope,
     ) Allocator.Error!bool {
-        const binder = topLevelConstBinderForUse(store_view, const_use) orelse return false;
+        const binding = topLevelConstBinderForUse(store_view, const_use) orelse return false;
+        const binder = binding.binder;
         const local = try self.addFreshLocalWithBinderCell(
             self.builder.symbols.fresh(),
             cell,
             binder,
         );
+        self.draft.setLocalRecursiveBinding(local, checked.constModuleId(const_use), binding.root);
         try self.bindLocalNameFromView(store_view, local, binder);
         const reservation = try self.addExprWithTypeCell(cell, .pending_deferred);
         const active_id: ActiveConstBindingId = @fromBackingInt(@intCast(@as(u32, @intCast(self.draft.active_const_bindings.items.len))));
@@ -45061,6 +45172,7 @@ const BodyContext = struct {
             const capture_node = try self.graph.importMono(lowered_ty);
             const capture_cell = DraftTypeCell.fromGraphNode(capture_node);
             const local = try fn_ctx.addFreshLocalWithBinderCell(self.builder.symbols.fresh(), capture_cell, binder);
+            fn_ctx.draft.locals.items[@backingInt(local)].capture_kind = capture.kind;
             try fn_ctx.bindLocalName(local, binder);
             const previous = fn_ctx.binders.get(binder);
             try fn_ctx.binders.put(binder, local);
@@ -45229,6 +45341,7 @@ const BodyContext = struct {
             const lowered_ty = try fn_ctx.lowerConstCaptureType(store_view, capture.ty);
             const capture_cell = try fn_ctx.draftTypeCell(lowered_ty);
             const local = try fn_ctx.addFreshLocalWithBinderCell(self.builder.symbols.fresh(), capture_cell, binder);
+            fn_ctx.draft.locals.items[@backingInt(local)].capture_kind = capture.kind;
             try fn_ctx.bindLocalName(local, binder);
             const previous = fn_ctx.binders.get(binder);
             try fn_ctx.binders.put(binder, local);

@@ -161,6 +161,9 @@ pub const FnTemplate = struct {
 /// `ConstStore`; runtime capture joining was completed before LIR.
 pub const CaptureSlot = struct {
     id: const_store.CaptureId,
+    /// Whether this slot holds a lexical capture or a top-level root's
+    /// recursive binding, carried from the captured Monotype local.
+    kind: const_store.ConstCaptureKind,
     slot: u32,
     ty: const_store.ConstTypeId,
     plan: ConstPlanId,
