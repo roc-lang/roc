@@ -8958,10 +8958,18 @@ the value's own type); checked-body construction lowers each recorded use as a
 `row_coerce` whose child is the lookup at the value's own type, and the
 resolved value reference follows the coercion to that child. A use whose
 value's type has no reached tag union, such as a callable value, relates to
-the value's type itself. Because no use relates to the value's own rows, the
-value's still-open implicitly opened rows close when the module finishes
-checking (`Check.closeWeakValueImplicitOpenExts`) without any use observing
-it, and the closed type is the one the value is evaluated at.
+the value's type itself. Because no use relates to the value's own rows,
+every still-open row the coercion reaches in a top-level value's type closes
+when the module finishes checking, whether or not the value is annotated
+(`Check.closeTopLevelValueRows`, beside the annotation-minted rows
+`Check.closeWeakValueImplicitOpenExts` closes), without any use observing it;
+the closed type is the one the value is evaluated at, so the value stays a
+compile-time root. A value's row can still gain tags after a use copied it (a
+generated codec's validation adds its error tags during finalize), so each
+re-opened row is recorded with the row it copies, and once constraints settle
+`Check.propagateValueRowsToWidenedUses` adds every such tag to the copy; a use
+whose type does not admit it is a type mismatch at the use. A row with no
+tags, which asserts that no value has it, is never re-opened.
 
 ### Hosted Try Question Widening Removed
 
