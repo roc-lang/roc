@@ -8902,12 +8902,23 @@ without a backing is outside the reach: every use of the value shares it, and
 a use that needs it at another type is a type mismatch. Roc RFC 0011 likewise
 refines only the levels of a union a re-tag reaches.
 
-NOT YET IMPLEMENTED. Today a top-level value's row is shared by its module's
-uses and closed when the module finishes checking
-(`Check.closeWeakValueImplicitOpenExts`), so every defect listed above is
-present. The implementation replaces that closing with the per-use widening
-above and deletes `closeWeakValueImplicitOpenExts` and
-`weak_value_implicit_open_ext_ranges`.
+Checking implements this at each use of a checked top-level value, in its
+own module (`e_lookup_local`) and in an importer (`e_lookup_external`, for an
+imported value that is not a binding scheme). `Check.computeCoercionReach`
+marks the positions of the value's type the coercion reaches, and
+`Check.widenedValueUseVar` builds the use's copy: every reached tag union, its
+tags' payloads copied through the reach, under a fresh open extension, and
+every other variable shared with the value. A reached alias is copied as its
+widened backing. When the copy differs from the value's type, the use relates
+to the copy and checking records it (`ModuleEnv.RowCoercedUse`: the use and
+the value's own type); checked-body construction lowers each recorded use as a
+`row_coerce` whose child is the lookup at the value's own type, and the
+resolved value reference follows the coercion to that child. A use whose
+value's type has no reached tag union, such as a callable value, relates to
+the value's type itself. Because no use relates to the value's own rows, the
+value's still-open implicitly opened rows close when the module finishes
+checking (`Check.closeWeakValueImplicitOpenExts`) without any use observing
+it, and the closed type is the one the value is evaluated at.
 
 ### Hosted Try Question Widening Removed
 

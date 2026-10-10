@@ -708,6 +708,17 @@ host_boundary_annotations: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, void),
 /// `annotation_implicit_open_exts` slices it per annotation for the post-body
 /// audit (`auditImplicitOpenExts`).
 implicit_open_exts: std.ArrayListUnmanaged(ImplicitOpenExt),
+/// Scratch for `computeCoercionReach`: the positions the row coercion
+/// reaches from a value's type, and the positions below one it does not.
+coercion_reach_stack: std.ArrayListUnmanaged(Var) = .empty,
+coercion_reach_seen: std.AutoHashMapUnmanaged(Var, void) = .empty,
+coercion_outside_stack: std.ArrayListUnmanaged(Var) = .empty,
+coercion_outside_seen: std.AutoHashMapUnmanaged(Var, void) = .empty,
+/// Scratch for `widenedValueUseVar`: each reached variable's copy.
+widened_use_copies: std.AutoHashMapUnmanaged(Var, Var) = .empty,
+/// Scratch for `widenedValueUseVar`: one row's tags, gathered along its
+/// extension chain.
+widened_use_tags: std.ArrayListUnmanaged(types_mod.Tag) = .empty,
 /// The annotation whose definition's body check is about to generate it; its
 /// implicitly opened rows are bounded for the rest of that body check
 /// (`beginBoundedAnnotationRows`).
@@ -3877,6 +3888,12 @@ pub fn deinit(self: *Self) void {
     while (position_values.next()) |positions| if (positions.*) |items| self.gpa.free(items);
     self.nominal_positions.deinit(self.gpa);
     self.implicit_open_exts.deinit(self.gpa);
+    self.coercion_reach_stack.deinit(self.gpa);
+    self.coercion_reach_seen.deinit(self.gpa);
+    self.coercion_outside_stack.deinit(self.gpa);
+    self.coercion_outside_seen.deinit(self.gpa);
+    self.widened_use_copies.deinit(self.gpa);
+    self.widened_use_tags.deinit(self.gpa);
     self.annotation_implicit_open_exts.deinit(self.gpa);
     self.bounded_row_marks.deinit(self.gpa);
     self.weak_value_implicit_open_ext_ranges.deinit(self.gpa);
@@ -19910,6 +19927,203 @@ fn runLateImplicitOpenExtAudit(self: *Self, env: *Env) std.mem.Allocator.Error!v
 
 /// The resolved extension a tag row ends in, through aliases and extension
 /// chains. Rows related by unification share it.
+/// Mark the positions of `root` that the row coercion reaches
+/// (`coercion_reach_seen`) and every position below one it does not
+/// (`coercion_outside_seen`), exactly as the coercion reaches rows (design.md
+/// "Row Coercion Primitive"): a tag union's tags' payloads and its extension,
+/// an alias's backing, and both arguments of `Try`, whose backing
+/// `[Ok(a), Err(e)]` places each in a tag payload. Every other position—a
+/// record field, a tuple item, a function argument or result, an argument of
+/// `List` or of a user nominal—ends the reach.
+///
+/// Reach is a property of POSITIONS, not of variables: a variable at any
+/// position outside the reach is outside it, even when it is also reachable
+/// from a position inside, because the coercion must leave it unchanged at the
+/// outside position.
+fn computeCoercionReach(self: *Self, root: Var) std.mem.Allocator.Error!void {
+    self.coercion_reach_stack.clearRetainingCapacity();
+    self.coercion_reach_seen.clearRetainingCapacity();
+    self.coercion_outside_stack.clearRetainingCapacity();
+    self.coercion_outside_seen.clearRetainingCapacity();
+    try self.coercion_reach_stack.append(self.gpa, root);
+    while (self.coercion_reach_stack.pop()) |var_| {
+        const resolved = self.types.resolveVar(var_);
+        const entry = try self.coercion_reach_seen.getOrPut(self.gpa, resolved.var_);
+        if (entry.found_existing) continue;
+        switch (resolved.desc.content) {
+            .alias => |alias| try self.coercion_reach_stack.append(self.gpa, self.types.getAliasBackingVar(alias)),
+            .structure => |flat| switch (flat) {
+                .tag_union => |union_| {
+                    for (0..union_.tags.count) |index| {
+                        const tag = self.types.getTagAt(union_.tags, @intCast(index));
+                        try self.coercion_reach_stack.appendSlice(self.gpa, self.types.sliceVars(tag.args));
+                    }
+                    try self.coercion_reach_stack.append(self.gpa, union_.ext);
+                },
+                .nominal_type => |nominal| {
+                    if (self.nominalIsBuiltinTry(nominal)) {
+                        try self.coercion_reach_stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal));
+                    } else {
+                        try self.appendCoercionOutsideChildren(flat);
+                    }
+                },
+                .fn_pure, .fn_effectful, .fn_unbound, .tuple, .record => try self.appendCoercionOutsideChildren(flat),
+                .empty_record, .empty_tag_union => {},
+            },
+            .flex, .rigid, .err, .field_presence => {},
+        }
+    }
+    while (self.coercion_outside_stack.pop()) |var_| {
+        const resolved = self.types.resolveVar(var_);
+        const entry = try self.coercion_outside_seen.getOrPut(self.gpa, resolved.var_);
+        if (entry.found_existing) continue;
+        switch (resolved.desc.content) {
+            .alias => |alias| {
+                try self.coercion_outside_stack.appendSlice(self.gpa, self.types.sliceAliasAllArgs(alias));
+                try self.coercion_outside_stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+            },
+            .structure => |flat| try self.appendCoercionOutsideChildren(flat),
+            .flex, .rigid, .err, .field_presence => {},
+        }
+    }
+}
+
+/// Push every child of one structure onto the outside-the-reach worklist of
+/// `computeCoercionReach`.
+fn appendCoercionOutsideChildren(self: *Self, flat: FlatType) std.mem.Allocator.Error!void {
+    switch (flat) {
+        .tag_union => |union_| {
+            for (0..union_.tags.count) |index| {
+                const tag = self.types.getTagAt(union_.tags, @intCast(index));
+                try self.coercion_outside_stack.appendSlice(self.gpa, self.types.sliceVars(tag.args));
+            }
+            try self.coercion_outside_stack.append(self.gpa, union_.ext);
+        },
+        .nominal_type => |nominal| try self.coercion_outside_stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+        .fn_pure, .fn_effectful, .fn_unbound => |func| {
+            try self.coercion_outside_stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+            try self.coercion_outside_stack.append(self.gpa, func.ret);
+            try self.coercion_outside_stack.appendSlice(self.gpa, self.types.sliceVars(func.effect_deps));
+        },
+        .tuple => |tuple| try self.coercion_outside_stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+        .record => |record| {
+            const presences = self.types.getRecordFieldsSlice(record.fields).items(.presence);
+            for (presences) |presence| {
+                try self.coercion_outside_stack.append(self.gpa, presence.typeVar());
+                if (presence.presenceVar()) |presence_var| {
+                    try self.coercion_outside_stack.append(self.gpa, presence_var);
+                }
+            }
+            try self.coercion_outside_stack.append(self.gpa, record.ext);
+        },
+        .empty_record, .empty_tag_union => {},
+    }
+}
+
+fn nominalIsBuiltinTry(self: *const Self, nominal: types_mod.NominalType) bool {
+    return nominal.originIsBuiltin() and nominal.sourceDeclOptional() == self.builtinTrySourceDecl();
+}
+
+/// The type a use of a top-level value relates to (design.md "Value Rows:
+/// Local Values Share, Top-Level Values Widen At Each Use"): a copy of the
+/// value's type in which every tag union the row coercion reaches has a fresh
+/// open extension, whether the value's own row is open or closed, so the use
+/// may need the value at any wider union without changing the value's type.
+/// Every position outside the reach, and every variable that is not a reached
+/// row, is shared with the value, so those stay one type for every use. Null
+/// when the coercion reaches no tag union, so the use relates to the value's
+/// type itself.
+fn widenedValueUseVar(self: *Self, value_var: Var, env: *Env, region: Region) std.mem.Allocator.Error!?Var {
+    try self.computeCoercionReach(value_var);
+    self.widened_use_copies.clearRetainingCapacity();
+    const copy = try self.widenedReachCopy(value_var, env, region);
+    return if (copy == self.types.resolveVar(value_var).var_) null else copy;
+}
+
+/// Whether the row coercion may widen the row at `var_`: a position it
+/// reaches and no position outside it shares.
+fn coercionMayWiden(self: *const Self, var_: Var) bool {
+    const root = self.types.resolveVar(var_).var_;
+    return self.coercion_reach_seen.contains(root) and !self.coercion_outside_seen.contains(root);
+}
+
+/// One reached variable's copy for `widenedValueUseVar`; the variable itself
+/// when nothing under it widens. The reach never passes through a recursive
+/// type (recursion goes through a nominal, which ends the reach), so the copy
+/// is finite; copies are shared through `widened_use_copies`.
+fn widenedReachCopy(self: *Self, var_: Var, env: *Env, region: Region) std.mem.Allocator.Error!Var {
+    const resolved = self.types.resolveVar(var_);
+    if (!self.coercionMayWiden(resolved.var_)) return resolved.var_;
+    if (self.widened_use_copies.get(resolved.var_)) |copy| return copy;
+    const copy: Var = switch (resolved.desc.content) {
+        // The copy's union is the alias's backing, widened; the alias's
+        // parameters describe the value's own row, not the widened one.
+        .alias => |alias| try self.widenedReachCopy(self.types.getAliasBackingVar(alias), env, region),
+        .structure => |flat| switch (flat) {
+            .tag_union => try self.widenedRowCopy(resolved.var_, env, region),
+            .nominal_type => |nominal| blk: {
+                // Copying an argument appends to the type store, so read the
+                // arguments out of it first.
+                const args = try self.gpa.dupe(Var, self.types.sliceNominalArgs(nominal));
+                defer self.gpa.free(args);
+                var changed = false;
+                for (args) |*arg| {
+                    const arg_copy = try self.widenedReachCopy(arg.*, env, region);
+                    changed = changed or arg_copy != self.types.resolveVar(arg.*).var_;
+                    arg.* = arg_copy;
+                }
+                if (!changed) break :blk resolved.var_;
+                var widened = nominal;
+                widened.args = try self.types.appendVars(args);
+                break :blk try self.freshFromContent(.{ .structure = .{ .nominal_type = widened } }, env, region);
+            },
+            .fn_pure, .fn_effectful, .fn_unbound, .tuple, .record, .empty_record, .empty_tag_union => resolved.var_,
+        },
+        .flex, .rigid, .err, .field_presence => resolved.var_,
+    };
+    try self.widened_use_copies.put(self.gpa, resolved.var_, copy);
+    return copy;
+}
+
+/// A reached tag union's copy: every tag on its extension chain, each payload
+/// copied through the reach, under a fresh open extension. A row whose chain
+/// ends in a rigid is not the value's to widen and is shared.
+fn widenedRowCopy(self: *Self, row: Var, env: *Env, region: Region) std.mem.Allocator.Error!Var {
+    const tags_start = self.widened_use_tags.items.len;
+    defer self.widened_use_tags.shrinkRetainingCapacity(tags_start);
+    var current = row;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .tag_union => |union_| {
+                    for (0..union_.tags.count) |index| {
+                        try self.widened_use_tags.append(self.gpa, self.types.getTagAt(union_.tags, @intCast(index)));
+                    }
+                    current = union_.ext;
+                },
+                .empty_tag_union => break,
+                .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return self.types.resolveVar(row).var_,
+            },
+            .flex => break,
+            .rigid, .err, .field_presence => return self.types.resolveVar(row).var_,
+        }
+    }
+    // Copying a payload appends to the type store and to these scratch lists,
+    // so read the row's tags and each tag's payloads out of them first.
+    const tags = try self.gpa.dupe(types_mod.Tag, self.widened_use_tags.items[tags_start..]);
+    defer self.gpa.free(tags);
+    for (tags) |*tag| {
+        const args = try self.gpa.dupe(Var, self.types.sliceVars(tag.args));
+        defer self.gpa.free(args);
+        for (args) |*arg| arg.* = try self.widenedReachCopy(arg.*, env, region);
+        tag.* = try self.types.mkTag(tag.name, args);
+    }
+    const ext = try self.freshFromContent(.{ .flex = Flex.init() }, env, region);
+    return try self.freshFromContent(try self.types.mkTagUnion(tags, ext), env, region);
+}
+
 fn tagRowTail(self: *const Self, row: Var) Var {
     var current = row;
     while (true) {
@@ -25743,7 +25957,20 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                     try self.instantiateVarOrphan(pat_var, env, env.rank(), .use_last_var)
                 else
                     pat_var;
-                _ = try self.unify(expr_var, use_var, env);
+                // A use of a checked top-level value relates to a widening
+                // copy of the value's type, and reads the value through a
+                // row coercion (design.md "Value Rows: Local Values Share,
+                // Top-Level Values Widen At Each Use").
+                const widened_use_var = if (mb_processing_def) |processing_def|
+                    if (processing_def.status == .processed) try self.widenedValueUseVar(use_var, env, expr_region) else null
+                else
+                    null;
+                if (widened_use_var) |widened| {
+                    _ = try self.unify(expr_var, widened, env);
+                    try self.cir.recordRowCoercedUse(ModuleEnv.nodeIdxFrom(expr_idx), pat_var);
+                } else {
+                    _ = try self.unify(expr_var, use_var, env);
+                }
                 if (mb_processing_def) |processing_def| {
                     try self.recordSharedSchemeUse(
                         @backingInt(expr_idx),
@@ -25784,7 +26011,19 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                         .{ .explicit = expr_region },
                         .{ .value_use = expr_idx },
                     );
-                    _ = try self.unify(expr_var, ext_instantiated_var, env);
+                    // A use of an imported value that is not a binding scheme
+                    // widens exactly as a use in its own module does (design.md
+                    // "Value Rows: Local Values Share, Top-Level Values Widen
+                    // At Each Use"); a scheme's instantiation already has
+                    // fresh rows.
+                    const is_value = !ext_ref.other_cir.nodeIsBindingScheme(ext_ref.other_cir_node_idx);
+                    const widened_use_var = if (is_value) try self.widenedValueUseVar(ext_instantiated_var, env, expr_region) else null;
+                    if (widened_use_var) |widened| {
+                        _ = try self.unify(expr_var, widened, env);
+                        try self.cir.recordRowCoercedUse(ModuleEnv.nodeIdxFrom(expr_idx), ext_instantiated_var);
+                    } else {
+                        _ = try self.unify(expr_var, ext_instantiated_var, env);
+                    }
                 }
             } else {
                 try self.markErroneous(expr_var);
