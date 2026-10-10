@@ -1085,6 +1085,7 @@ scratch_replay_sources: std.ArrayListUnmanaged(u32) = .empty,
 scratch_replay_pairs: std.ArrayListUnmanaged(ModuleEnv.SchemeUsePair) = .empty,
 scratch_replay_nodes: std.AutoHashMapUnmanaged(Var, Var) = .empty,
 scratch_replay_grafts: std.ArrayListUnmanaged(DispatchReplayPair) = .empty,
+scratch_replay_kind_grafts: std.ArrayListUnmanaged(DispatchReplayPair) = .empty,
 scratch_replay_walk: std.ArrayListUnmanaged(DispatchReplayPair) = .empty,
 scratch_replay_walked: std.AutoHashMapUnmanaged(DispatchReplayPair, void) = .empty,
 /// Raw body constraint callable -> its `where_method_use` record. Deferred
@@ -4057,6 +4058,7 @@ pub fn deinit(self: *Self) void {
     self.scratch_replay_pairs.deinit(self.gpa);
     self.scratch_replay_nodes.deinit(self.gpa);
     self.scratch_replay_grafts.deinit(self.gpa);
+    self.scratch_replay_kind_grafts.deinit(self.gpa);
     self.scratch_replay_walk.deinit(self.gpa);
     self.scratch_replay_walked.deinit(self.gpa);
     self.where_method_use_record_by_fn_var.deinit(self.gpa);
@@ -43863,10 +43865,13 @@ fn replayDispatchTarget(
 
     // Pair the frozen instance with this edge's callable before changing
     // anything: where the callable has structure it is the instance's (the
-    // shapes are equal), and where it has a variable the instance supplies
-    // that subtree.
+    // shapes are equal), except that a function whose effect is unbound takes
+    // the instance function's kind, and where it has a variable the instance
+    // supplies that subtree.
     if (!try self.pairDispatchReplayInstance(replay_source.frozen_root, constraint.fn_var)) return null;
-    if (std.debug.runtime_safety) try self.verifyDispatchReplayAgainstFresh(replay_source.*, constraint, method_lookup);
+    var expected_callable_tree: std.ArrayListUnmanaged(u8) = .empty;
+    defer expected_callable_tree.deinit(self.gpa);
+    if (std.debug.runtime_safety) try self.verifyDispatchReplayAgainstFresh(replay_source.*, constraint, method_lookup, &expected_callable_tree);
 
     try self.dispatch_target_instantiations.ensureUnusedCapacity(self.gpa, 1);
     try self.dispatch_target_instantiation_by_fn_var.ensureUnusedCapacity(self.gpa, 1);
@@ -43876,6 +43881,20 @@ fn replayDispatchTarget(
         const result = try self.unify(graft.source, graft.target, env);
         if (!result.isEstablished()) {
             base.invariant("concrete dispatch replay could not relate a callable variable to its source's ground instance", .{});
+        }
+    }
+    const unify_env = self.unifyEnv();
+    for (self.scratch_replay_kind_grafts.items) |graft| {
+        if (!(try unifier.relateFunctionKind(&unify_env, graft.source, graft.target)).isEstablished()) {
+            base.invariant("concrete dispatch replay could not give a callable function its source instance's effect", .{});
+        }
+    }
+    if (std.debug.runtime_safety) {
+        var actual_callable_tree: std.ArrayListUnmanaged(u8) = .empty;
+        defer actual_callable_tree.deinit(self.gpa);
+        try self.appendReplayTree(constraint.fn_var, &actual_callable_tree);
+        if (!replayShapeEql(expected_callable_tree.items, actual_callable_tree.items)) {
+            base.invariant("concrete dispatch replay left a callable different from what relating it to a fresh instance gives", .{});
         }
     }
     const method_var = constraint.fn_var;
@@ -43918,12 +43937,14 @@ fn replayDispatchTarget(
 /// Builds with runtime safety check every replay against the work it
 /// replaces: a fresh copy of the method's scheme related to this edge's
 /// callable, on a savepoint the check rolls back, must be exactly the frozen
-/// instance the edge is about to share.
+/// instance the edge is about to share. The callable as that relation leaves
+/// it goes in `expected_callable`, for the replay's own result to match.
 fn verifyDispatchReplayAgainstFresh(
     self: *Self,
     replay_source: DispatchReplaySource,
     constraint: StaticDispatchConstraint,
     method_lookup: StaticDispatchMethodBinding,
+    expected_callable: *std.ArrayListUnmanaged(u8),
 ) Allocator.Error!void {
     const scheme_root = if (method_lookup.is_this_module)
         ModuleEnv.varFrom(method_lookup.binding.type_node_idx)
@@ -43942,6 +43963,7 @@ fn verifyDispatchReplayAgainstFresh(
             base.invariant("a replayed dispatch edge's callable does not relate to a fresh instance of its method", .{});
         }
         try self.appendReplayTree(fresh_instance, &fresh_tree);
+        try self.appendReplayTree(constraint.fn_var, expected_callable);
     }
     if (!replayShapeEql(frozen_tree.items, fresh_tree.items)) {
         base.invariant("concrete dispatch replay shared an instance a fresh instantiation would not produce", .{});
@@ -44057,13 +44079,19 @@ fn finishDispatchReplayFreezes(self: *Self) Allocator.Error!void {
 
 /// Walk a replay source's ground instance and a callable together, recording
 /// in `scratch_replay_nodes` a callable node standing at each instance node,
-/// and in `scratch_replay_grafts` each callable variable together with
-/// the instance subtree that a fresh instance would relate it to. False when
-/// the stored layouts differ at some position (two equal rows stored in
-/// different orders), in which case nothing is replayed.
+/// in `scratch_replay_grafts` each callable variable together with the
+/// instance subtree that a fresh instance would relate it to, and in
+/// `scratch_replay_kind_grafts` each callable function whose effect is unbound
+/// together with the instance function whose kind a fresh instance would give
+/// it. False when the stored layouts differ at some position (two equal rows
+/// stored in different orders), or when relating a function's kind could fail
+/// (a pure instance function standing at a callable function with effect
+/// dependencies, which the shape does not record), in which case nothing is
+/// replayed.
 fn pairDispatchReplayInstance(self: *Self, source_var: Var, callable_var: Var) Allocator.Error!bool {
     self.scratch_replay_nodes.clearRetainingCapacity();
     self.scratch_replay_grafts.clearRetainingCapacity();
+    self.scratch_replay_kind_grafts.clearRetainingCapacity();
     self.scratch_replay_walk.clearRetainingCapacity();
     self.scratch_replay_walked.clearRetainingCapacity();
     try self.scratch_replay_walk.append(self.gpa, .{ .source = source_var, .target = callable_var });
@@ -44085,10 +44113,41 @@ fn pairDispatchReplayInstance(self: *Self, source_var: Var, callable_var: Var) A
                 continue;
             },
             .rigid, .err => return false,
-            .field_presence, .alias, .structure => {},
+            .structure => |flat| switch (flat) {
+                .fn_unbound => |func| if (!try self.pairDispatchReplayFunctionKind(source, target.var_, func)) return false,
+                .fn_pure, .fn_effectful, .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => {},
+            },
+            .field_presence, .alias => {},
         }
         if (!try self.pairDispatchReplayChildren(source.desc.content, target.desc.content)) return false;
     }
+    return true;
+}
+
+/// Record that the callable function `target`, whose effect is unbound, takes
+/// the kind of the instance function `source`. A frozen instance is ground, so
+/// `source` is pure or effectful whenever it is a function at all.
+fn pairDispatchReplayFunctionKind(self: *Self, source: types_mod.ResolvedVarDesc, target: Var, target_func: types_mod.Func) Allocator.Error!bool {
+    const source_is_pure = switch (source.desc.content) {
+        .structure => |flat| switch (flat) {
+            .fn_pure => true,
+            .fn_effectful => false,
+            .fn_unbound => base.invariant("a frozen dispatch replay instance holds a function whose effect is unbound", .{}),
+            .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => return false,
+        },
+        .flex, .rigid, .alias, .field_presence, .err => return false,
+    };
+    if (source_is_pure and target_func.effect_deps.len() != 0) return false;
+    for (self.scratch_replay_kind_grafts.items) |graft| {
+        if (graft.target != target) continue;
+        // One callable function standing at two instance functions takes
+        // both kinds, which equal shapes guarantee agree.
+        if ((self.types.resolveVar(graft.source).desc.content.structure == .fn_pure) != source_is_pure) {
+            base.invariant("concrete dispatch replay paired one callable function with instance functions of different kinds", .{});
+        }
+        return true;
+    }
+    try self.scratch_replay_kind_grafts.append(self.gpa, .{ .source = source.var_, .target = target });
     return true;
 }
 

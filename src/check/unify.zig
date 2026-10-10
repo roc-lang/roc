@@ -385,6 +385,56 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
     return .unified;
 }
 
+/// The effect half of unifying a function whose effect is still unbound with
+/// a pure or effectful function of the same shape: `target` takes the kind of
+/// `kind_source`, exactly as `unify` would give it, while its own argument and
+/// result variables stay in place. A caller that relates the arguments and
+/// result itself (concrete dispatch replay) uses this so that `target` is never
+/// merged with `kind_source`. A mismatch is returned without a report or
+/// poisoning, keeping completed writes as `.write_no_report` does.
+pub fn relateFunctionKind(env: *const Env, kind_source: Var, target: Var) std.mem.Allocator.Error!Result {
+    env.unify_scratch.reset();
+    var unifier = Unifier.init(
+        env.ident_store,
+        env.self_module_identity,
+        env.types,
+        env.unify_scratch,
+        env.occurs_scratch,
+        .construction,
+        .ordinary,
+        .none,
+        env.construction_probe,
+        null,
+    );
+    const vars = ResolvedVarDescs{
+        .a = env.types.resolveVar(kind_source),
+        .b = env.types.resolveVar(target),
+    };
+    const target_func = switch (vars.b.desc.content) {
+        .structure => |flat| switch (flat) {
+            .fn_unbound => |func| func,
+            .fn_pure, .fn_effectful, .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => base.invariant("relateFunctionKind target is not a function whose effect is unbound", .{}),
+        },
+        .flex, .rigid, .alias, .field_presence, .err => base.invariant("relateFunctionKind target is not a function whose effect is unbound", .{}),
+    };
+    const selected: Content = switch (vars.a.desc.content) {
+        .structure => |flat| switch (flat) {
+            .fn_pure => blk: {
+                unifier.demandPureEffectDeps(target_func.effect_deps) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.TypeMismatch, error.ErroneousType => return .mismatch,
+                };
+                break :blk .{ .structure = .{ .fn_pure = .{ .args = target_func.args, .ret = target_func.ret } } };
+            },
+            .fn_effectful => .{ .structure = .{ .fn_effectful = target_func } },
+            .fn_unbound, .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => base.invariant("relateFunctionKind source is not a pure or effectful function", .{}),
+        },
+        .flex, .rigid, .alias, .field_presence, .err => base.invariant("relateFunctionKind source is not a pure or effectful function", .{}),
+    };
+    try env.types.setVarContent(vars.b.var_, try unifier.contentForMerge(&vars, selected));
+    return .unified;
+}
+
 fn snapshotRawRecordEvidence(env: *const Env, raw: RawTypePair) std.mem.Allocator.Error!TypeMismatchEvidence {
     return .{ .record = .{
         .expected_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, raw.expected),

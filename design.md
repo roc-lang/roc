@@ -9793,8 +9793,15 @@ together. Where the callable already has structure the shapes guarantee it is
 the instance's, so it is kept as is; each callable variable is related to the
 frozen subtree at its position, which is what relating the callable to a fresh
 instance would bind it to, so every replayed edge shares one frozen instance
-rather than copying it. A walk that finds the two stored layouts differ at
-some position (equal rows stored in different orders) replays nothing. The
+rather than copying it. A callable function whose effect is still unbound is
+structure whose effect is not yet the instance's: a frozen instance is ground,
+so its function at that position is pure or effectful, and the callable
+function takes that kind in place, exactly as unifying it with the instance
+would give it, while its arguments and result are paired like any other
+children. A walk that finds the two stored layouts differ at some position
+(equal rows stored in different orders), or that finds a pure instance
+function at a callable function with effect dependencies (which the shape does
+not record, and which relating would have to make pure), replays nothing. The
 edge's scheme-use record is an ordinary dispatch-target record whose
 substitution names the callable node at each instance position, or the frozen
 node where the callable had a variable, and whose nested-requirement callables
@@ -9823,13 +9830,15 @@ Checking a module ends by thawing every frozen class, so no later stage,
 serialized store, or import sees the mark. Builds with runtime safety check
 the mechanism against what it replaces: every replay first relates a fresh
 copy of the method's scheme to the edge's callable on a savepoint and requires
-the result to equal the frozen instance exactly; module checking verifies
+the result to equal the frozen instance exactly, and requires the callable the
+replay leaves to equal the callable that relation left; module checking verifies
 before thawing that every frozen instance is still the tree it was frozen as;
 and every in-place descriptor write asserts that its class is not frozen.
 
 The accepted side is pinned by the checker test "concrete dispatch replay
-reuses a settled ground target across uses" and the eval test "replayed method
-chain computes each use's own values"; the rejected sides by "concrete
+reuses a settled ground target across uses", the checker test "the third
+identical use of an effectful method is effectful", and the eval test
+"replayed method chain computes each use's own values"; the rejected sides by "concrete
 dispatch replay keys each call's own argument types", "concrete dispatch
 replay never selects a method whose scheme is still being checked", and "a
 type error in one replayed use leaves the uses sharing its instance intact",
@@ -11354,9 +11363,11 @@ Other solved-graph mutations:
   Dispatch Requirements In Type Schemes, above). A root edge with a ground
   receiver and a final method without explicit requirements relates each
   variable of its callable to the matching subtree of an equal-shaped
-  source's frozen instance instead of a fresh instantiation, and records the
-  source's settled nested requirements as its own; it writes exactly the
-  instance and evidence a fresh instantiation would.
+  source's frozen instance instead of a fresh instantiation, gives each
+  callable function whose effect is unbound the matching instance function's
+  kind in place (`unify.relateFunctionKind`), and records the source's settled
+  nested requirements as its own; it writes exactly the instance and evidence
+  a fresh instantiation would.
 - Frozen classes (`Store.freezeClass`, `Store.thawFrozenClasses`)—mechanism:
   concrete dispatch replay (above). While a module is checked, a merge with a
   frozen class keeps its descriptor, its rank never changes, and every write
