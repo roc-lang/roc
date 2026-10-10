@@ -15,6 +15,7 @@ const std = @import("std");
 const collections = @import("collections");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
+const BodyClone = @import("body_clone.zig");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
@@ -58,16 +59,6 @@ pub const Owners = struct {
     pub fn noteStmt(self: *Owners, store: *const LirStore, layouts: *const layout_mod.Store, stmt: LIR.CFStmt) Allocator.Error!void {
         switch (stmt) {
             .assign_ref => |assign| try self.noteDefinition(assign.target, transparentSource(store, layouts, assign.op, assign.target)),
-            .assign_literal => |assign| try self.noteDefinition(assign.target, null),
-            .init_uninitialized => |uninitialized| try self.noteDefinition(uninitialized.target, null),
-            .assign_call => |assign| try self.noteDefinition(assign.target, null),
-            .assign_call_erased => |assign| try self.noteDefinition(assign.target, null),
-            .assign_packed_erased_fn => |assign| try self.noteDefinition(assign.target, null),
-            .assign_low_level => |assign| try self.noteDefinition(assign.target, null),
-            .assign_list => |assign| try self.noteDefinition(assign.target, null),
-            .assign_struct => |assign| try self.noteDefinition(assign.target, null),
-            .assign_tag => |assign| try self.noteDefinition(assign.target, null),
-            .set_local => |assign| try self.noteDefinition(assign.target, null),
             .str_match => |str_match| try self.noteStrMatchSteps(store, str_match.steps),
             .str_match_set => |str_match_set| {
                 const arms = store.getStrMatchArms(str_match_set.arms);
@@ -81,6 +72,11 @@ pub const Owners = struct {
                     try self.noteDefinition(GuardedList.at(params, param_index), null);
                 }
             },
+            .init_uninitialized,
+            .assign_literal,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_box,
@@ -95,8 +91,13 @@ pub const Owners = struct {
             .assign_boxy_tag_payload,
             .boxy_tag_match,
             .assign_call_dict,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
             .store_struct,
             .store_tag,
+            .set_local,
             .debug,
             .expect,
             .expect_err,
@@ -114,7 +115,7 @@ pub const Owners = struct {
             .jump,
             .ret,
             .crash,
-            => {},
+            => if (BodyClone.definedTarget(stmt)) |target| try self.noteDefinition(target, null),
         }
     }
 
@@ -191,94 +192,18 @@ pub fn resolveProcReuseSources(
 
     var calls = std.ArrayList(LIR.CFStmtId).empty;
     defer calls.deinit(allocator);
-    var visited = collections.DenseMap(LIR.CFStmtId, void).init(allocator);
-    defer visited.deinit();
-    var stack = std.ArrayList(LIR.CFStmtId).empty;
-    defer stack.deinit(allocator);
-    try stack.append(allocator, body);
-    while (stack.pop()) |current| {
-        if ((try visited.getOrPut(current)).found_existing) continue;
+    var stmts = try BodyClone.ReachableStmts.initWithAllocator(store, body, allocator);
+    defer stmts.deinit();
+    while (try stmts.next()) |current| {
         const stmt = store.getCFStmt(current);
         try owners.noteStmt(store, layouts, stmt);
         if (stmt == .assign_call_erased and stmt.assign_call_erased.reuse_source != null) {
             try calls.append(allocator, current);
         }
-        try appendSuccessors(allocator, store, stmt, &stack);
     }
 
     for (calls.items) |call_id| {
         const call = &store.getCFStmtPtr(call_id).assign_call_erased;
         call.reuse_source = owners.reuseSource(store, layouts, call.closure);
-    }
-}
-
-fn appendSuccessors(allocator: Allocator, store: *const LirStore, stmt: LIR.CFStmt, stack: *std.ArrayList(LIR.CFStmtId)) Allocator.Error!void {
-    switch (stmt) {
-        .switch_stmt => |switch_stmt| {
-            const branches = store.getCFSwitchBranches(switch_stmt.branches);
-            for (0..GuardedList.borrowLen(branches)) |branch_index| {
-                try stack.append(allocator, GuardedList.at(branches, branch_index).body);
-            }
-            try stack.append(allocator, switch_stmt.default_branch);
-            if (switch_stmt.continuation) |continuation| try stack.append(allocator, continuation);
-        },
-        .switch_initialized_payload => |switch_stmt| {
-            try stack.append(allocator, switch_stmt.initialized_branch);
-            try stack.append(allocator, switch_stmt.uninitialized_branch);
-        },
-        .str_match => |str_match| {
-            try stack.append(allocator, str_match.on_match);
-            try stack.append(allocator, str_match.on_miss);
-        },
-        .boxy_tag_match => |tag_match| {
-            try stack.append(allocator, tag_match.on_match);
-            try stack.append(allocator, tag_match.on_miss);
-        },
-        .str_match_set => |str_match_set| {
-            const arms = store.getStrMatchArms(str_match_set.arms);
-            for (0..GuardedList.borrowLen(arms)) |arm_index| {
-                try stack.append(allocator, GuardedList.at(arms, arm_index).on_match);
-            }
-            try stack.append(allocator, str_match_set.on_miss);
-        },
-        .join => |join_stmt| {
-            try stack.append(allocator, join_stmt.body);
-            try stack.append(allocator, join_stmt.remainder);
-        },
-        .ret, .crash, .jump, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break, .expect_err => {},
-        .comptime_branch_taken => |marker| try stack.append(allocator, marker.next),
-        inline .init_uninitialized,
-        .assign_ref,
-        .assign_literal,
-        .assign_call,
-        .assign_call_erased,
-        .assign_packed_erased_fn,
-        .assign_boxy_desc_ref,
-        .assign_boxy_dict_ref,
-        .assign_boxy_box,
-        .assign_boxy_record_update,
-        .assign_boxy_reuse_box,
-        .assign_boxy_unbox,
-        .assign_boxy_adapt,
-        .assign_boxy_inspect,
-        .assign_boxy_eq,
-        .assign_boxy_hash,
-        .assign_boxy_tag,
-        .assign_boxy_tag_payload,
-        .assign_call_dict,
-        .assign_low_level,
-        .assign_list,
-        .assign_struct,
-        .assign_tag,
-        .store_struct,
-        .store_tag,
-        .set_local,
-        .debug,
-        .expect,
-        .incref,
-        .decref,
-        .decref_if_initialized,
-        .free,
-        => |s| try stack.append(allocator, s.next),
     }
 }

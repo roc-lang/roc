@@ -24,6 +24,14 @@ const test_fixtures = @import("test_fixtures.zig");
 /// synthetic checked payloads from one definition.
 const fixtureTableIndex = test_fixtures.tableIndex;
 const builtinNominal = test_fixtures.builtinNominal;
+const moduleKey = test_fixtures.moduleKey;
+const typeKey = test_fixtures.typeKey;
+const typeSchemeKey = test_fixtures.typeSchemeKey;
+const testIntNumeral = test_fixtures.testIntNumeral;
+const testSmallDecNumeral = test_fixtures.testSmallDecNumeral;
+const minimalCheckedArtifact = test_fixtures.minimalCheckedArtifact;
+const procedureTemplateRef = test_fixtures.procedureTemplateRef;
+const procedureValueRef = test_fixtures.procedureValueRef;
 const solved_lir_lower = @import("../solved_lir_lower.zig");
 
 const Allocator = std.mem.Allocator;
@@ -400,7 +408,7 @@ fn resolveImportedProcedureBinding(
     module: ProcedureModuleView,
     binding_ref: checked.ImportedProcedureBindingRef,
 ) ResolvedWorker {
-    const binding = importedProcedureBinding(module, binding_ref);
+    const binding = Plan.importedProcedureBinding(module, binding_ref);
     return switch (binding.body) {
         .direct_template => |direct| switch (direct.template) {
             .checked => |template| resolveProcedureTemplate(modules, worker, template),
@@ -418,60 +426,6 @@ fn resolveImportedProcedureBinding(
     };
 }
 
-fn importedProcedureBinding(
-    module: ProcedureModuleView,
-    binding_ref: checked.ImportedProcedureBindingRef,
-) checked.ImportedProcedureBindingView {
-    for (module.exported_procedure_bindings.bindings) |binding| {
-        if (checked_moduleKeyEqual(binding.binding.artifact, binding_ref.artifact) and
-            binding.binding.def == binding_ref.def and
-            binding.binding.pattern == binding_ref.pattern)
-        {
-            return binding;
-        }
-    }
-    boxyLowerInvariant("imported procedure binding was not exported by its checked module");
-}
-
-fn topLevelProcedureBindingForExpr(
-    module: ProcedureModuleView,
-    expr: checked.CheckedExprId,
-) ?checked.ArtifactTopLevelProcedureBindingRef {
-    for (module.top_level_procedure_bindings.bindings.items, 0..) |binding, index| {
-        const template_ref = switch (binding.body) {
-            .direct_template => |direct| switch (direct.template) {
-                .checked => |template| template,
-                .lifted,
-                .synthetic,
-                => continue,
-            },
-            .checked_error, .callable_eval_template => continue,
-        };
-        const template = module.checked_procedure_templates.get(template_ref.template);
-        const body_id = switch (template.body) {
-            .checked_body => |body| body,
-            .intrinsic_wrapper,
-            .entry_wrapper,
-            .unimplemented,
-            => continue,
-        };
-        if (module.checked_bodies.body(body_id).root_expr == expr) {
-            return .{
-                .artifact = module.key,
-                .binding = @fromBackingInt(@intCast(@as(u32, @intCast(index)))),
-            };
-        }
-    }
-    return null;
-}
-
-fn nestedCallableSiteExprForExpr(
-    module: ProcedureModuleView,
-    expr: checked.CheckedExprId,
-) ?checked.CheckedExprId {
-    return Plan.nestedCallableSiteExprFor(module, expr);
-}
-
 fn resolveProcedureTemplate(
     modules: Common.CheckedModules,
     worker: Plan.WorkerPlanId,
@@ -480,7 +434,7 @@ fn resolveProcedureTemplate(
     const module = procedureModuleByCheckedModuleId(modules, template_ref.artifact);
     const template = module.checked_procedure_templates.get(template_ref.template);
     const body: ResolvedWorkerBody = if (template.target == .hosted)
-        .{ .hosted = hostedProcForTemplate(module, template_ref) }
+        .{ .hosted = Plan.hostedProcForTemplate(module, template_ref) }
     else switch (template.body) {
         .checked_body => |body_id| .{ .checked_expr = .{
             .body_id = body_id,
@@ -520,7 +474,7 @@ fn resolveHostedProcedure(
         .module = module,
         .template_ref = hosted_ref.template,
         .template = template,
-        .body = .{ .hosted = hostedProcForTemplate(module, hosted_ref.template) },
+        .body = .{ .hosted = Plan.hostedProcForTemplate(module, hosted_ref.template) },
     };
 }
 
@@ -594,7 +548,7 @@ fn resolveNestedConstFn(
     // (design.md "Defaulted Fields").
     if (nested.default_root) |identity| {
         const module = procedureModuleByIdentity(modules, &identity.bytes);
-        const expr_id = checkedLambdaExprForNestedFn(module, nested);
+        const expr_id = Plan.checkedLambdaExprForNestedFn(module, nested);
         return .{
             .worker = worker,
             .module_key = module.key,
@@ -608,7 +562,7 @@ fn resolveNestedConstFn(
         };
     }
     const module = procedureModuleByKey(modules, .{ .bytes = names.procTemplateModuleDigest(nested.owner).bytes });
-    const expr_id = checkedLambdaExprForNestedFn(module, nested);
+    const expr_id = Plan.checkedLambdaExprForNestedFn(module, nested);
     const template = module.checked_procedure_templates.get(nested.owner.template);
     return .{
         .worker = worker,
@@ -691,52 +645,6 @@ fn nestedProcSiteForExpr(module: ProcedureModuleView, expr_id: checked.CheckedEx
     return null;
 }
 
-fn checkedLambdaExprForNestedFn(
-    module: ProcedureModuleView,
-    nested: anytype,
-) checked.CheckedExprId {
-    for (module.nested_proc_sites.sites) |site| {
-        if (site.site != nested.site) continue;
-        switch (site.owner) {
-            .template => |site_owner| {
-                if (nested.default_root != null) continue;
-                if (!names.procedureTemplateRefEql(site_owner, nested.owner)) continue;
-            },
-            // A default-root-qualified stored function matches the declaring
-            // module's default-root site (design.md "Defaulted Fields").
-            .default_root => if (nested.default_root == null) continue,
-        }
-        const expr_id = site.checked_expr orelse
-            boxyLowerInvariant("stored nested function had no checked expression site");
-        const expr = module.checked_bodies.expr(expr_id);
-        if (expr.data == .lambda) return expr_id;
-        if (expr.data == .closure) return expr.data.closure.lambda;
-        boxyLowerInvariant("stored nested function site did not point at a lambda or closure");
-    }
-    boxyLowerInvariant("stored nested function referenced a missing checked nested site");
-}
-
-fn checkedBinderType(module: ProcedureModuleView, binder: checked.PatternBinderId) checked.CheckedTypeId {
-    const raw = @backingInt(binder);
-    if (raw >= module.checked_bodies.patternBinderCount()) {
-        boxyLowerInvariant("stored function capture binder was outside the checked body store");
-    }
-    const pattern = module.checked_bodies.patternBinder(@fromBackingInt(@intCast(raw))).pattern;
-    if (@backingInt(pattern) >= module.checked_bodies.patternCount()) {
-        boxyLowerInvariant("stored function capture pattern was outside the checked body store");
-    }
-    return module.checked_bodies.pattern(pattern).ty;
-}
-
-fn hostedProcForTemplate(module: ProcedureModuleView, template_ref: names.ProcedureTemplateRef) checked.HostedProc {
-    for (module.hosted_procs.procs) |hosted| {
-        if (names.procedureTemplateRefEql(hosted.template, template_ref)) {
-            return hosted;
-        }
-    }
-    boxyLowerInvariant("hosted procedure template was missing from the checked hosted proc table");
-}
-
 fn rootProcedureModule(modules: Common.CheckedModules) ProcedureModuleView {
     const checked_module = modules.root.module;
     return .{
@@ -785,6 +693,32 @@ fn procedureModuleFromImport(import: checked.ImportedModuleView) ProcedureModule
         .interface_capabilities = import.interface_capabilities,
         .const_store = import.const_store,
         .module_env = import.module_env,
+    };
+}
+
+/// This module as the planner's view of it, for the plan's shared module
+/// queries.
+fn planModuleView(module: ProcedureModuleView) Plan.ModuleView {
+    return .{
+        .key = module.key,
+        .canonical_names = module.canonical_names,
+        .checked_types = module.checked_types,
+        .checked_bodies = module.checked_bodies,
+        .compile_time_roots = module.compile_time_roots,
+        .entry_wrappers = module.entry_wrappers,
+        .intrinsic_wrappers = module.intrinsic_wrappers,
+        .hosted_procs = module.hosted_procs,
+        .resolved_value_refs = module.resolved_value_refs,
+        .static_dispatch_plans = module.static_dispatch_plans,
+        .method_registry = module.method_registry,
+        .checked_procedure_templates = module.checked_procedure_templates,
+        .nested_proc_sites = module.nested_proc_sites,
+        .top_level_procedure_bindings = module.top_level_procedure_bindings,
+        .callable_eval_templates = module.callable_eval_templates,
+        .exported_procedure_bindings = module.exported_procedure_bindings,
+        .interface_capabilities = module.interface_capabilities,
+        .const_store = module.const_store,
+        .const_templates = module.const_templates,
     };
 }
 
@@ -5605,7 +5539,7 @@ const ProcedureBuilder = struct {
         const source_rep = self.plan.representations.items[@backingInt(rep_id)];
         const source_module = procedureModuleById(self.modules, source_rep.source_type.module);
         const owner = methodOwnerForProcedureType(source_module, source_rep.source_type.ty) orelse return true;
-        return self.lookupMethodTarget(source_module, owner, requirement_module, requirement.fn_name) == null;
+        return Plan.lookupMethodTarget(self.methodSearchModules(), planModuleView(source_module), owner, planModuleView(requirement_module), requirement.fn_name) == null;
     }
 
     /// Bind each formal of `env` to its actual in `context`, so static
@@ -6241,43 +6175,19 @@ const ProcedureBuilder = struct {
         const source_module = procedureModuleById(self.modules, source_rep.source_type.module);
         const requirement_module = procedureModuleById(self.modules, requirement.source_type.module);
         const owner = methodOwnerForProcedureType(source_module, source_rep.source_type.ty) orelse return null;
-        const target_lookup = self.lookupMethodTarget(
-            source_module,
+        const target_lookup = Plan.lookupMethodTarget(
+            self.methodSearchModules(),
+            planModuleView(source_module),
             owner,
-            requirement_module,
+            planModuleView(requirement_module),
             requirement.fn_name,
         ) orelse return null;
-        const source = self.workerSourceForMethodTarget(target_lookup, source_rep.source_type);
+        const source = Plan.workerSourceForMethodTarget(target_lookup, source_rep.source_type, null);
         const worker_type = Plan.CheckedTypeIdentity{
-            .module = target_lookup.module.key,
+            .module = target_lookup.view.key,
             .ty = target_lookup.target.callable_ty,
         };
         return self.plan.workerForSourceType(source, worker_type);
-    }
-
-    fn workerSourceForMethodTarget(
-        _: *ProcedureBuilder,
-        lookup: MethodTargetLookup,
-        shape: Plan.CheckedTypeIdentity,
-    ) Plan.WorkerSource {
-        return switch (lookup.target.kind) {
-            .procedure => |procedure| .{ .procedure_template = procedure.template },
-            .local_proc => |local| if (topLevelProcedureBindingForExpr(lookup.module, local.expr)) |binding|
-                .{ .procedure_binding = binding }
-            else
-                .{ .nested_expr = .{ .module = lookup.module.key, .expr = nestedCallableSiteExprForExpr(lookup.module, local.expr) orelse local.expr } },
-            .structural => |kind| switch (kind) {
-                .parser => .{ .generated_codec = .{
-                    .kind = .parser_constructor,
-                    .shape = shape,
-                } },
-                .encoder => .{ .generated_codec = .{
-                    .kind = .encoder_constructor,
-                    .shape = shape,
-                } },
-                .equality, .hash, .map, .map_effectful => boxyLowerInvariant("non-codec structural target reached Boxy method worker selection"),
-            },
-        };
     }
 
     /// The planned worker for the checked `to_inspect` override of this
@@ -6290,7 +6200,7 @@ const ProcedureBuilder = struct {
         const source_rep = self.plan.representations.items[@backingInt(rep_id)];
         const source_module = procedureModuleById(self.modules, source_rep.source_type.module);
         const owner = methodOwnerForProcedureType(source_module, source_rep.source_type.ty) orelse return null;
-        const target_lookup = self.lookupInspectOverride(source_module, owner) orelse return null;
+        const target_lookup = Plan.lookupInspectOverride(self.methodSearchModules(), planModuleView(source_module), owner) orelse return null;
         const source = switch (target_lookup.target.kind) {
             .procedure => |procedure| Plan.WorkerSource{ .procedure_template = procedure.template },
             .local_proc,
@@ -6298,94 +6208,13 @@ const ProcedureBuilder = struct {
             => boxyLowerInvariant("boxy nominal method target reached lowering without a procedure worker"),
         };
         return self.plan.workerForSourceType(source, .{
-            .module = target_lookup.module.key,
+            .module = target_lookup.view.key,
             .ty = target_lookup.target.callable_ty,
         });
     }
 
-    const MethodTargetLookup = struct {
-        module: ProcedureModuleView,
-        target: static_dispatch.MethodTarget,
-    };
-
-    fn lookupMethodTarget(
-        self: *ProcedureBuilder,
-        owner_module: ProcedureModuleView,
-        owner: static_dispatch.MethodOwner,
-        method_module: ProcedureModuleView,
-        method: names.MethodNameId,
-    ) ?MethodTargetLookup {
-        const method_text = method_module.canonical_names.methodNameText(method);
-        if (self.lookupMethodTargetInModule(owner_module, owner_module, owner, method_text)) |target| return target;
-        for (self.modules.imports) |imported| {
-            const module = procedureModuleFromImport(imported);
-            if (checked_moduleKeyEqual(module.key, owner_module.key)) continue;
-            if (self.lookupMethodTargetInModule(module, owner_module, owner, method_text)) |target| return target;
-        }
-        for (self.modules.root.relation_modules) |relation| {
-            const module = procedureModuleFromImport(relation);
-            if (checked_moduleKeyEqual(module.key, owner_module.key)) continue;
-            if (self.lookupMethodTargetInModule(module, owner_module, owner, method_text)) |target| return target;
-        }
-        return null;
-    }
-
-    /// Selects the module that declares `owner.to_inspect` exactly as
-    /// `lookupMethodTarget` does; that declaration's checked eligibility is
-    /// the answer.
-    fn lookupInspectOverride(
-        self: *ProcedureBuilder,
-        owner_module: ProcedureModuleView,
-        owner: static_dispatch.MethodOwner,
-    ) ?MethodTargetLookup {
-        if (inspectOverrideInModule(owner_module, owner_module, owner)) |decision| return decision.target;
-        for (self.modules.imports) |imported| {
-            const module = procedureModuleFromImport(imported);
-            if (checked_moduleKeyEqual(module.key, owner_module.key)) continue;
-            if (inspectOverrideInModule(module, owner_module, owner)) |decision| return decision.target;
-        }
-        for (self.modules.root.relation_modules) |relation| {
-            const module = procedureModuleFromImport(relation);
-            if (checked_moduleKeyEqual(module.key, owner_module.key)) continue;
-            if (inspectOverrideInModule(module, owner_module, owner)) |decision| return decision.target;
-        }
-        return null;
-    }
-
-    const InspectOverrideDecision = struct {
-        target: ?MethodTargetLookup,
-    };
-
-    fn inspectOverrideInModule(
-        candidate: ProcedureModuleView,
-        owner_module: ProcedureModuleView,
-        owner: static_dispatch.MethodOwner,
-    ) ?InspectOverrideDecision {
-        const candidate_owner = Plan.methodOwnerInNames(owner_module.canonical_names, candidate.canonical_names, owner) orelse return null;
-        const candidate_method = candidate.canonical_names.lookupMethodName("to_inspect") orelse return null;
-        const key: static_dispatch.MethodKey = .{ .owner = candidate_owner, .method = candidate_method };
-        // A declared `to_inspect` decides inspection in this module; the
-        // registry records an override only for an eligible, unrejected
-        // declaration.
-        _ = candidate.method_registry.lookup(key) orelse return null;
-        const override = candidate.method_registry.lookupInspectOverride(key) orelse return .{ .target = null };
-        // Inspection calls the method at its checked `T -> Str` instance.
-        var target = override.target;
-        target.callable_ty = override.callable_ty;
-        return .{ .target = .{ .module = candidate, .target = target } };
-    }
-
-    fn lookupMethodTargetInModule(
-        _: *ProcedureBuilder,
-        candidate: ProcedureModuleView,
-        owner_module: ProcedureModuleView,
-        owner: static_dispatch.MethodOwner,
-        method_text: []const u8,
-    ) ?MethodTargetLookup {
-        const candidate_owner = Plan.methodOwnerInNames(owner_module.canonical_names, candidate.canonical_names, owner) orelse return null;
-        const candidate_method = candidate.canonical_names.lookupMethodName(method_text) orelse return null;
-        const found = candidate.method_registry.lookup(.{ .owner = candidate_owner, .method = candidate_method }) orelse return null;
-        return .{ .module = candidate, .target = found.requireTarget("boxy procedure lowering") };
+    fn methodSearchModules(self: *const ProcedureBuilder) Plan.MethodSearchModules {
+        return .{ .imports = self.modules.imports, .relation_modules = self.modules.root.relation_modules };
     }
 
     /// Compose the explicit substitutions along the storage wrapper chain.
@@ -8209,7 +8038,7 @@ const ProcedureBuilder = struct {
             boxyLowerInvariant("hosted worker had no host ABI signature");
         const host_function = (Plan.RepQuery{ .plan = self.plan, .allocator = self.allocator }).functionChildren(host_fn_rep) orelse
             boxyLowerInvariant("hosted ABI signature is not a function");
-        const worker_function = checkedFunctionPayload(resolved.module, template.checked_fn_root);
+        const worker_function = Plan.checkedFunctionPayload(resolved.module, template.checked_fn_root);
         if (host_function.arg_count != worker_function.args.len) {
             boxyLowerInvariant("hosted host signature arity disagreed with worker signature");
         }
@@ -8384,7 +8213,7 @@ const ProcedureBuilder = struct {
     ) Allocator.Error!WorkerBodySource {
         const template = resolved.template orelse
             boxyLowerInvariant("intrinsic worker had no checked procedure template");
-        const function = checkedFunctionPayload(resolved.module, template.checked_fn_root);
+        const function = Plan.checkedFunctionPayload(resolved.module, template.checked_fn_root);
         return switch (intrinsic) {
             .str_inspect => {
                 if (function.args.len != 1) {
@@ -16241,7 +16070,7 @@ const ProcBodyBuilder = struct {
         for (fn_value.captures) |capture| {
             if (!capture.id.isCanonical()) continue;
             const binder = capture.id.binder();
-            const ty = checkedBinderType(self.module, binder);
+            const ty = Plan.checkedBinderType(self.module, binder);
             const target_rep = self.repForType(ty);
             const stored_rep = self.parent.plan.repForStoredType(.{
                 .module = store_module.key,
@@ -19473,7 +19302,7 @@ const ProcBodyBuilder = struct {
 
     /// The closure a local declaration binds, when it binds one.
     fn declaredClosureExpr(self: *ProcBodyBuilder, expr_id: checked.CheckedExprId) ?checked.CheckedExprId {
-        const site = nestedCallableSiteExprForExpr(self.module, expr_id) orelse return null;
+        const site = Plan.nestedCallableSiteExprFor(self.module, expr_id) orelse return null;
         if (self.module.checked_bodies.expr(site).data != .closure) return null;
         return site;
     }
@@ -20851,13 +20680,13 @@ const ProcBodyBuilder = struct {
             return try self.loweredExprsChain(args, lowered, hint);
         }
 
-        switch (op) {
+        switch (boxyLowLevelKind(op)) {
             .box_box,
             .box_unbox,
             => return try self.beginBoxBoundaryLowLevel(target, result_ty, op, args, next),
             .box_unbox_borrowed => boxyLowerInvariant("ARC-only Box.unbox variant reached boxy lowering"),
             .list_map_can_reuse => return try self.beginListMapCanReuse(target, args, next),
-            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_prefetch, .list_prefetched, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_sort_with, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => {},
+            .other => {},
         }
         try self.markLocalDescriptorForType(target, result_ty);
 
@@ -21100,7 +20929,7 @@ const ProcBodyBuilder = struct {
             .checked_error, .@"unreachable" => return try self.beginCrashingDispatch(dispatch),
             .direct_closed, .direct_parametric, .direct_pending, .evidence_dependent, .structural => {},
         }
-        const callable = checkedFunctionPayload(self.module, dispatch.callable_ty);
+        const callable = Plan.checkedFunctionPayload(self.module, dispatch.callable_ty);
         const try_rep = self.repForType(callable.ret);
         const try_value = try self.addFrameLocalForRepWithFreshDescriptor(try_rep);
         const unwrap = try self.lowerLiteralConversionResultInto(
@@ -21124,7 +20953,7 @@ const ProcBodyBuilder = struct {
         interpolation: checked.CheckedInterpolation,
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
-        const assembler_fn = checkedFunctionPayload(self.module, interpolation.assembler_ty);
+        const assembler_fn = Plan.checkedFunctionPayload(self.module, interpolation.assembler_ty);
         if (assembler_fn.args.len != 1) boxyLowerInvariant("interpolation assembler did not take exactly the values list");
         const assembler_rep = self.repForType(interpolation.assembler_ty);
         const assembler = try self.addFrameLocalForRepWithFreshDescriptor(assembler_rep);
@@ -24921,10 +24750,7 @@ const ProcBodyBuilder = struct {
     }
 
     fn directTargetIsLocalProc(self: *const ProcBodyBuilder, target: checked.ResolvedValueId) bool {
-        return switch (self.resolvedValueRecord(target).ref) {
-            .local_proc => true,
-            .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => false,
-        };
+        return self.resolvedValueRecord(target).ref == .local_proc;
     }
 
     fn lowerErasedCallLocalsInto(
@@ -25454,7 +25280,7 @@ const ProcBodyBuilder = struct {
         const required_method = self.parent.plan.dictionaries.items[@backingInt(match.requirement)].fn_name;
 
         const operands = self.parent.plan.callOperandSlice(planned.operands);
-        const callable = checkedFunctionPayload(self.module, dispatch.callable_ty);
+        const callable = Plan.checkedFunctionPayload(self.module, dispatch.callable_ty);
         if (operands.len != callable.args.len) {
             boxyLowerInvariant("planned dictionary operand arity disagreed with its checked callable type");
         }
@@ -31492,7 +31318,7 @@ const ProcBodyBuilder = struct {
                     .op = .{ .local = source },
                     .next = next,
                 } }, self.glueOrigin());
-                switch (op) {
+                switch (boxyLowLevelKind(op)) {
                     .box_box => {
                         const materialization = try self.descriptorMaterializationForExactRep(target_rep);
                         const result_desc = try self.descriptorForConstructedTargetMaterialization(target, materialization);
@@ -31520,13 +31346,13 @@ const ProcBodyBuilder = struct {
                         return assign;
                     },
                     .box_unbox_borrowed => boxyLowerInvariant("ARC-only Box.unbox variant reached boxy lowering"),
-                    .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_prefetch, .list_prefetched, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_sort_with, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => unreachable,
+                    .list_map_can_reuse, .other => unreachable,
                 }
             }
             return try self.assignLocal(target, source, next);
         }
 
-        switch (op) {
+        switch (boxyLowLevelKind(op)) {
             .box_unbox_borrowed => boxyLowerInvariant("ARC-only Box.unbox variant reached boxy lowering"),
             .box_box => {
                 if (target_content.tag == .box and self.parent.result.layouts.getLayout(target_content.getIdx()).eql(source_content)) {
@@ -31550,7 +31376,7 @@ const ProcBodyBuilder = struct {
                     return try self.assignUnaryLowLevel(target, .box_unbox, source, next);
                 }
             },
-            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_prefetch, .list_prefetched, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_sort_with, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => unreachable,
+            .list_map_can_reuse, .other => unreachable,
         }
 
         boxyLowerInvariant("Box boundary low-level operation required descriptor-backed box adaptation lowering");
@@ -35400,7 +35226,7 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("boxy to_inspect method worker carried hidden parameters");
         }
 
-        const function = checkedFunctionPayload(procedureModuleById(self.parent.modules, worker.checked_type.module), worker.checked_type.ty);
+        const function = Plan.checkedFunctionPayload(procedureModuleById(self.parent.modules, worker.checked_type.module), worker.checked_type.ty);
         if (function.args.len != 1) {
             boxyLowerInvariant("boxy to_inspect method worker had unexpected arity");
         }
@@ -43008,15 +42834,7 @@ const ProcBodyBuilder = struct {
     }
 
     fn resolvedValueRecord(self: *const ProcBodyBuilder, ref_id: checked.ResolvedValueRefId) checked.ResolvedValueRefRecord {
-        return resolvedValueRecordInModule(self.module, ref_id);
-    }
-
-    fn resolvedValueRecordInModule(module: ProcedureModuleView, ref_id: checked.ResolvedValueRefId) checked.ResolvedValueRefRecord {
-        const raw = @backingInt(ref_id);
-        if (raw >= module.resolved_value_refs.records.len) {
-            boxyLowerInvariant("checked lookup referenced a missing resolved value");
-        }
-        return module.resolved_value_refs.records[raw];
+        return Plan.resolvedValueRecord(self.module, ref_id);
     }
 
     fn workerReturnLayout(self: *const ProcBodyBuilder) @import("layout").Idx {
@@ -43098,27 +42916,7 @@ const ProcBodyBuilder = struct {
     }
 
     fn descriptorStorageRep(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
-        var current = rep_id;
-        while (true) {
-            const rep = self.parent.plan.representations.items[@backingInt(current)];
-            switch (rep.kind) {
-                .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
-                .nominal => |kind| switch (kind) {
-                    .transparent => {
-                        if (rep.declared_fields.len != 0 or
-                            rep.nominal_backing_arg_substitutions.len != 0) return current;
-                        current = self.repQuery().requiredSingleChild(current, .nominal_backing).rep;
-                    },
-                    .opaque_nominal, .builtin_other => return current,
-                },
-                .box => {
-                    const child = self.repQuery().requiredSingleChild(current, .box_payload).rep;
-                    if (self.workerRuntimeLayoutForRep(current).layoutIdx() != self.workerRuntimeLayoutForRep(child).layoutIdx()) return current;
-                    current = child;
-                },
-                .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .list, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return current,
-            }
-        }
+        return self.parent.descriptorStorageRep(rep_id);
     }
 
     fn repContainsDynamicStorage(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) bool {
@@ -43786,8 +43584,7 @@ const ProcBodyBuilder = struct {
     }
 
     fn tagVariantNameText(self: *const ProcBodyBuilder, variant: Plan.TagVariant) []const u8 {
-        const module = procedureModuleById(self.parent.modules, variant.name_module);
-        return module.canonical_names.tagLabelText(variant.name);
+        return self.parent.tagVariantNameText(variant);
     }
 
     fn lirTagName(
@@ -43878,13 +43675,6 @@ fn constBoxPayloadType(module: ProcedureModuleView, checked_ty: checked.CheckedT
         boxyLowerInvariant("ConstStore box restored with a non-Box checked type");
     }
     return nominal.args[0];
-}
-
-fn checkedFunctionPayload(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedFunctionType {
-    return switch (resolvedTypePayload(module, checked_ty)) {
-        .function => |function| function,
-        .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("checked intrinsic wrapper did not have a function type"),
-    };
 }
 
 fn constTupleItemTypes(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) []const checked.CheckedTypeId {
@@ -44989,6 +44779,27 @@ fn lirSymbol(symbol: Common.Symbol) LIR.Symbol {
     return LIR.Symbol.fromRaw(@intCast(@backingInt(symbol)));
 }
 
+/// The Boxy lowering of a checked low-level operation: the operations
+/// lowering handles with dedicated statements, and `other` for every
+/// operation lowered as an ordinary `assign_low_level`.
+const BoxyLowLevelKind = enum {
+    box_box,
+    box_unbox,
+    box_unbox_borrowed,
+    list_map_can_reuse,
+    other,
+};
+
+fn boxyLowLevelKind(op: can.CIR.Expr.LowLevel) BoxyLowLevelKind {
+    return switch (op) {
+        .box_box => .box_box,
+        .box_unbox => .box_unbox,
+        .box_unbox_borrowed => .box_unbox_borrowed,
+        .list_map_can_reuse => .list_map_can_reuse,
+        .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_prefetch, .list_prefetched, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_sort_with, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => .other,
+    };
+}
+
 fn boxyLowerInvariant(comptime message: []const u8) noreturn {
     if (comptime zig_builtin.mode == .debug and zig_builtin.target.os.tag == .freestanding) {
         base.invariant("{s}", .{"boxy lower invariant violated: " ++ message});
@@ -45538,7 +45349,7 @@ fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind, stored: ConstLookupS
             .expr = @fromBackingInt(@intCast(1)),
             .ref = .{ .top_level_const = .{
                 .const_ref = const_ref,
-                .requested_source_ty_template = canonicalTypeKey(1),
+                .requested_source_ty_template = typeKey(1),
                 .requested_source_ty_payload = @fromBackingInt(@intCast(fixtureTableIndex(0))),
             } },
             .checked_ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
@@ -45796,7 +45607,7 @@ test "boxy lowerer emits direct calls to planned private workers" {
             .expr = @fromBackingInt(@intCast(2)),
             .ref = .{ .top_level_proc = .{
                 .binding = .{ .top_level = .{ .artifact = checked_module.key, .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
-                .source_fn_ty_template = canonicalTypeKey(1),
+                .source_fn_ty_template = typeKey(1),
                 .source_fn_ty_payload = @fromBackingInt(@intCast(1)),
                 .runtime_result_provenance = null,
             } },
@@ -45970,7 +45781,7 @@ test "boxy lowerer emits direct calls to planned imported workers" {
     import_checked_module.top_level_procedure_bindings = .{ .bindings = .{ .items = &import_bindings, .capacity = import_bindings.len, .pointer_stability = .{} } };
     const import_helper_use = checked.ProcedureUseTemplate{
         .binding = .{ .top_level = .{ .artifact = import_checked_module.key, .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
-        .source_fn_ty_template = canonicalTypeKey(3),
+        .source_fn_ty_template = typeKey(3),
         .source_fn_ty_payload = @fromBackingInt(@intCast(1)),
         .runtime_result_provenance = null,
     };
@@ -46062,7 +45873,7 @@ test "boxy lowerer emits direct calls to planned imported workers" {
 
     const imported_use = checked.ProcedureUseTemplate{
         .binding = .{ .imported = imported_binding },
-        .source_fn_ty_template = canonicalTypeKey(2),
+        .source_fn_ty_template = typeKey(2),
         .source_fn_ty_payload = @fromBackingInt(@intCast(1)),
         .runtime_result_provenance = null,
     };
@@ -46246,7 +46057,7 @@ test "boxy lowerer emits recursive direct calls to the current private worker" {
             .expr = @fromBackingInt(@intCast(2)),
             .ref = .{ .top_level_proc = .{
                 .binding = .{ .top_level = .{ .artifact = checked_module.key, .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
-                .source_fn_ty_template = canonicalTypeKey(1),
+                .source_fn_ty_template = typeKey(1),
                 .source_fn_ty_payload = @fromBackingInt(@intCast(1)),
                 .runtime_result_provenance = null,
             } },
@@ -54033,139 +53844,6 @@ test "boxy lowerer emits const plans for zero-payload tag variants" {
     }
 }
 
-/// A shared empty ModuleEnv for test checked_modules, so lowering paths that read
-/// through the checked_module's module environment (e.g. the hosted-entry section
-/// scan) see valid empty data instead of undefined memory. Allocated once
-/// from the page allocator so the testing allocator's leak detection stays
-/// clean.
-fn testEmptyModuleEnv() *can.ModuleEnv {
-    const S = struct {
-        var env: ?*can.ModuleEnv = null;
-    };
-    if (S.env) |existing| return existing;
-    const page_allocator = std.heap.page_allocator;
-    const env = page_allocator.create(can.ModuleEnv) catch unreachable;
-    env.* = can.ModuleEnv.init(page_allocator, "") catch unreachable;
-    env.initCIRFields("Test") catch unreachable;
-    S.env = env;
-    return env;
-}
-
-fn minimalCheckedArtifact(allocator: Allocator) checked.CheckedModuleArtifact {
-    return .{
-        .key = moduleKey(1),
-        .canonical_names = names.CanonicalNameStore.init(allocator),
-        .module_identity = testModuleIdentity(),
-        .checking_context_identity = .{},
-        .module_env = .{ .checked_source = testEmptyModuleEnv() },
-        .exports = .{},
-        .provides_requires = .{},
-        .method_registry = .{},
-        .static_dispatch_plans = .{},
-        .resolved_value_refs = .{},
-        .checked_procedure_templates = .{},
-        .top_level_procedure_bindings = .{},
-        .root_requests = .{},
-        .hosted_procs = .{},
-        .platform_required_declarations = .{},
-        .platform_required_bindings = .{},
-        .interface_capabilities = .{},
-        .compile_time_roots = .{},
-        .top_level_values = .{},
-        .hoisted_constants = .{},
-        .const_templates = .{},
-        .const_store = check.ConstStore.ConstStore.init(allocator),
-    };
-}
-
-fn testModuleIdentity() checked.ModuleIdentity {
-    return .{
-        .module_idx = 0,
-        .module_name = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-        .display_module_name = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-        .kind = .module,
-    };
-}
-
-fn moduleKey(byte: u8) checked.ModuleId {
-    var key = checked.ModuleId{};
-    key.bytes[0] = byte;
-    return key;
-}
-
-fn typeKey(byte: u8) names.TypeDigest {
-    var key = names.TypeDigest{};
-    key.bytes[0] = byte;
-    return key;
-}
-
-fn canonicalTypeKey(byte: u8) names.CanonicalTypeKey {
-    var key = names.CanonicalTypeKey{};
-    key.bytes[0] = byte;
-    return key;
-}
-
-fn typeSchemeKey(byte: u8) names.CanonicalTypeSchemeKey {
-    var key = names.CanonicalTypeSchemeKey{};
-    key.bytes[0] = byte;
-    return key;
-}
-
-fn testIntNumeral(value: u128) Allocator.Error!can.ModuleEnv.NumeralLiteral {
-    return recordTestNumeral(value, 0, 0, false, false);
-}
-
-fn testSmallDecNumeral(value: can.CIR.SmallDecValue) Allocator.Error!can.ModuleEnv.NumeralLiteral {
-    var divisor: u128 = 1;
-    for (0..value.denominator_power_of_ten) |_| divisor *= 10;
-
-    const magnitude: u128 = @intCast(if (value.numerator < 0) -@as(i32, value.numerator) else value.numerator);
-    return recordTestNumeral(
-        magnitude / divisor,
-        magnitude % divisor,
-        value.denominator_power_of_ten,
-        value.numerator < 0,
-        true,
-    );
-}
-
-fn recordTestNumeral(
-    before: u128,
-    after: u128,
-    scale: u8,
-    is_negative: bool,
-    is_fractional: bool,
-) Allocator.Error!can.ModuleEnv.NumeralLiteral {
-    var before_buffer: [16]u8 = undefined;
-    var after_buffer: [16]u8 = undefined;
-    const before_digits = base256Digits(before, &before_buffer);
-    const after_digits = if (scale == 0) &.{} else base256Digits(after, &after_buffer);
-    const env = testEmptyModuleEnv();
-    const node = @as(can.CIR.Node.Idx, @fromBackingInt(@intCast(fixtureTableIndex(0))));
-    try env.recordNumeralLiteral(
-        node,
-        before_digits,
-        after_digits,
-        scale,
-        is_negative,
-        is_fractional,
-        is_fractional,
-        true,
-    );
-    return env.numeralLiteralForNode(node) orelse unreachable;
-}
-
-fn base256Digits(value: u128, buffer: *[16]u8) []const u8 {
-    var remaining = value;
-    var len: usize = 0;
-    while (true) {
-        buffer.*[buffer.len - 1 - len] = @truncate(remaining);
-        len += 1;
-        remaining >>= 8;
-        if (remaining == 0) return buffer.*[buffer.len - len ..];
-    }
-}
-
 const ListMapCanReuseTransformRet = enum {
     u64,
     u8,
@@ -54348,12 +54026,12 @@ fn skipLeadingDescriptorInitializers(store: *const LirStore, start: LIR.CFStmtId
     }
 }
 
-fn procedureTemplateRef(key: checked.CheckedModuleArtifactKey, raw_template_id: u32) names.ProcedureTemplateRef {
-    return .{
-        .artifact = .{ .bytes = key.bytes },
-        .proc_base = @fromBackingInt(@intCast(raw_template_id)),
-        .template = @fromBackingInt(@intCast(raw_template_id)),
-    };
+fn checkedTemplate(
+    template_ref: names.ProcedureTemplateRef,
+    checked_fn_root: checked.CheckedTypeId,
+    body: checked.CheckedBodyId,
+) checked.CheckedProcedureTemplate {
+    return test_fixtures.checkedTemplate(template_ref, checked_fn_root, body, .roc);
 }
 
 fn namedProcedureTemplateRef(
@@ -54374,34 +54052,6 @@ fn namedProcedureTemplateRef(
         .artifact = .{ .bytes = checked_module.key.bytes },
         .proc_base = proc_base,
         .template = @fromBackingInt(@intCast(raw_template_id)),
-    };
-}
-
-fn procedureValueRef(template: names.ProcedureTemplateRef) names.ProcedureValueRef {
-    return .{
-        .artifact = template.artifact,
-        .proc_base = template.proc_base,
-    };
-}
-
-fn checkedTemplate(
-    template_ref: names.ProcedureTemplateRef,
-    checked_fn_root: checked.CheckedTypeId,
-    body: checked.CheckedBodyId,
-) checked.CheckedProcedureTemplate {
-    return .{
-        .proc_base = template_ref.proc_base,
-        .template_id = template_ref.template,
-        .body = .{ .checked_body = body },
-        .checked_fn_scheme = typeSchemeKey(9),
-        .checked_fn_root = checked_fn_root,
-        .static_dispatch_plans = .{},
-        .direct_dispatch_plans = .{},
-        .dispatch_relations = .{},
-        .resolved_value_refs = .{},
-        .top_level_value_uses = .{},
-        .nested_proc_sites = .{},
-        .target = .roc,
     };
 }
 

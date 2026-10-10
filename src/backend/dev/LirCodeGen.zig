@@ -48,37 +48,6 @@ const CpuLevel = roc_target_mod.CpuLevel;
 
 // List builtin functions - using C-compatible wrappers to avoid ABI issues
 // with 24-byte RocList struct returns on aarch64
-const RocList = builtins.list.RocList;
-
-// String builtins
-const strToUtf8C = builtins.str.strToUtf8C;
-const strConcatC = builtins.str.strConcatC;
-const strContains = builtins.str.strContains;
-const strStartsWith = builtins.str.startsWith;
-const strEndsWith = builtins.str.endsWith;
-const strCountUtf8Bytes = builtins.str.countUtf8Bytes;
-const strCaselessAsciiEquals = builtins.str.strCaselessAsciiEquals;
-const strEqual = builtins.str.strEqual;
-const strEqualStaticSmall = builtins.str.strEqualStaticSmall;
-const strStaticSmallWordEq = builtins.str.strStaticSmallWordEq;
-const strStaticSmallWordCaselessEq = builtins.str.strStaticSmallWordCaselessEq;
-const strRepeatC = builtins.str.repeatC;
-const strTrim = builtins.str.strTrim;
-const strTrimStart = builtins.str.strTrimStart;
-const strTrimEnd = builtins.str.strTrimEnd;
-const strSplitOn = builtins.str.strSplitOn;
-const strJoinWithC = builtins.str.strJoinWithC;
-const strReserveC = builtins.str.reserveC;
-const strReleaseExcessCapacity = builtins.str.strReleaseExcessCapacity;
-const strWithCapacityC = builtins.str.withCapacityC;
-const strDropPrefix = builtins.str.strDropPrefix;
-const strDropPrefixCaselessAscii = builtins.str.strDropPrefixCaselessAscii;
-const strDropSuffix = builtins.str.strDropSuffix;
-const strSplitFirst = builtins.str.splitFirst;
-const strSplitLast = builtins.str.splitLast;
-const strWithAsciiLowercased = builtins.str.strWithAsciiLowercased;
-const strWithAsciiUppercased = builtins.str.strWithAsciiUppercased;
-const strFromUtf8Lossy = builtins.str.fromUtf8Lossy;
 
 const Relocation = @import("Relocation.zig").IndexedRelocation;
 const collections = @import("collections");
@@ -444,66 +413,26 @@ pub const BoxyBuiltinFn = enum {
     list_reserve_for_append,
     list_release_excess_capacity,
 
-    /// Get the exported symbol name for shim relocation resolution. Each name
-    /// must match a `pub fn` in `src/eval/boxy_abi.zig`.
+    const symbol_prefix = "roc_boxy_";
+
+    const symbol_names = blk: {
+        var result: [@typeInfo(BoxyBuiltinFn).@"enum".field_names.len][]const u8 = undefined;
+        for (std.meta.tags(BoxyBuiltinFn)) |boxy_fn| {
+            result[@backingInt(boxy_fn)] = symbol_prefix ++ @tagName(boxy_fn);
+        }
+        break :blk result;
+    };
+
     /// The wrapper whose C symbol is `name`, or null.
     pub fn fromSymbolName(name: []const u8) ?BoxyBuiltinFn {
-        inline for (@typeInfo(BoxyBuiltinFn).@"enum".field_values) |field_value| {
-            const boxy_fn: BoxyBuiltinFn = @fromBackingInt(@intCast(field_value));
-            if (std.mem.eql(u8, name, comptime boxy_fn.symbolName())) return boxy_fn;
-        }
-        return null;
+        if (!std.mem.startsWith(u8, name, symbol_prefix)) return null;
+        return std.meta.stringToEnum(BoxyBuiltinFn, name[symbol_prefix.len..]);
     }
 
+    /// The exported symbol name for shim relocation resolution. Each name
+    /// must match a `pub fn` in `src/eval/boxy_abi.zig`.
     pub fn symbolName(self: BoxyBuiltinFn) []const u8 {
-        return switch (self) {
-            .static_desc => "roc_boxy_static_desc",
-            .static_dict => "roc_boxy_static_dict",
-            .dict_method_arg_desc => "roc_boxy_dict_method_arg_desc",
-            .dict_method_hidden_desc => "roc_boxy_dict_method_hidden_desc",
-            .nested_desc => "roc_boxy_nested_desc",
-            .box_payload_desc => "roc_boxy_box_payload_desc",
-            .tag_payload_desc => "roc_boxy_tag_payload_desc",
-            .tag_ext_desc => "roc_boxy_tag_ext_desc",
-            .tag_residual_desc => "roc_boxy_tag_residual_desc",
-            .inspect => "roc_boxy_inspect",
-            .eq => "roc_boxy_eq",
-            .hash => "roc_boxy_hash",
-            .box => "roc_boxy_box",
-            .unbox => "roc_boxy_unbox",
-            .record_update => "roc_boxy_record_update",
-            .adapt => "roc_boxy_adapt",
-            .tag => "roc_boxy_tag",
-            .tag_payload => "roc_boxy_tag_payload",
-            .drop => "roc_boxy_drop",
-            .tag_match => "roc_boxy_tag_match",
-            .desc_copy => "roc_boxy_desc_copy",
-            .dict_copy => "roc_boxy_dict_copy",
-            .dynamic_num_literal => "roc_boxy_dynamic_num_literal",
-            .dynamic_num_literal_ref => "roc_boxy_dynamic_num_literal_ref",
-            .dynamic_frac_literal_ref => "roc_boxy_dynamic_frac_literal_ref",
-            .call_dict => "roc_boxy_call_dict",
-            .materialize_call_result => "roc_boxy_materialize_call_result",
-            .register_proc => "roc_boxy_register_proc",
-            .register_erased_proc => "roc_boxy_register_erased_proc",
-            .call_erased => "roc_boxy_call_erased",
-            .defer_erased => "roc_boxy_defer_erased",
-            .drive_pending => "roc_boxy_drive_pending",
-            .caller_drives => "roc_boxy_caller_drives",
-            .return_pending => "roc_boxy_return_pending",
-            .list_concat => "roc_boxy_list_concat",
-            .list_prepend => "roc_boxy_list_prepend",
-            .list_sublist => "roc_boxy_list_sublist",
-            .list_drop_at => "roc_boxy_list_drop_at",
-            .list_replace => "roc_boxy_list_replace",
-            .list_set => "roc_boxy_list_set",
-            .list_swap => "roc_boxy_list_swap",
-            .list_reverse => "roc_boxy_list_reverse",
-            .list_sort_with => "roc_boxy_list_sort_with",
-            .list_reserve => "roc_boxy_list_reserve",
-            .list_reserve_for_append => "roc_boxy_list_reserve_for_append",
-            .list_release_excess_capacity => "roc_boxy_list_release_excess_capacity",
-        };
+        return symbol_names[@backingInt(self)];
     }
 
     /// The ABI size of each declared parameter of the wrapper, in order, or
@@ -577,247 +506,7 @@ pub const BoxyNativeFnTable = [boxy_builtin_fn_count]usize;
 /// Lists are (ptr, len, capacity) = 24 bytes and need special handling when returning results.
 
 // Number-to-string C wrapper functions (explicit output pointer to avoid struct return ABI issues)
-const RocStr = builtins.str.RocStr;
 const RocOps = builtins.host_abi.RocOps;
-
-// ── C wrapper functions for string/list builtins ──
-// These decompose 24-byte RocStr/RocList structs into individual 8-byte fields
-// so all args fit in registers and we avoid platform-specific struct-passing ABI issues.
-
-/// Wrapper: strToUtf8C(RocStr, *RocOps) -> RocList
-/// Decomposed: (out, str_bytes, str_len, str_cap) -> void
-fn wrapStrToUtf8(out: *RocList, str_bytes: ?[*]u8, str_len: usize, str_cap: usize) callconv(.c) void {
-    const roc_ops = builtins.in_process_host.ops();
-    const arg = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
-    out.* = strToUtf8C(arg, roc_ops);
-}
-
-/// Wrapper: strConcatC(RocStr, RocStr, UpdateMode, *RocOps) -> RocStr
-/// Decomposed: (out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, update_mode) -> void
-fn wrapStrConcat(out: *RocStr, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, update_mode: builtins.utils.UpdateMode) callconv(.c) void {
-    const roc_ops = builtins.in_process_host.ops();
-    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
-    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
-
-    if (builtin.mode == .debug) {
-        const debugAssertValidStr = struct {
-            fn check(label: []const u8, s: RocStr) void {
-                if (s.isSmallStr()) return;
-                if (s.bytes != null) return;
-
-                std.debug.print(
-                    "wrapStrConcat invalid RocStr {s}: len={d} cap=0x{x} raw_bytes=0x{x}\n",
-                    .{ label, s.len(), s.capacity_or_alloc_ptr, @intFromPtr(s.bytes) },
-                );
-                base.invariant(
-                    "LIR/codegen invariant violated: wrapStrConcat received invalid RocStr {s} (len={d}, cap=0x{x})",
-                    .{ label, s.len(), s.capacity_or_alloc_ptr },
-                );
-            }
-        }.check;
-
-        debugAssertValidStr("lhs", a);
-        debugAssertValidStr("rhs", b);
-    }
-
-    out.* = strConcatC(a, b, update_mode, roc_ops);
-}
-
-/// Wrapper: strContains(RocStr, RocStr) -> bool
-/// Decomposed: (a_bytes, a_len, a_cap, b_bytes, b_len, b_cap) -> bool
-fn wrapStrContains(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize) callconv(.c) bool {
-    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
-    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
-    return strContains(a, b);
-}
-
-/// Wrapper: startsWith(RocStr, RocStr) -> bool
-fn wrapStrStartsWith(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize) callconv(.c) bool {
-    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
-    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
-    return strStartsWith(a, b);
-}
-
-/// Wrapper: endsWith(RocStr, RocStr) -> bool
-fn wrapStrEndsWith(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize) callconv(.c) bool {
-    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
-    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
-    return strEndsWith(a, b);
-}
-
-/// Wrapper: strEqual(RocStr, RocStr) -> bool
-fn wrapStrEqual(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize) callconv(.c) bool {
-    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
-    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
-    return strEqual(a, b);
-}
-
-/// Wrapper: strEqualStaticSmall(RocStr, u64, u64, u64, u64) -> bool
-fn wrapStrEqualStaticSmall(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, static_len: u64, word0: u64, word1: u64, word2: u64) callconv(.c) bool {
-    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
-    return strEqualStaticSmall(a, static_len, word0, word1, word2);
-}
-
-/// Wrapper: strStaticSmallWordEq(RocStr, u64, u64, u64) -> bool
-fn wrapStrStaticSmallWordEq(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, offset: u64, active_len: u64, word: u64) callconv(.c) bool {
-    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
-    return strStaticSmallWordEq(a, offset, active_len, word);
-}
-
-/// Wrapper: strStaticSmallWordCaselessEq(RocStr, u64, u64, u64) -> bool
-fn wrapStrStaticSmallWordCaselessEq(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, offset: u64, active_len: u64, word: u64) callconv(.c) bool {
-    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
-    return strStaticSmallWordCaselessEq(a, offset, active_len, word);
-}
-
-/// Wrapper: countUtf8Bytes(RocStr) -> u64
-fn wrapStrCountUtf8Bytes(str_bytes: ?[*]u8, str_len: usize, str_cap: usize) callconv(.c) u64 {
-    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
-    return strCountUtf8Bytes(s);
-}
-
-fn wrapStrSplitFirst(out: *anyopaque, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, find_layout: *const dev_wrappers.StrSplitFirstLayout) callconv(.c) void {
-    const roc_ops = builtins.in_process_host.ops();
-    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
-    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
-    const result = strSplitFirst(a, b, roc_ops);
-    const out_bytes: [*]u8 = @ptrCast(out);
-
-    @as(*RocStr, @ptrCast(@alignCast(out_bytes + find_layout.after_offset))).* = result.after;
-    @as(*RocStr, @ptrCast(@alignCast(out_bytes + find_layout.before_offset))).* = result.before;
-    @as(*u8, @ptrCast(@alignCast(out_bytes + find_layout.found_offset))).* = if (result.found) 1 else 0;
-}
-
-fn wrapStrSplitLast(out: *anyopaque, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, find_layout: *const dev_wrappers.StrSplitLastLayout) callconv(.c) void {
-    const roc_ops = builtins.in_process_host.ops();
-    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
-    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
-    const result = strSplitLast(a, b, roc_ops);
-    const out_bytes: [*]u8 = @ptrCast(out);
-
-    @as(*RocStr, @ptrCast(@alignCast(out_bytes + find_layout.after_offset))).* = result.after;
-    @as(*RocStr, @ptrCast(@alignCast(out_bytes + find_layout.before_offset))).* = result.before;
-    @as(*u8, @ptrCast(@alignCast(out_bytes + find_layout.found_offset))).* = if (result.found) 1 else 0;
-}
-
-fn wrapStrDropPrefixCaselessAscii(out: *anyopaque, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, prefix_layout: *const dev_wrappers.StrDropPrefixCaselessAsciiLayout) callconv(.c) void {
-    const roc_ops = builtins.in_process_host.ops();
-    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
-    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
-    const result = strDropPrefixCaselessAscii(a, b, roc_ops);
-    const out_bytes: [*]u8 = @ptrCast(out);
-
-    @as(*RocStr, @ptrCast(@alignCast(out_bytes + prefix_layout.after_offset))).* = result.after;
-    @as(*u8, @ptrCast(@alignCast(out_bytes + prefix_layout.found_offset))).* = if (result.found) 1 else 0;
-}
-
-/// Wrapper: strCaselessAsciiEquals(RocStr, RocStr) -> bool
-fn wrapStrCaselessAsciiEquals(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize) callconv(.c) bool {
-    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
-    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
-    return strCaselessAsciiEquals(a, b);
-}
-
-/// Wrapper: repeatC(RocStr, u64, *RocOps) -> RocStr
-fn wrapStrRepeat(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, count: u64) callconv(.c) void {
-    const roc_ops = builtins.in_process_host.ops();
-    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
-    out.* = strRepeatC(s, count, roc_ops);
-}
-
-/// Wrapper: strTrim(RocStr, UpdateMode, *RocOps) -> RocStr
-fn wrapStrTrim(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, update_mode: builtins.utils.UpdateMode) callconv(.c) void {
-    const roc_ops = builtins.in_process_host.ops();
-    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
-    out.* = strTrim(s, update_mode, roc_ops);
-}
-
-/// Wrapper: strTrimStart(RocStr, UpdateMode, *RocOps) -> RocStr
-fn wrapStrTrimStart(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, update_mode: builtins.utils.UpdateMode) callconv(.c) void {
-    const roc_ops = builtins.in_process_host.ops();
-    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
-    out.* = strTrimStart(s, update_mode, roc_ops);
-}
-
-/// Wrapper: strTrimEnd(RocStr, UpdateMode, *RocOps) -> RocStr
-fn wrapStrTrimEnd(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, update_mode: builtins.utils.UpdateMode) callconv(.c) void {
-    const roc_ops = builtins.in_process_host.ops();
-    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
-    out.* = strTrimEnd(s, update_mode, roc_ops);
-}
-
-/// Wrapper: strSplitOn(RocStr, RocStr, *RocOps) -> RocList
-fn wrapStrSplit(out: *RocList, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize) callconv(.c) void {
-    const roc_ops = builtins.in_process_host.ops();
-    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
-    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
-    out.* = strSplitOn(a, b, roc_ops);
-}
-
-/// Wrapper: strJoinWithC(RocList, RocStr, *RocOps) -> RocStr
-fn wrapStrJoinWith(out: *RocStr, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, sep_bytes: ?[*]u8, sep_len: usize, sep_cap: usize) callconv(.c) void {
-    const roc_ops = builtins.in_process_host.ops();
-    const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    const sep = RocStr{ .bytes = sep_bytes, .length = sep_len, .capacity_or_alloc_ptr = sep_cap };
-    out.* = strJoinWithC(list, sep, roc_ops);
-}
-
-/// Wrapper: reserveC(RocStr, u64, UpdateMode, *RocOps) -> RocStr
-fn wrapStrReserve(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, spare: u64, update_mode: builtins.utils.UpdateMode) callconv(.c) void {
-    const roc_ops = builtins.in_process_host.ops();
-    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
-    out.* = strReserveC(s, spare, update_mode, roc_ops);
-}
-
-/// Wrapper: strReleaseExcessCapacity(RocStr, UpdateMode, *RocOps) -> RocStr
-fn wrapStrReleaseExcessCapacity(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, update_mode: builtins.utils.UpdateMode) callconv(.c) void {
-    const roc_ops = builtins.in_process_host.ops();
-    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
-    out.* = strReleaseExcessCapacity(s, update_mode, roc_ops);
-}
-
-/// Wrapper: withCapacityC(u64, *RocOps) -> RocStr
-fn wrapStrWithCapacity(out: *RocStr, capacity: u64) callconv(.c) void {
-    const roc_ops = builtins.in_process_host.ops();
-    out.* = strWithCapacityC(capacity, roc_ops);
-}
-
-/// Wrapper: strDropPrefix(RocStr, RocStr, *RocOps) -> RocStr
-fn wrapStrDropPrefix(out: *RocStr, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize) callconv(.c) void {
-    const roc_ops = builtins.in_process_host.ops();
-    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
-    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
-    out.* = strDropPrefix(a, b, roc_ops);
-}
-
-/// Wrapper: strDropSuffix(RocStr, RocStr, *RocOps) -> RocStr
-fn wrapStrDropSuffix(out: *RocStr, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize) callconv(.c) void {
-    const roc_ops = builtins.in_process_host.ops();
-    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
-    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
-    out.* = strDropSuffix(a, b, roc_ops);
-}
-
-/// Wrapper: strWithAsciiLowercased(RocStr, UpdateMode, *RocOps) -> RocStr
-fn wrapStrWithAsciiLowercased(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, update_mode: builtins.utils.UpdateMode) callconv(.c) void {
-    const roc_ops = builtins.in_process_host.ops();
-    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
-    out.* = strWithAsciiLowercased(s, update_mode, roc_ops);
-}
-
-/// Wrapper: strWithAsciiUppercased(RocStr, UpdateMode, *RocOps) -> RocStr
-fn wrapStrWithAsciiUppercased(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, update_mode: builtins.utils.UpdateMode) callconv(.c) void {
-    const roc_ops = builtins.in_process_host.ops();
-    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
-    out.* = strWithAsciiUppercased(s, update_mode, roc_ops);
-}
-
-/// Wrapper: fromUtf8Lossy(RocList, *RocOps) -> RocStr
-fn wrapStrFromUtf8Lossy(out: *RocStr, list_bytes: ?[*]u8, list_len: usize, list_cap: usize) callconv(.c) void {
-    const roc_ops = builtins.in_process_host.ops();
-    const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    out.* = strFromUtf8Lossy(list, roc_ops);
-}
 
 const LIR = lir.LIR;
 const LirProcSpec = lir.LirProcSpec;
@@ -3227,16 +2916,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const src_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                     const src_reg = try self.ensureInGeneralReg(src_loc);
                     // Truncation: just mask the relevant bits
-                    const dst_bits: u8 = if (ll.op == .u8_to_i8_wrap or ll.op == .i8_to_u8_wrap or ll.op == .u16_to_i8_wrap or ll.op == .u16_to_u8_wrap or ll.op == .i16_to_i8_wrap or ll.op == .i16_to_u8_wrap or ll.op == .u32_to_i8_wrap or ll.op == .u32_to_u8_wrap or ll.op == .i32_to_i8_wrap or ll.op == .i32_to_u8_wrap or ll.op == .u64_to_i8_wrap or ll.op == .u64_to_u8_wrap or ll.op == .i64_to_i8_wrap or ll.op == .i64_to_u8_wrap)
-                        8
-                    else if (ll.op == .u16_to_i16_wrap or ll.op == .i8_to_u16_wrap or ll.op == .i16_to_u16_wrap or ll.op == .u32_to_i16_wrap or ll.op == .u32_to_u16_wrap or ll.op == .i32_to_i16_wrap or ll.op == .i32_to_u16_wrap or ll.op == .u64_to_i16_wrap or ll.op == .u64_to_u16_wrap or ll.op == .i64_to_i16_wrap or ll.op == .i64_to_u16_wrap)
-                        16
-                    else if (ll.op == .u32_to_i32_wrap or ll.op == .i8_to_u32_wrap or ll.op == .i16_to_u32_wrap or ll.op == .i32_to_u32_wrap or ll.op == .u64_to_i32_wrap or ll.op == .u64_to_u32_wrap or ll.op == .i64_to_i32_wrap or ll.op == .i64_to_u32_wrap)
-                        32
-                    else if (ll.op == .i8_to_u64_wrap or ll.op == .i16_to_u64_wrap or ll.op == .i32_to_u64_wrap or ll.op == .u64_to_i64_wrap or ll.op == .i64_to_u64_wrap)
-                        64
-                    else
-                        unreachable;
+                    const dst_bits = numeric_conversion.getConversionSpec(ll.op).?.dst.bits();
                     if (dst_bits < 64) {
                         const shift_amount: u8 = 64 - dst_bits;
                         try self.emitShlImm(.w64, src_reg, src_reg, shift_amount);
@@ -3756,14 +3436,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (args.len != 1) unreachable;
                     const str_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
-                    return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrToUtf8), LowLevelBuiltins.strOp(.str_to_utf8), .list, null);
+                    return try self.callStr1RocOpsToResult(str_off, LowLevelBuiltins.strOp(.str_to_utf8), .list, null);
                 },
                 .str_is_eq => {
                     if (args.len != 2) unreachable;
                     const a_loc, const b_loc = try self.emitValueLocals(2, args);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
-                    const eq_loc = try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrEqual), LowLevelBuiltins.strOp(.str_is_eq));
+                    const eq_loc = try self.callStr2ToScalar(a_off, b_off, LowLevelBuiltins.strOp(.str_is_eq));
                     const eq_reg = try self.ensureInGeneralReg(eq_loc);
                     return .{ .general_reg = eq_reg };
                 },
@@ -3775,7 +3455,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const word0_off = try self.ensureOnStack(word0_loc, 8);
                     const word1_off = try self.ensureOnStack(word1_loc, 8);
                     const word2_off = try self.ensureOnStack(word2_loc, 8);
-                    const eq_loc = try self.callStrStaticSmallToScalar(str_off, len_off, word0_off, word1_off, word2_off, @intFromPtr(&wrapStrEqualStaticSmall), LowLevelBuiltins.strOp(.str_is_eq_static_small));
+                    const eq_loc = try self.callStrStaticSmallToScalar(str_off, len_off, word0_off, word1_off, word2_off, LowLevelBuiltins.strOp(.str_is_eq_static_small));
                     const eq_reg = try self.ensureInGeneralReg(eq_loc);
                     return .{ .general_reg = eq_reg };
                 },
@@ -3786,7 +3466,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const offset_off = try self.ensureOnStack(offset_loc, 8);
                     const active_len_off = try self.ensureOnStack(active_len_loc, 8);
                     const word_off = try self.ensureOnStack(word_loc, 8);
-                    const eq_loc = try self.callStrStaticSmallWordToScalar(str_off, offset_off, active_len_off, word_off, @intFromPtr(&wrapStrStaticSmallWordEq), LowLevelBuiltins.strOp(.str_static_small_word_eq));
+                    const eq_loc = try self.callStrStaticSmallWordToScalar(str_off, offset_off, active_len_off, word_off, LowLevelBuiltins.strOp(.str_static_small_word_eq));
                     const eq_reg = try self.ensureInGeneralReg(eq_loc);
                     return .{ .general_reg = eq_reg };
                 },
@@ -3797,7 +3477,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const offset_off = try self.ensureOnStack(offset_loc, 8);
                     const active_len_off = try self.ensureOnStack(active_len_loc, 8);
                     const word_off = try self.ensureOnStack(word_loc, 8);
-                    const eq_loc = try self.callStrStaticSmallWordToScalar(str_off, offset_off, active_len_off, word_off, @intFromPtr(&wrapStrStaticSmallWordCaselessEq), LowLevelBuiltins.strOp(.str_static_small_word_caseless_eq));
+                    const eq_loc = try self.callStrStaticSmallWordToScalar(str_off, offset_off, active_len_off, word_off, LowLevelBuiltins.strOp(.str_static_small_word_caseless_eq));
                     const eq_reg = try self.ensureInGeneralReg(eq_loc);
                     return .{ .general_reg = eq_reg };
                 },
@@ -3812,34 +3492,34 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
-                    return try self.callStr2RocOpsToStr(a_off, b_off, @intFromPtr(&wrapStrConcat), LowLevelBuiltins.strOp(.str_concat), updateModeImmForArg0(ll.unique_args));
+                    return try self.callStr2RocOpsToStr(a_off, b_off, LowLevelBuiltins.strOp(.str_concat), updateModeImmForArg0(ll.unique_args));
                 },
                 .str_contains => {
                     if (args.len != 2) unreachable;
                     const a_loc, const b_loc = try self.emitValueLocals(2, args);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
-                    return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrContains), LowLevelBuiltins.strOp(.str_contains));
+                    return try self.callStr2ToScalar(a_off, b_off, LowLevelBuiltins.strOp(.str_contains));
                 },
                 .str_starts_with => {
                     if (args.len != 2) unreachable;
                     const a_loc, const b_loc = try self.emitValueLocals(2, args);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
-                    return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrStartsWith), LowLevelBuiltins.strOp(.str_starts_with));
+                    return try self.callStr2ToScalar(a_off, b_off, LowLevelBuiltins.strOp(.str_starts_with));
                 },
                 .str_ends_with => {
                     if (args.len != 2) unreachable;
                     const a_loc, const b_loc = try self.emitValueLocals(2, args);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
-                    return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrEndsWith), LowLevelBuiltins.strOp(.str_ends_with));
+                    return try self.callStr2ToScalar(a_off, b_off, LowLevelBuiltins.strOp(.str_ends_with));
                 },
                 .str_count_utf8_bytes => {
                     if (args.len != 1) unreachable;
                     const str_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
-                    return try self.callStr1ToScalar(str_off, @intFromPtr(&wrapStrCountUtf8Bytes), LowLevelBuiltins.strOp(.str_count_utf8_bytes));
+                    return try self.callStr1ToScalar(str_off, LowLevelBuiltins.strOp(.str_count_utf8_bytes));
                 },
                 .str_get_utf8_byte_unsafe => {
                     if (args.len != 2) unreachable;
@@ -3898,8 +3578,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try builder.addStrBytesLenCapMemArgs(frame_ptr, a_off);
                     try builder.addStrBytesLenCapMemArgs(frame_ptr, b_off);
                     try builder.addLeaArg(frame_ptr, layout_slot);
-                    const wrap_addr = if (comptime split_op == .str_split_first) @intFromPtr(&wrapStrSplitFirst) else @intFromPtr(&wrapStrSplitLast);
-                    try self.callBuiltinWithAdapter(&builder, wrap_addr, LowLevelBuiltins.strOp(split_op));
+                    try self.callBuiltin(&builder, LowLevelBuiltins.strOp(split_op));
 
                     return self.stackLocationForLayout(ll.ret_layout, result_offset);
                 },
@@ -3943,7 +3622,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try builder.addStrBytesLenCapMemArgs(frame_ptr, a_off);
                     try builder.addStrBytesLenCapMemArgs(frame_ptr, b_off);
                     try builder.addLeaArg(frame_ptr, layout_slot);
-                    try self.callBuiltinWithAdapter(&builder, @intFromPtr(&wrapStrDropPrefixCaselessAscii), LowLevelBuiltins.strOp(.str_drop_prefix_caseless_ascii));
+                    try self.callBuiltin(&builder, LowLevelBuiltins.strOp(.str_drop_prefix_caseless_ascii));
 
                     return self.stackLocationForLayout(ll.ret_layout, result_offset);
                 },
@@ -3952,7 +3631,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const a_loc, const b_loc = try self.emitValueLocals(2, args);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
-                    return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrCaselessAsciiEquals), LowLevelBuiltins.strOp(.str_caseless_ascii_equals));
+                    return try self.callStr2ToScalar(a_off, b_off, LowLevelBuiltins.strOp(.str_caseless_ascii_equals));
                 },
                 .str_repeat => {
                     // str_repeat(str, count) -> Str
@@ -3960,25 +3639,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const str_loc, const count_loc = try self.emitValueLocals(2, args);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     const count_off = try self.ensureOnStack(count_loc, 8);
-                    return try self.callStr1U64RocOpsToStr(str_off, count_off, @intFromPtr(&wrapStrRepeat), LowLevelBuiltins.strOp(.str_repeat), null);
+                    return try self.callStr1U64RocOpsToStr(str_off, count_off, LowLevelBuiltins.strOp(.str_repeat), null);
                 },
                 .str_trim => {
                     if (args.len != 1) unreachable;
                     const str_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
-                    return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrTrim), LowLevelBuiltins.strOp(.str_trim), .str, updateModeImmForArg0(ll.unique_args));
+                    return try self.callStr1RocOpsToResult(str_off, LowLevelBuiltins.strOp(.str_trim), .str, updateModeImmForArg0(ll.unique_args));
                 },
                 .str_trim_start => {
                     if (args.len != 1) unreachable;
                     const str_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
-                    return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrTrimStart), LowLevelBuiltins.strOp(.str_trim_start), .str, updateModeImmForArg0(ll.unique_args));
+                    return try self.callStr1RocOpsToResult(str_off, LowLevelBuiltins.strOp(.str_trim_start), .str, updateModeImmForArg0(ll.unique_args));
                 },
                 .str_trim_end => {
                     if (args.len != 1) unreachable;
                     const str_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
-                    return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrTrimEnd), LowLevelBuiltins.strOp(.str_trim_end), .str, updateModeImmForArg0(ll.unique_args));
+                    return try self.callStr1RocOpsToResult(str_off, LowLevelBuiltins.strOp(.str_trim_end), .str, updateModeImmForArg0(ll.unique_args));
                 },
                 .str_split_on => {
                     // str_split(str, delimiter) -> List(Str)
@@ -3986,7 +3665,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const a_loc, const b_loc = try self.emitValueLocals(2, args);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
-                    return try self.callStr2RocOpsToResult(a_off, b_off, @intFromPtr(&wrapStrSplit), LowLevelBuiltins.strOp(.str_split_on), .list, null);
+                    return try self.callStr2RocOpsToResult(a_off, b_off, LowLevelBuiltins.strOp(.str_split_on), .list, null);
                 },
                 .str_join_with => {
                     // str_join_with(list, separator) -> Str
@@ -3994,7 +3673,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const list_loc, const sep_loc = try self.emitValueLocals(2, args);
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
                     const sep_off = try self.ensureOnStack(sep_loc, roc_str_size);
-                    return try self.callListStrRocOpsToStr(list_off, sep_off, @intFromPtr(&wrapStrJoinWith), LowLevelBuiltins.strOp(.str_join_with));
+                    return try self.callListStrRocOpsToStr(list_off, sep_off, LowLevelBuiltins.strOp(.str_join_with));
                 },
                 .str_reserve => {
                     // str_reserve(str, spare) -> Str
@@ -4002,13 +3681,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const str_loc, const spare_loc = try self.emitValueLocals(2, args);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     const spare_off = try self.ensureOnStack(spare_loc, 8);
-                    return try self.callStr1U64RocOpsToStr(str_off, spare_off, @intFromPtr(&wrapStrReserve), LowLevelBuiltins.strOp(.str_reserve), updateModeImmForArg0(ll.unique_args));
+                    return try self.callStr1U64RocOpsToStr(str_off, spare_off, LowLevelBuiltins.strOp(.str_reserve), updateModeImmForArg0(ll.unique_args));
                 },
                 .str_release_excess_capacity => {
                     if (args.len != 1) unreachable;
                     const str_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
-                    return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrReleaseExcessCapacity), LowLevelBuiltins.strOp(.str_release_excess_capacity), .str, updateModeImmForArg0(ll.unique_args));
+                    return try self.callStr1RocOpsToResult(str_off, LowLevelBuiltins.strOp(.str_release_excess_capacity), .str, updateModeImmForArg0(ll.unique_args));
                 },
                 .str_with_capacity => {
                     // str_with_capacity(capacity) -> Str
@@ -4024,7 +3703,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addLeaArg(base_reg, result_offset);
                         try builder.addRegArg(cap_reg);
                         self.codegen.freeGeneral(cap_reg);
-                        try self.callBuiltinWithAdapter(&builder, @intFromPtr(&wrapStrWithCapacity), LowLevelBuiltins.strOp(.str_with_capacity));
+                        try self.callBuiltin(&builder, LowLevelBuiltins.strOp(.str_with_capacity));
                     }
                     return .{ .stack_str = result_offset };
                 },
@@ -4033,58 +3712,58 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const a_loc, const b_loc = try self.emitValueLocals(2, args);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
-                    return try self.callStr2RocOpsToResult(a_off, b_off, @intFromPtr(&wrapStrDropPrefix), LowLevelBuiltins.strOp(.str_drop_prefix), .str, null);
+                    return try self.callStr2RocOpsToResult(a_off, b_off, LowLevelBuiltins.strOp(.str_drop_prefix), .str, null);
                 },
                 .str_drop_suffix => {
                     if (args.len != 2) unreachable;
                     const a_loc, const b_loc = try self.emitValueLocals(2, args);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
-                    return try self.callStr2RocOpsToResult(a_off, b_off, @intFromPtr(&wrapStrDropSuffix), LowLevelBuiltins.strOp(.str_drop_suffix), .str, null);
+                    return try self.callStr2RocOpsToResult(a_off, b_off, LowLevelBuiltins.strOp(.str_drop_suffix), .str, null);
                 },
                 .str_with_ascii_lowercased => {
                     if (args.len != 1) unreachable;
                     const str_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
-                    return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrWithAsciiLowercased), LowLevelBuiltins.strOp(.str_with_ascii_lowercased), .str, updateModeImmForArg0(ll.unique_args));
+                    return try self.callStr1RocOpsToResult(str_off, LowLevelBuiltins.strOp(.str_with_ascii_lowercased), .str, updateModeImmForArg0(ll.unique_args));
                 },
                 .str_with_ascii_uppercased => {
                     if (args.len != 1) unreachable;
                     const str_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
-                    return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrWithAsciiUppercased), LowLevelBuiltins.strOp(.str_with_ascii_uppercased), .str, updateModeImmForArg0(ll.unique_args));
+                    return try self.callStr1RocOpsToResult(str_off, LowLevelBuiltins.strOp(.str_with_ascii_uppercased), .str, updateModeImmForArg0(ll.unique_args));
                 },
                 .str_from_utf8_validated => {
                     const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
-                    return try self.callList1RocOpsToStr(list_off, @intFromPtr(&dev_wrappers.roc_builtins_str_from_utf8_validated), LowLevelBuiltins.strOp(.str_from_utf8_validated));
+                    return try self.callList1RocOpsToStr(list_off, LowLevelBuiltins.strOp(.str_from_utf8_validated));
                 },
                 .str_from_utf16_le_short => {
                     const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
-                    return try self.callList1RocOpsToStr(list_off, @intFromPtr(&dev_wrappers.roc_builtins_str_from_utf16_le_short), LowLevelBuiltins.strOp(.str_from_utf16_le_short));
+                    return try self.callList1RocOpsToStr(list_off, LowLevelBuiltins.strOp(.str_from_utf16_le_short));
                 },
                 .str_from_utf16_be_short => {
                     const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
-                    return try self.callList1RocOpsToStr(list_off, @intFromPtr(&dev_wrappers.roc_builtins_str_from_utf16_be_short), LowLevelBuiltins.strOp(.str_from_utf16_be_short));
+                    return try self.callList1RocOpsToStr(list_off, LowLevelBuiltins.strOp(.str_from_utf16_be_short));
                 },
                 .str_from_utf32_le_short => {
                     const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
-                    return try self.callList1RocOpsToStr(list_off, @intFromPtr(&dev_wrappers.roc_builtins_str_from_utf32_le_short), LowLevelBuiltins.strOp(.str_from_utf32_le_short));
+                    return try self.callList1RocOpsToStr(list_off, LowLevelBuiltins.strOp(.str_from_utf32_le_short));
                 },
                 .str_from_utf32_be_short => {
                     const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
-                    return try self.callList1RocOpsToStr(list_off, @intFromPtr(&dev_wrappers.roc_builtins_str_from_utf32_be_short), LowLevelBuiltins.strOp(.str_from_utf32_be_short));
+                    return try self.callList1RocOpsToStr(list_off, LowLevelBuiltins.strOp(.str_from_utf32_be_short));
                 },
                 .str_from_utf8_lossy => {
                     // str_from_utf8_lossy(list) -> Str
                     if (args.len != 1) unreachable;
                     const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
-                    return try self.callList1RocOpsToStr(list_off, @intFromPtr(&wrapStrFromUtf8Lossy), LowLevelBuiltins.strOp(.str_from_utf8_lossy));
+                    return try self.callList1RocOpsToStr(list_off, LowLevelBuiltins.strOp(.str_from_utf8_lossy));
                 },
                 .str_from_utf8 => {
                     // str_from_utf8(list) -> Try(Str, [BadUtf8 {problem: Utf8Problem, index: U64}])
@@ -4808,7 +4487,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         if (operand_layout == .str) {
                             const a_off = try self.ensureOnStack(lhs_loc, roc_str_size);
                             const b_off = try self.ensureOnStack(rhs_loc, roc_str_size);
-                            const eq_loc = try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrEqual), LowLevelBuiltins.strOp(.str_is_eq));
+                            const eq_loc = try self.callStr2ToScalar(a_off, b_off, LowLevelBuiltins.strOp(.str_is_eq));
                             const eq_reg = try self.ensureInGeneralReg(eq_loc);
                             return .{ .general_reg = eq_reg };
                         }
@@ -4943,7 +4622,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const src_reg = try self.ensureInGeneralReg(inner_loc);
                     const result_reg = try self.allocTempGeneral();
                     try self.emitCmpImm(src_reg, 0);
-                    try self.emitSetCond(result_reg, condEqual());
+                    try self.emitSetCond(result_reg, condCode(.equal));
                     self.codegen.freeGeneral(src_reg);
                     return .{ .general_reg = result_reg };
                 },
@@ -4952,7 +4631,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const src_reg = try self.ensureInGeneralReg(inner_loc);
                     const result_reg = try self.allocTempGeneral();
                     try self.emitCmpImm(src_reg, 0);
-                    try self.emitSetCond(result_reg, condNotEqual());
+                    try self.emitSetCond(result_reg, condCode(.not_equal));
                     self.codegen.freeGeneral(src_reg);
                     return .{ .general_reg = result_reg };
                 },
@@ -5046,7 +4725,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const escape_fn = LowLevelBuiltins.strOp(.str_inspect);
                     return self.callStr1RocOpsToResult(
                         str_off,
-                        escape_fn.wrapperAddress(),
                         escape_fn,
                         .str,
                         null,
@@ -5270,7 +4948,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addImmArg(@intCast(elem_size));
                         try builder.addImmArg(@intCast(elem_alignment));
                         try builder.addImmArg(if (box_abi.contains_refcounted) 1 else 0);
-                        try self.callBuiltinWithAdapter(&builder, BuiltinFn.allocate_with_refcount.wrapperAddress(), .allocate_with_refcount);
+                        try self.callBuiltin(&builder, .allocate_with_refcount);
                     }
                     // Save heap pointer to stack (generating the value expression may clobber registers)
                     try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
@@ -5529,7 +5207,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addImmArg(@intCast(elem_size));
                         try builder.addImmArg(@intCast(box_abi.elem_alignment));
                         try builder.addImmArg(if (box_abi.contains_refcounted) 1 else 0);
-                        try self.callBuiltinWithAdapter(&builder, BuiltinFn.allocate_with_refcount.wrapperAddress(), .allocate_with_refcount);
+                        try self.callBuiltin(&builder, .allocate_with_refcount);
                     }
                     try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
 
@@ -6765,7 +6443,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitCmpImm(count, 0);
             const zero_count_patch = try self.emitJumpIfEqual();
             try self.emitCmpImm(count, kind.laneBits());
-            const out_of_range_patch = try self.codegen.emitCondJump(condAboveOrEqual());
+            const out_of_range_patch = try self.codegen.emitCondJump(condCode(.above_or_equal));
 
             const wide_kind: builtins.simd.Kind = if (kind == .i16x8) .i32x4 else .i64x2;
             try self.emitSimdWiden(result, vector.reg, kind, false, protected);
@@ -7001,25 +6679,229 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 .simd_concat_shift_bytes => .{ .vectors = 2, .scalars = 1 },
 
+                .str_is_eq,
+                .str_is_eq_static_small,
+                .str_static_small_word_eq,
+                .str_static_small_word_caseless_eq,
+                .str_concat,
+                .str_contains,
+                .str_trim,
+                .str_trim_start,
+                .str_trim_end,
+                .str_caseless_ascii_equals,
+                .str_with_ascii_lowercased,
+                .str_with_ascii_uppercased,
+                .str_starts_with,
+                .str_ends_with,
+                .str_repeat,
+                .str_drop_prefix,
+                .str_drop_prefix_caseless_ascii,
+                .str_drop_suffix,
+                .str_split_first,
+                .str_split_last,
+                .str_count_utf8_bytes,
+                .str_get_utf8_byte_unsafe,
+                .str_substring_unsafe,
+                .str_with_capacity,
+                .str_reserve,
+                .str_release_excess_capacity,
+                .str_to_utf8,
+                .str_from_utf8_lossy,
+                .str_from_utf8_validated,
+                .str_from_utf16_le_short,
+                .str_from_utf16_be_short,
+                .str_from_utf32_le_short,
+                .str_from_utf32_be_short,
+                .str_from_utf8,
+                .str_split_on,
+                .str_join_with,
+                .str_inspect,
+                .u8_to_str,
+                .i8_to_str,
+                .u16_to_str,
+                .i16_to_str,
+                .u32_to_str,
+                .i32_to_str,
+                .u64_to_str,
+                .i64_to_str,
+                .u128_to_str,
+                .i128_to_str,
+                .dec_to_str,
+                .f32_to_str,
+                .f64_to_str,
+                .list_len,
+                .list_capacity,
+                .list_get_unsafe,
+                .list_prefetched,
+                .list_prefetch,
+                .list_append_unsafe,
+                .list_concat,
+                .list_append_range_within,
+                .list_copy_range_within,
+                .list_append_range_within_unsafe,
+                .list_append_sublist,
+                .list_append_le_bytes,
+                .list_slack_unique,
+                .list_owned_unique,
+                .list_set_in_place_unsafe,
+                .list_with_capacity,
+                .list_drop_at,
+                .list_sublist,
+                .list_sublist_borrowed,
+                .list_set,
+                .list_replace_unsafe,
+                .list_swap,
+                .list_prepend,
+                .list_first,
+                .list_last,
+                .list_drop_first,
+                .list_drop_last,
+                .list_take_first,
+                .list_take_last,
+                .list_reverse,
+                .list_sort_with,
+                .list_reserve,
+                .list_reserve_for_append,
+                .list_release_excess_capacity,
+                .list_clear,
+                .list_split_first,
+                .list_split_last,
+                .list_map_prepare_reuse,
+                .list_map_can_reuse,
+                .list_map_cast_unsafe,
+                .list_map_extract_unsafe,
+                .list_map_write_unsafe,
                 .bool_not,
                 .bool_likely,
-                .box_alloc_zeroed,
-                .box_box,
-                .box_prepare_update,
-                .box_unbox,
-                .box_unbox_borrowed,
-                .compare,
-                .crash,
-                .crypto_blake3_hash_bytes,
-                .crypto_blake3_hasher_empty,
-                .crypto_blake3_hasher_finish,
-                .crypto_blake3_hasher_write,
+                .dict_pseudo_seed,
+                .hasher_finish,
+                .hasher_write_bool,
+                .hasher_write_u8,
+                .hasher_write_u16,
+                .hasher_write_u32,
+                .hasher_write_u64,
+                .hasher_write_u128,
+                .hasher_write_i8,
+                .hasher_write_i16,
+                .hasher_write_i32,
+                .hasher_write_i64,
+                .hasher_write_i128,
+                .hasher_write_f32,
+                .hasher_write_f64,
+                .hasher_write_dec,
+                .hasher_write_bytes,
+                .hasher_write_str,
                 .crypto_sha256_hash_bytes,
                 .crypto_sha256_hasher_empty,
-                .crypto_sha256_hasher_finish,
                 .crypto_sha256_hasher_write,
-                .dec_from_attos,
+                .crypto_sha256_hasher_finish,
+                .crypto_blake3_hash_bytes,
+                .crypto_blake3_hasher_empty,
+                .crypto_blake3_hasher_write,
+                .crypto_blake3_hasher_finish,
+                .num_is_eq,
+                .num_is_gt,
+                .num_is_gte,
+                .num_is_lt,
+                .num_is_lte,
+                .num_negate,
+                .num_abs,
+                .num_abs_diff,
+                .num_plus,
+                .num_minus,
+                .num_times,
+                .num_int_add_wrap,
+                .num_int_add_crash_on_overflow,
+                .num_int_add_overflows,
+                .num_int_add_proven_cannot_overflow,
+                .num_int_sub_wrap,
+                .num_int_sub_crash_on_overflow,
+                .num_int_sub_overflows,
+                .num_int_sub_proven_cannot_overflow,
+                .num_int_mul_wrap,
+                .num_int_mul_crash_on_overflow,
+                .num_int_mul_overflows,
+                .num_int_mul_proven_cannot_overflow,
+                .num_float_add,
+                .num_float_sub,
+                .num_float_mul,
+                .dec_mul,
+                .num_div_by,
+                .num_div_by_checked,
+                .num_div_trunc_by,
+                .num_div_trunc_by_checked,
+                .num_rem_by,
+                .num_rem_by_checked,
+                .num_mod_by,
+                .num_mod_by_checked,
+                .num_negate_checked,
+                .num_abs_checked,
+                .num_pow,
+                .num_atan2,
+                .num_sqrt,
+                .num_sin,
+                .num_cos,
+                .num_tan,
+                .num_asin,
+                .num_acos,
+                .num_atan,
+                .num_log,
+                .num_floor,
+                .num_ceiling,
+                .num_to_str,
+                .f32_to_bits,
+                .f32_from_bits,
+                .f64_to_bits,
+                .f64_from_bits,
+                .num_shift_left_by,
+                .num_shift_right_by,
+                .num_shift_right_zf_by,
+                .num_bitwise_and,
+                .num_bitwise_or,
+                .num_bitwise_xor,
+                .num_bitwise_not,
+                .num_count_one_bits,
+                .num_count_leading_zero_bits,
+                .num_count_trailing_zero_bits,
+                .num_from_le_bytes_unchecked,
+                .simd_load_16_unchecked,
+                .simd_store_16_unchecked,
+                .simd_append_16,
+                .simd_splat,
+                .simd_with_lane_unchecked,
+                .simd_to_u128_bits,
+                .simd_from_u128_bits,
+                .simd_add_wrap,
+                .simd_sub_wrap,
+                .simd_add_sat,
+                .simd_sub_sat,
+                .simd_neg_wrap,
+                .simd_abs_diff,
+                .simd_avg_rounded,
+                .simd_dot_pairs,
+                .simd_sad,
+                .simd_and,
+                .simd_or,
+                .simd_xor,
+                .simd_not,
+                .simd_bit_select,
+                .simd_interleave_lo,
+                .simd_interleave_hi,
+                .u8_from_str,
+                .i8_from_str,
+                .u16_from_str,
+                .i16_from_str,
+                .u32_from_str,
+                .i32_from_str,
+                .u64_from_str,
+                .i64_from_str,
+                .u128_from_str,
+                .i128_from_str,
                 .dec_from_str,
+                .dec_to_attos,
+                .dec_from_attos,
+                .f32_from_str,
+                .f64_from_str,
                 .u8_from_str_prefix,
                 .u8_from_utf8_prefix,
                 .i8_from_str_prefix,
@@ -7046,468 +6928,263 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .f32_from_utf8_prefix,
                 .f64_from_str_prefix,
                 .f64_from_utf8_prefix,
-                .dec_to_attos,
-                .dec_to_f32_try_unsafe,
-                .dec_to_f32_wrap,
-                .dec_to_f64,
-                .dec_to_i128_trunc,
-                .dec_to_i16_trunc,
-                .dec_to_i16_try_unsafe,
-                .dec_to_i32_trunc,
-                .dec_to_i32_try_unsafe,
-                .dec_to_i64_trunc,
-                .dec_to_i64_try_unsafe,
-                .dec_to_i8_trunc,
-                .dec_to_i8_try_unsafe,
-                .dec_to_str,
-                .dec_to_u128_trunc,
-                .dec_to_u128_try_unsafe,
-                .dec_to_u16_trunc,
-                .dec_to_u16_try_unsafe,
-                .dec_to_u32_trunc,
-                .dec_to_u32_try_unsafe,
-                .dec_to_u64_trunc,
-                .dec_to_u64_try_unsafe,
-                .dec_to_u8_trunc,
-                .dec_to_u8_try_unsafe,
-                .dict_pseudo_seed,
-                .erased_capture_load,
-                .f32_from_bits,
-                .f32_from_str,
-                .f32_to_bits,
-                .f32_to_f64,
-                .f32_to_i128_trunc,
-                .f32_to_i128_try_unsafe,
+                .u8_to_i8_wrap,
+                .u8_to_i8_try,
+                .u8_to_i16,
+                .u8_to_i32,
+                .u8_to_i64,
+                .u8_to_i128,
+                .u8_to_u16,
+                .u8_to_u32,
+                .u8_to_u64,
+                .u8_to_u128,
+                .u8_to_f32,
+                .u8_to_f64,
+                .u8_to_dec,
+                .i8_to_i16,
+                .i8_to_i32,
+                .i8_to_i64,
+                .i8_to_i128,
+                .i8_to_u8_wrap,
+                .i8_to_u8_try,
+                .i8_to_u16_wrap,
+                .i8_to_u16_try,
+                .i8_to_u32_wrap,
+                .i8_to_u32_try,
+                .i8_to_u64_wrap,
+                .i8_to_u64_try,
+                .i8_to_u128_wrap,
+                .i8_to_u128_try,
+                .i8_to_f32,
+                .i8_to_f64,
+                .i8_to_dec,
+                .u16_to_i8_wrap,
+                .u16_to_i8_try,
+                .u16_to_i16_wrap,
+                .u16_to_i16_try,
+                .u16_to_i32,
+                .u16_to_i64,
+                .u16_to_i128,
+                .u16_to_u8_wrap,
+                .u16_to_u8_try,
+                .u16_to_u32,
+                .u16_to_u64,
+                .u16_to_u128,
+                .u16_to_f32,
+                .u16_to_f64,
+                .u16_to_dec,
+                .i16_to_i8_wrap,
+                .i16_to_i8_try,
+                .i16_to_i32,
+                .i16_to_i64,
+                .i16_to_i128,
+                .i16_to_u8_wrap,
+                .i16_to_u8_try,
+                .i16_to_u16_wrap,
+                .i16_to_u16_try,
+                .i16_to_u32_wrap,
+                .i16_to_u32_try,
+                .i16_to_u64_wrap,
+                .i16_to_u64_try,
+                .i16_to_u128_wrap,
+                .i16_to_u128_try,
+                .i16_to_f32,
+                .i16_to_f64,
+                .i16_to_dec,
+                .u32_to_i8_wrap,
+                .u32_to_i8_try,
+                .u32_to_i16_wrap,
+                .u32_to_i16_try,
+                .u32_to_i32_wrap,
+                .u32_to_i32_try,
+                .u32_to_i64,
+                .u32_to_i128,
+                .u32_to_u8_wrap,
+                .u32_to_u8_try,
+                .u32_to_u16_wrap,
+                .u32_to_u16_try,
+                .u32_to_u64,
+                .u32_to_u128,
+                .u32_to_f32,
+                .u32_to_f64,
+                .u32_to_dec,
+                .i32_to_i8_wrap,
+                .i32_to_i8_try,
+                .i32_to_i16_wrap,
+                .i32_to_i16_try,
+                .i32_to_i64,
+                .i32_to_i128,
+                .i32_to_u8_wrap,
+                .i32_to_u8_try,
+                .i32_to_u16_wrap,
+                .i32_to_u16_try,
+                .i32_to_u32_wrap,
+                .i32_to_u32_try,
+                .i32_to_u64_wrap,
+                .i32_to_u64_try,
+                .i32_to_u128_wrap,
+                .i32_to_u128_try,
+                .i32_to_f32,
+                .i32_to_f64,
+                .i32_to_dec,
+                .u64_to_i8_wrap,
+                .u64_to_i8_try,
+                .u64_to_i16_wrap,
+                .u64_to_i16_try,
+                .u64_to_i32_wrap,
+                .u64_to_i32_try,
+                .u64_to_i64_wrap,
+                .u64_to_i64_try,
+                .u64_to_i128,
+                .u64_to_u8_wrap,
+                .u64_to_u8_try,
+                .u64_to_u16_wrap,
+                .u64_to_u16_try,
+                .u64_to_u32_wrap,
+                .u64_to_u32_try,
+                .u64_to_u128,
+                .u64_to_f32,
+                .u64_to_f64,
+                .u64_to_dec,
+                .i64_to_i8_wrap,
+                .i64_to_i8_try,
+                .i64_to_i16_wrap,
+                .i64_to_i16_try,
+                .i64_to_i32_wrap,
+                .i64_to_i32_try,
+                .i64_to_i128,
+                .i64_to_u8_wrap,
+                .i64_to_u8_try,
+                .i64_to_u16_wrap,
+                .i64_to_u16_try,
+                .i64_to_u32_wrap,
+                .i64_to_u32_try,
+                .i64_to_u64_wrap,
+                .i64_to_u64_try,
+                .i64_to_u128_wrap,
+                .i64_to_u128_try,
+                .i64_to_f32,
+                .i64_to_f64,
+                .i64_to_dec,
+                .u128_to_i8_wrap,
+                .u128_to_i8_try,
+                .u128_to_i16_wrap,
+                .u128_to_i16_try,
+                .u128_to_i32_wrap,
+                .u128_to_i32_try,
+                .u128_to_i64_wrap,
+                .u128_to_i64_try,
+                .u128_to_i128_wrap,
+                .u128_to_i128_try,
+                .u128_to_u8_wrap,
+                .u128_to_u8_try,
+                .u128_to_u16_wrap,
+                .u128_to_u16_try,
+                .u128_to_u32_wrap,
+                .u128_to_u32_try,
+                .u128_to_u64_wrap,
+                .u128_to_u64_try,
+                .u128_to_f32,
+                .u128_to_f64,
+                .u128_to_dec_try_unsafe,
+                .i128_to_i8_wrap,
+                .i128_to_i8_try,
+                .i128_to_i16_wrap,
+                .i128_to_i16_try,
+                .i128_to_i32_wrap,
+                .i128_to_i32_try,
+                .i128_to_i64_wrap,
+                .i128_to_i64_try,
+                .i128_to_u8_wrap,
+                .i128_to_u8_try,
+                .i128_to_u16_wrap,
+                .i128_to_u16_try,
+                .i128_to_u32_wrap,
+                .i128_to_u32_try,
+                .i128_to_u64_wrap,
+                .i128_to_u64_try,
+                .i128_to_u128_wrap,
+                .i128_to_u128_try,
+                .i128_to_f32,
+                .i128_to_f64,
+                .i128_to_dec_try_unsafe,
+                .f32_to_i8_trunc,
+                .f32_to_i8_try_unsafe,
                 .f32_to_i16_trunc,
                 .f32_to_i16_try_unsafe,
                 .f32_to_i32_trunc,
                 .f32_to_i32_try_unsafe,
                 .f32_to_i64_trunc,
                 .f32_to_i64_try_unsafe,
-                .f32_to_i8_trunc,
-                .f32_to_i8_try_unsafe,
-                .f32_to_str,
-                .f32_to_u128_trunc,
-                .f32_to_u128_try_unsafe,
+                .f32_to_i128_trunc,
+                .f32_to_i128_try_unsafe,
+                .f32_to_u8_trunc,
+                .f32_to_u8_try_unsafe,
                 .f32_to_u16_trunc,
                 .f32_to_u16_try_unsafe,
                 .f32_to_u32_trunc,
                 .f32_to_u32_try_unsafe,
                 .f32_to_u64_trunc,
                 .f32_to_u64_try_unsafe,
-                .f32_to_u8_trunc,
-                .f32_to_u8_try_unsafe,
-                .f64_from_bits,
-                .f64_from_str,
-                .f64_to_bits,
-                .f64_to_f32_try_unsafe,
-                .f64_to_f32_wrap,
-                .f64_to_i128_trunc,
-                .f64_to_i128_try_unsafe,
+                .f32_to_u128_trunc,
+                .f32_to_u128_try_unsafe,
+                .f32_to_f64,
+                .f64_to_i8_trunc,
+                .f64_to_i8_try_unsafe,
                 .f64_to_i16_trunc,
                 .f64_to_i16_try_unsafe,
                 .f64_to_i32_trunc,
                 .f64_to_i32_try_unsafe,
                 .f64_to_i64_trunc,
                 .f64_to_i64_try_unsafe,
-                .f64_to_i8_trunc,
-                .f64_to_i8_try_unsafe,
-                .f64_to_str,
-                .f64_to_u128_trunc,
-                .f64_to_u128_try_unsafe,
+                .f64_to_i128_trunc,
+                .f64_to_i128_try_unsafe,
+                .f64_to_u8_trunc,
+                .f64_to_u8_try_unsafe,
                 .f64_to_u16_trunc,
                 .f64_to_u16_try_unsafe,
                 .f64_to_u32_trunc,
                 .f64_to_u32_try_unsafe,
                 .f64_to_u64_trunc,
                 .f64_to_u64_try_unsafe,
-                .f64_to_u8_trunc,
-                .f64_to_u8_try_unsafe,
-                .hasher_finish,
-                .hasher_write_bool,
-                .hasher_write_bytes,
-                .hasher_write_dec,
-                .hasher_write_f32,
-                .hasher_write_f64,
-                .hasher_write_i128,
-                .hasher_write_i16,
-                .hasher_write_i32,
-                .hasher_write_i64,
-                .hasher_write_i8,
-                .hasher_write_str,
-                .hasher_write_u128,
-                .hasher_write_u16,
-                .hasher_write_u32,
-                .hasher_write_u64,
-                .hasher_write_u8,
-                .i128_from_str,
-                .i128_to_dec_try_unsafe,
-                .i128_to_f32,
-                .i128_to_f64,
-                .i128_to_i16_try,
-                .i128_to_i16_wrap,
-                .i128_to_i32_try,
-                .i128_to_i32_wrap,
-                .i128_to_i64_try,
-                .i128_to_i64_wrap,
-                .i128_to_i8_try,
-                .i128_to_i8_wrap,
-                .i128_to_str,
-                .i128_to_u128_try,
-                .i128_to_u128_wrap,
-                .i128_to_u16_try,
-                .i128_to_u16_wrap,
-                .i128_to_u32_try,
-                .i128_to_u32_wrap,
-                .i128_to_u64_try,
-                .i128_to_u64_wrap,
-                .i128_to_u8_try,
-                .i128_to_u8_wrap,
-                .i16_from_str,
-                .i16_to_dec,
-                .i16_to_f32,
-                .i16_to_f64,
-                .i16_to_i128,
-                .i16_to_i32,
-                .i16_to_i64,
-                .i16_to_i8_try,
-                .i16_to_i8_wrap,
-                .i16_to_str,
-                .i16_to_u128_try,
-                .i16_to_u128_wrap,
-                .i16_to_u16_try,
-                .i16_to_u16_wrap,
-                .i16_to_u32_try,
-                .i16_to_u32_wrap,
-                .i16_to_u64_try,
-                .i16_to_u64_wrap,
-                .i16_to_u8_try,
-                .i16_to_u8_wrap,
-                .i32_from_str,
-                .i32_to_dec,
-                .i32_to_f32,
-                .i32_to_f64,
-                .i32_to_i128,
-                .i32_to_i16_try,
-                .i32_to_i16_wrap,
-                .i32_to_i64,
-                .i32_to_i8_try,
-                .i32_to_i8_wrap,
-                .i32_to_str,
-                .i32_to_u128_try,
-                .i32_to_u128_wrap,
-                .i32_to_u16_try,
-                .i32_to_u16_wrap,
-                .i32_to_u32_try,
-                .i32_to_u32_wrap,
-                .i32_to_u64_try,
-                .i32_to_u64_wrap,
-                .i32_to_u8_try,
-                .i32_to_u8_wrap,
-                .i64_from_str,
-                .i64_to_dec,
-                .i64_to_f32,
-                .i64_to_f64,
-                .i64_to_i128,
-                .i64_to_i16_try,
-                .i64_to_i16_wrap,
-                .i64_to_i32_try,
-                .i64_to_i32_wrap,
-                .i64_to_i8_try,
-                .i64_to_i8_wrap,
-                .i64_to_str,
-                .i64_to_u128_try,
-                .i64_to_u128_wrap,
-                .i64_to_u16_try,
-                .i64_to_u16_wrap,
-                .i64_to_u32_try,
-                .i64_to_u32_wrap,
-                .i64_to_u64_try,
-                .i64_to_u64_wrap,
-                .i64_to_u8_try,
-                .i64_to_u8_wrap,
-                .i8_from_str,
-                .i8_to_dec,
-                .i8_to_f32,
-                .i8_to_f64,
-                .i8_to_i128,
-                .i8_to_i16,
-                .i8_to_i32,
-                .i8_to_i64,
-                .i8_to_str,
-                .i8_to_u128_try,
-                .i8_to_u128_wrap,
-                .i8_to_u16_try,
-                .i8_to_u16_wrap,
-                .i8_to_u32_try,
-                .i8_to_u32_wrap,
-                .i8_to_u64_try,
-                .i8_to_u64_wrap,
-                .i8_to_u8_try,
-                .i8_to_u8_wrap,
-                .list_append_le_bytes,
-                .list_append_range_within,
-                .list_append_range_within_unsafe,
-                .list_append_sublist,
-                .list_append_unsafe,
-                .list_concat,
-                .list_copy_range_within,
-                .list_drop_at,
-                .list_drop_first,
-                .list_drop_last,
-                .list_first,
-                .list_get_unsafe,
-                .list_last,
-                .list_capacity,
-                .list_len,
-                .list_prefetch,
-                .list_prefetched,
-                .list_map_can_reuse,
-                .list_map_cast_unsafe,
-                .list_map_extract_unsafe,
-                .list_map_prepare_reuse,
-                .list_map_write_unsafe,
-                .list_prepend,
-                .list_release_excess_capacity,
-                .list_clear,
-                .list_replace_unsafe,
-                .list_reserve,
-                .list_reserve_for_append,
-                .list_reverse,
-                .list_sort_with,
-                .list_owned_unique,
-                .list_set,
-                .list_set_in_place_unsafe,
-                .list_slack_unique,
-                .list_split_first,
-                .list_split_last,
-                .list_sublist,
-                .list_sublist_borrowed,
-                .list_swap,
-                .list_take_first,
-                .list_take_last,
-                .list_with_capacity,
-                .num_abs,
-                .num_abs_checked,
-                .num_abs_diff,
-                .num_acos,
-                .num_asin,
-                .num_atan,
-                .num_bitwise_and,
-                .num_bitwise_not,
-                .num_bitwise_or,
-                .num_bitwise_xor,
-                .num_ceiling,
-                .num_cos,
-                .num_count_leading_zero_bits,
-                .num_count_one_bits,
-                .num_count_trailing_zero_bits,
-                .num_div_by,
-                .num_div_by_checked,
-                .num_div_trunc_by,
-                .num_div_trunc_by_checked,
-                .num_floor,
-                .num_from_le_bytes_unchecked,
-                .num_is_eq,
-                .num_is_gt,
-                .num_is_gte,
-                .num_is_lt,
-                .num_is_lte,
-                .num_log,
-                .num_minus,
-                .num_mod_by,
-                .num_mod_by_checked,
-                .num_negate,
-                .num_negate_checked,
-                .num_plus,
-                .num_pow,
-                .num_atan2,
-                .num_rem_by,
-                .num_rem_by_checked,
-                .num_shift_left_by,
-                .num_shift_right_by,
-                .num_shift_right_zf_by,
-                .num_sin,
-                .num_sqrt,
-                .num_tan,
-                .num_times,
-                .num_int_add_wrap,
-                .num_int_add_crash_on_overflow,
-                .num_int_add_overflows,
-                .num_int_add_proven_cannot_overflow,
-                .num_int_sub_wrap,
-                .num_int_sub_crash_on_overflow,
-                .num_int_sub_overflows,
-                .num_int_sub_proven_cannot_overflow,
-                .num_int_mul_wrap,
-                .num_int_mul_crash_on_overflow,
-                .num_int_mul_overflows,
-                .num_int_mul_proven_cannot_overflow,
-                .num_float_add,
-                .num_float_sub,
-                .num_float_mul,
-                .dec_mul,
-                .num_to_str,
+                .f64_to_u128_trunc,
+                .f64_to_u128_try_unsafe,
+                .f64_to_f32_wrap,
+                .f64_to_f32_try_unsafe,
+                .dec_to_i8_trunc,
+                .dec_to_i8_try_unsafe,
+                .dec_to_i16_trunc,
+                .dec_to_i16_try_unsafe,
+                .dec_to_i32_trunc,
+                .dec_to_i32_try_unsafe,
+                .dec_to_i64_trunc,
+                .dec_to_i64_try_unsafe,
+                .dec_to_i128_trunc,
+                .dec_to_u8_trunc,
+                .dec_to_u8_try_unsafe,
+                .dec_to_u16_trunc,
+                .dec_to_u16_try_unsafe,
+                .dec_to_u32_trunc,
+                .dec_to_u32_try_unsafe,
+                .dec_to_u64_trunc,
+                .dec_to_u64_try_unsafe,
+                .dec_to_u128_trunc,
+                .dec_to_u128_try_unsafe,
+                .dec_to_f32_wrap,
+                .dec_to_f32_try_unsafe,
+                .dec_to_f64,
+                .box_box,
+                .box_unbox,
+                .box_unbox_borrowed,
+                .box_prepare_update,
+                .erased_capture_load,
                 .ptr_alloca,
-                .ptr_cast,
-                .ptr_load,
+                .box_alloc_zeroed,
                 .ptr_store,
-                .simd_abs_diff,
-                .simd_add_sat,
-                .simd_add_wrap,
-                .simd_and,
-                .simd_append_16,
-                .simd_avg_rounded,
-                .simd_bit_select,
-                .simd_dot_pairs,
-                .simd_from_u128_bits,
-                .simd_interleave_hi,
-                .simd_interleave_lo,
-                .simd_load_16_unchecked,
-                .simd_neg_wrap,
-                .simd_not,
-                .simd_or,
-                .simd_sad,
-                .simd_splat,
-                .simd_store_16_unchecked,
-                .simd_sub_sat,
-                .simd_sub_wrap,
-                .simd_to_u128_bits,
-                .simd_with_lane_unchecked,
-                .simd_xor,
-                .str_caseless_ascii_equals,
-                .str_concat,
-                .str_contains,
-                .str_count_utf8_bytes,
-                .str_drop_prefix,
-                .str_drop_prefix_caseless_ascii,
-                .str_drop_suffix,
-                .str_ends_with,
-                .str_from_utf8,
-                .str_from_utf8_lossy,
-                .str_from_utf8_validated,
-                .str_from_utf16_le_short,
-                .str_from_utf16_be_short,
-                .str_from_utf32_le_short,
-                .str_from_utf32_be_short,
-
-                .str_get_utf8_byte_unsafe,
-                .str_inspect,
-                .str_is_eq,
-                .str_is_eq_static_small,
-                .str_join_with,
-                .str_release_excess_capacity,
-                .str_repeat,
-                .str_reserve,
-                .str_split_first,
-                .str_split_last,
-                .str_split_on,
-                .str_starts_with,
-                .str_static_small_word_caseless_eq,
-                .str_static_small_word_eq,
-                .str_substring_unsafe,
-                .str_to_utf8,
-                .str_trim,
-                .str_trim_end,
-                .str_trim_start,
-                .str_with_ascii_lowercased,
-                .str_with_ascii_uppercased,
-                .str_with_capacity,
-                .u128_from_str,
-                .u128_to_dec_try_unsafe,
-                .u128_to_f32,
-                .u128_to_f64,
-                .u128_to_i128_try,
-                .u128_to_i128_wrap,
-                .u128_to_i16_try,
-                .u128_to_i16_wrap,
-                .u128_to_i32_try,
-                .u128_to_i32_wrap,
-                .u128_to_i64_try,
-                .u128_to_i64_wrap,
-                .u128_to_i8_try,
-                .u128_to_i8_wrap,
-                .u128_to_str,
-                .u128_to_u16_try,
-                .u128_to_u16_wrap,
-                .u128_to_u32_try,
-                .u128_to_u32_wrap,
-                .u128_to_u64_try,
-                .u128_to_u64_wrap,
-                .u128_to_u8_try,
-                .u128_to_u8_wrap,
-                .u16_from_str,
-                .u16_to_dec,
-                .u16_to_f32,
-                .u16_to_f64,
-                .u16_to_i128,
-                .u16_to_i16_try,
-                .u16_to_i16_wrap,
-                .u16_to_i32,
-                .u16_to_i64,
-                .u16_to_i8_try,
-                .u16_to_i8_wrap,
-                .u16_to_str,
-                .u16_to_u128,
-                .u16_to_u32,
-                .u16_to_u64,
-                .u16_to_u8_try,
-                .u16_to_u8_wrap,
-                .u32_from_str,
-                .u32_to_dec,
-                .u32_to_f32,
-                .u32_to_f64,
-                .u32_to_i128,
-                .u32_to_i16_try,
-                .u32_to_i16_wrap,
-                .u32_to_i32_try,
-                .u32_to_i32_wrap,
-                .u32_to_i64,
-                .u32_to_i8_try,
-                .u32_to_i8_wrap,
-                .u32_to_str,
-                .u32_to_u128,
-                .u32_to_u16_try,
-                .u32_to_u16_wrap,
-                .u32_to_u64,
-                .u32_to_u8_try,
-                .u32_to_u8_wrap,
-                .u64_from_str,
-                .u64_to_dec,
-                .u64_to_f32,
-                .u64_to_f64,
-                .u64_to_i128,
-                .u64_to_i16_try,
-                .u64_to_i16_wrap,
-                .u64_to_i32_try,
-                .u64_to_i32_wrap,
-                .u64_to_i64_try,
-                .u64_to_i64_wrap,
-                .u64_to_i8_try,
-                .u64_to_i8_wrap,
-                .u64_to_str,
-                .u64_to_u128,
-                .u64_to_u16_try,
-                .u64_to_u16_wrap,
-                .u64_to_u32_try,
-                .u64_to_u32_wrap,
-                .u64_to_u8_try,
-                .u64_to_u8_wrap,
-                .u8_from_str,
-                .u8_to_dec,
-                .u8_to_f32,
-                .u8_to_f64,
-                .u8_to_i128,
-                .u8_to_i16,
-                .u8_to_i32,
-                .u8_to_i64,
-                .u8_to_i8_try,
-                .u8_to_i8_wrap,
-                .u8_to_str,
-                .u8_to_u128,
-                .u8_to_u16,
-                .u8_to_u32,
-                .u8_to_u64,
+                .ptr_load,
+                .ptr_cast,
+                .compare,
+                .crash,
                 => null,
             };
         }
@@ -8171,7 +7848,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Used for str->str and str->list ops that take 1 string + roc_ops
         /// `update_mode_imm` is appended just before roc_ops for wrappers whose
         /// first argument carries the op's runtime uniqueness check.
-        fn callStr1RocOpsToResult(self: *Self, str_off: i32, adapter_addr: usize, builtin_fn: BuiltinFn, result_kind: enum { str, list }, update_mode_imm: ?i64) Allocator.Error!ValueLocation {
+        fn callStr1RocOpsToResult(self: *Self, str_off: i32, builtin_fn: BuiltinFn, result_kind: enum { str, list }, update_mode_imm: ?i64) Allocator.Error!ValueLocation {
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
 
             // fn(out, str_bytes, str_len, str_cap, [update_mode,] roc_ops)
@@ -8180,7 +7857,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addLeaArg(frame_ptr, result_offset);
             try builder.addStrBytesLenCapMemArgs(frame_ptr, str_off);
             if (update_mode_imm) |imm| try builder.addImmArg(imm);
-            try self.callBuiltinWithAdapter(&builder, adapter_addr, builtin_fn);
+            try self.callBuiltin(&builder, builtin_fn);
 
             return switch (result_kind) {
                 .str => .{ .stack_str = result_offset },
@@ -8190,14 +7867,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Call a C wrapper: fn(out, list_bytes, list_len, list_cap, roc_ops) -> void
         /// Used for list->str ops that take 1 list + roc_ops.
-        fn callList1RocOpsToStr(self: *Self, list_off: i32, adapter_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
+        fn callList1RocOpsToStr(self: *Self, list_off: i32, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
             try builder.addLeaArg(frame_ptr, result_offset);
             try builder.addThreeWordMemArg(frame_ptr, list_off);
-            try self.callBuiltinWithAdapter(&builder, adapter_addr, builtin_fn);
+            try self.callBuiltin(&builder, builtin_fn);
 
             return .{ .stack_str = result_offset };
         }
@@ -8246,7 +7923,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Call a C wrapper: fn(out, list_bytes, list_len, list_cap, str_bytes, str_len, str_cap, roc_ops) -> void
         /// Used for list+str->str ops.
-        fn callListStrRocOpsToStr(self: *Self, list_off: i32, str_off: i32, adapter_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
+        fn callListStrRocOpsToStr(self: *Self, list_off: i32, str_off: i32, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
 
             const base_ptr = frame_ptr;
@@ -8255,20 +7932,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addLeaArg(base_ptr, result_offset);
             try builder.addThreeWordMemArg(base_ptr, list_off);
             try builder.addStrBytesLenCapMemArgs(base_ptr, str_off);
-            try self.callBuiltinWithAdapter(&builder, adapter_addr, builtin_fn);
+            try self.callBuiltin(&builder, builtin_fn);
 
             return .{ .stack_str = result_offset };
         }
 
         /// Call a C wrapper: fn(str_f0, str_f1, str_f2) -> scalar (bool or u64)
         /// Used for str->bool and str->u64 ops that take 1 string
-        fn callStr1ToScalar(self: *Self, str_off: i32, adapter_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
+        fn callStr1ToScalar(self: *Self, str_off: i32, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
             // fn(str_bytes, str_len, str_cap) -> scalar - 3 args
             const base_ptr = frame_ptr;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
             try builder.addStrBytesLenCapMemArgs(base_ptr, str_off);
-            try self.callBuiltinWithAdapter(&builder, adapter_addr, builtin_fn);
+            try self.callBuiltin(&builder, builtin_fn);
 
             // Result is in return register (X0 or RAX)
             const result_reg = try self.allocTempGeneral();
@@ -8301,14 +7978,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Call a C wrapper: fn(a_f0, a_f1, a_f2, b_f0, b_f1, b_f2) -> bool
         /// Used for (str, str) -> bool comparison ops (equal, contains, starts_with, etc.)
-        fn callStr2ToScalar(self: *Self, a_off: i32, b_off: i32, adapter_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
+        fn callStr2ToScalar(self: *Self, a_off: i32, b_off: i32, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
             // fn(a_bytes, a_len, a_cap, b_bytes, b_len, b_cap) -> bool - 6 args
             const base_ptr = frame_ptr;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
             try builder.addStrBytesLenCapMemArgs(base_ptr, a_off);
             try builder.addStrBytesLenCapMemArgs(base_ptr, b_off);
-            try self.callBuiltinWithAdapter(&builder, adapter_addr, builtin_fn);
+            try self.callBuiltin(&builder, builtin_fn);
 
             // Result is in return register (X0 or RAX)
             const result_reg = try self.allocTempGeneral();
@@ -8327,7 +8004,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Call a C wrapper: fn(str_f0, str_f1, str_f2, len, word0, word1, word2) -> bool
         /// Used by compiler-generated static small field dispatch.
-        fn callStrStaticSmallToScalar(self: *Self, str_off: i32, len_off: i32, word0_off: i32, word1_off: i32, word2_off: i32, adapter_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
+        fn callStrStaticSmallToScalar(self: *Self, str_off: i32, len_off: i32, word0_off: i32, word1_off: i32, word2_off: i32, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
             const base_ptr = frame_ptr;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
@@ -8336,7 +8013,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addMemArg(base_ptr, word0_off);
             try builder.addMemArg(base_ptr, word1_off);
             try builder.addMemArg(base_ptr, word2_off);
-            try self.callBuiltinWithAdapter(&builder, adapter_addr, builtin_fn);
+            try self.callBuiltin(&builder, builtin_fn);
 
             const result_reg = try self.allocTempGeneral();
             if (comptime target.toCpuArch() == .aarch64) {
@@ -8350,7 +8027,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Call a C wrapper: fn(str_f0, str_f1, str_f2, offset, active_len, word) -> bool
         /// Used by compiler-generated static small field dispatch as a cheap discriminator.
-        fn callStrStaticSmallWordToScalar(self: *Self, str_off: i32, offset_off: i32, active_len_off: i32, word_off: i32, adapter_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
+        fn callStrStaticSmallWordToScalar(self: *Self, str_off: i32, offset_off: i32, active_len_off: i32, word_off: i32, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
             const base_ptr = frame_ptr;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
@@ -8358,7 +8035,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addMemArg(base_ptr, offset_off);
             try builder.addMemArg(base_ptr, active_len_off);
             try builder.addMemArg(base_ptr, word_off);
-            try self.callBuiltinWithAdapter(&builder, adapter_addr, builtin_fn);
+            try self.callBuiltin(&builder, builtin_fn);
 
             const result_reg = try self.allocTempGeneral();
             if (comptime target.toCpuArch() == .aarch64) {
@@ -8372,13 +8049,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Call a C wrapper: fn(out, a_f0, a_f1, a_f2, b_f0, b_f1, b_f2, [update_mode,] roc_ops) -> void
         /// Used for (str, str, roc_ops) -> str/list ops
-        fn callStr2RocOpsToStr(self: *Self, a_off: i32, b_off: i32, adapter_addr: usize, builtin_fn: BuiltinFn, update_mode_imm: ?i64) Allocator.Error!ValueLocation {
-            return self.callStr2RocOpsToResult(a_off, b_off, adapter_addr, builtin_fn, .str, update_mode_imm);
+        fn callStr2RocOpsToStr(self: *Self, a_off: i32, b_off: i32, builtin_fn: BuiltinFn, update_mode_imm: ?i64) Allocator.Error!ValueLocation {
+            return self.callStr2RocOpsToResult(a_off, b_off, builtin_fn, .str, update_mode_imm);
         }
 
         /// `update_mode_imm` is appended just before roc_ops for wrappers whose
         /// first argument carries the op's runtime uniqueness check.
-        fn callStr2RocOpsToResult(self: *Self, a_off: i32, b_off: i32, adapter_addr: usize, builtin_fn: BuiltinFn, result_kind: enum { str, list }, update_mode_imm: ?i64) Allocator.Error!ValueLocation {
+        fn callStr2RocOpsToResult(self: *Self, a_off: i32, b_off: i32, builtin_fn: BuiltinFn, result_kind: enum { str, list }, update_mode_imm: ?i64) Allocator.Error!ValueLocation {
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
 
             // fn(out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, [update_mode,] roc_ops) -> void
@@ -8389,7 +8066,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addStrBytesLenCapMemArgs(base_ptr, a_off);
             try builder.addStrBytesLenCapMemArgs(base_ptr, b_off);
             if (update_mode_imm) |imm| try builder.addImmArg(imm);
-            try self.callBuiltinWithAdapter(&builder, adapter_addr, builtin_fn);
+            try self.callBuiltin(&builder, builtin_fn);
 
             return switch (result_kind) {
                 .str => .{ .stack_str = result_offset },
@@ -8401,7 +8078,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Used for (str, u64, roc_ops) -> str ops like str_repeat, str_reserve.
         /// `update_mode_imm` is appended just before roc_ops for wrappers whose
         /// first argument carries the op's runtime uniqueness check.
-        fn callStr1U64RocOpsToStr(self: *Self, str_off: i32, u64_off: i32, adapter_addr: usize, builtin_fn: BuiltinFn, update_mode_imm: ?i64) Allocator.Error!ValueLocation {
+        fn callStr1U64RocOpsToStr(self: *Self, str_off: i32, u64_off: i32, builtin_fn: BuiltinFn, update_mode_imm: ?i64) Allocator.Error!ValueLocation {
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
 
             // fn(out, str_bytes, str_len, str_cap, u64_val, [update_mode,] roc_ops) -> void
@@ -8412,7 +8089,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addStrBytesLenCapMemArgs(base_ptr, str_off);
             try builder.addMemArg(base_ptr, u64_off);
             if (update_mode_imm) |imm| try builder.addImmArg(imm);
-            try self.callBuiltinWithAdapter(&builder, adapter_addr, builtin_fn);
+            try self.callBuiltin(&builder, builtin_fn);
 
             return .{ .stack_str = result_offset };
         }
@@ -9353,7 +9030,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             try self.codegen.emitLoadImm(infinity_reg, @bitCast(infinity_bits));
             try self.emitCmpReg(masked_reg, infinity_reg);
-            const not_nan_patch = try self.codegen.emitCondJump(condBelowOrEqual());
+            const not_nan_patch = try self.codegen.emitCondJump(condCode(.below_or_equal));
             try self.codegen.emitLoadImm(bits_reg, @bitCast(normalized_nan_bits));
             try self.codegen.patchJump(not_nan_patch, self.codegen.currentOffset());
         }
@@ -9500,7 +9177,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             try self.emitLsrImm(.w64, tmp_reg, cap_reg, 1);
             try self.emitCmpReg(len_reg, tmp_reg);
-            const len_ok_patch = try self.codegen.emitCondJump(condBelowOrEqual());
+            const len_ok_patch = try self.codegen.emitCondJump(condCode(.below_or_equal));
             try self.emitDebugCrashInvalidLocal(.str, .length_exceeds_capacity, local);
             const done = self.codegen.currentOffset();
             try self.codegen.patchJump(len_ok_patch, done);
@@ -10292,7 +9969,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 return .{ .general_reg = overflow_reg };
                             }
                             try self.emitCmpImm(overflow_reg, 0);
-                            try self.emitCrashOnCond(condNotEqual(), checkedOverflowMessage(entry.op));
+                            try self.emitCrashOnCond(condCode(.not_equal), checkedOverflowMessage(entry.op));
                             self.codegen.freeGeneral(overflow_reg);
                         }
                     } else if (checked_op) |tag| try self.emitCheckedIntAddSubOverflow(tag, result_reg, operand_layout, is_unsigned);
@@ -10313,7 +9990,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 return .{ .general_reg = overflow_reg };
                             }
                             try self.emitCmpImm(overflow_reg, 0);
-                            try self.emitCrashOnCond(condNotEqual(), checkedOverflowMessage(entry.op));
+                            try self.emitCrashOnCond(condCode(.not_equal), checkedOverflowMessage(entry.op));
                             self.codegen.freeGeneral(overflow_reg);
                         }
                     } else if (checked_op) |tag| try self.emitCheckedIntAddSubOverflow(tag, result_reg, operand_layout, is_unsigned);
@@ -10390,7 +10067,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
 
                         try self.emitCmpImm(sign_check_reg, 0);
-                        const same_sign_patch = try self.codegen.emitCondJump(condGreaterOrEqual());
+                        const same_sign_patch = try self.codegen.emitCondJump(condCode(.greater_or_equal));
                         try self.emitAddRegs(.w64, result_reg, result_reg, divisor_reg);
                         const done_patch = try self.codegen.emitJump();
 
@@ -10415,12 +10092,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_bitwise_xor => try self.codegen.emitXor(.w64, result_reg, lhs_reg, rhs_reg),
                 // Comparison operations
                 .num_is_eq => {
-                    try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condEqual());
+                    try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condCode(.equal));
                 },
-                .num_is_lt => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, if (is_unsigned) condBelow() else condLess()),
-                .num_is_lte => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, if (is_unsigned) condBelowOrEqual() else condLessOrEqual()),
-                .num_is_gt => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, if (is_unsigned) condAbove() else condGreater()),
-                .num_is_gte => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, if (is_unsigned) condAboveOrEqual() else condGreaterOrEqual()),
+                .num_is_lt => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, if (is_unsigned) condCode(.below) else condCode(.less)),
+                .num_is_lte => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, if (is_unsigned) condCode(.below_or_equal) else condCode(.less_or_equal)),
+                .num_is_gt => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, if (is_unsigned) condCode(.above) else condCode(.greater)),
+                .num_is_gte => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, if (is_unsigned) condCode(.above_or_equal) else condCode(.greater_or_equal)),
             }
 
             // Free operand registers if they were temporary
@@ -10444,8 +10121,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .i8 => try self.emitSignedIntRangeFlag(flag_reg, result_reg, -128, 127),
                 .i16 => try self.emitSignedIntRangeFlag(flag_reg, result_reg, -32_768, 32_767),
                 .i32 => try self.emitSignedIntRangeFlag(flag_reg, result_reg, -2_147_483_648, 2_147_483_647),
-                .u64 => try self.emitSetCond(flag_reg, if (operation == .add) condUnsignedAddOverflow() else condUnsignedSubOverflow()),
-                .i64 => try self.emitSetCond(flag_reg, condOverflow()),
+                .u64 => try self.emitSetCond(flag_reg, if (operation == .add) condCode(.unsigned_add_overflow) else condCode(.unsigned_sub_overflow)),
+                .i64 => try self.emitSetCond(flag_reg, condCode(.overflow)),
                 .bool, .str, .u128, .i128, .f32, .f64, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => {
                     if (builtin.mode == .debug) std.debug.assert(!is_unsigned or operand_layout == .u128);
                     unreachable;
@@ -10457,7 +10134,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const max_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(max_reg);
             try self.codegen.emitLoadImm(max_reg, max_value);
-            try self.codegen.emitCmp(.w64, flag_reg, result_reg, max_reg, condAbove());
+            try self.codegen.emitCmp(.w64, flag_reg, result_reg, max_reg, condCode(.above));
         }
 
         fn emitSignedIntRangeFlag(self: *Self, flag_reg: GeneralReg, result_reg: GeneralReg, min_value: i64, max_value: i64) Allocator.Error!void {
@@ -10465,9 +10142,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.codegen.freeGeneral(limit_reg);
             defer self.codegen.freeGeneral(high_flag);
             try self.codegen.emitLoadImm(limit_reg, min_value);
-            try self.codegen.emitCmp(.w64, flag_reg, result_reg, limit_reg, condLess());
+            try self.codegen.emitCmp(.w64, flag_reg, result_reg, limit_reg, condCode(.less));
             try self.codegen.emitLoadImm(limit_reg, max_value);
-            try self.codegen.emitCmp(.w64, high_flag, result_reg, limit_reg, condGreater());
+            try self.codegen.emitCmp(.w64, high_flag, result_reg, limit_reg, condCode(.greater));
             try self.codegen.emitOr(.w64, flag_reg, flag_reg, high_flag);
         }
 
@@ -10501,18 +10178,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emit.mulRegRegReg(.w64, result_reg, lhs_reg, rhs_reg);
                     try self.codegen.emit.smulhRegRegReg(high_reg, lhs_reg, rhs_reg);
                     try self.emitAsrImm(.w64, sign_reg, result_reg, 63);
-                    try self.codegen.emitCmp(.w64, flag_reg, high_reg, sign_reg, condNotEqual());
+                    try self.codegen.emitCmp(.w64, flag_reg, high_reg, sign_reg, condCode(.not_equal));
                     self.freeGenerals(.{ sign_reg, high_reg });
                 } else {
                     try self.codegen.emitMul(.w64, result_reg, lhs_reg, rhs_reg);
-                    try self.emitSetCond(flag_reg, condOverflow());
+                    try self.emitSetCond(flag_reg, condCode(.overflow));
                 },
                 .u64 => if (comptime target.toCpuArch() == .aarch64) {
                     const high_reg, const zero_reg = try self.allocTempGenerals(2);
                     try self.codegen.emit.mulRegRegReg(.w64, result_reg, lhs_reg, rhs_reg);
                     try self.codegen.emit.umulhRegRegReg(high_reg, lhs_reg, rhs_reg);
                     try self.codegen.emitLoadImm(zero_reg, 0);
-                    try self.codegen.emitCmp(.w64, flag_reg, high_reg, zero_reg, condNotEqual());
+                    try self.codegen.emitCmp(.w64, flag_reg, high_reg, zero_reg, condCode(.not_equal));
                     self.freeGenerals(.{ zero_reg, high_reg });
                 } else {
                     var rhs_temp: ?GeneralReg = null;
@@ -10527,7 +10204,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.emitMovRegReg(result_reg, .RAX);
                     // MUL sets OF exactly when the high half is nonzero. Read
                     // it after preserving RAX so result_reg may safely be RDX.
-                    try self.emitSetCond(flag_reg, condOverflow());
+                    try self.emitSetCond(flag_reg, condCode(.overflow));
                     if (rhs_temp) |temp| self.codegen.freeGeneral(temp);
                 },
                 .bool, .str, .u128, .i128, .f32, .f64, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => {
@@ -10553,12 +10230,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .i16 => try self.emitSignedIntRangeCheck(result_reg, -32_768, 32_767, message),
                 .i32 => try self.emitSignedIntRangeCheck(result_reg, -2_147_483_648, 2_147_483_647, message),
                 .u64 => try self.emitCrashOnCond(if ((CheckedArithmetic.classify(op) orelse unreachable).operation == .add)
-                    condUnsignedAddOverflow()
+                    condCode(.unsigned_add_overflow)
                 else if ((CheckedArithmetic.classify(op) orelse unreachable).operation == .sub)
-                    condUnsignedSubOverflow()
+                    condCode(.unsigned_sub_overflow)
                 else
                     unreachable, message),
-                .i64 => try self.emitCrashOnCond(condOverflow(), message),
+                .i64 => try self.emitCrashOnCond(condCode(.overflow), message),
                 .bool, .str, .u128, .i128, .f32, .f64, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => {
                     if (builtin.mode == .debug) {
                         std.debug.assert(!is_unsigned or operand_layout == .u128);
@@ -10569,14 +10246,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn emitUnsignedIntRangeCheck(self: *Self, result_reg: GeneralReg, max_value: i64, message: []const u8) Allocator.Error!void {
             try self.emitCmpRegImm64(result_reg, max_value);
-            try self.emitCrashOnCond(condAbove(), message);
+            try self.emitCrashOnCond(condCode(.above), message);
         }
 
         fn emitSignedIntRangeCheck(self: *Self, result_reg: GeneralReg, min_value: i64, max_value: i64, message: []const u8) Allocator.Error!void {
             try self.emitCmpRegImm64(result_reg, min_value);
-            try self.emitCrashOnCond(condLess(), message);
+            try self.emitCrashOnCond(condCode(.less), message);
             try self.emitCmpRegImm64(result_reg, max_value);
-            try self.emitCrashOnCond(condGreater(), message);
+            try self.emitCrashOnCond(condCode(.greater), message);
         }
 
         fn emitCmpRegImm64(self: *Self, reg: GeneralReg, value: i64) Allocator.Error!void {
@@ -10598,7 +10275,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn emitCheckedZeroDenominator(self: *Self, op: lir.LowLevel, rhs_reg: GeneralReg, operand_layout: layout.Idx) Allocator.Error!void {
             const message = checkedZeroDenominatorMessage(op, operand_layout);
             try self.emitCmpImm(rhs_reg, 0);
-            try self.emitCrashOnCond(condEqual(), message);
+            try self.emitCrashOnCond(condCode(.equal), message);
         }
 
         fn emitCheckedSignedMinDivOverflow(self: *Self, op: lir.LowLevel, lhs_reg: GeneralReg, rhs_reg: GeneralReg, operand_layout: layout.Idx) Allocator.Error!void {
@@ -10606,7 +10283,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitCmpRegImm64(lhs_reg, lowest);
             const lhs_not_lowest = try self.emitJumpIfNotEqual();
             try self.emitCmpRegImm64(rhs_reg, -1);
-            try self.emitCrashOnCond(condEqual(), checkedOverflowMessage(op));
+            try self.emitCrashOnCond(condCode(.equal), checkedOverflowMessage(op));
             try self.codegen.patchJump(lhs_not_lowest, self.codegen.currentOffset());
         }
 
@@ -10684,11 +10361,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.codegen.emit.smulhRegRegReg(high_reg, lhs_reg, rhs_reg);
                 try self.emitAsrImm(.w64, sign_reg, result_reg, 63);
                 try self.emitCmpReg(high_reg, sign_reg);
-                try self.emitCrashOnCond(condNotEqual(), message);
+                try self.emitCrashOnCond(condCode(.not_equal), message);
                 self.freeGenerals(.{ sign_reg, high_reg });
             } else {
                 try self.codegen.emitMul(.w64, result_reg, lhs_reg, rhs_reg);
-                try self.emitCrashOnCond(condOverflow(), message);
+                try self.emitCrashOnCond(condCode(.overflow), message);
             }
         }
 
@@ -10698,7 +10375,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.codegen.emit.mulRegRegReg(.w64, result_reg, lhs_reg, rhs_reg);
                 try self.codegen.emit.umulhRegRegReg(high_reg, lhs_reg, rhs_reg);
                 try self.emitCmpImm(high_reg, 0);
-                try self.emitCrashOnCond(condNotEqual(), message);
+                try self.emitCrashOnCond(condCode(.not_equal), message);
                 self.codegen.freeGeneral(high_reg);
             } else {
                 var rhs_temp: ?GeneralReg = null;
@@ -10713,7 +10390,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
                 try self.codegen.emit.mulReg(.w64, rhs_src);
                 try self.emitCmpImm(.RDX, 0);
-                try self.emitCrashOnCond(condNotEqual(), message);
+                try self.emitCrashOnCond(condCode(.not_equal), message);
                 if (result_reg != .RAX) {
                     try self.codegen.emit.movRegReg(.w64, result_reg, .RAX);
                 }
@@ -10730,69 +10407,63 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             switch (operand_layout) {
                 .u128 => try self.emitCrashOnCond(if ((CheckedArithmetic.classify(op) orelse unreachable).operation == .add)
-                    condUnsignedAddOverflow()
+                    condCode(.unsigned_add_overflow)
                 else if ((CheckedArithmetic.classify(op) orelse unreachable).operation == .sub)
-                    condUnsignedSubOverflow()
+                    condCode(.unsigned_sub_overflow)
                 else
                     unreachable, message),
-                .i128 => try self.emitCrashOnCond(condOverflow(), message),
+                .i128 => try self.emitCrashOnCond(condCode(.overflow), message),
                 .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .f32, .f64, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => {},
             }
         }
 
-        // Condition code helpers for cross-architecture support
-        fn condEqual() Condition {
-            return if (comptime target.toCpuArch() == .aarch64) .eq else .equal;
-        }
-
-        fn condNotEqual() Condition {
-            return if (comptime target.toCpuArch() == .aarch64) .ne else .not_equal;
-        }
-
-        // Signed condition codes
-        fn condLess() Condition {
-            return if (comptime target.toCpuArch() == .aarch64) .lt else .less;
-        }
-
-        fn condLessOrEqual() Condition {
-            return if (comptime target.toCpuArch() == .aarch64) .le else .less_or_equal;
-        }
-
-        fn condGreater() Condition {
-            return if (comptime target.toCpuArch() == .aarch64) .gt else .greater;
-        }
-
-        fn condGreaterOrEqual() Condition {
-            return if (comptime target.toCpuArch() == .aarch64) .ge else .greater_or_equal;
-        }
-
-        // Unsigned condition codes
-        fn condBelow() Condition {
-            return if (comptime target.toCpuArch() == .aarch64) .cc else .below;
-        }
-
-        fn condBelowOrEqual() Condition {
-            return if (comptime target.toCpuArch() == .aarch64) .ls else .below_or_equal;
-        }
-
-        fn condAbove() Condition {
-            return if (comptime target.toCpuArch() == .aarch64) .hi else .above;
-        }
-
-        fn condAboveOrEqual() Condition {
-            return if (comptime target.toCpuArch() == .aarch64) .cs else .above_or_equal;
-        }
-
-        fn condOverflow() Condition {
-            return if (comptime target.toCpuArch() == .aarch64) .vs else .overflow;
-        }
-
-        fn condUnsignedAddOverflow() Condition {
-            return if (comptime target.toCpuArch() == .aarch64) .cs else .below;
-        }
-
-        fn condUnsignedSubOverflow() Condition {
-            return if (comptime target.toCpuArch() == .aarch64) .cc else .below;
+        /// The condition code `which` names, in this architecture's encoding.
+        /// The unsigned add/sub overflow conditions read the carry flag, whose
+        /// sense after a subtraction is inverted on aarch64.
+        fn condCode(comptime which: enum {
+            equal,
+            not_equal,
+            less,
+            less_or_equal,
+            greater,
+            greater_or_equal,
+            below,
+            below_or_equal,
+            above,
+            above_or_equal,
+            overflow,
+            unsigned_add_overflow,
+            unsigned_sub_overflow,
+        }) Condition {
+            return if (comptime target.toCpuArch() == .aarch64) switch (which) {
+                .equal => .eq,
+                .not_equal => .ne,
+                .less => .lt,
+                .less_or_equal => .le,
+                .greater => .gt,
+                .greater_or_equal => .ge,
+                .below => .cc,
+                .below_or_equal => .ls,
+                .above => .hi,
+                .above_or_equal => .cs,
+                .overflow => .vs,
+                .unsigned_add_overflow => .cs,
+                .unsigned_sub_overflow => .cc,
+            } else switch (which) {
+                .unsigned_add_overflow, .unsigned_sub_overflow => .below,
+                .equal,
+                .not_equal,
+                .less,
+                .less_or_equal,
+                .greater,
+                .greater_or_equal,
+                .below,
+                .below_or_equal,
+                .above,
+                .above_or_equal,
+                .overflow,
+                => @field(Condition, @tagName(which)),
+            };
         }
 
         fn checkedOverflowMessage(op: lir.LowLevel) []const u8 {
@@ -10872,14 +10543,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (family_entry) |entry| {
                         if (entry.mode == .crash_on_overflow or entry.mode == .overflows) {
                             const overflow_reg = try self.allocTempGeneral();
-                            try self.emitSetCond(overflow_reg, if (!is_unsigned) condOverflow() else if (is_add) condUnsignedAddOverflow() else condUnsignedSubOverflow());
+                            try self.emitSetCond(overflow_reg, if (!is_unsigned) condCode(.overflow) else if (is_add) condCode(.unsigned_add_overflow) else condCode(.unsigned_sub_overflow));
                             if (entry.mode == .overflows) {
                                 try self.bindPendingI128OverflowResult(result_low, result_high);
                                 self.freeGenerals(.{ lhs_parts.low, lhs_parts.high, rhs_parts.low, rhs_parts.high });
                                 return .{ .general_reg = overflow_reg };
                             }
                             try self.emitCmpImm(overflow_reg, 0);
-                            try self.emitCrashOnCond(condNotEqual(), checkedOverflowMessage(entry.op));
+                            try self.emitCrashOnCond(condCode(.not_equal), checkedOverflowMessage(entry.op));
                             self.codegen.freeGeneral(overflow_reg);
                         }
                     } else if (checked_op) |tag| try self.emitCheckedI128AddSubOverflow(tag, operand_layout);
@@ -10897,7 +10568,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             return .{ .general_reg = overflow_reg };
                         }
                         try self.emitCmpImm(overflow_reg, 0);
-                        try self.emitCrashOnCond(condNotEqual(), checkedOverflowMessage(entry.op));
+                        try self.emitCrashOnCond(condCode(.not_equal), checkedOverflowMessage(entry.op));
                         self.codegen.freeGeneral(overflow_reg);
                     } else if (checked_op) |_| {
                         unreachable;
@@ -11782,7 +11453,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitCmpImm(rhs_parts.low, 0);
             const low_not_zero = try self.emitJumpIfNotEqual();
             try self.emitCmpImm(rhs_parts.high, 0);
-            try self.emitCrashOnCond(condEqual(), checkedZeroDenominatorMessage(op, operand_layout));
+            try self.emitCrashOnCond(condCode(.equal), checkedZeroDenominatorMessage(op, operand_layout));
             try self.codegen.patchJump(low_not_zero, self.codegen.currentOffset());
         }
 
@@ -11802,7 +11473,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitCmpRegImm64(rhs_parts.low, -1);
             const rhs_low_not_neg_one = try self.emitJumpIfNotEqual();
             try self.emitCmpRegImm64(rhs_parts.high, -1);
-            try self.emitCrashOnCond(condEqual(), checkedOverflowMessage(op));
+            try self.emitCrashOnCond(condCode(.equal), checkedOverflowMessage(op));
 
             const normal_offset = self.codegen.currentOffset();
             try self.codegen.patchJump(lhs_low_not_zero, normal_offset);
@@ -12106,7 +11777,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.emitClz64(lz_low, parts.low);
                     const is_zero, const zero_reg = try self.allocTempGenerals(2);
                     try self.codegen.emitLoadImm(zero_reg, 0);
-                    try self.codegen.emitCmp(.w64, is_zero, parts.high, zero_reg, condEqual());
+                    try self.codegen.emitCmp(.w64, is_zero, parts.high, zero_reg, condCode(.equal));
                     try self.codegen.emitMul(.w64, lz_low, lz_low, is_zero);
                     try self.codegen.emitAdd(.w64, result, result, lz_low);
                     self.freeGenerals(.{ lz_low, is_zero, zero_reg });
@@ -12118,7 +11789,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.emitCtz64(tz_high, parts.high);
                     const is_zero, const zero_reg = try self.allocTempGenerals(2);
                     try self.codegen.emitLoadImm(zero_reg, 0);
-                    try self.codegen.emitCmp(.w64, is_zero, parts.low, zero_reg, condEqual());
+                    try self.codegen.emitCmp(.w64, is_zero, parts.low, zero_reg, condCode(.equal));
                     try self.codegen.emitMul(.w64, tz_high, tz_high, is_zero);
                     try self.codegen.emitAdd(.w64, result, result, tz_high);
                     self.freeGenerals(.{ tz_high, is_zero, zero_reg });
@@ -12510,7 +12181,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     } else if (field_layout.tag == .struct_) {
                         try work.append(wa, .{ .node_struct = .{ .lhs_loc = .{ .stack = .{ .offset = f.lhs_off } }, .rhs_loc = .{ .stack = .{ .offset = f.rhs_off } }, .layout_idx = f.layout_idx, .result_reg = rr } });
                     } else if (f.layout_idx == .str) {
-                        const eq_loc = try self.callStr2ToScalar(f.lhs_off, f.rhs_off, @intFromPtr(&wrapStrEqual), .str_equal);
+                        const eq_loc = try self.callStr2ToScalar(f.lhs_off, f.rhs_off, .str_equal);
                         const eq_reg = try self.ensureInGeneralReg(eq_loc);
                         try self.emitMovRegReg(rr, eq_reg);
                         self.codegen.freeGeneral(eq_reg);
@@ -12552,7 +12223,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             },
                         }
                         try self.emitCmpReg(lhs_reg, rhs_reg);
-                        try self.emitSetCond(rr, condEqual());
+                        try self.emitSetCond(rr, condCode(.equal));
                         self.freeGenerals(.{ lhs_reg, rhs_reg });
                     } else if (field_layout.tag == .tag_union) {
                         try work.append(wa, .{ .node_tag = .{ .lhs_loc = .{ .stack = .{ .offset = f.lhs_off } }, .rhs_loc = .{ .stack = .{ .offset = f.rhs_off } }, .layout_idx = f.layout_idx, .result_reg = rr } });
@@ -12582,7 +12253,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             cmp_off += 8;
                         }
                         try self.emitCmpImm(xor_acc, 0);
-                        try self.emitSetCond(rr, condEqual());
+                        try self.emitSetCond(rr, condCode(.equal));
                         self.freeGenerals(.{ tmp_a, tmp_b, xor_acc });
                     }
                 },
@@ -12812,13 +12483,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.emitCmpReg(lhs_len, rhs_len);
                     self.codegen.freeGeneral(rhs_len);
                     try self.codegen.emitLoadImm(rr, 0);
-                    const len_ne_patch = try self.codegen.emitCondJump(condNotEqual());
+                    const len_ne_patch = try self.codegen.emitCondJump(condCode(.not_equal));
                     try self.codegen.emitLoadImm(rr, 1);
                     const len_slot = self.codegen.allocStackSlot(8);
                     try self.codegen.emitStoreStack(.w64, len_slot, lhs_len);
                     try self.emitCmpImm(lhs_len, 0);
                     self.codegen.freeGeneral(lhs_len);
-                    const empty_patch = try self.codegen.emitCondJump(condEqual());
+                    const empty_patch = try self.codegen.emitCondJump(condCode(.equal));
                     if (elem_size == 0) {
                         const done_offset = self.codegen.currentOffset();
                         try self.codegen.patchJump(len_ne_patch, done_offset);
@@ -12855,7 +12526,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emit.cmpRegReg(.w64, ctr_reg, len_reg);
                         self.freeGenerals(.{ ctr_reg, len_reg });
                     }
-                    const exit_patch = try self.codegen.emitCondJump(condGreaterOrEqual());
+                    const exit_patch = try self.codegen.emitCondJump(condCode(.greater_or_equal));
                     {
                         const ptr_reg, const off_reg = try self.allocTempGenerals(2);
                         try self.codegen.emitLoadStack(.w64, ptr_reg, lhs_ptr_slot);
@@ -12895,7 +12566,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 .list_finish => |st| {
                     try self.emitCmpImm(st.result_reg, 1);
-                    const ne_patch = try self.codegen.emitCondJump(condNotEqual());
+                    const ne_patch = try self.codegen.emitCondJump(condCode(.not_equal));
                     {
                         const ctr_reg = try self.allocTempGeneral();
                         try self.codegen.emitLoadStack(.w64, ctr_reg, st.ctr_slot);
@@ -13116,7 +12787,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// so float comparisons use unsigned/specific conditions rather than signed ones.
         fn floatCondition(op: lir.LowLevel) ?Condition {
             return switch (narrowEnum(IntBinOp, op)) {
-                .num_is_eq => condEqual(),
+                .num_is_eq => condCode(.equal),
                 .num_is_lt => if (comptime target.toCpuArch() == .aarch64)
                     @as(Condition, .mi)
                 else
@@ -13159,7 +12830,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const low_not_zero = try self.emitJumpIfNotEqual();
                 try self.codegen.emitLoadImm(high_lowest, std.math.minInt(i64));
                 try self.emitCmpReg(parts.high, high_lowest);
-                try self.emitCrashOnCond(condEqual(), message);
+                try self.emitCrashOnCond(condCode(.equal), message);
                 try self.codegen.patchJump(low_not_zero, self.codegen.currentOffset());
                 self.freeGenerals(.{ high_lowest, parts.low, parts.high });
                 return;
@@ -13168,7 +12839,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const lowest = signedLowestI64(operand_layout) orelse return;
             const src_reg = try self.ensureInGeneralReg(loc);
             try self.emitCmpRegImm64(src_reg, lowest);
-            try self.emitCrashOnCond(condEqual(), message);
+            try self.emitCrashOnCond(condCode(.equal), message);
             self.codegen.freeGeneral(src_reg);
         }
 
@@ -13749,7 +13420,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addImmArg(@intCast(elem_size));
                 try builder.addImmArg(@intCast(box_abi.elem_alignment));
                 try builder.addImmArg(if (box_abi.contains_refcounted) 1 else 0);
-                try self.callBuiltinWithAdapter(&builder, BuiltinFn.allocate_with_refcount.wrapperAddress(), .allocate_with_refcount);
+                try self.callBuiltin(&builder, .allocate_with_refcount);
             }
             try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
 
@@ -15492,7 +15163,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addImmArg(@intCast(total_data_bytes));
                 try builder.addImmArg(@intCast(list_abi.alignment_bytes));
                 try builder.addImmArg(if (list_abi.elements_refcounted) 1 else 0);
-                try self.callBuiltinWithAdapter(&builder, BuiltinFn.allocate_with_refcount.wrapperAddress(), .allocate_with_refcount);
+                try self.callBuiltin(&builder, .allocate_with_refcount);
 
                 try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
             }
@@ -15569,7 +15240,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addImmArg(@intCast(box_abi.elem_size));
                         try builder.addImmArg(@intCast(box_abi.elem_alignment));
                         try builder.addImmArg(if (box_abi.contains_refcounted) 1 else 0);
-                        try self.callBuiltinWithAdapter(&builder, BuiltinFn.allocate_with_refcount.wrapperAddress(), .allocate_with_refcount);
+                        try self.callBuiltin(&builder, .allocate_with_refcount);
                     }
                     try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
 
@@ -15699,7 +15370,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try builder.addImmArg(@intCast(box_abi.elem_size));
                     try builder.addImmArg(@intCast(box_abi.elem_alignment));
                     try builder.addImmArg(if (box_abi.contains_refcounted) 1 else 0);
-                    try self.callBuiltinWithAdapter(&builder, BuiltinFn.allocate_with_refcount.wrapperAddress(), .allocate_with_refcount);
+                    try self.callBuiltin(&builder, .allocate_with_refcount);
                 }
                 try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
 
@@ -16572,7 +16243,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addImmArg(@intCast(payload_size));
                 try builder.addImmArg(builtins.erased_callable.payload_alignment);
                 try builder.addImmArg(if (builtins.erased_callable.allocation_has_refcounted_children) 1 else 0);
-                try self.callBuiltinWithAdapter(&builder, BuiltinFn.allocate_with_refcount.wrapperAddress(), .allocate_with_refcount);
+                try self.callBuiltin(&builder, .allocate_with_refcount);
             }
             try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
 
@@ -20233,33 +19904,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return keys;
         }
 
-        /// Emit the deterministic union of helper demands. Transitive demands
-        /// use the existing iterative helper worklist and never duplicate code.
-        pub fn compileRcHelperRequirements(self: *Self, keys: []const u64) Allocator.Error!void {
-            self.assertImageOpen();
-            std.debug.assert(!self.fragment_mode);
-            const sorted = try self.allocator.dupe(u64, keys);
-            defer self.allocator.free(sorted);
-            std.mem.sort(u64, sorted, {}, std.sort.asc(u64));
-            const mode = self.generation_mode;
-            self.generation_mode = .shim_execution;
-            defer self.generation_mode = mode;
-            for (sorted) |key| {
-                if ((key >> 63) != 0) {
-                    _ = try self.compileSingleBoxyCaptureDropHelper(
-                        @fromBackingInt(@intCast(@as(u32, @intCast((key >> 32) & 0x7fff_ffff)))),
-                        @truncate(key),
-                    );
-                } else {
-                    try self.scheduleRcHelper(.{
-                        .key = RcHelperKey.decode(key & 0x3_ffff_ffff),
-                        .atomicity = @fromBackingInt(@intCast(@as(u1, @intCast((key >> 34) & 1)))),
-                    });
-                }
-                try self.maybeDrainRcHelpers();
-            }
-        }
-
         /// Compile all procedures first, before generating any calls.
         /// This ensures all call targets are known before we need to patch calls.
         pub fn compileAllProcSpecs(self: *Self, proc_specs: []const LirProcSpec) Allocator.Error!void {
@@ -20302,47 +19946,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Emit a dictionary-dispatch thunk for each exact worker named by
             // the producer-owned Boxy worker list, once every procedure has a
             // resolved code address.
-            try self.generateBoxyDictProcThunks();
-        }
-
-        /// Compile the complete demand list produced by LIR reachability.
-        /// Original store ids are retained, so a shared union program remains
-        /// available for a later consumer with its own machine-code policy.
-        pub fn compileSelectedProcSpecs(self: *Self, demand: []const lir.LIR.LirProcSpecId) Allocator.Error!void {
-            self.assertImageOpen();
-            for (demand) |proc_id| {
-                const proc = self.store.getProcSpec(proc_id);
-                std.debug.assert(!proc.is_static_initializer);
-                // A procedure spliced from an object-cache entry is already
-                // registered with its code.
-                if (self.proc_registry.contains(@backingInt(proc_id))) continue;
-                try self.proc_registry.put(@backingInt(proc_id), .{
-                    .id = proc_id,
-                    .code_start = unresolved_proc_code_start,
-                    .code_end = 0,
-                    .name = proc.name,
-                    .args = proc.args,
-                });
-            }
-            for (demand) |proc_id| {
-                const proc = self.store.getProcSpec(proc_id);
-                if (self.proc_registry.get(@backingInt(proc_id))) |registered| {
-                    if (registered.code_start != unresolved_proc_code_start) continue;
-                }
-                if (proc.external) {
-                    if (builtin.mode == .debug) {
-                        base.invariant("Dev/codegen invariant violated: external proc {d} had no object-cache entry spliced before compilation", .{@backingInt(proc_id)});
-                    }
-                    unreachable;
-                }
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.emitBranchIslandIfNeeded();
-                    try self.codegen.compactBranchSites();
-                }
-                try self.compileProcSpec(proc_id, proc);
-            }
-            try self.patchPendingCalls();
-            try self.patchPendingProcAddrs();
             try self.generateBoxyDictProcThunks();
         }
 
@@ -23394,7 +22997,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             switch (str_match.end) {
                 .exact => {
                     try self.emitCmpReg(cursor_reg, source.len);
-                    try miss_patches.append(self.allocator, try self.codegen.emitCondJump(condNotEqual()));
+                    try miss_patches.append(self.allocator, try self.codegen.emitCondJump(condCode(.not_equal)));
                 },
                 .tail => {},
             }
@@ -23424,7 +23027,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.codegen.emitLoadImm(tmp_reg, std.math.minInt(i64));
             try self.emitAndRegs(.w64, tmp_reg, tmp_reg, len_reg);
             try self.emitCmpImm(tmp_reg, 0);
-            const small_patch = try self.codegen.emitCondJump(condNotEqual());
+            const small_patch = try self.codegen.emitCondJump(condCode(.not_equal));
 
             try self.emitLoad(.w64, bytes_reg, frame_ptr, source_offset);
             try self.codegen.emitLoadImm(source_is_small_reg, 0);
@@ -23432,7 +23035,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.codegen.emitLoadImm(tmp_reg, 1);
             try self.emitAndRegs(.w64, tmp_reg, tmp_reg, source_alloc_reg);
             try self.emitCmpImm(tmp_reg, 0);
-            const already_slice_patch = try self.codegen.emitCondJump(condNotEqual());
+            const already_slice_patch = try self.codegen.emitCondJump(condCode(.not_equal));
             try self.emitMovRegReg(source_alloc_reg, bytes_reg);
             try self.codegen.emitLoadImm(tmp_reg, 1);
             try self.emitOrRegs(.w64, source_alloc_reg, source_alloc_reg, tmp_reg);
@@ -23471,12 +23074,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             try self.codegen.emitLoadImm(needed_reg, @bitCast(@as(u64, @intCast(needed))));
             try self.emitCmpReg(len_reg, needed_reg);
-            try miss_patches.append(self.allocator, try self.codegen.emitCondJump(condBelow()));
+            try miss_patches.append(self.allocator, try self.codegen.emitCondJump(condCode(.below)));
 
             try self.emitMovRegReg(limit_reg, len_reg);
             try self.emitSubRegs(.w64, limit_reg, limit_reg, needed_reg);
             try self.emitCmpReg(cursor_reg, limit_reg);
-            try miss_patches.append(self.allocator, try self.codegen.emitCondJump(condAbove()));
+            try miss_patches.append(self.allocator, try self.codegen.emitCondJump(condCode(.above)));
         }
 
         fn emitFindDelimiter(
@@ -23499,7 +23102,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 try self.codegen.emitLoadImm(needed_reg, @bitCast(@as(u64, @intCast(delimiter.len))));
                 try self.emitCmpReg(len_reg, needed_reg);
-                try miss_patches.append(self.allocator, try self.codegen.emitCondJump(condBelow()));
+                try miss_patches.append(self.allocator, try self.codegen.emitCondJump(condCode(.below)));
 
                 try self.emitMovRegReg(limit_reg, len_reg);
                 try self.emitSubRegs(.w64, limit_reg, limit_reg, needed_reg);
@@ -23507,7 +23110,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const loop_start = self.codegen.currentOffset();
             try self.emitCmpReg(cursor_reg, limit_reg);
-            try miss_patches.append(self.allocator, try self.codegen.emitCondJump(condAbove()));
+            try miss_patches.append(self.allocator, try self.codegen.emitCondJump(condCode(.above)));
 
             try self.emitMovRegReg(candidate_reg, bytes_reg);
             try self.emitAddRegs(.w64, candidate_reg, candidate_reg, cursor_reg);
@@ -23518,7 +23121,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 try self.emitLoadW8(loaded_reg, candidate_reg, 0);
                 try self.emitCmpImm(loaded_reg, delimiter[0]);
-                break :blk try self.codegen.emitCondJump(condNotEqual());
+                break :blk try self.codegen.emitCondJump(condCode(.not_equal));
             };
 
             if (delimiter.len > 1) {
@@ -23576,7 +23179,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
                 try self.codegen.emitLoadImm(expected_reg, @bitCast(expected));
                 try self.emitCmpReg(loaded_reg, expected_reg);
-                try mismatch_patches.append(self.allocator, try self.codegen.emitCondJump(condNotEqual()));
+                try mismatch_patches.append(self.allocator, try self.codegen.emitCondJump(condCode(.not_equal)));
 
                 offset += chunk_len;
             }
@@ -23598,7 +23201,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitSubRegs(.w64, capture_len_reg, capture_len_reg, start_reg);
 
             try self.emitCmpImm(source_is_small_reg, 0);
-            const heap_patch = try self.codegen.emitCondJump(condEqual());
+            const heap_patch = try self.codegen.emitCondJump(condCode(.equal));
 
             try self.emitStoreSmallStrCapture(dest_offset, source_bytes_reg, start_reg, capture_len_reg);
             const done_patch = try self.codegen.emitJump();
@@ -23633,7 +23236,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const loop_start = self.codegen.currentOffset();
             try self.emitCmpImm(remaining_reg, 0);
-            const done_patch = try self.codegen.emitCondJump(condEqual());
+            const done_patch = try self.codegen.emitCondJump(condCode(.equal));
             try self.emitLoadW8(byte_reg, src_cur_reg, 0);
             try self.emitStoreW8(dst_cur_reg, 0, byte_reg);
             try self.emitAddUsizeImm(src_cur_reg, src_cur_reg, 1);
@@ -25887,6 +25490,40 @@ fn addProc(store: *LirStore, args: []const LocalId, body: CFStmtId, ret_layout: 
         .body = body,
         .ret_layout = ret_layout,
     }, .none);
+}
+
+/// Test helper: compile `demand` serially in the given order, the way a
+/// non-fragment image lane does, so fragment assembly can be compared against it.
+fn compileProcSpecsInOrder(cg: anytype, demand: []const lir.LIR.LirProcSpecId) Allocator.Error!void {
+    const unresolved_proc_code_start = @TypeOf(cg.*).unresolved_proc_code_start;
+    cg.assertImageOpen();
+    for (demand) |proc_id| {
+        const proc = cg.store.getProcSpec(proc_id);
+        std.debug.assert(!proc.is_static_initializer);
+        if (cg.proc_registry.contains(@backingInt(proc_id))) continue;
+        try cg.proc_registry.put(@backingInt(proc_id), .{
+            .id = proc_id,
+            .code_start = unresolved_proc_code_start,
+            .code_end = 0,
+            .name = proc.name,
+            .args = proc.args,
+        });
+    }
+    for (demand) |proc_id| {
+        const proc = cg.store.getProcSpec(proc_id);
+        if (cg.proc_registry.get(@backingInt(proc_id))) |registered| {
+            if (registered.code_start != unresolved_proc_code_start) continue;
+        }
+        std.debug.assert(!proc.external);
+        if (comptime @TypeOf(cg.*).roc_target.toCpuArch() == .aarch64) {
+            try cg.emitBranchIslandIfNeeded();
+            try cg.codegen.compactBranchSites();
+        }
+        try cg.compileProcSpec(proc_id, proc);
+    }
+    try cg.patchPendingCalls();
+    try cg.patchPendingProcAddrs();
+    try cg.generateBoxyDictProcThunks();
 }
 
 fn addLiteralProc(store: *LirStore, value: lir.LiteralValue, ret_layout: layout.Idx) Allocator.Error!lir.LIR.LirProcSpecId {
@@ -28317,23 +27954,6 @@ test "symbol producer caches reuse identities and reset with generated code" {
     }
 }
 
-test "dev explicit procedure demand leaves runtime-only body uncompiled" {
-    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) return error.SkipZigTest;
-    const allocator = std.testing.allocator;
-    var store = LirStore.init(allocator);
-    defer store.deinit();
-    var test_state = try TestLayoutState.init(allocator);
-    defer test_state.deinit();
-    const runtime = try addLiteralProc(&store, .{ .i64_literal = .{ .value = 99, .layout_idx = .i64 } }, .i64);
-    const compile_time = try addLiteralProc(&store, .{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, .i64);
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, roc_target_mod.host_cpu.level());
-    defer codegen.deinit();
-    try codegen.compileSelectedProcSpecs(&.{compile_time});
-    try std.testing.expect(codegen.compiledProcSymbol(runtime) == null);
-    try std.testing.expect(codegen.compiledProcSymbol(compile_time) != null);
-    try std.testing.expectEqual(@as(usize, 2), store.procSpecCount());
-}
-
 test "independent fragment emits only requested procedure with unresolved self and cross calls" {
     const allocator = std.testing.allocator;
     inline for (.{ RocTarget.x64linux, RocTarget.arm64linux }) |target| {
@@ -28415,13 +28035,6 @@ test "independent fragment defers shared RC helper demand" {
     try std.testing.expectEqual(@as(usize, 1), helper_lane.compiled_rc_helpers.count());
     try std.testing.expect(!helper_lane.getFragmentContextDependencies().comptime_hooks);
     try std.testing.expect(helper_lane.getGeneratedCode().len > 0);
-    var coordinator = try HostLirCodeGen.init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
-    defer coordinator.deinit();
-    try coordinator.compileRcHelperRequirements(keys);
-    const count = coordinator.compiled_rc_helpers.count();
-    try coordinator.compileRcHelperRequirements(keys);
-    try std.testing.expectEqual(count, coordinator.compiled_rc_helpers.count());
-    try std.testing.expect(count > 0);
 }
 
 test "independent fragment symbolic calls resolve after all procedures are placed" {
@@ -28469,7 +28082,7 @@ test "independent fragment symbolic calls resolve after all procedures are place
         var serial = try CG.init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
         defer serial.deinit();
         serial.generation_mode = .shim_execution;
-        try serial.compileSelectedProcSpecs(&.{ caller, callee });
+        try compileProcSpecsInOrder(&serial, &.{ caller, callee });
         try serial.finishImage();
         try std.testing.expectEqualSlices(u8, serial.getGeneratedCode(), image.getGeneratedCode());
     }

@@ -724,11 +724,6 @@ pub const VarPool = struct {
         return self.ranks.items[0 .. @backingInt(self.current_rank) + 1];
     }
 
-    // Get a slice of ranks, up to, but not including, the current rank
-    pub fn sliceExceptCurrentRank(self: *Self) []const VarArrayList {
-        return self.ranks.items[0..@backingInt(self.current_rank)];
-    }
-
     pub fn pushRank(self: *Self) std.mem.Allocator.Error!void {
         self.current_rank = self.current_rank.next();
         if (@backingInt(self.current_rank) >= self.ranks.items.len) {

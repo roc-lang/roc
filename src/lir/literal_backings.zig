@@ -4,6 +4,7 @@
 const std = @import("std");
 const base = @import("base");
 const core = @import("lir_core");
+const BodyClone = @import("body_clone.zig");
 const GuardedList = @import("collections").GuardedList;
 const DenseMap = @import("collections").DenseMap;
 const LIR = core.LIR;
@@ -16,6 +17,7 @@ pub fn collect(allocator: Allocator, store: *const core.LirStore) Allocator.Erro
     defer collector.backing_set.deinit();
     defer collector.backings.deinit(allocator);
     defer collector.stack.deinit(allocator);
+    defer collector.successors.deinit(allocator);
     for (store.getProcSpecs()) |proc| {
         if (proc.body) |body| try collector.pushStmt(body);
         const joins = store.getJoinPointSpan(proc.join_points);
@@ -32,6 +34,7 @@ const Collector = struct {
     backing_set: DenseMap(base.StringLiteral.Idx, void),
     backings: std.ArrayList(base.StringLiteral.Idx) = .empty,
     stack: std.ArrayList(LIR.CFStmtId) = .empty,
+    successors: std.ArrayList(LIR.CFStmtId) = .empty,
 
     fn mark(self: *Collector, backing: base.StringLiteral.Idx) Allocator.Error!void {
         if (!(try self.backing_set.getOrPut(backing)).found_existing)
@@ -49,56 +52,14 @@ const Collector = struct {
         while (self.stack.pop()) |stmt_id| {
             const stmt = self.store.getCFStmt(stmt_id);
             switch (stmt) {
-                .init_uninitialized => |s| try self.pushStmt(s.next),
-                .assign_ref => |s| try self.pushStmt(s.next),
-                .assign_literal => |s| {
-                    switch (s.value) {
-                        .str_literal => |literal| try self.mark(literal.backing),
-                        .bytes_literal => |literal| try self.mark(literal.bytes.backing),
-                        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .proc_ref => {},
-                    }
-                    try self.pushStmt(s.next);
-                },
-                inline .assign_call, .assign_packed_erased_fn => |s| {
-                    try self.pushStmt(s.next);
-                },
-                .assign_call_erased => |s| try self.pushStmt(s.next),
-                inline .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level => |s| try self.pushStmt(s.next),
-                .boxy_tag_match => |s| {
-                    try self.pushStmt(s.on_match);
-                    try self.pushStmt(s.on_miss);
-                },
-                .assign_list => |s| try self.pushStmt(s.next),
-                .assign_struct => |s| try self.pushStmt(s.next),
-                .assign_tag => |s| try self.pushStmt(s.next),
-                .store_struct => |s| try self.pushStmt(s.next),
-                .store_tag => |s| try self.pushStmt(s.next),
-                .set_local => |s| try self.pushStmt(s.next),
-                .debug => |s| try self.pushStmt(s.next),
-                .expect => |s| try self.pushStmt(s.next),
-                .comptime_branch_taken => |s| try self.pushStmt(s.next),
-                .incref => |s| try self.pushStmt(s.next),
-                .decref => |s| try self.pushStmt(s.next),
-                .decref_if_initialized => |s| try self.pushStmt(s.next),
-                .free => |s| try self.pushStmt(s.next),
-                .switch_stmt => |s| {
-                    if (s.continuation) |continuation| try self.pushStmt(continuation);
-                    try self.pushStmt(s.default_branch);
-                    const branches = self.store.getCFSwitchBranches(s.branches);
-                    for (0..branches.len) |index| {
-                        const branch = GuardedList.at(branches, index);
-                        try self.pushStmt(branch.body);
-                    }
-                },
-                .switch_initialized_payload => |s| {
-                    try self.pushStmt(s.initialized_branch);
-                    try self.pushStmt(s.uninitialized_branch);
+                .assign_literal => |s| switch (s.value) {
+                    .str_literal => |literal| try self.mark(literal.backing),
+                    .bytes_literal => |literal| try self.mark(literal.bytes.backing),
+                    .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .proc_ref => {},
                 },
                 .str_match => |s| {
                     try self.mark(s.prefix.backing);
                     try self.markSteps(s.steps);
-                    try self.pushStmt(s.on_match);
-                    try self.pushStmt(s.on_miss);
                 },
                 .str_match_set => |s| {
                     const arms = self.store.getStrMatchArms(s.arms);
@@ -106,24 +67,59 @@ const Collector = struct {
                         const arm = GuardedList.at(arms, index);
                         try self.mark(arm.prefix.backing);
                         try self.markSteps(arm.steps);
-                        try self.pushStmt(arm.on_match);
                     }
-                    try self.pushStmt(s.on_miss);
                 },
-                .join => |s| {
-                    try self.pushStmt(s.body);
-                    try self.pushStmt(s.remainder);
-                },
-                .ret,
-                .jump,
-                .crash,
+                .init_uninitialized,
+                .assign_ref,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
                 .loop_continue,
                 .loop_break,
+                .join,
+                .jump,
+                .ret,
+                .crash,
                 => {},
             }
+            // Successors join the stack in the shared edge order, each one
+            // once, so the backing order a program yields is stable.
+            self.successors.clearRetainingCapacity();
+            try BodyClone.appendSuccessors(self.store, &self.successors, stmt_id, self.allocator);
+            for (self.successors.items) |next| try self.pushStmt(next);
         }
     }
 };

@@ -298,7 +298,8 @@ pub const Constants = struct {
     /// 138: Hosted Try errors no longer widen implicitly at question operators.
     /// 139: Literal dispatch plans store an optional conversion function, absent
     ///      for a proved concrete builtin numeral.
-    pub const CACHE_VERSION = 139;
+    /// 140: Canonical node payloads are encoded from their payload field types.
+    pub const CACHE_VERSION = 140;
 };
 
 /// Configuration for the Roc cache system.

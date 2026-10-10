@@ -65,6 +65,7 @@ const build_options = @import("build_options");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
 const debug_print = @import("debug_print.zig");
+const body_clone = @import("body_clone.zig");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
@@ -362,6 +363,8 @@ const Scratch = struct {
     /// Bumped by 3 in beginProc so all stamp values are fresh.
     generation: u32 = 0,
     work: std.ArrayList(WorkItem) = .empty,
+    /// Statements still to stamp while propagating shared tails.
+    shared_work: std.ArrayList(CFStmtId) = .empty,
     candidates: std.ArrayList(Candidate) = .empty,
     /// Heads of shared tails discovered during the walk.
     shared_heads: std.ArrayList(CFStmtId) = .empty,
@@ -380,6 +383,7 @@ const Scratch = struct {
     fn deinit(self: *Scratch) void {
         self.stamps.deinit();
         self.work.deinit(self.gpa);
+        self.shared_work.deinit(self.gpa);
         self.candidates.deinit(self.gpa);
         self.shared_heads.deinit(self.gpa);
         self.rets.deinit(self.gpa);
@@ -571,61 +575,18 @@ const Detection = struct {
     /// changes both branch paths even though only `a` points directly at `b`.
     fn propagateSharedTails(self: *Detection) ResourceError!void {
         const gpa = self.scratch.gpa;
-        const work = &self.scratch.work;
+        const work = &self.scratch.shared_work;
         const stamps = &self.scratch.stamps;
         const gen = self.scratch.generation;
 
         work.clearRetainingCapacity();
-        for (self.scratch.shared_heads.items) |shared_head| {
-            try work.append(gpa, .{ .stmt = shared_head, .edge = .proc_body });
-        }
+        try work.appendSlice(gpa, self.scratch.shared_heads.items);
 
-        while (work.pop()) |item| {
-            const stamp = stamps.getPtr(item.stmt).?;
+        while (work.pop()) |stmt_id| {
+            const stamp = stamps.getPtr(stmt_id).?;
             if (stamp.* == gen + 2) continue;
             stamp.* = gen + 2;
-
-            const stmt = self.store.getCFStmt(item.stmt);
-            try self.appendSuccessorsForSharedPropagation(work, stmt);
-        }
-    }
-
-    fn appendSharedSuccessor(self: *Detection, work: *std.ArrayList(WorkItem), stmt_id: CFStmtId) ResourceError!void {
-        if (self.scratch.stamps.get(stmt_id) == self.scratch.generation + 2) return;
-        try work.append(self.scratch.gpa, .{ .stmt = stmt_id, .edge = .proc_body });
-    }
-
-    fn appendSuccessorsForSharedPropagation(self: *Detection, work: *std.ArrayList(WorkItem), stmt: LIR.CFStmt) ResourceError!void {
-        switch (stmt) {
-            .join => |s| {
-                try self.appendSharedSuccessor(work, s.remainder);
-                try self.appendSharedSuccessor(work, s.body);
-            },
-            .switch_stmt => |s| {
-                if (s.continuation) |continuation| {
-                    try self.appendSharedSuccessor(work, continuation);
-                }
-                try self.appendSharedSuccessor(work, s.default_branch);
-                const branches = self.store.getCFSwitchBranches(s.branches);
-                for (0..branches.len) |index| try self.appendSharedSuccessor(work, GuardedList.at(branches, index).body);
-            },
-            .switch_initialized_payload => |s| {
-                try self.appendSharedSuccessor(work, s.initialized_branch);
-                try self.appendSharedSuccessor(work, s.uninitialized_branch);
-            },
-            inline .str_match, .boxy_tag_match => |s| {
-                try self.appendSharedSuccessor(work, s.on_match);
-                try self.appendSharedSuccessor(work, s.on_miss);
-            },
-            .str_match_set => |s| {
-                const arms = self.store.getStrMatchArms(s.arms);
-                for (0..arms.len) |index| try self.appendSharedSuccessor(work, GuardedList.at(arms, index).on_match);
-                try self.appendSharedSuccessor(work, s.on_miss);
-            },
-            .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
-                try self.appendSharedSuccessor(work, s.next);
-            },
+            try body_clone.appendSuccessors(self.store, work, stmt_id, gpa);
         }
     }
 
@@ -846,84 +807,72 @@ const Detection = struct {
     /// Any read of a chain local (or write over one mid-chain) outside the
     /// blessed transitions permanently invalidates the candidate.
     fn stmtTouchesChain(self: *const Detection, stmt: LIR.CFStmt, candidate: *const Candidate) bool {
-        const c = candidate;
-        return switch (stmt) {
-            .assign_ref => |s| switch (s.op) {
-                .local => |src| c.chainContains(src),
-                .discriminant => |d| c.chainContains(d.source),
-                .field => |f| c.chainContains(f.source),
-                inline .tag_payload, .tag_payload_struct => |t| c.chainContains(t.source),
-                .list_reinterpret => |l| c.chainContains(l.backing_ref),
-                .nominal => |n| c.chainContains(n.backing_ref),
-            },
-            .assign_literal => false,
-            .assign_packed_erased_fn => |s| (s.capture != null and c.chainContains(s.capture.?)) or
-                (s.reuse != null and c.chainContains(s.reuse.?)) or
-                (s.result_desc != null and self.descRefTouchesChain(s.result_desc.?, c)),
-            .init_uninitialized => |s| c.chainContains(s.target),
-            inline .assign_call, .assign_low_level => |s| self.spanTouchesChain(s.args, c),
-            .assign_call_erased => |s| c.chainContains(s.closure) or
-                (s.reuse_source != null and c.chainContains(s.reuse_source.?)) or
-                self.spanTouchesChain(s.args, c),
-            .assign_boxy_desc_ref => |s| self.descRefTouchesChain(s.desc, c) or
-                (s.tag_residual_for != null and self.descRefTouchesChain(s.tag_residual_for.?, c)) or
-                self.spanTouchesChain(s.captures, c),
-            .assign_boxy_dict_ref => |s| self.dictRefTouchesChain(s.dict, c) or self.spanTouchesChain(s.captures, c),
-            .assign_boxy_box => |s| c.chainContains(s.payload) or if (s.payload_desc) |desc| self.descRefTouchesChain(desc, c) else false,
-            .assign_boxy_record_update => |s| c.chainContains(s.base) or c.chainContains(s.fields) or
-                self.descRefTouchesChain(s.base_desc, c) or self.descRefTouchesChain(s.fields_desc, c),
-            .assign_boxy_reuse_box => |s| c.chainContains(s.source) or self.descRefTouchesChain(s.desc, c),
-            .assign_boxy_unbox => |s| c.chainContains(s.source) or
-                self.descRefTouchesChain(s.source_desc, c) or
-                (s.target_desc != null and self.descRefTouchesChain(s.target_desc.?, c)),
-            .assign_boxy_adapt => |s| c.chainContains(s.source) or
-                (s.source_desc != null and self.descRefTouchesChain(s.source_desc.?, c)) or
-                (s.target_desc != null and self.descRefTouchesChain(s.target_desc.?, c)),
-            .assign_boxy_inspect => |s| c.chainContains(s.source) or self.descRefTouchesChain(s.source_desc, c),
-            .assign_boxy_eq => |s| c.chainContains(s.lhs) or c.chainContains(s.rhs) or self.descRefTouchesChain(s.desc, c),
-            .assign_boxy_hash => |s| c.chainContains(s.value) or c.chainContains(s.hasher) or self.descRefTouchesChain(s.desc, c),
-            .assign_boxy_tag => |s| self.descRefTouchesChain(s.target_desc, c) or
-                (s.payload != null and c.chainContains(s.payload.?)) or
-                (s.payload_desc != null and self.descRefTouchesChain(s.payload_desc.?, c)),
-            .assign_boxy_tag_payload => |s| c.chainContains(s.source) or self.descRefTouchesChain(s.source_desc, c),
-            .boxy_tag_match => |s| c.chainContains(s.source) or self.descRefTouchesChain(s.source_desc, c),
-            .assign_call_dict => |s| self.dictRefTouchesChain(s.dict, c) or self.spanTouchesChain(s.args, c) or self.spanTouchesChain(s.arg_descs, c) or self.spanTouchesChain(s.hidden_args, c),
-            .assign_list => |s| self.spanTouchesChain(s.elems, c),
-            .assign_struct => |s| self.spanTouchesChain(s.fields, c),
-            .assign_tag => |s| (s.target_desc != null and self.descRefTouchesChain(s.target_desc.?, c)) or
-                (if (s.payload) |payload| c.chainContains(payload) else false),
-            .store_struct => |s| c.chainContains(s.dest) or self.spanTouchesChain(s.fields, c),
-            .store_tag => |s| c.chainContains(s.dest) or if (s.payload) |payload| c.chainContains(payload) else false,
-            // Reading the value is a use; overwriting a tracked local would
-            // corrupt the chain, so treat that as disqualifying too.
-            .set_local => |s| c.chainContains(s.value) or c.chainContains(s.target),
-            inline .debug, .expect_err => |s| c.chainContains(s.message),
-            .expect => |s| c.chainContains(s.condition),
-            inline .incref, .decref, .free, .ret => |s| c.chainContains(s.value),
-            .decref_if_initialized => |s| c.chainContains(s.cond) or c.chainContains(s.value),
-            .switch_stmt => |s| c.chainContains(s.cond),
-            .switch_initialized_payload => |s| c.chainContains(s.cond) or c.chainContains(s.payload),
-            .str_match, .str_match_set => true,
-            .crash => |s| if (s.msg.localId()) |message| c.chainContains(message) else false,
-            .jump, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .loop_continue, .loop_break, .join => false,
-        };
+        switch (stmt) {
+            // Initializing or overwriting a tracked local would corrupt the
+            // chain, so those writes disqualify like reads do.
+            .init_uninitialized => |s| if (candidate.chainContains(s.target)) return true,
+            .set_local => |s| if (candidate.chainContains(s.target)) return true,
+            // A string match binds views into its source and its arms are
+            // not blessed transitions, so it always ends the candidate.
+            .str_match, .str_match_set => return true,
+            .assign_ref,
+            .assign_literal,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_record_update,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .incref,
+            .decref,
+            .decref_if_initialized,
+            .free,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => {},
+        }
+        var probe: ChainProbe = .{ .candidate = candidate };
+        body_clone.forEachStmtRead(self.store, stmt, &probe, ChainProbe.note);
+        return probe.hit;
     }
 
-    fn spanTouchesChain(self: *const Detection, span: LIR.LocalSpan, candidate: *const Candidate) bool {
-        const locals = self.store.getLocalSpan(span);
-        for (0..locals.len) |index| if (candidate.chainContains(GuardedList.at(locals, index))) return true;
-        return false;
-    }
+    const ChainProbe = struct {
+        candidate: *const Candidate,
+        hit: bool = false,
 
-    fn descRefTouchesChain(_: *const Detection, desc: LIR.BoxyDescRef, candidate: *const Candidate) bool {
-        const local = desc.localOrNull() orelse return false;
-        return candidate.chainContains(local);
-    }
-
-    fn dictRefTouchesChain(_: *const Detection, dict: LIR.BoxyDictRef, candidate: *const Candidate) bool {
-        const local = dict.localOrNull() orelse return false;
-        return candidate.chainContains(local);
-    }
+        fn note(probe: *ChainProbe, local: LocalId) void {
+            if (probe.candidate.chainContains(local)) probe.hit = true;
+        }
+    };
 
     fn invalidateSharedRewriteCandidates(self: *Detection) void {
         for (self.scratch.candidates.items) |*candidate| {
@@ -1437,48 +1386,11 @@ const Transform = struct {
     }
 
     fn nextOf(self: *const Transform, stmt_id: CFStmtId) CFStmtId {
-        return switch (self.store.getCFStmt(stmt_id)) {
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| s.next,
-            .expect_err,
-            .runtime_error,
-            .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
-            .switch_stmt,
-            .switch_initialized_payload,
-            .str_match,
-            .str_match_set,
-            .boxy_tag_match,
-            .loop_continue,
-            .loop_break,
-            .join,
-            .jump,
-            .ret,
-            .crash,
-            => unreachable,
-        };
+        return body_clone.linearNext(self.store.getCFStmt(stmt_id));
     }
 
     fn setNext(self: *Transform, stmt_id: CFStmtId, next: CFStmtId) void {
-        const ptr = self.store.getCFStmtPtr(stmt_id);
-        switch (ptr.*) {
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |*s| s.next = next,
-            .expect_err,
-            .runtime_error,
-            .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
-            .switch_stmt,
-            .switch_initialized_payload,
-            .str_match,
-            .str_match_set,
-            .boxy_tag_match,
-            .loop_continue,
-            .loop_break,
-            .join,
-            .jump,
-            .ret,
-            .crash,
-            => unreachable,
-        }
+        body_clone.setLinearNext(self.store.getCFStmtPtr(stmt_id), next);
     }
 
     fn unlink(self: *Transform, edge: Edge, replacement: CFStmtId) void {

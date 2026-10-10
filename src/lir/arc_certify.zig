@@ -4728,37 +4728,6 @@ const Certifier = struct {
         }
 
         const node_count = graph.nodes.items.len;
-        var pred_counts = try graph_allocator.alloc(usize, node_count);
-        @memset(pred_counts, 0);
-        for (graph.nodes.items) |node| {
-            const successor_start = node.successor_start;
-            const successor_end = successor_start + @as(usize, node.successor_len);
-            for (graph.successors.items[successor_start..successor_end]) |successor| {
-                const successor_index = graph.indices.get(successor) orelse unreachable;
-                pred_counts[successor_index] += 1;
-            }
-        }
-
-        var pred_starts = try graph_allocator.alloc(usize, node_count + 1);
-        pred_starts[0] = 0;
-        for (pred_counts, 0..) |count, index| {
-            pred_starts[index + 1] = pred_starts[index] + count;
-        }
-        var pred_writes = try graph_allocator.dupe(usize, pred_starts[0..node_count]);
-        const predecessors = try graph_allocator.alloc(usize, pred_starts[node_count]);
-        for (graph.nodes.items, 0..) |node, predecessor_index| {
-            const successor_start = node.successor_start;
-            const successor_end = successor_start + @as(usize, node.successor_len);
-            for (graph.successors.items[successor_start..successor_end]) |successor| {
-                const successor_index = graph.indices.get(successor) orelse unreachable;
-                const write_index = pred_writes[successor_index];
-                predecessors[write_index] = predecessor_index;
-                pred_writes[successor_index] += 1;
-            }
-        }
-
-        try self.computeJoinComponents(&graph, pred_starts, predecessors);
-
         const succ_starts = try graph_allocator.alloc(u32, node_count + 1);
         const succs = try graph_allocator.alloc(u32, graph.successors.items.len);
         const read_starts = try graph_allocator.alloc(u32, node_count + 1);
@@ -4783,15 +4752,22 @@ const Certifier = struct {
             }
             def_starts[node_index + 1] = @intCast(defs.items.len);
         }
-        const pred_starts_u32 = try graph_allocator.alloc(u32, node_count + 1);
-        for (pred_starts, pred_starts_u32) |offset, *out| out.* = @intCast(offset);
-        const preds = try graph_allocator.alloc(u32, predecessors.len);
-        for (predecessors, preds) |predecessor, *out| out.* = @intCast(predecessor);
+        const preds = try collections.csr.transpose(graph_allocator, succ_starts, succs);
+
+        // Numbering components in forward order makes every inter-component
+        // predecessor settle before a queued successor join is walked.
+        const components = try collections.scc.compute(graph_allocator, succ_starts, succs, preds.starts, preds.targets);
+        var joins = self.join_bodies.iterator();
+        while (joins.next()) |join| {
+            const node = graph.indices.get(join.value_ptr.*) orelse unreachable;
+            try self.join_components.put(join.key_ptr.*, components.component_of[node]);
+        }
+
         const liveness_graph = arc_liveness.Graph{
             .succ_starts = succ_starts,
             .succs = succs,
-            .pred_starts = pred_starts_u32,
-            .preds = preds,
+            .pred_starts = preds.starts,
+            .preds = preds.targets,
             .read_starts = read_starts,
             .reads = reads.items,
             .def_starts = def_starts,
@@ -4810,67 +4786,6 @@ const Certifier = struct {
             base.invariant("ARC borrow certifier invariant violated: read-before-rebind cache missing stmt {d}", .{@backingInt(start)});
         };
         return cached;
-    }
-
-    /// Kosaraju over the same final-LIR graph used for read-before-rebind
-    /// analysis. Numbering components in forward order makes every inter-
-    /// component predecessor settle before a queued successor join is walked.
-    fn computeJoinComponents(
-        self: *Certifier,
-        graph: *const ReadBeforeRebindGraph,
-        pred_starts: []const usize,
-        predecessors: []const usize,
-    ) Allocator.Error!void {
-        const allocator = graph.allocator;
-        const n = graph.nodes.items.len;
-        const Frame = struct { node: usize, next: usize = 0 };
-        var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, n);
-        var frames = std.ArrayList(Frame).empty;
-        var finished = std.ArrayList(usize).empty;
-        for (0..n) |start| {
-            if (seen.isSet(start)) continue;
-            seen.set(start);
-            try frames.append(allocator, .{ .node = start });
-            while (frames.items.len != 0) {
-                const frame = &frames.items[frames.items.len - 1];
-                const node = graph.nodes.items[frame.node];
-                if (frame.next < node.successor_len) {
-                    const successor = graph.successors.items[node.successor_start + frame.next];
-                    frame.next += 1;
-                    const child = graph.indices.get(successor) orelse unreachable;
-                    if (!seen.isSet(child)) {
-                        seen.set(child);
-                        try frames.append(allocator, .{ .node = child });
-                    }
-                } else {
-                    try finished.append(allocator, frame.node);
-                    _ = frames.pop();
-                }
-            }
-        }
-
-        const components = try allocator.alloc(u32, n);
-        @memset(components, no_dense);
-        var reverse_work = std.ArrayList(usize).empty;
-        var component: u32 = 0;
-        while (finished.pop()) |start| {
-            if (components[start] != no_dense) continue;
-            components[start] = component;
-            try reverse_work.append(allocator, start);
-            while (reverse_work.pop()) |node| {
-                for (predecessors[pred_starts[node]..pred_starts[node + 1]]) |predecessor| {
-                    if (components[predecessor] != no_dense) continue;
-                    components[predecessor] = component;
-                    try reverse_work.append(allocator, predecessor);
-                }
-            }
-            component += 1;
-        }
-        var joins = self.join_bodies.iterator();
-        while (joins.next()) |join| {
-            const node = graph.indices.get(join.value_ptr.*) orelse unreachable;
-            try self.join_components.put(join.key_ptr.*, components[node]);
-        }
     }
 
     /// Ascending dense positions of a join's maybe-uninitialized params.

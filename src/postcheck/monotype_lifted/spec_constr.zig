@@ -1422,7 +1422,7 @@ const Pass = struct {
                     pass.rewindAnalysis(mark);
                 },
                 .iterator_fusion => {
-                    try pass.cloneFnBodyForIteratorFusion(self.fn_id);
+                    try pass.cloneFnBody(.iterator_fusion, self.fn_id);
                     output.changed = true;
                 },
                 .unused_loop_results => output.changed = try pass.projectUnusedLoopResultsInFn(self.fn_id),
@@ -2778,7 +2778,7 @@ const Pass = struct {
     fn rewriteAllOriginalBodies(self: *Pass, original_fn_count: usize) Common.LowerError!void {
         for (0..original_fn_count) |index| {
             const fn_id: Ast.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-            try self.cloneFnBodyInPlace(fn_id);
+            try self.cloneFnBody(.normalize, fn_id);
         }
     }
 
@@ -4444,26 +4444,48 @@ const Pass = struct {
         return clone.run(root);
     }
 
-    /// Normalize a whole function body once through the value-aware cloner.
-    /// Structural consumers expose exact producer calls locally, call-pattern
-    /// rewrites consume the resulting values, and loop fixed points scalarize
-    /// known carried structure without a body-category routing decision.
-    fn cloneFnBodyInPlace(self: *Pass, fn_id: Ast.FnId) Common.LowerError!void {
+    /// How a whole function body is cloned in place.
+    const FnBodyCloneMode = enum {
+        /// Normalize the body once through the value-aware cloner: structural
+        /// consumers expose exact producer calls locally, call-pattern
+        /// rewrites consume the resulting values, and loop fixed points
+        /// scalarize known carried structure without a body-category routing
+        /// decision.
+        normalize,
+        /// Inline the body's iterator producers for fusion, leaving call
+        /// patterns and callable workers to the normalizing clone.
+        iterator_fusion,
+    };
+
+    fn cloneFnBody(self: *Pass, comptime mode: FnBodyCloneMode, fn_id: Ast.FnId) Common.LowerError!void {
         const fn_index = @backingInt(fn_id);
-        if (fn_index < self.whole_body_cloned.len and self.whole_body_cloned[fn_index]) return;
+        if (mode == .normalize and fn_index < self.whole_body_cloned.len and self.whole_body_cloned[fn_index]) return;
 
         const fn_ = self.program.getFn(fn_id);
         const body = switch (self.sourceBody(fn_id)) {
             .roc => |body| body,
             .hosted => return,
         };
-        var cloner = Cloner.initForOriginalBodyRewrite(self);
-        defer cloner.deinit();
-        cloner.inline_calls = switch (self.clone_inlining) {
-            .all_calls => .all,
-            .iterator_fusion => .iterator_fusion,
+        var cloner = switch (mode) {
+            .normalize => Cloner.initForOriginalBodyRewrite(self),
+            .iterator_fusion => Cloner.initForRewrite(self),
         };
-        cloner.inline_direct_requires_known_arg = true;
+        defer cloner.deinit();
+        switch (mode) {
+            .normalize => {
+                cloner.inline_calls = switch (self.clone_inlining) {
+                    .all_calls => .all,
+                    .iterator_fusion => .iterator_fusion,
+                };
+                cloner.inline_direct_requires_known_arg = true;
+            },
+            .iterator_fusion => {
+                cloner.inline_calls = .iterator_fusion;
+                cloner.inline_direct_requires_known_arg = false;
+                cloner.rewrite_call_patterns = false;
+                cloner.emit_callable_workers = false;
+            },
+        }
         const args = self.program.typedLocalSpan(fn_.args);
         for (0..args.len) |index| {
             const local = GuardedList.at(args, index).local;
@@ -4485,61 +4507,24 @@ const Pass = struct {
             .spec_constr_pattern = fn_.spec_constr_pattern,
             .root_identity = fn_.root_identity,
             .signature = fn_.signature,
-            .iterator_fusion_scope = fn_.iterator_fusion_scope,
+            .iterator_fusion_scope = switch (mode) {
+                .normalize => fn_.iterator_fusion_scope,
+                .iterator_fusion => true,
+            },
             .args = fn_.args,
             .captures = fn_.captures,
             .body = .{ .roc = cloned },
             .ret = fn_.ret,
             .shapes = shapes,
         });
-        if (fn_index < self.whole_body_cloned.len) self.whole_body_cloned[fn_index] = true;
-    }
-
-    fn cloneFnBodyForIteratorFusion(self: *Pass, fn_id: Ast.FnId) Common.LowerError!void {
-        const fn_index = @backingInt(fn_id);
-        const fn_ = self.program.getFn(fn_id);
-        const body = switch (self.sourceBody(fn_id)) {
-            .roc => |source| source,
-            .hosted => return,
-        };
-
-        var cloner = Cloner.initForRewrite(self);
-        defer cloner.deinit();
-        cloner.inline_calls = .iterator_fusion;
-        cloner.inline_direct_requires_known_arg = false;
-        cloner.rewrite_call_patterns = false;
-        cloner.emit_callable_workers = false;
-
-        const args = self.program.typedLocalSpan(fn_.args);
-        for (0..args.len) |index| {
-            const local = GuardedList.at(args, index).local;
-            try cloner.putLocalAlias(local, local);
+        switch (mode) {
+            .normalize => if (fn_index < self.whole_body_cloned.len) {
+                self.whole_body_cloned[fn_index] = true;
+            },
+            .iterator_fusion => if (!self.borrowed_worker) {
+                self.whole_body_cloned[fn_index] = true;
+            },
         }
-        const captures = self.program.typedLocalSpan(fn_.captures);
-        for (0..captures.len) |index| {
-            const local = GuardedList.at(captures, index).local;
-            try cloner.putLocalAlias(local, local);
-        }
-
-        const outer_shapes = self.program.beginFnShapes(fn_id);
-        const cloned = try cloner.cloneExpr(body);
-        // Unchanged subtrees of the source body are reused rather than
-        // re-created, so the rewritten body keeps the source body's shapes.
-        const shapes = self.program.finishFnShapes(outer_shapes).merged(fn_.shapes);
-        self.program.setFn(fn_id, .{
-            .symbol = fn_.symbol,
-            .source = fn_.source,
-            .spec_constr_pattern = fn_.spec_constr_pattern,
-            .root_identity = fn_.root_identity,
-            .signature = fn_.signature,
-            .iterator_fusion_scope = true,
-            .args = fn_.args,
-            .captures = fn_.captures,
-            .body = .{ .roc = cloned },
-            .ret = fn_.ret,
-            .shapes = shapes,
-        });
-        if (!self.borrowed_worker) self.whole_body_cloned[fn_index] = true;
     }
 
     /// Once the specialization graph is complete, clone only functions whose
@@ -17528,7 +17513,7 @@ test "issue 10760 SpecConstr bounds cloning of rewritten inline bodies" {
     defer pass.deinit();
 
     for (0..pass.plans.len) |index| {
-        try pass.cloneFnBodyInPlace(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
+        try pass.cloneFnBody(.normalize, @fromBackingInt(@intCast(@as(u32, @intCast(index)))));
     }
 
     const rewritten_body = switch (program.getFn(callee).body) {
@@ -18247,7 +18232,7 @@ test "whole-body normalization resolves binder-equivalent argument locals" {
 
     var pass = try Pass.init(allocator, &program);
     defer pass.deinit();
-    try pass.cloneFnBodyInPlace(fn_id);
+    try pass.cloneFnBody(.normalize, fn_id);
 
     const cloned_body = switch (program.getFn(fn_id).body) {
         .roc => |body| body,

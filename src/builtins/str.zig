@@ -1982,14 +1982,6 @@ pub fn validateUtf8Bytes(
 }
 
 /// TODO
-pub fn validateUtf8BytesX(
-    str: RocList,
-    roc_ops: *RocOps,
-) FromUtf8Try {
-    return fromUtf8(str, .Immutable, roc_ops);
-}
-
-/// TODO
 pub fn sliceHelp(
     bytes: [*]const u8,
     length: usize,
@@ -3963,7 +3955,7 @@ test "validateUtf8Bytes: ascii" {
     const ptr: [*]const u8 = @as([*]const u8, @ptrCast(raw));
     const list = sliceHelp(ptr, raw.len, test_env.getOps());
 
-    const str_result = validateUtf8BytesX(list, test_env.getOps());
+    const str_result = fromUtf8(list, .Immutable, test_env.getOps());
     defer str_result.string.decref(test_env.getOps());
     try expectOk(str_result);
 }
@@ -3976,7 +3968,7 @@ test "validateUtf8Bytes: unicode œ" {
     const ptr: [*]const u8 = @as([*]const u8, @ptrCast(raw));
     const list = sliceHelp(ptr, raw.len, test_env.getOps());
 
-    const str_result = validateUtf8BytesX(list, test_env.getOps());
+    const str_result = fromUtf8(list, .Immutable, test_env.getOps());
     defer str_result.string.decref(test_env.getOps());
     try expectOk(str_result);
 }
@@ -3989,7 +3981,7 @@ test "validateUtf8Bytes: unicode ∆" {
     const ptr: [*]const u8 = @as([*]const u8, @ptrCast(raw));
     const list = sliceHelp(ptr, raw.len, test_env.getOps());
 
-    const str_result = validateUtf8BytesX(list, test_env.getOps());
+    const str_result = fromUtf8(list, .Immutable, test_env.getOps());
     defer str_result.string.decref(test_env.getOps());
     try expectOk(str_result);
 }
@@ -4002,7 +3994,7 @@ test "validateUtf8Bytes: emoji" {
     const ptr: [*]const u8 = @as([*]const u8, @ptrCast(raw));
     const list = sliceHelp(ptr, raw.len, test_env.getOps());
 
-    const str_result = validateUtf8BytesX(list, test_env.getOps());
+    const str_result = fromUtf8(list, .Immutable, test_env.getOps());
     defer str_result.string.decref(test_env.getOps());
     try expectOk(str_result);
 }
@@ -4015,7 +4007,7 @@ test "validateUtf8Bytes: unicode ∆ in middle of array" {
     const ptr: [*]const u8 = @as([*]const u8, @ptrCast(raw));
     const list = sliceHelp(ptr, raw.len, test_env.getOps());
 
-    const str_result = validateUtf8BytesX(list, test_env.getOps());
+    const str_result = fromUtf8(list, .Immutable, test_env.getOps());
     defer str_result.string.decref(test_env.getOps());
     try expectOk(str_result);
 }

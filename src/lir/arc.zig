@@ -25,10 +25,12 @@ const core = @import("lir_core");
 const layout_mod = @import("layout");
 const arc_sig = @import("arc_sig.zig");
 const arc_solve = @import("arc_solve.zig");
+const arc_liveness = @import("arc_liveness.zig");
 const arc_certify = @import("arc_certify.zig");
 const arc_dismantle = @import("arc_dismantle.zig");
 const ArcSnapshot = @import("arc_state.zig").Snapshot;
 const LoopForest = collections.LoopForest;
+const Row = arc_liveness.Row;
 const debug_print = @import("debug_print.zig");
 
 const LIR = core.LIR;
@@ -504,7 +506,7 @@ const GroupLivenessIndex = struct {
 
     /// Exact inverse of groupUsedFromTable over concrete refcounted locals.
     /// Raw bits for group members and borrowed-result bits do not select units.
-    fn seedKeep(self: *const GroupLivenessIndex, reads: *const ExactBitSet, refcounted: []const bool, keep: *OwnedSet) ResourceError!void {
+    fn seedKeep(self: *const GroupLivenessIndex, reads: *const Row, refcounted: []const bool, keep: *OwnedSet) ResourceError!void {
         const resources = keep.domain.resource_locals;
         if (resources.len == 0) return;
         std.debug.assert(self.seed_ranges.len == self.ranges.len);
@@ -534,7 +536,7 @@ const GroupLivenessIndex = struct {
         return if (self.raw_bits.len == 0) resource_bit else self.raw_bits[resource_bit];
     }
 
-    fn usedExcept(self: *const GroupLivenessIndex, domain: *const ProcArcDomain, reads: *const ExactBitSet, leader: LIR.LocalId, except: LIR.LocalId) bool {
+    fn usedExcept(self: *const GroupLivenessIndex, domain: *const ProcArcDomain, reads: *const Row, leader: LIR.LocalId, except: LIR.LocalId) bool {
         const range = if (domain.groupBitOf(leader)) |bit|
             self.ranges[bit - domain.resource_locals.len]
         else {
@@ -789,22 +791,10 @@ fn recordObjectCacheFacts(
 /// lowest-numbered member; ownership variants inherit their source's group.
 fn recordTailGroups(store: *LirStore, solution: *const arc_solve.Solution) ResourceError!void {
     const proc_count = store.procSpecCount();
-    const parent = try store.allocator.alloc(u32, proc_count);
-    defer store.allocator.free(parent);
-    for (parent, 0..) |*slot, index| slot.* = @intCast(index);
+    var groups = try collections.DisjointSets.init(store.allocator, proc_count);
+    defer groups.deinit(store.allocator);
     var grouped = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(store.allocator, proc_count);
     defer grouped.deinit(store.allocator);
-
-    const find = struct {
-        fn root(links: []u32, start: u32) u32 {
-            var current = start;
-            while (links[current] != current) {
-                links[current] = links[links[current]];
-                current = links[current];
-            }
-            return current;
-        }
-    }.root;
 
     for (0..proc_count) |proc_index| {
         const caller: LIR.LirProcSpecId = @fromBackingInt(@as(u32, @intCast(proc_index)));
@@ -812,15 +802,13 @@ fn recordTailGroups(store: *LirStore, solution: *const arc_solve.Solution) Resou
             const callee = store.getCFStmt(tail_call.stmt).assign_call.proc;
             grouped.set(proc_index);
             grouped.set(@backingInt(callee));
-            const caller_root = find(parent, @intCast(proc_index));
-            const callee_root = find(parent, @backingInt(callee));
-            if (caller_root < callee_root) parent[callee_root] = caller_root else parent[caller_root] = callee_root;
+            groups.unite(@intCast(proc_index), @backingInt(callee));
         }
     }
     var members = grouped.iterator(.{});
     while (members.next()) |proc_index| {
         const proc: LIR.LirProcSpecId = @fromBackingInt(@as(u32, @intCast(proc_index)));
-        store.getProcSpecPtr(proc).tail_group = @fromBackingInt(find(parent, @intCast(proc_index)));
+        store.getProcSpecPtr(proc).tail_group = @fromBackingInt(groups.find(@intCast(proc_index)));
     }
 }
 
@@ -1344,9 +1332,9 @@ const LoopKeep = struct {
 const LoopLivenessCache = struct {
     /// Dense liveness-node rows for one compact loop identity. Null rows are
     /// outside the forward closure of that join's two explicit regions.
-    rows: []?ExactBitSet = &.{},
+    rows: []?Row = &.{},
     active: ?std.bit_set.DynamicBitSetUnmanaged = null,
-    keep_reads: ?ExactBitSet = null,
+    keep_reads: ?Row = null,
     /// The join regions interpreted under this loop identity. Solving their
     /// forward closure up front makes every later query a direct node lookup,
     /// including sibling switch arms that the first query did not traverse.
@@ -1354,207 +1342,6 @@ const LoopLivenessCache = struct {
     initialized: bool = false,
     consumed_keep_bits: bool = false,
     dirty: bool = false,
-};
-
-/// Strongly connected components of a statement graph, numbered in
-/// topological order: no edge leads into a lower-numbered component, so a
-/// statement in a lower-numbered component than another is never reachable
-/// from it. `nodes[starts[c]..starts[c + 1]]` lists component `c`'s
-/// statements. Both passes run on explicit work stacks.
-const StatementComponents = struct {
-    component_of: []u32,
-    nodes: []u32,
-    starts: []u32,
-};
-
-fn statementComponents(
-    allocator: Allocator,
-    succ_starts: []const u32,
-    succs: []const u32,
-    pred_starts: []const u32,
-    preds: []const u32,
-) Allocator.Error!StatementComponents {
-    const node_count = succ_starts.len - 1;
-    const no_component = std.math.maxInt(u32);
-    const component_of = try allocator.alloc(u32, node_count);
-    @memset(component_of, no_component);
-    var component_nodes = std.ArrayList(u32).empty;
-    var component_starts = std.ArrayList(u32).empty;
-    const Frame = struct { node: u32, next_successor: u32 };
-    var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
-    var frames = std.ArrayList(Frame).empty;
-    var finish_order = std.ArrayList(u32).empty;
-    for (0..node_count) |root| {
-        if (seen.isSet(root)) continue;
-        seen.set(root);
-        try frames.append(allocator, .{ .node = @intCast(root), .next_successor = succ_starts[root] });
-        while (frames.items.len != 0) {
-            const frame = &frames.items[frames.items.len - 1];
-            if (frame.next_successor < succ_starts[frame.node + 1]) {
-                const successor = succs[frame.next_successor];
-                frame.next_successor += 1;
-                if (!seen.isSet(successor)) {
-                    seen.set(successor);
-                    try frames.append(allocator, .{ .node = successor, .next_successor = succ_starts[successor] });
-                }
-                continue;
-            }
-            try finish_order.append(allocator, frame.node);
-            _ = frames.pop();
-        }
-    }
-    var reverse_work = std.ArrayList(u32).empty;
-    var order_index = finish_order.items.len;
-    while (order_index > 0) {
-        order_index -= 1;
-        const root = finish_order.items[order_index];
-        if (component_of[root] != no_component) continue;
-        const component: u32 = @intCast(component_starts.items.len);
-        try component_starts.append(allocator, @intCast(component_nodes.items.len));
-        component_of[root] = component;
-        try reverse_work.append(allocator, root);
-        while (reverse_work.pop()) |member| {
-            try component_nodes.append(allocator, member);
-            for (preds[pred_starts[member]..pred_starts[member + 1]]) |predecessor| {
-                if (component_of[predecessor] != no_component) continue;
-                component_of[predecessor] = component;
-                try reverse_work.append(allocator, predecessor);
-            }
-        }
-    }
-    try component_starts.append(allocator, @intCast(component_nodes.items.len));
-    return .{ .component_of = component_of, .nodes = component_nodes.items, .starts = component_starts.items };
-}
-
-/// One exact finite-lattice bit set. Rows share persistent sparse subtrees;
-/// adding or killing one liveness fact copies one bounded-depth radix path.
-const ExactBitSet = struct {
-    bit_len: usize,
-    words: ArcSnapshot(u64, 0),
-
-    fn initEmpty(allocator: Allocator, bit_len: usize) Allocator.Error!ExactBitSet {
-        const word_len = std.math.divCeil(usize, bit_len, 64) catch unreachable;
-        if (word_len != 0 and word_len - 1 > std.math.maxInt(u32)) {
-            arcInvariant("ARC liveness bit domain exceeded the snapshot index representation");
-        }
-        return .{ .bit_len = bit_len, .words = ArcSnapshot(u64, 0).init(allocator, word_len) };
-    }
-
-    fn deinit(_: *ExactBitSet, _: Allocator) void {}
-
-    fn clone(self: *const ExactBitSet, allocator: Allocator) Allocator.Error!ExactBitSet {
-        var cloned = self.*;
-        cloned.words.allocator = allocator;
-        return cloned;
-    }
-
-    fn set(self: *ExactBitSet, bit: usize) Allocator.Error!void {
-        std.debug.assert(bit < self.bit_len);
-        const word_index: u32 = @intCast(bit / 64);
-        const mask = @as(u64, 1) << @intCast(bit % 64);
-        try self.words.put(word_index, self.words.get(word_index) | mask);
-    }
-
-    fn unset(self: *ExactBitSet, bit: usize) Allocator.Error!void {
-        std.debug.assert(bit < self.bit_len);
-        const word_index: u32 = @intCast(bit / 64);
-        const mask = @as(u64, 1) << @intCast(bit % 64);
-        try self.words.put(word_index, self.words.get(word_index) & ~mask);
-    }
-
-    fn isSet(self: *const ExactBitSet, bit: usize) bool {
-        std.debug.assert(bit < self.bit_len);
-        const word_index: u32 = @intCast(bit / 64);
-        const mask = @as(u64, 1) << @intCast(bit % 64);
-        return self.words.get(word_index) & mask != 0;
-    }
-
-    /// Exact range existence, without enumerating either members or live bits.
-    fn anySetInRange(self: *const ExactBitSet, start: usize, end: usize) bool {
-        std.debug.assert(start <= end and end <= self.bit_len);
-        if (start == end) return false;
-        const first_word: u32 = @intCast(start / 64);
-        const last_word: u32 = @intCast((end - 1) / 64);
-        const first_mask = @as(u64, std.math.maxInt(u64)) << @as(u6, @intCast(start % 64));
-        const last_mask = @as(u64, std.math.maxInt(u64)) >> @as(u6, @intCast(63 - (end - 1) % 64));
-        if (first_word == last_word) return self.words.get(first_word) & first_mask & last_mask != 0;
-        if (self.words.get(first_word) & first_mask != 0) return true;
-        if (self.words.get(last_word) & last_mask != 0) return true;
-        return self.words.hasNonEmptyInRange(first_word + 1, last_word);
-    }
-
-    fn unsetAll(self: *ExactBitSet) void {
-        self.words.clear();
-    }
-
-    fn setUnion(self: *ExactBitSet, other: ExactBitSet) Allocator.Error!void {
-        std.debug.assert(self.bit_len == other.bit_len);
-        _ = try self.words.joinWith(&other.words, {}, unionWord);
-    }
-
-    fn setIntersection(self: *ExactBitSet, other: ExactBitSet) Allocator.Error!void {
-        std.debug.assert(self.bit_len == other.bit_len);
-        _ = try self.words.meetWith(&other.words, {}, intersectWord);
-    }
-
-    /// Whether any bit is set. The snapshot answers from its structure, so
-    /// this costs the tree depth rather than the domain's width.
-    fn isEmpty(self: *const ExactBitSet) bool {
-        const word_len = std.math.divCeil(usize, self.bit_len, 64) catch unreachable;
-        return !self.words.hasNonEmptyInRange(0, word_len);
-    }
-
-    fn count(self: *const ExactBitSet) usize {
-        var total: usize = 0;
-        const word_len = std.math.divCeil(usize, self.bit_len, 64) catch unreachable;
-        for (0..word_len) |word_index| total += @popCount(self.words.get(@intCast(word_index)));
-        return total;
-    }
-
-    const RangeIterator = struct {
-        words: ArcSnapshot(u64, 0).RangeIterator,
-        start: usize,
-        end: usize,
-        word_base: usize = 0,
-        pending: u64 = 0,
-
-        fn next(self: *RangeIterator) ?usize {
-            while (self.pending == 0) {
-                const word = self.words.next() orelse return null;
-                self.word_base = @as(usize, word.index) * 64;
-                self.pending = word.value;
-                if (self.start > self.word_base) self.pending &= @as(u64, std.math.maxInt(u64)) << @as(u6, @intCast(self.start - self.word_base));
-                if (self.end - self.word_base < 64) self.pending &= @as(u64, std.math.maxInt(u64)) >> @as(u6, @intCast(64 - (self.end - self.word_base)));
-            }
-            const bit = self.word_base + @ctz(self.pending);
-            self.pending &= self.pending - 1;
-            return bit;
-        }
-    };
-
-    /// Enumerate set bits in a half-open range, skipping absent and excluded
-    /// word subtrees rather than looking up every word in the domain.
-    fn iteratorRange(self: *const ExactBitSet, start: usize, end: usize) RangeIterator {
-        std.debug.assert(start <= end and end <= self.bit_len);
-        return .{
-            .words = self.words.iteratorRange(@intCast(start / 64), if (start == end) start / 64 else @as(u64, @intCast(end / 64)) + @intFromBool(end % 64 != 0)),
-            .start = start,
-            .end = end,
-        };
-    }
-
-    fn eql(self: *const ExactBitSet, other: ExactBitSet) bool {
-        if (self.bit_len != other.bit_len) return false;
-        return self.words.eql(&other.words);
-    }
-
-    fn unionWord(_: void, lhs: u64, rhs: u64) u64 {
-        return lhs | rhs;
-    }
-
-    fn intersectWord(_: void, lhs: u64, rhs: u64) u64 {
-        return lhs & rhs;
-    }
 };
 
 // Join-summary solver
@@ -1626,8 +1413,8 @@ const ExactBitSet = struct {
 /// bit differs, so related snapshots cost their structural difference.
 const DeadUnits = struct {
     source: OwnedSet,
-    reads: ExactBitSet,
-    dead: ExactBitSet,
+    reads: Row,
+    dead: Row,
 };
 
 const JoinSummary = struct {
@@ -1665,7 +1452,7 @@ const JoinSummary = struct {
     seed_placed: OwnedSet,
     /// Resource indices of the retained environment, which the body-use
     /// filter keeps.
-    retained_resources: ExactBitSet,
+    retained_resources: Row,
     /// Units of `entry_state` whose group the remainder does not read.
     entry_dead: ?DeadUnits = null,
     /// Units of `jump_common` whose group the body does not read.
@@ -3890,7 +3677,7 @@ const Inserter = struct {
 
     fn noteRestitutionBoundaryReads(
         self: *Inserter,
-        reads: *ExactBitSet,
+        reads: *Row,
         stmt: LIR.CFStmtId,
     ) ResourceError!void {
         const mask = self.solution.restitutionParamsAt(stmt);
@@ -4390,7 +4177,7 @@ const Inserter = struct {
     /// otherwise.
     fn groupUsedFromTable(
         self: *Inserter,
-        reads: *const ExactBitSet,
+        reads: *const Row,
         local: LIR.LocalId,
     ) bool {
         if (builtin.mode == .debug) keep_set_liveness_visits.increment();
@@ -4445,21 +4232,21 @@ const Inserter = struct {
     fn solveDeadUnits(
         self: *Inserter,
         source: *const OwnedSet,
-        reads: *const ExactBitSet,
+        reads: *const Row,
         reference: ?*const DeadUnits,
     ) ResourceError!DeadUnits {
         var result = DeadUnits{
             .source = try cloneOwnedSetWith(self.solve_allocator, source),
-            .reads = try reads.clone(self.solve_allocator),
+            .reads = reads.clone(self.solve_allocator),
             .dead = undefined,
         };
         const base = reference orelse {
-            result.dead = try ExactBitSet.initEmpty(self.solve_allocator, self.domain().resource_locals.len);
+            result.dead = Row.initEmpty(self.solve_allocator, self.domain().resource_locals.len);
             var members = source.iterator(.{});
             while (members.next()) |resource| try self.redecideDeadUnit(&result, @intCast(resource));
             return result;
         };
-        result.dead = try base.dead.clone(self.solve_allocator);
+        result.dead = base.dead.clone(self.solve_allocator);
         var redecide = DeadUnitRedecide{ .inserter = self, .result = &result };
         try result.source.entries.differenceWith(&base.source.entries, &redecide, DeadUnitRedecide.entryDiffers);
         try base.source.entries.differenceWith(&result.source.entries, &redecide, DeadUnitRedecide.entryDiffers);
@@ -4501,8 +4288,8 @@ const Inserter = struct {
     };
 
     /// Resource indices of the given locals that are ownership resources.
-    fn resourceIndicesOf(self: *Inserter, span: LIR.LocalSpan) ResourceError!ExactBitSet {
-        var indices = try ExactBitSet.initEmpty(self.solve_allocator, self.domain().resource_locals.len);
+    fn resourceIndicesOf(self: *Inserter, span: LIR.LocalSpan) ResourceError!Row {
+        var indices = Row.initEmpty(self.solve_allocator, self.domain().resource_locals.len);
         const locals = self.store.getLocalSpan(span);
         for (0..GuardedList.borrowLen(locals)) |index| {
             if (self.domain().resourceBitOf(GuardedList.at(locals, index))) |bit| try indices.set(bit);
@@ -6294,7 +6081,7 @@ const Inserter = struct {
     /// loop-nesting forest with the roots each loop rebinds.
     const PlaceUseFacts = struct {
         forest: LoopForest,
-        rebound_roots: []ExactBitSet,
+        rebound_roots: []Row,
         /// Edges entering a loop other than at its header, by loop.
         side_entry_starts: []u32,
         side_entries: []u32,
@@ -6306,11 +6093,11 @@ const Inserter = struct {
         place_users: []u32,
         reaches_every_place_use: std.bit_set.DynamicBitSetUnmanaged,
         /// Each statement's strongly connected component, in the topological
-        /// numbering of `statementComponents`.
+        /// numbering of `collections.scc`.
         component: []u32,
         /// By component, the place leaders used by some statement the
         /// component reaches, itself included.
-        places_used_from: []ExactBitSet,
+        places_used_from: []Row,
         /// By root, one more than the highest-numbered component of a
         /// statement that rebinds it, or zero when none does. No statement
         /// rebinding the root is reachable from a component at or above it.
@@ -6333,27 +6120,17 @@ const Inserter = struct {
         const allocator = self.emission_allocator;
         const graph = self.source_liveness.graphFor(self.current_sig);
         const node_count = graph.nodes.items.len;
-        const succ_starts = try allocator.alloc(u32, node_count + 1);
-        const pred_starts = try allocator.alloc(u32, node_count + 1);
-        succ_starts[0] = 0;
-        for (graph.nodes.items, 0..) |node, index| {
-            succ_starts[index + 1] = succ_starts[index] + node.successor_len;
-            pred_starts[index] = @intCast(graph.predecessor_starts[index]);
-        }
-        pred_starts[node_count] = @intCast(graph.predecessor_starts[node_count]);
-        const succs = try allocator.alloc(u32, succ_starts[node_count]);
-        for (graph.nodes.items, 0..) |node, index| {
-            @memcpy(succs[succ_starts[index]..succ_starts[index + 1]], graph.successors.items[node.successor_start..][0..node.successor_len]);
-        }
-        const preds = try allocator.alloc(u32, graph.predecessors.len);
-        for (graph.predecessors, preds) |predecessor, *out| out.* = @intCast(predecessor);
+        const succ_starts = graph.liveness.succ_starts;
+        const succs = graph.liveness.succs;
+        const pred_starts = graph.liveness.pred_starts;
+        const preds = graph.liveness.preds;
         const forest = try LoopForest.build(allocator, succ_starts, succs, pred_starts, preds);
         const loop_count = forest.loops.len;
         const local_count = self.store.localCount();
 
         const rebinds = try allocator.alloc(LIR.LocalId, node_count);
-        const rebound_roots = try allocator.alloc(ExactBitSet, loop_count);
-        for (rebound_roots) |*rebound| rebound.* = try ExactBitSet.initEmpty(allocator, local_count);
+        const rebound_roots = try allocator.alloc(Row, loop_count);
+        for (rebound_roots) |*rebound| rebound.* = Row.initEmpty(allocator, local_count);
         var every_place = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
         const PlaceUser = struct { place: u32, node: u32 };
         var place_user_list = std.ArrayList(PlaceUser).empty;
@@ -6376,7 +6153,7 @@ const Inserter = struct {
             order -= 1;
             const loop = forest.preorder[order];
             const parent = forest.loops[loop].parent;
-            if (parent != LoopForest.none) try rebound_roots[parent].setUnion(rebound_roots[loop]);
+            if (parent != LoopForest.none) try rebound_roots[parent].setUnion(&rebound_roots[loop]);
         }
         std.mem.sort(PlaceUser, place_user_list.items, {}, struct {
             fn lessThan(_: void, lhs: PlaceUser, rhs: PlaceUser) bool {
@@ -6397,20 +6174,20 @@ const Inserter = struct {
 
         // The places each component reaches. Successor components are
         // numbered higher, so each is complete before it is read.
-        const components = try statementComponents(allocator, succ_starts, succs, pred_starts, preds);
-        const component_count = components.starts.len - 1;
-        const places_used_from = try allocator.alloc(ExactBitSet, component_count);
-        for (places_used_from) |*places| places.* = try ExactBitSet.initEmpty(allocator, local_count);
+        const components = try collections.scc.compute(allocator, succ_starts, succs, pred_starts, preds);
+        const component_count = components.count();
+        const places_used_from = try allocator.alloc(Row, component_count);
+        for (places_used_from) |*places| places.* = Row.initEmpty(allocator, local_count);
         for (place_user_list.items) |entry| {
             try places_used_from[components.component_of[entry.node]].set(entry.place);
         }
         var component_index = component_count;
         while (component_index > 0) {
             component_index -= 1;
-            for (components.nodes[components.starts[component_index]..components.starts[component_index + 1]]) |node_index| {
+            for (components.membersOf(component_index)) |node_index| {
                 for (succs[succ_starts[node_index]..succ_starts[node_index + 1]]) |succ| {
                     const succ_component = components.component_of[succ];
-                    if (succ_component != component_index) try places_used_from[component_index].setUnion(places_used_from[succ_component]);
+                    if (succ_component != component_index) try places_used_from[component_index].setUnion(&places_used_from[succ_component]);
                 }
             }
         }
@@ -6547,10 +6324,7 @@ const Inserter = struct {
             if (unit.loop) {
                 try facts.live_loops.put(allocator, root_key | unit.index, {});
                 const header = facts.forest.loops[unit.index].header;
-                const pred_start = graph.predecessor_starts[header];
-                const pred_end = graph.predecessor_starts[header + 1];
-                for (graph.predecessors[pred_start..pred_end]) |predecessor| {
-                    const pred: u32 = @intCast(predecessor);
+                for (graph.liveness.predecessorsOf(header)) |pred| {
                     if (facts.forest.containsNode(unit.index, pred) or facts.rebinds[pred] == root) continue;
                     try Reach(facts, transparency, &work, allocator, pred);
                 }
@@ -6560,10 +6334,7 @@ const Inserter = struct {
                 }
             } else {
                 try facts.live_nodes.put(allocator, root_key | unit.index, {});
-                const pred_start = graph.predecessor_starts[unit.index];
-                const pred_end = graph.predecessor_starts[unit.index + 1];
-                for (graph.predecessors[pred_start..pred_end]) |predecessor| {
-                    const pred: u32 = @intCast(predecessor);
+                for (graph.liveness.predecessorsOf(unit.index)) |pred| {
                     if (facts.rebinds[pred] == root) continue;
                     try Reach(facts, transparency, &work, allocator, pred);
                 }
@@ -6635,7 +6406,7 @@ const Inserter = struct {
             self.place_query_uses.clearRetainingCapacity();
             if ((try self.stmtPlaceFacts(node.stmt, &self.place_query_uses)).uses_every_place) return true;
             if (facts.rebinds[node_index] == root) continue;
-            try stack.appendSlice(self.emission_allocator, graph.successors.items[node.successor_start..][0..node.successor_len]);
+            try stack.appendSlice(self.emission_allocator, graph.liveness.successorsOf(node_index));
         }
         return false;
     }
@@ -7038,49 +6809,12 @@ const Inserter = struct {
 
     const ReadBeforeRebindNode = struct {
         stmt: LIR.CFStmtId,
-        reads: ExactBitSet,
-        exposed: ExactBitSet,
+        reads: Row,
         successor_start: usize,
         successor_len: u32,
         def: ?LIR.LocalId,
         edge_kills: []const ReadBeforeRebindEdgeKill = &.{},
     };
-
-    /// The structured liveness solver's claims about one graph, kept for the
-    /// debug oracle: the loop forest, each node's component, each loop's carried
-    /// row, and a support witness for every bit a unit was found to expose.
-    const LivenessCertificate = struct {
-        arena: std.heap.ArenaAllocator,
-        forest: LoopForest = undefined,
-        component_of: []const u32 = &.{},
-        carried: []const ExactBitSet = &.{},
-        witnesses: std.ArrayList(LivenessWitness) = .empty,
-    };
-
-    /// Why a unit (a node, or a loop that defines and kills nothing of the bit)
-    /// exposes `bit`.
-    const LivenessWitness = struct {
-        const Kind = enum {
-            /// `member` reads the bit.
-            read,
-            /// The bit is exposed at `successor`, in a component solved before.
-            exit,
-            /// The bit is exposed at `successor`, a node of the unit witnessed
-            /// earlier at `support`.
-            edge,
-        };
-
-        loop: bool,
-        unit: u32,
-        bit: u32,
-        kind: Kind,
-        /// The unit's node the support starts from.
-        member: u32,
-        successor: u32 = 0,
-        support: u32 = 0,
-    };
-
-    const no_seed_successor: u32 = std.math.maxInt(u32);
 
     const ReadBeforeRebindGraph = struct {
         allocator: Allocator,
@@ -7088,9 +6822,13 @@ const Inserter = struct {
         nodes: std.ArrayList(ReadBeforeRebindNode),
         /// Node indices, resolved exactly once while each edge is appended.
         successors: std.ArrayList(u32),
-        predecessor_starts: []const usize = &.{},
-        predecessors: []const usize = &.{},
-        loop_edges: []const usize = &.{},
+        /// The graph as the shared liveness solver reads it: edges by node
+        /// index with their reverse, every node's read and defined bits, and
+        /// every edge's kills.
+        liveness: arc_liveness.Graph,
+        /// Each node's keep-free liveness row.
+        rows: []const Row = &.{},
+        loop_edges: []const u32 = &.{},
         /// Compact node bits whose forward paths can reach a loop boundary.
         reaches_loop_edge: std.bit_set.DynamicBitSetUnmanaged = .{},
 
@@ -7100,6 +6838,7 @@ const Inserter = struct {
                 .group_liveness = try GroupLivenessIndex.init(allocator, proc_domain, solution, seed_refcounted),
                 .nodes = .empty,
                 .successors = .empty,
+                .liveness = .{ .succ_starts = &.{}, .succs = &.{}, .pred_starts = &.{}, .preds = &.{}, .read_starts = &.{}, .reads = &.{}, .def_starts = &.{}, .defs = &.{}, .bit_len = 0 },
             };
         }
     };
@@ -7113,18 +6852,12 @@ const Inserter = struct {
         if (self.source_liveness.frozen) arcInvariant("ARC mutated frozen source liveness");
         if (self.source_liveness.stmt_node_indices.get(stmt)) |index| return index;
 
-        var reads = try ExactBitSet.initEmpty(graph.allocator, self.domain().livenessBitLen());
-        errdefer reads.deinit(graph.allocator);
-        var exposed = try ExactBitSet.initEmpty(graph.allocator, self.domain().livenessBitLen());
-        errdefer exposed.deinit(graph.allocator);
-
         const index = graph.nodes.items.len;
         if (index >= no_stmt_node_index) arcInvariant("ARC liveness graph exceeded its node index representation");
 
         try graph.nodes.append(self.source_liveness.scratch_allocator, .{
             .stmt = stmt,
-            .reads = reads,
-            .exposed = exposed,
+            .reads = Row.initEmpty(graph.allocator, self.domain().livenessBitLen()),
             .successor_start = 0,
             .successor_len = 0,
             .def = null,
@@ -7164,7 +6897,7 @@ const Inserter = struct {
         return self.groupLivenessIndex().rawBitOf(self.domain(), local);
     }
 
-    fn noteReadBeforeRebindLocal(self: *const Inserter, reads: *ExactBitSet, local: LIR.LocalId) ResourceError!void {
+    fn noteReadBeforeRebindLocal(self: *const Inserter, reads: *Row, local: LIR.LocalId) ResourceError!void {
         if (self.rawLivenessBitOf(local)) |bit| try reads.set(bit);
     }
 
@@ -7183,14 +6916,14 @@ const Inserter = struct {
     /// group bit, and its value-use bit. Reference-count statements record
     /// only the raw bit through `noteReadBeforeRebindLocal`: they must not
     /// extend group or call-result liveness.
-    fn noteLivenessUseLocal(self: *const Inserter, reads: *ExactBitSet, local: LIR.LocalId) ResourceError!void {
+    fn noteLivenessUseLocal(self: *const Inserter, reads: *Row, local: LIR.LocalId) ResourceError!void {
         if (self.solution.isRepresentationAlias(local)) return;
         if (self.rawLivenessBitOf(local)) |bit| try reads.set(bit);
         if (self.groupBitOf(local)) |bit| try reads.set(bit);
         if (self.valueUseBitOf(local)) |bit| try reads.set(bit);
     }
 
-    fn noteLivenessUseSpan(self: *const Inserter, reads: *ExactBitSet, span: LIR.LocalSpan) ResourceError!void {
+    fn noteLivenessUseSpan(self: *const Inserter, reads: *Row, span: LIR.LocalSpan) ResourceError!void {
         const locals = self.store.getLocalSpan(span);
         for (0..GuardedList.borrowLen(locals)) |index| {
             const local = GuardedList.at(locals, index);
@@ -7198,14 +6931,14 @@ const Inserter = struct {
         }
     }
 
-    fn noteLivenessUseRefOp(self: *const Inserter, reads: *ExactBitSet, op: LIR.RefOp) ResourceError!void {
+    fn noteLivenessUseRefOp(self: *const Inserter, reads: *Row, op: LIR.RefOp) ResourceError!void {
         try self.noteLivenessUseLocal(reads, refOpSource(op));
     }
 
     /// Records the loop keep-set as reads at a `loop_continue`/`loop_break`:
     /// kept units, groups with any kept member, and kept call-result locals
     /// all stay live across the loop edge.
-    fn noteLivenessLoopKeep(self: *const Inserter, reads: *ExactBitSet, keep: *const OwnedSet) ResourceError!void {
+    fn noteLivenessLoopKeep(self: *const Inserter, reads: *Row, keep: *const OwnedSet) ResourceError!void {
         // Every kept unit reads as a value use, which also sets its group
         // and value-use bits, so the loop edge keeps a group alive whenever
         // any member is kept.
@@ -7261,7 +6994,7 @@ const Inserter = struct {
         start: LIR.CFStmtId,
         loop_keep: ?LoopKeep,
         loop_keep_id: u32,
-    ) ResourceError!*const ExactBitSet {
+    ) ResourceError!*const Row {
         try self.prepareSourceLiveness();
         if (loop_keep_id == 0) {
             const graph = self.source_liveness.graphFor(self.current_sig);
@@ -7269,7 +7002,7 @@ const Inserter = struct {
             if (node_index == no_stmt_node_index or node_index >= graph.nodes.items.len) {
                 arcInvariant("ARC keep-free liveness start was outside its source graph");
             }
-            return &graph.nodes.items[node_index].exposed;
+            return &graph.rows[node_index];
         } else {
             if (loop_keep_id >= self.loop_liveness_caches.items.len) {
                 arcInvariant("ARC liveness queried an unknown loop identity");
@@ -7326,7 +7059,7 @@ const Inserter = struct {
         // Loop-edge nodes found by a keep-free build seed the backward
         // reachability sweep that decides which statements ever need
         // loop-keyed rows.
-        var loop_edge_nodes = std.ArrayList(usize).empty;
+        var loop_edge_nodes = std.ArrayList(u32).empty;
 
         // The source body is the complete ownership-neutral graph.
         _ = try self.ensureReadBeforeRebindNode(&graph, &work, self.current_proc_body);
@@ -7601,7 +7334,7 @@ const Inserter = struct {
                 },
                 .loop_continue,
                 .loop_break,
-                => try loop_edge_nodes.append(scratch_allocator, node_index),
+                => try loop_edge_nodes.append(scratch_allocator, @intCast(node_index)),
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
                 => {},
@@ -7611,58 +7344,21 @@ const Inserter = struct {
             }
         }
 
-        const node_count = graph.nodes.items.len;
-        var pred_counts = try scratch_allocator.alloc(usize, node_count);
-        @memset(pred_counts, 0);
-        for (graph.nodes.items) |node| {
-            const successor_start = node.successor_start;
-            const successor_end = successor_start + @as(usize, node.successor_len);
-            for (graph.successors.items[successor_start..successor_end]) |successor| {
-                const successor_index: usize = successor;
-                pred_counts[successor_index] += 1;
-            }
-        }
-
-        var pred_starts = try graph_allocator.alloc(usize, node_count + 1);
-        pred_starts[0] = 0;
-        for (pred_counts, 0..) |count, index| {
-            pred_starts[index + 1] = pred_starts[index] + count;
-        }
-        var pred_writes = try scratch_allocator.dupe(usize, pred_starts[0..node_count]);
-        const predecessors = try graph_allocator.alloc(usize, pred_starts[node_count]);
-        for (graph.nodes.items, 0..) |node, predecessor_index| {
-            const successor_start = node.successor_start;
-            const successor_end = successor_start + @as(usize, node.successor_len);
-            for (graph.successors.items[successor_start..successor_end]) |successor| {
-                const successor_index: usize = successor;
-                const write_index = pred_writes[successor_index];
-                predecessors[write_index] = predecessor_index;
-                pred_writes[successor_index] += 1;
-            }
-        }
-        graph.predecessor_starts = pred_starts;
-        graph.predecessors = predecessors;
-        graph.loop_edges = try graph_allocator.dupe(usize, loop_edge_nodes.items);
-        graph.reaches_loop_edge = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph_allocator, node_count);
-
-        if (loop_edge_nodes.items.len != 0) {
-            var reached = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(scratch_allocator, node_count);
-            for (loop_edge_nodes.items) |edge_node| reached.set(edge_node);
-            while (loop_edge_nodes.pop()) |reach_index| {
-                graph.reaches_loop_edge.set(reach_index);
-                const pred_start = pred_starts[reach_index];
-                const pred_end = pred_starts[reach_index + 1];
-                for (predecessors[pred_start..pred_end]) |predecessor_index| {
-                    if (reached.isSet(predecessor_index)) continue;
-                    reached.set(predecessor_index);
-                    try loop_edge_nodes.append(scratch_allocator, predecessor_index);
-                }
-            }
-        }
-
         graph.nodes = try settleGrownList(ReadBeforeRebindNode, graph_allocator, self.source_liveness.scratch_allocator, &graph.nodes);
-        graph.successors = try settleGrownList(u32, graph_allocator, self.source_liveness.scratch_allocator, &graph.successors);
+        graph.liveness = try self.livenessStructure(&graph, graph_allocator);
+        graph.successors.deinit(self.source_liveness.scratch_allocator);
         lists_growing = false;
+        graph.loop_edges = try graph_allocator.dupe(u32, loop_edge_nodes.items);
+        graph.reaches_loop_edge = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph_allocator, graph.nodes.items.len);
+        for (loop_edge_nodes.items) |edge_node| graph.reaches_loop_edge.set(edge_node);
+        while (loop_edge_nodes.pop()) |reach_index| {
+            for (graph.liveness.predecessorsOf(reach_index)) |predecessor_index| {
+                if (graph.reaches_loop_edge.isSet(predecessor_index)) continue;
+                graph.reaches_loop_edge.set(predecessor_index);
+                try loop_edge_nodes.append(scratch_allocator, predecessor_index);
+            }
+        }
+
         try self.solveKeepFreeLiveness(&graph);
         // There are exactly two source read contracts: no restitution, or
         // the solver's complete available outcome span. Parameter ownership
@@ -7679,7 +7375,7 @@ const Inserter = struct {
             for (restitution.nodes.items) |*node| {
                 const stmt = self.store.getCFStmt(node.stmt);
                 if (stmt == .jump or stmt == .ret) {
-                    node.reads = try node.reads.clone(graph_allocator);
+                    node.reads = node.reads.clone(graph_allocator);
                     try self.noteRestitutionBoundaryReads(&node.reads, node.stmt);
                 }
             }
@@ -7689,566 +7385,146 @@ const Inserter = struct {
         graph_slot.* = graph;
     }
 
-    /// Solve every node's keep-free liveness row: a bit is exposed at a node
-    /// when some path from the node reaches a read of it without crossing a
-    /// definition of it or an edge that kills it.
-    ///
-    /// The statement graph is reducible (a join body is entered only by jumps
-    /// to its join), so its cycles form a loop-nesting forest. A loop is
-    /// strongly connected, so a bit that nothing inside a loop defines or
-    /// kills is exposed either at every node of the loop or at none. Each bit
-    /// is solved by one backward search from its reads in which every loop
-    /// that is transparent to it counts as a single unit, and each row is the
-    /// shared set of bits its enclosing loops carry whole plus the few bits
-    /// live at the node itself. A loop nest therefore costs its size rather
-    /// than its size times its depth.
-    fn solveKeepFreeLiveness(self: *Inserter, graph: *ReadBeforeRebindGraph) ResourceError!void {
-        if (builtin.mode != .debug) return self.solveStructuredLiveness(graph, null);
-        var certificate = LivenessCertificate{ .arena = std.heap.ArenaAllocator.init(self.source_liveness.scratch_allocator) };
-        defer certificate.arena.deinit();
-        try self.solveStructuredLiveness(graph, &certificate);
-        try self.certifyStructuredLiveness(graph, &certificate);
-    }
-
-    /// Debug-only oracle for the structured solve. It checks the solver's
-    /// certificate rather than re-solving, so it costs the size of the rows'
-    /// shared representation rather than their content:
-    /// - every row satisfies its equation exactly (a fixed point);
-    /// - in a cyclic component, every row is its innermost loop's carried row
-    ///   plus the bits its own node unit exposes, and every carried row is
-    ///   its parent loop's plus the bits its loop unit exposes;
-    /// - every exposed unit bit has a support witness: a read in the unit, an
-    ///   exit to a row of another component, or an edge to a unit found
-    ///   earlier for the same bit; and a loop unit defines and kills nothing
-    ///   of its bit.
-    /// A loop is strongly connected, so a transparent loop unit's bit is
-    /// supported at every node of the loop, and every row bit has a finite
-    /// path to a read: the fixed point is the least one.
-    fn certifyStructuredLiveness(self: *Inserter, graph: *ReadBeforeRebindGraph, certificate: *const LivenessCertificate) ResourceError!void {
-        if (builtin.mode != .debug) return;
-        var arena = std.heap.ArenaAllocator.init(self.source_liveness.scratch_allocator);
-        defer arena.deinit();
-        const allocator = arena.allocator();
-        const forest = &certificate.forest;
-        const no_loop = LoopForest.none;
-        const loop_count = forest.loops.len;
-        const bit_len = self.domain().livenessBitLen();
-
-        // Every row satisfies its equation. Successor rows share structure
-        // with the row, so the comparison descends only where they differ.
-        for (graph.nodes.items) |node| {
-            var candidate = try ExactBitSet.initEmpty(allocator, bit_len);
-            const successors = graph.successors.items[node.successor_start..][0..node.successor_len];
-            for (successors, 0..) |successor, offset| {
-                var exposed = try graph.nodes.items[successor].exposed.clone(allocator);
-                for (node.edge_kills) |kill| {
-                    if (kill.successor_offset == offset) try exposed.unset(kill.bit);
-                }
-                try candidate.setUnion(exposed);
-            }
-            if (node.def) |local| {
-                if (self.rawLivenessBitOf(local)) |bit| try candidate.unset(bit);
-                if (self.groupBitOf(local)) |bit| try candidate.unset(bit);
-                if (self.valueUseBitOf(local)) |bit| try candidate.unset(bit);
-            }
-            try candidate.setUnion(node.reads);
-            if (!candidate.eql(node.exposed)) arcInvariant("ARC structured liveness row did not satisfy its equation");
-        }
-
-        // The bits each loop defines or kills, independently of the solve.
-        const written = try allocator.alloc(ExactBitSet, loop_count);
-        for (written) |*bits| bits.* = try ExactBitSet.initEmpty(allocator, bit_len);
-        for (graph.nodes.items, 0..) |node, node_index| {
-            const loop = forest.innermost[node_index];
-            if (loop == no_loop) continue;
-            if (node.def) |local| {
-                if (self.rawLivenessBitOf(local)) |bit| try written[loop].set(bit);
-                if (self.groupBitOf(local)) |bit| try written[loop].set(bit);
-                if (self.valueUseBitOf(local)) |bit| try written[loop].set(bit);
-            }
-            for (node.edge_kills) |kill| {
-                const target_loop = forest.innermost[graph.successors.items[node.successor_start + kill.successor_offset]];
-                if (target_loop == no_loop) continue;
-                var common = loop;
-                while (common != no_loop and !forest.contains(common, target_loop)) common = forest.loops[common].parent;
-                if (common != no_loop) try written[common].set(kill.bit);
-            }
-        }
-        {
-            var preorder_index = loop_count;
-            while (preorder_index > 0) {
-                preorder_index -= 1;
-                const loop = forest.preorder[preorder_index];
-                const parent = forest.loops[loop].parent;
-                if (parent != no_loop) try written[parent].setUnion(written[loop]);
-            }
-        }
-
-        // Every unit bit is supported, and its words are the unit's own.
-        var loop_words = std.AutoHashMapUnmanaged(u64, u64).empty;
-        var node_words = std.AutoHashMapUnmanaged(u64, u64).empty;
-        for (certificate.witnesses.items, 0..) |witness, witness_index| {
-            const bit = witness.bit;
-            const member = witness.member;
-            if (witness.loop) {
-                if (!forest.containsNode(witness.unit, member)) arcInvariant("ARC liveness witness left its loop unit");
-                if (written[witness.unit].isSet(bit)) arcInvariant("ARC liveness loop unit defines or kills its own bit");
-                if (!certificate.carried[witness.unit].isSet(bit)) arcInvariant("ARC liveness loop unit bit missing from its carried row");
-            } else {
-                if (member != witness.unit) arcInvariant("ARC liveness witness left its node unit");
-                if (!graph.nodes.items[member].exposed.isSet(bit)) arcInvariant("ARC liveness node unit bit missing from its row");
-            }
-            switch (witness.kind) {
-                .read => if (!graph.nodes.items[member].reads.isSet(bit)) arcInvariant("ARC liveness read witness does not read its bit"),
-                .exit => {
-                    const successor = witness.successor;
-                    if (certificate.component_of[successor] == certificate.component_of[member]) arcInvariant("ARC liveness exit witness stayed in its component");
-                    if (!graph.nodes.items[successor].exposed.isSet(bit)) arcInvariant("ARC liveness exit witness reached a row without its bit");
-                    if (!self.livenessEdgePasses(graph, member, successor, bit)) arcInvariant("ARC liveness exit witness edge does not pass its bit");
-                },
-                .edge => {
-                    const successor = witness.successor;
-                    if (witness.support >= witness_index) arcInvariant("ARC liveness witness was not supported by an earlier unit");
-                    const support = certificate.witnesses.items[witness.support];
-                    if (support.bit != bit) arcInvariant("ARC liveness witness was supported by another bit");
-                    const holds = if (support.loop) forest.containsNode(support.unit, successor) else support.unit == successor;
-                    if (!holds) arcInvariant("ARC liveness witness edge missed its supporting unit");
-                    if (!self.livenessEdgePasses(graph, member, successor, bit)) arcInvariant("ARC liveness witness edge does not pass its bit");
-                },
-            }
-            const key = (@as(u64, witness.unit) << 32) | (bit / 64);
-            const mask = @as(u64, 1) << @intCast(bit % 64);
-            const words = if (witness.loop) &loop_words else &node_words;
-            const slot = try words.getOrPut(allocator, key);
-            if (!slot.found_existing) slot.value_ptr.* = 0;
-            slot.value_ptr.* |= mask;
-        }
-
-        // Rows and carried rows are exactly their bases plus their units' bits.
-        const empty = try ExactBitSet.initEmpty(allocator, bit_len);
-        for (0..loop_count) |loop| {
-            const parent = forest.loops[loop].parent;
-            const base = if (parent != no_loop) &certificate.carried[parent] else &empty;
-            try checkLivenessExtension(&certificate.carried[loop], base, &loop_words, @intCast(loop));
-        }
-        for (graph.nodes.items, 0..) |node, node_index| {
-            const loop = forest.innermost[node_index];
-            if (loop == no_loop) continue;
-            try checkLivenessExtension(&node.exposed, &certificate.carried[loop], &node_words, @intCast(node_index));
-        }
-    }
-
-    /// Whether some edge from `predecessor` to `successor` passes `bit`: the
-    /// predecessor does not define it and the edge does not kill it.
-    fn livenessEdgePasses(self: *const Inserter, graph: *const ReadBeforeRebindGraph, predecessor: u32, successor: u32, bit: u32) bool {
-        const node = graph.nodes.items[predecessor];
-        if (node.def) |local| {
-            for ([_]?usize{ self.rawLivenessBitOf(local), self.groupBitOf(local), self.valueUseBitOf(local) }) |defined| {
-                if (defined) |defined_bit| if (defined_bit == bit) return false;
-            }
-        }
-        const successors = graph.successors.items[node.successor_start..][0..node.successor_len];
-        for (successors, 0..) |candidate, offset| {
-            if (candidate != successor) continue;
-            const killed = for (node.edge_kills) |kill| {
-                if (kill.successor_offset == offset and kill.bit == bit) break true;
-            } else false;
-            if (!killed) return true;
-        }
-        return false;
-    }
-
-    /// Checks that `row` is `base` plus exactly the bits `unit_words` lists
-    /// for `unit`. Only words where the two diverge structurally are visited.
-    fn checkLivenessExtension(row: *const ExactBitSet, base: *const ExactBitSet, unit_words: *const std.AutoHashMapUnmanaged(u64, u64), unit: u32) ResourceError!void {
-        const Check = struct {
-            unit_words_: *const std.AutoHashMapUnmanaged(u64, u64),
-            unit_: u32,
-
-            fn rowWord(check: @This(), word: u32, row_word: u64, base_word: u64) ResourceError!void {
-                const own = check.unit_words_.get((@as(u64, check.unit_) << 32) | word) orelse 0;
-                if (row_word != base_word | own) arcInvariant("ARC liveness row was not its base plus its unit's bits");
-            }
-
-            fn baseWord(_: @This(), _: u32, base_word: u64, row_word: u64) ResourceError!void {
-                if (base_word & ~row_word != 0) arcInvariant("ARC liveness row dropped a bit of its base");
-            }
-        };
-        const check = Check{ .unit_words_ = unit_words, .unit_ = unit };
-        try row.words.differenceWith(&base.words, check, Check.rowWord);
-        try base.words.differenceWith(&row.words, check, Check.baseWord);
-    }
-
-    fn solveStructuredLiveness(self: *Inserter, graph: *ReadBeforeRebindGraph, certificate: ?*LivenessCertificate) ResourceError!void {
-        var scratch_arena = std.heap.ArenaAllocator.init(self.source_liveness.scratch_allocator);
-        defer scratch_arena.deinit();
-        const allocator = scratch_arena.allocator();
-        // What the oracle checks outlives the solve.
-        const kept_allocator = if (certificate) |kept| kept.arena.allocator() else allocator;
+    /// The walked graph in the shared solver's form: edges by node index and
+    /// their reverse, each node's read bits and the raw, group, and value-use
+    /// bits its definition rebinds, and each edge's kills.
+    fn livenessStructure(self: *const Inserter, graph: *const ReadBeforeRebindGraph, allocator: Allocator) ResourceError!arc_liveness.Graph {
         const node_count = graph.nodes.items.len;
-        const bit_len = self.domain().livenessBitLen();
-        const no_loop = LoopForest.none;
-
         const succ_starts = try allocator.alloc(u32, node_count + 1);
-        const pred_starts = try allocator.alloc(u32, node_count + 1);
         succ_starts[0] = 0;
-        for (graph.nodes.items, 0..) |node, index| {
-            succ_starts[index + 1] = succ_starts[index] + node.successor_len;
-            pred_starts[index] = @intCast(graph.predecessor_starts[index]);
-        }
-        pred_starts[node_count] = @intCast(graph.predecessor_starts[node_count]);
+        for (graph.nodes.items, 0..) |node, index| succ_starts[index + 1] = succ_starts[index] + node.successor_len;
         const succs = try allocator.alloc(u32, succ_starts[node_count]);
+        var kill_starts = std.ArrayList(u32).empty;
+        var kills = std.ArrayList(u32).empty;
+        try kill_starts.append(allocator, 0);
         for (graph.nodes.items, 0..) |node, index| {
             @memcpy(succs[succ_starts[index]..succ_starts[index + 1]], graph.successors.items[node.successor_start..][0..node.successor_len]);
-        }
-        const preds = try allocator.alloc(u32, graph.predecessors.len);
-        for (graph.predecessors, preds) |predecessor, *out| out.* = @intCast(predecessor);
-        var forest = try LoopForest.build(kept_allocator, succ_starts, succs, pred_starts, preds);
-        const loop_count = forest.loops.len;
-
-        // Edges entering a loop other than at its header, by loop.
-        const LoopEntry = struct { loop: u32, predecessor: u32, target: u32 };
-        var side_entries = std.ArrayList(LoopEntry).empty;
-        for (0..node_count) |target_index| {
-            const target: u32 = @intCast(target_index);
-            for (preds[pred_starts[target]..pred_starts[target + 1]]) |predecessor| {
-                var loop = forest.innermost[target];
-                while (loop != no_loop and !forest.containsNode(loop, predecessor)) : (loop = forest.loops[loop].parent) {
-                    if (forest.loops[loop].header != target) {
-                        try side_entries.append(allocator, .{ .loop = loop, .predecessor = predecessor, .target = target });
-                    }
+            for (0..node.successor_len) |offset| {
+                for (node.edge_kills) |kill| {
+                    if (kill.successor_offset == offset) try kills.append(allocator, kill.bit);
                 }
+                try kill_starts.append(allocator, @intCast(kills.items.len));
             }
         }
-        std.mem.sort(LoopEntry, side_entries.items, {}, struct {
-            fn lessThan(_: void, lhs: LoopEntry, rhs: LoopEntry) bool {
-                return lhs.loop < rhs.loop;
-            }
-        }.lessThan);
-        const side_entry_starts = try allocator.alloc(u32, loop_count + 1);
-        {
-            var cursor: usize = 0;
-            for (0..loop_count) |loop| {
-                side_entry_starts[loop] = @intCast(cursor);
-                while (cursor < side_entries.items.len and side_entries.items[cursor].loop == loop) cursor += 1;
-            }
-            side_entry_starts[loop_count] = @intCast(cursor);
-        }
-
-        // Bits each loop defines or kills: a node's definition belongs to its
-        // innermost loop, and an edge's kills to the innermost loop holding
-        // both its ends.
-        const written = try allocator.alloc(ExactBitSet, loop_count);
-        for (written) |*bits| bits.* = try ExactBitSet.initEmpty(graph.allocator, bit_len);
-        for (graph.nodes.items, 0..) |node, node_index| {
-            const loop = forest.innermost[node_index];
-            if (loop == no_loop) continue;
+        const preds = try collections.csr.transpose(allocator, succ_starts, succs);
+        const def_starts = try allocator.alloc(u32, node_count + 1);
+        var defs = std.ArrayList(u32).empty;
+        def_starts[0] = 0;
+        for (graph.nodes.items, 0..) |node, index| {
             if (node.def) |local| {
-                if (self.rawLivenessBitOf(local)) |bit| try written[loop].set(bit);
-                if (self.groupBitOf(local)) |bit| try written[loop].set(bit);
-                if (self.valueUseBitOf(local)) |bit| try written[loop].set(bit);
+                for ([_]?usize{ self.rawLivenessBitOf(local), self.groupBitOf(local), self.valueUseBitOf(local) }) |defined| {
+                    if (defined) |bit| try defs.append(allocator, @intCast(bit));
+                }
             }
-            for (node.edge_kills) |kill| {
-                const target_loop = forest.innermost[graph.successors.items[node.successor_start + kill.successor_offset]];
-                if (target_loop == no_loop) continue;
-                var common = loop;
-                while (common != no_loop and !forest.contains(common, target_loop)) common = forest.loops[common].parent;
-                if (common != no_loop) try written[common].set(kill.bit);
-            }
+            def_starts[index + 1] = @intCast(defs.items.len);
         }
-        var preorder_index = loop_count;
-        while (preorder_index > 0) {
-            preorder_index -= 1;
-            const loop = forest.preorder[preorder_index];
-            const parent = forest.loops[loop].parent;
-            if (parent != no_loop) try written[parent].setUnion(written[loop]);
-        }
-
-        // Components in an order that solves every successor component
-        // first: a node outside every cycle is one exact step of the
-        // equations from its successors' finished rows, sharing their sets.
-        const components = try statementComponents(kept_allocator, succ_starts, succs, pred_starts, preds);
-        const component_of = components.component_of;
-
-        // Inside a cyclic component, one backward search per bit. A unit is a
-        // node, or the largest loop around a node that is transparent to the
-        // bit, whose whole body shares one answer.
-        const Unit = struct { loop: bool, index: u32, witness: u32 };
-        const BitAt = struct { index: u32, bit: u32 };
-        const Seed = struct { index: u32, bit: u32, successor: u32 };
-        const Search = struct {
-            certificate_: ?*LivenessCertificate,
-            witness_kind: LivenessWitness.Kind = .read,
-            witness_successor: u32 = 0,
-            witness_support: u32 = 0,
-            inserter: *Inserter,
-            graph_: *ReadBeforeRebindGraph,
-            forest_: *const LoopForest,
-            written_: []const ExactBitSet,
-            component_of_: []const u32,
-            component: u32 = 0,
-            node_stamp: []u32,
-            loop_stamp: []u32,
-            stamp: u32 = 0,
-            bit: u32 = 0,
-            work: std.ArrayList(Unit) = .empty,
-            node_bits: std.ArrayList(BitAt) = .empty,
-            loop_bits: std.ArrayList(BitAt) = .empty,
-            allocator_: Allocator,
-
-            fn transparent(search: *const @This(), loop: u32) bool {
-                return !search.written_[loop].isSet(search.bit);
-            }
-
-            /// The largest loop around `node` that defines and kills nothing
-            /// of the bit, or none.
-            fn transparentLoop(search: *const @This(), node: u32) ?u32 {
-                const loop = search.forest_.innermost[node];
-                if (loop == LoopForest.none or !search.transparent(loop)) return null;
-                return search.forest_.outermostWhile(loop, search, transparent);
-            }
-
-            fn reach(search: *@This(), node: u32) Allocator.Error!void {
-                if (search.component_of_[node] != search.component) return;
-                const unit: Unit = if (search.transparentLoop(node)) |loop| blk: {
-                    if (search.loop_stamp[loop] == search.stamp) return;
-                    search.loop_stamp[loop] = search.stamp;
-                    break :blk .{ .loop = true, .index = loop, .witness = 0 };
-                } else blk: {
-                    if (search.node_stamp[node] == search.stamp) return;
-                    search.node_stamp[node] = search.stamp;
-                    break :blk .{ .loop = false, .index = node, .witness = 0 };
-                };
-                var found = unit;
-                if (search.certificate_) |kept| {
-                    found.witness = @intCast(kept.witnesses.items.len);
-                    try kept.witnesses.append(kept.arena.allocator(), .{
-                        .loop = unit.loop,
-                        .unit = unit.index,
-                        .bit = search.bit,
-                        .kind = search.witness_kind,
-                        .member = node,
-                        .successor = search.witness_successor,
-                        .support = search.witness_support,
-                    });
-                }
-                try search.work.append(search.allocator_, found);
-            }
-
-            fn defines(search: *const @This(), node_index: u32) bool {
-                const local = search.graph_.nodes.items[node_index].def orelse return false;
-                const inserter = search.inserter;
-                const bit: usize = search.bit;
-                for ([_]?usize{ inserter.rawLivenessBitOf(local), inserter.groupBitOf(local), inserter.valueUseBitOf(local) }) |defined| {
-                    if (defined) |defined_bit| if (defined_bit == bit) return true;
-                }
-                return false;
-            }
-
-            /// Whether some edge from `predecessor` to `successor` keeps the bit.
-            fn edgeKeeps(search: *const @This(), predecessor: u32, successor: u32) bool {
-                const node = search.graph_.nodes.items[predecessor];
-                const successors = search.graph_.successors.items[node.successor_start..][0..node.successor_len];
-                for (successors, 0..) |candidate, offset| {
-                    if (candidate != successor) continue;
-                    const killed = for (node.edge_kills) |kill| {
-                        if (kill.successor_offset == offset and kill.bit == search.bit) break true;
-                    } else false;
-                    if (!killed) return true;
-                }
-                return false;
-            }
-
-            /// Whether the bit exposed at `successor` is exposed at
-            /// `predecessor` through their edges and its definition.
-            fn passes(search: *const @This(), predecessor: u32, successor: u32) bool {
-                return !search.defines(predecessor) and search.edgeKeeps(predecessor, successor);
-            }
-
-            fn reachPredecessorsOf(search: *@This(), target: u32, outside: ?u32, support: u32) Allocator.Error!void {
-                const pred_start = search.graph_.predecessor_starts[target];
-                const pred_end = search.graph_.predecessor_starts[target + 1];
-                for (search.graph_.predecessors[pred_start..pred_end]) |predecessor| {
-                    const pred: u32 = @intCast(predecessor);
-                    if (outside) |loop| if (search.forest_.containsNode(loop, pred)) continue;
-                    if (search.passes(pred, target)) {
-                        search.witness_kind = .edge;
-                        search.witness_successor = target;
-                        search.witness_support = support;
-                        try search.reach(pred);
-                    }
-                }
-            }
+        var structure = arc_liveness.Graph{
+            .succ_starts = succ_starts,
+            .succs = succs,
+            .pred_starts = preds.starts,
+            .preds = preds.targets,
+            .read_starts = &.{},
+            .reads = &.{},
+            .def_starts = def_starts,
+            .defs = defs.items,
+            .kill_starts = if (kills.items.len == 0) &.{} else kill_starts.items,
+            .kills = kills.items,
+            .bit_len = self.domain().livenessBitLen(),
         };
-        var search = Search{
-            .certificate_ = certificate,
-            .inserter = self,
-            .graph_ = graph,
-            .forest_ = &forest,
-            .written_ = written,
-            .component_of_ = component_of,
-            .node_stamp = try allocator.alloc(u32, node_count),
-            .loop_stamp = try allocator.alloc(u32, loop_count),
-            .allocator_ = allocator,
-        };
-        @memset(search.node_stamp, std.math.maxInt(u32));
-        @memset(search.loop_stamp, std.math.maxInt(u32));
-        const carried = try kept_allocator.alloc(ExactBitSet, loop_count);
-        const byIndex = struct {
-            fn lessThan(_: void, lhs: BitAt, rhs: BitAt) bool {
-                return if (lhs.index == rhs.index) lhs.bit < rhs.bit else lhs.index < rhs.index;
-            }
-        }.lessThan;
-        var seeds = std.ArrayList(Seed).empty;
-        var scratch = try ExactBitSet.initEmpty(graph.allocator, bit_len);
-        var edge_scratch = try ExactBitSet.initEmpty(graph.allocator, bit_len);
+        try setLivenessReads(&structure, graph, allocator);
+        return structure;
+    }
 
-        var component_cursor = components.starts.len - 1;
-        while (component_cursor > 0) {
-            component_cursor -= 1;
-            const members = components.nodes[components.starts[component_cursor]..components.starts[component_cursor + 1]];
-            const first = members[0];
-            if (members.len == 1 and forest.innermost[first] == no_loop) {
-                _ = try self.recomputeLivenessNode(graph, first, &scratch, &edge_scratch);
-                continue;
-            }
-            const component: u32 = @intCast(component_cursor);
-            search.component = component;
-            search.node_bits.clearRetainingCapacity();
-            search.loop_bits.clearRetainingCapacity();
-
-            // Seeds: reads inside the component, and bits exposed just past
-            // an edge leaving it.
-            seeds.clearRetainingCapacity();
-            for (members) |member| {
-                const node = graph.nodes.items[member];
-                var read_bits = node.reads.iteratorRange(0, bit_len);
-                while (read_bits.next()) |bit| try seeds.append(allocator, .{ .index = member, .bit = @intCast(bit), .successor = no_seed_successor });
-                const successors = graph.successors.items[node.successor_start..][0..node.successor_len];
-                for (successors, 0..) |successor, offset| {
-                    if (component_of[successor] == component) continue;
-                    var exposed_bits = graph.nodes.items[successor].exposed.iteratorRange(0, bit_len);
-                    while (exposed_bits.next()) |bit| {
-                        const killed = for (node.edge_kills) |kill| {
-                            if (kill.successor_offset == offset and kill.bit == bit) break true;
-                        } else false;
-                        if (!killed) try seeds.append(allocator, .{ .index = member, .bit = @intCast(bit), .successor = successor });
-                    }
-                }
-            }
-            std.mem.sort(Seed, seeds.items, {}, struct {
-                fn lessThan(_: void, lhs: Seed, rhs: Seed) bool {
-                    return if (lhs.bit == rhs.bit) lhs.index < rhs.index else lhs.bit < rhs.bit;
-                }
-            }.lessThan);
-            var seed_index: usize = 0;
-            while (seed_index < seeds.items.len) : (search.stamp += 1) {
-                search.bit = seeds.items[seed_index].bit;
-                while (seed_index < seeds.items.len and seeds.items[seed_index].bit == search.bit) : (seed_index += 1) {
-                    const seed = seeds.items[seed_index];
-                    // An exit seed is exposed at its node only through the
-                    // node's definition; a read is exposed regardless.
-                    const reads = graph.nodes.items[seed.index].reads.isSet(search.bit);
-                    if (reads or !search.defines(seed.index)) {
-                        search.witness_kind = if (reads) .read else .exit;
-                        search.witness_successor = seed.successor;
-                        try search.reach(seed.index);
-                    }
-                }
-                while (search.work.pop()) |unit| {
-                    if (unit.loop) {
-                        try search.loop_bits.append(allocator, .{ .index = unit.index, .bit = search.bit });
-                        try search.reachPredecessorsOf(forest.loops[unit.index].header, unit.index, unit.witness);
-                        for (side_entries.items[side_entry_starts[unit.index]..side_entry_starts[unit.index + 1]]) |entry| {
-                            if (component_of[entry.predecessor] != component) continue;
-                            if (search.passes(entry.predecessor, entry.target)) {
-                                search.witness_kind = .edge;
-                                search.witness_successor = entry.target;
-                                search.witness_support = unit.witness;
-                                try search.reach(entry.predecessor);
-                            }
-                        }
-                    } else {
-                        try search.node_bits.append(allocator, .{ .index = unit.index, .bit = search.bit });
-                        try search.reachPredecessorsOf(unit.index, null, unit.witness);
-                    }
-                }
-            }
-
-            // Rows: the bits whole loops carry, shared down the component's
-            // loop tree, plus the bits exposed at the node itself.
-            std.mem.sort(BitAt, search.loop_bits.items, {}, byIndex);
-            std.mem.sort(BitAt, search.node_bits.items, {}, byIndex);
-            var top = forest.innermost[first];
-            while (forest.loops[top].parent != no_loop) top = forest.loops[top].parent;
-            for (forest.preorder[forest.loops[top].enter .. forest.loops[top].exit + 1]) |loop| {
-                const parent = forest.loops[loop].parent;
-                var row = if (parent != no_loop)
-                    try carried[parent].clone(graph.allocator)
-                else
-                    try ExactBitSet.initEmpty(graph.allocator, bit_len);
-                var low: usize = 0;
-                var high: usize = search.loop_bits.items.len;
-                while (low < high) {
-                    const mid = low + (high - low) / 2;
-                    if (search.loop_bits.items[mid].index < loop) low = mid + 1 else high = mid;
-                }
-                while (low < search.loop_bits.items.len and search.loop_bits.items[low].index == loop) : (low += 1) {
-                    try row.set(search.loop_bits.items[low].bit);
-                }
-                carried[loop] = row;
-            }
-            std.mem.sort(u32, members, {}, std.sort.asc(u32));
-            var bit_index: usize = 0;
-            for (members) |member| {
-                var row = try carried[forest.innermost[member]].clone(graph.allocator);
-                while (bit_index < search.node_bits.items.len and search.node_bits.items[bit_index].index < member) bit_index += 1;
-                while (bit_index < search.node_bits.items.len and search.node_bits.items[bit_index].index == member) : (bit_index += 1) {
-                    try row.set(search.node_bits.items[bit_index].bit);
-                }
-                graph.nodes.items[member].exposed = row;
-            }
+    /// Replaces the structure's read bits with the nodes' current reads.
+    fn setLivenessReads(structure: *arc_liveness.Graph, graph: *const ReadBeforeRebindGraph, allocator: Allocator) ResourceError!void {
+        const read_starts = try allocator.alloc(u32, graph.nodes.items.len + 1);
+        var reads = std.ArrayList(u32).empty;
+        read_starts[0] = 0;
+        for (graph.nodes.items, 0..) |node, index| {
+            var bits = node.reads.iterator();
+            while (bits.next()) |bit| try reads.append(allocator, @intCast(bit));
+            read_starts[index + 1] = @intCast(reads.items.len);
         }
-        if (certificate) |kept| {
-            kept.forest = forest;
-            kept.component_of = component_of;
-            kept.carried = carried;
+        structure.read_starts = read_starts;
+        structure.reads = reads.items;
+    }
+
+    /// Solve every node's keep-free liveness row: a bit is exposed at a node
+    /// when some path from the node reaches a read of it without crossing a
+    /// definition of it or an edge that kills it (see `arc_liveness`).
+    fn solveKeepFreeLiveness(self: *Inserter, graph: *ReadBeforeRebindGraph) ResourceError!void {
+        try setLivenessReads(&graph.liveness, graph, graph.allocator);
+        graph.rows = try arc_liveness.solve(graph.allocator, self.source_liveness.scratch_allocator, &graph.liveness);
+    }
+
+    /// Rows of a loop-keyed solve over the active subgraph, in which every
+    /// active node holds a row.
+    const LoopRows = struct {
+        rows: []const ?Row,
+
+        fn rowOf(self: @This(), node: u32) *const Row {
+            return if (self.rows[node]) |*row| row else arcInvariant("ARC loop liveness reached a node outside its active subgraph");
+        }
+    };
+
+    /// Sets every active loop edge's row to its keep-free row plus the
+    /// keep-set's reads, queueing the active predecessors of each row that
+    /// changed.
+    fn seedLoopEdgeRows(
+        self: *Inserter,
+        graph: *const ReadBeforeRebindGraph,
+        active: *const std.bit_set.DynamicBitSetUnmanaged,
+        rows: []?Row,
+        keep_reads: *const Row,
+        in_work: *std.bit_set.DynamicBitSetUnmanaged,
+        work: *std.ArrayList(usize),
+    ) ResourceError!void {
+        for (graph.loop_edges) |loop_node| {
+            if (!active.isSet(loop_node)) continue;
+            var candidate = graph.rows[loop_node].clone(self.emission_allocator);
+            try candidate.setUnion(keep_reads);
+            const row = rows[loop_node] orelse arcInvariant("ARC active loop edge lacked its row");
+            if (row.eql(&candidate)) continue;
+            rows[loop_node] = candidate;
+            try self.queueActivePredecessors(graph, active, in_work, work, loop_node);
         }
     }
 
-    fn recomputeLivenessNode(
+    fn queueActivePredecessors(
         self: *Inserter,
-        graph: *ReadBeforeRebindGraph,
+        graph: *const ReadBeforeRebindGraph,
+        active: *const std.bit_set.DynamicBitSetUnmanaged,
+        in_work: *std.bit_set.DynamicBitSetUnmanaged,
+        work: *std.ArrayList(usize),
         node_index: usize,
-        scratch: *ExactBitSet,
-        edge_scratch: *ExactBitSet,
-    ) ResourceError!bool {
-        const node = &graph.nodes.items[node_index];
-        scratch.unsetAll();
-        const successor_end = node.successor_start + @as(usize, node.successor_len);
-        for (graph.successors.items[node.successor_start..successor_end], 0..) |successor, successor_offset| {
-            var edge_killed = false;
-            for (node.edge_kills) |kill| {
-                if (kill.successor_offset != successor_offset) continue;
-                if (!edge_killed) {
-                    edge_scratch.unsetAll();
-                    try edge_scratch.setUnion(graph.nodes.items[successor].exposed);
-                    edge_killed = true;
-                }
-                try edge_scratch.unset(kill.bit);
-            }
-            try scratch.setUnion(if (edge_killed) edge_scratch.* else graph.nodes.items[successor].exposed);
+    ) ResourceError!void {
+        for (graph.liveness.predecessorsOf(node_index)) |predecessor| {
+            if (!active.isSet(predecessor) or in_work.isSet(predecessor)) continue;
+            in_work.set(predecessor);
+            try work.append(self.emission_allocator, predecessor);
         }
-        if (node.def) |local| {
-            if (self.rawLivenessBitOf(local)) |bit| try scratch.unset(bit);
-            if (self.groupBitOf(local)) |bit| try scratch.unset(bit);
-            if (self.valueUseBitOf(local)) |bit| try scratch.unset(bit);
+    }
+
+    /// Recomputes queued rows from their successors until every active row
+    /// satisfies its equation, queueing the active predecessors of each row
+    /// that changed. Loop edges have no successors, so they are never
+    /// queued by a change and keep their seeded rows.
+    fn settleLoopRows(
+        self: *Inserter,
+        graph: *const ReadBeforeRebindGraph,
+        active: *const std.bit_set.DynamicBitSetUnmanaged,
+        rows: []?Row,
+        in_work: *std.bit_set.DynamicBitSetUnmanaged,
+        work: *std.ArrayList(usize),
+    ) ResourceError!void {
+        while (work.pop()) |node_index| {
+            in_work.unset(node_index);
+            const candidate = try arc_liveness.equationRow(&graph.liveness, node_index, self.emission_allocator, LoopRows{ .rows = rows }, LoopRows.rowOf);
+            const row = rows[node_index] orelse arcInvariant("ARC active loop node lacked its row");
+            if (row.eql(&candidate)) continue;
+            rows[node_index] = candidate;
+            try self.queueActivePredecessors(graph, active, in_work, work, node_index);
         }
-        try scratch.setUnion(node.reads);
-        if (node.exposed.eql(scratch.*)) return false;
-        node.exposed.unsetAll();
-        try node.exposed.setUnion(scratch.*);
-        return true;
     }
 
     fn computeLoopReadsBeforeRebind(
@@ -8256,7 +7532,7 @@ const Inserter = struct {
         start: LIR.CFStmtId,
         keep: LoopKeep,
         loop_keep_id: u32,
-    ) ResourceError!*const ExactBitSet {
+    ) ResourceError!*const Row {
         if (loop_keep_id == 0 or loop_keep_id >= self.loop_liveness_caches.items.len) {
             arcInvariant("ARC loop liveness referenced an unknown loop identity");
         }
@@ -8282,9 +7558,7 @@ const Inserter = struct {
             try walk.append(allocator, root_node);
         }
         while (walk.pop()) |node_index| {
-            const node = graph.nodes.items[node_index];
-            const successor_end = node.successor_start + @as(usize, node.successor_len);
-            for (graph.successors.items[node.successor_start..successor_end]) |successor| {
+            for (graph.liveness.successorsOf(node_index)) |successor| {
                 if (active.isSet(successor)) continue;
                 active.set(successor);
                 try walk.append(allocator, successor);
@@ -8292,78 +7566,19 @@ const Inserter = struct {
         }
         if (!active.isSet(start_node)) arcInvariant("ARC loop liveness query was outside its explicit join regions");
 
-        var keep_reads = try ExactBitSet.initEmpty(allocator, self.domain().livenessBitLen());
+        var keep_reads = Row.initEmpty(allocator, self.domain().livenessBitLen());
         try self.noteLivenessLoopKeep(&keep_reads, keep.set);
         cache.consumed_keep_bits = !keep_reads.isEmpty();
 
-        const rows = try allocator.alloc(?ExactBitSet, node_count);
+        const rows = try allocator.alloc(?Row, node_count);
         @memset(rows, null);
+        var active_iter = active.iterator(.{});
+        while (active_iter.next()) |node_index| rows[node_index] = graph.rows[node_index].clone(allocator);
         var in_work = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
         var node_work = std.ArrayList(usize).empty;
-        for (graph.loop_edges) |loop_node| {
-            if (!active.isSet(loop_node)) continue;
-            var row = try graph.nodes.items[loop_node].exposed.clone(allocator);
-            try row.setUnion(keep_reads);
-            rows[loop_node] = row;
-            const pred_start = graph.predecessor_starts[loop_node];
-            const pred_end = graph.predecessor_starts[loop_node + 1];
-            for (graph.predecessors[pred_start..pred_end]) |predecessor| {
-                if (!active.isSet(predecessor) or in_work.isSet(predecessor)) continue;
-                in_work.set(predecessor);
-                try node_work.append(allocator, predecessor);
-            }
-        }
+        try self.seedLoopEdgeRows(graph, &active, rows, &keep_reads, &in_work, &node_work);
+        try self.settleLoopRows(graph, &active, rows, &in_work, &node_work);
 
-        var scratch = try ExactBitSet.initEmpty(allocator, self.domain().livenessBitLen());
-        var edge_scratch = try ExactBitSet.initEmpty(allocator, self.domain().livenessBitLen());
-        while (node_work.pop()) |node_index| {
-            in_work.unset(node_index);
-            const node = graph.nodes.items[node_index];
-            scratch.unsetAll();
-            const successor_end = node.successor_start + @as(usize, node.successor_len);
-            for (graph.successors.items[node.successor_start..successor_end], 0..) |successor, successor_offset| {
-                const successor_row = if (rows[successor]) |*row| row else &graph.nodes.items[successor].exposed;
-                var edge_killed = false;
-                for (node.edge_kills) |kill| {
-                    if (kill.successor_offset != successor_offset) continue;
-                    if (!edge_killed) {
-                        edge_scratch.unsetAll();
-                        try edge_scratch.setUnion(successor_row.*);
-                        edge_killed = true;
-                    }
-                    try edge_scratch.unset(kill.bit);
-                }
-                try scratch.setUnion(if (edge_killed) edge_scratch else successor_row.*);
-            }
-            if (node.def) |local| {
-                if (self.rawLivenessBitOf(local)) |bit| try scratch.unset(bit);
-                if (self.groupBitOf(local)) |bit| try scratch.unset(bit);
-                if (self.valueUseBitOf(local)) |bit| try scratch.unset(bit);
-            }
-            try scratch.setUnion(node.reads);
-            const previous = if (rows[node_index]) |*row| row else &node.exposed;
-            if (previous.eql(scratch)) continue;
-            if (rows[node_index]) |*row| {
-                row.unsetAll();
-                try row.setUnion(scratch);
-            } else {
-                rows[node_index] = try scratch.clone(allocator);
-            }
-            const pred_start = graph.predecessor_starts[node_index];
-            const pred_end = graph.predecessor_starts[node_index + 1];
-            for (graph.predecessors[pred_start..pred_end]) |predecessor| {
-                if (!active.isSet(predecessor) or in_work.isSet(predecessor)) continue;
-                in_work.set(predecessor);
-                try node_work.append(allocator, predecessor);
-            }
-        }
-
-        var active_iter = active.iterator(.{});
-        while (active_iter.next()) |node_index| {
-            if (rows[node_index] == null) {
-                rows[node_index] = try graph.nodes.items[node_index].exposed.clone(allocator);
-            }
-        }
         cache.rows = rows;
         cache.active = active;
         cache.keep_reads = keep_reads;
@@ -8388,82 +7603,19 @@ const Inserter = struct {
         if (cache.rows.len != graph.nodes.items.len) arcInvariant("ARC loop cache row domain changed after graph construction");
 
         const allocator = self.emission_allocator;
-        var new_keep_reads = try ExactBitSet.initEmpty(allocator, self.domain().livenessBitLen());
+        var new_keep_reads = Row.initEmpty(allocator, self.domain().livenessBitLen());
         try self.noteLivenessLoopKeep(&new_keep_reads, keep.set);
-        var new_iter = new_keep_reads.iteratorRange(0, new_keep_reads.bit_len);
+        var new_iter = new_keep_reads.iterator();
         while (new_iter.next()) |bit| {
             if (!old_keep_reads.isSet(bit)) arcInvariant("ARC loop boundary facts grew after their monotone keep-set shrank");
         }
-        if (old_keep_reads.eql(new_keep_reads)) {
-            cache.dirty = false;
-            cache.consumed_keep_bits = !new_keep_reads.isEmpty();
-            if (builtin.mode == .debug) try self.certifyLoopReadsBeforeRebind(cache);
-            return;
+        if (!old_keep_reads.eql(&new_keep_reads)) {
+            var in_work = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, graph.nodes.items.len);
+            var node_work = std.ArrayList(usize).empty;
+            try self.seedLoopEdgeRows(graph, active, cache.rows, &new_keep_reads, &in_work, &node_work);
+            try self.settleLoopRows(graph, active, cache.rows, &in_work, &node_work);
+            old_keep_reads.* = new_keep_reads;
         }
-
-        var scratch = try ExactBitSet.initEmpty(allocator, self.domain().livenessBitLen());
-        var edge_scratch = try ExactBitSet.initEmpty(allocator, self.domain().livenessBitLen());
-        var in_work = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, graph.nodes.items.len);
-        var node_work = std.ArrayList(usize).empty;
-
-        for (graph.loop_edges) |loop_node| {
-            if (!active.isSet(loop_node)) continue;
-            scratch.unsetAll();
-            try scratch.setUnion(graph.nodes.items[loop_node].exposed);
-            try scratch.setUnion(new_keep_reads);
-            const row = if (cache.rows[loop_node]) |*existing| existing else arcInvariant("ARC active loop edge lacked its cached row");
-            if (row.eql(scratch)) continue;
-            row.unsetAll();
-            try row.setUnion(scratch);
-            const pred_start = graph.predecessor_starts[loop_node];
-            const pred_end = graph.predecessor_starts[loop_node + 1];
-            for (graph.predecessors[pred_start..pred_end]) |predecessor| {
-                if (!active.isSet(predecessor) or in_work.isSet(predecessor)) continue;
-                in_work.set(predecessor);
-                try node_work.append(allocator, predecessor);
-            }
-        }
-
-        while (node_work.pop()) |node_index| {
-            in_work.unset(node_index);
-            const node = graph.nodes.items[node_index];
-            scratch.unsetAll();
-            const successor_end = node.successor_start + @as(usize, node.successor_len);
-            for (graph.successors.items[node.successor_start..successor_end], 0..) |successor, successor_offset| {
-                const successor_row = if (cache.rows[successor]) |*row| row else arcInvariant("ARC active loop predecessor reached an uncached successor");
-                var edge_killed = false;
-                for (node.edge_kills) |kill| {
-                    if (kill.successor_offset != successor_offset) continue;
-                    if (!edge_killed) {
-                        edge_scratch.unsetAll();
-                        try edge_scratch.setUnion(successor_row.*);
-                        edge_killed = true;
-                    }
-                    try edge_scratch.unset(kill.bit);
-                }
-                try scratch.setUnion(if (edge_killed) edge_scratch else successor_row.*);
-            }
-            if (node.def) |local| {
-                if (self.rawLivenessBitOf(local)) |bit| try scratch.unset(bit);
-                if (self.groupBitOf(local)) |bit| try scratch.unset(bit);
-                if (self.valueUseBitOf(local)) |bit| try scratch.unset(bit);
-            }
-            try scratch.setUnion(node.reads);
-            const row = if (cache.rows[node_index]) |*existing| existing else arcInvariant("ARC active loop node lacked its cached row");
-            if (row.eql(scratch)) continue;
-            row.unsetAll();
-            try row.setUnion(scratch);
-            const pred_start = graph.predecessor_starts[node_index];
-            const pred_end = graph.predecessor_starts[node_index + 1];
-            for (graph.predecessors[pred_start..pred_end]) |predecessor| {
-                if (!active.isSet(predecessor) or in_work.isSet(predecessor)) continue;
-                in_work.set(predecessor);
-                try node_work.append(allocator, predecessor);
-            }
-        }
-
-        old_keep_reads.unsetAll();
-        try old_keep_reads.setUnion(new_keep_reads);
         cache.consumed_keep_bits = !new_keep_reads.isEmpty();
         cache.dirty = false;
         if (builtin.mode == .debug) try self.certifyLoopReadsBeforeRebind(cache);
@@ -8488,73 +7640,19 @@ const Inserter = struct {
         if (cache.rows.len != graph.nodes.items.len) arcInvariant("ARC loop-liveness certifier saw a row-domain mismatch");
 
         const allocator = self.emission_allocator;
-        const expected = try allocator.alloc(?ExactBitSet, graph.nodes.items.len);
+        const expected = try allocator.alloc(?Row, graph.nodes.items.len);
         @memset(expected, null);
-        var active_iter = active.iterator(.{});
-        while (active_iter.next()) |node_index| {
-            expected[node_index] = try graph.nodes.items[node_index].exposed.clone(allocator);
-        }
         var is_loop_edge = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, graph.nodes.items.len);
-        for (graph.loop_edges) |loop_node| {
-            if (!active.isSet(loop_node)) continue;
-            is_loop_edge.set(loop_node);
-            try expected[loop_node].?.setUnion(keep_reads.*);
-        }
-
+        for (graph.loop_edges) |loop_node| is_loop_edge.set(loop_node);
         var in_work = try active.clone(allocator);
         var work = std.ArrayList(usize).empty;
-        active_iter = active.iterator(.{});
-        while (active_iter.next()) |node_index| try work.append(allocator, node_index);
-        var scratch = try ExactBitSet.initEmpty(allocator, self.domain().livenessBitLen());
-        var edge_scratch = try ExactBitSet.initEmpty(allocator, self.domain().livenessBitLen());
-        while (work.pop()) |node_index| {
-            in_work.unset(node_index);
-            const node = graph.nodes.items[node_index];
-            scratch.unsetAll();
-            if (is_loop_edge.isSet(node_index)) {
-                try scratch.setUnion(node.exposed);
-                try scratch.setUnion(keep_reads.*);
-            } else {
-                const successor_end = node.successor_start + @as(usize, node.successor_len);
-                for (graph.successors.items[node.successor_start..successor_end], 0..) |successor, successor_offset| {
-                    const successor_row = if (expected[successor]) |*row|
-                        row
-                    else
-                        arcInvariant("ARC loop-liveness certifier reached an inactive successor");
-                    var edge_killed = false;
-                    for (node.edge_kills) |kill| {
-                        if (kill.successor_offset != successor_offset) continue;
-                        if (!edge_killed) {
-                            edge_scratch.unsetAll();
-                            try edge_scratch.setUnion(successor_row.*);
-                            edge_killed = true;
-                        }
-                        try edge_scratch.unset(kill.bit);
-                    }
-                    try scratch.setUnion(if (edge_killed) edge_scratch else successor_row.*);
-                }
-                if (node.def) |local| {
-                    if (self.rawLivenessBitOf(local)) |bit| try scratch.unset(bit);
-                    if (self.groupBitOf(local)) |bit| try scratch.unset(bit);
-                    if (self.valueUseBitOf(local)) |bit| try scratch.unset(bit);
-                }
-                try scratch.setUnion(node.reads);
-            }
-            const row = if (expected[node_index]) |*entry|
-                entry
-            else
-                arcInvariant("ARC loop-liveness certifier omitted an active row");
-            if (row.eql(scratch)) continue;
-            row.unsetAll();
-            try row.setUnion(scratch);
-            const pred_start = graph.predecessor_starts[node_index];
-            const pred_end = graph.predecessor_starts[node_index + 1];
-            for (graph.predecessors[pred_start..pred_end]) |predecessor| {
-                if (!active.isSet(predecessor) or in_work.isSet(predecessor)) continue;
-                in_work.set(predecessor);
-                try work.append(allocator, predecessor);
-            }
+        var active_iter = active.iterator(.{});
+        while (active_iter.next()) |node_index| {
+            expected[node_index] = graph.rows[node_index].clone(allocator);
+            if (!is_loop_edge.isSet(node_index)) try work.append(allocator, node_index);
         }
+        try self.seedLoopEdgeRows(graph, active, expected, keep_reads, &in_work, &work);
+        try self.settleLoopRows(graph, active, expected, &in_work, &work);
 
         active_iter = active.iterator(.{});
         while (active_iter.next()) |node_index| {
@@ -8563,7 +7661,7 @@ const Inserter = struct {
             else
                 arcInvariant("ARC loop-liveness cache omitted an active row");
             const independently_solved = expected[node_index].?;
-            if (!actual.eql(independently_solved)) arcInvariant("ARC loop liveness delta disagreed with an independent fixed point");
+            if (!actual.eql(&independently_solved)) arcInvariant("ARC loop liveness delta disagreed with an independent fixed point");
         }
     }
 
@@ -8602,7 +7700,7 @@ const Inserter = struct {
         self: *Inserter,
         start: LIR.CFStmtId,
         loop_keep: ?LoopKeep,
-    ) ResourceError!*const ExactBitSet {
+    ) ResourceError!*const Row {
         const keep = loop_keep orelse return self.computeReadsBeforeRebind(start, null, 0);
         if (keep.id == 0) arcInvariant("ARC loop keep-set used the keep-free identity");
         const keep_free = try self.computeReadsBeforeRebind(start, null, 0);
@@ -9178,55 +8276,6 @@ fn arcInvariant(comptime message: []const u8) noreturn {
 /// Convert an intentional fixture-table position while preserving enum inference.
 fn fixtureTableIndex(comptime index: u32) u32 {
     return index;
-}
-
-test "exact ARC sets preserve operations across persistent forks" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const word_bits = @bitSizeOf(usize);
-    for ([_]usize{ word_bits, word_bits + 1 }) |bit_len| {
-        var left = try ExactBitSet.initEmpty(arena.allocator(), bit_len);
-        var right = try ExactBitSet.initEmpty(arena.allocator(), bit_len);
-
-        try left.set(0);
-        try left.set(bit_len - 1);
-        try right.set(bit_len - 1);
-        try left.setIntersection(right);
-        try testing.expectEqual(@as(usize, 1), left.count());
-        try testing.expect(left.isSet(bit_len - 1));
-
-        var cloned = try left.clone(arena.allocator());
-        try testing.expect(cloned.eql(left));
-        // A domain whose width is not a whole number of words must not
-        // enumerate the padding bits above it.
-        var iter = cloned.iteratorRange(0, cloned.bit_len);
-        try testing.expectEqual(bit_len - 1, iter.next().?);
-        try testing.expectEqual(@as(?usize, null), iter.next());
-    }
-}
-
-test "statement components never number a successor's component lower" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    // 0 -> 1 -> 2 -> 1 (a loop of 1 and 2), 2 -> 3, 0 -> 4 -> 3.
-    const succ_starts = [_]u32{ 0, 2, 3, 5, 5, 6 };
-    const succs = [_]u32{ 1, 4, 2, 1, 3, 3 };
-    const pred_starts = [_]u32{ 0, 0, 2, 3, 5, 6 };
-    const preds = [_]u32{ 0, 2, 1, 2, 4, 0 };
-    const components = try statementComponents(arena.allocator(), &succ_starts, &succs, &pred_starts, &preds);
-    try testing.expectEqual(@as(usize, 5), components.starts.len);
-    try testing.expectEqual(components.component_of[1], components.component_of[2]);
-    for (0..succ_starts.len - 1) |node| {
-        for (succs[succ_starts[node]..succ_starts[node + 1]]) |succ| {
-            try testing.expect(components.component_of[succ] >= components.component_of[node]);
-        }
-        const component = components.component_of[node];
-        const members = components.nodes[components.starts[component]..components.starts[component + 1]];
-        try testing.expect(std.mem.findScalar(u32, members, @intCast(node)) != null);
-    }
-    try testing.expect(components.component_of[0] < components.component_of[1]);
-    try testing.expect(components.component_of[1] < components.component_of[3]);
-    try testing.expect(components.component_of[4] < components.component_of[3]);
 }
 
 test "arc insertion boundary exists" {
@@ -10965,7 +10014,7 @@ test "ARC proc domain excludes scalar and other-proc locals" {
         var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 });
         const seed_index = try GroupLivenessIndex.init(failing.allocator(), &domain, &solution, &local_contains_refcounted);
         try testing.expectEqual(@as(usize, 0), seed_index.seed_resources.len);
-        var reads = try ExactBitSet.initEmpty(arena.allocator(), domain.livenessBitLen());
+        var reads = Row.initEmpty(arena.allocator(), domain.livenessBitLen());
         try reads.set(0);
         var seed = try OwnedSet.init(arena.allocator(), &domain);
         try seed_index.seedKeep(&reads, &local_contains_refcounted, &seed);
@@ -11256,7 +10305,7 @@ test "ARC sparse join seeds agree with exhaustive group predicates and emission 
     try testing.expectEqualSlices(u32, grouped.raw_bits, no_joins.raw_bits);
     try testing.expect(grouped.rawBitOf(&domain, locals[1]).? != domain.requiredResourceBitOf(locals[1]));
     // Extra suffix bits model borrowed-result liveness, which never seeds units.
-    var reads = try ExactBitSet.initEmpty(arena.allocator(), domain.livenessBitLen() + 65);
+    var reads = Row.initEmpty(arena.allocator(), domain.livenessBitLen() + 65);
     var expected = try OwnedSet.init(arena.allocator(), &domain);
     var actual = try OwnedSet.init(arena.allocator(), &domain);
     var prng = std.Random.DefaultPrng.init(11323);
@@ -11314,19 +10363,19 @@ test "ARC grouped raw liveness agrees with exhaustive resource queries" {
     var domain = try ProcArcDomain.init(arena.allocator(), &f.store, &solution, &rc, &indices, f.store.getProcSpec(proc).frame_locals);
     defer domain.clearGlobalIndices();
     const grouped = try GroupLivenessIndex.init(arena.allocator(), &domain, &solution, null);
-    var reads = try ExactBitSet.initEmpty(arena.allocator(), domain.livenessBitLen());
+    var reads = Row.initEmpty(arena.allocator(), domain.livenessBitLen());
     var expected = @as([locals.len]bool, @splat(false));
     var prng = std.Random.DefaultPrng.init(11127);
     const random = prng.random();
     for (0..20) |round| {
         // Include empty rows, one-member rows, dense rows, and shared unions.
-        var next = try ExactBitSet.initEmpty(arena.allocator(), domain.livenessBitLen());
+        var next = Row.initEmpty(arena.allocator(), domain.livenessBitLen());
         for (locals, 0..) |local, i| {
             const live = if (round == 0) false else if (round == 1) i == 64 else random.boolean();
             if (live) try next.set(grouped.rawBitOf(&domain, local).?);
             expected[i] = if (round % 3 == 0) expected[i] or live else live;
         }
-        if (round % 3 == 0) try reads.setUnion(next) else reads = next;
+        if (round % 3 == 0) try reads.setUnion(&next) else reads = next;
         for (locals, 0..) |local, i| {
             try testing.expectEqual(local, domain.resourceLocalAt(i));
             try testing.expectEqual(expected[i], reads.isSet(grouped.rawBitOf(&domain, local).?));
@@ -11347,7 +10396,7 @@ test "ARC grouped raw liveness agrees with exhaustive resource queries" {
 test "ARC raw-liveness ranges exclude boundary bits without scanning wide empty groups" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    var reads = try ExactBitSet.initEmpty(arena.allocator(), 1_000_001);
+    var reads = Row.initEmpty(arena.allocator(), 1_000_001);
     for ([_]usize{ 0, 63, 64, 511, 512, 999999, 1000000 }) |bit| try reads.set(bit);
     const boundaries = [_]usize{ 0, 1, 63, 64, 65, 511, 512, 513, 999999, 1000000, 1000001 };
     for (boundaries) |start| {

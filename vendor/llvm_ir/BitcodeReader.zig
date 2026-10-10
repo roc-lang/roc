@@ -134,16 +134,6 @@ pub fn deinit(bc: *BitcodeReader) void {
     bc.* = undefined;
 }
 
-/// Verifies the 4-byte magic number at the start of the bitcode file.
-pub fn checkMagic(bc: *BitcodeReader, magic: *const [4]u8) !void {
-    var buffer: [4]u8 = undefined;
-    try bc.readBytes(&buffer);
-    if (!std.mem.eql(u8, &buffer, magic)) return error.InvalidMagic;
-
-    try bc.startBlock(null, 2);
-    try bc.block_info.put(bc.allocator, Block.block_info, Block.Info.default);
-}
-
 /// Returns the next item from the bitcode stream, or null at end of file.
 pub fn next(bc: *BitcodeReader) !?Item {
     while (true) {

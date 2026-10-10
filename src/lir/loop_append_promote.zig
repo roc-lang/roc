@@ -456,10 +456,23 @@ const Pass = struct {
                                 try work.append(self.allocator, .{ .proc = a.proc, .current = self.store.getProcSpec(a.proc).body });
                             }
                         },
-                        .ret,
                         .init_uninitialized,
                         .assign_call_erased,
                         .assign_packed_erased_fn,
+                        .assign_boxy_desc_ref,
+                        .assign_boxy_dict_ref,
+                        .assign_boxy_box,
+                        .assign_boxy_record_update,
+                        .assign_boxy_reuse_box,
+                        .assign_boxy_unbox,
+                        .assign_boxy_adapt,
+                        .assign_boxy_inspect,
+                        .assign_boxy_eq,
+                        .assign_boxy_hash,
+                        .assign_boxy_tag,
+                        .assign_boxy_tag_payload,
+                        .boxy_tag_match,
+                        .assign_call_dict,
                         .assign_list,
                         .assign_struct,
                         .assign_tag,
@@ -484,21 +497,8 @@ const Pass = struct {
                         .loop_break,
                         .join,
                         .jump,
+                        .ret,
                         .crash,
-                        .assign_boxy_desc_ref,
-                        .assign_boxy_dict_ref,
-                        .assign_boxy_box,
-                        .assign_boxy_record_update,
-                        .assign_boxy_reuse_box,
-                        .assign_boxy_unbox,
-                        .assign_boxy_adapt,
-                        .assign_boxy_inspect,
-                        .assign_boxy_eq,
-                        .assign_boxy_hash,
-                        .assign_boxy_tag,
-                        .assign_boxy_tag_payload,
-                        .boxy_tag_match,
-                        .assign_call_dict,
                         => frame.current = null,
                     }
                 } else {
@@ -584,6 +584,20 @@ const Pass = struct {
                     .init_uninitialized,
                     .assign_call_erased,
                     .assign_packed_erased_fn,
+                    .assign_boxy_desc_ref,
+                    .assign_boxy_dict_ref,
+                    .assign_boxy_box,
+                    .assign_boxy_record_update,
+                    .assign_boxy_reuse_box,
+                    .assign_boxy_unbox,
+                    .assign_boxy_adapt,
+                    .assign_boxy_inspect,
+                    .assign_boxy_eq,
+                    .assign_boxy_hash,
+                    .assign_boxy_tag,
+                    .assign_boxy_tag_payload,
+                    .boxy_tag_match,
+                    .assign_call_dict,
                     .assign_list,
                     .assign_struct,
                     .assign_tag,
@@ -609,20 +623,6 @@ const Pass = struct {
                     .join,
                     .jump,
                     .crash,
-                    .assign_boxy_desc_ref,
-                    .assign_boxy_dict_ref,
-                    .assign_boxy_box,
-                    .assign_boxy_record_update,
-                    .assign_boxy_reuse_box,
-                    .assign_boxy_unbox,
-                    .assign_boxy_adapt,
-                    .assign_boxy_inspect,
-                    .assign_boxy_eq,
-                    .assign_boxy_hash,
-                    .assign_boxy_tag,
-                    .assign_boxy_tag_payload,
-                    .boxy_tag_match,
-                    .assign_call_dict,
                     => return null,
                 }
             }
@@ -791,7 +791,8 @@ const Pass = struct {
             if (visited.contains(current)) continue;
             try visited.put(current, {});
             scan.statement_visits += 1;
-            switch (self.store.getCFStmt(current)) {
+            const stmt = self.store.getCFStmt(current);
+            switch (stmt) {
                 .assign_ref => |assign| {
                     try bumpUse(&scan.assigned_targets, assign.target);
                     switch (assign.op) {
@@ -927,158 +928,115 @@ const Pass = struct {
                     for (0..GuardedList.borrowLen(arms)) |i| try stack.append(allocator, GuardedList.at(arms, i).on_match);
                     try stack.append(allocator, s.on_miss);
                 },
-                inline .assign_literal, .init_uninitialized, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref => |s| {
-                    try bumpUse(&scan.assigned_targets, s.target);
-                    try stack.append(allocator, s.next);
-                },
-                .comptime_branch_taken => |s| try stack.append(allocator, s.next),
-                .assign_call_erased => |s| {
-                    try bumpUse(&scan.assigned_targets, s.target);
-                    const args = self.store.getLocalSpan(s.args);
-                    for (0..GuardedList.borrowLen(args)) |i| try noteUse(scan, GuardedList.at(args, i), false);
-                    try noteUse(scan, s.closure, false);
-                    try stack.append(allocator, s.next);
-                },
-                .assign_list => |s| {
-                    try bumpUse(&scan.assigned_targets, s.target);
-                    const elems = self.store.getLocalSpan(s.elems);
-                    for (0..GuardedList.borrowLen(elems)) |i| try noteUse(scan, GuardedList.at(elems, i), false);
-                    try stack.append(allocator, s.next);
-                },
-                .assign_struct => |s| {
-                    try bumpUse(&scan.assigned_targets, s.target);
-                    const fields = self.store.getLocalSpan(s.fields);
-                    for (0..GuardedList.borrowLen(fields)) |i| try noteUse(scan, GuardedList.at(fields, i), false);
-                    try stack.append(allocator, s.next);
-                },
-                inline .assign_tag, .assign_boxy_tag => |s| {
-                    try bumpUse(&scan.assigned_targets, s.target);
-                    if (s.payload) |payload| try noteUse(scan, payload, false);
-                    try stack.append(allocator, s.next);
-                },
-                .store_struct => |s| {
-                    try noteUse(scan, s.dest, false);
-                    const fields = self.store.getLocalSpan(s.fields);
-                    for (0..GuardedList.borrowLen(fields)) |i| try noteUse(scan, GuardedList.at(fields, i), false);
-                    try stack.append(allocator, s.next);
-                },
-                .store_tag => |s| {
-                    try noteUse(scan, s.dest, false);
-                    if (s.payload) |payload| try noteUse(scan, payload, false);
-                    try stack.append(allocator, s.next);
-                },
-                .debug => |s| {
-                    try noteUse(scan, s.message, false);
-                    try stack.append(allocator, s.next);
-                },
-                .expect => |s| {
-                    try noteUse(scan, s.condition, false);
-                    try stack.append(allocator, s.next);
-                },
-                inline .incref, .decref, .free => |s| {
-                    try noteUse(scan, s.value, false);
-                    try stack.append(allocator, s.next);
-                },
-                .decref_if_initialized => |s| {
-                    try noteUse(scan, s.value, false);
-                    try noteUse(scan, s.cond, false);
-                    try stack.append(allocator, s.next);
-                },
-                .expect_err => |s| try noteUse(scan, s.message, false),
-                .assign_boxy_box => |s| {
-                    try bumpUse(&scan.assigned_targets, s.target);
-                    try noteUse(scan, s.payload, false);
-                    try stack.append(allocator, s.next);
-                },
-                .assign_boxy_record_update => |s| {
-                    try bumpUse(&scan.assigned_targets, s.target);
-                    try noteUse(scan, s.base, false);
-                    try noteUse(scan, s.fields, false);
-                    try stack.append(allocator, s.next);
-                },
-                .assign_boxy_eq => |s| {
-                    try bumpUse(&scan.assigned_targets, s.target);
-                    try noteUse(scan, s.lhs, false);
-                    try noteUse(scan, s.rhs, false);
-                    try stack.append(allocator, s.next);
-                },
-                .assign_boxy_hash => |s| {
-                    try bumpUse(&scan.assigned_targets, s.target);
-                    try noteUse(scan, s.value, false);
-                    try noteUse(scan, s.hasher, false);
-                    try stack.append(allocator, s.next);
-                },
-                inline .assign_boxy_reuse_box,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_tag_payload,
-                => |s| {
-                    try bumpUse(&scan.assigned_targets, s.target);
-                    try noteUse(scan, s.source, false);
-                    try stack.append(allocator, s.next);
-                },
-                .assign_call_dict => |s| {
-                    try bumpUse(&scan.assigned_targets, s.target);
-                    const args = self.store.getLocalSpan(s.args);
-                    for (0..GuardedList.borrowLen(args)) |i| try noteUse(scan, GuardedList.at(args, i), false);
-                    try stack.append(allocator, s.next);
-                },
                 .jump => |jump| {
                     scan.jump_visits += 1;
                     if (active_bodies.get(jump.target)) |active| {
                         if (active) |index| scan.joins.items[index].has_back_edge = true;
                     }
                 },
-                .crash, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+                .init_uninitialized,
+                .assign_literal,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .assign_call_dict,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .loop_continue,
+                .loop_break,
+                .crash,
+                => {
+                    if (body_clone.definedTarget(stmt)) |target| try bumpUse(&scan.assigned_targets, target);
+                    var reads: UntrackedReads = .{ .scan = scan };
+                    body_clone.forEachStmtRead(self.store, stmt, &reads, UntrackedReads.note);
+                    if (reads.failure) |err| return err;
+                    switch (stmt) {
+                        .expect_err, .crash, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+                        .init_uninitialized,
+                        .assign_ref,
+                        .assign_literal,
+                        .assign_call,
+                        .assign_call_erased,
+                        .assign_packed_erased_fn,
+                        .assign_boxy_desc_ref,
+                        .assign_boxy_dict_ref,
+                        .assign_boxy_box,
+                        .assign_boxy_record_update,
+                        .assign_boxy_reuse_box,
+                        .assign_boxy_unbox,
+                        .assign_boxy_adapt,
+                        .assign_boxy_inspect,
+                        .assign_boxy_eq,
+                        .assign_boxy_hash,
+                        .assign_boxy_tag,
+                        .assign_boxy_tag_payload,
+                        .boxy_tag_match,
+                        .assign_call_dict,
+                        .assign_low_level,
+                        .assign_list,
+                        .assign_struct,
+                        .assign_tag,
+                        .store_struct,
+                        .store_tag,
+                        .set_local,
+                        .debug,
+                        .expect,
+                        .comptime_branch_taken,
+                        .incref,
+                        .decref,
+                        .decref_if_initialized,
+                        .free,
+                        .switch_stmt,
+                        .switch_initialized_payload,
+                        .str_match,
+                        .str_match_set,
+                        .join,
+                        .jump,
+                        .ret,
+                        => try stack.append(allocator, body_clone.linearNext(stmt)),
+                    }
+                },
             }
         }
     }
 
-    /// Slow, independent reference definition used only by loop-index tests.
-    fn testSubtreeJumpsTo(self: *Pass, body: CFStmtId, id: LIR.JoinPointId) ResourceError!bool {
-        const allocator = self.allocator;
-        var stack = std.ArrayList(CFStmtId).empty;
-        defer stack.deinit(allocator);
-        var visited = collections.DenseMap(CFStmtId, void).init(allocator);
-        defer visited.deinit();
-        try stack.append(allocator, body);
-        while (stack.pop()) |current| {
-            if (visited.contains(current)) continue;
-            try visited.put(current, {});
-            switch (self.store.getCFStmt(current)) {
-                .jump => |jump| if (jump.target == id) return true,
-                .join => |join| {
-                    try stack.append(allocator, join.body);
-                    try stack.append(allocator, join.remainder);
-                },
-                .switch_stmt => |s| {
-                    const branches = self.store.getCFSwitchBranches(s.branches);
-                    for (0..GuardedList.borrowLen(branches)) |i| try stack.append(allocator, GuardedList.at(branches, i).body);
-                    try stack.append(allocator, s.default_branch);
-                    if (s.continuation) |continuation| try stack.append(allocator, continuation);
-                },
-                .switch_initialized_payload => |s| {
-                    try stack.append(allocator, s.initialized_branch);
-                    try stack.append(allocator, s.uninitialized_branch);
-                },
-                inline .str_match, .boxy_tag_match => |s| {
-                    try stack.append(allocator, s.on_match);
-                    try stack.append(allocator, s.on_miss);
-                },
-                .str_match_set => |s| {
-                    const arms = self.store.getStrMatchArms(s.arms);
-                    for (0..GuardedList.borrowLen(arms)) |i| try stack.append(allocator, GuardedList.at(arms, i).on_match);
-                    try stack.append(allocator, s.on_miss);
-                },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict => |s| {
-                    try stack.append(allocator, s.next);
-                },
-                .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
-            }
+    /// Operand reads the chain analysis does not model, noted as untracked
+    /// uses of their locals.
+    const UntrackedReads = struct {
+        scan: *Scan,
+        failure: ?ResourceError = null,
+
+        fn note(self: *UntrackedReads, local: LocalId) void {
+            if (self.failure != null) return;
+            noteUse(self.scan, local, false) catch |err| {
+                self.failure = err;
+            };
         }
-        return false;
-    }
+    };
 
     /// Alias families describe one logical list value. A join write or a
     /// merged definition starts a new family; an operation result also starts
@@ -2132,6 +2090,19 @@ const Pass = struct {
                     .assign_ref,
                     .assign_literal,
                     .assign_packed_erased_fn,
+                    .assign_boxy_desc_ref,
+                    .assign_boxy_dict_ref,
+                    .assign_boxy_box,
+                    .assign_boxy_record_update,
+                    .assign_boxy_reuse_box,
+                    .assign_boxy_unbox,
+                    .assign_boxy_adapt,
+                    .assign_boxy_inspect,
+                    .assign_boxy_eq,
+                    .assign_boxy_hash,
+                    .assign_boxy_tag,
+                    .assign_boxy_tag_payload,
+                    .boxy_tag_match,
                     .assign_low_level,
                     .assign_list,
                     .assign_struct,
@@ -2159,19 +2130,6 @@ const Pass = struct {
                     .jump,
                     .ret,
                     .crash,
-                    .assign_boxy_desc_ref,
-                    .assign_boxy_dict_ref,
-                    .assign_boxy_box,
-                    .assign_boxy_record_update,
-                    .assign_boxy_reuse_box,
-                    .assign_boxy_unbox,
-                    .assign_boxy_adapt,
-                    .assign_boxy_inspect,
-                    .assign_boxy_eq,
-                    .assign_boxy_hash,
-                    .assign_boxy_tag,
-                    .assign_boxy_tag_payload,
-                    .boxy_tag_match,
                     => {},
                 }
                 if (!leaf) break;
@@ -2342,7 +2300,53 @@ const Pass = struct {
                         if (self.append_sites.contains(inner_id)) return false;
                     }
                 },
-                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_call_dict, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .jump, .ret, .crash, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match => {},
+                .init_uninitialized,
+                .assign_ref,
+                .assign_literal,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .loop_continue,
+                .loop_break,
+                .jump,
+                .ret,
+                .crash,
+                => {},
             }
         }
         return true;
@@ -2355,7 +2359,53 @@ const Pass = struct {
         while (try stmts.next()) |stmt_id| {
             switch (self.store.getCFStmt(stmt_id)) {
                 .jump => |jump| if (jump.target == id) return true,
-                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .ret, .crash, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict => {},
+                .init_uninitialized,
+                .assign_ref,
+                .assign_literal,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .loop_continue,
+                .loop_break,
+                .join,
+                .ret,
+                .crash,
+                => {},
             }
         }
         return false;
@@ -2394,7 +2444,53 @@ const Pass = struct {
                 inline .i64_literal, .i128_literal => |lit| lit.value,
                 .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .bytes_literal, .proc_ref, .static_data => null,
             },
-            .init_uninitialized, .assign_ref, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict => return null,
+            .init_uninitialized,
+            .assign_ref,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_record_update,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .incref,
+            .decref,
+            .decref_if_initialized,
+            .free,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => return null,
         }
     }
 
@@ -2428,11 +2524,8 @@ const Pass = struct {
             var stmts = try body_clone.ReachableStmts.initWithScratch(self.store, join.body, self.analysis);
             defer stmts.deinit();
             while (try stmts.next()) |stmt_id| {
-                switch (self.store.getCFStmt(stmt_id)) {
-                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict => |st| {
-                        const entry = try defs.getOrPut(st.target);
-                        entry.value_ptr.* = if (entry.found_existing) null else stmt_id;
-                    },
+                const stmt = self.store.getCFStmt(stmt_id);
+                switch (stmt) {
                     inline .store_struct, .store_tag => |st| {
                         const entry = try defs.getOrPut(st.dest);
                         entry.value_ptr.* = if (entry.found_existing) null else stmt_id;
@@ -2448,7 +2541,52 @@ const Pass = struct {
                     .jump => |jump| if (jump.target == join.id) {
                         back_edges += 1;
                     },
-                    .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .loop_continue, .loop_break, .ret, .crash => {},
+                    .init_uninitialized,
+                    .assign_ref,
+                    .assign_literal,
+                    .assign_call,
+                    .assign_call_erased,
+                    .assign_packed_erased_fn,
+                    .assign_boxy_desc_ref,
+                    .assign_boxy_dict_ref,
+                    .assign_boxy_box,
+                    .assign_boxy_record_update,
+                    .assign_boxy_reuse_box,
+                    .assign_boxy_unbox,
+                    .assign_boxy_adapt,
+                    .assign_boxy_inspect,
+                    .assign_boxy_eq,
+                    .assign_boxy_hash,
+                    .assign_boxy_tag,
+                    .assign_boxy_tag_payload,
+                    .boxy_tag_match,
+                    .assign_call_dict,
+                    .assign_low_level,
+                    .assign_list,
+                    .assign_struct,
+                    .assign_tag,
+                    .debug,
+                    .expect,
+                    .expect_err,
+                    .runtime_error,
+                    .comptime_exhaustiveness_failed,
+                    .comptime_branch_taken,
+                    .incref,
+                    .decref,
+                    .decref_if_initialized,
+                    .free,
+                    .switch_stmt,
+                    .switch_initialized_payload,
+                    .str_match,
+                    .str_match_set,
+                    .loop_continue,
+                    .loop_break,
+                    .ret,
+                    .crash,
+                    => if (body_clone.definedTarget(stmt)) |target| {
+                        const entry = try defs.getOrPut(target);
+                        entry.value_ptr.* = if (entry.found_existing) null else stmt_id;
+                    },
                 }
             }
         }
@@ -2465,7 +2603,23 @@ const Pass = struct {
                     current = inner.remainder;
                 },
                 inline .assign_ref, .assign_literal, .init_uninitialized, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload => |st| current = st.next,
-                .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_call_dict, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => return null,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .boxy_tag_match,
+                .assign_call_dict,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .loop_continue,
+                .loop_break,
+                .jump,
+                .ret,
+                .crash,
+                => return null,
             }
         };
         const test_switch = self.store.getCFStmt(test_stmt).switch_stmt;
@@ -2497,7 +2651,53 @@ const Pass = struct {
         }
         const compare = switch (self.store.getCFStmt(cond_def)) {
             .assign_low_level => |st| st,
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict => return null,
+            .init_uninitialized,
+            .assign_ref,
+            .assign_literal,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_record_update,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .incref,
+            .decref,
+            .decref_if_initialized,
+            .free,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => return null,
         };
         const compare_args = self.store.getLocalSpan(compare.args);
         if (GuardedList.borrowLen(compare_args) != 2) return null;
@@ -2545,7 +2745,53 @@ const Pass = struct {
             const value_def = (defs.get(value_root) orelse return null) orelse return null;
             const step = switch (self.store.getCFStmt(value_def)) {
                 .assign_low_level => |st| st,
-                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict => return null,
+                .init_uninitialized,
+                .assign_ref,
+                .assign_literal,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .loop_continue,
+                .loop_break,
+                .join,
+                .jump,
+                .ret,
+                .crash,
+                => return null,
             };
             const step_direction: @FieldType(TripBound, "direction") = if (step.op == .num_int_add_wrap or step.op == .num_int_add_crash_on_overflow or step.op == .num_int_add_proven_cannot_overflow)
                 .up
@@ -2574,10 +2820,8 @@ const Pass = struct {
             var stmts = try body_clone.ReachableStmts.initWithScratch(self.store, join.body, self.analysis);
             defer stmts.deinit();
             while (try stmts.next()) |stmt_id| {
-                switch (self.store.getCFStmt(stmt_id)) {
-                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict => |st| if (st.target == counter) {
-                        direct_defs += 1;
-                    },
+                const stmt = self.store.getCFStmt(stmt_id);
+                switch (stmt) {
                     .set_local => |st| if (st.target == counter and st.mode != .initialize_join_param) {
                         direct_defs += 1;
                     },
@@ -2587,7 +2831,54 @@ const Pass = struct {
                             if (GuardedList.at(inner_params, i) == counter) direct_defs += 1;
                         }
                     },
-                    .store_struct, .store_tag, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .loop_continue, .loop_break, .jump, .ret, .crash => {},
+                    .init_uninitialized,
+                    .assign_ref,
+                    .assign_literal,
+                    .assign_call,
+                    .assign_call_erased,
+                    .assign_packed_erased_fn,
+                    .assign_boxy_desc_ref,
+                    .assign_boxy_dict_ref,
+                    .assign_boxy_box,
+                    .assign_boxy_record_update,
+                    .assign_boxy_reuse_box,
+                    .assign_boxy_unbox,
+                    .assign_boxy_adapt,
+                    .assign_boxy_inspect,
+                    .assign_boxy_eq,
+                    .assign_boxy_hash,
+                    .assign_boxy_tag,
+                    .assign_boxy_tag_payload,
+                    .boxy_tag_match,
+                    .assign_call_dict,
+                    .assign_low_level,
+                    .assign_list,
+                    .assign_struct,
+                    .assign_tag,
+                    .store_struct,
+                    .store_tag,
+                    .debug,
+                    .expect,
+                    .expect_err,
+                    .runtime_error,
+                    .comptime_exhaustiveness_failed,
+                    .comptime_branch_taken,
+                    .incref,
+                    .decref,
+                    .decref_if_initialized,
+                    .free,
+                    .switch_stmt,
+                    .switch_initialized_payload,
+                    .str_match,
+                    .str_match_set,
+                    .loop_continue,
+                    .loop_break,
+                    .jump,
+                    .ret,
+                    .crash,
+                    => if (body_clone.definedTarget(stmt) == counter) {
+                        direct_defs += 1;
+                    },
                 }
             }
         }
@@ -2921,6 +3212,20 @@ const VersionRewriter = struct {
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_record_update,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -2945,20 +3250,6 @@ const VersionRewriter = struct {
             .loop_break,
             .ret,
             .crash,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             => return .none,
         }
     }
@@ -2983,7 +3274,52 @@ const VersionRewriter = struct {
                 .remainder = cloned[1],
             } }, origin),
             .switch_stmt => return cloned[0],
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .jump, .ret, .crash => unreachable,
+            .init_uninitialized,
+            .assign_ref,
+            .assign_literal,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_record_update,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .incref,
+            .decref,
+            .decref_if_initialized,
+            .free,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .jump,
+            .ret,
+            .crash,
+            => unreachable,
         }
     }
 };
@@ -3029,6 +3365,20 @@ const SlackVersionRewriter = struct {
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_record_update,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -3054,20 +3404,6 @@ const SlackVersionRewriter = struct {
             .loop_break,
             .ret,
             .crash,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             => return .none,
         }
     }
@@ -3082,7 +3418,53 @@ const SlackVersionRewriter = struct {
     ) ResourceError!CFStmtId {
         const s = switch (stmt) {
             .join => |join| join,
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .jump, .ret, .crash => unreachable,
+            .init_uninitialized,
+            .assign_ref,
+            .assign_literal,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_record_update,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .incref,
+            .decref,
+            .decref_if_initialized,
+            .free,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .jump,
+            .ret,
+            .crash,
+            => unreachable,
         };
         if (self.sites.get(old_id)) |site| {
             var next = cloned[0];
@@ -3202,7 +3584,7 @@ fn expectLoopScan(f: *PromoteTest, body: CFStmtId, statements: usize, jumps: usi
     var found: usize = 0;
     for (scan.joins.items) |info| {
         const join = f.store.getCFStmt(info.stmt).join;
-        try testing.expectEqual(try pass.testSubtreeJumpsTo(join.body, join.id), info.has_back_edge);
+        try testing.expectEqual(try pass.hasBackEdge(join.body, join.id), info.has_back_edge);
         found += @intFromBool(info.has_back_edge);
     }
     try testing.expectEqual(loops, found);
@@ -3835,6 +4217,20 @@ test "promote threads slack through an append-only loop" {
                         .assign_call,
                         .assign_call_erased,
                         .assign_packed_erased_fn,
+                        .assign_boxy_desc_ref,
+                        .assign_boxy_dict_ref,
+                        .assign_boxy_box,
+                        .assign_boxy_record_update,
+                        .assign_boxy_reuse_box,
+                        .assign_boxy_unbox,
+                        .assign_boxy_adapt,
+                        .assign_boxy_inspect,
+                        .assign_boxy_eq,
+                        .assign_boxy_hash,
+                        .assign_boxy_tag,
+                        .assign_boxy_tag_payload,
+                        .boxy_tag_match,
+                        .assign_call_dict,
                         .assign_list,
                         .assign_struct,
                         .assign_tag,
@@ -3859,20 +4255,6 @@ test "promote threads slack through an append-only loop" {
                         .join,
                         .ret,
                         .crash,
-                        .assign_boxy_desc_ref,
-                        .assign_boxy_dict_ref,
-                        .assign_boxy_box,
-                        .assign_boxy_record_update,
-                        .assign_boxy_reuse_box,
-                        .assign_boxy_unbox,
-                        .assign_boxy_adapt,
-                        .assign_boxy_inspect,
-                        .assign_boxy_eq,
-                        .assign_boxy_hash,
-                        .assign_boxy_tag,
-                        .assign_boxy_tag_payload,
-                        .boxy_tag_match,
-                        .assign_call_dict,
                         => return error.TestUnexpectedResult,
                     }
                 }
@@ -3885,6 +4267,20 @@ test "promote threads slack through an append-only loop" {
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_record_update,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
             .assign_list,
             .assign_struct,
             .assign_tag,
@@ -3910,20 +4306,6 @@ test "promote threads slack through an append-only loop" {
             .jump,
             .ret,
             .crash,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             => return error.TestUnexpectedResult,
         }
     }
@@ -4062,7 +4444,51 @@ fn appendShapeOf(store: *LirStore, root: CFStmtId, head: LIR.JoinPointId, copy: 
                 if (s.target == head) shape.jumps_to_head += 1;
                 if (s.target == copy) shape.jumps_to_copy += 1;
             },
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .ret, .crash, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict => {},
+            .init_uninitialized,
+            .assign_ref,
+            .assign_literal,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_record_update,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .incref,
+            .decref,
+            .decref_if_initialized,
+            .free,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .ret,
+            .crash,
+            => {},
         }
     }
     return shape;
@@ -4302,6 +4728,20 @@ fn shapeOf(store: *LirStore, root: CFStmtId, head: LIR.JoinPointId, copy: LIR.Jo
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_record_update,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
             .assign_list,
             .assign_struct,
             .assign_tag,
@@ -4326,20 +4766,6 @@ fn shapeOf(store: *LirStore, root: CFStmtId, head: LIR.JoinPointId, copy: LIR.Jo
             .join,
             .ret,
             .crash,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             => {},
         }
     }

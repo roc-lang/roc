@@ -5663,7 +5663,9 @@ pub const MonoLlvmCodeGen = struct {
             .list_split_last,
             .num_log,
             => return error.UnsupportedLowLevel,
-            .u8_to_i8_wrap,
+            // Every remaining op is a numeric conversion; the comptime check keeps
+            // this switch exhaustive when a non-conversion op is added.
+            inline .u8_to_i8_wrap,
             .u8_to_i8_try,
             .u8_to_i16,
             .u8_to_i32,
@@ -5908,7 +5910,10 @@ pub const MonoLlvmCodeGen = struct {
             .dec_to_f32_wrap,
             .dec_to_f32_try_unsafe,
             .dec_to_f64,
-            => try self.emitNumericConversion(target, op, arg_locals),
+            => |tag| {
+                if (comptime numeric_conversion.getConversionSpec(tag) == null) @compileError("unhandled low-level op " ++ @tagName(tag));
+                try self.emitNumericConversion(target, op, arg_locals);
+            },
         }
     }
 
@@ -5935,7 +5940,7 @@ pub const MonoLlvmCodeGen = struct {
             hasher_write_bytes = @backingInt(lir.LowLevel.hasher_write_bytes),
             hasher_write_str = @backingInt(lir.LowLevel.hasher_write_str),
         };
-        const hasher_op = narrowLowLevel(HasherOp, op) orelse return error.UnsupportedLowLevel;
+        const hasher_op = std.enums.fromInt(HasherOp, @backingInt(op)) orelse return error.UnsupportedLowLevel;
         const result = switch (hasher_op) {
             .dict_pseudo_seed => blk: {
                 if (args.len != 0) return error.CompilationFailed;
@@ -6057,7 +6062,7 @@ pub const MonoLlvmCodeGen = struct {
             crypto_blake3_hasher_write = @backingInt(lir.LowLevel.crypto_blake3_hasher_write),
             crypto_blake3_hasher_finish = @backingInt(lir.LowLevel.crypto_blake3_hasher_finish),
         };
-        const crypto_op = narrowLowLevel(CryptoOp, op) orelse return error.UnsupportedLowLevel;
+        const crypto_op = std.enums.fromInt(CryptoOp, @backingInt(op)) orelse return error.UnsupportedLowLevel;
         const info: CryptoInfo = switch (crypto_op) {
             .crypto_sha256_hash_bytes => .{ .name = builtinSymbol(LowLevelBuiltins.cryptoOp(.crypto_sha256_hash_bytes)), .arity = Arity.one },
             .crypto_sha256_hasher_empty => .{ .name = builtinSymbol(LowLevelBuiltins.cryptoOp(.crypto_sha256_hasher_empty)), .arity = Arity.zero },
@@ -6827,7 +6832,7 @@ pub const MonoLlvmCodeGen = struct {
         const vector_ty = try self.simdType(vector);
         const lane_ty = builder.intType(vector.laneBits()) catch return error.OutOfMemory;
 
-        const simd_op = narrowLowLevel(SimdLowLevel, op) orelse return error.UnsupportedLowLevel;
+        const simd_op = std.enums.fromInt(SimdLowLevel, @backingInt(op)) orelse return error.UnsupportedLowLevel;
         switch (simd_op) {
             .simd_splat => {
                 const arg = GuardedList.at(args, 0);
@@ -7022,7 +7027,7 @@ pub const MonoLlvmCodeGen = struct {
         const builder, const wip = try self.builderAndWip();
         const vector_ty = try self.simdType(vector);
 
-        const simd_op = narrowLowLevel(SimdLowLevel, op) orelse return error.UnsupportedLowLevel;
+        const simd_op = std.enums.fromInt(SimdLowLevel, @backingInt(op)) orelse return error.UnsupportedLowLevel;
         switch (simd_op) {
             .simd_mul_high => {
                 const wide_bits: u16 = vector.laneBits() * 2;
@@ -7466,16 +7471,6 @@ pub const MonoLlvmCodeGen = struct {
         };
 
         try self.storeScalar(self.slot(target).ptr, self.localLayout(target), result);
-    }
-
-    /// Narrow `op` to a smaller enum whose variants carry `LowLevel`'s values.
-    /// Returns null when `op` is not one of them.
-    fn narrowLowLevel(comptime Narrow: type, op: lir.LowLevel) ?Narrow {
-        const raw = @backingInt(op);
-        inline for (@typeInfo(Narrow).@"enum".field_values) |field_value| {
-            if (raw == field_value) return @fromBackingInt(@intCast(field_value));
-        }
-        return null;
     }
 
     /// Lower a scalar numeric conversion. Delegates to a helper for each

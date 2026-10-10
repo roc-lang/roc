@@ -11,6 +11,7 @@
 //! procedure task independently of the store receiving its cloned output.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const collections = @import("collections");
 const Allocator = std.mem.Allocator;
@@ -554,7 +555,10 @@ pub fn forEachStmtRead(
             const fields = store.getLocalSpan(s.fields);
             for (0..fields.len) |index| note(ctx, GuardedList.at(fields, index));
         },
-        .assign_tag => |s| if (s.payload) |payload| note(ctx, payload),
+        .assign_tag => |s| {
+            if (s.target_desc) |desc| emitDesc(ctx, note, desc);
+            if (s.payload) |payload| note(ctx, payload);
+        },
         .store_struct => |s| {
             note(ctx, s.dest);
             const fields = store.getLocalSpan(s.fields);
@@ -686,6 +690,145 @@ pub fn forEachStmtDef(
         .free,
         .comptime_branch_taken,
         .jump,
+        .runtime_error,
+        .comptime_exhaustiveness_failed,
+        .loop_continue,
+        .loop_break,
+        => {},
+    }
+}
+
+/// The one local an assigning statement writes: its `target`, including a
+/// `set_local` rebinding. Statements that bind several locals (joins, string
+/// matches), write through a pointer (`store_*`), or write nothing have none;
+/// `forEachStmtDef` enumerates every binder.
+pub fn definedTarget(stmt: LIR.CFStmt) ?LocalId {
+    return switch (stmt) {
+        inline .init_uninitialized,
+        .assign_ref,
+        .assign_literal,
+        .assign_call,
+        .assign_call_erased,
+        .assign_packed_erased_fn,
+        .assign_boxy_desc_ref,
+        .assign_boxy_dict_ref,
+        .assign_boxy_box,
+        .assign_boxy_record_update,
+        .assign_boxy_reuse_box,
+        .assign_boxy_unbox,
+        .assign_boxy_adapt,
+        .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_hash,
+        .assign_boxy_tag,
+        .assign_boxy_tag_payload,
+        .assign_call_dict,
+        .assign_low_level,
+        .assign_list,
+        .assign_struct,
+        .assign_tag,
+        .set_local,
+        => |s| s.target,
+        .join,
+        .jump,
+        .store_struct,
+        .store_tag,
+        .debug,
+        .expect,
+        .expect_err,
+        .runtime_error,
+        .comptime_exhaustiveness_failed,
+        .comptime_branch_taken,
+        .incref,
+        .decref,
+        .decref_if_initialized,
+        .free,
+        .switch_stmt,
+        .switch_initialized_payload,
+        .str_match,
+        .str_match_set,
+        .boxy_tag_match,
+        .loop_continue,
+        .loop_break,
+        .ret,
+        .crash,
+        => null,
+    };
+}
+
+/// Call `visit(ctx, successor)` for every statement control can transfer to
+/// directly from `stmt`: a straight-line `next`, switch arms before the
+/// default, both payload-initialization arms, match hits before misses, and
+/// a join's remainder. A switch continuation is release-placement metadata
+/// that the arms reach through their own chains, so it is not an edge; a
+/// join body is entered only by jumps, and a jump's successor is its
+/// target's body, which the caller resolves through its own join index.
+/// Flow analyses that must not see dead join bodies walk these edges;
+/// `appendSuccessors` covers every reachable statement instead.
+pub fn forEachFlowSuccessor(
+    store: *const LirStore,
+    stmt: LIR.CFStmt,
+    ctx: anytype,
+    comptime visit: fn (@TypeOf(ctx), CFStmtId) Allocator.Error!void,
+) Allocator.Error!void {
+    switch (stmt) {
+        inline .init_uninitialized,
+        .assign_ref,
+        .assign_literal,
+        .assign_call,
+        .assign_call_erased,
+        .assign_packed_erased_fn,
+        .assign_boxy_desc_ref,
+        .assign_boxy_dict_ref,
+        .assign_boxy_box,
+        .assign_boxy_record_update,
+        .assign_boxy_reuse_box,
+        .assign_boxy_unbox,
+        .assign_boxy_adapt,
+        .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_hash,
+        .assign_boxy_tag,
+        .assign_boxy_tag_payload,
+        .assign_call_dict,
+        .assign_low_level,
+        .assign_list,
+        .assign_struct,
+        .assign_tag,
+        .store_struct,
+        .store_tag,
+        .set_local,
+        .debug,
+        .expect,
+        .comptime_branch_taken,
+        .incref,
+        .decref,
+        .decref_if_initialized,
+        .free,
+        => |s| try visit(ctx, s.next),
+        .switch_stmt => |s| {
+            const branches = store.getCFSwitchBranches(s.branches);
+            for (0..branches.len) |index| try visit(ctx, GuardedList.at(branches, index).body);
+            try visit(ctx, s.default_branch);
+        },
+        .switch_initialized_payload => |s| {
+            try visit(ctx, s.initialized_branch);
+            try visit(ctx, s.uninitialized_branch);
+        },
+        inline .str_match, .boxy_tag_match => |s| {
+            try visit(ctx, s.on_match);
+            try visit(ctx, s.on_miss);
+        },
+        .str_match_set => |s| {
+            const arms = store.getStrMatchArms(s.arms);
+            for (0..arms.len) |index| try visit(ctx, GuardedList.at(arms, index).on_match);
+            try visit(ctx, s.on_miss);
+        },
+        .join => |s| try visit(ctx, s.remainder),
+        .jump,
+        .ret,
+        .crash,
+        .expect_err,
         .runtime_error,
         .comptime_exhaustiveness_failed,
         .loop_continue,
@@ -837,14 +980,22 @@ pub fn markStmtDefinitionsSparse(store: *const LirStore, defined: *ReadCounts, s
 }
 
 fn noteDefinition(defined: anytype, local: LocalId) void {
-    if (@TypeOf(defined) == *ReadCounts) {
+    const Defined = @TypeOf(defined);
+    if (Defined == *ReadCounts) {
         noteReachableRead(defined, local);
+    } else if (@typeInfo(Defined) == .pointer and @typeInfo(Defined).pointer.size == .one) {
+        defined.noteDefinition(local);
     } else {
         defined[@backingInt(local)] = true;
     }
 }
 
-fn visitStmtDefinitions(store: *const LirStore, defined: anytype, stmt_id: CFStmtId) void {
+/// Mark every local `stmt_id` binds, in `defined` (a `*ReadCounts`, a
+/// `[]bool` row, or a pointer to a marker with a `noteDefinition(local)`
+/// method): statement targets, call out-descriptors, join parameters
+/// including the maybe-uninitialized ones, and string-match captures. A
+/// `set_local` rebinds an existing local and is not a binder.
+pub fn visitStmtDefinitions(store: *const LirStore, defined: anytype, stmt_id: CFStmtId) void {
     switch (store.getCFStmt(stmt_id)) {
         inline .init_uninitialized,
         .assign_ref,
@@ -1145,14 +1296,136 @@ pub fn cloneCallVariant(
     return variant;
 }
 
+/// A pass that fuses `result = call(args...)` with the one statement that
+/// consumes `result`, reached through pure local aliases, into a call of a
+/// variant of the callee that performs the consumption itself. `Spec` states
+/// the consumer and the variant:
+///
+///   * `shape`: the `LirProcSpec.shapes` field whose bodies can hold the
+///     caller shape. Debug builds also run the excluded procedures and fail
+///     if one of them is rewritten.
+///   * `origin_kind`: the `OriginKind` the fused call records.
+///   * `State`: pass-wide input `resultEligible`, `match` and `createVariant`
+///     read, such as the layout store.
+///   * `VariantKey`: what identifies a variant, including its source proc.
+///   * `resultEligible(state, result_layout) bool`: whether a call result of
+///     this layout can be fused at all; the callee must also return it.
+///   * `match(state, store, call, result_layout, forwarded) ?Match`: the
+///     consumer at `forwarded.next` of the aliased result `forwarded.value`.
+///   * `createVariant(state, store, key) !LirProcSpecId`: the variant proc,
+///     built once per key.
+///
+/// The fusion drops the call-result local and the aliases between it and the
+/// consumer, so it fires only when every one of those locals has exactly
+/// one read in the procedure (`chainIsSingleUse`).
+pub fn CallResultFusion(comptime Spec: type) type {
+    return struct {
+        const Self = @This();
+
+        /// The consumer a spec recognized, and the fused call it yields.
+        pub const Match = struct {
+            key: Spec.VariantKey,
+            /// The argument the variant takes ahead of the source's own.
+            leading_arg: LocalId,
+            /// The consumer's target, which the fused call now defines.
+            target: LocalId,
+            /// The statement after the consumer.
+            next: CFStmtId,
+        };
+
+        store: *LirStore,
+        state: Spec.State,
+        variants: std.AutoHashMap(Spec.VariantKey, LIR.LirProcSpecId),
+
+        /// Rewrite every admitted procedure in the store.
+        pub fn run(store: *LirStore, state: Spec.State) Allocator.Error!void {
+            var pass: Self = .{
+                .store = store,
+                .state = state,
+                .variants = std.AutoHashMap(Spec.VariantKey, LIR.LirProcSpecId).init(store.allocator),
+            };
+            defer pass.variants.deinit();
+
+            const proc_count = store.procSpecCount();
+            for (0..proc_count) |proc_index| {
+                const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(proc_index));
+                const admitted = @field(store.getProcSpec(proc_id).shapes, Spec.shape);
+                if (!admitted and builtin.mode != .debug) continue;
+                const rewrote = try pass.transformProc(proc_id);
+                if (rewrote and !admitted) base.invariant("{s}", .{Spec.name ++ " pass rewrote a procedure whose shapes excluded it"});
+            }
+        }
+
+        fn transformProc(self: *Self, proc_id: LIR.LirProcSpecId) Allocator.Error!bool {
+            const body = rewritableProcBody(self.store, proc_id) orelse return false;
+            var stmts = try ReachableStmts.init(self.store, body);
+            defer stmts.deinit();
+            var rewrote = false;
+            while (try stmts.next()) |stmt_id| {
+                if (try self.rewriteAt(body, stmt_id)) rewrote = true;
+            }
+            return rewrote;
+        }
+
+        fn rewriteAt(self: *Self, proc_body: CFStmtId, call_stmt_id: CFStmtId) Allocator.Error!bool {
+            const call_stmt_node = self.store.getCFStmt(call_stmt_id);
+            if (call_stmt_node != .assign_call) return false;
+            const call = call_stmt_node.assign_call;
+
+            const result_layout = self.store.getLocal(call.target).layout_idx;
+            if (!Spec.resultEligible(self.state, result_layout)) return false;
+
+            const callee = self.store.getProcSpec(call.proc);
+            if (callee.body == null or callee.hosted != null or callee.abi != .roc) return false;
+            if (callee.ret_layout != result_layout) return false;
+
+            var chain = std.ArrayList(LocalId).empty;
+            defer chain.deinit(self.store.allocator);
+            const forwarded = try forwardLocalAliasChainInto(self.store, self.store.allocator, call.target, call.next, &chain);
+            const consumer = Spec.match(self.state, self.store, call, result_layout, forwarded) orelse return false;
+
+            if (!try chainIsSingleUse(self.store, proc_body, chain.items)) return false;
+
+            const variant_proc = try self.variant(consumer.key);
+
+            var args = std.ArrayList(LocalId).empty;
+            defer args.deinit(self.store.allocator);
+            try args.append(self.store.allocator, consumer.leading_arg);
+            const call_args = self.store.getLocalSpan(call.args);
+            for (0..call_args.len) |index| {
+                try args.append(self.store.allocator, GuardedList.at(call_args, index));
+            }
+
+            var origin = self.store.stmtOrigin(call_stmt_id);
+            origin.kind = Spec.origin_kind;
+            try self.store.replaceCFStmt(call_stmt_id, .{ .assign_call = .{
+                .target = consumer.target,
+                .proc = variant_proc,
+                .args = try self.store.addLocalSpan(args.items),
+                .is_cold = call.is_cold,
+                .next = consumer.next,
+            } }, origin);
+            return true;
+        }
+
+        fn variant(self: *Self, key: Spec.VariantKey) Allocator.Error!LIR.LirProcSpecId {
+            if (self.variants.get(key)) |existing| return existing;
+            const created = try Spec.createVariant(self.state, self.store, key);
+            try self.variants.put(key, created);
+            return created;
+        }
+    };
+}
+
 /// Clone a source proc body into fresh statements and locals, delegating return
 /// handling to `Rewriter`.
 ///
 /// `Rewriter` carries the pass-specific destination state and supplies the
 /// hooks that diverge between passes:
 ///
-///   * `cloneRet(self: *Rewriter, cloner: anytype, value: LocalId, origin: LIR.StmtOrigin)`—required.
-///     Produces the cloned tail for a source `ret value`.
+///   * `cloneRet(self: *Rewriter, cloner: anytype, value: LocalId, origin: LIR.StmtOrigin)`—
+///     optional. Produces the cloned tail for a source `ret value`; without
+///     it the clone returns the mapped value with the source origin.
 ///   * `interceptStmt(self: *Rewriter, cloner: anytype, old_id: CFStmtId, stmt: LIR.CFStmt, origin: LIR.StmtOrigin)`—
 ///     optional. Returns a cloned statement id to short-circuit the default
 ///     clone, letting the pass fuse a direct constructor/concat return into
@@ -1239,19 +1512,10 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             return self;
         }
 
-        /// Clone a control-flow subtree within its current procedure. Join
-        /// declarations owned by the subtree receive fresh identities, while
-        /// jumps to lexically enclosing declarations retain their targets.
-        pub fn initWithFreshDeclaredJoins(
-            store: *LirStore,
-            rewriter: Rewriter,
-            body: CFStmtId,
-            join_params: *JoinParamIndex,
-        ) Allocator.Error!Self {
-            return initWithFreshDeclaredJoinsAndAllocator(store, rewriter, body, join_params, store.allocator);
-        }
-
-        /// Clone a subtree with task-owned scratch and a destination join index.
+        /// Clone a control-flow subtree within its current procedure, with
+        /// task-owned scratch and a destination join index. Join declarations
+        /// owned by the subtree receive fresh identities, while jumps to
+        /// lexically enclosing declarations retain their targets.
         pub fn initWithFreshDeclaredJoinsAndAllocator(
             store: *LirStore,
             rewriter: Rewriter,
@@ -1419,7 +1683,10 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 .loop_continue => try self.store.addCFStmt(.loop_continue, origin),
                 .loop_break => try self.store.addCFStmt(.loop_break, origin),
                 .jump => |s| try self.cloneJump(s, origin),
-                .ret => |s| try self.rewriter.cloneRet(self, s.value, origin),
+                .ret => |s| if (@hasDecl(Rewriter, "cloneRet"))
+                    try self.rewriter.cloneRet(self, s.value, origin)
+                else
+                    try self.store.addCFStmt(.{ .ret = .{ .value = try self.mapLocal(s.value) } }, origin),
                 .crash => |s| try self.store.addCFStmt(.{ .crash = .{
                     .msg = switch (s.msg) {
                         .literal => |literal| .{ .literal = literal },
@@ -2150,7 +2417,9 @@ pub const InterceptChildren = struct {
     len: u2,
 };
 
-fn linearNext(stmt: LIR.CFStmt) CFStmtId {
+/// The `next` of a straight-line statement. Every other kind has no single
+/// successor, and asking for one is a compiler bug.
+pub fn linearNext(stmt: LIR.CFStmt) CFStmtId {
     return switch (stmt) {
         inline .init_uninitialized,
         .assign_ref,
@@ -2204,7 +2473,8 @@ fn linearNext(stmt: LIR.CFStmt) CFStmtId {
     };
 }
 
-fn setLinearNext(stmt: *LIR.CFStmt, next: CFStmtId) void {
+/// Replace the `next` of a straight-line statement; see `linearNext`.
+pub fn setLinearNext(stmt: *LIR.CFStmt, next: CFStmtId) void {
     switch (stmt.*) {
         inline .init_uninitialized,
         .assign_ref,
@@ -2258,11 +2528,7 @@ fn setLinearNext(stmt: *LIR.CFStmt, next: CFStmtId) void {
     }
 }
 
-const TestRetRewriter = struct {
-    pub fn cloneRet(_: *TestRetRewriter, cloner: anytype, value: LocalId, origin: LIR.StmtOrigin) Allocator.Error!CFStmtId {
-        return try cloner.store.addCFStmt(.{ .ret = .{ .value = try cloner.mapLocal(value) } }, origin);
-    }
-};
+const TestRetRewriter = struct {};
 
 test "subtree clone bridges renamed parameters before an external join" {
     const testing = std.testing;
@@ -2292,7 +2558,7 @@ test "subtree clone bridges renamed parameters before an external join" {
     var join_params = JoinParamIndex.init(testing.allocator);
     defer join_params.deinit();
     try join_params.indexReachable(&store, external_stmt);
-    var cloner = try BodyCloner(TestRetRewriter).initWithFreshDeclaredJoins(&store, .{}, internal_stmt, &join_params);
+    var cloner = try BodyCloner(TestRetRewriter).initWithFreshDeclaredJoinsAndAllocator(&store, .{}, internal_stmt, &join_params, testing.allocator);
     defer cloner.deinit();
     const cloned_stmt = try cloner.cloneStmt(internal_stmt);
     const cloned = store.getCFStmt(cloned_stmt).join;
@@ -2554,7 +2820,7 @@ test "body_clone join allocation belongs to the destination procedure" {
     defer index.deinit();
     try index.indexReachable(&store, destination);
     for (41..43) |expected| {
-        var subtree = try BodyCloner(TestRetRewriter).initWithFreshDeclaredJoins(&store, .{}, source, &index);
+        var subtree = try BodyCloner(TestRetRewriter).initWithFreshDeclaredJoinsAndAllocator(&store, .{}, source, &index, testing.allocator);
         defer subtree.deinit();
         const clone = store.getCFStmt(try subtree.cloneStmt(source)).join;
         try testing.expectEqual(@as(u32, @intCast(expected)), @backingInt(clone.id));

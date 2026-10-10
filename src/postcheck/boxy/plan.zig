@@ -18,6 +18,14 @@ const test_fixtures = @import("test_fixtures.zig");
 /// synthetic checked payloads from one definition.
 const fixtureTableIndex = test_fixtures.tableIndex;
 const builtinNominal = test_fixtures.builtinNominal;
+const moduleKey = test_fixtures.moduleKey;
+const typeKey = test_fixtures.typeKey;
+const typeSchemeKey = test_fixtures.typeSchemeKey;
+const procedureTemplateRef = test_fixtures.procedureTemplateRef;
+const procedureValueRef = test_fixtures.procedureValueRef;
+const checkedTemplate = test_fixtures.checkedTemplate;
+const testIntNumeral = test_fixtures.testIntNumeral;
+const minimalCheckedArtifact = test_fixtures.minimalCheckedArtifact;
 
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
@@ -4033,6 +4041,10 @@ const Builder = struct {
         return .{ .query = self.repQuery(), .modules = self };
     }
 
+    fn methodSearchModules(self: *const Builder) MethodSearchModules {
+        return .{ .imports = self.imports, .relation_modules = self.relation_modules };
+    }
+
     fn moduleForId(self: *Builder, module_id: checked.ModuleId) ModuleView {
         if (moduleKeyEqual(module_id, self.root_view.key)) return self.root_view;
         for (self.extra_module_views) |view| {
@@ -5198,7 +5210,7 @@ const Builder = struct {
                     .resolved => |span| span,
                     .from_callable => boxyPlanInvariant("generated codec call retained callable-derived evidence"),
                 };
-                source = self.workerSourceForMethodTarget(lookup, dispatch_type, null);
+                source = workerSourceForMethodTarget(lookup, dispatch_type, null);
                 source_fn_type = .{ .module = target_view.key, .ty = node.target.callable_ty };
                 checked_evidence = .{ .start = nested.start, .len = nested.len };
                 const edge: DictionaryMethodEvidence.EvidenceEdge = .{ .module = contract.view.key, .node = node_id };
@@ -5720,7 +5732,7 @@ const Builder = struct {
 
                 if (methodOwnerForModuleType(view, shape.ty)) |owner| {
                     if (view.canonical_names.?.lookupMethodName(Ident.ENCODER_FOR_METHOD_NAME)) |encoder_for| {
-                        if (self.lookupMethodTarget(view, owner, view, encoder_for)) |lookup| {
+                        if (lookupMethodTarget(self.methodSearchModules(), view, owner, view, encoder_for)) |lookup| {
                             switch (lookup.target.kind) {
                                 // A declared encoder, or the compiler-generated
                                 // structural encoder, whose body the checker
@@ -6045,7 +6057,7 @@ const Builder = struct {
             .inspect => blk: {
                 if (rep.kind != .nominal and rep.kind != .primitive) break :blk null;
                 const owner = methodOwnerForModuleType(view, rep.source_type.ty) orelse break :blk null;
-                break :blk self.lookupInspectOverride(view, owner);
+                break :blk lookupInspectOverride(self.methodSearchModules(), view, owner);
             },
             .equality, .hash => |method| blk: {
                 if (rep.kind != .nominal) break :blk null;
@@ -6063,7 +6075,7 @@ const Builder = struct {
         };
         if (lookup) |method| {
             if (self.plan.descriptorMethodForRep(rep_id, kind) == null) {
-                const source = self.workerSourceForMethodTarget(method, rep.source_type, null);
+                const source = workerSourceForMethodTarget(method, rep.source_type, null);
                 const source_fn_type = CheckedTypeIdentity{ .module = method.view.key, .ty = method.target.callable_ty };
                 _ = try self.analyzeType(method.view, method.target.callable_ty);
                 try actions.append(self.allocator, .{ .ensure_worker = .{ .source = source, .checked_type = source_fn_type, .root_request = null } });
@@ -6090,7 +6102,7 @@ const Builder = struct {
             boxyPlanInvariant("planned boxy inspect override callable had unexpected receiver arity");
         }
         const rep = self.plan.representations.items[@backingInt(rep_id)];
-        const source = self.workerSourceForMethodTarget(lookup, rep.source_type, null);
+        const source = workerSourceForMethodTarget(lookup, rep.source_type, null);
         const evidence: ?DictionaryMethodEvidence.EvidenceEdge = if (kind == .inspect) .{
             .module = lookup.view.key,
             .node = lookup.inspect_evidence orelse
@@ -6513,7 +6525,7 @@ const Builder = struct {
     }
 
     fn stepConstDefinition(self: *Builder, actions: *std.ArrayList(PlanAction), view: ModuleView, ref_id: checked.ResolvedValueRefId) Allocator.Error!void {
-        const record = self.resolvedValueRecord(view, ref_id);
+        const record = resolvedValueRecord(view, ref_id);
         const const_use = if (record.ref == .selected_hoisted_const)
             record.ref.selected_hoisted_const.const_use
         else if (record.ref == .top_level_const)
@@ -7265,7 +7277,7 @@ const Builder = struct {
         };
         const capture = state.fn_value.captures[state.index];
         const source_type = if (capture.id.isCanonical())
-            typeRef(fn_view, self.checkedBinderType(fn_view, capture.id.binder()))
+            typeRef(fn_view, checkedBinderType(fn_view, capture.id.binder()))
         else
             self.generatedWorkerCaptureType(state.worker, capture.id);
         const capture_rep = try self.analyzeStoredType(store_view, capture.ty, source_type);
@@ -8533,7 +8545,7 @@ const Builder = struct {
                     if (nominal.builtin != null) return shape;
                     if (methodOwnerForModuleType(view, shape.ty)) |owner| {
                         if (view.canonical_names.?.lookupMethodName(Ident.PARSER_FOR_METHOD_NAME)) |parser_for| {
-                            if (self.lookupMethodTarget(view, owner, view, parser_for)) |lookup| {
+                            if (lookupMethodTarget(self.methodSearchModules(), view, owner, view, parser_for)) |lookup| {
                                 switch (lookup.target.kind) {
                                     .procedure, .local_proc => return shape,
                                     .structural => |kind| switch (kind) {
@@ -11346,7 +11358,7 @@ const Builder = struct {
             const node = view.static_dispatch_plans.evidenceNode(edge.node);
             const nested_schema: ?WorkerEvidenceParams = switch (node.target.kind) {
                 .procedure => |procedure| self.templateEvidenceParams(procedure.template),
-                .local_proc => |local| self.nestedExprEvidenceParams(view, self.nestedCallableSiteExprForExpr(view, local.expr) orelse local.expr),
+                .local_proc => |local| self.nestedExprEvidenceParams(view, nestedCallableSiteExprFor(view, local.expr) orelse local.expr),
                 .structural => null,
             };
             switch (node.nested) {
@@ -11369,7 +11381,7 @@ const Builder = struct {
         if (worker.source != .nested_expr) boxyPlanInvariant("numeral evidence depth exceeded its checked worker");
         const expr = worker.source.nested_expr;
         const view = self.moduleForId(expr.module);
-        const site_expr = self.nestedCallableSiteExprForExpr(view, expr.expr) orelse expr.expr;
+        const site_expr = nestedCallableSiteExprFor(view, expr.expr) orelse expr.expr;
         const site = for (view.nested_proc_sites.sites) |candidate| {
             if (candidate.checked_expr == site_expr) break candidate;
         } else boxyPlanInvariant("nested numeral evidence omitted its lexical site");
@@ -11461,7 +11473,7 @@ const Builder = struct {
         const use_expr = view.checked_bodies.expr(use.expr);
         if (use_expr.data == .lookup_required) {
             if (use_expr.data.lookup_required) |ref_id| {
-                const record = self.resolvedValueRecord(view, ref_id);
+                const record = resolvedValueRecord(view, ref_id);
                 if (record.ref == .platform_required_proc) {
                     if (record.ref.platform_required_proc.root_evidence) |root_evidence| {
                         const app_view = self.moduleForCheckedModuleId(root_evidence.checked_module);
@@ -12046,7 +12058,7 @@ const Builder = struct {
             const view, const site_expr = switch (worker.source) {
                 .nested_expr => |expr_ref| blk: {
                     const view = self.moduleForId(expr_ref.module);
-                    break :blk .{ view, self.nestedCallableSiteExprForExpr(view, expr_ref.expr) orelse expr_ref.expr };
+                    break :blk .{ view, nestedCallableSiteExprFor(view, expr_ref.expr) orelse expr_ref.expr };
                 },
                 .procedure_template, .procedure_binding, .procedure_use => blk: {
                     if (self.root_module == null) continue;
@@ -12300,13 +12312,13 @@ const Builder = struct {
                 ),
                 .imported => |imported| blk: {
                     const view = self.moduleForId(imported.artifact);
-                    break :blk self.bindingBodySchemeVars(self.importedProcedureBinding(view, imported).body);
+                    break :blk self.bindingBodySchemeVars(importedProcedureBinding(view, imported).body);
                 },
                 .hosted => null,
             },
             .nested_expr => |expr_ref| blk: {
                 const view = self.moduleForId(expr_ref.module);
-                const site_expr = self.nestedCallableSiteExprForExpr(view, expr_ref.expr) orelse expr_ref.expr;
+                const site_expr = nestedCallableSiteExprFor(view, expr_ref.expr) orelse expr_ref.expr;
                 for (view.checked_procedure_templates.dispatch_scopes) |*scope| {
                     if (scope.checked_expr != site_expr) continue;
                     break :blk .{ .view = view, .vars = view.checked_procedure_templates.scopeSchemeVars(scope) };
@@ -12486,14 +12498,14 @@ const Builder = struct {
                 ),
                 .imported => |imported| blk: {
                     const view = self.moduleForId(imported.artifact);
-                    const binding = self.importedProcedureBinding(view, imported);
+                    const binding = importedProcedureBinding(view, imported);
                     break :blk self.bindingBodyEvidenceParams(binding.body);
                 },
                 .hosted => null,
             },
             .nested_expr => |expr_ref| blk: {
                 const view = self.moduleForId(expr_ref.module);
-                const site_expr = self.nestedCallableSiteExprForExpr(view, expr_ref.expr) orelse expr_ref.expr;
+                const site_expr = nestedCallableSiteExprFor(view, expr_ref.expr) orelse expr_ref.expr;
                 break :blk self.nestedExprEvidenceParams(view, site_expr);
             },
             .generated_codec,
@@ -13526,7 +13538,7 @@ const Builder = struct {
                     if (schemeVarsContain(own, variable)) return true;
                 }
                 const view = self.moduleForId(expr_ref.module);
-                const site_expr = self.nestedCallableSiteExprForExpr(view, expr_ref.expr) orelse expr_ref.expr;
+                const site_expr = nestedCallableSiteExprFor(view, expr_ref.expr) orelse expr_ref.expr;
                 const site = for (view.nested_proc_sites.sites) |candidate| {
                     if (candidate.checked_expr == site_expr) break candidate;
                 } else boxyPlanInvariant("nested worker omitted its lexical site");
@@ -13780,7 +13792,7 @@ const Builder = struct {
         const rep = self.plan.representations.items[@backingInt(rep_id)];
         const view = self.moduleForId(rep.source_type.module);
         const owner = methodOwnerForModuleType(view, rep.source_type.ty) orelse return null;
-        const found = self.lookupMethodTargetByText(view, owner, derivedMethodText(method)) orelse return null;
+        const found = lookupMethodTargetByText(self.methodSearchModules(), view, owner, derivedMethodText(method)) orelse return null;
         return switch (found) {
             .rejected => found,
             .target => |lookup| switch (lookup.target.kind) {
@@ -13833,7 +13845,7 @@ const Builder = struct {
             return try self.recordDerivedDecision(walk, rep_id, existing);
         }
         const rep = self.plan.representations.items[@backingInt(rep_id)];
-        const source = self.workerSourceForMethodTarget(lookup, rep.source_type, null);
+        const source = workerSourceForMethodTarget(lookup, rep.source_type, null);
         const fn_type = CheckedTypeIdentity{ .module = lookup.view.key, .ty = lookup.target.callable_ty };
         _ = try self.analyzeType(lookup.view, lookup.target.callable_ty);
         const worker = try self.ensureWorker(source, fn_type, null);
@@ -14223,7 +14235,7 @@ const Builder = struct {
         defer seen.deinit();
         for (fn_value.captures) |capture| {
             if (!capture.id.isCanonical()) continue;
-            const binder_rep = self.plan.repForSourceType(typeRef(fn_view, self.checkedBinderType(fn_view, capture.id.binder()))) orelse
+            const binder_rep = self.plan.repForSourceType(typeRef(fn_view, checkedBinderType(fn_view, capture.id.binder()))) orelse
                 boxyPlanInvariant("stored function capture binder type was not analyzed");
             const stored_rep = self.plan.repForStoredType(.{ .module = store_view.key, .ty = capture.ty }) orelse
                 boxyPlanInvariant("stored function capture type was not analyzed");
@@ -16639,7 +16651,7 @@ const Builder = struct {
                         .local_proc, .structural => view,
                     };
                     const callable_type = selectedDispatchCallableType(view, target_view, node);
-                    const source = self.workerSourceForMethodTarget(.{
+                    const source = workerSourceForMethodTarget(.{
                         .view = target_view,
                         .target = node.target,
                     }, dispatcher_type, node.generated_codec_derivation);
@@ -16883,7 +16895,7 @@ const Builder = struct {
         const owner = methodOwnerForModuleType(source_view, source_rep.source_type.ty) orelse
             self.defaultedDictionaryOwner(source_rep_id);
         if (owner) |method_owner| {
-            if (self.lookupMethodTarget(source_view, method_owner, requirement_view, requirement.fn_name)) |lookup| {
+            if (lookupMethodTarget(self.methodSearchModules(), source_view, method_owner, requirement_view, requirement.fn_name)) |lookup| {
                 // A compiler-derived equality or hash has no worker: the slot
                 // runs the structural method over the owner's type.
                 if (lookup.target.kind == .structural) switch (lookup.target.kind.structural) {
@@ -16897,7 +16909,7 @@ const Builder = struct {
                     },
                     .parser, .encoder, .map, .map_effectful => {},
                 };
-                const source = self.workerSourceForMethodTarget(lookup, source_rep.source_type, null);
+                const source = workerSourceForMethodTarget(lookup, source_rep.source_type, null);
                 const callable_type = CheckedTypeIdentity{ .module = lookup.view.key, .ty = lookup.target.callable_ty };
                 _ = try self.analyzeType(lookup.view, lookup.target.callable_ty);
                 const worker = try self.ensureWorker(source, callable_type, null);
@@ -19068,161 +19080,6 @@ const Builder = struct {
         return null;
     }
 
-    const MethodTargetLookup = struct {
-        view: ModuleView,
-        method: ?MethodNameId = null,
-        target: static_dispatch.MethodTarget,
-        /// For an inspect override, the checked evidence of inspection's use.
-        inspect_evidence: ?static_dispatch.EvidenceNodeId = null,
-    };
-
-    /// What an exact registry lookup found. `rejected` is a declared method
-    /// whose declaration canonicalization or checking rejected: it has no
-    /// worker, and a dispatch that lands on it is a `checked_error`.
-    const MethodLookupResult = union(enum) {
-        target: MethodTargetLookup,
-        rejected,
-    };
-
-    fn lookupMethodTarget(
-        self: *Builder,
-        owner_view: ModuleView,
-        owner: static_dispatch.MethodOwner,
-        method_view: ModuleView,
-        method: MethodNameId,
-    ) ?MethodTargetLookup {
-        const method_text = method_view.canonical_names.?.methodNameText(method);
-        return switch (self.lookupMethodTargetByText(owner_view, owner, method_text) orelse return null) {
-            .target => |lookup| lookup,
-            .rejected => boxyPlanInvariant("a checked requirement's method target was a rejected declaration"),
-        };
-    }
-
-    fn lookupMethodTargetByText(
-        self: *Builder,
-        owner_view: ModuleView,
-        owner: static_dispatch.MethodOwner,
-        method_text: []const u8,
-    ) ?MethodLookupResult {
-        if (self.lookupMethodTargetInView(owner_view, owner_view, owner, method_text)) |target| return target;
-        for (self.imports) |imported| {
-            const view = moduleViewFromImported(imported);
-            if (moduleKeyEqual(view.key, owner_view.key)) continue;
-            if (self.lookupMethodTargetInView(view, owner_view, owner, method_text)) |target| return target;
-        }
-        for (self.relation_modules) |relation| {
-            const view = moduleViewFromImported(relation);
-            if (moduleKeyEqual(view.key, owner_view.key)) continue;
-            if (self.lookupMethodTargetInView(view, owner_view, owner, method_text)) |target| return target;
-        }
-        return null;
-    }
-
-    /// The checked `to_inspect` override that inspection calls for `owner`,
-    /// or null when inspection renders the owner's default form. The view
-    /// that declares `owner.to_inspect` is selected exactly as method dispatch
-    /// selects it; that declaration's checked eligibility is the answer.
-    fn lookupInspectOverride(
-        self: *Builder,
-        owner_view: ModuleView,
-        owner: static_dispatch.MethodOwner,
-    ) ?MethodTargetLookup {
-        if (inspectOverrideInView(owner_view, owner_view, owner)) |decision| return decision.target;
-        for (self.imports) |imported| {
-            const view = moduleViewFromImported(imported);
-            if (moduleKeyEqual(view.key, owner_view.key)) continue;
-            if (inspectOverrideInView(view, owner_view, owner)) |decision| return decision.target;
-        }
-        for (self.relation_modules) |relation| {
-            const view = moduleViewFromImported(relation);
-            if (moduleKeyEqual(view.key, owner_view.key)) continue;
-            if (inspectOverrideInView(view, owner_view, owner)) |decision| return decision.target;
-        }
-        return null;
-    }
-
-    const InspectOverrideDecision = struct {
-        target: ?MethodTargetLookup,
-    };
-
-    fn inspectOverrideInView(
-        candidate: ModuleView,
-        owner_view: ModuleView,
-        owner: static_dispatch.MethodOwner,
-    ) ?InspectOverrideDecision {
-        const owner_names = owner_view.canonical_names orelse return null;
-        const candidate_names = candidate.canonical_names orelse return null;
-        const candidate_owner = methodOwnerInNames(owner_names, candidate_names, owner) orelse return null;
-        const candidate_method = candidate_names.lookupMethodName("to_inspect") orelse return null;
-        const key: static_dispatch.MethodKey = .{ .owner = candidate_owner, .method = candidate_method };
-        // A declared `to_inspect` decides inspection in this view; the registry
-        // records an override only for an eligible, unrejected declaration.
-        _ = candidate.method_registry.lookup(key) orelse return null;
-        const override = candidate.method_registry.lookupInspectOverride(key) orelse return .{ .target = null };
-        // Inspection calls the method at its checked `T -> Str` instance.
-        var target = override.target;
-        target.callable_ty = override.callable_ty;
-        return .{ .target = .{
-            .view = candidate,
-            .method = candidate_method,
-            .target = target,
-            .inspect_evidence = override.evidence,
-        } };
-    }
-
-    fn lookupMethodTargetInView(
-        _: *Builder,
-        candidate: ModuleView,
-        owner_view: ModuleView,
-        owner: static_dispatch.MethodOwner,
-        method_text: []const u8,
-    ) ?MethodLookupResult {
-        const owner_names = owner_view.canonical_names orelse return null;
-        const candidate_names = candidate.canonical_names orelse return null;
-        const candidate_owner = methodOwnerInNames(owner_names, candidate_names, owner) orelse return null;
-        const candidate_method = candidate_names.lookupMethodName(method_text) orelse return null;
-        return switch (candidate.method_registry.lookup(.{ .owner = candidate_owner, .method = candidate_method }) orelse return null) {
-            .rejected => .rejected,
-            .target => |target| .{ .target = .{ .view = candidate, .method = candidate_method, .target = target } },
-        };
-    }
-
-    fn workerSourceForMethodTarget(
-        self: *Builder,
-        lookup: MethodTargetLookup,
-        shape: CheckedTypeIdentity,
-        contract_derivation: ?static_dispatch.GeneratedCodecDerivationId,
-    ) WorkerSource {
-        return switch (lookup.target.kind) {
-            .procedure => |procedure| .{ .procedure_template = procedure.template },
-            .local_proc => |local| if (self.topLevelProcedureBindingForExpr(lookup.view, local.expr)) |binding|
-                .{ .procedure_binding = binding }
-            else blk: {
-                const site_expr = self.nestedCallableSiteExprForExpr(lookup.view, local.expr) orelse local.expr;
-                // A dictionary slot, generated codec, or derived method calls
-                // its worker without a frame of the procedure's declaring
-                // body, so it can supply no value of that body.
-                if (nestedCallableRuntimeCaptures(lookup.view, site_expr).len != 0) {
-                    boxyPlanInvariant("method evidence selected a local procedure that needs values of its declaration context");
-                }
-                break :blk .{ .nested_expr = .{ .module = lookup.view.key, .expr = site_expr } };
-            },
-            .structural => |kind| switch (kind) {
-                .parser => .{ .generated_codec = .{
-                    .kind = .parser_constructor,
-                    .shape = shape,
-                    .contract_derivation = contract_derivation,
-                } },
-                .encoder => .{ .generated_codec = .{
-                    .kind = .encoder_constructor,
-                    .shape = shape,
-                    .contract_derivation = contract_derivation,
-                } },
-                .equality, .hash, .map, .map_effectful => boxyPlanInvariant("non-codec structural target reached Boxy method worker selection"),
-            },
-        };
-    }
-
     /// Returns the exact call-side row that instantiates a worker child when
     /// open tag rows expose different tags on each side of a checked function
     /// boundary. When the call contributes unmatched tags, the worker
@@ -19481,7 +19338,7 @@ const Builder = struct {
                 },
                 .imported => |imported| blk: {
                     const view = self.moduleForId(imported.artifact);
-                    break :blk .{ view, callableEvalTemplateOf(self.importedProcedureBinding(view, imported).body) orelse return null };
+                    break :blk .{ view, callableEvalTemplateOf(importedProcedureBinding(view, imported).body) orelse return null };
                 },
                 .hosted => return null,
             },
@@ -19513,7 +19370,7 @@ const Builder = struct {
     /// alias, or a procedure use whose binding is a callable-eval template
     /// (checking classifies only exact procedure aliases of those as direct).
     fn directTargetIsThroughAlias(self: *Builder, view: ModuleView, target: checked.ResolvedValueId) bool {
-        const procedure = switch (self.resolvedValueRecord(view, target).ref) {
+        const procedure = switch (resolvedValueRecord(view, target).ref) {
             .local_proc => |local| return local.is_alias,
             .top_level_proc, .imported_proc, .promoted_top_level_proc => |procedure| procedure,
             .platform_required_proc => |required| required.procedure,
@@ -19525,7 +19382,7 @@ const Builder = struct {
             .platform_required => |required| self.moduleForId(required.app_value.artifact).top_level_procedure_bindings.get(required.procedure_binding).body == .callable_eval_template,
             .imported => |imported| blk: {
                 const imported_view = self.moduleForId(imported.artifact);
-                break :blk self.importedProcedureBinding(imported_view, imported).body == .callable_eval_template;
+                break :blk importedProcedureBinding(imported_view, imported).body == .callable_eval_template;
             },
             .hosted => false,
         };
@@ -19548,7 +19405,7 @@ const Builder = struct {
 
     fn importedProcedureBindingBody(self: *Builder, binding_ref: checked.ImportedProcedureBindingRef) WorkerBody {
         const view = self.moduleForId(binding_ref.artifact);
-        const binding = self.importedProcedureBinding(view, binding_ref);
+        const binding = importedProcedureBinding(view, binding_ref);
         return switch (binding.body) {
             .direct_template => |direct| switch (direct.template) {
                 .checked => |template| self.rootProcedureTemplateBody(template),
@@ -19567,22 +19424,6 @@ const Builder = struct {
             .view = view,
             .proc = hostedProcForTemplate(view, hosted_ref.template),
         } };
-    }
-
-    fn importedProcedureBinding(
-        _: *Builder,
-        view: ModuleView,
-        binding_ref: checked.ImportedProcedureBindingRef,
-    ) checked.ImportedProcedureBindingView {
-        for (view.exported_procedure_bindings.bindings) |binding| {
-            if (moduleKeyEqual(binding.binding.artifact, binding_ref.artifact) and
-                binding.binding.def == binding_ref.def and
-                binding.binding.pattern == binding_ref.pattern)
-            {
-                return binding;
-            }
-        }
-        boxyPlanInvariant("imported procedure binding was not exported by its checked module");
     }
 
     fn rootProcedureTemplateBody(self: *Builder, template_ref: checked_names.ProcedureTemplateRef) WorkerBody {
@@ -19696,13 +19537,13 @@ const Builder = struct {
         };
         for (fn_value.captures) |capture| {
             if (!capture.id.isCanonical()) continue;
-            _ = try self.analyzeType(fn_view, self.checkedBinderType(fn_view, capture.id.binder()));
+            _ = try self.analyzeType(fn_view, checkedBinderType(fn_view, capture.id.binder()));
         }
     }
 
     fn nestedConstFnBody(self: *Builder, nested: anytype) WorkerBody {
         const view = self.moduleForStoredNestedFn(nested);
-        const expr_id = self.checkedLambdaExprForNestedFn(view, nested);
+        const expr_id = checkedLambdaExprForNestedFn(view, nested);
         return .{ .checked_expr = .{
             .view = view,
             .root_expr = expr_id,
@@ -19838,45 +19679,6 @@ const Builder = struct {
             _ = try self.analyzeType(view, arg);
         }
         _ = try self.analyzeType(view, host_function.ret);
-    }
-
-    fn checkedLambdaExprForNestedFn(
-        _: *Builder,
-        view: ModuleView,
-        nested: anytype,
-    ) checked.CheckedExprId {
-        for (view.nested_proc_sites.sites) |site| {
-            if (site.site != nested.site) continue;
-            switch (site.owner) {
-                .template => |site_owner| {
-                    if (nested.default_root != null) continue;
-                    if (!checked_names.procedureTemplateRefEql(site_owner, nested.owner)) continue;
-                },
-                // A default-root-qualified stored function matches the
-                // declaring module's default-root site (design.md
-                // "Defaulted Fields").
-                .default_root => if (nested.default_root == null) continue,
-            }
-            const expr_id = site.checked_expr orelse
-                boxyPlanInvariant("stored nested function had no checked expression site");
-            const expr = view.checked_bodies.expr(expr_id);
-            if (expr.data == .lambda) return expr_id;
-            if (expr.data == .closure) return expr.data.closure.lambda;
-            boxyPlanInvariant("stored nested function site did not point at a lambda or closure");
-        }
-        boxyPlanInvariant("stored nested function referenced a missing checked nested site");
-    }
-
-    fn checkedBinderType(_: *Builder, view: ModuleView, binder: checked.PatternBinderId) checked.CheckedTypeId {
-        const raw = @backingInt(binder);
-        if (raw >= view.checked_bodies.patternBinderCount()) {
-            boxyPlanInvariant("stored function capture binder was outside the checked body store");
-        }
-        const pattern = view.checked_bodies.patternBinder(@fromBackingInt(@intCast(raw))).pattern;
-        if (@backingInt(pattern) >= view.checked_bodies.patternCount()) {
-            boxyPlanInvariant("stored function capture pattern was outside the checked body store");
-        }
-        return view.checked_bodies.pattern(pattern).ty;
     }
 
     fn callableEvalTemplate(
@@ -20281,10 +20083,10 @@ const Builder = struct {
             // only by the module declaring it, which owns the dispatch.
             .local_proc => |local| .{
                 .view = dispatch_view,
-                .source = if (self.topLevelProcedureBindingForExpr(dispatch_view, local.expr)) |binding|
+                .source = if (topLevelProcedureBindingForExpr(dispatch_view, local.expr)) |binding|
                     .{ .procedure_binding = binding }
                 else
-                    .{ .nested_expr = .{ .module = dispatch_view.key, .expr = self.nestedCallableSiteExprForExpr(dispatch_view, local.expr) orelse local.expr } },
+                    .{ .nested_expr = .{ .module = dispatch_view.key, .expr = nestedCallableSiteExprFor(dispatch_view, local.expr) orelse local.expr } },
             },
             .structural => |kind| .{
                 .view = dispatch_view,
@@ -20301,11 +20103,11 @@ const Builder = struct {
     }
 
     fn directTargetIsLocalProc(
-        self: *Builder,
+        _: *Builder,
         view: ModuleView,
         target: checked.ResolvedValueId,
     ) bool {
-        return self.resolvedValueRecord(view, target).ref == .local_proc;
+        return resolvedValueRecord(view, target).ref == .local_proc;
     }
 
     fn directTargetHasNoCaptures(
@@ -20328,12 +20130,12 @@ const Builder = struct {
     }
 
     fn directCallInstantiationSourceFnType(
-        self: *Builder,
+        _: *Builder,
         view: ModuleView,
         target: checked.ResolvedValueId,
         call_site_type: checked.CheckedTypeId,
     ) CheckedTypeIdentity {
-        const record = self.resolvedValueRecord(view, target);
+        const record = resolvedValueRecord(view, target);
         if (record.ref == .platform_required_proc) {
             return .{
                 .module = view.key,
@@ -20345,16 +20147,16 @@ const Builder = struct {
     }
 
     fn workerSourceForDirectTarget(self: *Builder, view: ModuleView, target: checked.ResolvedValueId) WorkerSource {
-        const record = self.resolvedValueRecord(view, target);
+        const record = resolvedValueRecord(view, target);
         return switch (record.ref) {
             .top_level_proc,
             .promoted_top_level_proc,
             => |procedure| self.workerSourceForProcedureUse(procedure),
             .platform_required_proc => |required| self.workerSourceForProcedureUse(required.procedure),
-            .local_proc => |local| if (self.topLevelProcedureBindingForExpr(view, local.expr)) |binding|
+            .local_proc => |local| if (topLevelProcedureBindingForExpr(view, local.expr)) |binding|
                 .{ .procedure_binding = binding }
             else
-                .{ .nested_expr = .{ .module = view.key, .expr = self.nestedCallableSiteExprForExpr(view, local.expr) orelse local.expr } },
+                .{ .nested_expr = .{ .module = view.key, .expr = nestedCallableSiteExprFor(view, local.expr) orelse local.expr } },
             .imported_proc, .hosted_proc => |procedure| self.workerSourceForProcedureUse(procedure),
             .local_param,
             .local_value,
@@ -20414,10 +20216,10 @@ const Builder = struct {
                     const view = ref.view;
                     const record = view.resolved_value_refs.callableTarget(ref.ref_id);
                     break :next switch (record.ref) {
-                        .local_proc => |local| return if (self.topLevelProcedureBindingForExpr(view, local.expr)) |binding|
+                        .local_proc => |local| return if (topLevelProcedureBindingForExpr(view, local.expr)) |binding|
                             .{ .procedure_binding = binding }
                         else
-                            .{ .nested_expr = .{ .module = view.key, .expr = self.nestedCallableSiteExprForExpr(view, local.expr) orelse local.expr } },
+                            .{ .nested_expr = .{ .module = view.key, .expr = nestedCallableSiteExprFor(view, local.expr) orelse local.expr } },
                         .top_level_proc,
                         .promoted_top_level_proc,
                         => |procedure| .{ .procedure_use = procedure },
@@ -20471,7 +20273,7 @@ const Builder = struct {
                         },
                         .imported => |imported| blk: {
                             const view = self.moduleForId(imported.artifact);
-                            break :blk switch (self.importedProcedureBinding(view, imported).body) {
+                            break :blk switch (importedProcedureBinding(view, imported).body) {
                                 .callable_eval_template => |template| .{ .eval_template = .{ .view = view, .template = template } },
                                 .checked_error, .direct_template => null,
                             };
@@ -20540,7 +20342,7 @@ const Builder = struct {
             => |procedure| self.storedFnSourceForProcedureUse(procedure),
             .platform_required_proc => |required| self.storedFnSourceForProcedureUse(required.procedure),
             .imported_proc => |procedure| self.storedFnSourceForProcedureUse(procedure),
-            .local_proc => |local| if (self.topLevelProcedureBindingForExpr(view, local.expr)) |binding|
+            .local_proc => |local| if (topLevelProcedureBindingForExpr(view, local.expr)) |binding|
                 self.storedFnSourceForTopLevelBinding(binding)
             else
                 null,
@@ -20571,7 +20373,7 @@ const Builder = struct {
             }),
             .imported => |imported| blk: {
                 const view = self.moduleForId(imported.artifact);
-                const binding = self.importedProcedureBinding(view, imported);
+                const binding = importedProcedureBinding(view, imported);
                 break :blk switch (binding.body) {
                     .checked_error => null,
                     .callable_eval_template => |template| self.storedFnSourceForCallableEvalTemplate(view, template),
@@ -20606,47 +20408,6 @@ const Builder = struct {
             .fn_value => |fn_id| .{ .module = view.key, .fn_id = fn_id },
             .pending, .const_node, .discarded, .expect, .runtime => null,
         };
-    }
-
-    fn nestedCallableSiteExprForExpr(
-        _: *Builder,
-        view: ModuleView,
-        expr: checked.CheckedExprId,
-    ) ?checked.CheckedExprId {
-        return nestedCallableSiteExprFor(view, expr);
-    }
-
-    fn topLevelProcedureBindingForExpr(
-        _: *Builder,
-        view: ModuleView,
-        expr: checked.CheckedExprId,
-    ) ?checked.ArtifactTopLevelProcedureBindingRef {
-        for (view.top_level_procedure_bindings.bindings.items, 0..) |binding, index| {
-            const template_ref = switch (binding.body) {
-                .direct_template => |direct| switch (direct.template) {
-                    .checked => |template| template,
-                    .lifted,
-                    .synthetic,
-                    => continue,
-                },
-                .checked_error, .callable_eval_template => continue,
-            };
-            const template = view.checked_procedure_templates.get(template_ref.template);
-            const body_id = switch (template.body) {
-                .checked_body => |body| body,
-                .intrinsic_wrapper,
-                .entry_wrapper,
-                .unimplemented,
-                => continue,
-            };
-            if (view.checked_bodies.body(body_id).root_expr == expr) {
-                return .{
-                    .artifact = view.key,
-                    .binding = @fromBackingInt(@intCast(@as(u32, @intCast(index)))),
-                };
-            }
-        }
-        return null;
     }
 
     fn workerCheckedTypeForSource(self: *Builder, source: WorkerSource, requested_type: CheckedTypeIdentity) CheckedTypeIdentity {
@@ -20695,7 +20456,7 @@ const Builder = struct {
         binding_ref: checked.ImportedProcedureBindingRef,
     ) CheckedTypeIdentity {
         const view = self.moduleForId(binding_ref.artifact);
-        const binding = self.importedProcedureBinding(view, binding_ref);
+        const binding = importedProcedureBinding(view, binding_ref);
         return switch (binding.body) {
             .direct_template => |direct| switch (direct.template) {
                 .checked => |template| self.checkedTypeForTemplate(template),
@@ -20732,14 +20493,6 @@ const Builder = struct {
             .generated_field_iterator,
             => source,
         };
-    }
-
-    fn resolvedValueRecord(_: *Builder, view: ModuleView, target: checked.ResolvedValueId) checked.ResolvedValueRefRecord {
-        const raw = @backingInt(target);
-        if (raw >= view.resolved_value_refs.records.len) {
-            boxyPlanInvariant("checked direct call target referenced a missing resolved value");
-        }
-        return view.resolved_value_refs.records[raw];
     }
 };
 
@@ -21534,7 +21287,8 @@ fn requiredSingleChildOf(plan: *const ProgramPlan, rep_id: TypeRepId, role: Chil
     return found orelse boxyPlanInvariant("boxy representation was missing required child role");
 }
 
-fn checkedFunctionPayload(view: ModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedFunctionType {
+/// The function type `checked_ty` names, looking through aliases and nominal wrappers.
+pub fn checkedFunctionPayload(view: anytype, checked_ty: checked.CheckedTypeId) checked.CheckedFunctionType {
     var current = checked_ty;
     while (true) {
         switch (view.checked_types.payload(current)) {
@@ -21830,7 +21584,106 @@ fn checkedTryPayloads(view: ModuleView, checked_ty: checked.CheckedTypeId) ?Chec
     boxyPlanInvariant("checked Try alias chain was cyclic");
 }
 
-fn hostedProcForTemplate(view: ModuleView, template_ref: checked_names.ProcedureTemplateRef) checked.HostedProc {
+/// The imported procedure binding `binding_ref` names in `view`.
+pub fn importedProcedureBinding(
+    view: anytype,
+    binding_ref: checked.ImportedProcedureBindingRef,
+) checked.ImportedProcedureBindingView {
+    for (view.exported_procedure_bindings.bindings) |binding| {
+        if (moduleKeyEqual(binding.binding.artifact, binding_ref.artifact) and
+            binding.binding.def == binding_ref.def and
+            binding.binding.pattern == binding_ref.pattern)
+        {
+            return binding;
+        }
+    }
+    boxyPlanInvariant("imported procedure binding was not exported by its checked module");
+}
+
+/// The checked lambda expression that defines the nested function `nested`.
+pub fn checkedLambdaExprForNestedFn(
+    view: anytype,
+    nested: anytype,
+) checked.CheckedExprId {
+    for (view.nested_proc_sites.sites) |site| {
+        if (site.site != nested.site) continue;
+        switch (site.owner) {
+            .template => |site_owner| {
+                if (nested.default_root != null) continue;
+                if (!checked_names.procedureTemplateRefEql(site_owner, nested.owner)) continue;
+            },
+            // A default-root-qualified stored function matches the
+            // declaring module's default-root site (design.md
+            // "Defaulted Fields").
+            .default_root => if (nested.default_root == null) continue,
+        }
+        const expr_id = site.checked_expr orelse
+            boxyPlanInvariant("stored nested function had no checked expression site");
+        const expr = view.checked_bodies.expr(expr_id);
+        if (expr.data == .lambda) return expr_id;
+        if (expr.data == .closure) return expr.data.closure.lambda;
+        boxyPlanInvariant("stored nested function site did not point at a lambda or closure");
+    }
+    boxyPlanInvariant("stored nested function referenced a missing checked nested site");
+}
+
+/// The checked type of the pattern binder `binder`.
+pub fn checkedBinderType(view: anytype, binder: checked.PatternBinderId) checked.CheckedTypeId {
+    const raw = @backingInt(binder);
+    if (raw >= view.checked_bodies.patternBinderCount()) {
+        boxyPlanInvariant("stored function capture binder was outside the checked body store");
+    }
+    const pattern = view.checked_bodies.patternBinder(@fromBackingInt(@intCast(raw))).pattern;
+    if (@backingInt(pattern) >= view.checked_bodies.patternCount()) {
+        boxyPlanInvariant("stored function capture pattern was outside the checked body store");
+    }
+    return view.checked_bodies.pattern(pattern).ty;
+}
+
+/// The top-level procedure binding `expr` refers to, if it is a direct reference to one.
+pub fn topLevelProcedureBindingForExpr(
+    view: anytype,
+    expr: checked.CheckedExprId,
+) ?checked.ArtifactTopLevelProcedureBindingRef {
+    for (view.top_level_procedure_bindings.bindings.items, 0..) |binding, index| {
+        const template_ref = switch (binding.body) {
+            .direct_template => |direct| switch (direct.template) {
+                .checked => |template| template,
+                .lifted,
+                .synthetic,
+                => continue,
+            },
+            .checked_error, .callable_eval_template => continue,
+        };
+        const template = view.checked_procedure_templates.get(template_ref.template);
+        const body_id = switch (template.body) {
+            .checked_body => |body| body,
+            .intrinsic_wrapper,
+            .entry_wrapper,
+            .unimplemented,
+            => continue,
+        };
+        if (view.checked_bodies.body(body_id).root_expr == expr) {
+            return .{
+                .artifact = view.key,
+                .binding = @fromBackingInt(@intCast(@as(u32, @intCast(index)))),
+            };
+        }
+    }
+    return null;
+}
+
+/// The resolved value record `target` names.
+pub fn resolvedValueRecord(view: anytype, target: checked.ResolvedValueId) checked.ResolvedValueRefRecord {
+    const raw = @backingInt(target);
+    if (raw >= view.resolved_value_refs.records.len) {
+        boxyPlanInvariant("checked direct call target referenced a missing resolved value");
+    }
+    return view.resolved_value_refs.records[raw];
+}
+
+/// The hosted procedure whose template is `template_ref`.
+pub fn hostedProcForTemplate(view: anytype, template_ref: checked_names.ProcedureTemplateRef) checked.HostedProc {
     for (view.hosted_procs.procs) |hosted| {
         if (checked_names.procedureTemplateRefEql(hosted.template, template_ref)) {
             return hosted;
@@ -21849,6 +21702,171 @@ fn hostedRepresentationForTemplate(
         }
     }
     boxyPlanInvariant("hosted procedure template was missing from the interface hosted representation table");
+}
+
+/// The modules a method lookup searches after the owner's own module: the
+/// program's imports, then its relation modules.
+pub const MethodSearchModules = struct {
+    imports: []const checked.ImportedModuleView,
+    relation_modules: []const checked.ImportedModuleView,
+};
+
+/// A method target together with the module view that declares it.
+pub const MethodTargetLookup = struct {
+    view: ModuleView,
+    method: ?MethodNameId = null,
+    target: static_dispatch.MethodTarget,
+    /// For an inspect override, the checked evidence of inspection's use.
+    inspect_evidence: ?static_dispatch.EvidenceNodeId = null,
+};
+
+/// What an exact registry lookup found. `rejected` is a declared method
+/// whose declaration canonicalization or checking rejected: it has no
+/// worker, and a dispatch that lands on it is a `checked_error`.
+pub const MethodLookupResult = union(enum) {
+    target: MethodTargetLookup,
+    rejected,
+};
+
+/// Find the method target for `owner` and a method name id across the searchable modules.
+pub fn lookupMethodTarget(
+    modules: MethodSearchModules,
+    owner_view: ModuleView,
+    owner: static_dispatch.MethodOwner,
+    method_view: ModuleView,
+    method: MethodNameId,
+) ?MethodTargetLookup {
+    const method_text = method_view.canonical_names.?.methodNameText(method);
+    return switch (lookupMethodTargetByText(modules, owner_view, owner, method_text) orelse return null) {
+        .target => |lookup| lookup,
+        .rejected => boxyPlanInvariant("a checked requirement's method target was a rejected declaration"),
+    };
+}
+
+/// Find the method target for `owner` and a method name given as text across the searchable modules.
+pub fn lookupMethodTargetByText(
+    modules: MethodSearchModules,
+    owner_view: ModuleView,
+    owner: static_dispatch.MethodOwner,
+    method_text: []const u8,
+) ?MethodLookupResult {
+    if (lookupMethodTargetInView(owner_view, owner_view, owner, method_text)) |target| return target;
+    for (modules.imports) |imported| {
+        const view = moduleViewFromImported(imported);
+        if (moduleKeyEqual(view.key, owner_view.key)) continue;
+        if (lookupMethodTargetInView(view, owner_view, owner, method_text)) |target| return target;
+    }
+    for (modules.relation_modules) |relation| {
+        const view = moduleViewFromImported(relation);
+        if (moduleKeyEqual(view.key, owner_view.key)) continue;
+        if (lookupMethodTargetInView(view, owner_view, owner, method_text)) |target| return target;
+    }
+    return null;
+}
+
+/// The checked `to_inspect` override that inspection calls for `owner`,
+/// or null when inspection renders the owner's default form. The view
+/// that declares `owner.to_inspect` is selected exactly as method dispatch
+/// selects it; that declaration's checked eligibility is the answer.
+pub fn lookupInspectOverride(
+    modules: MethodSearchModules,
+    owner_view: ModuleView,
+    owner: static_dispatch.MethodOwner,
+) ?MethodTargetLookup {
+    if (inspectOverrideInView(owner_view, owner_view, owner)) |decision| return decision.target;
+    for (modules.imports) |imported| {
+        const view = moduleViewFromImported(imported);
+        if (moduleKeyEqual(view.key, owner_view.key)) continue;
+        if (inspectOverrideInView(view, owner_view, owner)) |decision| return decision.target;
+    }
+    for (modules.relation_modules) |relation| {
+        const view = moduleViewFromImported(relation);
+        if (moduleKeyEqual(view.key, owner_view.key)) continue;
+        if (inspectOverrideInView(view, owner_view, owner)) |decision| return decision.target;
+    }
+    return null;
+}
+
+const InspectOverrideDecision = struct {
+    target: ?MethodTargetLookup,
+};
+
+fn inspectOverrideInView(
+    candidate: ModuleView,
+    owner_view: ModuleView,
+    owner: static_dispatch.MethodOwner,
+) ?InspectOverrideDecision {
+    const owner_names = owner_view.canonical_names orelse return null;
+    const candidate_names = candidate.canonical_names orelse return null;
+    const candidate_owner = methodOwnerInNames(owner_names, candidate_names, owner) orelse return null;
+    const candidate_method = candidate_names.lookupMethodName("to_inspect") orelse return null;
+    const key: static_dispatch.MethodKey = .{ .owner = candidate_owner, .method = candidate_method };
+    // A declared `to_inspect` decides inspection in this view; the registry
+    // records an override only for an eligible, unrejected declaration.
+    _ = candidate.method_registry.lookup(key) orelse return null;
+    const override = candidate.method_registry.lookupInspectOverride(key) orelse return .{ .target = null };
+    // Inspection calls the method at its checked `T -> Str` instance.
+    var target = override.target;
+    target.callable_ty = override.callable_ty;
+    return .{ .target = .{
+        .view = candidate,
+        .method = candidate_method,
+        .target = target,
+        .inspect_evidence = override.evidence,
+    } };
+}
+
+/// Find the method target for `owner` in one candidate module view.
+pub fn lookupMethodTargetInView(
+    candidate: ModuleView,
+    owner_view: ModuleView,
+    owner: static_dispatch.MethodOwner,
+    method_text: []const u8,
+) ?MethodLookupResult {
+    const owner_names = owner_view.canonical_names orelse return null;
+    const candidate_names = candidate.canonical_names orelse return null;
+    const candidate_owner = methodOwnerInNames(owner_names, candidate_names, owner) orelse return null;
+    const candidate_method = candidate_names.lookupMethodName(method_text) orelse return null;
+    return switch (candidate.method_registry.lookup(.{ .owner = candidate_owner, .method = candidate_method }) orelse return null) {
+        .rejected => .rejected,
+        .target => |target| .{ .target = .{ .view = candidate, .method = candidate_method, .target = target } },
+    };
+}
+
+/// The worker source that lowers a resolved method target at `shape`.
+pub fn workerSourceForMethodTarget(
+    lookup: MethodTargetLookup,
+    shape: CheckedTypeIdentity,
+    contract_derivation: ?static_dispatch.GeneratedCodecDerivationId,
+) WorkerSource {
+    return switch (lookup.target.kind) {
+        .procedure => |procedure| .{ .procedure_template = procedure.template },
+        .local_proc => |local| if (topLevelProcedureBindingForExpr(lookup.view, local.expr)) |binding|
+            .{ .procedure_binding = binding }
+        else blk: {
+            const site_expr = nestedCallableSiteExprFor(lookup.view, local.expr) orelse local.expr;
+            // A dictionary slot, generated codec, or derived method calls
+            // its worker without a frame of the procedure's declaring
+            // body, so it can supply no value of that body.
+            if (nestedCallableRuntimeCaptures(lookup.view, site_expr).len != 0) {
+                boxyPlanInvariant("method evidence selected a local procedure that needs values of its declaration context");
+            }
+            break :blk .{ .nested_expr = .{ .module = lookup.view.key, .expr = site_expr } };
+        },
+        .structural => |kind| switch (kind) {
+            .parser => .{ .generated_codec = .{
+                .kind = .parser_constructor,
+                .shape = shape,
+                .contract_derivation = contract_derivation,
+            } },
+            .encoder => .{ .generated_codec = .{
+                .kind = .encoder_constructor,
+                .shape = shape,
+                .contract_derivation = contract_derivation,
+            } },
+            .equality, .hash, .map, .map_effectful => boxyPlanInvariant("non-codec structural target reached Boxy method worker selection"),
+        },
+    };
 }
 
 fn moduleViewFromImported(imported: checked.ImportedModuleView) ModuleView {
@@ -24664,12 +24682,6 @@ test "boxy planner records imported box payload capability source modules" {
     try expectTypeRef(source_key, @fromBackingInt(@intCast(1)), fields[2].source_type);
 }
 
-fn moduleKey(byte: u8) checked.ModuleId {
-    var key = checked.ModuleId{};
-    key.bytes[0] = byte;
-    return key;
-}
-
 fn rootTypeRef(ty: checked.CheckedTypeId) CheckedTypeIdentity {
     return .{ .ty = ty };
 }
@@ -24677,121 +24689,6 @@ fn rootTypeRef(ty: checked.CheckedTypeId) CheckedTypeIdentity {
 fn expectTypeRef(module: checked.ModuleId, ty: checked.CheckedTypeId, actual: CheckedTypeIdentity) error{ TestExpectedEqual, TestUnexpectedResult }!void {
     try std.testing.expect(moduleKeyEqual(module, actual.module));
     try std.testing.expectEqual(ty, actual.ty);
-}
-
-fn typeKey(byte: u8) checked_names.CanonicalTypeKey {
-    var key = checked_names.CanonicalTypeKey{};
-    key.bytes[0] = byte;
-    return key;
-}
-
-fn typeSchemeKey(byte: u8) checked_names.CanonicalTypeSchemeKey {
-    var key = checked_names.CanonicalTypeSchemeKey{};
-    key.bytes[0] = byte;
-    return key;
-}
-
-fn procedureTemplateRef(key: checked.CheckedModuleArtifactKey, raw_template_id: u32) checked_names.ProcedureTemplateRef {
-    return .{
-        .artifact = .{ .bytes = key.bytes },
-        .proc_base = @fromBackingInt(@intCast(raw_template_id)),
-        .template = @fromBackingInt(@intCast(raw_template_id)),
-    };
-}
-
-fn procedureValueRef(template: checked_names.ProcedureTemplateRef) checked_names.ProcedureValueRef {
-    return .{
-        .artifact = template.artifact,
-        .proc_base = template.proc_base,
-    };
-}
-
-fn checkedTemplate(
-    template_ref: checked_names.ProcedureTemplateRef,
-    checked_fn_root: checked.CheckedTypeId,
-    body: checked.CheckedBodyId,
-    target: checked.ProcTarget,
-) checked.CheckedProcedureTemplate {
-    return .{
-        .proc_base = template_ref.proc_base,
-        .template_id = template_ref.template,
-        .body = .{ .checked_body = body },
-        .checked_fn_scheme = typeSchemeKey(9),
-        .checked_fn_root = checked_fn_root,
-        .static_dispatch_plans = .{},
-        .direct_dispatch_plans = .{},
-        .dispatch_relations = .{},
-        .resolved_value_refs = .{},
-        .top_level_value_uses = .{},
-        .nested_proc_sites = .{},
-        .target = target,
-    };
-}
-
-fn testIntNumeral(value: u128) Allocator.Error!can.ModuleEnv.NumeralLiteral {
-    var buffer: [16]u8 = undefined;
-    var remaining = value;
-    var len: usize = 0;
-    while (true) {
-        buffer[buffer.len - 1 - len] = @truncate(remaining);
-        len += 1;
-        remaining >>= 8;
-        if (remaining == 0) break;
-    }
-
-    const env = testNumeralModuleEnv();
-    const node = @as(can.CIR.Node.Idx, @fromBackingInt(@intCast(fixtureTableIndex(0))));
-    try env.recordNumeralLiteral(node, buffer[buffer.len - len ..], &.{}, 0, false, false, false, true);
-    return env.numeralLiteralForNode(node) orelse unreachable;
-}
-
-fn testNumeralModuleEnv() *can.ModuleEnv {
-    const S = struct {
-        var env: ?*can.ModuleEnv = null;
-    };
-    if (S.env) |existing| return existing;
-    const page_allocator = std.heap.page_allocator;
-    const env = page_allocator.create(can.ModuleEnv) catch unreachable;
-    env.* = can.ModuleEnv.init(page_allocator, "") catch unreachable;
-    env.initCIRFields("Test") catch unreachable;
-    S.env = env;
-    return env;
-}
-
-fn minimalCheckedArtifact(allocator: Allocator) checked.CheckedModuleArtifact {
-    return .{
-        .key = moduleKey(1),
-        .canonical_names = checked_names.CanonicalNameStore.init(allocator),
-        .module_identity = testModuleIdentity(),
-        .checking_context_identity = .{},
-        .module_env = .{ .checked_source = testNumeralModuleEnv() },
-        .exports = .{},
-        .provides_requires = .{},
-        .method_registry = .{},
-        .static_dispatch_plans = .{},
-        .resolved_value_refs = .{},
-        .checked_procedure_templates = .{},
-        .top_level_procedure_bindings = .{},
-        .root_requests = .{},
-        .hosted_procs = .{},
-        .platform_required_declarations = .{},
-        .platform_required_bindings = .{},
-        .interface_capabilities = .{},
-        .compile_time_roots = .{},
-        .top_level_values = .{},
-        .hoisted_constants = .{},
-        .const_templates = .{},
-        .const_store = check.ConstStore.ConstStore.init(allocator),
-    };
-}
-
-fn testModuleIdentity() checked.ModuleIdentity {
-    return .{
-        .module_idx = 0,
-        .module_name = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-        .display_module_name = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-        .kind = .module,
-    };
 }
 
 fn dummyProcedureTemplate() checked_names.ProcedureTemplateRef {

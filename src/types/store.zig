@@ -844,16 +844,6 @@ pub const Store = struct {
         try self.setDescUnguarded(storage.desc_idx, desc);
     }
 
-    /// Whether `var_` belongs to a frozen class.
-    pub fn varIsFrozen(self: *const Self, var_: Var) bool {
-        return self.resolveStorageRoot(var_).desc.flags.frozen;
-    }
-
-    /// The frozen classes, by anchor, for verifying them.
-    pub fn frozenAnchors(self: *const Self) std.AutoHashMapUnmanaged(u32, Var).ValueIterator {
-        return self.frozen_anchors.valueIterator();
-    }
-
     /// End every class's freeze; afterwards the store holds no frozen class.
     pub fn thawFrozenClasses(self: *Self) Allocator.Error!void {
         var anchors = self.frozen_anchors.iterator();
@@ -1433,13 +1423,6 @@ pub const Store = struct {
         return self.vars.sliceRange(range);
     }
 
-    /// Get an iterator over vars for the given range.
-    /// Use this instead of sliceVars when the iteration may trigger
-    /// reallocations (e.g., during unification).
-    pub fn iterVars(self: *const Self, range: VarSafeList.Range) VarSafeList.Iterator {
-        return self.vars.iterRange(range);
-    }
-
     /// Get a var at a specific offset within a range.
     /// Use this for index-based iteration when unification may trigger reallocations.
     pub fn getVarAt(self: *const Self, range: VarSafeList.Range, offset: u32) Var {
@@ -1772,6 +1755,17 @@ pub const Store = struct {
         const trace = tracy.traceNamed(@src(), "typesStore.resolveVar");
         defer trace.end();
         return publicResolved(initial_var, self.resolveStorageRoot(initial_var));
+    }
+
+    /// Resolve `var_` through any chain of aliases to the content they name.
+    pub fn resolveThroughAliases(self: *const Self, var_: Var) ResolvedVarDesc {
+        var resolved = self.resolveVar(var_);
+        var guard = debug.IterationGuard.init("resolveThroughAliases");
+        while (resolved.desc.content == .alias) {
+            guard.tick();
+            resolved = self.resolveVar(self.getAliasBackingVar(resolved.desc.content.alias));
+        }
+        return resolved;
     }
 
     /// Whether `var_` resolves through aliases to a function structure.

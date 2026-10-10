@@ -438,11 +438,7 @@ pub const CheckingContextIdentity = struct {
         };
     }
 
-    pub fn deinit(self: *CheckingContextIdentity, allocator: Allocator) void {
-        allocator.free(self.explicit_roots);
-        allocator.free(self.imports);
-        self.* = .{};
-    }
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 /// Public `PublishImportArtifact` declaration.
@@ -459,6 +455,10 @@ const CheckedImportViews = struct {
     /// Platform relation modules: registry-visible for dispatch resolution
     /// even though they are neither imported nor in `available`.
     relations: []const ImportedModuleView = &.{},
+
+    fn viewForKey(self: CheckedImportViews, key: CheckedModuleArtifactKey) ?ImportedModuleView {
+        return dependencyViewByKey(key, self.direct, self.available, self.relations);
+    }
 };
 
 /// Checked artifacts that must be available to consume this module's public API.
@@ -475,11 +475,7 @@ pub const PublicApiDependencies = struct {
         pub const deserialize = Serde.deserialize;
     };
 
-    pub fn deinit(self: *PublicApiDependencies, allocator: Allocator) void {
-        allocator.free(self.type_owner_artifacts);
-        allocator.free(self.artifacts);
-        self.* = .{};
-    }
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 /// Checked artifacts that must be materialized for post-check lowering of this
@@ -494,10 +490,7 @@ pub const LoweringVisibility = struct {
         pub const deserialize = Serde.deserialize;
     };
 
-    pub fn deinit(self: *LoweringVisibility, allocator: Allocator) void {
-        allocator.free(self.module_ids);
-        self.* = .{};
-    }
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 /// Ordered checked-module registries visible to method lookup after the
@@ -513,10 +506,7 @@ pub const MethodLookupScope = struct {
         pub const deserialize = Serde.deserialize;
     };
 
-    pub fn deinit(self: *MethodLookupScope, allocator: Allocator) void {
-        allocator.free(self.module_ids);
-        self.* = .{};
-    }
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 const MethodLookupScopeBuilder = struct {
@@ -542,7 +532,7 @@ const MethodLookupScopeBuilder = struct {
     }
 
     fn append(self: *MethodLookupScopeBuilder, module_id: CheckedModuleArtifactKey) Allocator.Error!void {
-        if (checkedArtifactKeyEql(module_id, self.current)) return;
+        if (CheckedModuleArtifactKey.eql(module_id, self.current)) return;
         const entry = try self.seen.getOrPut(module_id);
         if (entry.found_existing) return;
         entry.value_ptr.* = {};
@@ -597,11 +587,11 @@ fn moduleViewIsSuperseded(
 ) bool {
     for (relation_artifacts) |relation| {
         if (base.ModuleIdentity.eql(&view.module_identity.stable_hash, &relation.module_identity.stable_hash) and
-            !checkedArtifactKeyEql(view.key, relation.key)) return true;
+            !CheckedModuleArtifactKey.eql(view.key, relation.key)) return true;
     }
     for (direct_imports) |direct| {
         if (base.ModuleIdentity.eql(&view.module_identity.stable_hash, &direct.view.module_identity.stable_hash) and
-            !checkedArtifactKeyEql(view.key, direct.key)) return true;
+            !CheckedModuleArtifactKey.eql(view.key, direct.key)) return true;
     }
     return false;
 }
@@ -682,10 +672,7 @@ pub const ExportTable = struct {
         return .{ .defs = self.defs };
     }
 
-    pub fn deinit(self: *ExportTable, allocator: Allocator) void {
-        allocator.free(self.defs);
-        self.* = .{};
-    }
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 
     /// Relocatable serialized form. `CIR.Def.Idx` is a POD enum, so the single
     /// `defs` slice relocates with one fixup regardless of length.
@@ -751,11 +738,7 @@ pub const ProvidesRequiresMetadata = struct {
         pub const deserialize = Serde.deserialize;
     };
 
-    pub fn deinit(self: *ProvidesRequiresMetadata, allocator: Allocator) void {
-        allocator.free(self.provides);
-        allocator.free(self.requires);
-        self.* = .{};
-    }
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 /// Public `ProvidedProcedureExport` declaration.
@@ -845,10 +828,7 @@ pub const ProvidedExportTable = struct {
         return .{ .exports = try exports.toOwnedSlice(allocator) };
     }
 
-    pub fn deinit(self: *ProvidedExportTable, allocator: Allocator) void {
-        allocator.free(self.exports);
-        self.* = .{};
-    }
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 /// Public `RootRequestKind` declaration.
@@ -1055,7 +1035,7 @@ pub const RootRequestTable = struct {
         for (requests.items) |*request| {
             if (request.root_evidence != null) continue;
             const template_ref = request.procedure_template orelse continue;
-            if (!checkedArtifactKeyEql(checkedArtifactKeyFromArtifactRef(template_ref.artifact), artifact_key)) {
+            if (!CheckedModuleArtifactKey.eql(checkedArtifactKeyFromArtifactRef(template_ref.artifact), artifact_key)) {
                 checkedArtifactInvariant("root procedure template belonged to a different checked artifact", .{});
             }
             request.root_evidence = .{
@@ -1107,12 +1087,7 @@ pub const RootRequestTable = struct {
         };
     }
 
-    pub fn deinit(self: *RootRequestTable, allocator: Allocator) void {
-        allocator.free(self.compile_time_requests);
-        allocator.free(self.runtime_requests);
-        allocator.free(self.requests);
-        self.* = .{};
-    }
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 fn explicitRootMatchesCheckedRootKind(
@@ -1435,7 +1410,7 @@ const CompileTimeRequestScheduler = struct {
         self: *CompileTimeRequestScheduler,
         template_ref: canonical.ProcedureTemplateRef,
     ) ?[]const ResolvedValueRefId {
-        if (!checkedArtifactKeyEql(checkedArtifactKeyFromArtifactRef(template_ref.artifact), self.artifact_key)) return null;
+        if (!CheckedModuleArtifactKey.eql(checkedArtifactKeyFromArtifactRef(template_ref.artifact), self.artifact_key)) return null;
         const index = @backingInt(template_ref.template);
         if (index >= self.visited_templates.len) {
             checkedArtifactInvariant("compile-time request dependency referenced an unknown local procedure template", .{});
@@ -1490,12 +1465,12 @@ const CompileTimeRequestScheduler = struct {
         while (true) {
             switch (procedure.binding) {
                 .top_level => |top_level| {
-                    if (!checkedArtifactKeyEql(top_level.artifact, self.artifact_key)) return null;
+                    if (!CheckedModuleArtifactKey.eql(top_level.artifact, self.artifact_key)) return null;
                     const binding = self.top_level_procedure_bindings.get(top_level.binding);
                     return try self.collectProcedureBindingDependencies(binding.body);
                 },
                 .platform_required => |required| {
-                    if (!checkedArtifactKeyEql(required.artifact, self.artifact_key)) return null;
+                    if (!CheckedModuleArtifactKey.eql(required.artifact, self.artifact_key)) return null;
                     const binding = self.platform_required_bindings.lookupByBindingId(@backingInt(required.procedure_binding)) orelse {
                         checkedArtifactInvariant("platform-required procedure dependency referenced a missing binding", .{});
                     };
@@ -1557,7 +1532,7 @@ const CompileTimeRequestScheduler = struct {
     }
 
     fn constUseIsUnimplemented(self: *CompileTimeRequestScheduler, const_ref: ConstRef) bool {
-        if (!checkedArtifactKeyEql(const_ref.artifact, self.artifact_key)) return false;
+        if (!CheckedModuleArtifactKey.eql(const_ref.artifact, self.artifact_key)) return false;
         return self.const_templates.get(const_ref).state == .unimplemented;
     }
 
@@ -1565,7 +1540,7 @@ const CompileTimeRequestScheduler = struct {
         self: *CompileTimeRequestScheduler,
         const_ref: ConstRef,
     ) ?ComptimeRootId {
-        if (!checkedArtifactKeyEql(const_ref.artifact, self.artifact_key)) return null;
+        if (!CheckedModuleArtifactKey.eql(const_ref.artifact, self.artifact_key)) return null;
         return switch (const_ref.owner) {
             .top_level_binding => |top_level| blk: {
                 if (top_level.module_idx != self.module_idx) {
@@ -3996,9 +3971,9 @@ const CheckedSchemeIndexPolicy = struct {
 /// Recursive types are stored as cyclic `CheckedTypeId` graphs with no implicit
 /// tree structure, so every traversal of a store root must guard against cycles.
 /// New `CheckedTypeId` traversals must be expressed through `checked_traverse.zig`
-/// (`BoolPredicateTraversal`, `ReserveThenFillTraversal`, or `DigestTraversal`),
-/// which own the visited/active memo and guarantee the memo is written before a
-/// root is descended. Hand-rolled visited/active sets are prohibited: they make
+/// (`BoolPredicateTraversal`), which owns the visited/active memo and
+/// guarantees the memo is written before a root is descended. Hand-rolled
+/// visited/active sets are prohibited: they make
 /// "read the memo but forget the write" compile cleanly and only fail on
 /// recursive inputs.
 pub const CheckedTypeStore = struct {
@@ -6805,7 +6780,7 @@ fn appendNominalDeclarationRootPayload(
         // reached through a declaration root and a use-site root.
         if (existing_nominal.name != nominal.name or
             existing_nominal.origin_module != nominal.origin_module or
-            !checkedArtifactKeyEql(existing_nominal.owner_module, nominal.owner_module) or
+            !CheckedModuleArtifactKey.eql(existing_nominal.owner_module, nominal.owner_module) or
             existing_nominal.is_opaque != nominal.is_opaque)
         {
             checkedArtifactInvariant("nominal declaration key collided with a different nominal payload", .{});
@@ -6939,16 +6914,7 @@ fn checkedTypeIdSliceEql(a: []const CheckedTypeId, b: []const CheckedTypeId) boo
 fn checkedDeclaredFieldSliceEql(a: []const CheckedDeclaredField, b: []const CheckedDeclaredField) bool {
     if (a.len != b.len) return false;
     for (a, b) |left, right| {
-        switch (left) {
-            .named => |left_name| switch (right) {
-                .named => |right_name| if (left_name != right_name) return false,
-                .padding => return false,
-            },
-            .padding => |left_index| switch (right) {
-                .named => return false,
-                .padding => |right_index| if (left_index != right_index) return false,
-            },
-        }
+        if (!std.meta.eql(left, right)) return false;
     }
     return true;
 }
@@ -7087,7 +7053,7 @@ fn checkedTypePayloadBuildEqlStored(
             const right = stored.alias;
             break :blk left.name == right.name and
                 left.origin_module == right.origin_module and
-                checkedArtifactKeyEql(left.owner_module, right.owner_module) and
+                CheckedModuleArtifactKey.eql(left.owner_module, right.owner_module) and
                 left.source_decl == right.source_decl and
                 left.builtin_origin == right.builtin_origin and
                 left.backing == right.backing and
@@ -7107,7 +7073,7 @@ fn checkedTypePayloadBuildEqlStored(
             const right = stored.nominal;
             break :blk left.name == right.name and
                 left.origin_module == right.origin_module and
-                checkedArtifactKeyEql(left.owner_module, right.owner_module) and
+                CheckedModuleArtifactKey.eql(left.owner_module, right.owner_module) and
                 left.source_decl == right.source_decl and
                 left.builtin == right.builtin and
                 left.is_opaque == right.is_opaque and
@@ -7157,19 +7123,6 @@ const OwnerNominalDecl = struct {
     decl: CheckedNominalDeclaration,
 };
 
-fn importedViewForKey(imports: CheckedImportViews, key: CheckedModuleArtifactKey) ?ImportedModuleView {
-    for (imports.direct) |import| {
-        if (checkedArtifactKeyEql(import.key, key)) return import.view;
-    }
-    for (imports.available) |view| {
-        if (checkedArtifactKeyEql(view.key, key)) return view;
-    }
-    for (imports.relations) |view| {
-        if (checkedArtifactKeyEql(view.key, key)) return view;
-    }
-    return null;
-}
-
 /// Find the imported artifact view + declaration for a nominal using the
 /// explicit representation carried by the payload. Missing declaration-backed
 /// owners are producer bugs: a published artifact must be self-contained.
@@ -7180,16 +7133,16 @@ fn ownerViewAndDeclForImportedNominal(
 ) ?OwnerNominalDecl {
     return switch (representation) {
         .builtin => |builtin_nominal| blk: {
-            const view = importedViewForKey(imports, owner_module) orelse return null;
+            const view = imports.viewForKey(owner_module) orelse return null;
             const declaration = view.checked_types.builtinNominalDeclaration(builtin_nominal) orelse return null;
             break :blk .{ .view = view, .decl = declaration };
         },
         .imported_declaration => |imported| blk: {
-            const view = importedViewForKey(imports, imported.artifact) orelse return null;
+            const view = imports.viewForKey(imported.artifact) orelse return null;
             break :blk .{ .view = view, .decl = view.checked_types.nominalDeclarationById(imported.declaration) };
         },
         .imported_box_payload_capability => |capability_ref| blk: {
-            const view = importedViewForKey(imports, capability_ref.artifact) orelse return null;
+            const view = imports.viewForKey(capability_ref.artifact) orelse return null;
             const capability = view.interface_capabilities.boxPayloadCapability(capability_ref.capability);
             const decl = view.checked_types.nominalDeclaration(capability.nominal) orelse
                 checkedArtifactInvariant("imported box payload capability referenced missing nominal declaration", .{});
@@ -8975,31 +8928,11 @@ fn checkedImportedOwnerForOriginHash(
     imports: CheckedImportViews,
     origin_hash: *const [32]u8,
 ) ModuleId {
-    var found: ?ModuleId = null;
-
-    for (imports.direct) |import| {
-        if (!importedViewIdentityMatches(import.view, origin_hash)) continue;
-        found = checkedUniqueOwnerArtifact(found, import.key);
-    }
-    for (imports.available) |view| {
-        if (!importedViewIdentityMatches(view, origin_hash)) continue;
-        found = checkedUniqueOwnerArtifact(found, view.key);
-    }
-
-    return found orelse checkedArtifactInvariant(
+    const view = importedViewForOriginHash(imports.direct, imports.available, origin_hash) orelse checkedArtifactInvariant(
         "checked named type source origin had no available checked owner artifact {any}",
         .{origin_hash.*},
     );
-}
-
-fn checkedUniqueOwnerArtifact(existing: ?ModuleId, next: ModuleId) ModuleId {
-    if (existing) |found| {
-        if (!checkedArtifactKeyEql(found, next)) {
-            checkedArtifactInvariant("checked named type source origin resolved to multiple owner artifacts", .{});
-        }
-        return found;
-    }
-    return next;
+    return view.key;
 }
 
 fn categorizeBuiltinNominal(module: TypedCIR.Module, imports: CheckedImportViews, nominal: types.NominalType) ?CheckedBuiltinNominal {
@@ -10307,7 +10240,7 @@ fn importedNominalDeclarationRefForSourceNominal(
                 .declaration = declaration.id,
             };
             if (found) |existing| {
-                if (!checkedArtifactKeyEql(existing.artifact, next.artifact) or existing.declaration != next.declaration) {
+                if (!CheckedModuleArtifactKey.eql(existing.artifact, next.artifact) or existing.declaration != next.declaration) {
                     checkedArtifactInvariant("checked nominal representation import declaration resolution was ambiguous", .{});
                 }
             } else {
@@ -10325,7 +10258,7 @@ fn importedNominalDeclarationRefForSourceNominal(
                 .declaration = declaration.id,
             };
             if (found) |existing| {
-                if (!checkedArtifactKeyEql(existing.artifact, next.artifact) or existing.declaration != next.declaration) {
+                if (!CheckedModuleArtifactKey.eql(existing.artifact, next.artifact) or existing.declaration != next.declaration) {
                     checkedArtifactInvariant("checked nominal representation import declaration resolution was ambiguous", .{});
                 }
             } else {
@@ -10555,10 +10488,7 @@ pub const CheckedExhaustivenessSiteTable = struct {
         return self.sites[raw];
     }
 
-    pub fn deinit(self: *CheckedExhaustivenessSiteTable, allocator: Allocator) void {
-        allocator.free(self.sites);
-        self.* = .{};
-    }
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 
     pub const Serialized = extern struct {
         sites: SerializedSlice(CheckedExhaustivenessSite) = .{},
@@ -11704,7 +11634,7 @@ const CheckedSourceNodeMap = struct {
         return packed_entry & (checked_source_node_id_limit - 1);
     }
 
-    fn deinit(self: *CheckedSourceNodeMap, allocator: Allocator) void {
+    pub fn deinit(self: *CheckedSourceNodeMap, allocator: Allocator) void {
         allocator.free(self.entries);
         self.* = .{};
     }
@@ -12873,7 +12803,7 @@ pub const CheckedBodyStore = struct {
                 .top_level => |target| target,
                 .imported, .hosted, .platform_required => continue,
             };
-            if (!checkedArtifactKeyEql(target.artifact, local_module)) continue;
+            if (!CheckedModuleArtifactKey.eql(target.artifact, local_module)) continue;
             const binding = bindings.get(target.binding);
             if (binding.body != .callable_eval_template) continue;
             const root = roots.root(templates.get(binding.body.callable_eval_template).root);
@@ -13655,38 +13585,7 @@ pub const CheckedBodyStore = struct {
         try self.stored_exprs.ensureUnusedCapacity(allocator, additional);
     }
 
-    pub fn deinit(self: *CheckedBodyStore, allocator: Allocator) void {
-        self.source_node_map.deinit(allocator);
-        if (!self.serialized) {
-            self.literal_pattern_exprs.deinit(allocator);
-            self.pattern_binder_by_pattern.deinit(allocator);
-            self.pattern_binders.deinit(allocator);
-            self.string_ranges.deinit(allocator);
-            self.string_bytes.deinit(allocator);
-            self.stored_statements.deinit(allocator);
-            self.stored_patterns.deinit(allocator);
-            self.stored_exprs.deinit(allocator);
-            self.bodies.deinit(allocator);
-            self.expr_id_pool.deinit(allocator);
-            self.pattern_id_pool.deinit(allocator);
-            self.statement_id_pool.deinit(allocator);
-            self.pattern_binder_id_pool.deinit(allocator);
-            self.loop_mutations.deinit(allocator);
-            self.record_expr_field_pool.deinit(allocator);
-            self.record_unset_label_pool.deinit(allocator);
-            self.field_access_segment_pool.deinit(allocator);
-            self.default_exprs.deinit(allocator);
-            self.record_omitted_defaults.deinit(allocator);
-            self.if_branch_pool.deinit(allocator);
-            self.match_branch_pool.deinit(allocator);
-            self.match_branch_pattern_pool.deinit(allocator);
-            self.binder_remap_pool.deinit(allocator);
-            self.capture_pool.deinit(allocator);
-            self.record_destruct_pool.deinit(allocator);
-            self.str_pattern_step_pool.deinit(allocator);
-        }
-        self.* = .{};
-    }
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 
     pub fn discardSourceNodeMap(self: *CheckedBodyStore, allocator: Allocator) void {
         self.source_node_map.discard(allocator);
@@ -13941,7 +13840,7 @@ const DiagnosticErrorGraph = struct {
                 .promoted_top_level_proc,
                 => continue,
             };
-            if (!checkedArtifactKeyEql(ref.artifact, bindings.module)) continue;
+            if (!CheckedModuleArtifactKey.eql(ref.artifact, bindings.module)) continue;
             if (bindings.const_templates.get(ref).state == .unimplemented) continue;
             lookup_values[@backingInt(record.expr)] = switch (ref.owner) {
                 .top_level_binding => |owner| by_pattern.get(owner.pattern) orelse
@@ -14999,7 +14898,7 @@ fn procedureUseBody(
         .platform_required => |required| .{ .artifact = required.artifact, .binding = required.procedure_binding },
         .hosted => return null,
         .imported => |imported| {
-            const view = moduleViewForKey(imports, available_modules, relation_modules, imported.artifact) orelse
+            const view = dependencyViewByKey(imported.artifact, imports, available_modules, relation_modules) orelse
                 checkedArtifactInvariant("imported direct-call target referenced an unavailable checked module", .{});
             for (view.exported_procedure_bindings.bindings) |binding| {
                 if (binding.binding.def == imported.def and binding.binding.pattern == imported.pattern) {
@@ -15013,10 +14912,10 @@ fn procedureUseBody(
             checkedArtifactInvariant("imported direct-call target was not exported by its checked module", .{});
         },
     };
-    if (checkedArtifactKeyEql(top_level.artifact, local_module)) {
+    if (CheckedModuleArtifactKey.eql(top_level.artifact, local_module)) {
         return .{ .view = null, .body = local_procedure_bindings.get(top_level.binding).body };
     }
-    const view = moduleViewForKey(imports, available_modules, relation_modules, top_level.artifact) orelse
+    const view = dependencyViewByKey(top_level.artifact, imports, available_modules, relation_modules) orelse
         checkedArtifactInvariant("direct-call target referenced an unavailable checked module", .{});
     return .{ .view = view, .body = view.top_level_procedure_bindings.get(top_level.binding).body };
 }
@@ -15059,10 +14958,10 @@ fn topLevelProcedureKind(
     available_modules: []const ImportedModuleView,
     relation_modules: []const ImportedModuleView,
 ) std.meta.Tag(ProcedureBindingBody) {
-    const body = if (checkedArtifactKeyEql(top_level.artifact, local_module))
+    const body = if (CheckedModuleArtifactKey.eql(top_level.artifact, local_module))
         local_procedure_bindings.get(top_level.binding).body
     else blk: {
-        const view = moduleViewForKey(imports, available_modules, relation_modules, top_level.artifact) orelse
+        const view = dependencyViewByKey(top_level.artifact, imports, available_modules, relation_modules) orelse
             checkedArtifactInvariant("direct-call target referenced an unavailable checked module", .{});
         break :blk view.top_level_procedure_bindings.get(top_level.binding).body;
     };
@@ -15075,7 +14974,7 @@ fn importedProcedureKind(
     available_modules: []const ImportedModuleView,
     relation_modules: []const ImportedModuleView,
 ) std.meta.Tag(ProcedureBindingBody) {
-    const view = moduleViewForKey(imports, available_modules, relation_modules, imported.artifact) orelse
+    const view = dependencyViewByKey(imported.artifact, imports, available_modules, relation_modules) orelse
         checkedArtifactInvariant("imported direct-call target referenced an unavailable checked module", .{});
     for (view.exported_procedure_bindings.bindings) |binding| {
         if (binding.binding.def == imported.def and binding.binding.pattern == imported.pattern) {
@@ -15087,24 +14986,6 @@ fn importedProcedureKind(
         }
     }
     checkedArtifactInvariant("imported direct-call target was not exported by its checked module", .{});
-}
-
-fn moduleViewForKey(
-    imports: []const PublishImportArtifact,
-    available_modules: []const ImportedModuleView,
-    relation_modules: []const ImportedModuleView,
-    key: CheckedModuleArtifactKey,
-) ?ImportedModuleView {
-    for (imports) |import| {
-        if (checkedArtifactKeyEql(import.key, key)) return import.view;
-    }
-    for (available_modules) |view| {
-        if (checkedArtifactKeyEql(view.key, key)) return view;
-    }
-    for (relation_modules) |view| {
-        if (checkedArtifactKeyEql(view.key, key)) return view;
-    }
-    return null;
 }
 
 const CheckedStringLiteralBuilder = struct {
@@ -16507,10 +16388,7 @@ pub const IntrinsicWrapperTable = struct {
         return self.wrappers.items[@backingInt(id)];
     }
 
-    pub fn deinit(self: *IntrinsicWrapperTable, allocator: Allocator) void {
-        self.wrappers.deinit(allocator);
-        self.* = .{};
-    }
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 /// Public `EntryWrapper` declaration.
@@ -16563,10 +16441,7 @@ pub const EntryWrapperTable = struct {
         return null;
     }
 
-    pub fn deinit(self: *EntryWrapperTable, allocator: Allocator) void {
-        self.wrappers.deinit(allocator);
-        self.* = .{};
-    }
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 /// Public `StaticDispatchPlanTableRef` declaration.
@@ -16725,10 +16600,7 @@ pub const TopLevelProcedureBindingTable = struct {
         return self.bindings.items[@backingInt(ref)];
     }
 
-    pub fn deinit(self: *TopLevelProcedureBindingTable, allocator: Allocator) void {
-        self.bindings.deinit(allocator);
-        self.* = .{};
-    }
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 /// Public `CallableEvalTemplate` declaration.
@@ -16791,10 +16663,7 @@ pub const CallableEvalTemplateTable = struct {
         return .{ .templates = self.templates.items };
     }
 
-    pub fn deinit(self: *CallableEvalTemplateTable, allocator: Allocator) void {
-        self.templates.deinit(allocator);
-        self.* = .{};
-    }
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 /// Record every callable-eval binding that is an exact procedure alias of a
@@ -17225,12 +17094,7 @@ pub const ResolvedValueRefTable = struct {
         return record;
     }
 
-    pub fn deinit(self: *ResolvedValueRefTable, allocator: Allocator) void {
-        allocator.free(self.template_refs);
-        allocator.free(self.by_checked_expr);
-        allocator.free(self.records);
-        self.* = .{};
-    }
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 };
 /// Short name for the resolved checked value table.
 pub const ResolvedValueTable = ResolvedValueRefTable;
@@ -17823,7 +17687,7 @@ fn importedViewForOriginHash(
 
 fn uniqueImportedView(existing: ?ImportedModuleView, next: ImportedModuleView) ImportedModuleView {
     if (existing) |found| {
-        if (!checkedArtifactKeyEql(found.key, next.key)) {
+        if (!CheckedModuleArtifactKey.eql(found.key, next.key)) {
             checkedArtifactInvariant("module identity resolved to multiple checked artifacts", .{});
         }
         return found;
@@ -20644,20 +20508,8 @@ const EvidencePass = struct {
         };
         const target_key = checkedArtifactKeyFromArtifactRef(procedure.template.artifact);
         const table: *const CheckedProcedureTemplateTable = imported: {
-            for (self.import_views.direct) |import| {
-                if (checkedArtifactKeyEql(import.key, target_key)) {
-                    return .{ .table = import.view.checked_procedure_templates, .template = import.view.checked_procedure_templates.get(procedure.template.template) };
-                }
-            }
-            for (self.import_views.available) |view| {
-                if (checkedArtifactKeyEql(view.key, target_key)) {
-                    return .{ .table = view.checked_procedure_templates, .template = view.checked_procedure_templates.get(procedure.template.template) };
-                }
-            }
-            for (self.import_views.relations) |view| {
-                if (checkedArtifactKeyEql(view.key, target_key)) {
-                    return .{ .table = view.checked_procedure_templates, .template = view.checked_procedure_templates.get(procedure.template.template) };
-                }
+            if (self.import_views.viewForKey(target_key)) |view| {
+                return .{ .table = view.checked_procedure_templates, .template = view.checked_procedure_templates.get(procedure.template.template) };
             }
             if (target.module_idx != self.module.moduleIndex()) {
                 checkedArtifactInvariant("procedure evidence target artifact was unavailable during checked publication", .{});
@@ -22647,13 +22499,7 @@ pub const NestedProcSiteTable = struct {
         };
     }
 
-    pub fn deinit(self: *NestedProcSiteTable, allocator: Allocator) void {
-        allocator.free(self.sites);
-        allocator.free(self.template_refs);
-        allocator.free(@constCast(self.path_components));
-        allocator.free(self.runtime_captures);
-        self.* = .{};
-    }
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 
     /// The binders of enclosing frames whose values the procedure at `site`
     /// needs at runtime (see `NestedProcSite.runtime_captures`).
@@ -23321,22 +23167,7 @@ pub const CheckedProcedureTemplateTable = struct {
         };
     }
 
-    pub fn deinit(self: *CheckedProcedureTemplateTable, allocator: Allocator) void {
-        allocator.free(self.by_def);
-        allocator.free(self.promoted);
-        self.templates.deinit(allocator);
-        allocator.free(self.evidence_params_pool);
-        allocator.free(self.evidence_path_nodes);
-        allocator.free(self.evidence_param_callables);
-        allocator.free(self.scheme_vars_pool);
-        allocator.free(self.dispatch_ref_scopes);
-        allocator.free(self.dispatch_relation_kinds);
-        allocator.free(self.dispatch_scopes);
-        allocator.free(self.specialization_interface_relations);
-        allocator.free(self.specialization_interface_types);
-        allocator.free(self.single_source_call_templates);
-        self.* = .{};
-    }
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 
     /// Whether this template is called at exactly one site of its module's
     /// source and cannot be called from elsewhere.
@@ -24292,11 +24123,7 @@ pub const HostedProcTable = struct {
 
     /// Build-time-only teardown (see `StaticDispatchPlanTable.deinit`): a frozen table's
     /// slices alias the artifact buffer and are freed wholesale by the artifact, never here.
-    pub fn deinit(self: *HostedProcTable, allocator: Allocator) void {
-        allocator.free(self.procs);
-        allocator.free(@constCast(self.order_key_bytes));
-        self.* = .{};
-    }
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 /// One platform-header hosted binding. Slice order is the host dispatch index.
@@ -24380,10 +24207,7 @@ pub const HostedBindingTable = struct {
         return .{ .bindings = try bindings.toOwnedSlice(allocator) };
     }
 
-    pub fn deinit(self: *HostedBindingTable, allocator: Allocator) void {
-        allocator.free(self.bindings);
-        self.* = .{};
-    }
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 /// Public `PlatformAppRelationKey` declaration.
@@ -24509,10 +24333,7 @@ pub const PlatformRequiredDeclarationTable = struct {
         return hasher.finalResult();
     }
 
-    pub fn deinit(self: *PlatformRequiredDeclarationTable, allocator: Allocator) void {
-        allocator.free(self.declarations);
-        self.* = .{};
-    }
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 fn hashRequiredTypeForClauseAliases(
@@ -24713,12 +24534,7 @@ pub const PlatformTypeInputs = struct {
         return .{ .requirements = rows, .identities = owned_identities, .aliases = try aliases.toOwnedSlice(allocator) };
     }
 
-    pub fn deinit(self: *PlatformTypeInputs, allocator: Allocator) void {
-        allocator.free(self.requirements);
-        allocator.free(self.identities);
-        allocator.free(self.aliases);
-        self.* = .{};
-    }
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 
     pub const Serialized = extern struct {
         requirements: SerializedSlice(Requirement) = .{},
@@ -24752,7 +24568,7 @@ const PlatformRelationTypeSubstitutions = struct {
             active_relation,
         );
 
-        const app_view = relationArtifactByKey(relation_artifacts, active_relation.app_artifact) orelse {
+        const app_view = dependencyViewByKey(active_relation.app_artifact, &.{}, relation_artifacts, &.{}) orelse {
             checkedArtifactInvariant("platform/app relation substitution missing app relation artifact", .{});
         };
 
@@ -24963,7 +24779,7 @@ pub const PlatformRequirementRelationTable = struct {
             if (builtin.mode == .debug) allocator.free(seen_declarations);
         }
 
-        const app_view = relationArtifactByKey(relation_artifacts, active_relation.app_artifact) orelse {
+        const app_view = dependencyViewByKey(active_relation.app_artifact, &.{}, relation_artifacts, &.{}) orelse {
             checkedArtifactInvariant("platform/app relation missing app relation artifact", .{});
         };
 
@@ -25032,10 +24848,7 @@ pub const PlatformRequirementRelationTable = struct {
         return .{ .relations = rows };
     }
 
-    pub fn deinit(self: *PlatformRequirementRelationTable, allocator: Allocator) void {
-        allocator.free(self.relations);
-        self.* = .{};
-    }
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 
     pub fn lookupByRelationId(self: *const PlatformRequirementRelationTable, relation_id: PlatformRequirementRelationId) ?PlatformRequirementRelation {
         const raw = @backingInt(relation_id);
@@ -25108,11 +24921,7 @@ pub const PlatformRequirementSolutionTable = struct {
         return self.identity_solutions[solution.identity_start .. solution.identity_start + solution.identity_len];
     }
 
-    pub fn deinit(self: *PlatformRequirementSolutionTable, allocator: Allocator) void {
-        allocator.free(self.identity_solutions);
-        allocator.free(self.solutions);
-        self.* = .{};
-    }
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 /// Materialize the checker-recorded successful requirement solutions into
@@ -26326,17 +26135,13 @@ fn projectResolvedDispatchTargetCallable(
         .structural => checkedArtifactInvariant("structural method registry result was published as a direct callable target", .{}),
         .procedure => |procedure| checkedArtifactKeyFromArtifactRef(procedure.template.artifact),
     };
-    if (checkedArtifactKeyEql(target_key, artifact_key)) return target.callable_ty;
+    if (CheckedModuleArtifactKey.eql(target_key, artifact_key)) return target.callable_ty;
 
     // Snapshot-style compiles pass the builtin module only as a DIRECT
     // import; total resolution makes builtin-owned direct targets ubiquitous,
     // so search both view sets.
-    const imported = importedModuleViewByKey(available_artifacts, target_key) orelse direct: {
-        for (direct_imports) |import| {
-            if (checkedArtifactKeyEql(import.key, target_key)) break :direct import.view;
-        }
+    const imported = dependencyViewByKey(target_key, direct_imports, available_artifacts, &.{}) orelse
         checkedArtifactInvariant("resolved dispatch target artifact was not available during checked publication", .{});
-    };
     var projector = CheckedTypeStoreImportProjector.init(allocator, store, names, imported);
     defer projector.deinit();
     return try projector.project(target.callable_ty);
@@ -26628,7 +26433,7 @@ fn dispatchSubstitutionStep(
             };
             if (target_nominal.name != plan_nominal.name or
                 target_nominal.origin_module != plan_nominal.origin_module or
-                !checkedArtifactKeyEql(target_nominal.owner_module, plan_nominal.owner_module) or
+                !CheckedModuleArtifactKey.eql(target_nominal.owner_module, plan_nominal.owner_module) or
                 target_nominal.source_decl != plan_nominal.source_decl or
                 target_nominal.builtin != plan_nominal.builtin or
                 target_nominal.args.len != plan_nominal.args.len)
@@ -26771,23 +26576,6 @@ fn appendUniqueCheckedTypeSubstitution(
     }
     try formals.append(allocator, formal);
     try actuals.append(allocator, actual);
-}
-
-fn importedModuleViewByKey(
-    artifacts: []const ImportedModuleView,
-    key: CheckedModuleArtifactKey,
-) ?ImportedModuleView {
-    for (artifacts) |artifact| {
-        if (std.meta.eql(artifact.key.bytes, key.bytes)) return artifact;
-    }
-    return null;
-}
-
-fn relationArtifactByKey(
-    relation_artifacts: []const ImportedModuleView,
-    key: CheckedModuleArtifactKey,
-) ?ImportedModuleView {
-    return importedModuleViewByKey(relation_artifacts, key);
 }
 
 fn validatePlatformBindingRelation(
@@ -27685,7 +27473,7 @@ fn platformRequiredProcedureUse(
     requested_source_ty: canonical.CanonicalTypeKey,
     exported_binding: ImportedProcedureBindingView,
 ) ProcedureUseTemplate {
-    if (!checkedArtifactKeyEql(exported_binding.binding.artifact, app_artifact) or
+    if (!CheckedModuleArtifactKey.eql(exported_binding.binding.artifact, app_artifact) or
         exported_binding.binding.pattern != app_value.pattern)
     {
         checkedArtifactInvariant("platform-required app procedure use disagreed with its exported binding", .{});
@@ -28058,16 +27846,7 @@ pub const ModuleInterfaceCapabilities = struct {
         };
     }
 
-    pub fn deinit(self: *ModuleInterfaceCapabilities, allocator: Allocator) void {
-        freeConstSlice(allocator, self.boxed_payload_templates);
-        freeConstSlice(allocator, self.opaque_atomic_proofs);
-        freeConstSlice(allocator, self.hosted_representations);
-        freeConstSlice(allocator, self.platform_representations);
-        freeConstSlice(allocator, self.exported_nominal_representations);
-        freeConstSlice(allocator, self.args_pool);
-        freeConstSlice(allocator, self.padding_pool);
-        self.* = .{};
-    }
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 
     pub fn boxPayloadCapability(
         self: *const ModuleInterfaceCapabilities,
@@ -28789,7 +28568,7 @@ const SingleSourceCalls = struct {
     }
 
     fn localTemplate(self: SingleSourceCalls, template: canonical.ProcedureTemplateRef) ?canonical.CheckedProcedureTemplateId {
-        if (!checkedArtifactKeyEql(checkedArtifactKeyFromArtifactRef(template.artifact), self.artifact_key)) return null;
+        if (!CheckedModuleArtifactKey.eql(checkedArtifactKeyFromArtifactRef(template.artifact), self.artifact_key)) return null;
         return template.template;
     }
 
@@ -28819,7 +28598,7 @@ const SingleSourceCalls = struct {
             .platform_required => |required| ArtifactTopLevelProcedureBindingRef{ .artifact = required.artifact, .binding = required.procedure_binding },
             .imported, .hosted => return null,
         };
-        if (!checkedArtifactKeyEql(binding.artifact, self.artifact_key)) return null;
+        if (!CheckedModuleArtifactKey.eql(binding.artifact, self.artifact_key)) return null;
         return switch (self.top_level_procedure_bindings.get(binding.binding).body) {
             .direct_template => |direct| switch (direct.template) {
                 .checked => |template| self.localTemplate(template),
@@ -29133,7 +28912,7 @@ const ExhaustivenessTemplateReachability = struct {
         kind: ReachabilityKind,
         binding_ref: ArtifactTopLevelProcedureBindingRef,
     ) Allocator.Error!void {
-        if (!checkedArtifactKeyEql(binding_ref.artifact, self.artifact_key)) return;
+        if (!CheckedModuleArtifactKey.eql(binding_ref.artifact, self.artifact_key)) return;
         const binding = self.top_level_procedure_bindings.get(binding_ref.binding);
         try self.markProcedureBindingBody(kind, binding.body);
     }
@@ -29193,7 +28972,7 @@ const ExhaustivenessTemplateReachability = struct {
         kind: ReachabilityKind,
         template_ref: ArtifactCallableEvalTemplateRef,
     ) Allocator.Error!void {
-        if (!checkedArtifactKeyEql(template_ref.artifact, self.artifact_key)) return;
+        if (!CheckedModuleArtifactKey.eql(template_ref.artifact, self.artifact_key)) return;
         try self.markCallableEvalTemplate(kind, template_ref.template);
     }
 
@@ -29213,7 +28992,7 @@ const ExhaustivenessTemplateReachability = struct {
         self: *const ExhaustivenessTemplateReachability,
         template_ref: canonical.ProcedureTemplateRef,
     ) ?usize {
-        if (!checkedArtifactKeyEql(checkedArtifactKeyFromArtifactRef(template_ref.artifact), self.artifact_key)) return null;
+        if (!CheckedModuleArtifactKey.eql(checkedArtifactKeyFromArtifactRef(template_ref.artifact), self.artifact_key)) return null;
         const idx = @backingInt(template_ref.template);
         if (idx >= self.procedure_templates.templates.items.len) {
             checkedArtifactInvariant("reachable procedure template ref was outside table", .{});
@@ -30030,12 +29809,7 @@ pub const TopLevelValueTable = struct {
         return self.entries[self.by_def[lo].entry];
     }
 
-    pub fn deinit(self: *TopLevelValueTable, allocator: Allocator) void {
-        allocator.free(self.by_def);
-        allocator.free(self.by_pattern);
-        allocator.free(self.entries);
-        self.* = .{};
-    }
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 /// Public `HoistedConstId` declaration.
@@ -30224,13 +29998,7 @@ pub const HoistedConstTable = struct {
         return self.entries[@backingInt(entry_id)];
     }
 
-    pub fn deinit(self: *HoistedConstTable, allocator: Allocator) void {
-        allocator.free(self.by_root);
-        allocator.free(self.by_pattern);
-        allocator.free(self.by_expr);
-        allocator.free(self.entries);
-        self.* = .{};
-    }
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 /// Public `CheckedCallableBodyRef` declaration.
@@ -30302,11 +30070,7 @@ pub const CheckedConstBodyTable = struct {
         return self.bodies[idx];
     }
 
-    pub fn deinit(self: *CheckedConstBodyTable, allocator: Allocator) void {
-        allocator.free(self.bodies);
-        allocator.free(self.by_root);
-        self.* = .{};
-    }
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 /// Public `MethodRegistryEntryRef` declaration.
@@ -30390,6 +30154,9 @@ pub const ImportedTemplateClosureView = struct {
     interface_capabilities: []const ArtifactModuleInterfaceCapabilitiesRef = &.{},
 };
 
+/// The closure slice names, shared by every table that stores one list per slice.
+const closure_fields = @typeInfo(ImportedTemplateClosureView).@"struct".field_names;
+
 /// `(start, len)` range into one of a `ClosurePool`'s flat side pools.
 pub const ClosureRange = extern struct { start: u32 = 0, len: u32 = 0 };
 
@@ -30419,50 +30186,23 @@ pub const StoredImportedTemplateClosure = extern struct {
 /// elements; `commit` copies an owned `ImportedTemplateClosureView` into the
 /// pools and `materialize` returns the public view aliasing them (zero-alloc).
 pub const ClosurePool = struct {
-    checked_bodies: std.ArrayList(ArtifactCheckedBodyRef),
-    checked_type_roots: std.ArrayList(ArtifactCheckedTypeRef),
-    checked_type_schemes: std.ArrayList(ArtifactCheckedTypeSchemeRef),
-    checked_callable_bodies: std.ArrayList(ArtifactCheckedCallableBodyRef),
-    checked_const_bodies: std.ArrayList(ArtifactCheckedConstBodyRef),
-    checked_procedure_templates: std.ArrayList(ArtifactProcedureTemplateRef),
-    callable_eval_templates: std.ArrayList(ArtifactCallableEvalTemplateRef),
-    const_templates: std.ArrayList(ConstRef),
-    nested_proc_sites: std.ArrayList(ArtifactNestedProcSiteTableRef),
-    resolved_value_refs: std.ArrayList(ArtifactResolvedValueRefTableRef),
-    static_dispatch_plans: std.ArrayList(ArtifactStaticDispatchPlanTableRef),
-    method_registry_entries: std.ArrayList(MethodRegistryEntryRef),
-    interface_capabilities: std.ArrayList(ArtifactModuleInterfaceCapabilitiesRef),
+    checked_bodies: std.ArrayList(ArtifactCheckedBodyRef) = .empty,
+    checked_type_roots: std.ArrayList(ArtifactCheckedTypeRef) = .empty,
+    checked_type_schemes: std.ArrayList(ArtifactCheckedTypeSchemeRef) = .empty,
+    checked_callable_bodies: std.ArrayList(ArtifactCheckedCallableBodyRef) = .empty,
+    checked_const_bodies: std.ArrayList(ArtifactCheckedConstBodyRef) = .empty,
+    checked_procedure_templates: std.ArrayList(ArtifactProcedureTemplateRef) = .empty,
+    callable_eval_templates: std.ArrayList(ArtifactCallableEvalTemplateRef) = .empty,
+    const_templates: std.ArrayList(ConstRef) = .empty,
+    nested_proc_sites: std.ArrayList(ArtifactNestedProcSiteTableRef) = .empty,
+    resolved_value_refs: std.ArrayList(ArtifactResolvedValueRefTableRef) = .empty,
+    static_dispatch_plans: std.ArrayList(ArtifactStaticDispatchPlanTableRef) = .empty,
+    method_registry_entries: std.ArrayList(MethodRegistryEntryRef) = .empty,
+    interface_capabilities: std.ArrayList(ArtifactModuleInterfaceCapabilitiesRef) = .empty,
     /// True when the pools alias a serialized buffer and must not be freed.
     serialized: bool = false,
 
-    pub const empty: ClosurePool = .{
-        .checked_bodies = .empty,
-        .checked_type_roots = .empty,
-        .checked_type_schemes = .empty,
-        .checked_callable_bodies = .empty,
-        .checked_const_bodies = .empty,
-        .checked_procedure_templates = .empty,
-        .callable_eval_templates = .empty,
-        .const_templates = .empty,
-        .nested_proc_sites = .empty,
-        .resolved_value_refs = .empty,
-        .static_dispatch_plans = .empty,
-        .method_registry_entries = .empty,
-        .interface_capabilities = .empty,
-    };
-
-    fn appendPool(
-        comptime T: type,
-        pool: *std.ArrayList(T),
-        allocator: Allocator,
-        slice: []const T,
-    ) Allocator.Error!ClosureRange {
-        return artifact_serialize.appendSpan(ClosureRange, T, pool, allocator, slice);
-    }
-
-    fn poolSlice(comptime T: type, pool: *const std.ArrayList(T), range: ClosureRange) []const T {
-        return pool.items[range.start .. range.start + range.len];
-    }
+    pub const empty: ClosurePool = .{};
 
     /// Copy each closure slice into its pool, returning the POD ranges, then
     /// free the input view's owned slices. Mirrors `deinitImportedTemplateClosure`.
@@ -30482,60 +30222,25 @@ pub const ClosurePool = struct {
         allocator: Allocator,
         closure: ImportedTemplateClosureView,
     ) Allocator.Error!StoredImportedTemplateClosure {
-        return .{
-            .checked_bodies = try appendPool(ArtifactCheckedBodyRef, &self.checked_bodies, allocator, closure.checked_bodies),
-            .checked_type_roots = try appendPool(ArtifactCheckedTypeRef, &self.checked_type_roots, allocator, closure.checked_type_roots),
-            .checked_type_schemes = try appendPool(ArtifactCheckedTypeSchemeRef, &self.checked_type_schemes, allocator, closure.checked_type_schemes),
-            .checked_callable_bodies = try appendPool(ArtifactCheckedCallableBodyRef, &self.checked_callable_bodies, allocator, closure.checked_callable_bodies),
-            .checked_const_bodies = try appendPool(ArtifactCheckedConstBodyRef, &self.checked_const_bodies, allocator, closure.checked_const_bodies),
-            .checked_procedure_templates = try appendPool(ArtifactProcedureTemplateRef, &self.checked_procedure_templates, allocator, closure.checked_procedure_templates),
-            .callable_eval_templates = try appendPool(ArtifactCallableEvalTemplateRef, &self.callable_eval_templates, allocator, closure.callable_eval_templates),
-            .const_templates = try appendPool(ConstRef, &self.const_templates, allocator, closure.const_templates),
-            .nested_proc_sites = try appendPool(ArtifactNestedProcSiteTableRef, &self.nested_proc_sites, allocator, closure.nested_proc_sites),
-            .resolved_value_refs = try appendPool(ArtifactResolvedValueRefTableRef, &self.resolved_value_refs, allocator, closure.resolved_value_refs),
-            .static_dispatch_plans = try appendPool(ArtifactStaticDispatchPlanTableRef, &self.static_dispatch_plans, allocator, closure.static_dispatch_plans),
-            .method_registry_entries = try appendPool(MethodRegistryEntryRef, &self.method_registry_entries, allocator, closure.method_registry_entries),
-            .interface_capabilities = try appendPool(ArtifactModuleInterfaceCapabilitiesRef, &self.interface_capabilities, allocator, closure.interface_capabilities),
-        };
+        var stored: StoredImportedTemplateClosure = .{};
+        inline for (closure_fields) |name| {
+            const Elem = std.meta.Child(@FieldType(ImportedTemplateClosureView, name));
+            @field(stored, name) = try artifact_serialize.appendSpan(ClosureRange, Elem, &@field(self, name), allocator, @field(closure, name));
+        }
+        return stored;
     }
 
     /// Materialize the public 13-slice view aliasing this pool's flat storage.
     pub fn reconstruct(self: *const ClosurePool, stored: StoredImportedTemplateClosure) ImportedTemplateClosureView {
-        return .{
-            .checked_bodies = poolSlice(ArtifactCheckedBodyRef, &self.checked_bodies, stored.checked_bodies),
-            .checked_type_roots = poolSlice(ArtifactCheckedTypeRef, &self.checked_type_roots, stored.checked_type_roots),
-            .checked_type_schemes = poolSlice(ArtifactCheckedTypeSchemeRef, &self.checked_type_schemes, stored.checked_type_schemes),
-            .checked_callable_bodies = poolSlice(ArtifactCheckedCallableBodyRef, &self.checked_callable_bodies, stored.checked_callable_bodies),
-            .checked_const_bodies = poolSlice(ArtifactCheckedConstBodyRef, &self.checked_const_bodies, stored.checked_const_bodies),
-            .checked_procedure_templates = poolSlice(ArtifactProcedureTemplateRef, &self.checked_procedure_templates, stored.checked_procedure_templates),
-            .callable_eval_templates = poolSlice(ArtifactCallableEvalTemplateRef, &self.callable_eval_templates, stored.callable_eval_templates),
-            .const_templates = poolSlice(ConstRef, &self.const_templates, stored.const_templates),
-            .nested_proc_sites = poolSlice(ArtifactNestedProcSiteTableRef, &self.nested_proc_sites, stored.nested_proc_sites),
-            .resolved_value_refs = poolSlice(ArtifactResolvedValueRefTableRef, &self.resolved_value_refs, stored.resolved_value_refs),
-            .static_dispatch_plans = poolSlice(ArtifactStaticDispatchPlanTableRef, &self.static_dispatch_plans, stored.static_dispatch_plans),
-            .method_registry_entries = poolSlice(MethodRegistryEntryRef, &self.method_registry_entries, stored.method_registry_entries),
-            .interface_capabilities = poolSlice(ArtifactModuleInterfaceCapabilitiesRef, &self.interface_capabilities, stored.interface_capabilities),
-        };
+        var closure: ImportedTemplateClosureView = .{};
+        inline for (closure_fields) |name| {
+            const range = @field(stored, name);
+            @field(closure, name) = @field(self, name).items[range.start .. range.start + range.len];
+        }
+        return closure;
     }
 
-    pub fn deinit(self: *ClosurePool, allocator: Allocator) void {
-        if (!self.serialized) {
-            self.checked_bodies.deinit(allocator);
-            self.checked_type_roots.deinit(allocator);
-            self.checked_type_schemes.deinit(allocator);
-            self.checked_callable_bodies.deinit(allocator);
-            self.checked_const_bodies.deinit(allocator);
-            self.checked_procedure_templates.deinit(allocator);
-            self.callable_eval_templates.deinit(allocator);
-            self.const_templates.deinit(allocator);
-            self.nested_proc_sites.deinit(allocator);
-            self.resolved_value_refs.deinit(allocator);
-            self.static_dispatch_plans.deinit(allocator);
-            self.method_registry_entries.deinit(allocator);
-            self.interface_capabilities.deinit(allocator);
-        }
-        self.* = ClosurePool.empty;
-    }
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 
     /// Relocatable serialized form: one `SerializedSlice` per flat pool (13
     /// base-pointer fixups, independent of stored data size).
@@ -30732,18 +30437,22 @@ pub fn appendImportedTemplateClosureArtifactKeys(
     keys: *std.ArrayList(CheckedModuleArtifactKey),
     closure: ImportedTemplateClosureView,
 ) Allocator.Error!void {
-    for (closure.checked_bodies) |value| try appendClosureArtifactKey(allocator, keys, value.artifact);
-    for (closure.checked_type_roots) |value| try appendClosureArtifactKey(allocator, keys, value.artifact);
-    for (closure.checked_type_schemes) |value| try appendClosureArtifactKey(allocator, keys, value.artifact);
-    for (closure.checked_callable_bodies) |value| try appendClosureArtifactKey(allocator, keys, value.artifact);
-    for (closure.checked_const_bodies) |value| try appendClosureArtifactKey(allocator, keys, value.artifact);
-    for (closure.checked_procedure_templates) |value| try appendClosureArtifactKey(allocator, keys, checkedArtifactKeyFromArtifactRef(value.artifact));
-    for (closure.callable_eval_templates) |value| try appendClosureArtifactKey(allocator, keys, value.artifact);
-    for (closure.const_templates) |value| try appendClosureArtifactKey(allocator, keys, value.artifact);
-    for (closure.nested_proc_sites) |value| try appendClosureArtifactKey(allocator, keys, value.artifact);
-    for (closure.resolved_value_refs) |value| try appendClosureArtifactKey(allocator, keys, value.artifact);
-    for (closure.static_dispatch_plans) |value| try appendClosureArtifactKey(allocator, keys, value.artifact);
-    for (closure.interface_capabilities) |value| try appendClosureArtifactKey(allocator, keys, value.artifact);
+    inline for (closure_fields) |name| {
+        const Elem = std.meta.Child(@FieldType(ImportedTemplateClosureView, name));
+        // Method registry entries are keyed by the owning table, not by artifact.
+        if (comptime @hasField(Elem, "artifact")) {
+            for (@field(closure, name)) |value| {
+                const ArtifactField = @TypeOf(value.artifact);
+                const key = if (comptime ArtifactField == CheckedModuleArtifactKey)
+                    value.artifact
+                else if (comptime ArtifactField == canonical.ArtifactRef)
+                    checkedArtifactKeyFromArtifactRef(value.artifact)
+                else
+                    @compileError("closure entry artifact has type " ++ @typeName(ArtifactField));
+                try appendClosureArtifactKey(allocator, keys, key);
+            }
+        }
+    }
 }
 
 /// Public `appendPlatformRelationDependencyArtifactKeysFromView` function.
@@ -30814,7 +30523,7 @@ fn appendClosureArtifactKey(
     key: CheckedModuleArtifactKey,
 ) Allocator.Error!void {
     for (keys.items) |existing| {
-        if (checkedArtifactKeyEql(existing, key)) return;
+        if (CheckedModuleArtifactKey.eql(existing, key)) return;
     }
     try keys.append(allocator, key);
 }
@@ -31157,7 +30866,7 @@ fn appendPublicApiOwnerDependency(
     keys: *ArtifactKeyAccumulator,
     type_owner_keys: *ArtifactKeyAccumulator,
 ) Allocator.Error!void {
-    if (checkedArtifactKeyEql(owner_key, artifact_key)) return;
+    if (CheckedModuleArtifactKey.eql(owner_key, artifact_key)) return;
     if (publicApiDependencyKeyIsKnownBuiltin(owner_key, imports, available_artifacts)) return;
     _ = try keys.append(allocator, owner_key);
     _ = try type_owner_keys.append(allocator, owner_key);
@@ -31175,7 +30884,7 @@ fn appendPublicApiClosureDependencyKey(
     keys: *ArtifactKeyAccumulator,
     key: CheckedModuleArtifactKey,
 ) Allocator.Error!void {
-    if (checkedArtifactKeyEql(key, artifact_key)) return;
+    if (CheckedModuleArtifactKey.eql(key, artifact_key)) return;
     if (publicApiDependencyKeyIsKnownBuiltin(key, imports, available_artifacts)) return;
     _ = try keys.append(allocator, key);
 }
@@ -31185,7 +30894,7 @@ fn publicApiDependencyKeyIsKnownBuiltin(
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
 ) bool {
-    if (publicApiDependencyViewByKey(key, imports, available_artifacts)) |view| {
+    if (dependencyViewByKey(key, imports, available_artifacts, &.{})) |view| {
         return view.module_env.module_role == .builtin;
     }
     return false;
@@ -31352,7 +31061,7 @@ const PublicApiClosureDependencyCollector = struct {
             .procedure_template => |template_ref| {
                 const key = checkedArtifactKeyFromArtifactRef(template_ref.artifact);
                 try self.appendArtifactKey(key);
-                if (!checkedArtifactKeyEql(key, self.artifact_key)) return;
+                if (!CheckedModuleArtifactKey.eql(key, self.artifact_key)) return;
 
                 const entry = try self.visited_templates.getOrPut(template_ref);
                 if (entry.found_existing) return;
@@ -31370,7 +31079,7 @@ const PublicApiClosureDependencyCollector = struct {
             },
             .callable_eval_template => |template_ref| {
                 try self.appendArtifactKey(template_ref.artifact);
-                if (!checkedArtifactKeyEql(template_ref.artifact, self.artifact_key)) return;
+                if (!CheckedModuleArtifactKey.eql(template_ref.artifact, self.artifact_key)) return;
 
                 const entry = try self.visited_callable_eval_templates.getOrPut(template_ref);
                 if (entry.found_existing) return;
@@ -31386,7 +31095,7 @@ const PublicApiClosureDependencyCollector = struct {
             },
             .const_ref => |const_ref| {
                 try self.appendArtifactKey(const_ref.artifact);
-                if (!checkedArtifactKeyEql(const_ref.artifact, self.artifact_key)) return;
+                if (!CheckedModuleArtifactKey.eql(const_ref.artifact, self.artifact_key)) return;
 
                 const entry = try self.visited_consts.getOrPut(const_ref);
                 if (entry.found_existing) return;
@@ -31452,7 +31161,7 @@ const PublicApiClosureDependencyCollector = struct {
             },
             .top_level_binding => |binding_ref| {
                 try self.appendArtifactKey(binding_ref.artifact);
-                if (!checkedArtifactKeyEql(binding_ref.artifact, self.artifact_key)) return;
+                if (!CheckedModuleArtifactKey.eql(binding_ref.artifact, self.artifact_key)) return;
 
                 switch (self.top_level_bindings.get(binding_ref.binding).body) {
                     .direct_template => |direct| switch (direct.template) {
@@ -31548,8 +31257,9 @@ const LoweringVisibilityBuilder = struct {
     }
 
     fn finish(self: *LoweringVisibilityBuilder) Allocator.Error!LoweringVisibility {
-        std.mem.sort(CheckedModuleArtifactKey, self.keys.items.items, {}, checkedArtifactKeyLessThan);
-        return .{ .module_ids = try self.keys.toOwnedSlice(self.allocator) };
+        const module_ids = try self.keys.toOwnedSlice(self.allocator);
+        std.mem.sort(CheckedModuleArtifactKey, module_ids, {}, checkedArtifactKeyLessThan);
+        return .{ .module_ids = module_ids };
     }
 
     /// Make `key` visible along with the public API dependencies of every
@@ -31560,7 +31270,7 @@ const LoweringVisibilityBuilder = struct {
         defer pending.deinit(self.allocator);
         try pending.append(self.allocator, key);
         while (pending.pop()) |next| {
-            if (checkedArtifactKeyEql(next, self.artifact_key)) continue;
+            if (CheckedModuleArtifactKey.eql(next, self.artifact_key)) continue;
             if (self.viewByKey(next)) |view| {
                 if (view.module_env.module_role == .builtin) continue;
             }
@@ -31582,7 +31292,7 @@ const LoweringVisibilityBuilder = struct {
         key: CheckedModuleArtifactKey,
         pending: *std.ArrayListUnmanaged(CheckedModuleArtifactKey),
     ) Allocator.Error!void {
-        if (checkedArtifactKeyEql(key, self.artifact_key)) return;
+        if (CheckedModuleArtifactKey.eql(key, self.artifact_key)) return;
         const entry = try self.visited_public_api.getOrPut(key);
         if (entry.found_existing) return;
         entry.value_ptr.* = {};
@@ -31605,7 +31315,7 @@ const LoweringVisibilityBuilder = struct {
         var pending: std.ArrayListUnmanaged(CheckedTypeId) = .empty;
         defer pending.deinit(self.allocator);
         try pending.append(self.allocator, root);
-        const local = checkedArtifactKeyEql(artifact, self.artifact_key);
+        const local = CheckedModuleArtifactKey.eql(artifact, self.artifact_key);
         const view: ?ImportedModuleView = if (local) null else self.viewByKey(artifact) orelse {
             checkedArtifactInvariant("lowering visibility type root referenced unavailable checked artifact", .{});
         };
@@ -31764,19 +31474,11 @@ fn collectLoweringVisibility(
     }
 
     var visibility_index: usize = 0;
-    while (visibility_index < builder.keys.items.items.len) : (visibility_index += 1) {
-        try builder.appendPublicApiDependenciesForKey(builder.keys.items.items[visibility_index]);
+    while (visibility_index < builder.keys.set.count()) : (visibility_index += 1) {
+        try builder.appendPublicApiDependenciesForKey(builder.keys.set.keys()[visibility_index]);
     }
 
     return try builder.finish();
-}
-
-fn publicApiDependencyViewByKey(
-    key: CheckedModuleArtifactKey,
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
-) ?ImportedModuleView {
-    return dependencyViewByKey(key, imports, available_artifacts, &.{});
 }
 
 fn dependencyViewByKey(
@@ -31786,13 +31488,13 @@ fn dependencyViewByKey(
     relation_artifacts: []const ImportedModuleView,
 ) ?ImportedModuleView {
     for (imports) |import_artifact| {
-        if (checkedArtifactKeyEql(import_artifact.key, key)) return import_artifact.view;
+        if (CheckedModuleArtifactKey.eql(import_artifact.key, key)) return import_artifact.view;
     }
     for (available_artifacts) |view| {
-        if (checkedArtifactKeyEql(view.key, key)) return view;
+        if (CheckedModuleArtifactKey.eql(view.key, key)) return view;
     }
     for (relation_artifacts) |view| {
-        if (checkedArtifactKeyEql(view.key, key)) return view;
+        if (CheckedModuleArtifactKey.eql(view.key, key)) return view;
     }
     return null;
 }
@@ -31807,15 +31509,48 @@ pub const ExportedProcedureTemplate = struct {
     template_closure: StoredImportedTemplateClosure = .{},
 };
 
+/// Read-only view of a closure-bearing export table: its rows plus the pool
+/// their stored closures index into.
+fn ClosureRowView(comptime View: type, comptime Row: type) type {
+    return struct {
+        /// Materialize a row's imported template closure from the backing pool.
+        pub fn rowClosure(self: View, row: Row) ImportedTemplateClosureView {
+            return self.closure_pool.reconstruct(row.template_closure);
+        }
+    };
+}
+
+/// The row-table scaffolding every closure-bearing export table shares: the
+/// view over its rows, row closure materialization, and teardown gated on
+/// the pool's frozen flag.
+fn ClosureRowTable(comptime Table: type, comptime View: type, comptime Row: type, comptime rows_field: []const u8) type {
+    return struct {
+        pub fn view(self: *const Table) View {
+            var out: View = .{ .closure_pool = &self.closure_pool };
+            @field(out, rows_field) = @field(self, rows_field);
+            return out;
+        }
+
+        /// Materialize a row's imported template closure from this table's pool.
+        pub fn rowClosure(self: *const Table, row: Row) ImportedTemplateClosureView {
+            return self.view().rowClosure(row);
+        }
+
+        pub fn deinit(self: *Table, allocator: Allocator) void {
+            if (!self.closure_pool.serialized) allocator.free(@field(self, rows_field));
+            self.closure_pool.deinit(allocator);
+            self.* = .{};
+        }
+    };
+}
+
 /// Public `ExportedProcedureTemplateView` declaration.
 pub const ExportedProcedureTemplateView = struct {
     templates: []const ExportedProcedureTemplate = &.{},
     closure_pool: *const ClosurePool = &empty_closure_pool,
 
-    /// Materialize a row's imported template closure from the backing pool.
-    pub fn rowClosure(self: ExportedProcedureTemplateView, row: ExportedProcedureTemplate) ImportedTemplateClosureView {
-        return self.closure_pool.reconstruct(row.template_closure);
-    }
+    const Common = ClosureRowView(@This(), ExportedProcedureTemplate);
+    pub const rowClosure = Common.rowClosure;
 };
 
 const empty_closure_pool: ClosurePool = ClosurePool.empty;
@@ -31849,6 +31584,20 @@ pub const ExportedProcedureTemplateTable = struct {
             templates.deinit(allocator);
             closure_pool.deinit(allocator);
         }
+        const closure_context = ImportedTemplateClosureContext{
+            .allocator = allocator,
+            .artifact_key = artifact_key,
+            .checked_types = checked_types,
+            .checked_templates = checked_templates,
+            .callable_eval_template_table = callable_eval_templates,
+            .entry_wrappers = entry_wrappers,
+            .const_templates_table = const_templates,
+            .resolved_value_refs_table = resolved_value_refs,
+            .top_level_bindings = top_level_bindings,
+            .platform_required_bindings = platform_required_bindings,
+            .imports = imports,
+            .available_artifacts = available_artifacts,
+        };
 
         for (published_exports) |def_idx| {
             const template = checked_templates.lookupByDef(def_idx) orelse continue;
@@ -31860,18 +31609,7 @@ pub const ExportedProcedureTemplateTable = struct {
             const source_scheme = checked_type_publication.schemeForSourceVar(module, module.defType(def_idx));
             const template_data = checked_templates.get(template.template);
             var template_closure = try buildImportedTemplateClosure(
-                allocator,
-                artifact_key,
-                checked_types,
-                checked_templates,
-                callable_eval_templates,
-                entry_wrappers,
-                const_templates,
-                resolved_value_refs,
-                top_level_bindings,
-                platform_required_bindings,
-                imports,
-                available_artifacts,
+                closure_context,
                 template,
                 template_data,
             );
@@ -31896,20 +31634,10 @@ pub const ExportedProcedureTemplateTable = struct {
         };
     }
 
-    pub fn view(self: *const ExportedProcedureTemplateTable) ExportedProcedureTemplateView {
-        return .{ .templates = self.templates, .closure_pool = &self.closure_pool };
-    }
-
-    /// Materialize a row's imported template closure from this table's pool.
-    pub fn rowClosure(self: *const ExportedProcedureTemplateTable, row: ExportedProcedureTemplate) ImportedTemplateClosureView {
-        return self.view().rowClosure(row);
-    }
-
-    pub fn deinit(self: *ExportedProcedureTemplateTable, allocator: Allocator) void {
-        if (!self.closure_pool.serialized) allocator.free(self.templates);
-        self.closure_pool.deinit(allocator);
-        self.* = .{};
-    }
+    const Common = ClosureRowTable(@This(), ExportedProcedureTemplateView, ExportedProcedureTemplate, "templates");
+    pub const view = Common.view;
+    pub const rowClosure = Common.rowClosure;
+    pub const deinit = Common.deinit;
 
     /// Relocatable serialized form: the POD row slice plus the closure pool.
     pub const Serialized = extern struct {
@@ -31927,89 +31655,45 @@ pub const ExportedProcedureTemplateTable = struct {
 };
 
 fn buildImportedTemplateClosure(
-    allocator: Allocator,
-    artifact_key: CheckedModuleArtifactKey,
-    checked_types: *const CheckedTypeStore,
-    checked_templates: *const CheckedProcedureTemplateTable,
-    callable_eval_templates: *const CallableEvalTemplateTable,
-    entry_wrappers: *const EntryWrapperTable,
-    const_templates: *const ConstTemplateTable,
-    resolved_value_refs: *const ResolvedValueRefTable,
-    top_level_bindings: *const TopLevelProcedureBindingTable,
-    platform_required_bindings: *const PlatformRequiredBindingTable,
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
+    context: ImportedTemplateClosureContext,
     template_ref: canonical.ProcedureTemplateRef,
     template: CheckedProcedureTemplate,
 ) Allocator.Error!ImportedTemplateClosureView {
-    var builder = ImportedTemplateClosureBuilder.init(
-        allocator,
-        artifact_key,
-        checked_types,
-        checked_templates,
-        callable_eval_templates,
-        entry_wrappers,
-        const_templates,
-        resolved_value_refs,
-        top_level_bindings,
-        platform_required_bindings,
-        imports,
-        available_artifacts,
-    );
+    var builder = ImportedTemplateClosureBuilder.init(context);
     defer builder.deinit();
 
-    try builder.appendInterfaceCapabilities(.{ .artifact = artifact_key });
+    try builder.appendInterfaceCapabilities(.{ .artifact = context.artifact_key });
     try builder.appendTemplate(template_ref, template);
 
-    return .{
-        .checked_bodies = try builder.checked_bodies.toOwnedSlice(allocator),
-        .checked_type_roots = try builder.checked_type_roots.toOwnedSlice(allocator),
-        .checked_type_schemes = try builder.checked_type_schemes.toOwnedSlice(allocator),
-        .checked_callable_bodies = try builder.checked_callable_bodies.toOwnedSlice(allocator),
-        .checked_const_bodies = try builder.checked_const_bodies.toOwnedSlice(allocator),
-        .checked_procedure_templates = try builder.checked_procedure_templates.toOwnedSlice(allocator),
-        .callable_eval_templates = try builder.callable_eval_templates.toOwnedSlice(allocator),
-        .const_templates = try builder.const_templates.toOwnedSlice(allocator),
-        .nested_proc_sites = try builder.nested_proc_sites.toOwnedSlice(allocator),
-        .resolved_value_refs = try builder.resolved_value_refs.toOwnedSlice(allocator),
-        .static_dispatch_plans = try builder.static_dispatch_plans.toOwnedSlice(allocator),
-        .method_registry_entries = try builder.method_registry_entries.toOwnedSlice(allocator),
-        .interface_capabilities = try builder.interface_capabilities.toOwnedSlice(allocator),
-    };
+    return try builder.finish();
 }
 
+/// Insertion-ordered set; `append` reports whether the value was new.
 fn UniqueList(comptime T: type) type {
     return struct {
-        items: std.ArrayList(T) = .empty,
-        seen: std.AutoHashMapUnmanaged(T, void) = .{},
+        set: std.AutoArrayHashMapUnmanaged(T, void) = .empty,
 
         const Self = @This();
         const empty: Self = .{};
 
         fn append(self: *Self, allocator: Allocator, value: T) Allocator.Error!bool {
-            const entry = try self.seen.getOrPut(allocator, value);
-            if (entry.found_existing) return false;
-
-            entry.value_ptr.* = {};
-            errdefer _ = self.seen.remove(value);
-
-            try self.items.append(allocator, value);
-            return true;
+            return !(try self.set.getOrPut(allocator, value)).found_existing;
         }
 
         fn toOwnedSlice(self: *Self, allocator: Allocator) Allocator.Error![]T {
-            return try self.items.toOwnedSlice(allocator);
+            return try allocator.dupe(T, self.set.keys());
         }
 
         fn deinit(self: *Self, allocator: Allocator) void {
-            self.seen.deinit(allocator);
-            self.items.deinit(allocator);
+            self.set.deinit(allocator);
             self.* = .{};
         }
     };
 }
 
-const ImportedTemplateClosureBuilder = struct {
+/// The tables an exported closure is collected from, shared by every closure
+/// built for one artifact.
+const ImportedTemplateClosureContext = struct {
     allocator: Allocator,
     artifact_key: CheckedModuleArtifactKey,
     checked_types: *const CheckedTypeStore,
@@ -32022,77 +31706,40 @@ const ImportedTemplateClosureBuilder = struct {
     platform_required_bindings: *const PlatformRequiredBindingTable,
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
-    checked_bodies: UniqueList(ArtifactCheckedBodyRef),
-    checked_type_roots: UniqueList(ArtifactCheckedTypeRef),
-    checked_type_schemes: UniqueList(ArtifactCheckedTypeSchemeRef),
-    checked_callable_bodies: UniqueList(ArtifactCheckedCallableBodyRef),
-    checked_const_bodies: UniqueList(ArtifactCheckedConstBodyRef),
-    checked_procedure_templates: UniqueList(ArtifactProcedureTemplateRef),
-    callable_eval_templates: UniqueList(ArtifactCallableEvalTemplateRef),
-    const_templates: UniqueList(ConstRef),
-    nested_proc_sites: UniqueList(ArtifactNestedProcSiteTableRef),
-    resolved_value_refs: UniqueList(ArtifactResolvedValueRefTableRef),
-    static_dispatch_plans: UniqueList(ArtifactStaticDispatchPlanTableRef),
-    method_registry_entries: UniqueList(MethodRegistryEntryRef),
-    interface_capabilities: UniqueList(ArtifactModuleInterfaceCapabilitiesRef),
+};
 
-    fn init(
-        allocator: Allocator,
-        artifact_key: CheckedModuleArtifactKey,
-        checked_types: *const CheckedTypeStore,
-        checked_templates: *const CheckedProcedureTemplateTable,
-        callable_eval_templates: *const CallableEvalTemplateTable,
-        entry_wrappers: *const EntryWrapperTable,
-        const_templates: *const ConstTemplateTable,
-        resolved_value_refs: *const ResolvedValueRefTable,
-        top_level_bindings: *const TopLevelProcedureBindingTable,
-        platform_required_bindings: *const PlatformRequiredBindingTable,
-        imports: []const PublishImportArtifact,
-        available_artifacts: []const ImportedModuleView,
-    ) ImportedTemplateClosureBuilder {
-        return .{
-            .allocator = allocator,
-            .artifact_key = artifact_key,
-            .checked_types = checked_types,
-            .checked_templates = checked_templates,
-            .callable_eval_template_table = callable_eval_templates,
-            .entry_wrappers = entry_wrappers,
-            .const_templates_table = const_templates,
-            .resolved_value_refs_table = resolved_value_refs,
-            .top_level_bindings = top_level_bindings,
-            .platform_required_bindings = platform_required_bindings,
-            .imports = imports,
-            .available_artifacts = available_artifacts,
-            .checked_bodies = .empty,
-            .checked_type_roots = .empty,
-            .checked_type_schemes = .empty,
-            .checked_callable_bodies = .empty,
-            .checked_const_bodies = .empty,
-            .checked_procedure_templates = .empty,
-            .callable_eval_templates = .empty,
-            .const_templates = .empty,
-            .nested_proc_sites = .empty,
-            .resolved_value_refs = .empty,
-            .static_dispatch_plans = .empty,
-            .method_registry_entries = .empty,
-            .interface_capabilities = .empty,
-        };
+const ImportedTemplateClosureBuilder = struct {
+    context: ImportedTemplateClosureContext,
+    checked_bodies: UniqueList(ArtifactCheckedBodyRef) = .empty,
+    checked_type_roots: UniqueList(ArtifactCheckedTypeRef) = .empty,
+    checked_type_schemes: UniqueList(ArtifactCheckedTypeSchemeRef) = .empty,
+    checked_callable_bodies: UniqueList(ArtifactCheckedCallableBodyRef) = .empty,
+    checked_const_bodies: UniqueList(ArtifactCheckedConstBodyRef) = .empty,
+    checked_procedure_templates: UniqueList(ArtifactProcedureTemplateRef) = .empty,
+    callable_eval_templates: UniqueList(ArtifactCallableEvalTemplateRef) = .empty,
+    const_templates: UniqueList(ConstRef) = .empty,
+    nested_proc_sites: UniqueList(ArtifactNestedProcSiteTableRef) = .empty,
+    resolved_value_refs: UniqueList(ArtifactResolvedValueRefTableRef) = .empty,
+    static_dispatch_plans: UniqueList(ArtifactStaticDispatchPlanTableRef) = .empty,
+    method_registry_entries: UniqueList(MethodRegistryEntryRef) = .empty,
+    interface_capabilities: UniqueList(ArtifactModuleInterfaceCapabilitiesRef) = .empty,
+
+    fn init(context: ImportedTemplateClosureContext) ImportedTemplateClosureBuilder {
+        return .{ .context = context };
     }
 
     fn deinit(self: *ImportedTemplateClosureBuilder) void {
-        self.interface_capabilities.deinit(self.allocator);
-        self.method_registry_entries.deinit(self.allocator);
-        self.static_dispatch_plans.deinit(self.allocator);
-        self.resolved_value_refs.deinit(self.allocator);
-        self.nested_proc_sites.deinit(self.allocator);
-        self.const_templates.deinit(self.allocator);
-        self.callable_eval_templates.deinit(self.allocator);
-        self.checked_procedure_templates.deinit(self.allocator);
-        self.checked_const_bodies.deinit(self.allocator);
-        self.checked_callable_bodies.deinit(self.allocator);
-        self.checked_type_schemes.deinit(self.allocator);
-        self.checked_type_roots.deinit(self.allocator);
-        self.checked_bodies.deinit(self.allocator);
+        inline for (closure_fields) |name| @field(self, name).deinit(self.context.allocator);
+    }
+
+    /// Move every collected list into an owned closure view.
+    fn finish(self: *ImportedTemplateClosureBuilder) Allocator.Error!ImportedTemplateClosureView {
+        var closure: ImportedTemplateClosureView = .{};
+        errdefer deinitImportedTemplateClosure(self.context.allocator, &closure);
+        inline for (closure_fields) |name| {
+            @field(closure, name) = try @field(self, name).toOwnedSlice(self.context.allocator);
+        }
+        return closure;
     }
 
     fn appendTemplate(
@@ -32117,8 +31764,8 @@ const ImportedTemplateClosureBuilder = struct {
 
     fn runClosureSteps(self: *ImportedTemplateClosureBuilder, first: ClosureStep) Allocator.Error!void {
         var pending: std.ArrayListUnmanaged(ClosureStep) = .empty;
-        defer pending.deinit(self.allocator);
-        try pending.append(self.allocator, first);
+        defer pending.deinit(self.context.allocator);
+        try pending.append(self.context.allocator, first);
         while (pending.pop()) |step| {
             const start = pending.items.len;
             try self.runClosureStep(step, &pending);
@@ -32135,7 +31782,7 @@ const ImportedTemplateClosureBuilder = struct {
         switch (step) {
             .template => |entry| {
                 const template = entry.template;
-                if (!try self.checked_procedure_templates.append(self.allocator, entry.ref)) return;
+                if (!try self.checked_procedure_templates.append(self.context.allocator, entry.ref)) return;
 
                 switch (template.body) {
                     .checked_body => |body| try self.appendCheckedBody(body),
@@ -32155,28 +31802,28 @@ const ImportedTemplateClosureBuilder = struct {
                 if (try self.appendImportedTemplateClosureForResolvedRef(resolved)) return;
                 if (try self.appendPlatformRequiredRelationClosureForResolvedRef(resolved)) return;
                 if (self.callableEvalBindingForResolvedRef(resolved)) |template_id| {
-                    return try pending.append(self.allocator, .{ .callable_eval_template = template_id });
+                    return try pending.append(self.context.allocator, .{ .callable_eval_template = template_id });
                 }
                 if (self.templateForResolvedValueRef(resolved)) |dependency_ref| {
-                    _ = try self.checked_procedure_templates.append(self.allocator, dependency_ref);
+                    _ = try self.checked_procedure_templates.append(self.context.allocator, dependency_ref);
                 }
                 if (self.constRefForResolvedValueRef(resolved)) |dependency_ref| {
-                    _ = try self.const_templates.append(self.allocator, dependency_ref);
+                    _ = try self.const_templates.append(self.context.allocator, dependency_ref);
                 }
             },
             .callable_eval_template => |template_id| {
-                const template = self.callable_eval_template_table.get(template_id);
-                const wrapper = entryWrapperForRoot(self.entry_wrappers, template.root);
-                const entry_template = self.checked_templates.get(wrapper.template.template);
+                const template = self.context.callable_eval_template_table.get(template_id);
+                const wrapper = entryWrapperForRoot(self.context.entry_wrappers, template.root);
+                const entry_template = self.context.checked_templates.get(wrapper.template.template);
 
                 try self.appendCheckedTypeRoot(template.checked_fn_root);
                 try self.appendCheckedTypeScheme(template.source_scheme);
-                try pending.append(self.allocator, .{ .template = .{ .ref = wrapper.template, .template = entry_template } });
-                try pending.append(self.allocator, .{ .callable_eval_template_done = template_id });
+                try pending.append(self.context.allocator, .{ .template = .{ .ref = wrapper.template, .template = entry_template } });
+                try pending.append(self.context.allocator, .{ .callable_eval_template_done = template_id });
             },
             .callable_eval_template_done => |template_id| {
-                _ = try self.callable_eval_templates.append(self.allocator, .{
-                    .artifact = self.artifact_key,
+                _ = try self.callable_eval_templates.append(self.context.allocator, .{
+                    .artifact = self.context.artifact_key,
                     .template = template_id,
                 });
             },
@@ -32184,32 +31831,32 @@ const ImportedTemplateClosureBuilder = struct {
     }
 
     fn appendCheckedBody(self: *ImportedTemplateClosureBuilder, body: CheckedBodyId) Allocator.Error!void {
-        const ref = ArtifactCheckedBodyRef{ .artifact = self.artifact_key, .body = body };
-        _ = try self.checked_bodies.append(self.allocator, ref);
+        const ref = ArtifactCheckedBodyRef{ .artifact = self.context.artifact_key, .body = body };
+        _ = try self.checked_bodies.append(self.context.allocator, ref);
     }
 
     fn appendCheckedConstBody(self: *ImportedTemplateClosureBuilder, body: CheckedConstBodyRef) Allocator.Error!void {
-        const ref = ArtifactCheckedConstBodyRef{ .artifact = self.artifact_key, .body = body };
-        _ = try self.checked_const_bodies.append(self.allocator, ref);
+        const ref = ArtifactCheckedConstBodyRef{ .artifact = self.context.artifact_key, .body = body };
+        _ = try self.checked_const_bodies.append(self.context.allocator, ref);
     }
 
     fn appendCheckedTypeRoot(self: *ImportedTemplateClosureBuilder, ty: CheckedTypeId) Allocator.Error!void {
-        const ref = ArtifactCheckedTypeRef{ .artifact = self.artifact_key, .ty = ty };
-        _ = try self.checked_type_roots.append(self.allocator, ref);
+        const ref = ArtifactCheckedTypeRef{ .artifact = self.context.artifact_key, .ty = ty };
+        _ = try self.checked_type_roots.append(self.context.allocator, ref);
     }
 
     fn appendCheckedTypeScheme(
         self: *ImportedTemplateClosureBuilder,
         scheme_key: canonical.CanonicalTypeSchemeKey,
     ) Allocator.Error!void {
-        const scheme = self.checked_types.schemeForKey(scheme_key) orelse {
+        const scheme = self.context.checked_types.schemeForKey(scheme_key) orelse {
             if (builtin.mode == .debug) {
                 base.invariant("checked artifact invariant violated: exported template references missing checked type scheme", .{});
             }
             unreachable;
         };
-        const ref = ArtifactCheckedTypeSchemeRef{ .artifact = self.artifact_key, .scheme = scheme.id };
-        _ = try self.checked_type_schemes.append(self.allocator, ref);
+        const ref = ArtifactCheckedTypeSchemeRef{ .artifact = self.context.artifact_key, .scheme = scheme.id };
+        _ = try self.checked_type_schemes.append(self.context.allocator, ref);
     }
 
     fn appendNestedProcSites(
@@ -32217,8 +31864,8 @@ const ImportedTemplateClosureBuilder = struct {
         table: NestedProcSiteTableRef,
     ) Allocator.Error!void {
         if (table.len == 0) return;
-        const ref = ArtifactNestedProcSiteTableRef{ .artifact = self.artifact_key, .table = table };
-        _ = try self.nested_proc_sites.append(self.allocator, ref);
+        const ref = ArtifactNestedProcSiteTableRef{ .artifact = self.context.artifact_key, .table = table };
+        _ = try self.nested_proc_sites.append(self.context.allocator, ref);
     }
 
     fn appendResolvedValueRefs(
@@ -32226,8 +31873,8 @@ const ImportedTemplateClosureBuilder = struct {
         table: ResolvedValueRefTableRef,
     ) Allocator.Error!void {
         if (table.len == 0) return;
-        const ref = ArtifactResolvedValueRefTableRef{ .artifact = self.artifact_key, .table = table };
-        _ = try self.resolved_value_refs.append(self.allocator, ref);
+        const ref = ArtifactResolvedValueRefTableRef{ .artifact = self.context.artifact_key, .table = table };
+        _ = try self.resolved_value_refs.append(self.context.allocator, ref);
     }
 
     fn appendStaticDispatchPlans(
@@ -32235,34 +31882,24 @@ const ImportedTemplateClosureBuilder = struct {
         table: StaticDispatchPlanTableRef,
     ) Allocator.Error!void {
         if (table.len == 0) return;
-        const ref = ArtifactStaticDispatchPlanTableRef{ .artifact = self.artifact_key, .table = table };
-        _ = try self.static_dispatch_plans.append(self.allocator, ref);
+        const ref = ArtifactStaticDispatchPlanTableRef{ .artifact = self.context.artifact_key, .table = table };
+        _ = try self.static_dispatch_plans.append(self.context.allocator, ref);
     }
 
     fn appendInterfaceCapabilities(
         self: *ImportedTemplateClosureBuilder,
         ref: ArtifactModuleInterfaceCapabilitiesRef,
     ) Allocator.Error!void {
-        _ = try self.interface_capabilities.append(self.allocator, ref);
+        _ = try self.interface_capabilities.append(self.context.allocator, ref);
     }
 
     fn appendImportedTemplateClosure(
         self: *ImportedTemplateClosureBuilder,
         closure: ImportedTemplateClosureView,
     ) Allocator.Error!void {
-        for (closure.checked_bodies) |value| _ = try self.checked_bodies.append(self.allocator, value);
-        for (closure.checked_type_roots) |value| _ = try self.checked_type_roots.append(self.allocator, value);
-        for (closure.checked_type_schemes) |value| _ = try self.checked_type_schemes.append(self.allocator, value);
-        for (closure.checked_callable_bodies) |value| _ = try self.checked_callable_bodies.append(self.allocator, value);
-        for (closure.checked_const_bodies) |value| _ = try self.checked_const_bodies.append(self.allocator, value);
-        for (closure.checked_procedure_templates) |value| _ = try self.checked_procedure_templates.append(self.allocator, value);
-        for (closure.callable_eval_templates) |value| _ = try self.callable_eval_templates.append(self.allocator, value);
-        for (closure.const_templates) |value| _ = try self.const_templates.append(self.allocator, value);
-        for (closure.nested_proc_sites) |value| _ = try self.nested_proc_sites.append(self.allocator, value);
-        for (closure.resolved_value_refs) |value| _ = try self.resolved_value_refs.append(self.allocator, value);
-        for (closure.static_dispatch_plans) |value| _ = try self.static_dispatch_plans.append(self.allocator, value);
-        for (closure.method_registry_entries) |value| _ = try self.method_registry_entries.append(self.allocator, value);
-        for (closure.interface_capabilities) |value| _ = try self.interface_capabilities.append(self.allocator, value);
+        inline for (closure_fields) |name| {
+            for (@field(closure, name)) |value| _ = try @field(self, name).append(self.context.allocator, value);
+        }
     }
 
     /// Queue a direct-dependency step for each resolved ref, in order.
@@ -32272,11 +31909,11 @@ const ImportedTemplateClosureBuilder = struct {
         pending: *std.ArrayListUnmanaged(ClosureStep),
     ) Allocator.Error!void {
         const end = table.start + table.len;
-        if (end > self.resolved_value_refs_table.template_refs.len) checkedArtifactInvariant("checked template resolved-ref span was outside table", .{});
-        for (self.resolved_value_refs_table.template_refs[table.start..end]) |ref_id| {
+        if (end > self.context.resolved_value_refs_table.template_refs.len) checkedArtifactInvariant("checked template resolved-ref span was outside table", .{});
+        for (self.context.resolved_value_refs_table.template_refs[table.start..end]) |ref_id| {
             const raw = @backingInt(ref_id);
-            if (raw >= self.resolved_value_refs_table.records.len) checkedArtifactInvariant("checked template resolved-ref id was outside table", .{});
-            try pending.append(self.allocator, .{ .direct_dependency = self.resolved_value_refs_table.records[raw].ref });
+            if (raw >= self.context.resolved_value_refs_table.records.len) checkedArtifactInvariant("checked template resolved-ref id was outside table", .{});
+            try pending.append(self.context.allocator, .{ .direct_dependency = self.context.resolved_value_refs_table.records[raw].ref });
         }
     }
 
@@ -32286,7 +31923,7 @@ const ImportedTemplateClosureBuilder = struct {
     ) Allocator.Error!bool {
         return switch (ref) {
             .imported_const => |const_use| blk: {
-                _ = try self.const_templates.append(self.allocator, const_use.const_ref);
+                _ = try self.const_templates.append(self.context.allocator, const_use.const_ref);
                 break :blk true;
             },
             .imported_proc => |proc_use| blk: {
@@ -32328,11 +31965,11 @@ const ImportedTemplateClosureBuilder = struct {
                 const template_ref = checkedTemplateFromCallableTemplateForClosure(direct.template) orelse {
                     checkedArtifactInvariant("imported procedure binding referenced a post-check template before mono", .{});
                 };
-                _ = try self.checked_procedure_templates.append(self.allocator, template_ref);
+                _ = try self.checked_procedure_templates.append(self.context.allocator, template_ref);
             },
             .checked_error => {},
             .callable_eval_template => |template_id| {
-                _ = try self.callable_eval_templates.append(self.allocator, .{
+                _ = try self.callable_eval_templates.append(self.context.allocator, .{
                     .artifact = binding.binding.artifact,
                     .template = template_id,
                 });
@@ -32344,7 +31981,7 @@ const ImportedTemplateClosureBuilder = struct {
         self: *ImportedTemplateClosureBuilder,
         ref: ImportedProcedureBindingRef,
     ) ImportedProcedureBindingView {
-        for (self.imports) |import| {
+        for (self.context.imports) |import| {
             if (!std.meta.eql(import.key.bytes, ref.artifact.bytes)) continue;
             for (import.view.exported_procedure_bindings.bindings) |binding| {
                 if (binding.binding.def == ref.def and
@@ -32354,7 +31991,7 @@ const ImportedTemplateClosureBuilder = struct {
                 }
             }
         }
-        for (self.available_artifacts) |view| {
+        for (self.context.available_artifacts) |view| {
             if (!std.meta.eql(view.key.bytes, ref.artifact.bytes)) continue;
             for (view.exported_procedure_bindings.bindings) |binding| {
                 if (binding.binding.def == ref.def and
@@ -32378,7 +32015,7 @@ const ImportedTemplateClosureBuilder = struct {
                     .const_value => {},
                     .procedure_value => checkedArtifactInvariant("platform-required const ref pointed at procedure binding {d}", .{@backingInt(required.binding)}),
                 }
-                try self.appendImportedTemplateClosure(self.platform_required_bindings.relationClosure(binding));
+                try self.appendImportedTemplateClosure(self.context.platform_required_bindings.relationClosure(binding));
                 break :blk true;
             },
             .platform_required_proc => |required| blk: {
@@ -32387,7 +32024,7 @@ const ImportedTemplateClosureBuilder = struct {
                     .procedure_value => {},
                     .const_value => checkedArtifactInvariant("platform-required procedure ref pointed at const binding {d}", .{@backingInt(required.binding)}),
                 }
-                try self.appendImportedTemplateClosure(self.platform_required_bindings.relationClosure(binding));
+                try self.appendImportedTemplateClosure(self.context.platform_required_bindings.relationClosure(binding));
                 break :blk true;
             },
             .local_param,
@@ -32412,7 +32049,7 @@ const ImportedTemplateClosureBuilder = struct {
         self: *ImportedTemplateClosureBuilder,
         binding_id: PlatformRequiredBindingId,
     ) PlatformRequiredBinding {
-        return self.platform_required_bindings.lookupByBindingId(@backingInt(binding_id)) orelse {
+        return self.context.platform_required_bindings.lookupByBindingId(@backingInt(binding_id)) orelse {
             checkedArtifactInvariant("resolved platform-required value referenced missing binding {d}", .{@backingInt(binding_id)});
         };
     }
@@ -32421,11 +32058,11 @@ const ImportedTemplateClosureBuilder = struct {
         self: *ImportedTemplateClosureBuilder,
         const_ref: ConstRef,
     ) Allocator.Error!void {
-        if (!try self.const_templates.append(self.allocator, const_ref)) return;
+        if (!try self.const_templates.append(self.context.allocator, const_ref)) return;
 
-        if (!std.meta.eql(const_ref.artifact.bytes, self.artifact_key.bytes)) return;
+        if (!std.meta.eql(const_ref.artifact.bytes, self.context.artifact_key.bytes)) return;
 
-        const scheme = self.checked_types.schemeForKey(const_ref.source_scheme) orelse {
+        const scheme = self.context.checked_types.schemeForKey(const_ref.source_scheme) orelse {
             if (builtin.mode == .debug) {
                 base.invariant("checked artifact invariant violated: const template references missing checked type scheme", .{});
             }
@@ -32434,7 +32071,7 @@ const ImportedTemplateClosureBuilder = struct {
         try self.appendCheckedTypeRoot(scheme.root);
         try self.appendCheckedTypeScheme(const_ref.source_scheme);
 
-        const template = self.const_templates_table.get(const_ref);
+        const template = self.context.const_templates_table.get(const_ref);
         switch (template.state) {
             .eval_template => |eval| {
                 try self.appendCheckedConstBody(eval.body);
@@ -32442,10 +32079,10 @@ const ImportedTemplateClosureBuilder = struct {
                 try self.appendResolvedValueRefs(eval.resolved_value_refs);
                 try self.appendStaticDispatchPlans(eval.static_dispatch_plans);
                 var pending: std.ArrayListUnmanaged(ClosureStep) = .empty;
-                defer pending.deinit(self.allocator);
+                defer pending.deinit(self.context.allocator);
                 try self.appendDirectProcedureDependencies(eval.resolved_value_refs, &pending);
-                const entry_template = self.checked_templates.get(eval.entry_template.template);
-                try pending.append(self.allocator, .{ .template = .{ .ref = eval.entry_template, .template = entry_template } });
+                const entry_template = self.context.checked_templates.get(eval.entry_template.template);
+                try pending.append(self.context.allocator, .{ .template = .{ .ref = eval.entry_template, .template = entry_template } });
                 std.mem.reverse(ClosureStep, pending.items);
                 while (pending.pop()) |step| {
                     const start = pending.items.len;
@@ -32519,10 +32156,10 @@ const ImportedTemplateClosureBuilder = struct {
             .top_level => |binding| binding,
             .imported, .hosted, .platform_required => return null,
         };
-        if (!std.meta.eql(top_level.artifact.bytes, self.artifact_key.bytes)) {
+        if (!std.meta.eql(top_level.artifact.bytes, self.context.artifact_key.bytes)) {
             checkedArtifactInvariant("top-level callable-eval closure dependency referenced a different artifact", .{});
         }
-        const binding = self.top_level_bindings.get(top_level.binding);
+        const binding = self.context.top_level_bindings.get(top_level.binding);
         return switch (binding.body) {
             .direct_template, .checked_error => null,
             .callable_eval_template => |template| template,
@@ -32558,10 +32195,10 @@ const ImportedTemplateClosureBuilder = struct {
         self: *ImportedTemplateClosureBuilder,
         binding_ref: ArtifactTopLevelProcedureBindingRef,
     ) ?canonical.ProcedureTemplateRef {
-        if (!std.meta.eql(binding_ref.artifact.bytes, self.artifact_key.bytes)) {
+        if (!std.meta.eql(binding_ref.artifact.bytes, self.context.artifact_key.bytes)) {
             checkedArtifactInvariant("top-level procedure closure dependency referenced a different artifact", .{});
         }
-        const binding = self.top_level_bindings.get(binding_ref.binding);
+        const binding = self.context.top_level_bindings.get(binding_ref.binding);
         return switch (binding.body) {
             .direct_template => |direct| checkedTemplateFromCallableTemplateForClosure(direct.template),
             .callable_eval_template, .checked_error => null,
@@ -32580,87 +32217,28 @@ fn checkedTemplateFromCallableTemplateForClosure(
 }
 
 fn buildImportedConstTemplateClosure(
-    allocator: Allocator,
-    artifact_key: CheckedModuleArtifactKey,
-    checked_types: *const CheckedTypeStore,
-    checked_templates: *const CheckedProcedureTemplateTable,
-    callable_eval_templates: *const CallableEvalTemplateTable,
-    entry_wrappers: *const EntryWrapperTable,
-    const_templates: *const ConstTemplateTable,
-    resolved_value_refs: *const ResolvedValueRefTable,
-    top_level_bindings: *const TopLevelProcedureBindingTable,
-    platform_required_bindings: *const PlatformRequiredBindingTable,
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
+    context: ImportedTemplateClosureContext,
     const_ref: ConstRef,
 ) Allocator.Error!ImportedTemplateClosureView {
-    var builder = ImportedTemplateClosureBuilder.init(
-        allocator,
-        artifact_key,
-        checked_types,
-        checked_templates,
-        callable_eval_templates,
-        entry_wrappers,
-        const_templates,
-        resolved_value_refs,
-        top_level_bindings,
-        platform_required_bindings,
-        imports,
-        available_artifacts,
-    );
+    var builder = ImportedTemplateClosureBuilder.init(context);
     defer builder.deinit();
 
-    try builder.appendInterfaceCapabilities(.{ .artifact = artifact_key });
+    try builder.appendInterfaceCapabilities(.{ .artifact = context.artifact_key });
     try builder.appendConstTemplate(const_ref);
 
-    return .{
-        .checked_bodies = try builder.checked_bodies.toOwnedSlice(allocator),
-        .checked_type_roots = try builder.checked_type_roots.toOwnedSlice(allocator),
-        .checked_type_schemes = try builder.checked_type_schemes.toOwnedSlice(allocator),
-        .checked_callable_bodies = try builder.checked_callable_bodies.toOwnedSlice(allocator),
-        .checked_const_bodies = try builder.checked_const_bodies.toOwnedSlice(allocator),
-        .checked_procedure_templates = try builder.checked_procedure_templates.toOwnedSlice(allocator),
-        .callable_eval_templates = try builder.callable_eval_templates.toOwnedSlice(allocator),
-        .const_templates = try builder.const_templates.toOwnedSlice(allocator),
-        .nested_proc_sites = try builder.nested_proc_sites.toOwnedSlice(allocator),
-        .resolved_value_refs = try builder.resolved_value_refs.toOwnedSlice(allocator),
-        .static_dispatch_plans = try builder.static_dispatch_plans.toOwnedSlice(allocator),
-        .method_registry_entries = try builder.method_registry_entries.toOwnedSlice(allocator),
-        .interface_capabilities = try builder.interface_capabilities.toOwnedSlice(allocator),
-    };
-}
-
-fn freeConstSlice(allocator: Allocator, slice: anytype) void {
-    if (slice.len > 0) allocator.free(slice);
+    return try builder.finish();
 }
 
 pub fn deinitImportedTemplateClosure(
     allocator: Allocator,
     closure: *ImportedTemplateClosureView,
 ) void {
-    freeConstSlice(allocator, closure.checked_bodies);
-    freeConstSlice(allocator, closure.checked_type_roots);
-    freeConstSlice(allocator, closure.checked_type_schemes);
-    freeConstSlice(allocator, closure.checked_callable_bodies);
-    freeConstSlice(allocator, closure.checked_const_bodies);
-    freeConstSlice(allocator, closure.checked_procedure_templates);
-    freeConstSlice(allocator, closure.callable_eval_templates);
-    freeConstSlice(allocator, closure.const_templates);
-    freeConstSlice(allocator, closure.nested_proc_sites);
-    freeConstSlice(allocator, closure.resolved_value_refs);
-    freeConstSlice(allocator, closure.static_dispatch_plans);
-    freeConstSlice(allocator, closure.method_registry_entries);
-    freeConstSlice(allocator, closure.interface_capabilities);
+    inline for (closure_fields) |name| allocator.free(@field(closure, name));
     closure.* = .{};
 }
 
 /// Public `ImportedProcedureBindingBody` declaration.
-pub const ImportedProcedureBindingBody = union(enum) {
-    direct_template: DirectProcedureBinding,
-    callable_eval_template: CallableEvalTemplateId,
-    /// The binding value was rejected; evaluating it is a terminal checked error.
-    checked_error: CheckedExprId,
-};
+pub const ImportedProcedureBindingBody = ProcedureBindingBody;
 
 /// Public `ImportedProcedureBindingView` declaration.
 pub const ImportedProcedureBindingView = struct {
@@ -32678,10 +32256,8 @@ pub const ExportedProcedureBindingView = struct {
     bindings: []const ImportedProcedureBindingView = &.{},
     closure_pool: *const ClosurePool = &empty_closure_pool,
 
-    /// Materialize a row's imported template closure from the backing pool.
-    pub fn rowClosure(self: ExportedProcedureBindingView, row: ImportedProcedureBindingView) ImportedTemplateClosureView {
-        return self.closure_pool.reconstruct(row.template_closure);
-    }
+    const Common = ClosureRowView(@This(), ImportedProcedureBindingView);
+    pub const rowClosure = Common.rowClosure;
 };
 
 /// Public `ExportedProcedureBindingTable` declaration.
@@ -32715,6 +32291,20 @@ pub const ExportedProcedureBindingTable = struct {
             bindings.deinit(allocator);
             closure_pool.deinit(allocator);
         }
+        const closure_context = ImportedTemplateClosureContext{
+            .allocator = allocator,
+            .artifact_key = artifact_key,
+            .checked_types = checked_types,
+            .checked_templates = checked_templates,
+            .callable_eval_template_table = callable_eval_templates,
+            .entry_wrappers = entry_wrappers,
+            .const_templates_table = const_templates,
+            .resolved_value_refs_table = resolved_value_refs,
+            .top_level_bindings = procedure_bindings,
+            .platform_required_bindings = platform_required_bindings,
+            .imports = imports,
+            .available_artifacts = available_artifacts,
+        };
 
         // A function bound by a top-level destructure is a promoted callable
         // root; its row is keyed by the binder node the importer reaches it
@@ -32723,24 +32313,8 @@ pub const ExportedProcedureBindingTable = struct {
             const checked_pattern = checked_bodies.patternIdForSource(binder) orelse continue;
             const binding_ref = selected_hoisted_callables.lookupByPattern(checked_pattern) orelse continue;
             const binding = procedure_bindings.get(binding_ref);
-            const body: ImportedProcedureBindingBody = switch (binding.body) {
-                .direct_template => |direct| .{ .direct_template = direct },
-                .callable_eval_template => |template| .{ .callable_eval_template = template },
-                .checked_error => |expr| .{ .checked_error = expr },
-            };
             var template_closure = try buildProcedureBindingClosure(
-                allocator,
-                artifact_key,
-                checked_types,
-                checked_templates,
-                callable_eval_templates,
-                entry_wrappers,
-                const_templates,
-                resolved_value_refs,
-                procedure_bindings,
-                platform_required_bindings,
-                imports,
-                available_artifacts,
+                closure_context,
                 binding.body,
             );
             errdefer deinitImportedTemplateClosure(allocator, &template_closure);
@@ -32755,7 +32329,7 @@ pub const ExportedProcedureBindingTable = struct {
                     .pattern = checked_pattern,
                 },
                 .source_scheme = binding.source_scheme,
-                .body = body,
+                .body = binding.body,
                 .intrinsic = null,
                 .iterator_procedure = null,
                 .runtime_result_provenance = null,
@@ -32770,24 +32344,8 @@ pub const ExportedProcedureBindingTable = struct {
                 .const_ref => continue,
             };
             const binding = procedure_bindings.get(binding_ref);
-            const body: ImportedProcedureBindingBody = switch (binding.body) {
-                .direct_template => |direct| .{ .direct_template = direct },
-                .callable_eval_template => |template| .{ .callable_eval_template = template },
-                .checked_error => |expr| .{ .checked_error = expr },
-            };
             var template_closure = try buildProcedureBindingClosure(
-                allocator,
-                artifact_key,
-                checked_types,
-                checked_templates,
-                callable_eval_templates,
-                entry_wrappers,
-                const_templates,
-                resolved_value_refs,
-                procedure_bindings,
-                platform_required_bindings,
-                imports,
-                available_artifacts,
+                closure_context,
                 binding.body,
             );
             errdefer deinitImportedTemplateClosure(allocator, &template_closure);
@@ -32802,7 +32360,7 @@ pub const ExportedProcedureBindingTable = struct {
                     .pattern = top_level.pattern,
                 },
                 .source_scheme = binding.source_scheme,
-                .body = body,
+                .body = binding.body,
                 .intrinsic = intrinsicForProcedureDef(module, def_idx),
                 .iterator_procedure = iteratorProcedureForDef(module, def_idx),
                 .runtime_result_provenance = runtimeResultProvenanceForProcedureDef(module, def_idx),
@@ -32816,20 +32374,10 @@ pub const ExportedProcedureBindingTable = struct {
         };
     }
 
-    pub fn view(self: *const ExportedProcedureBindingTable) ExportedProcedureBindingView {
-        return .{ .bindings = self.bindings, .closure_pool = &self.closure_pool };
-    }
-
-    /// Materialize a row's imported template closure from this table's pool.
-    pub fn rowClosure(self: *const ExportedProcedureBindingTable, row: ImportedProcedureBindingView) ImportedTemplateClosureView {
-        return self.view().rowClosure(row);
-    }
-
-    pub fn deinit(self: *ExportedProcedureBindingTable, allocator: Allocator) void {
-        if (!self.closure_pool.serialized) allocator.free(self.bindings);
-        self.closure_pool.deinit(allocator);
-        self.* = .{};
-    }
+    const Common = ClosureRowTable(@This(), ExportedProcedureBindingView, ImportedProcedureBindingView, "bindings");
+    pub const view = Common.view;
+    pub const rowClosure = Common.rowClosure;
+    pub const deinit = Common.deinit;
 
     /// Relocatable serialized form: the POD row slice plus the closure pool.
     pub const Serialized = extern struct {
@@ -32847,53 +32395,20 @@ pub const ExportedProcedureBindingTable = struct {
 };
 
 fn buildProcedureBindingClosure(
-    allocator: Allocator,
-    artifact_key: CheckedModuleArtifactKey,
-    checked_types: *const CheckedTypeStore,
-    checked_templates: *const CheckedProcedureTemplateTable,
-    callable_eval_templates: *const CallableEvalTemplateTable,
-    entry_wrappers: *const EntryWrapperTable,
-    const_templates: *const ConstTemplateTable,
-    resolved_value_refs: *const ResolvedValueRefTable,
-    top_level_bindings: *const TopLevelProcedureBindingTable,
-    platform_required_bindings: *const PlatformRequiredBindingTable,
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
+    context: ImportedTemplateClosureContext,
     body: ProcedureBindingBody,
 ) Allocator.Error!ImportedTemplateClosureView {
     return switch (body) {
         .direct_template => |direct| switch (direct.template) {
             .checked => |template_ref| buildImportedTemplateClosure(
-                allocator,
-                artifact_key,
-                checked_types,
-                checked_templates,
-                callable_eval_templates,
-                entry_wrappers,
-                const_templates,
-                resolved_value_refs,
-                top_level_bindings,
-                platform_required_bindings,
-                imports,
-                available_artifacts,
+                context,
                 template_ref,
-                checked_templates.get(template_ref.template),
+                context.checked_templates.get(template_ref.template),
             ),
             .synthetic => |synthetic| buildImportedTemplateClosure(
-                allocator,
-                artifact_key,
-                checked_types,
-                checked_templates,
-                callable_eval_templates,
-                entry_wrappers,
-                const_templates,
-                resolved_value_refs,
-                top_level_bindings,
-                platform_required_bindings,
-                imports,
-                available_artifacts,
+                context,
                 synthetic.template,
-                checked_templates.get(synthetic.template.template),
+                context.checked_templates.get(synthetic.template.template),
             ),
             .lifted => {
                 if (builtin.mode == .debug) {
@@ -32904,51 +32419,24 @@ fn buildProcedureBindingClosure(
         },
         .checked_error => .{},
         .callable_eval_template => |template_id| blk: {
-            const template = callable_eval_templates.get(template_id);
-            const wrapper = entryWrapperForRoot(entry_wrappers, template.root);
-            const entry_template = checked_templates.get(wrapper.template.template);
+            const template = context.callable_eval_template_table.get(template_id);
+            const wrapper = entryWrapperForRoot(context.entry_wrappers, template.root);
+            const entry_template = context.checked_templates.get(wrapper.template.template);
 
-            var builder = ImportedTemplateClosureBuilder.init(
-                allocator,
-                artifact_key,
-                checked_types,
-                checked_templates,
-                callable_eval_templates,
-                entry_wrappers,
-                const_templates,
-                resolved_value_refs,
-                top_level_bindings,
-                platform_required_bindings,
-                imports,
-                available_artifacts,
-            );
+            var builder = ImportedTemplateClosureBuilder.init(context);
             defer builder.deinit();
 
-            try builder.appendInterfaceCapabilities(.{ .artifact = artifact_key });
+            try builder.appendInterfaceCapabilities(.{ .artifact = context.artifact_key });
             try builder.appendCheckedTypeRoot(template.checked_fn_root);
             try builder.appendCheckedTypeScheme(template.source_scheme);
             try builder.appendTemplate(wrapper.template, entry_template);
 
-            _ = try builder.callable_eval_templates.append(allocator, .{
-                .artifact = artifact_key,
+            _ = try builder.callable_eval_templates.append(context.allocator, .{
+                .artifact = context.artifact_key,
                 .template = template_id,
             });
 
-            break :blk .{
-                .checked_bodies = try builder.checked_bodies.toOwnedSlice(allocator),
-                .checked_type_roots = try builder.checked_type_roots.toOwnedSlice(allocator),
-                .checked_type_schemes = try builder.checked_type_schemes.toOwnedSlice(allocator),
-                .checked_callable_bodies = try builder.checked_callable_bodies.toOwnedSlice(allocator),
-                .checked_const_bodies = try builder.checked_const_bodies.toOwnedSlice(allocator),
-                .checked_procedure_templates = try builder.checked_procedure_templates.toOwnedSlice(allocator),
-                .callable_eval_templates = try builder.callable_eval_templates.toOwnedSlice(allocator),
-                .const_templates = try builder.const_templates.toOwnedSlice(allocator),
-                .nested_proc_sites = try builder.nested_proc_sites.toOwnedSlice(allocator),
-                .resolved_value_refs = try builder.resolved_value_refs.toOwnedSlice(allocator),
-                .static_dispatch_plans = try builder.static_dispatch_plans.toOwnedSlice(allocator),
-                .method_registry_entries = try builder.method_registry_entries.toOwnedSlice(allocator),
-                .interface_capabilities = try builder.interface_capabilities.toOwnedSlice(allocator),
-            };
+            break :blk try builder.finish();
         },
     };
 }
@@ -33121,7 +32609,7 @@ pub const ConstTemplateTable = struct {
             checkedArtifactInvariant("ConstRef template id is out of range", .{});
         }
         const template = self.templates.items[idx];
-        if (!constOwnerEql(template.owner, ref.owner) or
+        if (!std.meta.eql(template.owner, ref.owner) or
             !std.meta.eql(template.source_scheme.bytes, ref.source_scheme.bytes))
         {
             checkedArtifactInvariant("ConstRef does not match constant template row", .{});
@@ -33152,7 +32640,7 @@ pub const ConstTemplateTable = struct {
             checkedArtifactInvariant("ConstRef template id is out of range", .{});
         }
         const record = &self.templates.items[idx];
-        if (!constOwnerEql(record.owner, ref.owner) or
+        if (!std.meta.eql(record.owner, ref.owner) or
             !std.meta.eql(record.source_scheme.bytes, ref.source_scheme.bytes))
         {
             checkedArtifactInvariant("ConstRef does not match constant template row", .{});
@@ -33160,10 +32648,7 @@ pub const ConstTemplateTable = struct {
         return record;
     }
 
-    pub fn deinit(self: *ConstTemplateTable, allocator: Allocator) void {
-        self.templates.deinit(allocator);
-        self.* = .{};
-    }
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 /// Public `ImportedConstTemplateView` declaration.
@@ -33182,10 +32667,8 @@ pub const ExportedConstTemplateView = struct {
     templates: []const ImportedConstTemplateView = &.{},
     closure_pool: *const ClosurePool = &empty_closure_pool,
 
-    /// Materialize a row's imported template closure from the backing pool.
-    pub fn rowClosure(self: ExportedConstTemplateView, row: ImportedConstTemplateView) ImportedTemplateClosureView {
-        return self.closure_pool.reconstruct(row.template_closure);
-    }
+    const Common = ClosureRowView(@This(), ImportedConstTemplateView);
+    pub const rowClosure = Common.rowClosure;
 };
 
 /// Public `ExportedConstTemplateTable` declaration.
@@ -33219,6 +32702,20 @@ pub const ExportedConstTemplateTable = struct {
             templates.deinit(allocator);
             closure_pool.deinit(allocator);
         }
+        const closure_context = ImportedTemplateClosureContext{
+            .allocator = allocator,
+            .artifact_key = artifact_key,
+            .checked_types = checked_types,
+            .checked_templates = checked_templates,
+            .callable_eval_template_table = callable_eval_templates,
+            .entry_wrappers = entry_wrappers,
+            .const_templates_table = const_templates,
+            .resolved_value_refs_table = resolved_value_refs,
+            .top_level_bindings = top_level_bindings,
+            .platform_required_bindings = platform_required_bindings,
+            .imports = imports,
+            .available_artifacts = available_artifacts,
+        };
 
         // A value bound by a top-level destructure is a hoisted extraction
         // root; its row is keyed by the binder node the importer reaches it
@@ -33228,18 +32725,7 @@ pub const ExportedConstTemplateTable = struct {
             const entry = hoisted_constants.lookupByPattern(checked_pattern) orelse continue;
             const template = const_templates.get(entry.const_ref);
             var template_closure = try buildImportedConstTemplateClosure(
-                allocator,
-                artifact_key,
-                checked_types,
-                checked_templates,
-                callable_eval_templates,
-                entry_wrappers,
-                const_templates,
-                resolved_value_refs,
-                top_level_bindings,
-                platform_required_bindings,
-                imports,
-                available_artifacts,
+                closure_context,
                 entry.const_ref,
             );
             errdefer deinitImportedTemplateClosure(allocator, &template_closure);
@@ -33264,18 +32750,7 @@ pub const ExportedConstTemplateTable = struct {
             };
             const template = const_templates.get(const_ref);
             var template_closure = try buildImportedConstTemplateClosure(
-                allocator,
-                artifact_key,
-                checked_types,
-                checked_templates,
-                callable_eval_templates,
-                entry_wrappers,
-                const_templates,
-                resolved_value_refs,
-                top_level_bindings,
-                platform_required_bindings,
-                imports,
-                available_artifacts,
+                closure_context,
                 const_ref,
             );
             errdefer deinitImportedTemplateClosure(allocator, &template_closure);
@@ -33298,16 +32773,10 @@ pub const ExportedConstTemplateTable = struct {
         };
     }
 
-    pub fn deinit(self: *ExportedConstTemplateTable, allocator: Allocator) void {
-        if (!self.closure_pool.serialized) allocator.free(self.templates);
-        self.closure_pool.deinit(allocator);
-        self.* = .{};
-    }
-
-    /// Materialize a row's imported template closure from this table's pool.
-    pub fn rowClosure(self: *const ExportedConstTemplateTable, row: ImportedConstTemplateView) ImportedTemplateClosureView {
-        return self.view().rowClosure(row);
-    }
+    const Common = ClosureRowTable(@This(), ExportedConstTemplateView, ImportedConstTemplateView, "templates");
+    pub const view = Common.view;
+    pub const rowClosure = Common.rowClosure;
+    pub const deinit = Common.deinit;
 
     /// Relocatable serialized form: the POD row slice plus the closure pool.
     pub const Serialized = extern struct {
@@ -33334,10 +32803,6 @@ pub const ExportedConstTemplateTable = struct {
             return;
         }
     }
-
-    pub fn view(self: *const ExportedConstTemplateTable) ExportedConstTemplateView {
-        return .{ .templates = self.templates, .closure_pool = &self.closure_pool };
-    }
 };
 
 fn checkedArtifactInvariant(comptime message: []const u8, args: anytype) noreturn {
@@ -33345,10 +32810,6 @@ fn checkedArtifactInvariant(comptime message: []const u8, args: anytype) noretur
         base.invariant("checked artifact invariant violated: " ++ message, args);
     }
     unreachable;
-}
-
-fn checkedArtifactKeyEql(a: CheckedModuleArtifactKey, b: CheckedModuleArtifactKey) bool {
-    return std.meta.eql(a.bytes, b.bytes);
 }
 
 fn checkedArtifactKeyLessThan(_: void, a: CheckedModuleArtifactKey, b: CheckedModuleArtifactKey) bool {
@@ -33363,28 +32824,14 @@ fn closureArtifactRefIsLocal(
     artifact: *const CheckedModuleArtifact,
     referenced: CheckedModuleArtifactKey,
 ) bool {
-    return checkedArtifactKeyEql(referenced, artifact.key);
+    return CheckedModuleArtifactKey.eql(referenced, artifact.key);
 }
 
 fn constRefEql(a: ConstRef, b: ConstRef) bool {
-    return std.meta.eql(a.artifact.bytes, b.artifact.bytes) and
-        constOwnerEql(a.owner, b.owner) and
+    return a.artifact.eql(b.artifact) and
+        std.meta.eql(a.owner, b.owner) and
         a.template == b.template and
         std.meta.eql(a.source_scheme.bytes, b.source_scheme.bytes);
-}
-
-fn constOwnerEql(a: ConstOwner, b: ConstOwner) bool {
-    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
-    return switch (a) {
-        .top_level_binding => |left| blk: {
-            const right = b.top_level_binding;
-            break :blk left.module_idx == right.module_idx and left.pattern == right.pattern;
-        },
-        .hoisted_expr => |left| blk: {
-            const right = b.hoisted_expr;
-            break :blk left.module_idx == right.module_idx and left.expr == right.expr;
-        },
-    };
 }
 
 fn constRefTopLevelOwner(ref: ConstRef) ?ConstTopLevelOwner {
@@ -33513,11 +32960,7 @@ pub const CompileTimeDebugStore = struct {
         return self.bytes[entry.message_start..][0..entry.message_len];
     }
 
-    pub fn deinit(self: *CompileTimeDebugStore, allocator: Allocator) void {
-        allocator.free(self.entries);
-        allocator.free(self.bytes);
-        self.* = .{};
-    }
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 /// Checked module publication, including typed stores and compile-time observations.
@@ -33753,6 +33196,15 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 231);
         }
 
+        /// Every field but the inline POD `key` and `module_identity`: the
+        /// sub-stores, in buffer write order.
+        const sub_store_fields = @typeInfo(Serialized).@"struct".field_names[2..];
+
+        comptime {
+            std.debug.assert(artifact_serialize.comptimeStrEq(@typeInfo(Serialized).@"struct".field_names[0], "key"));
+            std.debug.assert(artifact_serialize.comptimeStrEq(@typeInfo(Serialized).@"struct".field_names[1], "module_identity"));
+        }
+
         /// Append every sub-store's bytes to `writer` in field order, recording
         /// each one's relocatable offsets. `module_env` is intentionally not
         /// written (transform E); its bytes live in a separate env blob.
@@ -33766,47 +33218,16 @@ pub const CheckedModuleArtifact = struct {
             if (artifact.evaluation_state != .finalized) checkedArtifactInvariant("cannot serialize prepared checked module", .{});
             self.key = artifact.key;
             self.module_identity = ModuleIdentitySerialized.encode(artifact.module_identity);
-            try self.direct_import_artifact_keys.serialize(artifact.direct_import_artifact_keys, gpa, writer);
-            try self.canonical_names.serialize(&artifact.canonical_names, gpa, writer);
-            try self.checking_context_identity.serialize(&artifact.checking_context_identity, gpa, writer);
-            try self.public_api_dependencies.serialize(&artifact.public_api_dependencies, gpa, writer);
-            try self.lowering_visibility.serialize(&artifact.lowering_visibility, gpa, writer);
-            try self.method_lookup_scope.serialize(&artifact.method_lookup_scope, gpa, writer);
-            try self.exports.serialize(&artifact.exports, gpa, writer);
-            try self.checked_types.serialize(&artifact.checked_types, gpa, writer);
-            try self.checked_bodies.serialize(&artifact.checked_bodies, gpa, writer);
-            try self.checked_const_bodies.serialize(&artifact.checked_const_bodies, gpa, writer);
-            try self.exhaustiveness_sites.serialize(&artifact.exhaustiveness_sites, gpa, writer);
-            try self.evaluation_diagnostics.serialize(&artifact.evaluation_diagnostics, gpa, writer);
-            try self.exported_procedure_templates.serialize(&artifact.exported_procedure_templates, gpa, writer);
-            try self.exported_procedure_bindings.serialize(&artifact.exported_procedure_bindings, gpa, writer);
-            try self.exported_const_templates.serialize(&artifact.exported_const_templates, gpa, writer);
-            try self.provides_requires.serialize(&artifact.provides_requires, gpa, writer);
-            try self.provided_exports.serialize(&artifact.provided_exports, gpa, writer);
-            try self.method_registry.serialize(&artifact.method_registry, gpa, writer);
-            try self.static_dispatch_plans.serialize(&artifact.static_dispatch_plans, gpa, writer);
-            try self.resolved_value_refs.serialize(&artifact.resolved_value_refs, gpa, writer);
-            try self.nested_proc_sites.serialize(&artifact.nested_proc_sites, gpa, writer);
-            try self.checked_procedure_templates.serialize(&artifact.checked_procedure_templates, gpa, writer);
-            try self.entry_wrappers.serialize(&artifact.entry_wrappers, gpa, writer);
-            try self.intrinsic_wrappers.serialize(&artifact.intrinsic_wrappers, gpa, writer);
-            try self.top_level_procedure_bindings.serialize(&artifact.top_level_procedure_bindings, gpa, writer);
-            try self.callable_eval_templates.serialize(&artifact.callable_eval_templates, gpa, writer);
-            try self.root_requests.serialize(&artifact.root_requests, gpa, writer);
-            try self.hosted_procs.serialize(&artifact.hosted_procs, gpa, writer);
-            try self.hosted_bindings.serialize(&artifact.hosted_bindings, gpa, writer);
-            try self.platform_required_declarations.serialize(&artifact.platform_required_declarations, gpa, writer);
-            try self.platform_type_inputs.serialize(&artifact.platform_type_inputs, gpa, writer);
-            try self.platform_requirement_relations.serialize(&artifact.platform_requirement_relations, gpa, writer);
-            try self.platform_requirement_solutions.serialize(&artifact.platform_requirement_solutions, gpa, writer);
-            try self.platform_required_bindings.serialize(&artifact.platform_required_bindings, gpa, writer);
-            try self.interface_capabilities.serialize(&artifact.interface_capabilities, gpa, writer);
-            try self.compile_time_roots.serialize(&artifact.compile_time_roots, gpa, writer);
-            try self.top_level_values.serialize(&artifact.top_level_values, gpa, writer);
-            try self.hoisted_constants.serialize(&artifact.hoisted_constants, gpa, writer);
-            try self.const_templates.serialize(&artifact.const_templates, gpa, writer);
-            try self.const_store.serialize(&artifact.const_store, gpa, writer);
-            try self.compile_time_debug.serialize(&artifact.compile_time_debug, gpa, writer);
+            inline for (sub_store_fields) |name| {
+                // `SerializedSlice.serialize` takes its slice by value; every other
+                // sub-store form takes a pointer to the store.
+                const SourceParam = @typeInfo(@TypeOf(@FieldType(Serialized, name).serialize)).@"fn".param_types[1].?;
+                if (@typeInfo(SourceParam).pointer.size == .one) {
+                    try @field(self, name).serialize(&@field(artifact, name), gpa, writer);
+                } else {
+                    try @field(self, name).serialize(@field(artifact, name), gpa, writer);
+                }
+            }
         }
 
         /// Materialize a frozen artifact from its relocated `backing` buffer (whose
@@ -33858,171 +33279,33 @@ pub const CheckedModuleArtifact = struct {
             backing_is_static: bool,
         ) CheckedModuleArtifact {
             const base_addr = @intFromPtr(backing.ptr);
-            return .{
-                .key = self.key,
-                .module_identity = self.module_identity.decode(),
-                .module_env = module_env,
-                .serialized_backing = backing,
-                .serialized_backing_is_static = backing_is_static,
-                .direct_import_artifact_keys = self.direct_import_artifact_keys.deserialize(base_addr),
-                .canonical_names = self.canonical_names.deserialize(base_addr, gpa),
-                .checking_context_identity = self.checking_context_identity.deserialize(base_addr),
-                .public_api_dependencies = self.public_api_dependencies.deserialize(base_addr),
-                .lowering_visibility = self.lowering_visibility.deserialize(base_addr),
-                .method_lookup_scope = self.method_lookup_scope.deserialize(base_addr),
-                .exports = self.exports.deserialize(base_addr),
-                .checked_types = self.checked_types.deserialize(base_addr),
-                .checked_bodies = self.checked_bodies.deserialize(base_addr),
-                .checked_const_bodies = self.checked_const_bodies.deserialize(base_addr),
-                .exhaustiveness_sites = self.exhaustiveness_sites.deserialize(base_addr),
-                .evaluation_diagnostics = self.evaluation_diagnostics.deserialize(base_addr),
-                .exported_procedure_templates = self.exported_procedure_templates.deserialize(base_addr),
-                .exported_procedure_bindings = self.exported_procedure_bindings.deserialize(base_addr),
-                .exported_const_templates = self.exported_const_templates.deserialize(base_addr),
-                .provides_requires = self.provides_requires.deserialize(base_addr),
-                .provided_exports = self.provided_exports.deserialize(base_addr),
-                .method_registry = self.method_registry.deserialize(base_addr),
-                .static_dispatch_plans = self.static_dispatch_plans.deserialize(base_addr),
-                .resolved_value_refs = self.resolved_value_refs.deserialize(base_addr),
-                .nested_proc_sites = self.nested_proc_sites.deserialize(base_addr),
-                .checked_procedure_templates = self.checked_procedure_templates.deserialize(base_addr),
-                .entry_wrappers = self.entry_wrappers.deserialize(base_addr),
-                .intrinsic_wrappers = self.intrinsic_wrappers.deserialize(base_addr),
-                .top_level_procedure_bindings = self.top_level_procedure_bindings.deserialize(base_addr),
-                .callable_eval_templates = self.callable_eval_templates.deserialize(base_addr),
-                .root_requests = self.root_requests.deserialize(base_addr),
-                .hosted_procs = self.hosted_procs.deserialize(base_addr),
-                .hosted_bindings = self.hosted_bindings.deserialize(base_addr),
-                .platform_required_declarations = self.platform_required_declarations.deserialize(base_addr),
-                .platform_type_inputs = self.platform_type_inputs.deserialize(base_addr),
-                .platform_requirement_relations = self.platform_requirement_relations.deserialize(base_addr),
-                .platform_requirement_solutions = self.platform_requirement_solutions.deserialize(base_addr),
-                .platform_required_bindings = self.platform_required_bindings.deserialize(base_addr),
-                .interface_capabilities = self.interface_capabilities.deserialize(base_addr),
-                .compile_time_roots = self.compile_time_roots.deserialize(base_addr),
-                .top_level_values = self.top_level_values.deserialize(base_addr),
-                .hoisted_constants = self.hoisted_constants.deserialize(base_addr),
-                .const_templates = self.const_templates.deserialize(base_addr),
-                .const_store = self.const_store.deserialize(base_addr, gpa),
-                .compile_time_debug = self.compile_time_debug.deserialize(base_addr),
-            };
+            // Every artifact field is either inline POD, a sub-store filled
+            // below, or one of the owner-only fields set here
+            // (`assertBidirectionalFieldSet` pins that partition).
+            var artifact: CheckedModuleArtifact = undefined;
+            artifact.key = self.key;
+            artifact.module_identity = self.module_identity.decode();
+            artifact.module_env = module_env;
+            artifact.serialized_backing = backing;
+            artifact.serialized_backing_is_static = backing_is_static;
+            artifact.pairing_arena = null;
+            artifact.evaluation_state = .finalized;
+            inline for (sub_store_fields) |name| {
+                // Stores that retain an allocator for their build-only fields
+                // take it as a second `deserialize` parameter.
+                const params = @typeInfo(@TypeOf(@FieldType(Serialized, name).deserialize)).@"fn".param_types;
+                @field(artifact, name) = if (params.len == 3)
+                    @field(self, name).deserialize(base_addr, gpa)
+                else
+                    @field(self, name).deserialize(base_addr);
+            }
+            return artifact;
         }
     };
 
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    // Version 57 (over upstream 56) publishes the optional/defaulted record
-    // field machinery: checked record-field access paths as ordered segment
-    // ranges with explicit successful-prefix types, source regions, access
-    // modes (`CheckedFieldAccessSegment.mode`—`.?` segments reach checked
-    // bodies), and per-segment backing access; the field-kind axis on
-    // checked record fields (`CheckedRecordField.kind`:
-    // required/optional/defaulted plus the defaulted identity, design.md
-    // "Field Kinds (All-Dynamic Optional Fields)"); the body store's
-    // default-expression table (`default_exprs`); and `checked_ids.OptionalId`
-    // encodings for inline optional ids. Version 58: const-store record type
-    // evidence carries the `??` default identity
-    // (`ConstStore.TypeField.default`), mirroring the Monotype
-    // `Type.FieldDefault` axis (design.md "Defaulted Fields").
-    // Version 59 combines the optional/defaulted field layouts above with
-    // upstream's version-57 artifact change.
-    // Version 60 preserves generalized field-kind variable identities and
-    // optional source-value types in stored const evidence.
-    // Version 61 gives every compile-time request its exact checked-root ID.
-    // Version 62 publishes exact record-construction omission defaults.
-    // Version 63 lets a field-default root own its literal conversion instead
-    // of publishing a second root for the same checked expression.
-    // Version 64 publishes iterator producer identities for `List.iter_rev`,
-    // the numeric `to`/`until` ranges, and the F32/F64 range helpers.
-    // Version 65 publishes unit-valued destructure-validation hoisted roots.
-    // Version 66 gives validation-only roots a discarded payload state so no
-    // unit constant is archived for them.
-    // Version 67 records a method whose declaration was rejected under its own
-    // registry key with no target.
-    // Version 68 publishes declarations that carry a type annotation and no
-    // implementation as their own artifact state
-    // (`CheckedProcedureBody.unimplemented` and
-    // `ConstTemplateState.unimplemented`) instead of pointing at a body the
-    // declaration never had.
-    // Version 69 records in the checking-context identity how a module's
-    // compile-time roots were established, so an app root checked without its
-    // entrypoint contract cannot share a cache entry with one checked under it.
-    // Version 70 retains canonical callable type keys in stored function
-    // evidence so specialization identity does not depend on fresh checked ids.
-    // Version 71 carries unset (`name: _`) field labels on checked record
-    // expressions (`record_unset_label_pool`, design.md "In Progress:
-    // Unsetting an Optional Field").
-    // Version 72 removes the field-default root kind: defaults materialize
-    // per specialization from the archived checked expression, and a
-    // default's literal conversion is an ordinary conversion root
-    // (design.md "Defaulted Fields").
-    // Version 73 publishes nested-procedure sites for lambdas/closures inside
-    // defaulted-field expressions under a `.default_root` owner
-    // (`NestedProcSiteOwner`): default expressions belong to no procedure
-    // template, so their sites carry the module's default-expression root set
-    // as owner (design.md "Defaulted Fields").
-    // Version 74 adds the `default_root` qualifier to stored nested function
-    // references (`ConstStore.FnDef.nested`): a compile-time function value
-    // whose site lives inside a defaulted-field expression names the
-    // declaring module's content identity so const-store restore resolves
-    // the default-root site (design.md "Defaulted Fields").
-    // Version 75 preserves whether forwarded evidence supplies an exact
-    // callable relation or only the shared method target.
-    // Version 76 retains callable evidence provenance used by pathless
-    // specialization.
-    // Version 77 additionally publishes the exact resolution of every
-    // generated-codec call, the selected contract on structural dispatch
-    // plans, and that contract on stored structural function evidence.
-    // Version 78 marks checker-validated generated-codec capabilities whose
-    // generated-body edge is selected only by a concrete specialization.
-    // Version 79 publishes the generated body's structural shape separately
-    // from the codec's public value shape.
-    // Version 80 removes symbolic constraint-callable evidence and records
-    // recursive resolved references explicitly.
-    // Version 81 records each scheme's quantified variables, each evidence
-    // parameter's slot, and each scheme use's substitution.
-    // Version 82 records each evidence parameter's constraint callable type.
-    // Version 83 records each procedure template's root evidence.
-    // Version 84 separates recursive-reference provenance from shared scheme
-    // uses without changing the resolved-reference layout.
-    // Version 85 retains callable-path recipes in stored function evidence so
-    // procedure values inside reusable constants specialize at their uses.
-    // Version 86 admits checker-proven concrete recursive dispatch recipes
-    // and preserves eager structural method selections.
-    // Version 87 persists the checked scheme's key-to-ID probing index.
-    // Version 88 records nested procedures' lexical type bindings.
-    // Version 89 records checked error constants for rejected pattern binders.
-    // Version 90 records each provided root's exact export declaration ID.
-    // Version 91 includes composite scheme requirements in evidence schemas.
-    // Version 92 distinguishes generalized callable aliases from runtime
-    // value bindings and function-body declarations.
-    // Version 93 distinguishes rejected function values from callable templates.
-    // Version 94 retains explicit equality guards and matched-value binders
-    // for custom literal patterns.
-    // Version 95 makes stored callable-derived evidence own its vector slot
-    // instead of retaining a parameter index from a forwarding scheme.
-    // Version 96 uses 128-bit type and evidence content hashes.
-    // Version 97 stores the builtin-identity-to-declaration index.
-    // Version 98 uses 256-bit SHA-256 type and evidence content hashes.
-    // Version 99 stores packed fixed-product lists with an optional scalar
-    // encoding and their padding-free product width.
-    // Version 100 distinguishes independent callable plans that reuse the
-    // evidence slot's producer-resolved nested vector from those that must
-    // synthesize nested evidence from their own callable.
-    // Version 101 publishes the `Builtin.Try` adapter capability for every
-    // procedure template whose result row is closed, not only hosted ones, so
-    // a Roc implementation requested at a row that includes its own can be
-    // adapted (design.md "Result-Row Widening Adapter").
-    // Version 102 preserves solver-independent deferred evaluation diagnostics.
-    // Version 103 persists the checked root index for immutable composition.
-    // Version 104 gives standalone literal roots only to conversions whose
-    // complete checked dispatch contract is specialization-independent.
-    // Version 105 also declares literal-conversion roots at their validated payload type.
-    // Version 106 publishes rejected requirement lookups as runtime errors.
-    // Version 107 keys each context-free checked type subtree by its own key,
-    // records which checked type roots are composable, and encodes keys with
-    // one-byte tags and varint integers.
     const serialized_layout_version: u32 = 107;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
@@ -34118,47 +33401,20 @@ pub const CheckedModuleArtifact = struct {
             self.* = undefined;
             return;
         }
-        self.compile_time_debug.deinit(allocator);
-        self.const_store.deinit();
-        self.const_templates.deinit(allocator);
-        self.hoisted_constants.deinit(allocator);
-        self.top_level_values.deinit(allocator);
-        self.compile_time_roots.deinit(allocator);
-        self.interface_capabilities.deinit(allocator);
-        self.platform_required_bindings.deinit(allocator);
-        self.platform_requirement_solutions.deinit(allocator);
-        self.platform_requirement_relations.deinit(allocator);
-        self.platform_required_declarations.deinit(allocator);
-        self.platform_type_inputs.deinit(allocator);
-        self.hosted_bindings.deinit(allocator);
-        self.hosted_procs.deinit(allocator);
-        self.root_requests.deinit(allocator);
-        self.callable_eval_templates.deinit(allocator);
-        self.top_level_procedure_bindings.deinit(allocator);
-        self.intrinsic_wrappers.deinit(allocator);
-        self.entry_wrappers.deinit(allocator);
-        self.checked_procedure_templates.deinit(allocator);
-        self.nested_proc_sites.deinit(allocator);
-        self.resolved_value_refs.deinit(allocator);
-        self.static_dispatch_plans.deinit(allocator);
-        self.method_registry.deinit(allocator);
-        self.provided_exports.deinit(allocator);
-        self.provides_requires.deinit(allocator);
-        self.exported_const_templates.deinit(allocator);
-        self.exported_procedure_bindings.deinit(allocator);
-        self.exported_procedure_templates.deinit(allocator);
-        self.checked_const_bodies.deinit(allocator);
-        self.exhaustiveness_sites.deinit(allocator);
-        self.evaluation_diagnostics.deinit(allocator);
-        self.checked_bodies.deinit(allocator);
-        self.checked_types.deinit(allocator);
-        self.exports.deinit(allocator);
-        self.method_lookup_scope.deinit(allocator);
-        self.lowering_visibility.deinit(allocator);
-        self.public_api_dependencies.deinit(allocator);
-        allocator.free(self.direct_import_artifact_keys);
-        self.checking_context_identity.deinit(allocator);
-        self.canonical_names.deinit();
+        const fields = Serialized.sub_store_fields;
+        comptime var index = fields.len;
+        inline while (index > 0) {
+            index -= 1;
+            const name = fields[index];
+            const Store = @FieldType(CheckedModuleArtifact, name);
+            if (comptime @typeInfo(Store) == .pointer) {
+                allocator.free(@field(self, name));
+            } else if (comptime @typeInfo(@TypeOf(Store.deinit)).@"fn".param_types.len == 1) {
+                @field(self, name).deinit();
+            } else {
+                @field(self, name).deinit(allocator);
+            }
+        }
         if (deinit_module_env) {
             self.module_env.deinit();
         } else {
@@ -35277,7 +34533,7 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(request.module_idx == self.module_identity.module_idx);
             std.debug.assert(@backingInt(request.checked_type) < self.checked_types.roots.items.len);
             if (request.procedure_template) |template_ref| {
-                std.debug.assert(checkedArtifactKeyEql(
+                std.debug.assert(CheckedModuleArtifactKey.eql(
                     checkedArtifactKeyFromArtifactRef(template_ref.artifact),
                     self.key,
                 ));
@@ -35285,7 +34541,7 @@ pub const CheckedModuleArtifact = struct {
                 const evidence = request.root_evidence orelse {
                     base.invariant("checked artifact invariant violated: procedure template root has no checked evidence vector", .{});
                 };
-                std.debug.assert(checkedArtifactKeyEql(evidence.checked_module, self.key));
+                std.debug.assert(CheckedModuleArtifactKey.eql(evidence.checked_module, self.key));
                 if (@as(u64, evidence.span.start) + evidence.span.len > self.static_dispatch_plans.evidence_refs.len) {
                     base.invariant("checked artifact invariant violated: procedure template root evidence was outside the app evidence table", .{});
                 }
@@ -37865,462 +37121,72 @@ const ProvidedExportKindExpectation = struct {
 fn expectProvidedExportKind(
     source: []const u8,
     expected: ProvidedExportKindExpectation,
-) (@import("test/TestEnv.zig").TestEnvError || Allocator.Error)!void {
-    const testing = std.testing;
+) (@import("test/TestEnv.zig").TestEnvError || CompileTimeFinalizer.Error || error{ CorruptArtifact, CorruptBuiltinArtifact, BuiltinArtifactVersionMismatch })!void {
     const TestEnv = @import("test/TestEnv.zig");
-    const allocator = testing.allocator;
+    const compiled_builtins = @import("compiled_builtins");
+    const allocator = std.testing.allocator;
 
     var test_env = try TestEnv.init("PlatformDataExportTest", source);
     defer test_env.deinit();
     try test_env.assertNoErrors();
 
-    const source_modules = [_]TypedCIR.Modules.SourceModule{
-        .{ .precompiled = test_env.module_env },
+    // The baked builtin artifact is the published form of the builtin module
+    // `test_env` checked against, so it serves as the real direct import.
+    const blob = compiled_builtins.builtin_artifact_bin[0..];
+    const serialized_bytes = try CheckedModuleArtifact.splitVersionTrailer(blob);
+    const backing: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 =
+        @alignCast(blob[0..serialized_bytes.len]);
+    const serialized: *const CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(backing.ptr));
+    try serialized.validate(backing.len);
+    var builtin_artifact = serialized.deserializeStatic(backing, allocator, .{ .static_builtin = test_env.builtin_module.env });
+    defer builtin_artifact.deinitRetainingModuleEnv(allocator);
+
+    const sources = [_]TypedCIR.Modules.SourceModule{
         .{ .precompiled = test_env.builtin_module.env },
+        .{ .precompiled = test_env.module_env },
     };
-    var modules = try TypedCIR.Modules.init(allocator, &source_modules);
+    var modules = try TypedCIR.Modules.init(allocator, &sources);
     defer modules.deinit();
-
-    const module = modules.module(0);
-    const module_env = module.moduleEnvConst();
-
-    const builtin_module = modules.module(1);
-    const builtin_env = builtin_module.moduleEnvConst();
-    var builtin_names = canonical.CanonicalNameStore.init(allocator);
-    defer builtin_names.deinit();
-    try internLoweringVisibleNames(builtin_env, &builtin_names);
-    const builtin_module_name = try builtin_names.internModuleName(builtin_env.module_name);
-    const builtin_identity = ModuleIdentity{
-        .stable_hash = computeStableModuleIdentityHash(builtin_env),
-        .module_idx = builtin_module.moduleIndex(),
-        .module_name = builtin_module_name,
-        .display_module_name = builtin_module_name,
-        .kind = builtin_env.module_kind,
-    };
-    const builtin_key = CheckedModuleArtifactKey.compute(
-        builtin_env.getSourceAll(),
-        builtin_identity,
-        .{},
-        &.{},
-    );
-    var builtin_source_nodes = try CheckedSourceNodes.init(allocator, builtin_module);
-    defer builtin_source_nodes.deinit(allocator);
-    var builtin_checked_type_publication = try CheckedTypeStore.fromModule(allocator, builtin_module, &builtin_names, builtin_key, &.{}, &.{}, &builtin_source_nodes, &.{}, &.{});
-    defer builtin_checked_type_publication.deinit(allocator);
-    const empty_checked_bodies = CheckedBodyStore{};
-    const empty_checked_const_bodies = CheckedConstBodyTable{};
-    const empty_exhaustiveness_sites = CheckedExhaustivenessSiteTable{};
-    const empty_compile_time_roots = CompileTimeRootTable{};
-    const empty_entry_wrappers = EntryWrapperTable{};
-    const empty_intrinsic_wrappers = IntrinsicWrapperTable{};
-    const empty_resolved_value_refs = ResolvedValueRefTable{};
-    const empty_nested_proc_sites = NestedProcSiteTable{};
-    const empty_static_dispatch_plans = static_dispatch.StaticDispatchPlanTable{};
-    const empty_hosted_procs = HostedProcTable{};
-    const empty_hosted_bindings = HostedBindingTable{};
-    const empty_exported_procedure_templates = ExportedProcedureTemplateTable{};
-    const empty_exported_procedure_bindings = ExportedProcedureBindingTable{};
-    const empty_exported_const_templates = ExportedConstTemplateTable{};
-    const empty_provided_exports = ProvidedExportTable{};
-    const empty_top_level_procedure_bindings = TopLevelProcedureBindingTable{};
-    const empty_platform_required_declarations = PlatformRequiredDeclarationTable{};
-    const empty_platform_required_bindings = PlatformRequiredBindingTable{};
-    const empty_callable_eval_templates = CallableEvalTemplateTable{};
-    const empty_hoisted_constants = HoistedConstTable{};
-    const empty_const_templates = ConstTemplateTable{};
-    const empty_interface_capabilities = ModuleInterfaceCapabilities{};
-    var empty_const_store = ConstStore.init(allocator);
-    defer empty_const_store.deinit();
-
-    // The module under test dispatches on builtin owners (`value + 1` needs
-    // I64.plus); publication asserts totality, so the builtin projection must
-    // carry its real method registry—built like the real publish path
-    // (bodies, templates, then the registry over them).
-    var builtin_pub_source_nodes = try CheckedSourceNodes.init(allocator, builtin_module);
-    defer builtin_pub_source_nodes.deinit(allocator);
-    var builtin_body_builder = try CheckedBodyStoreBuilder.fromModule(allocator, builtin_module, &builtin_names, &builtin_checked_type_publication, &builtin_pub_source_nodes, &.{});
-    defer builtin_body_builder.deinit(allocator);
-    const builtin_bodies = builtin_body_builder.storePtr();
-    var builtin_intrinsic_wrappers = IntrinsicWrapperTable{};
-    defer builtin_intrinsic_wrappers.deinit(allocator);
-    var builtin_templates = try CheckedProcedureTemplateTable.fromModule(
-        allocator,
-        builtin_module,
-        builtin_env.store.sliceDefs(builtin_env.value_binding_defs),
-        &builtin_names,
-        artifactRef(builtin_key),
-        &builtin_checked_type_publication,
-        builtin_bodies,
-        &builtin_intrinsic_wrappers,
-    );
-    defer builtin_templates.deinit(allocator);
-    const builtin_template_lookup = builtin_templates.asLookup(builtin_module.moduleIndex());
-    var builtin_method_registry = try static_dispatch.MethodRegistry.fromModule(
-        allocator,
-        builtin_module,
-        &builtin_names,
-        &builtin_template_lookup,
-        &.{},
-        &builtin_checked_type_publication,
-        builtin_bodies,
-    );
-    defer builtin_method_registry.deinit(allocator);
-    builtin_checked_type_publication.finishSourceTypes();
-
-    const builtin_view = ImportedModuleView{
-        .key = builtin_key,
-        .module_env = builtin_env,
-        .canonical_names = &builtin_names,
-        .module_identity = builtin_identity,
-        .exports = .{},
-        .checked_types = builtin_checked_type_publication.store.view(),
-        .checked_bodies = empty_checked_bodies.view(),
-        .exhaustiveness_sites = &empty_exhaustiveness_sites,
-        .checked_const_bodies = &empty_checked_const_bodies,
-        .checked_procedure_templates = &builtin_templates,
-        .compile_time_roots = &empty_compile_time_roots,
-        .entry_wrappers = &empty_entry_wrappers,
-        .intrinsic_wrappers = &empty_intrinsic_wrappers,
-        .resolved_value_refs = &empty_resolved_value_refs,
-        .nested_proc_sites = &empty_nested_proc_sites,
-        .static_dispatch_plans = &empty_static_dispatch_plans,
-        .hosted_procs = &empty_hosted_procs,
-        .hosted_bindings = &empty_hosted_bindings,
-        .exported_procedure_templates = empty_exported_procedure_templates.view(),
-        .exported_procedure_bindings = empty_exported_procedure_bindings.view(),
-        .exported_const_templates = empty_exported_const_templates.view(),
-        .provided_exports = &empty_provided_exports,
-        .top_level_procedure_bindings = &empty_top_level_procedure_bindings,
-        .platform_required_declarations = &empty_platform_required_declarations,
-        .platform_required_bindings = &empty_platform_required_bindings,
-        .callable_eval_templates = empty_callable_eval_templates.view(),
-        .hoisted_constants = &empty_hoisted_constants,
-        .const_templates = &empty_const_templates,
-        .method_registry = &builtin_method_registry,
-        .interface_capabilities = &empty_interface_capabilities,
-        .const_store = &empty_const_store,
-    };
-
-    const builtin_imports = [_]PublishImportArtifact{.{
-        .module_idx = 1,
-        .key = builtin_key,
-        .view = builtin_view,
+    const imports = [_]PublishImportArtifact{.{
+        .module_idx = 0,
+        .key = builtin_artifact.key,
+        .view = importedView(&builtin_artifact),
     }};
 
-    var canonical_names = canonical.CanonicalNameStore.init(allocator);
-    defer canonical_names.deinit();
-    try internLoweringVisibleNames(module_env, &canonical_names);
-    _ = try canonical_names.internTagLabel("#Missing");
-    _ = try canonical_names.internTagLabel("#Present");
-
-    const module_name = try canonical_names.internModuleName(module_env.module_name);
-    const display_module_name = try canonical_names.internModuleIdent(module.identStoreConst(), module_env.display_module_name_idx);
-    const module_identity = ModuleIdentity{
-        .stable_hash = computeStableModuleIdentityHash(module_env),
-        .module_idx = module.moduleIndex(),
-        .module_name = module_name,
-        .display_module_name = display_module_name,
-        .kind = module_env.module_kind,
+    const NoFinalization = struct {
+        fn finalize(
+            _: ?*anyopaque,
+            _: Allocator,
+            _: *CheckedModuleArtifact,
+            _: []const PublishImportArtifact,
+            _: []const ImportedModuleView,
+            _: []const ImportedModuleView,
+            _: ?*problem.Store,
+        ) CompileTimeFinalizer.Error!void {}
     };
-
-    const artifact_key = CheckedModuleArtifactKey{};
-    const owner_artifact = artifactRef(artifact_key);
-
-    var platform_required_declarations = try PlatformRequiredDeclarationTable.fromModule(allocator, module, &canonical_names);
-    defer platform_required_declarations.deinit(allocator);
-
-    var source_nodes = try CheckedSourceNodes.init(allocator, module);
-    defer source_nodes.deinit(allocator);
-
-    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, artifact_key, &builtin_imports, &.{}, &source_nodes, &.{}, &.{});
-    defer checked_type_publication.deinit(allocator);
-    const checked_types = &checked_type_publication.store;
-
-    var checked_body_builder = try CheckedBodyStoreBuilder.fromModule(allocator, module, &canonical_names, &checked_type_publication, &source_nodes, &.{});
-    defer checked_body_builder.deinit(allocator);
-    const checked_bodies = checked_body_builder.storePtr();
-
-    const value_binding_defs = module_env.store.sliceDefs(module_env.value_binding_defs);
-
-    var intrinsic_wrappers = IntrinsicWrapperTable{};
-    defer intrinsic_wrappers.deinit(allocator);
-
-    var checked_procedure_templates = try CheckedProcedureTemplateTable.fromModule(
-        allocator,
-        module,
-        value_binding_defs,
-        &canonical_names,
-        owner_artifact,
-        &checked_type_publication,
-        checked_bodies,
-        &intrinsic_wrappers,
-    );
-    defer checked_procedure_templates.deinit(allocator);
-
-    const template_lookup = checked_procedure_templates.asLookup(module.moduleIndex());
-    var method_registry = try static_dispatch.MethodRegistry.fromModule(
-        allocator,
-        module,
-        &canonical_names,
-        &template_lookup,
-        &.{},
-        &checked_type_publication,
-        checked_bodies,
-    );
-    defer method_registry.deinit(allocator);
-    checked_type_publication.finishSourceTypes();
-
-    var plan_build_data = static_dispatch.PlanTableBuildData{};
-    defer plan_build_data.deinit(allocator);
-    var static_dispatch_plans = try static_dispatch.StaticDispatchPlanTable.fromModule(
-        allocator,
-        module,
-        &canonical_names,
-        &checked_type_publication,
-        checked_bodies,
-        &plan_build_data,
-    );
-    defer static_dispatch_plans.deinit(allocator);
-    checked_bodies.attachStaticDispatchPlans(&static_dispatch_plans);
-    checked_bodies.attachNumeralPlans(&static_dispatch_plans);
-    checked_bodies.attachQuotePlans(&static_dispatch_plans);
-    checked_bodies.attachIteratorForPlans(&static_dispatch_plans);
-
-    var hosted_procs = try HostedProcTable.fromModule(
-        allocator,
-        module,
-        module_env.store.sliceDefs(module_env.hosted_defs),
-        &canonical_names,
-        &checked_procedure_templates,
-    );
-    defer hosted_procs.deinit(allocator);
-
-    var platform_requirement_relations = try PlatformRequirementRelationTable.fromRelation(
-        allocator,
-        module_identity,
-        &canonical_names,
-        &checked_type_publication.store,
-        &platform_required_declarations,
-        &.{},
-        null,
-    );
-    defer platform_requirement_relations.deinit(allocator);
-
-    var platform_required_bindings = try PlatformRequiredBindingTable.fromRelation(
-        allocator,
-        module_identity,
-        &canonical_names,
-        &platform_required_declarations,
-        &platform_requirement_relations,
-        null,
-    );
-    defer platform_required_bindings.deinit(allocator);
-
-    var compile_time_roots = try CompileTimeRootTable.fromModule(
-        allocator,
-        module,
-        &canonical_names,
-        value_binding_defs,
-        &.{},
-        &.{},
-        &checked_type_publication,
-        &checked_body_builder,
-        &checked_procedure_templates,
-    );
-    defer compile_time_roots.deinit(allocator);
-
-    var entry_wrappers = EntryWrapperTable{};
-    defer entry_wrappers.deinit(allocator);
-    try checked_procedure_templates.appendEntryWrappersForRoots(
-        allocator,
-        module,
-        &canonical_names,
-        owner_artifact,
-        checked_types,
-        &entry_wrappers,
-        compile_time_roots.roots,
-    );
-
-    var callable_eval_templates = CallableEvalTemplateTable{};
-    defer callable_eval_templates.deinit(allocator);
-
-    var top_level_procedure_bindings = TopLevelProcedureBindingTable.initEmpty();
-    defer top_level_procedure_bindings.deinit(allocator);
-
-    var const_templates = ConstTemplateTable{};
-    defer const_templates.deinit(allocator);
-
-    var top_level_values = try TopLevelValueTable.fromModule(
-        allocator,
-        module,
-        value_binding_defs,
-        &canonical_names,
-        checked_bodies,
-        &checked_procedure_templates,
-        &callable_eval_templates,
-        &top_level_procedure_bindings,
-        &const_templates,
-        artifact_key,
-        &compile_time_roots,
-        &checked_type_publication,
-    );
-    defer top_level_values.deinit(allocator);
-
-    var hoisted_constants = try HoistedConstTable.fromRoots(
-        allocator,
-        module,
-        artifact_key,
-        checked_types,
-        &compile_time_roots,
-        &const_templates,
-        &checked_type_publication,
-    );
-    defer hoisted_constants.deinit(allocator);
-
-    var selected_hoisted_callables = try SelectedHoistedCallableTable.fromRoots(
-        allocator,
-        module,
-        checked_bodies,
-        &compile_time_roots,
-        &callable_eval_templates,
-        &top_level_procedure_bindings,
-        &checked_type_publication,
-        checked_procedure_templates.promoted,
-    );
-    defer selected_hoisted_callables.deinit(allocator);
-
-    const provides = try publishProvidesMetadata(allocator, module, &canonical_names);
-    defer allocator.free(provides);
-
-    var resolved_value_refs = try ResolvedValueRefTable.fromModule(
-        allocator,
-        &modules,
-        module.moduleIndex(),
-        artifact_key,
-        &builtin_imports,
-        &.{},
-        &checked_procedure_templates,
-        &hosted_procs,
-        &platform_required_declarations,
-        &platform_required_bindings,
-        &top_level_values,
-        &selected_hoisted_callables,
-        &hoisted_constants,
-        &checked_type_publication,
-        checked_bodies,
-        checked_body_builder.syntheticOrigins(),
-    );
-    defer resolved_value_refs.deinit(allocator);
-    publishCallableEvalForwarding(
-        &callable_eval_templates,
-        checked_bodies,
-        &resolved_value_refs,
-        &compile_time_roots,
-        artifact_key,
-        &top_level_procedure_bindings,
-        &builtin_imports,
-        &.{},
-        &.{},
-    );
-    _ = checked_bodies.attachResolvedValueRefs(
-        &resolved_value_refs,
-        artifact_key,
-        &top_level_procedure_bindings,
-        &callable_eval_templates,
-        &builtin_imports,
-        &.{},
-        &.{},
-    );
-
-    var template_iterator_refs = TemplateIteratorRefs{};
-    defer template_iterator_refs.deinit(allocator);
-    try sealCheckedProcedureTemplateRefs(
-        allocator,
-        module,
-        &checked_type_publication,
-        checked_bodies,
-        &entry_wrappers,
-        &checked_procedure_templates,
-        &static_dispatch_plans,
-        &method_registry,
-        &resolved_value_refs,
-        &template_iterator_refs,
-    );
-
-    const template_root_evidence = try allocator.alloc(
-        ?artifact_serialize.Span,
-        checked_procedure_templates.templates.items.len,
-    );
-    defer allocator.free(template_root_evidence);
-    @memset(template_root_evidence, null);
-
-    try std.testing.expect(!try resolveTotalDispatchPlans(
-        allocator,
-        module,
-        &canonical_names,
-        &checked_type_publication,
-        checked_bodies,
-        &method_registry,
-        .{ .current_owner = artifact_key, .direct = &builtin_imports, .available = &.{} },
-        &static_dispatch_plans,
-        &checked_procedure_templates,
-        &resolved_value_refs,
-        &plan_build_data,
-        &template_iterator_refs,
-        &entry_wrappers,
-        &compile_time_roots,
-        &.{},
-        &.{},
-        template_root_evidence,
-    ));
-
-    var provided_exports = try ProvidedExportTable.fromModule(
-        allocator,
-        module,
-        &checked_type_publication,
-        &top_level_values,
-        provides,
-    );
-    defer provided_exports.deinit(allocator);
-
-    var root_requests = try RootRequestTable.fromModule(
-        allocator,
-        module,
-        artifact_key,
-        &checked_type_publication,
-        &compile_time_roots,
-        &checked_procedure_templates,
-        &entry_wrappers,
-        null,
-        &platform_required_declarations,
-        &platform_required_bindings,
-        &provided_exports,
-        checked_bodies,
-        &resolved_value_refs,
-        &top_level_values,
-        &top_level_procedure_bindings,
-        &callable_eval_templates,
-        &hoisted_constants,
-        &const_templates,
-        template_root_evidence,
-        &.{},
-        .checking,
-    );
-    defer root_requests.deinit(allocator);
+    // Prepared metadata is enough: the root and export tables are published
+    // before any compile-time evaluation runs.
+    var artifact = try publishFromTypedModule(allocator, &modules, 1, .{
+        .module_env_storage = .{ .checked_source = test_env.module_env },
+        .imports = &imports,
+        .compile_time_finalizer = .{ .finalize = &NoFinalization.finalize },
+        .evaluation_phase = .post_frontend,
+    });
+    defer artifact.deinitRetainingModuleEnv(allocator);
 
     var provided_runtime_roots: usize = 0;
-    for (root_requests.runtime_requests) |root| {
+    for (artifact.root_requests.runtime_requests) |root| {
         if (root.kind == .provided_export) provided_runtime_roots += 1;
     }
     var deferred_procedure_roots: usize = 0;
-    for (root_requests.requests) |root| {
+    for (artifact.root_requests.requests) |root| {
         if (root.kind == .provided_export and root.requires_pairing) deferred_procedure_roots += 1;
     }
     try std.testing.expectEqual(expected.deferred_procedure_roots, deferred_procedure_roots);
 
     var provided_data_exports: usize = 0;
     var provided_procedure_exports: usize = 0;
-    for (provided_exports.exports) |provided| {
+    for (artifact.provided_exports.exports) |provided| {
         switch (provided) {
             .data => provided_data_exports += 1,
             .procedure => provided_procedure_exports += 1,
@@ -38936,7 +37802,7 @@ test "source-instance projection does not coalesce a solved payload with an equa
     const target_template = try target.reserveSyntheticTypeRoot(allocator, shared_key, true);
     try testFillSyntheticVariableRoot(allocator, &target, target_template, .{ .flex = .{ .row_default = .empty_tag_union } });
 
-    var imported = testVisibilityImportedView(testCheckedArtifactKey(72), undefined, .{});
+    var imported = testVisibilityImportedView(testCheckedModuleKey(72), undefined, .{});
     imported.canonical_names = &source_names;
     imported.checked_types = source.view();
 
@@ -39222,18 +38088,12 @@ test "transform-A stores: serialize/deserialize round-trip preserves every slice
     try expectAllSliceStoreRoundTrips(HostedBindingTable);
 }
 
-fn testCheckedArtifactKey(byte: u8) CheckedModuleArtifactKey {
-    var key: CheckedModuleArtifactKey = .{};
-    key.bytes = @as([32]u8, @splat(byte));
-    return key;
-}
-
 test "method lookup scope preserves first-seen checking order without duplicates" {
     const gpa = std.testing.allocator;
-    const current = testCheckedArtifactKey(0xF0);
-    const available = testCheckedArtifactKey(0x01);
-    const relation = testCheckedArtifactKey(0x02);
-    const direct_only = testCheckedArtifactKey(0x03);
+    const current = testCheckedModuleKey(0xF0);
+    const available = testCheckedModuleKey(0x01);
+    const relation = testCheckedModuleKey(0x02);
+    const direct_only = testCheckedModuleKey(0x03);
 
     var builder = MethodLookupScopeBuilder.init(gpa, current);
     defer builder.deinit();
@@ -39246,9 +38106,9 @@ test "method lookup scope preserves first-seen checking order without duplicates
     var scope = try builder.finish();
     defer scope.deinit(gpa);
     try std.testing.expectEqual(@as(usize, 3), scope.module_ids.len);
-    try std.testing.expect(checkedArtifactKeyEql(available, scope.module_ids[0]));
-    try std.testing.expect(checkedArtifactKeyEql(relation, scope.module_ids[1]));
-    try std.testing.expect(checkedArtifactKeyEql(direct_only, scope.module_ids[2]));
+    try std.testing.expect(CheckedModuleArtifactKey.eql(available, scope.module_ids[0]));
+    try std.testing.expect(CheckedModuleArtifactKey.eql(relation, scope.module_ids[1]));
+    try std.testing.expect(CheckedModuleArtifactKey.eql(direct_only, scope.module_ids[2]));
 }
 
 fn testVisibilityImportedView(
@@ -39304,12 +38164,12 @@ test "method lookup scope keeps only registry-bearing modules in checking order"
     var env = try ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    const current = testCheckedArtifactKey(0xF0);
-    const empty_key = testCheckedArtifactKey(0x01);
-    const available_key = testCheckedArtifactKey(0x02);
-    const relation_key = testCheckedArtifactKey(0x03);
-    const previous_publication_key = testCheckedArtifactKey(0x04);
-    const previous_relation_key = testCheckedArtifactKey(0x05);
+    const current = testCheckedModuleKey(0xF0);
+    const empty_key = testCheckedModuleKey(0x01);
+    const available_key = testCheckedModuleKey(0x02);
+    const relation_key = testCheckedModuleKey(0x03);
+    const previous_publication_key = testCheckedModuleKey(0x04);
+    const previous_relation_key = testCheckedModuleKey(0x05);
     const dummy_entries = [_]static_dispatch.MethodRegistryEntry{undefined};
     const empty_registry = static_dispatch.MethodRegistry{};
     const nonempty_registry = static_dispatch.MethodRegistry{ .entries = @constCast(&dummy_entries) };
@@ -39346,8 +38206,8 @@ test "method lookup scope keeps only registry-bearing modules in checking order"
     defer scope.deinit(gpa);
 
     try std.testing.expectEqual(@as(usize, 2), scope.module_ids.len);
-    try std.testing.expect(checkedArtifactKeyEql(available_key, scope.module_ids[0]));
-    try std.testing.expect(checkedArtifactKeyEql(relation_key, scope.module_ids[1]));
+    try std.testing.expect(CheckedModuleArtifactKey.eql(available_key, scope.module_ids[0]));
+    try std.testing.expect(CheckedModuleArtifactKey.eql(relation_key, scope.module_ids[1]));
 }
 
 test "lowering visibility follows recursive public API and type-owner dependencies deterministically" {
@@ -39367,13 +38227,13 @@ test "lowering visibility follows recursive public API and type-owner dependenci
     defer env_builtin.deinit();
     env_builtin.module_role = .builtin;
 
-    const root_key = testCheckedArtifactKey(0xF0);
-    const key_a = testCheckedArtifactKey(0x05);
-    const key_b = testCheckedArtifactKey(0x01);
-    const key_c = testCheckedArtifactKey(0x03);
-    const key_d = testCheckedArtifactKey(0x02);
-    const key_e = testCheckedArtifactKey(0x04);
-    const key_builtin = testCheckedArtifactKey(0x06);
+    const root_key = testCheckedModuleKey(0xF0);
+    const key_a = testCheckedModuleKey(0x05);
+    const key_b = testCheckedModuleKey(0x01);
+    const key_c = testCheckedModuleKey(0x03);
+    const key_d = testCheckedModuleKey(0x02);
+    const key_e = testCheckedModuleKey(0x04);
+    const key_builtin = testCheckedModuleKey(0x06);
 
     const root_public = [_]CheckedModuleArtifactKey{key_b};
     const root_type_owners = [_]CheckedModuleArtifactKey{key_c};
@@ -39519,7 +38379,7 @@ test "issue 11290: builtin backing declarations survive serialization with share
         const payload = try store.commitPayload(gpa, .{ .nominal = .{
             .name = try names.internTypeName(if (owner == .dict) "Dict" else "Set"),
             .origin_module = module_identity,
-            .owner_module = testCheckedArtifactKey(0x90),
+            .owner_module = testCheckedModuleKey(0x90),
             .source_decl = 100 + @as(u32, @backingInt(owner)),
             .builtin = owner,
             .is_opaque = false,

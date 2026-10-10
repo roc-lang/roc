@@ -4961,25 +4961,17 @@ pub const InstGraph = struct {
             // read the wrong variant instead of hitting undefined behavior.
             Common.compilerBug("opaque interface relation widened a closed tag union");
         }
-        if (only_public.items.len == 0 and only_private.items.len == 0) {
-            try self.relateOpaqueChild(flat_public.ext, flat_private.ext, row_width, pending);
-        } else if (only_public.items.len == 0) {
-            try self.writeOrQueueTagRest(flat_public.ext, only_private.items, flat_private.ext, row_width, pending);
-        } else if (only_private.items.len == 0) {
-            try self.writeOrQueueTagRest(flat_private.ext, only_public.items, flat_public.ext, row_width, pending);
-        } else {
-            const new_ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) });
-            if (self.find(flat_public.ext) == self.find(flat_private.ext)) {
-                var rest = std.ArrayList(InstTag).empty;
-                defer rest.deinit(self.allocator);
-                try rest.appendSlice(self.allocator, only_public.items);
-                try rest.appendSlice(self.allocator, only_private.items);
-                try self.writeOrQueueTagRest(flat_public.ext, rest.items, new_ext, row_width, pending);
-            } else {
-                try self.writeOrQueueTagRest(flat_public.ext, only_private.items, new_ext, row_width, pending);
-                try self.writeOrQueueTagRest(flat_private.ext, only_public.items, new_ext, row_width, pending);
-            }
-        }
+        _ = try self.joinRowRests(
+            .tag_union,
+            relateOpaqueChild,
+            .right_additions_first,
+            flat_public.ext,
+            flat_private.ext,
+            only_private.items,
+            only_public.items,
+            row_width,
+            pending,
+        );
     }
 
     /// Record-row counterpart of `relateOpaqueTagRows`.
@@ -5051,27 +5043,17 @@ pub const InstGraph = struct {
             Common.invariant("opaque interface relation widened a closed record");
         }
 
-        const add_to_public = if (public_absorbs_private) &.{} else only_private.items;
-        const add_to_private = if (private_absorbs_public) &.{} else only_public.items;
-        if (add_to_public.len == 0 and add_to_private.len == 0) {
-            try self.relateOpaqueChild(flat_public.ext, flat_private.ext, row_width, pending);
-        } else if (add_to_private.len == 0) {
-            try self.writeOrQueueRecordRest(flat_public.ext, add_to_public, flat_private.ext, row_width, pending);
-        } else if (add_to_public.len == 0) {
-            try self.writeOrQueueRecordRest(flat_private.ext, add_to_private, flat_public.ext, row_width, pending);
-        } else {
-            const new_ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_record) });
-            if (self.find(flat_public.ext) == self.find(flat_private.ext)) {
-                var rest = std.ArrayList(InstField).empty;
-                defer rest.deinit(self.allocator);
-                try rest.appendSlice(self.allocator, add_to_private);
-                try rest.appendSlice(self.allocator, add_to_public);
-                try self.writeOrQueueRecordRest(flat_public.ext, rest.items, new_ext, row_width, pending);
-            } else {
-                try self.writeOrQueueRecordRest(flat_public.ext, add_to_public, new_ext, row_width, pending);
-                try self.writeOrQueueRecordRest(flat_private.ext, add_to_private, new_ext, row_width, pending);
-            }
-        }
+        _ = try self.joinRowRests(
+            .record,
+            relateOpaqueChild,
+            .right_additions_first,
+            flat_public.ext,
+            flat_private.ext,
+            if (public_absorbs_private) &.{} else only_private.items,
+            if (private_absorbs_public) &.{} else only_public.items,
+            row_width,
+            pending,
+        );
     }
 
     fn relateOpaqueChild(
@@ -7064,30 +7046,17 @@ pub const InstGraph = struct {
             Common.compilerBug("instantiation widened a closed tag union");
         }
 
-        var merged_ext = flat_left.ext;
-        if (only_left.items.len == 0 and only_right.items.len == 0) {
-            try pending.append(self.allocator, .{ .left = flat_left.ext, .right = flat_right.ext, .row_width = row_width });
-        } else if (only_left.items.len == 0) {
-            // Left lacks tags: its extension absorbs the right-only tags.
-            try self.writeOrQueueTagRest(flat_left.ext, only_right.items, flat_right.ext, row_width, pending);
-            merged_ext = flat_right.ext;
-        } else if (only_right.items.len == 0) {
-            try self.writeOrQueueTagRest(flat_right.ext, only_left.items, flat_left.ext, row_width, pending);
-            merged_ext = flat_left.ext;
-        } else {
-            const new_ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) });
-            if (self.find(flat_left.ext) == self.find(flat_right.ext)) {
-                var rest = std.ArrayList(InstTag).empty;
-                defer rest.deinit(row_allocator);
-                try rest.appendSlice(row_allocator, only_left.items);
-                try rest.appendSlice(row_allocator, only_right.items);
-                try self.writeOrQueueTagRest(flat_left.ext, rest.items, new_ext, row_width, pending);
-            } else {
-                try self.writeOrQueueTagRest(flat_left.ext, only_right.items, new_ext, row_width, pending);
-                try self.writeOrQueueTagRest(flat_right.ext, only_left.items, new_ext, row_width, pending);
-            }
-            merged_ext = new_ext;
-        }
+        const merged_ext = try self.joinRowRests(
+            .tag_union,
+            queueExtPair,
+            .right_additions_first,
+            flat_left.ext,
+            flat_right.ext,
+            only_right.items,
+            only_left.items,
+            row_width,
+            pending,
+        );
 
         try self.setContent(left, .{ .tag_union = .{
             .tags = try self.arena().dupe(InstTag, merged.items),
@@ -7097,37 +7066,128 @@ pub const InstGraph = struct {
         try self.union_(left, right);
     }
 
-    fn writeOrQueueTagRest(
+    /// The row entries of `kind`.
+    fn RowEntry(comptime kind: RowKind) type {
+        return switch (kind) {
+            .tag_union => InstTag,
+            .record => InstField,
+        };
+    }
+
+    /// A row of `kind` holding `entries` and extended by `ext`.
+    fn rowNode(self: *InstGraph, comptime kind: RowKind, entries: []const RowEntry(kind), ext: NodeId) Allocator.Error!InstNode {
+        const owned = try self.arena().dupe(RowEntry(kind), entries);
+        return switch (kind) {
+            .tag_union => .{ .tag_union = .{ .tags = owned, .ext = ext } },
+            .record => .{ .record = .{ .fields = owned, .ext = ext } },
+        };
+    }
+
+    /// Give `ext` the row `entries .. tail_ext`: written in place when `ext`
+    /// is an open row variable, otherwise queued as a relation against a
+    /// fresh row node.
+    fn writeOrQueueRowRest(
         self: *InstGraph,
+        comptime kind: RowKind,
         ext: NodeId,
-        tags: []const InstTag,
+        entries: []const RowEntry(kind),
         tail_ext: NodeId,
         row_width: RowWidthRelation,
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
+        const row_name, const other_row_name = switch (kind) {
+            .tag_union => .{ "tag", "record" },
+            .record => .{ "record", "tag" },
+        };
         const ext_root = self.find(ext);
         const ext_content = self.nodes.items[@backingInt(ext_root)];
         if (ext_content == .unresolved) {
             const variable = ext_content.unresolved;
             if (variable.numeric_default_phase != null) {
-                Common.invariant("instantiation tried to write a tag row into a numeric variable");
+                Common.invariant("instantiation tried to write a " ++ row_name ++ " row into a numeric variable");
             }
             if (variable.row_default) |default| {
-                if (default != .empty_tag_union) {
-                    Common.invariant("instantiation tried to write a tag row into a record row variable");
+                const expected_default: checked.RowDefault = switch (kind) {
+                    .tag_union => .empty_tag_union,
+                    .record => .empty_record,
+                };
+                if (default != expected_default) {
+                    Common.invariant("instantiation tried to write a " ++ row_name ++ " row into a " ++ other_row_name ++ " row variable");
                 }
             }
-            try self.setContent(ext_root, .{ .tag_union = .{
-                .tags = try self.arena().dupe(InstTag, tags),
-                .ext = tail_ext,
-            } });
+            try self.setContent(ext_root, try self.rowNode(kind, entries, tail_ext));
         } else {
-            const rest = try self.newNode(.{ .tag_union = .{
-                .tags = try self.arena().dupe(InstTag, tags),
-                .ext = tail_ext,
-            } });
+            const rest = try self.newNode(try self.rowNode(kind, entries, tail_ext));
             try pending.append(self.allocator, .{ .left = ext_root, .right = rest, .row_width = row_width });
         }
+    }
+
+    /// The order two rows' additions take when both extend one shared
+    /// extension.
+    const SharedRestOrder = enum {
+        right_additions_first,
+        left_additions_first,
+    };
+
+    /// Join two flattened rows' extensions once each side's missing entries
+    /// are known: `add_to_left` extends the left row and `add_to_right` the
+    /// right one. Two extensions with nothing to add relate through
+    /// `relate_exts`; otherwise the side lacking entries absorbs them, or
+    /// both extend a fresh row variable. Returns the joined extension.
+    fn joinRowRests(
+        self: *InstGraph,
+        comptime kind: RowKind,
+        comptime relate_exts: fn (*InstGraph, NodeId, NodeId, RowWidthRelation, *std.ArrayList(NodePair)) Allocator.Error!void,
+        comptime shared_rest_order: SharedRestOrder,
+        left_ext: NodeId,
+        right_ext: NodeId,
+        add_to_left: []const RowEntry(kind),
+        add_to_right: []const RowEntry(kind),
+        row_width: RowWidthRelation,
+        pending: *std.ArrayList(NodePair),
+    ) Allocator.Error!NodeId {
+        if (add_to_left.len == 0 and add_to_right.len == 0) {
+            try relate_exts(self, left_ext, right_ext, row_width, pending);
+            return left_ext;
+        }
+        if (add_to_right.len == 0) {
+            // Left lacks entries: its extension absorbs the right-only ones.
+            try self.writeOrQueueRowRest(kind, left_ext, add_to_left, right_ext, row_width, pending);
+            return right_ext;
+        }
+        if (add_to_left.len == 0) {
+            try self.writeOrQueueRowRest(kind, right_ext, add_to_right, left_ext, row_width, pending);
+            return left_ext;
+        }
+        const new_ext = try self.newNode(.{ .unresolved = InstVariable.row(switch (kind) {
+            .tag_union => .empty_tag_union,
+            .record => .empty_record,
+        }) });
+        if (self.find(left_ext) == self.find(right_ext)) {
+            // The rest lists below live only for this call and are usually
+            // short, so they start in a buffer on this frame.
+            var stack_first_buffer: [2048]u8 align(@alignOf(usize)) = undefined;
+            var stack_first = std.heap.BufferFirstAllocator.init(&stack_first_buffer, self.allocator);
+            const row_allocator = stack_first.allocator();
+            var rest = std.ArrayList(RowEntry(kind)).empty;
+            defer rest.deinit(row_allocator);
+            const first, const second = switch (shared_rest_order) {
+                .right_additions_first => .{ add_to_right, add_to_left },
+                .left_additions_first => .{ add_to_left, add_to_right },
+            };
+            try rest.appendSlice(row_allocator, first);
+            try rest.appendSlice(row_allocator, second);
+            try self.writeOrQueueRowRest(kind, left_ext, rest.items, new_ext, row_width, pending);
+        } else {
+            try self.writeOrQueueRowRest(kind, left_ext, add_to_left, new_ext, row_width, pending);
+            try self.writeOrQueueRowRest(kind, right_ext, add_to_right, new_ext, row_width, pending);
+        }
+        return new_ext;
+    }
+
+    /// Queue two row extensions as a pending pair.
+    fn queueExtPair(self: *InstGraph, left: NodeId, right: NodeId, row_width: RowWidthRelation, pending: *std.ArrayList(NodePair)) Allocator.Error!void {
+        try pending.append(self.allocator, .{ .left = left, .right = right, .row_width = row_width });
     }
 
     fn unifyRecordRows(
@@ -7214,70 +7274,23 @@ pub const InstGraph = struct {
             Common.invariant("instantiation widened a closed record");
         }
 
-        const add_to_left = if (left_absorbs_right) &.{} else only_right.items;
-        const add_to_right = if (right_absorbs_left) &.{} else only_left.items;
-        var merged_ext = flat_left.ext;
-        if (add_to_left.len == 0 and add_to_right.len == 0) {
-            try pending.append(self.allocator, .{ .left = flat_left.ext, .right = flat_right.ext, .row_width = row_width });
-        } else if (add_to_right.len == 0) {
-            try self.writeOrQueueRecordRest(flat_left.ext, add_to_left, flat_right.ext, row_width, pending);
-            merged_ext = flat_right.ext;
-        } else if (add_to_left.len == 0) {
-            try self.writeOrQueueRecordRest(flat_right.ext, add_to_right, flat_left.ext, row_width, pending);
-            merged_ext = flat_left.ext;
-        } else {
-            const new_ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_record) });
-            if (self.find(flat_left.ext) == self.find(flat_right.ext)) {
-                var rest = std.ArrayList(InstField).empty;
-                defer rest.deinit(row_allocator);
-                try rest.appendSlice(row_allocator, add_to_left);
-                try rest.appendSlice(row_allocator, add_to_right);
-                try self.writeOrQueueRecordRest(flat_left.ext, rest.items, new_ext, row_width, pending);
-            } else {
-                try self.writeOrQueueRecordRest(flat_left.ext, add_to_left, new_ext, row_width, pending);
-                try self.writeOrQueueRecordRest(flat_right.ext, add_to_right, new_ext, row_width, pending);
-            }
-            merged_ext = new_ext;
-        }
+        const merged_ext = try self.joinRowRests(
+            .record,
+            queueExtPair,
+            .left_additions_first,
+            flat_left.ext,
+            flat_right.ext,
+            if (left_absorbs_right) &.{} else only_right.items,
+            if (right_absorbs_left) &.{} else only_left.items,
+            row_width,
+            pending,
+        );
 
         try self.setContent(left, .{ .record = .{
             .fields = try self.arena().dupe(InstField, merged.items),
             .ext = merged_ext,
         } });
         try self.union_(left, right);
-    }
-
-    fn writeOrQueueRecordRest(
-        self: *InstGraph,
-        ext: NodeId,
-        fields: []const InstField,
-        tail_ext: NodeId,
-        row_width: RowWidthRelation,
-        pending: *std.ArrayList(NodePair),
-    ) Allocator.Error!void {
-        const ext_root = self.find(ext);
-        const ext_content = self.nodes.items[@backingInt(ext_root)];
-        if (ext_content == .unresolved) {
-            const variable = ext_content.unresolved;
-            if (variable.numeric_default_phase != null) {
-                Common.invariant("instantiation tried to write a record row into a numeric variable");
-            }
-            if (variable.row_default) |default| {
-                if (default != .empty_record) {
-                    Common.invariant("instantiation tried to write a record row into a tag row variable");
-                }
-            }
-            try self.setContent(ext_root, .{ .record = .{
-                .fields = try self.arena().dupe(InstField, fields),
-                .ext = tail_ext,
-            } });
-        } else {
-            const rest = try self.newNode(.{ .record = .{
-                .fields = try self.arena().dupe(InstField, fields),
-                .ext = tail_ext,
-            } });
-            try pending.append(self.allocator, .{ .left = ext_root, .right = rest, .row_width = row_width });
-        }
     }
 
     /// Import a finished Monotype into the current ownership scope. Active

@@ -11257,7 +11257,7 @@ Other solved-graph mutations:
   mechanism for a proved concrete builtin conversion; does not mutate the
   context's type or introduce a redirect rule.
 
-- `recordForMerge` / `tagUnionForMerge`—mechanism: row-extension
+- `rowForMerge` (record and tag-union rows)—mechanism: row-extension
   preservation during ordinary unification. Both operand equivalence classes
   acquire the merged content, so an extension reaching either operand must
   preserve that operand's pre-merge row meaning before the classes are joined.
@@ -11363,7 +11363,7 @@ Other solved-graph mutations:
   `check type - polarity` tests in
   `src/check/test/type_checking_integration.zig` and by
   `test/cli/platform_requirement_wider_error_row/`.
-- `closeRecordRowForDerivedParse` / `closeRecordRowForDerivedEncode`—policy:
+- `closeRecordRowForDerivedCodec` (parse and encode)—policy:
   Derived Structural Codec Record-Row Closure (above). After derived codec
   dispatch reaches quiescence, every record the codec's value shape reaches
   as data that was inferred from use sites closes its unconstrained flexible
@@ -11535,8 +11535,7 @@ Other solved-graph mutations:
 Stamped-plan restamps on CIR nodes (discharge time): the restamp rule—
 only the node's own constraint may restamp a node that already carries a
 stamped plan—is documented and enforced at the restamp sites
-(`rewriteEqBinopAsMethodEq`, `rewriteDerivedIsEqMethodCallAsStructuralEq`,
-`rewriteDerivedMethodCallAsStructuralHash`). Plan stamping at creation
+(`rewriteEqBinopAsMethodEq`, `rewriteDerivedMethodCallAsStructural`). Plan stamping at creation
 (`replaceExprWithDispatchCall` and friends at plan-creation sites) is the
 plan's first stamp, not a restamp. Eager method calls stamp their plan before
 discharging its constraint, so a selected structural derivation cannot be

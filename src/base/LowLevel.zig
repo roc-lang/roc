@@ -4,6 +4,8 @@
 //! reject specific ops that should have been lowered away earlier, but there is
 //! no separate semantic/backend enum pair.
 
+const numeric_conversion = @import("numeric_conversion.zig");
+
 /// Canonical primitive operations shared across canonicalization and LIR/codegen.
 pub const LowLevel = enum(u16) {
     // String operations
@@ -916,7 +918,6 @@ pub const LowLevel = enum(u16) {
             .box_unbox,
             => true,
 
-            .list_prefetched,
             .str_is_eq,
             .str_is_eq_static_small,
             .str_static_small_word_eq,
@@ -967,6 +968,7 @@ pub const LowLevel = enum(u16) {
             .dec_to_str,
             .f32_to_str,
             .f64_to_str,
+            .list_prefetched,
             .list_append_range_within_unsafe,
             .list_append_le_bytes,
             .list_slack_unique,
@@ -979,9 +981,9 @@ pub const LowLevel = enum(u16) {
             .list_drop_last,
             .list_take_first,
             .list_take_last,
-            .list_clear,
             .list_reverse,
             .list_sort_with,
+            .list_clear,
             .list_split_first,
             .list_split_last,
             .list_map_can_reuse,
@@ -1833,7 +1835,11 @@ pub const LowLevel = enum(u16) {
             .dec_from_str,
             .f32_from_str,
             .f64_from_str,
-            .u8_to_i8_wrap,
+            .compare,
+            .crash,
+            => RcEffect.none(),
+
+            inline .u8_to_i8_wrap,
             .u8_to_i8_try,
             .u8_to_i16,
             .u8_to_i32,
@@ -2078,10 +2084,21 @@ pub const LowLevel = enum(u16) {
             .dec_to_f32_wrap,
             .dec_to_f32_try_unsafe,
             .dec_to_f64,
-            .compare,
-            .crash,
-            => RcEffect.none(),
+            => |op| numericConversionRcEffect(op),
         };
+    }
+
+    /// The row of an operation that converts between two machine number types,
+    /// which `numeric_conversion.getConversionSpec` classifies from the
+    /// operation's name at comptime. Its operands and result are scalars, so
+    /// there is no refcount for it to touch. An operation this does not
+    /// classify is a compile error, which keeps `rcEffect` exhaustive: every
+    /// operation that is not a numeric conversion must have its own row.
+    fn numericConversionRcEffect(comptime op: LowLevel) RcEffect {
+        if (comptime numeric_conversion.getConversionSpec(op) == null) {
+            @compileError("LowLevel.rcEffect has no row for ." ++ @tagName(op));
+        }
+        return RcEffect.none();
     }
 
     /// ARC-only primitive variant whose result may borrow from an argument.

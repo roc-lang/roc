@@ -908,10 +908,6 @@ pub const DebugRefcountTracker = struct {
         active = false;
     }
 
-    pub fn isActive() bool {
-        return active;
-    }
-
     /// Whether the address table is full. Once it is, new allocations go
     /// unrecorded, so readers of the log cannot tell a missing entry from an
     /// operation that never happened.
