@@ -40363,7 +40363,7 @@ fn divergenceParityFixture(comptime kind: CheckedExprKind) CheckedExprData {
     const tag_label = testIndexId(canonical.TagLabelId, 0);
     return switch (kind) {
         .pending => .pending,
-        .numeral => .{ .numeral = .{ .literal = std.mem.zeroes(ModuleEnv.NumeralLiteral), .plan = null } },
+        .numeral => .{ .numeral = .{ .literal = .{ .node_idx = 0, .digits_start = 0, .before_len = 0, .after_len = 0, .after_decimal_digit_count = 0, .flags = 0 }, .plan = null } },
         .str_from_quote => .{ .str_from_quote = .{ .plan = null, .literal = string } },
         .str_segment => .{ .str_segment = string },
         .str => .{ .str = ops },

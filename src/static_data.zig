@@ -1368,7 +1368,7 @@ test "merging a large image keeps distinct nodes and folds every copy into its f
     for (root_relocations, 0..) |*relocation, index| {
         relocation.* = .{ .offset = index * 8, .target_symbol_name = "copy", .target = .{ .data_symbol = @fromBackingInt(@intCast(1 + distinct + index)) } };
     }
-    nodes[0] = .{ .symbol_name = "root", .bytes = try arena.allocator().alloc(u8, distinct * 8), .alignment = 8, .is_exported = false, .relocations = root_relocations };
+    nodes[0] = .{ .symbol_name = "root", .bytes = try arena.allocator().alloc(u8, distinct * 8), .alignment = 8, .is_exported = true, .relocations = root_relocations };
     @memset(@constCast(nodes[0].bytes), 0);
     for (0..distinct) |index| {
         const bytes = try std.fmt.allocPrint(arena.allocator(), "{d}", .{index});
@@ -1376,7 +1376,6 @@ test "merging a large image keeps distinct nodes and folds every copy into its f
         nodes[1 + distinct + index] = .{ .symbol_name = try std.fmt.allocPrint(arena.allocator(), "copy_{d}", .{index}), .bytes = bytes, .alignment = 1, .is_exported = false };
     }
     const owned = try cloneStaticData(allocator, nodes);
-    owned[0].value_id = @fromBackingInt(0);
     const merged = try mergeIdenticalNodes(allocator, owned);
     defer deinitStaticData(allocator, merged);
     try std.testing.expectEqual(@as(usize, 1 + distinct), merged.len);

@@ -4,7 +4,7 @@
 //! before any body is solved, and all of that function's call sites unify
 //! with the same type nodes. There is no generalization, per-use
 //! instantiation, or recursive-group ordering. The stage is sound because of
-//! these facts, each checked where it is consumed:
+//! these properties, each checked where it is consumed:
 //!
 //! - Monotype specialization shares one `FnId` among every call site that
 //!   reaches a callable at the same closed type, so those sites' lambda sets
@@ -18,7 +18,7 @@
 //!   carries that lambda's one span, and a merge never relates two capture
 //!   lists (`mergeLambdaSets`).
 //! - Merges append members in encounter order so a growing set extends in
-//!   place, and `canonicalizeCallableMemberOrder` then sorts every published
+//!   place, and `canonicalizeCallableMemberOrder` then sorts every output
 //!   set by lambda symbol. Consumers that number variants by position read one
 //!   order for a given member set, whatever order unification met it in.
 //! - Erasure comes from explicit boundaries: hosted and platform function
@@ -28,7 +28,7 @@
 //!   (`verifyErasedBoundaries`) and require each callable it reaches to be
 //!   erased.
 //!
-//! Definitions are published in `FnId` order. No consumer reads them in
+//! Definitions are output in `FnId` order. No consumer reads them in
 //! dependency order: Lambda Mono and LIR lowering reach functions only through
 //! explicit `FnId` and symbol references.
 
@@ -551,7 +551,7 @@ const Solver = struct {
     /// Give every lambda set and erased callable its members in ascending
     /// lambda-symbol order. Merges append members in encounter order so a
     /// growing set extends in place; sorting once here keeps that linear while
-    /// publishing one member order per member set.
+    /// giving every member set one member order.
     fn canonicalizeCallableMemberOrder(self: *Solver) Allocator.Error!void {
         var sorted: std.ArrayList(Type.FnMember) = .empty;
         defer sorted.deinit(self.allocator);
@@ -562,9 +562,9 @@ const Solver = struct {
                     self.program.types.set(ty, .{ .lambda_set = span });
                 },
                 .erased => |erased| if (try self.canonicalMemberSpan(erased.members, &sorted)) |span| {
-                    var canonical = erased;
-                    canonical.members = span;
-                    self.program.types.set(ty, .{ .erased = canonical });
+                    var sorted_erased = erased;
+                    sorted_erased.members = span;
+                    self.program.types.set(ty, .{ .erased = sorted_erased });
                 },
                 .link, .unbound, .forall, .primitive, .zst, .func, .list, .box, .tuple, .record, .tag_union, .named, .mono => {},
             }

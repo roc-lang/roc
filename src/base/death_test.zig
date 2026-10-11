@@ -105,16 +105,14 @@ fn violateInvariant(value: u32) error{}!void {
     if (value != 0) @import("invariant.zig").invariant("death test sample invariant saw {d}", .{value});
 }
 
-fn returnNormally(value: u32) error{}!void {
-    _ = value;
-}
+fn returnNormally() error{}!void {}
 
 test "expectPanic passes when the trigger violates an invariant" {
     try expectPanic("death test sample invariant saw 7", violateInvariant, .{7});
 }
 
 test "a death-test child whose trigger returns is reported as returned" {
-    var outcome = try runInChild(std.testing.allocator, returnNormally, .{0});
+    var outcome = try runInChild(std.testing.allocator, returnNormally, .{});
     defer outcome.deinit(std.testing.allocator);
     try std.testing.expect(outcome == .returned);
 }

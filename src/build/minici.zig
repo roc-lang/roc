@@ -2639,7 +2639,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 test "the suite inventory's own tests run with MiniCI's" {
-    _ = zig_test_suites;
+    std.testing.refAllDecls(zig_test_suites);
 }
 
 test "appendProgressPrefix aligns current phase to total width" {
@@ -2992,7 +2992,7 @@ test "MiniCI's nightly lanes run exactly the jobs whose result can differ by hos
         try std.testing.expectEqual(Lane.secondary, lane);
         for (jobs) |job| {
             const runs = lane.runs(job.placement);
-            if (runs != (job.placement == .every_host)) std.debug.print("job `{s}` is mis-selected by the {s} lane\n", .{ job.name, @tagName(lane) });
+            if (runs != (job.placement == .every_host)) std.debug.print("job `{s}` is wrongly selected by the {s} lane\n", .{ job.name, @tagName(lane) });
             try std.testing.expectEqual(job.placement == .every_host, runs);
         }
     }

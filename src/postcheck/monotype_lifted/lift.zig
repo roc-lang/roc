@@ -1368,8 +1368,8 @@ const CaptureSet = struct {
     }
 
     /// `CaptureWalk` actions that collect free locals into the set, reading
-    /// referenced functions' solved capture sets, and optionally rebuild each
-    /// reference's operand span once its operand values are collected.
+    /// referenced functions' solved capture sets, and optionally write each
+    /// reference's operand span anew once its operand values are collected.
     const Visitor = struct {
         set: *CaptureSet,
         bound: *BoundSet,

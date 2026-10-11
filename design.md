@@ -1276,10 +1276,10 @@ evaluate.
 
 ### Frame-Partitioned Phase State
 
-A fact recorded while one lambda, declaration, or binding group is being
+An entry recorded while one lambda, declaration, or binding group is being
 canonicalized or checked belongs to that frame, and no other frame may consume
 it. Shared storage that each consumer filters to find its own entries is
-forbidden: one consumer that forgets the filter resolves the fact against the
+forbidden: one consumer that forgets the filter resolves the entry against the
 wrong frame (a nested lambda's return constraint unified in an enclosing
 lambda's rank, a declaration satisfying its own right-hand-side lookup).
 
@@ -1302,8 +1302,8 @@ a compile error. The disciplines are:
   entries at enclosing ranks to the boundary that owns them.
 - `settled`: work judged once against the final solved state. The field's doc
   comment states why judging it any earlier would be wrong.
-- `fact`: facts, memos, and indices keyed by stable identities, meaning the
-  same thing to every frame.
+- `keyed`: memos, indices, and output keyed by stable identities, meaning
+  the same thing to every frame.
 
 When canonicalizing a file or checking a module returns successfully, every
 `frame_stack` and `frame_partitioned` field must be empty. This is a debug
@@ -3771,8 +3771,8 @@ bytes.
 ### Cache Admission Versioning
 
 A serialization root is a `Serialized` type whose bytes are admitted from outside
-the running compiler: `ModuleEnv.Serialized`, `CheckedModuleArtifact.Serialized`,
-and `PlatformPairing.Serialized`. Each root declares a `root_contract`
+the running compiler: `ModuleEnv.Serialized`, the checked module's `Serialized`
+layout, and `PlatformPairing.Serialized`. Each root declares a `root_contract`
 (`collections.serde_validation.RootContract`) naming its owner type and every
 owner field it deliberately does not persist, every serialized field with no
 owner field, and every rename. A root's layout fingerprint
@@ -3787,8 +3787,8 @@ cache entry kind (checked module, platform pairing, canonicalized module) has on
 entry-version hash folding the kind's domain tag, its envelope and record format
 versions, and the fingerprint of every root its bodies hold. Entry headers carry
 that hash, and admission compares it and nothing else, so a fingerprint not folded
-there guards no entry. The builtin blob's trailer is the single
-`CheckedModuleArtifact.Serialized` fingerprint, compared directly.
+there guards no entry. The builtin blob's trailer is the single fingerprint of
+the checked module's `Serialized` layout, compared directly.
 
 ### Fully Defined Persisted Bytes
 
@@ -14574,13 +14574,13 @@ Only the divergent path does this work: a value that does not diverge lowers
 through the ordinary operand lowering.
 
 Which expression kinds can be marked divergent is one classification,
-`checkedExprDivergence` in `checked_artifact.zig`: a kind diverges through its
-evaluation (it terminates, or an operand it evaluates diverges), through its
-static dispatch plan (the kinds that carry one: method and type dispatch,
-method equality, custom interpolation, and numeral and quote conversion), or
-never. Monotype's and Boxy's divergent lowerings check their never-divergent
-arms against it at compile time, and the checked-artifact parity tests drive
-`DivergenceScan` over every kind and compare its answer with it. A
+`checkedExprDivergence`, defined with the checked expression kinds: a kind
+diverges through its evaluation (it terminates, or an operand it evaluates
+diverges), through its static dispatch plan (the kinds that carry one: method
+and type dispatch, method equality, custom interpolation, and numeral and
+quote conversion), or never. Monotype's and Boxy's divergent lowerings check
+their never-divergent arms against it at compile time, and parity tests beside
+it drive `DivergenceScan` over every kind and compare its answer with it. A
 dispatch-plan kind lowers through its dispatch's callable-or-crash decision,
 so a custom interpolation whose conversion cannot run evaluates its segments
 and values and then crashes, like any other dispatch that cannot run.
@@ -15333,7 +15333,7 @@ The solver:
 Solving is monomorphic. Every lifted function's type is registered before any
 body is solved, and all of a function's call sites unify with those same type
 nodes; there is no generalization, per-use instantiation, or recursive-group
-ordering, and definitions are published in `FnId` order because consumers
+ordering, and definitions are output in `FnId` order because consumers
 reach functions only through explicit references. Monotype specialization
 shares one `FnId` among every call site that reaches a callable at the same
 closed type, so those sites' lambda sets become their union. The union is
@@ -15347,7 +15347,7 @@ carries the same span, and merging two sets never relates capture lists; a
 lambda that reaches a merge with two different spans is a compiler invariant
 violation. Merges append new members in encounter order so a growing set can
 extend in place at the end of the member pool. When solving ends, every
-lambda set and erased callable is republished with its members in ascending
+lambda set and erased callable is rewritten with its members in ascending
 lambda-symbol order, so every consumer that numbers callable variants by
 position sees one order for a given member set.
 

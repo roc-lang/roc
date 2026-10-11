@@ -501,35 +501,35 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .active_decl_type_entries = .frame_partitioned,
     .active_decl_import_aliases = .lexical,
     .active_decl_import_alias_entries = .frame_partitioned,
-    .forward_prepared_import_aliases = .fact,
+    .forward_prepared_import_aliases = .keyed,
     .type_var_scopes = .frame_stack,
-    .exposed_idents = .fact,
-    .exposed_types = .fact,
+    .exposed_idents = .keyed,
+    .exposed_types = .keyed,
     .exposed_ident_texts = .settled,
     .exposed_type_idents = .settled,
-    .exposed_qualified_type_idents = .fact,
-    .header_exposed_modules = .fact,
+    .exposed_qualified_type_idents = .keyed,
+    .header_exposed_modules = .keyed,
     .compiler_version = .input,
     .validation = .input,
     .is_entry_module = .input,
     .pending_provides_entries = .settled,
-    .method_registrations = .fact,
-    .used_patterns = .fact,
-    .globally_resolvable_patterns = .fact,
+    .method_registrations = .keyed,
+    .used_patterns = .keyed,
+    .globally_resolvable_patterns = .keyed,
     .builtin_auto_imported_types = .input,
-    .import_indices = .fact,
-    .parser_type_decl_states = .fact,
-    .forward_prepared_type_decls = .fact,
-    .forward_type_scope_eligibility = .fact,
-    .type_decl_statements = .fact,
-    .alias_cycle_references = .fact,
-    .alias_cycle_scopes = .fact,
-    .assoc_value_patterns = .fact,
+    .import_indices = .keyed,
+    .parser_type_decl_states = .keyed,
+    .forward_prepared_type_decls = .keyed,
+    .forward_type_scope_eligibility = .keyed,
+    .type_decl_statements = .keyed,
+    .alias_cycle_references = .keyed,
+    .alias_cycle_scopes = .keyed,
+    .assoc_value_patterns = .keyed,
     .assoc_forward_references = .boundary,
-    .assoc_forward_pattern_keys = .fact,
+    .assoc_forward_pattern_keys = .keyed,
     .assoc_local_statement_placeholders = .boundary,
-    .type_decl_paths = .fact,
-    .type_path_names = .fact,
+    .type_decl_paths = .keyed,
+    .type_path_names = .keyed,
     .type_anno_owner_path_stack = .frame_stack,
     .scratch_vars = .scratch,
     .scratch_idents = .scratch,
@@ -548,15 +548,15 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .scratch_reassign_targets = .scratch,
     .scratch_local_function_patterns = .frame_partitioned,
     .scratch_block_local_defs = .frame_partitioned,
-    .scratch_local_type_decls = .fact,
-    .scratch_global_value_defs = .fact,
-    .closure_counter = .fact,
+    .scratch_local_type_decls = .keyed,
+    .scratch_global_value_defs = .keyed,
+    .closure_counter = .keyed,
     .loop_depth = .lexical,
     .defining_bound_vars = .lexical,
     .defining_assoc_alias = .lexical,
     .current_local_def_ident = .lexical,
     .current_local_def_index = .lexical,
-    .interp_tmp_counter = .fact,
+    .interp_tmp_counter = .keyed,
     .allow_pattern_var_reuse = .lexical,
     .pattern_binders = .frame_partitioned,
     .pattern_binder_group_start = .lexical,
@@ -564,10 +564,6 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .enclosing_lambda = .lexical,
     .roc_ctx = .input,
 });
-
-comptime {
-    _ = state_inventory;
-}
 
 /// The first `frame_stack` or `frame_partitioned` field that still holds
 /// entries. Canonicalizing a file closes every frame it opens, and closing a
@@ -22673,11 +22669,14 @@ test "a frame left open in canonicalizer state fails the frame-balance invariant
 }
 
 test "every canonicalizer frame stack is checked for balance" {
-    const frame_owned = comptime state_discipline.fieldsWith(Self, state_inventory, &.{ .frame_stack, .frame_partitioned });
-    inline for (.{ "decl_scope_stack", "type_var_scopes", "type_anno_owner_path_stack", "scratch_defining_bound_vars", "pattern_binders" }) |expected| {
-        const found = for (frame_owned) |name| {
-            if (std.mem.eql(u8, name, expected)) break true;
-        } else false;
-        try std.testing.expect(found);
+    inline for (.{
+        .decl_scope_stack,
+        .type_var_scopes,
+        .type_anno_owner_path_stack,
+        .scratch_defining_bound_vars,
+        .pattern_binders,
+    }) |field| {
+        const discipline = state_inventory.get(field);
+        try std.testing.expect(discipline == .frame_stack or discipline == .frame_partitioned);
     }
 }

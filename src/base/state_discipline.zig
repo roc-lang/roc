@@ -1,10 +1,10 @@
 //! How each field of a compiler phase's mutable state relates to that phase's
 //! definitional frames (design.md "Frame-Partitioned Phase State").
 //!
-//! A fact recorded while one lambda, declaration, or binding group is being
+//! An entry recorded while one lambda, declaration, or binding group is being
 //! processed must not be consumed by a different one. A phase that keeps such
-//! facts in shared storage and relies on every consumer to skip the entries
-//! that are not its own is one forgotten filter away from resolving a fact
+//! entries in shared storage and relies on every consumer to skip the entries
+//! that are not its own is one forgotten filter away from resolving an entry
 //! against the wrong frame. Every field of `Check` and `Can` therefore carries
 //! exactly one `Discipline` in an `inventory` declared next to the struct; the
 //! inventory is an exhaustive `std.enums.EnumArray` over the struct's fields,
@@ -46,10 +46,10 @@ pub const Discipline = enum {
     /// against the settled solved state. The field's doc comment states why
     /// judging it any earlier would be wrong.
     settled,
-    /// Facts, memos, indices, and publication output keyed by stable
-    /// identities. An entry means the same thing to every frame that reads it,
-    /// so it is never drained per frame.
-    fact,
+    /// Memos, indices, and output keyed by stable identities. An entry means
+    /// the same thing to every frame that reads it, so it is never drained
+    /// per frame.
+    keyed,
 };
 
 /// The classification of every field of `T`, built by `inventory`.

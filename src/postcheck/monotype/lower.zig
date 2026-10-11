@@ -64821,10 +64821,10 @@ test "monotype sameType keeps failed alias alternatives out of recursion stack" 
 test "monotype assertSameType compares nothing outside debug builds" {
     if (@import("builtin").mode == .debug) return error.SkipZigTest;
     // Outside debug builds the assertion must not read its context or the
-    // type store at all: an undefined context and two unrelated type ids
-    // would fault or reach `unreachable` if the comparison ran.
+    // type store at all: an undefined context and undefined type ids would
+    // fault or reach `unreachable` if the comparison ran.
     var ctx: BodyContext = undefined;
-    ctx.assertSameType(@fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(1)), "release assertion compared types");
+    ctx.assertSameType(undefined, undefined, "release assertion compared types");
 }
 
 test "body context inspects graph-owned types despite program TypeId collisions" {
