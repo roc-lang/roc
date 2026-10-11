@@ -26,14 +26,14 @@ Commit `847aeab60b` (main at the start of this work), ReleaseFast, `--no-cache`:
 ## Results
 
 ReleaseFast, `perf stat -e instructions:u` pinned to P-cores, `--no-cache`,
-measured at commit `ff30659f46`:
+measured with every fix below applied:
 
 | Workload | Baseline | This branch | Change |
 | --- | ---: | ---: | ---: |
-| `roc check -j1 package/main.roc` (roc-pg) | 266.28 G | 249.76 G | -6.2% |
-| `roc build --opt=dev examples/query.roc` | 244.83 G | 239.58 G | -2.1% |
-| `roc build examples/query.roc` (LLVM) | 524.75 G | 416.04 G | -20.7% |
-| `roc test test/fx/issue8826_full.roc` | 141.4 M | 140.5 M | -0.6% |
+| `roc check -j1 package/main.roc` (roc-pg) | 266.28 G | 236.84 G | -11.1% |
+| `roc build --opt=dev examples/query.roc` | 244.83 G | 239.52 G | -2.2% |
+| `roc build examples/query.roc` (LLVM) | 524.75 G | 367.20 G | -30.0% |
+| `roc test test/fx/issue8826_full.roc` | 141.4 M | 140.6 M | -0.6% |
 
 Validation: the module unit tests of every touched module, the lint gates,
 and all CLI suites (platforms, echo, subcommands, glue: 2198 tests) pass.
@@ -195,6 +195,14 @@ stages it touches; the instruction-count effect is reported in "Results".
 36. `src/lir/arc_dismantle.zig` `FutureFields`: statement successors that
     do not depend on the candidate are recorded once and reused by every
     later candidate's walk.
+
+37. `src/lir/arc_dismantle.zig` `FutureFields`: each procedure's field-walk
+    graph is reversed once, and every candidate solves its observations
+    backward from its own reads, bounded by its redefinition, instead of
+    walking forward from each consuming read to the end of the procedure.
+    The LLVM build of `query.roc` drops from 416.0 G to 367.2 G instructions
+    and `roc check` on roc-pg from 249.8 G to 236.8 G; the generated code of
+    both backends is byte-identical.
 
 ## Findings from profiling
 
