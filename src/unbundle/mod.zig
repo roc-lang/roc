@@ -18,6 +18,9 @@ pub const localhost = @import("localhost.zig");
 /// Shared `.tar.zst` format constants, referenced by both `unbundle` and `bundle`.
 pub const format = @import("format.zig");
 
+/// In-memory archive construction shared by extraction and package-cache tests.
+pub const test_support = if (@import("builtin").is_test) @import("test_support.zig") else struct {};
+
 // Re-export commonly used functions and types
 pub const unbundleFiles = unbundle.unbundle;
 pub const unbundleStream = unbundle.unbundleStream;

@@ -435,7 +435,7 @@ pub const Writer = struct {
                 const captures = try self.module.const_store.allocator.alloc(const_store.ConstCapture, frame.slots.len);
                 defer self.module.const_store.allocator.free(captures);
                 for (captures, frame.slots, frame.capture_types, nodes) |*capture, slot, ty, node| {
-                    capture.* = .{ .id = slot.id, .ty = ty, .value = node };
+                    capture.* = .{ .id = slot.id, .kind = slot.kind, .ty = ty, .value = node };
                 }
                 const template = fn_value.template;
                 const fn_id = try self.module.const_store.appendFn(.{

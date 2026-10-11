@@ -100,7 +100,7 @@ linkFarm name (map unpackZig (lib.optionals includeFuzzingDependencies [
       name = "roc_deps_aarch64_macos_none";
       packageHash = "N-V-__8AAPOuPRLK1oNUw3WwQQzBRNkTOff2oOlXtnscSdOO";
       url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.17.0/aarch64-macos-none.tar.xz";
-      hash = "sha256-8fsYBdi6UhI93qHYRsyYAD5r3+oCO0X3aH0ps4TNxhQ=";
+      hash = "sha256-ofXbsRn/1I3Z5YiU3/piUS8WoYQAsElrPz5/A5lMMpc=";
     };
   }
   {
@@ -109,7 +109,7 @@ linkFarm name (map unpackZig (lib.optionals includeFuzzingDependencies [
       name = "roc_deps_aarch64_linux_musl";
       packageHash = "N-V-__8AAI28HhhG0Nx8NG4UWcEadzHaIBt4m-lIs_M-xRNP";
       url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.17.0/aarch64-linux-musl.tar.xz";
-      hash = "sha256-JL5OfMVLMrPiWu+8Q234SjlefeKao1Czxe+IvERQGcs=";
+      hash = "sha256-HetjuaHZ0OGycif6hkg0SAJ3tbhnq+IXTkGFDoTYJn4=";
     };
   }
   {
@@ -118,7 +118,7 @@ linkFarm name (map unpackZig (lib.optionals includeFuzzingDependencies [
       name = "roc_deps_aarch64_windows_gnu";
       packageHash = "N-V-__8AAILeexlcrD3R0nKDv_nFeowG7dLWpZuQCMjeMgN_";
       url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.17.0/aarch64-windows-gnu.zip";
-      hash = "sha256-C+NNsepYEMQBLhFVk3mvY6F8+B6lqBc2Q8iN+hXrx4g=";
+      hash = "sha256-Qf8n/KCB5yND9A2nw3tb4o/N77tLua02PHi4IWGNUMQ=";
     };
   }
   {
@@ -127,7 +127,7 @@ linkFarm name (map unpackZig (lib.optionals includeFuzzingDependencies [
       name = "roc_deps_arm_linux_musleabihf";
       packageHash = "N-V-__8AAMGvTxiyNmCHtvc7ThHsFU25_TnBjl1zIDWh_0g_";
       url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.17.0/arm-linux-musleabihf.tar.xz";
-      hash = "sha256-rawjQacA1uea3hENT/I0vaZ6iLu7Y5HXsISxm+frP6A=";
+      hash = "sha256-0DHylCdR/cYstolRcHB0s3MPols2auAhWoJ9E7OcW9w=";
     };
   }
   {
@@ -136,7 +136,7 @@ linkFarm name (map unpackZig (lib.optionals includeFuzzingDependencies [
       name = "roc_deps_x86_linux_musl";
       packageHash = "N-V-__8AAFEjaRWoQd3IMN0XCm8oziHcSolDSrLVXTQgcIWd";
       url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.17.0/x86-linux-musl.tar.xz";
-      hash = "sha256-cmljW3J6h0a8C5anvPFx/fAWMPRqwLOu3D22eebq7c4=";
+      hash = "sha256-gpalLa824qPQZie7jVtjuGw7nkaubOrdPa9AdQyKxmk=";
     };
   }
   {
@@ -145,7 +145,7 @@ linkFarm name (map unpackZig (lib.optionals includeFuzzingDependencies [
       name = "roc_deps_x86_64_linux_musl";
       packageHash = "N-V-__8AAFRVFhloG5rlb8GkGn4-7ays_ZfWOq4W_pi1ETcU";
       url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.17.0/x86_64-linux-musl.tar.xz";
-      hash = "sha256-mDalNVvn0h4ahUTbnpiei7Da8q7DuWXHlQuiMdrPySU=";
+      hash = "sha256-QMH0EqDb9wHsbPYHoCcqGSKEH6l5pHcPj3BwJYkzFh8=";
     };
   }
   {
@@ -154,7 +154,7 @@ linkFarm name (map unpackZig (lib.optionals includeFuzzingDependencies [
       name = "roc_deps_x86_64_macos_none";
       packageHash = "N-V-__8AADTKtxK-zH-_M4lsXzYzvaCcHdcoPvm_kQvmKaoG";
       url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.17.0/x86_64-macos-none.tar.xz";
-      hash = "sha256-A1u85DdwkyaAhGM5VF3Q/dwxsaPy7uxIhHJp4n+O1ps=";
+      hash = "sha256-6YcrnS/yXyAe/u7y2pNjUt1LDMLrYI+xqyJzr8F7m+0=";
     };
   }
   {
@@ -163,16 +163,16 @@ linkFarm name (map unpackZig (lib.optionals includeFuzzingDependencies [
       name = "roc_deps_x86_64_windows_gnu";
       packageHash = "N-V-__8AAG24mBxL085Yl7ox-jj-YgHWzMXsf6uj7SH6LnxQ";
       url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.17.0/x86_64-windows-gnu.zip";
-      hash = "sha256-V61M1+uaDJ91f79xh44gjdRjo/B0wZST0QsNQH25rWo=";
+      hash = "sha256-TdpirB+k82LGq8VSJwuRrdc/kw2sA8hVbRUgv+gigY4=";
     };
   }
   {
-    name = "bytebox-0.0.1-SXc2sdymDwDmedpZXCTPSLX8eOQZkr2tGoDalQAEgFnN.tar.gz";
+    name = "bytebox-0.0.1-SXc2sdymDwDisdVtvnk6RwklNLD8_0tN9QeOk-beQvJB.tar.gz";
     path = fetchZig {
       name = "bytebox";
-      packageHash = "bytebox-0.0.1-SXc2sdymDwDmedpZXCTPSLX8eOQZkr2tGoDalQAEgFnN";
-      url = "https://github.com/lukewilliamboswell/bytebox/archive/23e74bdd01a0b79bbb8937e01ab4a6c4132ffe87.tar.gz";
-      hash = "sha256-KkF4469qIaNj0v0/WlvNOx43782lKpL1RZ0evT4RJEI=";
+      packageHash = "bytebox-0.0.1-SXc2sdymDwDisdVtvnk6RwklNLD8_0tN9QeOk-beQvJB";
+      url = "https://github.com/lukewilliamboswell/bytebox/archive/a47174a91c2b03fe9f7982ca914633a15123b017.tar.gz";
+      hash = "sha256-0tP/w5GLQ69KTI+DIWOB3LwCQ8w1i14AGpjrqdg9J/Y=";
     };
   }
   {
@@ -185,12 +185,12 @@ linkFarm name (map unpackZig (lib.optionals includeFuzzingDependencies [
     };
   }
   {
-    name = "stable_array-0.1.0-3ihgvd9eAAA5ozV4aOQZ6GI3d_gTyiR9tS6mwav2w18o.tar.gz";
+    name = "stable_array-0.1.0-3ihgvVtnAADGV_7qnu3FIy1wTYraU_qBy17aAAOAREAx.tar.gz";
     path = fetchZig {
       name = "zig-stable-array";
-      packageHash = "stable_array-0.1.0-3ihgvd9eAAA5ozV4aOQZ6GI3d_gTyiR9tS6mwav2w18o";
-      url = "git+https://github.com/lukewilliamboswell/zig-stable-array.git#0931a8619b0e5429e1573caf1a1b34a421e4c76a";
-      hash = "sha256-n/NV3r5ji4+fW+c/I8AzjnLsGU4nUSzmJtdAI6+TcRk=";
+      packageHash = "stable_array-0.1.0-3ihgvVtnAADGV_7qnu3FIy1wTYraU_qBy17aAAOAREAx";
+      url = "git+https://github.com/lukewilliamboswell/zig-stable-array.git#62d68d6c5a4c412e2aa82fad1f90eaed061ea39b";
+      hash = "sha256-SnxsV2B635S8Pxpl6Zcsr6rNLpy0oLxouO1Uwn9+Y2k=";
     };
   }
   {

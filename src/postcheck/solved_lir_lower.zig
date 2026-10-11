@@ -2205,6 +2205,7 @@ const Lowerer = struct {
                 },
                 .local => |local| try self.add(.{ .local = local }),
                 .typed_boundary => |boundary| try self.add(.{ .expr = boundary.value }),
+                .row_widen => |widen| try self.add(.{ .expr = widen.value }),
                 .list, .tuple => |items| try self.addExprs(items),
                 .record => |fields| for (view.fieldExprSpan(fields)) |field| {
                     try self.add(.{ .expr = field.value });
@@ -3089,6 +3090,7 @@ const Lowerer = struct {
                 .binder = local.binder,
                 .capture_id = local.capture_id,
                 .checked_capture_id = local.checked_capture_id,
+                .capture_kind = local.capture_kind,
                 .ty = self.solved.local_tys.items[@backingInt(capture.local)],
             });
         }
@@ -3386,6 +3388,7 @@ const Lowerer = struct {
                 .@"unreachable",
                 .comptime_value,
                 .typed_boundary,
+                .row_widen,
                 .record_update,
                 .let_,
                 .lambda,
@@ -3467,6 +3470,7 @@ const Lowerer = struct {
             .@"unreachable",
             .comptime_value,
             .typed_boundary,
+            .row_widen,
             .record_update,
             .let_,
             .lambda,
@@ -3742,7 +3746,7 @@ const Lowerer = struct {
                     try path.append(self.allocator, root);
                     root = access.tuple;
                 },
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => break,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => break,
             }
         }
         var ty = known orelse try self.lowerExprTy(root);
@@ -3763,7 +3767,7 @@ const Lowerer = struct {
                     if (access.elem_index >= items.len) Common.invariant("tuple access index exceeded tuple type");
                     ty = GuardedList.at(items, @intCast(access.elem_index));
                 },
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
             }
             try self.expr_context_tys.put(path.items[index], ty);
         }
@@ -4256,6 +4260,7 @@ const Lowerer = struct {
                 .binder = capture.binder,
                 .capture_id = capture.capture_id,
                 .checked_capture_id = capture.checked_capture_id,
+                .capture_kind = capture.capture_kind,
                 .ty = capture_ty,
                 .storage_ty = try self.captureFieldStorageType(capture, capture_ty),
             });
@@ -5145,6 +5150,7 @@ const Lowerer = struct {
                 Common.invariant("ConstStore capture field had no checked capture identity");
             task.slots[task.index] = .{
                 .id = checked_capture_id,
+                .kind = field.capture_kind,
                 .slot = @intCast(task.index),
                 .ty = undefined,
                 .plan = undefined,
@@ -6749,6 +6755,7 @@ const Lowerer = struct {
             .static_data_candidate => |candidate| try self.staticDataCandidateStep(where, target, candidate, ty, next),
             .comptime_value => |value| .{ .ret = try self.lowerComptimeValueInto(where, target, value, ty, next) },
             .typed_boundary => |boundary| try self.typedBoundaryStep(where, target, ty, boundary, next),
+            .row_widen => |widen| try self.rowWidenStep(where, target, ty, widen.value, next),
             .field_access => |field| try self.fieldAccessStep(where, target, field.receiver, field.segments, next),
             .call_value => |call| try self.valueCallStep(where, target, ty, call.callee, call.args, next),
             .match_ => |match_| try self.matchStep(where, target, ty, match_.scrutinee, match_.branches, match_.comptime_site, next),
@@ -6858,6 +6865,10 @@ const Lowerer = struct {
             .static_data_candidate => |candidate| try self.staticDataCandidateStep(where, target, candidate, expr_ty, next),
             .comptime_value => |value| .{ .ret = try self.lowerComptimeValueInto(where, target, value, expr_ty, next) },
             .typed_boundary => |boundary| try self.typedBoundaryStep(where, target, expr_ty, boundary, next),
+            // A row coercion lowers as the same typed assignment: the source
+            // row's layout comes from the value's solved type, the destination
+            // from this expression's, and the tag-union boundary re-tags.
+            .row_widen => |widen| try self.rowWidenStep(where, target, expr_ty, widen.value, next),
             .list => |items| try self.listStep(where, target, expr_ty, items, next),
             .tuple => |items| try self.structExprsStep(where, target, self.solved.lifted.exprSpan(items), self.tupleItemTypes(expr_ty), next),
             .record => |fields| try self.recordStep(where, target, expr_ty, fields, next),
@@ -7040,6 +7051,77 @@ const Lowerer = struct {
         const source = try self.addTemp(source_ty);
         const after_source = try self.assignTypedBoundary(where, target, target_ty, source, source_ty, next);
         return .{ .tail = exprTask(where, source, boundary.value, source_ty, after_source) };
+    }
+
+    /// A checked row coercion (design.md "Row Coercion Primitive") is the
+    /// typed assignment of the return boundary, after asserting the
+    /// coercion's reach and superset rule on the two solved types.
+    fn rowWidenStep(
+        self: *Lowerer,
+        where: LowerSite,
+        target: LIR.LocalId,
+        target_ty: Type.TypeId,
+        value: Lifted.ExprId,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LowerStep {
+        try self.assertRowWidenReach(target_ty, try self.lowerExprContextTy(value));
+        return try self.typedBoundaryStep(where, target, target_ty, .{ .value = value }, next);
+    }
+
+    /// Inside the reach (the root row, rows that are tag payloads of a reached
+    /// row, and rows behind a named backing) every source tag is in the
+    /// destination with the same arity; anywhere else the two sides are
+    /// value-encoding equivalent.
+    fn assertRowWidenReach(self: *Lowerer, target_ty: Type.TypeId, source_ty: Type.TypeId) Common.LowerError!void {
+        var work = std.ArrayList([2]Type.TypeId).empty;
+        defer work.deinit(self.allocator);
+        var visited = std.AutoHashMap(u64, void).init(self.allocator);
+        defer visited.deinit();
+        var equivalent_pairs = std.AutoHashMap(u64, void).init(self.allocator);
+        defer equivalent_pairs.deinit();
+        try work.append(self.allocator, .{ target_ty, source_ty });
+        while (work.pop()) |pair| {
+            const target_runtime = self.namedBackingRoot(pair[0]);
+            const source_runtime = self.namedBackingRoot(pair[1]);
+            const key = (@as(u64, @backingInt(target_runtime)) << 32) | @as(u64, @backingInt(source_runtime));
+            const entry = try visited.getOrPut(key);
+            if (entry.found_existing) continue;
+            const target_content = self.types.get(target_runtime);
+            const source_content = self.types.get(source_runtime);
+            if (source_content == .tag_union and target_content == .tag_union) {
+                const target_tags = self.types.tagSpan(target_content.tag_union);
+                const source_tags = self.types.tagSpan(source_content.tag_union);
+                for (0..source_tags.len) |source_index| {
+                    const source_tag = GuardedList.at(source_tags, source_index);
+                    const target_tag = GuardedList.at(target_tags, Lowerer.tagIndexInTags(target_tags, source_tag));
+                    const target_payloads = self.types.span(target_tag.payloads);
+                    const source_payloads = self.types.span(source_tag.payloads);
+                    if (target_payloads.len != source_payloads.len) {
+                        Common.invariant("row coercion source tag payload arity differed from its destination tag");
+                    }
+                    for (0..source_payloads.len) |payload_index| {
+                        try work.append(self.allocator, .{
+                            GuardedList.at(target_payloads, payload_index),
+                            GuardedList.at(source_payloads, payload_index),
+                        });
+                    }
+                }
+                continue;
+            }
+            if (source_content == .tag_union and self.types.tagSpan(source_content.tag_union).len == 0) continue;
+            if (!try self.typesEquivalentInMode(.value_encoding, target_runtime, source_runtime, &equivalent_pairs)) {
+                Common.invariant("row coercion reached differing types outside tag payloads and named backings");
+            }
+        }
+    }
+
+    fn namedBackingRoot(self: *Lowerer, ty: Type.TypeId) Type.TypeId {
+        var current = ty;
+        while (true) {
+            const next = self.runtimeBackingType(current);
+            if (next == current) return current;
+            current = next;
+        }
     }
 
     fn listStep(
@@ -8183,7 +8265,8 @@ const Lowerer = struct {
             return .{ .tail = try self.operandChain(where, lowered, null, null, hint) };
         }
         if (op == .list_map_can_reuse) {
-            const interchangeable = try self.listMapLayoutsInterchangeable(args);
+            var map_output_elem: ?layout.Idx = null;
+            const interchangeable = try self.listMapLayoutsInterchangeable(args, &map_output_elem);
             if (!interchangeable.get(.u32) and !interchangeable.get(.u64)) {
                 // Reuse is statically impossible (or disabled) on every
                 // width, so the runtime uniqueness check never needs to
@@ -8209,6 +8292,7 @@ const Lowerer = struct {
                 .rc_effect = op.rcEffect(),
                 .args = try self.result.store.addLocalSpan(lowered.ids),
                 .interchangeable = interchangeable,
+                .map_output_elem = map_output_elem,
                 .next = next,
             } }, where.source());
             return .{ .tail = try self.operandChain(where, lowered, null, null, current) };
@@ -8371,7 +8455,7 @@ const Lowerer = struct {
         // the two derivations demand the same set of functions.
         if (self.solved.lifted.listMapCanReuseMatch(scrutinee, branches_span)) |folded| {
             const args = self.solved.lifted.exprSpan(folded.call_args);
-            const interchangeable = try self.listMapLayoutsInterchangeable(args);
+            const interchangeable = try self.listMapLayoutsInterchangeable(args, null);
             // Reuse possible on at least one width keeps the match, so each
             // backend can decide per the width it is building.
             if (!interchangeable.get(.u32) and !interchangeable.get(.u64)) {
@@ -9837,7 +9921,7 @@ const Lowerer = struct {
     /// on that width, so the op resolves to a constant 0 there. Both bits are
     /// stored so the lowered op is target-independent: codegen selects the bit
     /// for the width it is building.
-    fn listMapLayoutsInterchangeable(self: *Lowerer, args: anytype) Common.LowerError!layout.WidthValues(bool) {
+    fn listMapLayoutsInterchangeable(self: *Lowerer, args: anytype, output_layout: ?*?layout.Idx) Common.LowerError!layout.WidthValues(bool) {
         const none = layout.WidthValues(bool).both(false, false);
         if (args.len != 2) Common.invariant("list_map_can_reuse reached LIR lowering with the wrong arity");
         if (!self.list_in_place_map) return none;
@@ -9855,6 +9939,7 @@ const Lowerer = struct {
         const out_elem_idx = self.result.layouts.runtimeRepresentationLayoutIdx(
             try self.layoutOfType(try self.lowerType(out_ret)),
         );
+        if (output_layout) |out| out.* = out_elem_idx;
 
         return layout.WidthValues(bool).both(
             self.listMapInterchangeableAtWidth(in_elem_idx, out_elem_idx, .u32),
@@ -15450,7 +15535,8 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
             defer result.deinit();
         }
     };
-    try std.testing.checkAllAllocationFailures(allocator, Attempt.run, .{ &solved, Lifted.Program.FoldedMatch{ .scrutinee = produced, .body = read } });
+    var deterministic = base.DeterministicAllocator.init(allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), Attempt.run, .{ &solved, Lifted.Program.FoldedMatch{ .scrutinee = produced, .body = read } });
     const Verify = struct {
         fn run(failing: std.mem.Allocator, original: *const Solved.Program) Common.LowerError!void {
             var lowerer = try Lowerer.init(failing, .u64, original, .{});
@@ -15458,7 +15544,7 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
             try lowerer.verifyMaterializedDecisions();
         }
     };
-    try std.testing.checkAllAllocationFailures(allocator, Verify.run, .{&solved});
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), Verify.run, .{&solved});
     {
         var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
         defer lowerer.deinit();

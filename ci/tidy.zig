@@ -955,6 +955,7 @@ fn tidyBannedCoreCtxCreation(file: SourceFile, errors: *Errors) void {
         "src/echo_platform/echo_native.zig",
         "src/lsp/syntax.zig",
         "src/ctx/CoreCtx.zig",
+        "test/downstream-compiler/main.zig",
     };
 
     // Don't ban ourselves (this file contains the banned strings as literals)
@@ -997,6 +998,10 @@ fn tidyBanned(file: SourceFile, errors: *Errors) void {
 
         // Style:
         .{ "usingnamespace", "explicit imports" },
+
+        // A tool compiled for the detected CPU is a cache miss on every CI
+        // runner with a different one; see `hostToolTarget` in build.zig.
+        .{ ".target = b.graph.host", "hostToolTarget" },
     };
 
     for (ban_list) |ban_item| {

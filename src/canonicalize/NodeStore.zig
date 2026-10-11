@@ -356,7 +356,9 @@ pub const SpanWithNode = extern struct {
 pub const LiteralDispatchPlan = extern struct {
     node_idx: u32,
     target_var: u32,
-    fn_var: u32,
+    /// Zero only for a proved concrete builtin numeral, which needs no
+    /// conversion signature. All deferred/custom/pattern conversions name one.
+    fn_var_plus_one: u32,
     kind_and_resolution: u32,
     pattern_context_plus_one: u32,
 
@@ -377,6 +379,11 @@ pub const LiteralDispatchPlan = extern struct {
 
     fn packKindAndResolution(kind: Kind, resolution: Resolution) u32 {
         return @backingInt(kind) | (@backingInt(resolution) << resolution_shift);
+    }
+
+    /// The conversion obligation, absent for a validated concrete builtin numeral.
+    pub fn fnVar(self: LiteralDispatchPlan) ?types.Var {
+        return if (self.fn_var_plus_one == 0) null else @fromBackingInt(@intCast(self.fn_var_plus_one - 1));
     }
 
     pub fn dispatchKind(self: LiteralDispatchPlan) Kind {
@@ -934,9 +941,10 @@ pub fn recordLiteralDispatchPlan(
     node_idx: Node.Idx,
     kind: LiteralDispatchPlan.Kind,
     target_var: types.Var,
-    fn_var: types.Var,
+    fn_var: ?types.Var,
     pattern_failure_owner: ?u32,
 ) Allocator.Error!void {
+    std.debug.assert(fn_var != null or (kind == .numeral and pattern_failure_owner == null));
     const node = store.nodes.get(node_idx);
     std.debug.assert(literalDispatchKindForTag(node.tag) == kind);
     std.debug.assert(narrowNodeTag(PatternNodeTag, node.tag) == null or pattern_failure_owner != null);
@@ -955,7 +963,7 @@ pub fn recordLiteralDispatchPlan(
     var plan = LiteralDispatchPlan{
         .node_idx = @backingInt(node_idx),
         .target_var = @backingInt(target_var),
-        .fn_var = @backingInt(fn_var),
+        .fn_var_plus_one = if (fn_var) |var_| @backingInt(var_) + 1 else 0,
         .kind_and_resolution = LiteralDispatchPlan.packKindAndResolution(kind, .unresolved),
         .pattern_context_plus_one = context_plus_one,
     };
@@ -6542,7 +6550,7 @@ test "NodeStore basic CompactWriter roundtrip" {
     const literal_plan = deserialized.literalDispatchPlanForNode(node1_idx).?;
     try testing.expectEqual(LiteralDispatchPlan.Kind.numeral, literal_plan.dispatchKind());
     try testing.expectEqual(@as(u32, 7), literal_plan.target_var);
-    try testing.expectEqual(@as(u32, 9), literal_plan.fn_var);
+    try testing.expectEqual(@as(u32, 9), @backingInt(literal_plan.fnVar().?));
     try testing.expectEqual(LiteralDispatchPlan.Resolution.builtin_direct, literal_plan.dispatchResolution());
     try testing.expectEqual(@as(?u32, 11), literal_plan.patternFailureOwner(&deserialized));
     try testing.expectEqual(@as(u32, 14), literal_plan.patternContext(&deserialized).?.equality_fn_var_plus_one);
@@ -6598,7 +6606,7 @@ test "literal dispatch plans are retired with their owning nodes" {
     try testing.expectEqual(LiteralDispatchPlan.Kind.numeral, numeral_plan.dispatchKind());
     try testing.expectEqual(@as(?u32, 17), numeral_plan.patternFailureOwner(&store));
     try testing.expectEqual(@as(u32, 3), numeral_plan.target_var);
-    try testing.expectEqual(@as(u32, 4), numeral_plan.fn_var);
+    try testing.expectEqual(@as(u32, 4), @backingInt(numeral_plan.fnVar().?));
 
     try store.replaceExprWithRuntimeError(numeral_expr, runtime_error_diagnostic);
     try testing.expectEqual(@as(usize, 0), store.literalDispatchPlans().len);
