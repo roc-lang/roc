@@ -74,6 +74,8 @@ pub const byte_encoding = @import("byte_encoding.zig");
 pub const LargeBlockAllocator = @import("LargeBlockAllocator.zig");
 /// Logical CPU counts used to size worker pools.
 pub const cpu_count = @import("cpu_count.zig");
+/// Settings only tests may change; production builds fix them at compile time.
+pub const TestSwitch = @import("test_switch.zig").TestSwitch;
 
 var default_large_blocks: LargeBlockAllocator = LargeBlockAllocator.init(defaultBackingGpa());
 
