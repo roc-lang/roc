@@ -1158,6 +1158,18 @@ const Resolver = struct {
             "compiler invariant violated: a receiver method owner reference carries its method binding",
             .{},
         );
+        // A method declared by its receiver wins over a namespace extension,
+        // so an extension naming a method the receiver's own module already
+        // declares registers nothing.
+        if (owner.moduleIdentity()) |identity| {
+            const owner_env = self.envForIdentity(self.env, identity) orelse base.invariant(
+                "compiler invariant violated: a resolved receiver type's module is reachable from the import drain",
+                .{},
+            );
+            if (owner_env.common.findIdent(self.env.getIdent(entry.methodIdent()))) |owner_method_ident| {
+                if (owner_env.lookupMethodBindingForMethodOwnerConst(ModuleEnv.MethodOwner.initSelf(owner.owner), owner_method_ident) != null) return;
+            }
+        }
         const key = ModuleEnv.MethodKey.init(owner, entry.methodIdent());
         const region = self.env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(binding.def_idx));
         const gop = try self.receiver_extensions.getOrPut(key);

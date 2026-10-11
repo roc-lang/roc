@@ -428,7 +428,7 @@ pub const RocList = extern struct {
 
         return RocList{
             .bytes = utils.allocateWithRefcount(
-                length * element_width,
+                utils.checkedByteCount(length, element_width, roc_ops),
                 elem_alignment,
                 elements_refcounted,
                 roc_ops,

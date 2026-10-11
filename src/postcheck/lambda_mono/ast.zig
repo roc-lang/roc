@@ -249,6 +249,13 @@ pub const TypedBoundary = struct {
     value: ExprId,
 };
 
+/// A row coercion preserved through lambda solving: the child keeps its own
+/// closed tag row and this expression's type is the wider row (design.md "Row
+/// Coercion Primitive"). The oracle re-tags by name; nothing is unified.
+pub const RowWiden = struct {
+    value: ExprId,
+};
+
 /// Lambda Mono expression forms.
 pub const ExprData = union(enum) {
     local: LocalId,
@@ -265,6 +272,7 @@ pub const ExprData = union(enum) {
     static_data_candidate: StaticDataCandidate,
     comptime_value: ComptimeValue,
     typed_boundary: TypedBoundary,
+    row_widen: RowWiden,
     list: Span(ExprId),
     tuple: Span(ExprId),
     record: Span(FieldExpr),

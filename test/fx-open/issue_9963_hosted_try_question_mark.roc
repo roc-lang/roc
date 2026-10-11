@@ -2,12 +2,9 @@ app [main!] { pf: platform "./platform/main.roc" }
 
 # Regression test for https://github.com/roc-lang/roc/issues/9963
 #
-# FallibleHost.str_ok! is a hosted function returning Try(Str, [HostErr(Str)])
-# whose host implementation always returns Ok("ok"). Unwrapping it with `?`
-# inside Ok(...) widens the hosted function's closed error row at the use site
-# (here with Exit(I32) from main!'s error union); the compiler must bridge that
-# widened request with an adapter instead of specializing the host ABI at the
-# widened layout, which misread Ok("ok") as Err(HostErr("ok")).
+# The platform explicitly reconstructs the host's closed error before `?`
+# combines it with Exit(I32). The host always returns Ok("ok"); preserving
+# its declared ABI must keep that value from being misread as an Err.
 
 import pf.Fallible
 import pf.Stdout
