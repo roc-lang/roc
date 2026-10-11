@@ -30304,9 +30304,24 @@ const BodyContext = struct {
         const expr_id = task.expr;
         const checked_expr = self.view.bodies.expr(expr_id);
         switch (task.form) {
+            // A conditional whose scrutinee or first condition diverges runs
+            // nothing else, so only that operand lowers; its branches may not
+            // even have the continuation's shape.
             .at_cell => |cell| switch (checked_expr.data) {
-                .match_ => |match| return requestLowerTask(self, .{ .match_task = .{ .expr_id = expr_id, .match = match, .result_cell = cell } }),
-                .if_ => |if_| return requestLowerTask(self, .{ .if_task = .{ .expr_id = expr_id, .if_ = if_, .result_cell = cell } }),
+                .match_ => |match| {
+                    if (self.checkedExprDivergesInLoweredRuntime(match.cond)) {
+                        task.finish = .{ .effect_at_cell = cell };
+                        return divergentStep(self, match.cond, .{ .at_type = try self.unitType() });
+                    }
+                    return requestLowerTask(self, .{ .match_task = .{ .expr_id = expr_id, .match = match, .result_cell = cell } });
+                },
+                .if_ => |if_| {
+                    if (if_.branches.len > 0 and self.checkedExprDivergesInLoweredRuntime(if_.branches[0].cond)) {
+                        task.finish = .{ .effect_at_cell = cell };
+                        return divergentStep(self, if_.branches[0].cond, .{ .at_type = try self.unitType() });
+                    }
+                    return requestLowerTask(self, .{ .if_task = .{ .expr_id = expr_id, .if_ = if_, .result_cell = cell } });
+                },
                 .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {
                     task.finish = .{ .effect_at_cell = cell };
                     return divergentStep(self, expr_id, .{ .at_type = try self.unitType() });
