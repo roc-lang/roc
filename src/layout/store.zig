@@ -111,7 +111,8 @@ pub const Store = struct {
     allocator: std.mem.Allocator,
 
     layouts: collections.SafeList(Layout),
-    resolved_list_layouts: std.ArrayList(?Idx),
+    /// The list layout each layout resolves to through boxes, or `Idx.none`.
+    resolved_list_layouts: std.ArrayList(Idx),
     tuple_elems: collections.SafeList(Idx),
     struct_fields: StructField.SafeMultiList,
     /// Each committed struct field's byte offset for both pointer widths,
@@ -332,7 +333,7 @@ pub const Store = struct {
         try self.rememberScratchInternKey(.bool);
         try self.resolved_list_layouts.ensureTotalCapacity(allocator, num_primitives);
         for (0..num_primitives) |_| {
-            self.resolved_list_layouts.appendAssumeCapacity(null);
+            self.resolved_list_layouts.appendAssumeCapacity(.none);
         }
         return self;
     }
@@ -547,7 +548,7 @@ pub const Store = struct {
     pub fn reserveLayout(self: *Self, layout: Layout) std.mem.Allocator.Error!Idx {
         const safe_list_idx = try self.layouts.append(self.allocator, layout);
         const idx: Idx = @fromBackingInt(@intCast(@backingInt(safe_list_idx)));
-        try self.resolved_list_layouts.append(self.allocator, self.computeResolvedListLayoutIdx(idx));
+        try self.resolved_list_layouts.append(self.allocator, self.computeResolvedListLayoutIdx(idx) orelse .none);
         return idx;
     }
 
@@ -3082,7 +3083,7 @@ pub const Store = struct {
         const ptr = self.layouts.get(@fromBackingInt(@intCast(@backingInt(idx))));
         ptr.* = layout;
         self.digest_cache.invalidateLayout(idx);
-        self.resolved_list_layouts.items[@backingInt(idx)] = self.computeResolvedListLayoutIdx(idx);
+        self.resolved_list_layouts.items[@backingInt(idx)] = self.computeResolvedListLayoutIdx(idx) orelse .none;
     }
 
     fn computeResolvedListLayoutIdx(self: *const Self, start: Idx) ?Idx {
@@ -3104,7 +3105,8 @@ pub const Store = struct {
     }
 
     pub fn resolvedListLayoutIdx(self: *const Self, layout_idx: Idx) ?Idx {
-        return self.resolved_list_layouts.items[@backingInt(layout_idx)];
+        const resolved = self.resolved_list_layouts.items[@backingInt(layout_idx)];
+        return if (resolved == Idx.none) null else resolved;
     }
 };
 

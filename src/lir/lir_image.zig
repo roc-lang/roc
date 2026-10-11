@@ -63,7 +63,7 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v41: `proc_ref` is the `LIR.LiteralValue` tag that follows `bytes_literal`.
 /// v42: wide-UTF decoding ops renumber later LowLevel ops.
 /// v43: Boxy type descriptors record rejected `is_eq` and `to_hash` declarations.
-pub const FORMAT_VERSION: u32 = 43;
+pub const FORMAT_VERSION: u32 = 44;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -434,7 +434,7 @@ pub const LayoutStoreImage = extern struct {
         return .{
             .allocator = allocator,
             .layouts = try safeListFromRef(layout_mod.Layout, base_ptr, image_size, self.layouts),
-            .resolved_list_layouts = try arrayListFromRef(?layout_mod.Idx, base_ptr, image_size, self.resolved_list_layouts),
+            .resolved_list_layouts = try arrayListFromRef(layout_mod.Idx, base_ptr, image_size, self.resolved_list_layouts),
             .tuple_elems = try safeListFromRef(layout_mod.Idx, base_ptr, image_size, self.tuple_elems),
             .struct_fields = struct_fields,
             .struct_field_offsets = try safeListFromRef(layout_mod.WidthValues(u32), base_ptr, image_size, self.struct_field_offsets),
@@ -869,7 +869,7 @@ fn serializeSidecarInto(
     const layouts: layout_mod.Store = .{
         .allocator = gpa,
         .layouts = try cloneSafeList(layout_mod.Layout, gpa, lowered.layouts.layouts),
-        .resolved_list_layouts = try cloneStdArrayList(?layout_mod.Idx, gpa, lowered.layouts.resolved_list_layouts),
+        .resolved_list_layouts = try cloneStdArrayList(layout_mod.Idx, gpa, lowered.layouts.resolved_list_layouts),
         .tuple_elems = try cloneSafeList(layout_mod.Idx, gpa, lowered.layouts.tuple_elems),
         .struct_fields = try cloneStructFields(gpa, &lowered.layouts.struct_fields),
         .struct_field_offsets = try cloneSafeList(layout_mod.WidthValues(u32), gpa, lowered.layouts.struct_field_offsets),
@@ -1873,7 +1873,7 @@ test "LIR image copies and round-trips every populated store field" {
     var layouts = layout_mod.Store{
         .allocator = gpa,
         .layouts = try h.safeList(layout_mod.Layout, source_allocator, 3, 0x40),
-        .resolved_list_layouts = .{ .items = try h.distinct(?layout_mod.Idx, source_allocator, 4, 0x50), .capacity = 4, .pointer_stability = .{} },
+        .resolved_list_layouts = .{ .items = try h.distinct(layout_mod.Idx, source_allocator, 4, 0x50), .capacity = 4, .pointer_stability = .{} },
         .tuple_elems = try h.safeList(layout_mod.Idx, source_allocator, 5, 0x60),
         .struct_fields = try h.multiList(layout_mod.StructField, source_allocator, 6, 0x70),
         .struct_field_offsets = try h.safeList(layout_mod.WidthValues(u32), source_allocator, 6, 0x74),

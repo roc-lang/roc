@@ -383,6 +383,10 @@ stages it touches; the instruction-count effect is reported in "Results".
     free for `Idx.none`. Generated code is byte-identical; `roc check` is
     217.88 G, the dev build 222.9 G, and the LLVM build 344.9 G.
 
+63. The layout store's `resolved_list_layouts` column stores `Idx` with the
+    `Idx.none` sentinel (4 bytes per layout instead of 8), and the LIR image
+    format version moves to 44 for this column and fix 62's wider `Layout`.
+
 ## Findings from profiling
 
 These were found by profiling the ReleaseFast compiler with
@@ -1670,7 +1674,7 @@ X: widen the packed `Layout` so its indices are 32 bits (a 64-bit packed layout,
 - category C/E; runs per layout reserve and per `updateLayout`; impact low; risk low
 - Finding: the column stores `?Idx` (optional u32 → 8 bytes) per layout and `computeResolvedListLayoutIdx` walks the box chain on each `reserveLayout` and each `updateLayout` (the same raw slot is updated several times during a commit, recomputing each time).
 - Fix: `Idx` with a `none` sentinel (4 bytes), compute once at the end of each commit for the touched range.
-- Status: open
+- Status: partly fixed (fix 63): the column stores `Idx` with the `Idx.none` sentinel; it is still recomputed per reserve and update
 
 ### src/layout/digest.zig:222-235: `DigestCache.get` spins on a mutex per query and re-points `store` each call
 - category H; runs per `contentDigest` call (every RC helper symbol, cache key, erased-callable name); impact low-medium (parallel backends); risk low
