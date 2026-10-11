@@ -728,6 +728,9 @@ widened_use_tags: std.ArrayListUnmanaged(types_mod.Tag) = .empty,
 /// finalize), so `propagateValueRowsToWidenedUses` carries them into the
 /// copies once constraints settle.
 widened_use_rows: std.ArrayListUnmanaged(WidenedUseRow) = .empty,
+/// Every call recorded as a row-coerced callee, with the range of
+/// `widened_use_rows` its copy re-opened (`settleUnwidenedCallees`).
+widened_callees: std.ArrayListUnmanaged(WidenedCallee) = .empty,
 /// The annotation whose definition's body check is about to generate it; its
 /// implicitly opened rows are bounded for the rest of that body check
 /// (`beginBoundedAnnotationRows`).
@@ -3904,6 +3907,7 @@ pub fn deinit(self: *Self) void {
     self.widened_use_copies.deinit(self.gpa);
     self.widened_use_tags.deinit(self.gpa);
     self.widened_use_rows.deinit(self.gpa);
+    self.widened_callees.deinit(self.gpa);
     self.annotation_implicit_open_exts.deinit(self.gpa);
     self.bounded_row_marks.deinit(self.gpa);
     self.weak_value_implicit_open_ext_ranges.deinit(self.gpa);
@@ -20330,7 +20334,13 @@ fn widenedCalleeUseVar(
 /// `fn_var` and record the call for checked-body construction
 /// (`ModuleEnv.RowCoercedCallee`).
 fn widenRecordedCalleeResult(self: *Self, expr_idx: CIR.Expr.Idx, fn_var: Var, env: *Env, region: Region) std.mem.Allocator.Error!?Var {
+    const rows_start: u32 = @intCast(self.widened_use_rows.items.len);
     const widened = try self.widenedFunctionResultUseVar(fn_var, env, region) orelse return null;
+    try self.widened_callees.append(self.gpa, .{
+        .expr_idx = expr_idx,
+        .rows_start = rows_start,
+        .rows_end = @intCast(self.widened_use_rows.items.len),
+    });
     const ret = switch (self.types.resolveVar(fn_var).desc.content) {
         .structure => |flat| switch (flat) {
             .fn_pure, .fn_effectful, .fn_unbound => |func| func.ret,
@@ -20340,6 +20350,51 @@ fn widenRecordedCalleeResult(self: *Self, expr_idx: CIR.Expr.Idx, fn_var: Var, e
     };
     try self.cir.recordRowCoercedCallee(ModuleEnv.nodeIdxFrom(expr_idx), fn_var, ret);
     return widened;
+}
+
+/// A recorded row-coerced callee and the rows its copy re-opened.
+const WidenedCallee = struct {
+    expr_idx: CIR.Expr.Idx,
+    rows_start: u32,
+    rows_end: u32,
+};
+
+/// A call whose re-opened result rows gained no tag beyond the function's own
+/// rows did not widen anything, so it is an ordinary call: its rows close again
+/// and its record is dropped, leaving no coercion to lower around the call
+/// (and nothing to stand between the call and inlining or fusion).
+fn settleUnwidenedCallees(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    for (self.widened_callees.items) |callee| {
+        const rows = self.widened_use_rows.items[callee.rows_start..callee.rows_end];
+        const widened = for (rows) |pair| {
+            if (try self.useRowListsExtraTag(pair)) break true;
+        } else false;
+        if (widened) continue;
+        for (rows) |pair| {
+            const tail = self.tagRowTail(pair.use_row);
+            const resolved = self.types.resolveVar(tail);
+            if (resolved.desc.content != .flex) continue;
+            const empty = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, self.getRegionAt(pair.use_row));
+            _ = try self.unify(tail, empty, env);
+        }
+        self.cir.removeRowCoercedCallee(ModuleEnv.nodeIdxFrom(callee.expr_idx));
+    }
+}
+
+/// Whether a use's copy of a row lists a tag the value's row does not.
+fn useRowListsExtraTag(self: *Self, pair: WidenedUseRow) std.mem.Allocator.Error!bool {
+    const tags_start = self.widened_use_tags.items.len;
+    defer self.widened_use_tags.shrinkRetainingCapacity(tags_start);
+    try self.appendRowTags(pair.value_row);
+    const value_end = self.widened_use_tags.items.len;
+    try self.appendRowTags(pair.use_row);
+    const value_tags = self.widened_use_tags.items[tags_start..value_end];
+    for (self.widened_use_tags.items[value_end..]) |use_tag| {
+        for (value_tags) |value_tag| {
+            if (value_tag.name.eql(use_tag.name)) break;
+        } else return true;
+    }
+    return false;
 }
 
 /// Whether `var_` resolves to a function type.
@@ -36702,6 +36757,7 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
     while (try self.propagateValueRowsToWidenedUses(env)) {
         try self.finalizeGeneratedCodecConstraintsToQuiescence(env, scope == .module);
     }
+    try self.settleUnwidenedCallees(env);
     try self.resolvePendingTupleAccesses(env, true);
     try self.checkAllConstraints(env);
     try self.checkDefaultRestrictions();

@@ -4528,6 +4528,15 @@ pub fn recordRowCoercedCallee(self: *Self, node_idx: Node.Idx, fn_var: types_mod
     );
 }
 
+/// Drop the row-coerced callee record for the lookup at `node_idx`: the call
+/// widened nothing, so it is an ordinary call.
+pub fn removeRowCoercedCallee(self: *Self, node_idx: Node.Idx) void {
+    const entries = self.row_coerced_callees.items.items;
+    const slot = sortedNodeSlot(RowCoercedCallee, entries, @backingInt(node_idx));
+    if (slot >= entries.len or entries[slot].node_idx != @backingInt(node_idx)) return;
+    _ = self.row_coerced_callees.items.orderedRemove(slot);
+}
+
 /// The row-coerced callee record for the lookup at `node_idx`, if checking
 /// recorded one (`RowCoercedCallee`).
 pub fn rowCoercedCallee(self: *const Self, node_idx: Node.Idx) ?RowCoercedCallee {
