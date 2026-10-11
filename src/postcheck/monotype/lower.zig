@@ -23682,6 +23682,10 @@ const BodyContext = struct {
         settled_node_uninhabited: [2]collections.DenseMapUnmanaged(NodeId, bool) = .{ .empty, .empty },
         explicit_binding_memo: collections.DenseMapUnmanaged(checked.CheckedPatternId, bool) = .empty,
 
+        /// The chunk-directory span past which a released map gives up its
+        /// pages instead of keeping them for the next body.
+        const retained_chunks = 256;
+
         fn deinit(self: *Memos, allocator: Allocator) void {
             self.inhabitation_entered.deinit(allocator);
             for (&self.settled_node_uninhabited) |*settled| settled.deinit(allocator);
@@ -23702,9 +23706,12 @@ const BodyContext = struct {
             .settled_node_uninhabited = self.settled_node_uninhabited,
             .explicit_binding_memo = self.explicit_binding_memo,
         };
-        memos.inhabitation_entered.clearRetainingCapacity();
-        for (&memos.settled_node_uninhabited) |*settled| settled.clearRetainingCapacity();
-        memos.explicit_binding_memo.clearRetainingCapacity();
+        // A pooled map keeps the pages of a body-sized key range, not every
+        // page any body ever touched.
+        const allocator = self.builder.allocator;
+        memos.inhabitation_entered.clearRetainingAtMost(allocator, Memos.retained_chunks);
+        for (&memos.settled_node_uninhabited) |*settled| settled.clearRetainingAtMost(allocator, Memos.retained_chunks);
+        memos.explicit_binding_memo.clearRetainingAtMost(allocator, Memos.retained_chunks);
         self.builder.body_memo_pool.append(self.builder.allocator, memos) catch memos.deinit(self.builder.allocator);
     }
 

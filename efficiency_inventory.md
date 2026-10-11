@@ -30,13 +30,14 @@ measured with every fix below applied:
 
 | Workload | Baseline | This branch | Change |
 | --- | ---: | ---: | ---: |
-| `roc check -j1 package/main.roc` (roc-pg) | 266.28 G | 213.75 G | -19.7% |
+| `roc check -j1 package/main.roc` (roc-pg) | 266.28 G | 214.18 G | -19.6% |
 | `roc build --opt=dev examples/query.roc` | 244.83 G | 220.49 G | -9.9% |
 | `roc build examples/query.roc` (LLVM) | 524.75 G | 337.97 G | -35.6% |
 | `roc test test/fx/issue8826_full.roc` | 141.4 M | 139.9 M | -1.1% |
 
 Peak resident memory (`/usr/bin/time -f %M`) of `roc check -j1` on roc-pg:
-3.16 GB on the baseline, 2.66 GB on this branch (-16%).
+3.09-3.15 GB on the baseline, 2.65 GB on this branch (about -15%), each the
+minimum of five runs.
 
 Validation: every `run-test-zig-*` step except MiniCI's, the snapshot check,
 the lint gates, and all CLI suites (platforms, echo, subcommands, glue: 2198
@@ -464,6 +465,16 @@ stages it touches; the instruction-count effect is reported in "Results".
     page allocations were the largest allocator caller in the LLVM build.
     Generated code is byte-identical; `roc check` is 213.75 G (-0.4%), the
     dev build 220.49 G (-0.4%), the LLVM build 337.97 G (-0.35%).
+
+73. Memory regression found and fixed: fix 58's body-memo pool kept every
+    page its maps ever touched, since a pooled map keeps its pages when
+    cleared and successive bodies touch far-apart node ids, so the pooled
+    maps grew toward the whole node domain. Bisecting peak memory over
+    rebuilt commits (minimum of five runs each) put fix 45 at 2.61 GB, fix 57
+    at 2.64 GB, and fix 58 at 2.78 GB. A released memo map now keeps its
+    storage only while its chunk directory spans at most 256 chunks
+    (`DenseMap.clearRetainingAtMost`). Peak memory is 2.65 GB again, against
+    3.09-3.15 GB on the baseline; `roc check` is 214.18 G (+0.2%).
 
 ## Findings from profiling
 

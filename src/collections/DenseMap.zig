@@ -212,6 +212,17 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
             self.values.clearRetainingCapacity();
         }
 
+        /// Empty the map, keeping its storage only while its chunk directory
+        /// spans at most `max_chunks` chunks; a map kept for reuse that once
+        /// reached far-apart ids would otherwise hold their pages forever.
+        pub fn clearRetainingAtMost(self: *Self, max_chunks: usize) void {
+            if (self.sparse_chunks.items.len > max_chunks) {
+                self.clearAndFree();
+            } else {
+                self.clearRetainingCapacity();
+            }
+        }
+
         pub fn clearAndFree(self: *Self) void {
             self.freeChunks();
             self.chunk_base = 0;
@@ -510,6 +521,12 @@ pub fn DenseMapUnmanaged(comptime K: type, comptime V: type) type {
 
         pub fn clearAndFree(self: *Self, gpa: Allocator) void {
             self.lend(gpa).clearAndFree();
+        }
+
+        /// Empty the map, keeping its storage only while its chunk directory
+        /// spans at most `max_chunks` chunks.
+        pub fn clearRetainingAtMost(self: *Self, gpa: Allocator, max_chunks: usize) void {
+            self.lend(gpa).clearRetainingAtMost(max_chunks);
         }
 
         pub fn iterator(self: *Self) Iterator {
