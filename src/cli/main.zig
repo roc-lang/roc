@@ -192,11 +192,12 @@ const CliBuildEnvOptions = struct {
     timings: bool = false,
     resolution_config: compile.package_resolution.Config = .{},
     track_watch_inputs: bool = false,
-    /// Identity-only synthetic marking for staged default-app roots (check
-    /// sites). Sites that also need diagnostics remapped call
-    /// `setSyntheticRootSourceMappingWithLineOffset` themselves, which
-    /// implies these identities.
-    synthetic_default_app: bool = false,
+    /// The user's file, when the root is a staged default-app copy of it
+    /// (check sites): marks the root's synthetic identity and names the
+    /// user's file in crash reports. Sites that also need diagnostics
+    /// remapped call `setSyntheticRootSourceMappingWithLineOffset`
+    /// themselves, which implies both.
+    synthetic_default_app: ?[]const u8 = null,
     source_dir_override: ?[]const u8 = null,
     post_check_publication_mode: compile.build.PostCheckPublicationMode = .executable_artifacts,
     runtime_lowering: ?compile.build.RuntimeLoweringConfig = null,
@@ -232,7 +233,8 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
     build_env.setWatchInputTracking(opts.track_watch_inputs);
     build_env.setPostCheckPublicationMode(opts.post_check_publication_mode);
     if (opts.runtime_lowering) |config| build_env.setRuntimeLowering(config);
-    if (opts.synthetic_default_app) {
+    if (opts.synthetic_default_app) |user_path| {
+        build_env.setStagedEntryUserPath(user_path);
         // Staged default-app roots and their synthesized platform live in a
         // per-invocation temp dir; identity must be the stable synthetic one
         // so cache keys and nominal identity match across runs and pipelines.
@@ -18076,7 +18078,7 @@ fn checkFileWithBuildEnvPreserved(
     resolution_config: compile.package_resolution.Config,
     source_dir_override: ?[]const u8,
     track_watch_inputs: bool,
-    synthetic_default_app: bool,
+    synthetic_default_app: ?[]const u8,
     reporter: ?*progress.Reporter,
 ) CheckFileWithBuildEnvPreservedError!CheckResultWithBuildEnv {
     const trace = tracy.trace(@src());
@@ -18216,7 +18218,7 @@ fn checkFileWithBuildEnv(
     max_threads: ?usize,
     resolution_config: compile.package_resolution.Config,
     source_dir_override: ?[]const u8,
-    synthetic_default_app: bool,
+    synthetic_default_app: ?[]const u8,
     reporter: ?*progress.Reporter,
 ) CheckFileWithBuildEnvPreservedError!CheckResult {
     const trace = tracy.trace(@src());
@@ -18431,7 +18433,7 @@ fn rocCheckDefaultApp(
         args.max_threads,
         resolutionConfigFromLimits(args.resolve_limits),
         original_source_dir,
-        true,
+        args.path,
         reporter,
     );
     errdefer check_result.deinit(ctx.gpa);
@@ -18487,7 +18489,7 @@ fn rocCheckDefaultAppPreserved(
         resolutionConfigFromLimits(args.resolve_limits),
         original_source_dir,
         track_watch_inputs,
-        true,
+        args.path,
         reporter,
     );
     errdefer result_with_env.deinit(ctx.gpa);
@@ -18596,7 +18598,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
             resolutionConfigFromLimits(args.resolve_limits),
             null,
             true,
-            false,
+            null,
             &reporter,
         ) catch |err| {
             reporter.fail();
@@ -18635,7 +18637,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
             args.max_threads,
             resolutionConfigFromLimits(args.resolve_limits),
             null,
-            false,
+            null,
             &reporter,
         ) catch |err| {
             reporter.fail();
@@ -19035,7 +19037,7 @@ fn bumpCheckSide(
         resolutionConfigFromLimits(args.resolve_limits),
         null,
         false,
-        false,
+        null,
         null,
     ) catch |err| {
         try handleProcessFileError(err, stderr, path);
@@ -19519,7 +19521,7 @@ fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
         resolutionConfigFromLimits(args.resolve_limits),
         null,
         false,
-        false,
+        null,
         null,
     ) catch |err| {
         return handleProcessFileError(err, stderr, args.path);

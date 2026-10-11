@@ -1278,6 +1278,9 @@ pub const Coordinator = struct {
     /// Human release/nightly version for source header pins, separate from
     /// the embedder's cache namespace above.
     source_pin_version: ?[]const u8 = null,
+    /// The user's file for an entry module the CLI compiles from a staged
+    /// copy (a default app), so crash reports name the user's file.
+    staged_entry: ?StagedEntry = null,
 
     /// Optional cache manager for transparent checked-module disk caching.
     cache_manager: ?*CacheManager,
@@ -3111,21 +3114,35 @@ pub const Coordinator = struct {
         return self.total_remaining == 0 and self.inflight.load(.acquire) == 0 and self.task_channel.isEmpty();
     }
 
+    /// An entry module compiled from a staged copy of the user's file.
+    pub const StagedEntry = struct {
+        /// The staged copy's absolute path, as module tasks carry it.
+        staged_path: []const u8,
+        /// The user's file.
+        user_path: []const u8,
+    };
+
+    /// The path a crash report names for a module at `path`.
+    fn crashReportPath(self: *const Coordinator, path: []const u8) []const u8 {
+        const staged = self.staged_entry orelse return path;
+        return if (std.mem.eql(u8, path, staged.staged_path)) staged.user_path else path;
+    }
+
     /// Execute a task inline with explicit worker allocators.
     fn executeTaskInline(self: *Coordinator, task: WorkerTask, allocators: WorkerTaskAllocators) Allocator.Error!WorkerResult {
         switch (task) {
             .parse => |t| {
-                const ice = base.ice_context.enter(.{ .phase = .parse, .module_name = t.module_name, .module_path = t.path });
+                const ice = base.ice_context.enter(.{ .phase = .parse, .module_name = t.module_name, .module_path = self.crashReportPath(t.path) });
                 defer ice.leave();
                 return self.executeParse(t, allocators);
             },
             .canonicalize => |t| {
-                const ice = base.ice_context.enter(.{ .phase = .canonicalize, .module_name = t.module_name, .module_path = t.path });
+                const ice = base.ice_context.enter(.{ .phase = .canonicalize, .module_name = t.module_name, .module_path = self.crashReportPath(t.path) });
                 defer ice.leave();
                 return self.executeCanonicalize(t, allocators);
             },
             .type_check => |t| {
-                const ice = base.ice_context.enter(.{ .phase = .type_check, .module_name = t.module_name, .module_path = t.path });
+                const ice = base.ice_context.enter(.{ .phase = .type_check, .module_name = t.module_name, .module_path = self.crashReportPath(t.path) });
                 defer ice.leave();
                 return self.executeTypeCheck(t, allocators);
             },
