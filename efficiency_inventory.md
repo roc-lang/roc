@@ -213,6 +213,11 @@ stages it touches; the instruction-count effect is reported in "Results".
     239.5 G to 224.4 G, and the LLVM build from 367.2 G to 352.3 G; the
     generated code is byte-identical.
 
+39. `src/types`: the store's frozen-class anchors and `TypeWriter`'s five
+    var-keyed maps are `DenseMap`s, a nominal opening's rigid substitutions
+    are a stack slice searched linearly, and `detachOccurrence` reuses store
+    scratch instead of reserving a whole-store-sized buffer per detach.
+
 ## Findings from profiling
 
 These were found by profiling the ReleaseFast compiler with
@@ -259,13 +264,13 @@ reading code, and were not in the audit above.
 - category B; runs `put` per frozen class; `get` on every write to a frozen class (`isolateFromFrozenClassSlow`, line 882); `count()` check on every write …; impact low-medium (one hash per frozen-class write; the map is …; risk low
 - Finding: the key is the raw backing int of `DescStore.Idx` (a dense store-local id; the lint is bypassed by storing it as `u32`). This is exactly the "hash a dense id" pattern design.md forbids. Frozen classes are the ground-instance replay classes, so the map is populated once per settled ground dispatch instance per module.
 - Fix: `collections.DenseMap(DescStore.Idx, Var)` (paged, cleared in O(live)). `frozenAnchors()` iteration (line 853) becomes DenseMap iteration; `thawFrozenClasses` (line 859-866) uses the live list. No semantics change.
-- Status: open
+- Status: fixed (fix 39)
 
 ### src/types/store.zig:2043: `detachOccurrence` allocates and scans the ENTIRE slot store per detach
 - category E, A; runs per write aimed at a member of a frozen class (`isolateFromFrozenClassSlow` line 889), per `union_` that merges a frozen class (lines 1999, 2011), per …; impact high (quadratic in module size when frozen classes are …; risk medium
 - Finding: lines 2048-2057 allocate `class_members` with capacity `self.len()` (the whole store) and loop `raw_var` from 0 to `self.len()` calling `resolveStorageRoot` on EVERY variable to find the members of one class. A module with 500k vars pays 500k resolves and a 2MB allocation per detach. `isolateFromFrozenClassSlow` is reached on any write to a variable that unified into a frozen (ground replay) class, which happens …
 - Fix: track class membership explicitly: either a per-class intrusive circular list (`next_member: Var` column parallel to slots, O(1) to splice, O(members) to enumerate) or restrict the detach to the occurrence's own storage subtree (children pointing at it) by walking only vars whose redirect target is the occurrence. If an explicit member list is undesirable, at minimum keep a reusable `class_members` buffer in the …
-- Status: open
+- Status: partly fixed (fix 39): the member buffer is reused store scratch grown to the class size; the whole-store scan stays, since frozen-class detaches drew no samples in any profile and an explicit member list would cost a column on every variable
 
 ### src/types/instantiate.zig:890: fresh `AutoHashMapUnmanaged(Var,bool)` + three fresh containers per instantiation
 - category A, B; runs per `instantiateVar` / `instantiateTypeScheme` / `instantiateDeferredCallable` call: i.e. per use of any polymorphic binding, per nominal backing open, per …; impact high (every instantiation pays ~4 mallocs + ~4 frees + hash …; risk low
@@ -277,7 +282,7 @@ reading code, and were not in the audit above.
 - category A; runs per `openNominalBacking` call (every time the checker needs a nominal's backing: unify against nominal, field access through nominal, method dispatch, derive); impact medium (1 alloc + hash growth per backing open; backing …; risk low
 - Finding: lines 96-107 clear the caller's `var_map` DenseMap and then build a fresh `std.AutoHashMapUnmanaged(Ident.Idx, Var)` of formal-name -> arg, `deinit` at return. Formal counts are tiny (0-4), so a hash map is overkill: a linear scan of a small slice would be faster than hashing, and the allocation is pure overhead.
 - Fix: pass `formals`/`args` slices (already available) and have `RigidBehavior.substitute_rigids_fresh` accept a `[]const struct{name: Ident.Idx, var_: Var}` pair-slice with linear lookup, or keep a reusable `ArrayListUnmanaged` of pairs in `Scratch`. Verify with nominal instantiation tests.
-- Status: open
+- Status: fixed (fix 39)
 
 ### src/types/instantiate.zig:137: `Scratch.pending_constraints` buffers 88-byte constraints by value
 - category D; runs per instantiation of any var carrying constraints; impact low-medium; risk low
@@ -289,7 +294,7 @@ reading code, and were not in the audit above.
 - category B; runs per rendered type (every diagnostic, every LSP hover, every snapshot); `occurrence_counts` is filled by a full walk per root; impact low-medium in `roc check` of a clean program (only …; risk low
 - Finding: `seen_set`, `seen_count_set`, `occurrence_counts`, `ext_seen`, `flex_var_names_map` are all keyed by `Var`, a dense store-local id. The file already notes the cost: "a single deep render leaves these maps holding tens of thousands of slots, and `clearRetainingCapacity` walks all of that metadata every time" and adds `clearMapIfUsed` as a mitigation. That is the symptom of hashing a dense id.
 - Fix: `collections.DenseMap(Var, void)` / `DenseMap(Var, u32)` / `DenseMap(Var, FlexVarNameRange)` (paged; clear is O(live)). The membership sets that mirror a stack (`seen`/`seen_set`) could be a single `ScopedBitSet`.
-- Status: open
+- Status: fixed (fix 39)
 
 ### src/types/generalize.zig:156: `VarPool.ranks` is an `ArrayList(ArrayList(Var))`, one heap list per rank
 - category F; runs per rank push/pop (per let-nesting level entered), `mergeFrom` copies rank by rank; impact low-medium; risk medium (the out-of-order `addVarToRank` …
@@ -301,7 +306,7 @@ reading code, and were not in the audit above.
 - category G, A; runs same as detachOccurrence; impact covered above; risk covered above
 - Finding: even when the class has 2 members the scratch list reserves `len()` entries (4 bytes x every var in the module) and frees it on return.
 - Fix: covered by the detachOccurrence fix.
-- Status: open
+- Status: fixed (fix 39)
 
 ### src/check/Check.zig:130-1352: ~95 `std.AutoHashMap(Unmanaged)` fields keyed by dense ids (`Var`, `CIR.Expr.Idx`, `CIR.Pattern.Idx`, `CIR.Def.Idx`, `CIR.Statement.Idx`, `CIR.Annotation.Idx`, `CIR.TypeAnno.Idx`, `u32` node ids)
 - category B; runs per-module state; individual maps are hit per expression / per var / per dispatch edge (see hot list below); impact high in aggregate (this is the dominant allocation/hashing …; risk low per map; medium for iterated maps …

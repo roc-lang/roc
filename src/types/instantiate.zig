@@ -95,15 +95,25 @@ pub fn instantiateNominalBacking(
     // always rebound such rigids by name, and the opening operation must
     // agree with it).
     var_map.clearRetainingCapacity();
-    var rigid_subs = std.AutoHashMapUnmanaged(Ident.Idx, Var){};
-    defer rigid_subs.deinit(store.gpa);
+    // Declarations have a handful of formals; their names are searched
+    // linearly, from a stack buffer when they fit.
+    var inline_rigid_subs: [16]Instantiator.RigidSub = undefined;
+    const rigid_sub_buffer = if (formals.len <= inline_rigid_subs.len)
+        inline_rigid_subs[0..formals.len]
+    else
+        try store.gpa.alloc(Instantiator.RigidSub, formals.len);
+    defer if (formals.len > inline_rigid_subs.len) store.gpa.free(rigid_sub_buffer);
+    var rigid_sub_count: usize = 0;
     for (formals, args) |formal, arg| {
         const formal_resolved = store.resolveVar(formal);
         try var_map.put(formal_resolved.var_, arg);
         // A malformed header arg (underscore/malformed anno) is err, not
         // rigid; the template cannot reference it by name.
         switch (formal_resolved.desc.content) {
-            .rigid => |rigid| try rigid_subs.put(store.gpa, rigid.name, arg),
+            .rigid => |rigid| {
+                rigid_sub_buffer[rigid_sub_count] = .{ .name = rigid.name, .var_ = arg };
+                rigid_sub_count += 1;
+            },
             .flex, .alias, .field_presence, .structure, .err => {},
         }
     }
@@ -117,7 +127,7 @@ pub fn instantiateNominalBacking(
         // Rigids naming a formal take that formal's arg; any other rigid
         // (impossible in a well-formed template) stays rigid rather than
         // silently flexing.
-        .rigid_behavior = .{ .substitute_rigids_fresh = &rigid_subs },
+        .rigid_behavior = .{ .substitute_rigids_fresh = rigid_sub_buffer[0..rigid_sub_count] },
     };
     const minted_start: u32 = @intCast(store.len());
     const opened = try instantiator.instantiateVar(decl.backing);
@@ -492,6 +502,14 @@ pub const Instantiator = struct {
         ignore_rank,
     };
 
+    /// A formal's rigid name and the argument it stands for.
+    pub const RigidSub = struct { name: Ident.Idx, var_: Var };
+
+    fn rigidSub(subs: []const RigidSub, name: Ident.Idx) ?Var {
+        for (subs) |sub| if (sub.name == name) return sub.var_;
+        return null;
+    }
+
     /// The mode to use when instantiating rigids
     pub const RigidBehavior = union(enum) {
         /// In this mode, all rigids are instantiated as new flex vars
@@ -511,7 +529,7 @@ pub const Instantiator = struct {
 
         /// In this mode, rigids present in the provided map are substituted,
         /// and any other rigids are instantiated as fresh rigid variables.
-        substitute_rigids_fresh: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
+        substitute_rigids_fresh: []const RigidSub,
 
         /// Expected shape context substitutes declaration parameters with
         /// owned context copies while flexing other rigid leaves.
@@ -1132,7 +1150,7 @@ pub const Instantiator = struct {
                             return true;
                         },
                         .substitute_rigids_fresh => |rigid_subs| {
-                            if (rigid_subs.get(rigid.name)) |existing_var| {
+                            if (rigidSub(rigid_subs, rigid.name)) |existing_var| {
                                 try self.var_map.put(resolved_var, existing_var);
                                 try machine.value_stack.append(self.store.gpa, existing_var);
                                 return true;

@@ -51,20 +51,20 @@ seen: std.array_list.Managed(Var),
 /// Membership half of `seen`. The stack keeps the order pops need; this
 /// answers "is it enclosing?" without a scan, which a spine deep enough to
 /// need frames also needs.
-seen_set: std.AutoHashMap(Var, void),
+seen_set: collections_mod.DenseMap(Var, void),
 /// Suspended steps of the rendering walk, innermost last. The walk descends
 /// on this heap stack rather than the native one, so render depth is bounded
 /// only by available memory.
 frames: std.array_list.Managed(Frame),
 seen_count_var_occurrences: std.array_list.Managed(Var),
 /// Membership half of `seen_count_var_occurrences`.
-seen_count_set: std.AutoHashMap(Var, void),
+seen_count_set: collections_mod.DenseMap(Var, void),
 /// Suspended steps of the occurrence-counting walk, innermost last.
 count_frames: std.array_list.Managed(CountFrame),
 /// Occurrence counts of every var reachable from `occurrence_counts_root`,
 /// from one counting walk. Naming asks about many vars of one root, so each
 /// root is counted once per write.
-occurrence_counts: std.AutoHashMap(Var, u32),
+occurrence_counts: collections_mod.DenseMap(Var, u32),
 occurrence_counts_root: ?Var = null,
 /// Children collected for the occurrence-counting frames in flight, one
 /// contiguous run per frame.
@@ -76,10 +76,10 @@ occurrence_counts_skipped_constraints: ?Var = null,
 /// Extension vars already reached by the row collection currently running.
 /// Row collection runs to completion without rendering anything, so one
 /// buffer serves every row node.
-ext_seen: std.AutoHashMap(Var, void),
+ext_seen: collections_mod.DenseMap(Var, void),
 next_name_index: u32,
 name_counters: std.EnumMap(TypeContext, u32),
-flex_var_names_map: std.AutoHashMap(Var, FlexVarNameRange),
+flex_var_names_map: collections_mod.DenseMap(Var, FlexVarNameRange),
 flex_var_names: std.array_list.Managed(u8),
 static_dispatch_constraints: std.array_list.Managed(ConstraintWithDispatcher),
 static_dispatch_constraints_tmp: std.array_list.Managed(StaticDispatchTmp),
@@ -280,17 +280,17 @@ pub fn initFromParts(
         .idents = idents,
         .buf = try std.array_list.Managed(u8).initCapacity(gpa, 32),
         .seen = try std.array_list.Managed(Var).initCapacity(gpa, 16),
-        .seen_set = std.AutoHashMap(Var, void).init(gpa),
+        .seen_set = .init(gpa),
         .frames = try std.array_list.Managed(Frame).initCapacity(gpa, 16),
         .seen_count_var_occurrences = try std.array_list.Managed(Var).initCapacity(gpa, 16),
-        .seen_count_set = std.AutoHashMap(Var, void).init(gpa),
+        .seen_count_set = .init(gpa),
         .count_frames = try std.array_list.Managed(CountFrame).initCapacity(gpa, 16),
-        .occurrence_counts = std.AutoHashMap(Var, u32).init(gpa),
+        .occurrence_counts = .init(gpa),
         .count_pending = try std.array_list.Managed(Var).initCapacity(gpa, 16),
-        .ext_seen = std.AutoHashMap(Var, void).init(gpa),
+        .ext_seen = .init(gpa),
         .next_name_index = 0,
         .name_counters = std.EnumMap(TypeContext, u32).init(.{}),
-        .flex_var_names_map = std.AutoHashMap(Var, FlexVarNameRange).init(gpa),
+        .flex_var_names_map = .init(gpa),
         .flex_var_names = try std.array_list.Managed(u8).initCapacity(gpa, 32),
         .static_dispatch_constraints = try std.array_list.Managed(ConstraintWithDispatcher).initCapacity(gpa, 32),
         .static_dispatch_constraints_tmp = try std.array_list.Managed(StaticDispatchTmp).initCapacity(gpa, 32),
@@ -344,12 +344,12 @@ pub fn reset(self: *TypeWriter) void {
     self.seen_count_var_occurrences.clearRetainingCapacity();
     self.count_frames.clearRetainingCapacity();
     self.count_pending.clearRetainingCapacity();
-    clearMapIfUsed(Var, void, &self.seen_set);
-    clearMapIfUsed(Var, void, &self.seen_count_set);
-    clearMapIfUsed(Var, u32, &self.occurrence_counts);
+    self.seen_set.clearRetainingCapacity();
+    self.seen_count_set.clearRetainingCapacity();
+    self.occurrence_counts.clearRetainingCapacity();
     self.occurrence_counts_root = null;
-    clearMapIfUsed(Var, void, &self.ext_seen);
-    clearMapIfUsed(Var, FlexVarNameRange, &self.flex_var_names_map);
+    self.ext_seen.clearRetainingCapacity();
+    self.flex_var_names_map.clearRetainingCapacity();
     self.flex_var_names.clearRetainingCapacity();
     self.static_dispatch_constraints.clearRetainingCapacity();
     self.static_dispatch_constraints_tmp.clearRetainingCapacity();
@@ -368,16 +368,6 @@ pub fn reset(self: *TypeWriter) void {
 /// growth of the store could invalidate.
 fn varAt(self: *const TypeWriter, range: Var.SafeList.Range, idx: u32) Var {
     return self.types.vars.get(@fromBackingInt(@intCast(@backingInt(range.start) + idx))).*;
-}
-
-/// Empty a map without paying for its capacity when it is already empty.
-/// One writer serves a whole module—the snapshotter renders a string per node
-/// and reporting renders a type per diagnostic—so a single deep render leaves
-/// these maps holding tens of thousands of slots, and `clearRetainingCapacity`
-/// walks all of that metadata every time. A walk that runs to completion
-/// drains its own sets, so the usual entry finds nothing to drop.
-fn clearMapIfUsed(comptime K: type, comptime V: type, map: *std.AutoHashMap(K, V)) void {
-    if (map.count() != 0) map.clearRetainingCapacity();
 }
 
 fn hasSeenVar(self: *const TypeWriter, var_: Var) bool {
@@ -1431,7 +1421,7 @@ pub fn writeFlexVarName(self: *TypeWriter, writer: *ByteWrite, var_: Var, contex
 fn countVarOccurrences(self: *TypeWriter, search_var: Var, root_var: Var) std.mem.Allocator.Error!usize {
     if (self.occurrence_counts_root != root_var or self.occurrence_counts_skipped_constraints != self.count_skips_own_constraints) {
         self.occurrence_counts_root = null;
-        clearMapIfUsed(Var, u32, &self.occurrence_counts);
+        self.occurrence_counts.clearRetainingCapacity();
         try self.countAllOccurrences(root_var);
         self.occurrence_counts_root = root_var;
         self.occurrence_counts_skipped_constraints = self.count_skips_own_constraints;
@@ -1451,7 +1441,7 @@ fn countAllOccurrences(self: *TypeWriter, root_var: Var) std.mem.Allocator.Error
     self.seen_count_var_occurrences.clearRetainingCapacity();
     self.count_frames.clearRetainingCapacity();
     self.count_pending.clearRetainingCapacity();
-    clearMapIfUsed(Var, void, &self.seen_count_set);
+    self.seen_count_set.clearRetainingCapacity();
 
     // An aborted count leaves its own sets behind; draining them here keeps
     // the entry above free for every later naming decision.
@@ -1459,7 +1449,7 @@ fn countAllOccurrences(self: *TypeWriter, root_var: Var) std.mem.Allocator.Error
         self.seen_count_var_occurrences.clearRetainingCapacity();
         self.count_frames.clearRetainingCapacity();
         self.count_pending.clearRetainingCapacity();
-        clearMapIfUsed(Var, void, &self.seen_count_set);
+        self.seen_count_set.clearRetainingCapacity();
     }
 
     if (!try self.countRequest(root_var)) {
