@@ -3824,6 +3824,26 @@ const SpecJobTaskBuffers = struct {
 
 /// Caller-owned root task storage lets unordered executor completion be
 /// validated before any ordered coordinator commit begins.
+/// One template root's function type, sealed in its lane's workspace epoch.
+const RootTypeShard = struct {
+    worker_id: SpecJobWorkerId,
+    commit_domain: *SpecJobCommitDomain,
+    store_epoch: SpecJobStoreEpoch,
+    fn_ty: Type.TypeId,
+};
+
+const RootTypeTaskContext = struct {
+    inputs: *const SpecJobWorkerInputs,
+    source_module: checked.ModuleId,
+    template: names.ProcTemplate,
+    checked_ty: checked.CheckedTypeId,
+    request_index: usize,
+    shard: ?RootTypeShard = null,
+    failed: bool = false,
+    completed: bool = false,
+    worker_work_ns: u64 = 0,
+};
+
 const ProcedureRootTaskContext = struct {
     source_module: checked.ModuleId,
     inputs: *const SpecJobWorkerInputs,
@@ -4841,13 +4861,13 @@ const Builder = struct {
         defer scratch.deinit();
         for (entries) |entry| {
             _ = scratch.reset(.retain_capacity);
-            const summary = try entry.summary.copy(scratch.allocator(), relocation);
-            _ = try self.interface_summaries.insert(&self.program.types, &self.program.names, .{
-                .address = entry.address,
-                .evidence = entry.evidence,
-                .request = try entry.request.copy(scratch.allocator(), relocation),
-                .summary = summary,
-            });
+            _ = try self.interface_summaries.insertRelocated(
+                &self.program.types,
+                &self.program.names,
+                entry,
+                try entry.request.copy(scratch.allocator(), relocation),
+                relocation,
+            );
         }
     }
 
@@ -5205,12 +5225,17 @@ const Builder = struct {
         return moduleDigestFromId(nominal.owner_module);
     }
 
-    fn lowerRoot(self: *Builder, request: checked.RootRequest, source_module: checked.ModuleId) Allocator.Error!void {
+    fn lowerRoot(
+        self: *Builder,
+        request: checked.RootRequest,
+        source_module: checked.ModuleId,
+        fn_ty_slot: *?Type.TypeId,
+    ) Allocator.Error!void {
         const source_view = self.moduleForId(source_module);
         const def = if (request.procedure_binding) |binding|
             try self.lowerProcedureBindingRoot(request, binding, source_view)
         else if (request.procedure_template) |template|
-            try self.lowerTemplate(template, source_view, request.checked_type, request.root_evidence)
+            try self.lowerTemplate(template, source_view, request.checked_type, request.root_evidence, fn_ty_slot)
         else if (request.procedure_use) |procedure|
             try self.lowerProcedureUseRoot(request, procedure, source_module)
         else
@@ -5225,6 +5250,15 @@ const Builder = struct {
         if (source_modules.len != 0 and source_modules.len != requests.len) {
             Common.invariant("root source module count differs from explicit request count");
         }
+        // A template root's function type is a function of its checked type
+        // alone. Compile-time roots reach `lowerTemplate` twice, so each
+        // request lowers its type once, and on the lanes when there are any.
+        const fn_tys = try self.allocator.alloc(?Type.TypeId, requests.len);
+        defer self.allocator.free(fn_tys);
+        @memset(fn_tys, null);
+        if (self.post_check_executor) |executor| {
+            if (executor.worker_count > 1) try self.lowerTemplateRootTypes(executor, requests, source_modules, fn_tys);
+        }
         if (self.comptime_value_reads) {
             for (requests, 0..) |request, i| {
                 if (request.abi != .compile_time) continue;
@@ -5234,7 +5268,7 @@ const Builder = struct {
                 const source_view = self.moduleForId(source_module);
                 const template = request.procedure_template orelse
                     Common.invariant("shared compile-time root lacked its declared entry template");
-                const def = try self.lowerTemplate(template, source_view, request.checked_type, request.root_evidence);
+                const def = try self.lowerTemplate(template, source_view, request.checked_type, request.root_evidence, &fn_tys[i]);
                 const key = EntryRoot{ .module = source_module, .root = root_id };
                 const entry = try self.declared_comptime_root_functions.getOrPut(key);
                 const fn_id = self.defFnId(def);
@@ -5245,17 +5279,17 @@ const Builder = struct {
             }
         }
         const executor = self.post_check_executor orelse {
-            for (requests, 0..) |request, i| try self.lowerRoot(request, self.rootSourceModule(source_modules, i));
+            for (requests, 0..) |request, i| try self.lowerRoot(request, self.rootSourceModule(source_modules, i), &fn_tys[i]);
             return;
         };
         if (executor.worker_count <= 1) {
-            for (requests, 0..) |request, i| try self.lowerRoot(request, self.rootSourceModule(source_modules, i));
+            for (requests, 0..) |request, i| try self.lowerRoot(request, self.rootSourceModule(source_modules, i), &fn_tys[i]);
             return;
         }
         var index: usize = 0;
         while (index < requests.len) {
             if (requests[index].procedure_use == null) {
-                try self.lowerRoot(requests[index], self.rootSourceModule(source_modules, index));
+                try self.lowerRoot(requests[index], self.rootSourceModule(source_modules, index), &fn_tys[index]);
                 index += 1;
                 continue;
             }
@@ -5266,6 +5300,207 @@ const Builder = struct {
             {}
             try self.lowerProcedureRootBatch(executor, requests[start..index], if (source_modules.len == 0) &.{} else source_modules[start..index]);
         }
+    }
+
+    /// Whether `lowerIsolatedRoots` lowers `request` through `lowerTemplate`
+    /// when lanes are available: a procedure-use root lowers in a root batch
+    /// instead, and a binding root through its binding.
+    fn rootLowersTemplate(self: *const Builder, request: checked.RootRequest) bool {
+        if (request.procedure_template == null) return false;
+        if (self.comptime_value_reads and request.abi == .compile_time) return true;
+        return request.procedure_binding == null and request.procedure_use == null;
+    }
+
+    /// Lower every template root's function type on the lanes, then relocate
+    /// each one into the program store in request order. Each lane seals its
+    /// types into its own cumulative workspace, so the relocations absorb lane
+    /// epochs in the order each lane produced them.
+    fn lowerTemplateRootTypes(
+        self: *Builder,
+        executor: base.post_check_task_executor.Executor,
+        requests: []const checked.RootRequest,
+        source_modules: []const checked.ModuleId,
+        fn_tys: []?Type.TypeId,
+    ) Allocator.Error!void {
+        var task_count: usize = 0;
+        for (requests) |request| {
+            if (self.rootLowersTemplate(request)) task_count += 1;
+        }
+        if (task_count == 0) return;
+        const contexts = try self.allocator.alloc(RootTypeTaskContext, task_count);
+        defer self.allocator.free(contexts);
+        const tasks = try self.allocator.alloc(base.post_check_task_executor.Task, task_count);
+        defer self.allocator.free(tasks);
+        const completions = try self.allocator.alloc(base.post_check_task_executor.Completion, task_count);
+        defer self.allocator.free(completions);
+        const snapshot = try self.captureSpecJobInputs();
+        const inputs = SpecJobWorkerInputs{
+            .run_id = self.spec_job_run_id,
+            .modules = self.modules,
+            .module_views = self.moduleViews(),
+            .source_file_ids = self.sourceFileIds(),
+            .lowering_module_ids = self.loweringModuleIds(),
+            .snapshot = &snapshot,
+            .proc_debug_names = self.proc_debug_names,
+            .interface_summaries = &self.shared_summaries.?,
+            .interface_summary_end = self.shared_summaries.?.count,
+            .collect_counters = self.counters != null,
+            .collect_diagnostics = self.diagnostics != null,
+            .inline_expects = self.inline_expects,
+            .static_data_literals = self.static_data_literals,
+            .comptime_value_reads = self.comptime_value_reads,
+            .literal_roots = self.literal_roots,
+            .declared_comptime_root_functions = self.borrowed_comptime_root_functions orelse &self.declared_comptime_root_functions,
+            .hosted_catalog = self.hosted_catalog,
+            .current_loc = self.current_loc,
+            .current_region = self.current_region,
+            .timing_std_io = if (self.timing) |timing| timing.std_io else null,
+        };
+        var task_id: usize = 0;
+        for (requests, 0..) |request, index| {
+            if (!self.rootLowersTemplate(request)) continue;
+            contexts[task_id] = .{
+                .inputs = &inputs,
+                .source_module = self.rootSourceModule(source_modules, index),
+                .template = request.procedure_template.?,
+                .checked_ty = request.checked_type,
+                .request_index = index,
+            };
+            tasks[task_id] = .{ .id = task_id, .context = &contexts[task_id], .run = runRootTypeTask };
+            task_id += 1;
+        }
+        defer for (contexts) |*context| {
+            if (context.shard) |*shard| shard.store_epoch.deinit();
+        };
+        var run_error: ?Allocator.Error = null;
+        {
+            var wait_timing_scope = ProcedureTimingScope.begin(self.timing, .parallel_wait);
+            defer wait_timing_scope.end();
+            executor.run(tasks, completions) catch |err| {
+                run_error = err;
+            };
+        }
+        if (self.timing) |timing| {
+            for (contexts) |context| timing.parallel.worker_work_ns +%= context.worker_work_ns;
+        }
+        if (run_error) |err| return err;
+
+        var commit_timing_scope = ParallelCoordinatorTimingScope.begin(self.timing);
+        defer commit_timing_scope.end();
+        for (completions) |completion| {
+            if (completion.id >= contexts.len) Common.compilerBug("post-check executor returned an unknown root type task");
+            const context = &contexts[completion.id];
+            if (context.completed or completion.value != @as(?*anyopaque, @ptrCast(context))) {
+                Common.compilerBug("post-check executor returned an invalid root type completion");
+            }
+            context.completed = true;
+            if (context.shard) |*shard| {
+                if (@backingInt(shard.worker_id) != completion.worker_id) {
+                    Common.compilerBug("post-check executor changed root type worker ownership");
+                }
+            }
+        }
+        for (contexts) |*context| {
+            if (!context.completed) Common.compilerBug("post-check executor omitted a root type completion");
+            if (context.failed) return error.OutOfMemory;
+        }
+        for (contexts) |*context| {
+            const shard = &context.shard.?;
+            const commit_domain = shard.commit_domain;
+            try commit_domain.absorb(&shard.store_epoch);
+            var committed_types = CommittedGraphTypes.relocatedStore(
+                &commit_domain.types,
+                &commit_domain.name_store,
+                &self.program.types,
+                &self.program.names,
+                commit_domain.committedTypeRelocation(self.program),
+            );
+            fn_tys[context.request_index] = try committed_types.commitType(shard.fn_ty);
+            shard.store_epoch.deinit();
+            context.shard = null;
+        }
+    }
+
+    fn runRootTypeTask(
+        opaque_context: *anyopaque,
+        executor_worker: base.post_check_task_executor.Worker,
+    ) ?*anyopaque {
+        const context: *RootTypeTaskContext = @ptrCast(@alignCast(opaque_context));
+        const task_started_ns = if (context.inputs.timing_std_io) |std_io| timingNowNs(std_io) else 0;
+        defer if (context.inputs.timing_std_io) |std_io| {
+            const finished_ns = timingNowNs(std_io);
+            context.worker_work_ns = @intCast(@max(0, finished_ns - task_started_ns));
+        };
+        if (executor_worker.id >= std.math.maxInt(u32)) {
+            Common.compilerBug("post-check executor returned an invalid root type worker id");
+        }
+        const lane = Builder.ensureSpecJobLaneState(executor_worker, context.inputs) catch {
+            context.failed = true;
+            return context;
+        };
+        const builder = Builder.ensureSpecJobWorkerBuilder(&lane.worker, context.inputs) catch {
+            context.failed = true;
+            return context;
+        };
+        builder.current_loc = context.inputs.current_loc;
+        builder.current_region = context.inputs.current_region;
+        builder.spec_job_parallel_callback = true;
+        defer builder.spec_job_parallel_callback = false;
+        context.shard = builder.lowerRootTypeToShard(
+            &lane.worker,
+            &lane.commit_domain,
+            context.source_module,
+            context.template,
+            context.checked_ty,
+        ) catch {
+            context.failed = true;
+            return context;
+        };
+        return context;
+    }
+
+    /// Seal one template root's function type into the lane's workspace and
+    /// hand over the workspace epoch that holds it.
+    fn lowerRootTypeToShard(
+        self: *Builder,
+        worker: *SpecJobWorkerState,
+        commit_domain: *SpecJobCommitDomain,
+        source_module: checked.ModuleId,
+        template_ref: names.ProcTemplate,
+        checked_ty: checked.CheckedTypeId,
+    ) Allocator.Error!RootTypeShard {
+        const workspace = &worker.workspace;
+        const epoch = workspace.beginEpoch(self.program);
+        errdefer workspace.finishEpoch(epoch);
+        const summaries_before = workspace.interface_summaries.entries.items.len;
+        const program_types_before = self.program.types.epochBoundary();
+        const graph = try self.acquireSpecJobGraph(worker);
+        var body_draft = BodyDraftStore.init(self.allocator);
+        defer body_draft.deinit();
+        body_draft.spec_job_workspace = workspace;
+        body_draft.mutable_graph_names = &workspace.name_store;
+        const saved_graph = self.active_graph;
+        const saved_body_draft = self.active_body_draft;
+        self.active_graph = graph;
+        self.active_body_draft = &body_draft;
+        defer self.active_graph = saved_graph;
+        defer self.active_body_draft = saved_body_draft;
+        const fn_ty = try self.lowerContextFreeSpecializationType(self.moduleForId(source_module), template_ref, checked_ty);
+        if (workspace.interface_summaries.entries.items.len != summaries_before) {
+            Common.invariant("root type lowering produced an interface summary");
+        }
+        if (!std.meta.eql(program_types_before, self.program.types.epochBoundary())) {
+            Common.compilerBug("parallel root type lowering mutated the coordinator type store");
+        }
+        var store_epoch = try workspace.captureStoreEpoch(epoch);
+        errdefer store_epoch.deinit();
+        workspace.finishEpoch(epoch);
+        return .{
+            .worker_id = worker.worker_id,
+            .commit_domain = commit_domain,
+            .store_epoch = store_epoch,
+            .fn_ty = fn_ty,
+        };
     }
 
     fn captureSpecJobInputs(self: *Builder) Allocator.Error!WorkerInputs.Snapshot {
@@ -6018,12 +6253,17 @@ const Builder = struct {
         source_ty_view: ModuleView,
         source_fn_ty: checked.CheckedTypeId,
         root_evidence: ?checked.CheckedEvidenceSpan,
+        fn_ty_slot: *?Type.TypeId,
     ) Allocator.Error!Ast.DefId {
-        const fn_ty = try self.lowerContextFreeSpecializationType(
-            source_ty_view,
-            template_ref,
-            source_fn_ty,
-        );
+        const fn_ty = fn_ty_slot.* orelse lowered: {
+            const lowered = try self.lowerContextFreeSpecializationType(
+                source_ty_view,
+                template_ref,
+                source_fn_ty,
+            );
+            fn_ty_slot.* = lowered;
+            break :lowered lowered;
+        };
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const fn_template = self.fnDefForTemplate(
             view,
@@ -6467,7 +6707,7 @@ const Builder = struct {
             const key = Ast.specIdentityKey(spec_identity);
             fn_template.spec_key = key;
             if (template.provided_low_level) |op| fn_template.procedure_keyed_by_layout = op.procedureKeyedByLayout();
-            if (@import("builtin").link_libc and std.c.getenv("ROC_SPEC_CENSUS") != null) {
+            if (pack_trace_available and specCensusEnabled()) {
                 const proc_base = view.names.procBase(template_ref.proc_base);
                 const name: []const u8 = if (proc_base.export_name) |e| view.names.exportNameText(e) else "?";
                 std.debug.print("CENSUS_KEY\t{s}\t{x}\tev={x}\tcodec={x}\treq={x}\tcallable={s}\n", .{ name, key.bytes[0..8], spec_identity.evidence_digest.bytes[0..6], spec_identity.codec_contract_digest.bytes[0..6], spec_identity.request_fn_ty_digest.bytes[0..6], @tagName(spec_identity.callable) });
@@ -12512,6 +12752,12 @@ const Builder = struct {
                 else
                     spec.lookup_request_fn_node orelse spec.request_fn_node,
             );
+            if (!spec.local_context_dependent) {
+                // Ordered commit keys this request by its specialization
+                // digest. Computing it here lets the commit's import carry it
+                // instead of hashing the relocated type again.
+                _ = graph.types.equalityDigestCached(graph.name_store, request_ty, null);
+            }
             if (spec.eager_resolution) |eager| {
                 const eager_ty = try sealer.sealType(eager.fn_ty);
                 const eager_request_ty = try sealer.sealNode(eager.request_fn_node);
@@ -12729,6 +12975,7 @@ const Builder = struct {
         var timing_scope = ProcedureTimingScope.begin(self.timing, .body_finalization);
         defer timing_scope.end();
 
+        try body_draft.commitIntentTypes(self.allocator, committed_types, root_ty);
         const sealed_root = try committed_types.commitType(root_ty);
         const sealed_roots = try self.allocator.alloc(Type.TypeId, 0);
         errdefer self.allocator.free(sealed_roots);
@@ -14334,6 +14581,14 @@ const DraftTypeCell = union(enum) {
             .sealed => {},
             .graph_node => Common.invariant("graph-qualified type cell remained in a sealed body draft"),
         }
+    }
+
+    /// The sealed type a graph-free coordinator commit reads from this cell.
+    fn committedSealed(self: DraftTypeCell) Type.TypeId {
+        return switch (self) {
+            .sealed => |ty| ty,
+            .graph_node => Common.invariant("graph-qualified type cell reached graph-free coordinator commit"),
+        };
     }
 
     fn sealCommitted(
@@ -17891,6 +18146,42 @@ const BodyDraftStore = struct {
         );
     }
 
+    /// Relocate the root type and every type a coordinator intent carries, in
+    /// one import and interning transaction, before specialization requests
+    /// and static data resolve against the relocated types one at a time.
+    fn commitIntentTypes(
+        self: *const BodyDraftStore,
+        allocator: Allocator,
+        committed_types: *CommittedGraphTypes,
+        root_ty: Type.TypeId,
+    ) Allocator.Error!void {
+        if (committed_types.destination == null) return;
+        var tys = std.ArrayList(Type.TypeId).empty;
+        defer tys.deinit(allocator);
+        try tys.append(allocator, root_ty);
+        for (self.sealed_template_specs.items) |spec| {
+            try tys.append(allocator, spec.request_fn_ty);
+            for (spec.subst) |slot| switch (slot) {
+                .checked_error => {},
+                .ty => |ty| try tys.append(allocator, ty),
+            };
+            if (spec.codec_contract) |contract| {
+                try tys.append(allocator, contract.constructor_ty);
+                try tys.append(allocator, contract.shape_ty);
+            }
+        }
+        for (self.sealed_nested_specs.items) |spec| {
+            if (spec.codec_contract) |contract| {
+                try tys.append(allocator, contract.constructor_ty);
+                try tys.append(allocator, contract.shape_ty);
+            }
+        }
+        for (self.static_data_requests.items) |request| {
+            try tys.append(allocator, request.ty.committedSealed());
+        }
+        allocator.free(try committed_types.commitTypes(allocator, tys.items));
+    }
+
     fn sealCoreIntoProgramWithMap(
         self: *const BodyDraftStore,
         program: *Ast.Program,
@@ -19206,6 +19497,16 @@ const InterfaceSummaryRelocation = struct {
             return self.importing.?.importProgramType(value);
         }
         if (self.source_names == self.destination_names) return value;
+        if (self.committed) |committed| if (committed.destination) |destination| {
+            // A committed domain owns a cumulative name relocation, so each
+            // source name is interned once per domain rather than per use.
+            const relocation = destination.relocation.namesRelocation();
+            if (T == names.ModuleIdentityId) return relocation.relocateModuleIdentity(self.source_names, value);
+            if (T == names.TypeNameId) return relocation.relocateTypeName(self.source_names, value);
+            if (T == names.RecordFieldNameId) return relocation.relocateRecordFieldLabel(self.source_names, value);
+            if (T == names.TagNameId) return relocation.relocateTagLabel(self.source_names, value);
+            return value;
+        };
         if (T == names.ModuleIdentityId) return self.destination_names.internModuleIdentity(self.source_names.moduleIdentityBytes(value));
         if (T == names.TypeNameId) return self.destination_names.internTypeName(self.source_names.typeNameText(value));
         if (T == names.RecordFieldNameId) return self.destination_names.internRecordFieldLabel(self.source_names.recordFieldLabelText(value));
@@ -19237,25 +19538,43 @@ const InterfaceSummaryCache = struct {
     }
 
     fn insert(self: *InterfaceSummaryCache, types_: *Type.Store, name_store: *const names.NameStore, entry: InterfaceSummaryEntry) Allocator.Error!InterfaceSummary {
-        const bucket = try self.buckets.getOrPut(entry.address);
+        return self.insertRelocated(types_, name_store, entry, entry.request, InterfaceSummaryCopy{});
+    }
+
+    /// Insert an entry whose `request` is already expressed in this cache's
+    /// type and name domain, while `source.summary` is still expressed in its
+    /// producer's domain. A resident equal request answers without touching
+    /// the summary; a new summary is relocated once, directly into owned
+    /// storage.
+    fn insertRelocated(
+        self: *InterfaceSummaryCache,
+        types_: *Type.Store,
+        name_store: *const names.NameStore,
+        source: InterfaceSummaryEntry,
+        request: InterfaceConstraints.Identity,
+        summary_relocation: anytype,
+    ) Allocator.Error!InterfaceSummary {
+        const bucket = try self.buckets.getOrPut(source.address);
         if (!bucket.found_existing) bucket.value_ptr.* = .empty;
         for (bucket.value_ptr.items) |index| {
             const existing = self.entries.items[index];
-            if (storedConstFnEvidenceEql(existing.evidence, entry.evidence) and
-                try existing.request.eql(entry.request, types_, name_store)) return existing.summary;
+            if (storedConstFnEvidenceEql(existing.evidence, source.evidence) and
+                try existing.request.eql(request, types_, name_store)) return existing.summary;
         }
         try bucket.value_ptr.ensureUnusedCapacity(self.allocator, 1);
         try self.entries.ensureUnusedCapacity(self.allocator, 1);
-        var owned = entry;
         const arena = self.evidence_arena.allocator();
-        owned.evidence = .{
-            .nodes = try arena.dupe(check.ConstStore.ConstFnEvidence, entry.evidence.nodes),
-            .frames = try arena.dupe(check.ConstStore.ConstFnEvidenceFrame, entry.evidence.frames),
-            .head = entry.evidence.head,
-            .digest = entry.evidence.digest,
+        const owned: InterfaceSummaryEntry = .{
+            .address = source.address,
+            .evidence = .{
+                .nodes = try arena.dupe(check.ConstStore.ConstFnEvidence, source.evidence.nodes),
+                .frames = try arena.dupe(check.ConstStore.ConstFnEvidenceFrame, source.evidence.frames),
+                .head = source.evidence.head,
+                .digest = source.evidence.digest,
+            },
+            .request = try request.copy(arena, InterfaceSummaryCopy{}),
+            .summary = try source.summary.copy(arena, summary_relocation),
         };
-        owned.request = try entry.request.copy(arena, InterfaceSummaryCopy{});
-        owned.summary = try entry.summary.copy(arena, InterfaceSummaryCopy{});
         bucket.value_ptr.appendAssumeCapacity(@intCast(self.entries.items.len));
         self.entries.appendAssumeCapacity(owned);
         return owned.summary;
@@ -25065,12 +25384,13 @@ const BodyContext = struct {
         };
         var scratch = std.heap.ArenaAllocator.init(self.allocator);
         defer scratch.deinit();
-        return try binding.cache.insert(self.typeStore(), self.nameStore(), .{
-            .address = entry.address,
-            .evidence = entry.evidence,
-            .request = try entry.request.copy(scratch.allocator(), relocation),
-            .summary = try entry.summary.copy(scratch.allocator(), relocation),
-        });
+        return try binding.cache.insertRelocated(
+            self.typeStore(),
+            self.nameStore(),
+            entry,
+            try entry.request.copy(scratch.allocator(), relocation),
+            relocation,
+        );
     }
 
     fn parametricRequestHoles(
@@ -66311,6 +66631,24 @@ const pack_trace_available = @import("builtin").link_libc;
 /// `ROC_PACK_TRACE` is set: print every object cache lookup.
 fn packTraceEnabled() bool {
     return std.c.getenv("ROC_PACK_TRACE") != null;
+}
+
+/// `ROC_SPEC_CENSUS` is set: print every closed specialization key. Closed
+/// requests are frequent on every lane, so the environment is read once per
+/// process instead of scanned per request.
+fn specCensusEnabled() bool {
+    const State = struct {
+        /// 0 = not yet read, 1 = unset, 2 = set.
+        var value: std.atomic.Value(u8) = .init(0);
+    };
+    switch (State.value.load(.acquire)) {
+        1 => return false,
+        2 => return true,
+        else => {},
+    }
+    const enabled = std.c.getenv("ROC_SPEC_CENSUS") != null;
+    State.value.store(if (enabled) 2 else 1, .release);
+    return enabled;
 }
 
 fn moduleDigestFromId(key: checked.ModuleId) names.CheckedModuleDigest {
