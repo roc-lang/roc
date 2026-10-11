@@ -20115,46 +20115,109 @@ fn coercionMayWiden(self: *const Self, var_: Var) bool {
 }
 
 /// One reached variable's copy for `widenedValueUseVar`; the variable itself
-/// when nothing under it widens. The reach never passes through a recursive
-/// type (recursion goes through a nominal, which ends the reach), so the copy
-/// is finite; copies are shared through `widened_use_copies`.
-fn widenedReachCopy(self: *Self, var_: Var, env: *Env, region: Region) std.mem.Allocator.Error!Var {
-    const resolved = self.types.resolveVar(var_);
-    if (!self.coercionMayWiden(resolved.var_)) return resolved.var_;
-    if (self.widened_use_copies.get(resolved.var_)) |copy| return copy;
-    const copy: Var = switch (resolved.desc.content) {
-        // The copy's union is the alias's backing, widened; the alias's
-        // parameters describe the value's own row, not the widened one. An
-        // alias whose backing widens nothing is the alias itself.
-        .alias => |alias| blk: {
-            const backing = self.types.getAliasBackingVar(alias);
-            const backing_copy = try self.widenedReachCopy(backing, env, region);
-            break :blk if (backing_copy == self.types.resolveVar(backing).var_) resolved.var_ else backing_copy;
-        },
-        .structure => |flat| switch (flat) {
-            .tag_union => try self.widenedRowCopy(resolved.var_, env, region),
-            .nominal_type => |nominal| blk: {
-                // Copying an argument appends to the type store, so read the
-                // arguments out of it first.
-                const args = try self.gpa.dupe(Var, self.types.sliceNominalArgs(nominal));
-                defer self.gpa.free(args);
-                var changed = false;
-                for (args) |*arg| {
-                    const arg_copy = try self.widenedReachCopy(arg.*, env, region);
-                    changed = changed or arg_copy != self.types.resolveVar(arg.*).var_;
-                    arg.* = arg_copy;
-                }
-                if (!changed) break :blk resolved.var_;
-                var widened = nominal;
-                widened.args = try self.types.appendVars(args);
-                break :blk try self.freshFromContent(.{ .structure = .{ .nominal_type = widened } }, env, region);
+/// when nothing under it widens. Copies are shared through
+/// `widened_use_copies`. The walk keeps an explicit stack, since a value's type
+/// can nest tag payloads arbitrarily deep, and builds each copy after its
+/// children's (post-order). The reach never passes through a recursive type
+/// (recursion goes through a nominal, which ends the reach); a variable met
+/// again while its own copy is in progress keeps itself, so the walk is finite
+/// regardless.
+fn widenedReachCopy(self: *Self, root: Var, env: *Env, region: Region) std.mem.Allocator.Error!Var {
+    const Step = struct { var_: Var, expanded: bool };
+    var stack: std.ArrayListUnmanaged(Step) = .empty;
+    defer stack.deinit(self.gpa);
+    var in_progress: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    defer in_progress.deinit(self.gpa);
+    var children: std.ArrayListUnmanaged(Var) = .empty;
+    defer children.deinit(self.gpa);
+    try stack.append(self.gpa, .{ .var_ = root, .expanded = false });
+    while (stack.pop()) |step| {
+        const resolved = self.types.resolveVar(step.var_);
+        if (!self.coercionMayWiden(resolved.var_)) continue;
+        if (self.widened_use_copies.contains(resolved.var_)) continue;
+        if (!step.expanded) {
+            if ((try in_progress.getOrPut(self.gpa, resolved.var_)).found_existing) continue;
+            try stack.append(self.gpa, .{ .var_ = resolved.var_, .expanded = true });
+            children.clearRetainingCapacity();
+            try self.appendWidenedReachChildren(resolved.var_, &children);
+            for (children.items) |child| try stack.append(self.gpa, .{ .var_ = child, .expanded = false });
+            continue;
+        }
+        const copy: Var = switch (resolved.desc.content) {
+            // The copy's union is the alias's backing, widened; the alias's
+            // parameters describe the value's own row, not the widened one.
+            // An alias whose backing widens nothing is the alias itself.
+            .alias => |alias| blk: {
+                const backing = self.types.getAliasBackingVar(alias);
+                const backing_copy = self.widenedCopyOf(backing);
+                break :blk if (backing_copy == self.types.resolveVar(backing).var_) resolved.var_ else backing_copy;
             },
-            .fn_pure, .fn_effectful, .fn_unbound, .tuple, .record, .empty_record, .empty_tag_union => resolved.var_,
+            .structure => |flat| switch (flat) {
+                .tag_union => try self.widenedRowCopy(resolved.var_, env, region),
+                .nominal_type => |nominal| blk: {
+                    // Copying appends to the type store, so read the arguments
+                    // out of it first.
+                    const args = try self.gpa.dupe(Var, self.types.sliceNominalArgs(nominal));
+                    defer self.gpa.free(args);
+                    var changed = false;
+                    for (args) |*arg| {
+                        const arg_copy = self.widenedCopyOf(arg.*);
+                        changed = changed or arg_copy != self.types.resolveVar(arg.*).var_;
+                        arg.* = arg_copy;
+                    }
+                    if (!changed) break :blk resolved.var_;
+                    var widened = nominal;
+                    widened.args = try self.types.appendVars(args);
+                    break :blk try self.freshFromContent(.{ .structure = .{ .nominal_type = widened } }, env, region);
+                },
+                .fn_pure, .fn_effectful, .fn_unbound, .tuple, .record, .empty_record, .empty_tag_union => resolved.var_,
+            },
+            .flex, .rigid, .err, .field_presence => resolved.var_,
+        };
+        try self.widened_use_copies.put(self.gpa, resolved.var_, copy);
+    }
+    return self.widenedCopyOf(root);
+}
+
+/// The copy `widenedReachCopy` built for `var_`, or `var_` itself when the
+/// coercion does not widen it.
+fn widenedCopyOf(self: *const Self, var_: Var) Var {
+    const resolved = self.types.resolveVar(var_).var_;
+    return self.widened_use_copies.get(resolved) orelse resolved;
+}
+
+/// The variables a reached variable's copy is built from: an alias's backing,
+/// every payload on a tag union's extension chain, and a `Try`'s arguments.
+fn appendWidenedReachChildren(self: *Self, var_: Var, children: *std.ArrayListUnmanaged(Var)) std.mem.Allocator.Error!void {
+    const resolved = self.types.resolveVar(var_);
+    switch (resolved.desc.content) {
+        .alias => |alias| try children.append(self.gpa, self.types.getAliasBackingVar(alias)),
+        .structure => |flat| switch (flat) {
+            .tag_union => {
+                var current = resolved.var_;
+                while (true) {
+                    const row = self.types.resolveVar(current);
+                    switch (row.desc.content) {
+                        .alias => |alias| current = self.types.getAliasBackingVar(alias),
+                        .structure => |row_flat| switch (row_flat) {
+                            .tag_union => |union_| {
+                                for (0..union_.tags.count) |index| {
+                                    const tag = self.types.getTagAt(union_.tags, @intCast(index));
+                                    try children.appendSlice(self.gpa, self.types.sliceVars(tag.args));
+                                }
+                                current = union_.ext;
+                            },
+                            .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return,
+                        },
+                        .flex, .rigid, .err, .field_presence => return,
+                    }
+                }
+            },
+            .nominal_type => |nominal| try children.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+            .fn_pure, .fn_effectful, .fn_unbound, .tuple, .record, .empty_record, .empty_tag_union => {},
         },
-        .flex, .rigid, .err, .field_presence => resolved.var_,
-    };
-    try self.widened_use_copies.put(self.gpa, resolved.var_, copy);
-    return copy;
+        .flex, .rigid, .err, .field_presence => {},
+    }
 }
 
 /// A reached tag union's copy: every tag on its extension chain, each payload
@@ -20191,14 +20254,15 @@ fn widenedRowCopy(self: *Self, row: Var, env: *Env, region: Region) std.mem.Allo
     // exempts `[]` from implicit opening for this reason), so there is no
     // value to widen and the row stays shared.
     if (self.widened_use_tags.items.len == tags_start) return self.types.resolveVar(row).var_;
-    // Copying a payload appends to the type store and to these scratch lists,
-    // so read the row's tags and each tag's payloads out of them first.
+    // Building the copy appends to the type store and to these scratch lists,
+    // so read the row's tags and each tag's payloads out of them first. Every
+    // payload's own copy was built before this row's (`widenedReachCopy`).
     const tags = try self.gpa.dupe(types_mod.Tag, self.widened_use_tags.items[tags_start..]);
     defer self.gpa.free(tags);
     for (tags) |*tag| {
         const args = try self.gpa.dupe(Var, self.types.sliceVars(tag.args));
         defer self.gpa.free(args);
-        for (args) |*arg| arg.* = try self.widenedReachCopy(arg.*, env, region);
+        for (args) |*arg| arg.* = self.widenedCopyOf(arg.*);
         tag.* = try self.types.mkTag(tag.name, args);
     }
     const ext = try self.freshFromContent(.{ .flex = Flex.init() }, env, region);
