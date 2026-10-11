@@ -67,6 +67,22 @@ tests; it does not just build them.
 
 ### Test prerequisites
 
+Only the JavaScript cell tests in `run-test-repl-wasm` require
+[Node.js](https://nodejs.org/) **22.7.0 or newer**, available as `node` on your
+`PATH`. Node.js is not required to use Roc, build the compiler, or develop Roc
+in general. MiniCI includes this test, so running MiniCI also requires Node.js
+for this test alone.
+
+This version is needed because the test imports a `.js` ES module without a
+`package.json` declaring its module type; Node.js 22.7.0 enabled
+[module syntax detection by default](https://nodejs.org/download/release/v22.7.0/docs/api/packages.html#syntax-detection).
+Check your version with `node --version`. To run just these JavaScript tests
+from the repository root:
+
+```sh
+node --test test/repl-wasm-test/cells.test.mjs
+```
+
 The `run-test-cli` job includes the glue test suite, which compiles generated
 Rust glue for the `wasm32` target. Install a Rust toolchain (via [rustup]) with
 the WebAssembly target so those cases can build:
