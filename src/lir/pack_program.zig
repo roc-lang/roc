@@ -1,7 +1,7 @@
 //! Pack programs: one module's closed exports lowered as a program of their own.
 //!
 //! The object cache stores compiled specializations per module
-//! (`projects/big/package-object-cache.md`, "Entry format and on-disk
+//! (https://github.com/roc-lang/roc/issues/12167, "Entry format and on-disk
 //! layout"). A module's pack holds every specialization reachable from its
 //! exports that no imported module's pack already holds, and its content is
 //! a function of the module and its transitive imports alone. The roots of
