@@ -291,6 +291,18 @@ pub const Diagnostics = struct {
     data_size: u32,
 };
 
+test "MODULE_ENV_VERSION_HASH golden value" {
+    // Tripwire: an *accidental* change to `ModuleEnv.Serialized`'s layout silently
+    // invalidates every on-disk module cache. It flips this hash and fails here. On
+    // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
+    // golden bytes below with the ones this assertion prints.
+    const golden: [32]u8 = .{
+        0x96, 0xFD, 0x18, 0x6C, 0xB1, 0x91, 0xA3, 0x7D, 0xD2, 0xD1, 0xE9, 0x82, 0x9D, 0xBA, 0x26, 0xCA,
+        0x5C, 0x49, 0x37, 0x40, 0x33, 0x8D, 0x70, 0x7C, 0xAD, 0xEE, 0xA1, 0x25, 0xF1, 0x47, 0x76, 0x77,
+    };
+    try std.testing.expectEqualSlices(u8, &golden, &MODULE_ENV_VERSION_HASH);
+}
+
 test "readFromFileMapped memory-maps a cache file copy-on-write" {
     if (comptime !CoreCtx.can_map_files) return;
 
