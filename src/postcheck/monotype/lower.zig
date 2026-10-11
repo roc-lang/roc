@@ -5219,7 +5219,7 @@ const Builder = struct {
     }
 
     fn declaredModuleForNominal(_: *Builder, _: ModuleView, nominal: checked.CheckedNominalType) names.CheckedModuleDigest {
-        return moduleDigestFromId(nominal.owner_module);
+        return moduleDigestFromId(nominal.owner_module.*);
     }
 
     fn lowerRoot(self: *Builder, request: checked.RootRequest, source_module: checked.ModuleId) Allocator.Error!void {
@@ -9738,7 +9738,7 @@ const Builder = struct {
                 break :blk .{ .view = sv, .declaration = decl, .padding_field_tys = capability.paddingFieldTys(sv.interface_capabilities) };
             },
             .builtin => |builtin_nominal| blk: {
-                const source_view = self.moduleForId(nominal.owner_module);
+                const source_view = self.moduleForId(nominal.owner_module.*);
                 const decl = source_view.types.builtinNominalDeclaration(builtin_nominal) orelse break :blk null;
                 break :blk .{ .view = source_view, .declaration = decl, .padding_field_tys = decl.paddingFieldTypes(source_view.types) };
             },

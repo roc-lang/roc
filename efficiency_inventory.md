@@ -30,9 +30,9 @@ measured with every fix below applied:
 
 | Workload | Baseline | This branch | Change |
 | --- | ---: | ---: | ---: |
-| `roc check -j1 package/main.roc` (roc-pg) | 266.28 G | 218.60 G | -17.9% |
-| `roc build --opt=dev examples/query.roc` | 244.83 G | 223.30 G | -8.8% |
-| `roc build examples/query.roc` (LLVM) | 524.75 G | 345.53 G | -34.2% |
+| `roc check -j1 package/main.roc` (roc-pg) | 266.28 G | 216.86 G | -18.6% |
+| `roc build --opt=dev examples/query.roc` | 244.83 G | 221.38 G | -9.6% |
+| `roc build examples/query.roc` (LLVM) | 524.75 G | 343.40 G | -34.6% |
 | `roc test test/fx/issue8826_full.roc` | 141.4 M | 139.9 M | -1.1% |
 
 Validation: the module unit tests of every touched module, the lint gates,
@@ -249,6 +249,14 @@ stages it touches; the instruction-count effect is reported in "Results".
     that grows the store reads nothing through the pointer.
     Read-only helpers over a `*const LirStore` also bind statement locals by
     pointer (23 more sites).
+
+44. `src/check/checked_artifact.zig`: the read forms of checked alias and
+    nominal payloads point at the stored 192-byte owner module id instead of
+    copying it, like their slices alias the pools, so materializing a payload
+    no longer copies it. Build forms (`CheckedAliasTypeBuild`,
+    `CheckedNominalTypeBuild`) own the id, so a build survives the store
+    growing under it. `roc check` drops from 218.6 G to 216.9 G and the LLVM
+    build from 345.5 G to 343.4 G; generated code is byte-identical.
 
 ## Findings from profiling
 

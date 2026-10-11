@@ -2825,19 +2825,56 @@ pub fn builtinRuntimeEncoding(builtin_nominal: CheckedBuiltinNominal) CheckedBui
 }
 
 /// Public `CheckedAliasType` declaration.
-pub const CheckedAliasType = struct {
-    name: canonical.TypeNameId,
-    /// Deep content identity of the declaring module (dense id into this
-    /// artifact's `canonical_names.module_identities`).
-    origin_module: canonical.ModuleIdentityId,
-    /// Checked module id of the artifact that owns this named type's checked
-    /// declaration data. This is intentionally separate from `origin_module`.
-    owner_module: ModuleId,
-    source_decl: ?u32 = null,
-    builtin_origin: bool = false,
-    backing: CheckedTypeId,
-    args: []const CheckedTypeId = &.{},
-};
+pub const CheckedAliasType = CheckedAliasTypeOf(*const ModuleId);
+
+/// The build form of `CheckedAliasType`, which owns its owner module id.
+pub const CheckedAliasTypeBuild = CheckedAliasTypeOf(ModuleId);
+
+fn CheckedAliasTypeOf(comptime OwnerModule: type) type {
+    return struct {
+        const Self = @This();
+
+        name: canonical.TypeNameId,
+        /// Deep content identity of the declaring module (dense id into this
+        /// artifact's `canonical_names.module_identities`).
+        origin_module: canonical.ModuleIdentityId,
+        /// Checked module id of the artifact that owns this named type's
+        /// checked declaration data. This is intentionally separate from
+        /// `origin_module`. A read form aliases the stored id, like its
+        /// slice fields alias pools; a build form owns it.
+        owner_module: OwnerModule,
+        source_decl: ?u32 = null,
+        builtin_origin: bool = false,
+        backing: CheckedTypeId,
+        args: []const CheckedTypeId = &.{},
+
+        /// A read form over this build form, aliasing its owner module id.
+        pub fn asRead(self: *const Self) CheckedAliasType {
+            return .{
+                .name = self.name,
+                .origin_module = self.origin_module,
+                .owner_module = &self.owner_module,
+                .source_decl = self.source_decl,
+                .builtin_origin = self.builtin_origin,
+                .backing = self.backing,
+                .args = self.args,
+            };
+        }
+
+        /// A build form holding this read form's fields.
+        pub fn toBuild(self: Self) CheckedAliasTypeBuild {
+            return .{
+                .name = self.name,
+                .origin_module = self.origin_module,
+                .owner_module = self.owner_module.*,
+                .source_decl = self.source_decl,
+                .builtin_origin = self.builtin_origin,
+                .backing = self.backing,
+                .args = self.args,
+            };
+        }
+    };
+}
 
 /// Public `CheckedNominalDeclarationId` declaration.
 pub const CheckedNominalDeclarationId = enum(u32) { _ };
@@ -2882,28 +2919,71 @@ pub const CheckedNominalRepresentationRef = union(enum) {
 };
 
 /// Public `CheckedNominalType` declaration.
-pub const CheckedNominalType = struct {
-    name: canonical.TypeNameId,
-    /// Deep content identity of the declaring module (dense id into this
-    /// artifact's `canonical_names.module_identities`).
-    origin_module: canonical.ModuleIdentityId,
-    /// Checked module id of the artifact that owns this named type's checked
-    /// declaration data. This is intentionally separate from `origin_module`.
-    owner_module: ModuleId,
-    source_decl: ?u32 = null,
-    builtin: ?CheckedBuiltinNominal = null,
-    is_opaque: bool,
-    representation: CheckedNominalRepresentationRef,
-    args: []const CheckedTypeId = &.{},
-    /// Resolved types of the declaration's unnamed (`_` / `_name`) fields, in
-    /// declared order. These are layout padding, excluded from the backing row;
-    /// layout selection reserves `sizeof` of each. Empty for the common case of
-    /// a nominal with no unnamed fields.
-    padding_field_types: []const CheckedTypeId = &.{},
-    /// Source-declared field order for nominal record layout. Empty for
-    /// non-record nominal backings and for builtin nominals.
-    declared_fields: []const CheckedDeclaredField = &.{},
-};
+pub const CheckedNominalType = CheckedNominalTypeOf(*const ModuleId);
+
+/// The build form of `CheckedNominalType`, which owns its owner module id.
+pub const CheckedNominalTypeBuild = CheckedNominalTypeOf(ModuleId);
+
+fn CheckedNominalTypeOf(comptime OwnerModule: type) type {
+    return struct {
+        const Self = @This();
+
+        name: canonical.TypeNameId,
+        /// Deep content identity of the declaring module (dense id into this
+        /// artifact's `canonical_names.module_identities`).
+        origin_module: canonical.ModuleIdentityId,
+        /// Checked module id of the artifact that owns this named type's
+        /// checked declaration data. This is intentionally separate from
+        /// `origin_module`. A read form aliases the stored id, like its
+        /// slice fields alias pools; a build form owns it.
+        owner_module: OwnerModule,
+        source_decl: ?u32 = null,
+        builtin: ?CheckedBuiltinNominal = null,
+        is_opaque: bool,
+        representation: CheckedNominalRepresentationRef,
+        args: []const CheckedTypeId = &.{},
+        /// Resolved types of the declaration's unnamed (`_` / `_name`)
+        /// fields, in declared order. These are layout padding, excluded from
+        /// the backing row; layout selection reserves `sizeof` of each. Empty
+        /// for the common case of a nominal with no unnamed fields.
+        padding_field_types: []const CheckedTypeId = &.{},
+        /// Source-declared field order for nominal record layout. Empty for
+        /// non-record nominal backings and for builtin nominals.
+        declared_fields: []const CheckedDeclaredField = &.{},
+
+        /// A read form over this build form, aliasing its owner module id.
+        pub fn asRead(self: *const Self) CheckedNominalType {
+            return .{
+                .name = self.name,
+                .origin_module = self.origin_module,
+                .owner_module = &self.owner_module,
+                .source_decl = self.source_decl,
+                .builtin = self.builtin,
+                .is_opaque = self.is_opaque,
+                .representation = self.representation,
+                .args = self.args,
+                .padding_field_types = self.padding_field_types,
+                .declared_fields = self.declared_fields,
+            };
+        }
+
+        /// A build form holding this read form's fields.
+        pub fn toBuild(self: Self) CheckedNominalTypeBuild {
+            return .{
+                .name = self.name,
+                .origin_module = self.origin_module,
+                .owner_module = self.owner_module.*,
+                .source_decl = self.source_decl,
+                .builtin = self.builtin,
+                .is_opaque = self.is_opaque,
+                .representation = self.representation,
+                .args = self.args,
+                .padding_field_types = self.padding_field_types,
+                .declared_fields = self.declared_fields,
+            };
+        }
+    };
+}
 
 fn checkedNominalTypeKey(nominal: CheckedNominalType) canonical.NominalTypeKey {
     return .{
@@ -2999,10 +3079,10 @@ pub const CheckedTypePayloadBuild = union(enum) {
     err,
     flex: CheckedTypeVariable,
     rigid: CheckedTypeVariable,
-    alias: CheckedAliasType,
+    alias: CheckedAliasTypeBuild,
     record: CheckedRecordType,
     tuple: []const CheckedTypeId,
-    nominal: CheckedNominalType,
+    nominal: CheckedNominalTypeBuild,
     function: CheckedFunctionType,
     empty_record,
     tag_union: CheckedTagUnionTypeBuild,
@@ -3105,10 +3185,10 @@ fn reconstructCheckedTypePayload(pool_owner: anytype, stored: *const StoredCheck
         .empty_tag_union => .empty_tag_union,
         .flex => |v| .{ .flex = reconstructCheckedTypeVariable(pool_owner, v) },
         .rigid => |v| .{ .rigid = reconstructCheckedTypeVariable(pool_owner, v) },
-        .alias => |a| .{ .alias = .{
+        .alias => |*a| .{ .alias = .{
             .name = a.name,
             .origin_module = a.origin_module,
-            .owner_module = a.owner_module,
+            .owner_module = &a.owner_module,
             .source_decl = a.source_decl,
             .builtin_origin = a.builtin_origin,
             .backing = a.backing,
@@ -3121,10 +3201,10 @@ fn reconstructCheckedTypePayload(pool_owner: anytype, stored: *const StoredCheck
         .tuple => |range| .{
             .tuple = pool_owner.typeIdPool()[range.start .. range.start + range.len],
         },
-        .nominal => |n| .{ .nominal = .{
+        .nominal => |*n| .{ .nominal = .{
             .name = n.name,
             .origin_module = n.origin_module,
-            .owner_module = n.owner_module,
+            .owner_module = &n.owner_module,
             .source_decl = n.source_decl,
             .builtin = n.builtin,
             .is_opaque = n.is_opaque,
@@ -3685,7 +3765,7 @@ fn checkedTypePairEqlStep(
             const right_alias = right_payload.alias;
             if (left_alias.name != right_alias.name or
                 left_alias.origin_module != right_alias.origin_module or
-                !std.meta.eql(left_alias.owner_module, right_alias.owner_module) or
+                !std.meta.eql(left_alias.owner_module.*, right_alias.owner_module.*) or
                 left_alias.source_decl != right_alias.source_decl or
                 left_alias.builtin_origin != right_alias.builtin_origin or
                 !try appendCheckedTypePairs(allocator, pending, left_alias.args, right_alias.args))
@@ -3724,7 +3804,7 @@ fn checkedTypePairEqlStep(
             const right_nominal = right_payload.nominal;
             return left_nominal.name == right_nominal.name and
                 left_nominal.origin_module == right_nominal.origin_module and
-                std.meta.eql(left_nominal.owner_module, right_nominal.owner_module) and
+                std.meta.eql(left_nominal.owner_module.*, right_nominal.owner_module.*) and
                 left_nominal.source_decl == right_nominal.source_decl and
                 left_nominal.builtin == right_nominal.builtin and
                 left_nominal.is_opaque == right_nominal.is_opaque and
@@ -5384,7 +5464,7 @@ pub const CheckedTypeStore = struct {
             .alias => |a| .{ .alias = .{
                 .name = a.name,
                 .origin_module = a.origin_module,
-                .owner_module = a.owner_module,
+                .owner_module = a.owner_module.*,
                 .source_decl = a.source_decl,
                 .builtin_origin = a.builtin_origin,
                 .backing = a.backing,
@@ -5398,7 +5478,7 @@ pub const CheckedTypeStore = struct {
             .nominal => |n| .{ .nominal = .{
                 .name = n.name,
                 .origin_module = n.origin_module,
-                .owner_module = n.owner_module,
+                .owner_module = n.owner_module.*,
                 .source_decl = n.source_decl,
                 .builtin = n.builtin,
                 .is_opaque = n.is_opaque,
@@ -6055,7 +6135,7 @@ const DeclarationAnnoWalk = struct {
     const AliasBody = struct {
         statement: CIR.Statement.Idx,
         formals: []DeclarationFormal,
-        alias: CheckedAliasType,
+        alias: CheckedAliasTypeBuild,
     };
 
     fn deinit(self: *DeclarationAnnoWalk) void {
@@ -6462,7 +6542,7 @@ const DeclarationAnnoWalk = struct {
                 .alias = .{
                     .name = generic_alias.name,
                     .origin_module = generic_alias.origin_module,
-                    .owner_module = generic_alias.owner_module,
+                    .owner_module = generic_alias.owner_module.*,
                     .source_decl = generic_alias.source_decl,
                     .builtin_origin = generic_alias.builtin_origin,
                     .backing = undefined,
@@ -6480,7 +6560,7 @@ const DeclarationAnnoWalk = struct {
 
     /// Publish a walked alias expansion, which owns `alias.args`, and record
     /// it for every later reference at the same argument roots.
-    fn publishAliasExpansion(self: *DeclarationAnnoWalk, statement_idx: CIR.Statement.Idx, alias: CheckedAliasType) Allocator.Error!CheckedTypeId {
+    fn publishAliasExpansion(self: *DeclarationAnnoWalk, statement_idx: CIR.Statement.Idx, alias: CheckedAliasTypeBuild) Allocator.Error!CheckedTypeId {
         const scratch = &self.active.scratch.?;
         const key_args: []const CheckedTypeId = if (alias.args.len == 0) &.{} else scratch.allocator.dupe(CheckedTypeId, alias.args) catch |err| {
             self.allocator.free(alias.args);
@@ -6520,7 +6600,7 @@ fn appendInstantiatedNamedApplicationFromTemplate(
             break :blk try appendExplicitCheckedTypePayload(allocator, names, store, .{ .alias = .{
                 .name = alias.name,
                 .origin_module = alias.origin_module,
-                .owner_module = alias.owner_module,
+                .owner_module = alias.owner_module.*,
                 .source_decl = alias.source_decl,
                 .builtin_origin = alias.builtin_origin,
                 .backing = backing,
@@ -6552,7 +6632,7 @@ fn appendInstantiatedNamedApplicationFromTemplate(
             break :blk try appendExplicitCheckedTypePayload(allocator, names, store, .{ .nominal = .{
                 .name = nominal.name,
                 .origin_module = nominal.origin_module,
-                .owner_module = nominal.owner_module,
+                .owner_module = nominal.owner_module.*,
                 .source_decl = nominal.source_decl,
                 .builtin = nominal.builtin,
                 .is_opaque = nominal.is_opaque,
@@ -7087,7 +7167,7 @@ fn checkedTypePayloadBuildEqlStored(
             const right = stored.alias;
             break :blk left.name == right.name and
                 left.origin_module == right.origin_module and
-                checkedArtifactKeyEql(left.owner_module, right.owner_module) and
+                checkedArtifactKeyEql(left.owner_module, right.owner_module.*) and
                 left.source_decl == right.source_decl and
                 left.builtin_origin == right.builtin_origin and
                 left.backing == right.backing and
@@ -7107,7 +7187,7 @@ fn checkedTypePayloadBuildEqlStored(
             const right = stored.nominal;
             break :blk left.name == right.name and
                 left.origin_module == right.origin_module and
-                checkedArtifactKeyEql(left.owner_module, right.owner_module) and
+                checkedArtifactKeyEql(left.owner_module, right.owner_module.*) and
                 left.source_decl == right.source_decl and
                 left.builtin == right.builtin and
                 left.is_opaque == right.is_opaque and
@@ -7558,11 +7638,11 @@ const CheckedTypeKeyAdapter = struct {
                 }
                 try self.describeTagUnion(sink, null, tag_union.ext);
             },
+            .alias => |*alias| return try self.describeContent(sink, .{ .alias = alias.asRead() }),
+            .nominal => |*nominal| return try self.describeContent(sink, .{ .nominal = nominal.asRead() }),
             inline .pending,
             .err,
-            .alias,
             .tuple,
-            .nominal,
             .function,
             .empty_record,
             .empty_tag_union,
@@ -26628,7 +26708,7 @@ fn dispatchSubstitutionStep(
             };
             if (target_nominal.name != plan_nominal.name or
                 target_nominal.origin_module != plan_nominal.origin_module or
-                !checkedArtifactKeyEql(target_nominal.owner_module, plan_nominal.owner_module) or
+                !checkedArtifactKeyEql(target_nominal.owner_module.*, plan_nominal.owner_module.*) or
                 target_nominal.source_decl != plan_nominal.source_decl or
                 target_nominal.builtin != plan_nominal.builtin or
                 target_nominal.args.len != plan_nominal.args.len)
@@ -31106,7 +31186,7 @@ fn appendPublicApiTypeDependencies(
                 try appendPublicApiOwnerDependency(
                     allocator,
                     artifact_key,
-                    alias.owner_module,
+                    alias.owner_module.*,
                     imports,
                     available_artifacts,
                     keys,
@@ -31119,7 +31199,7 @@ fn appendPublicApiTypeDependencies(
                 try appendPublicApiOwnerDependency(
                     allocator,
                     artifact_key,
-                    nominal.owner_module,
+                    nominal.owner_module.*,
                     imports,
                     available_artifacts,
                     keys,
@@ -31639,12 +31719,12 @@ const LoweringVisibilityBuilder = struct {
             .err, .empty_record, .empty_tag_union => {},
             .flex, .rigid => |variable| for (variable.constraints) |constraint| try pending.append(gpa, constraint.fn_ty),
             .alias => |alias| {
-                try self.appendKey(alias.owner_module);
+                try self.appendKey(alias.owner_module.*);
                 try pending.append(gpa, alias.backing);
                 try pending.appendSlice(gpa, alias.args);
             },
             .nominal => |nominal| {
-                try self.appendKey(nominal.owner_module);
+                try self.appendKey(nominal.owner_module.*);
                 if (store.nominalBackingTemplateForPayload(nominal)) |backing| {
                     try pending.append(gpa, backing);
                 }
@@ -36309,7 +36389,7 @@ const CheckedTypeStoreImportProjector = struct {
                 break :blk .{ .alias = .{
                     .name = name,
                     .origin_module = origin_module,
-                    .owner_module = alias.owner_module,
+                    .owner_module = alias.owner_module.*,
                     .source_decl = alias.source_decl,
                     .builtin_origin = alias.builtin_origin,
                     .backing = backing,
@@ -36359,7 +36439,7 @@ const CheckedTypeStoreImportProjector = struct {
                 break :blk .{ .nominal = .{
                     .name = name,
                     .origin_module = origin_module,
-                    .owner_module = nominal.owner_module,
+                    .owner_module = nominal.owner_module.*,
                     .source_decl = nominal.source_decl,
                     .builtin = nominal.builtin,
                     .is_opaque = nominal.is_opaque,

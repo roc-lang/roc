@@ -7712,7 +7712,7 @@ test "requires signature naming a for-clause alias resolves to the app declarati
         "Model",
         app_artifact.canonical_names.typeNameText(identity_payload.alias.name),
     );
-    try std.testing.expect(Coordinator.checkedArtifactKeyEql(identity_payload.alias.owner_module, app_artifact.key));
+    try std.testing.expect(Coordinator.checkedArtifactKeyEql(identity_payload.alias.owner_module.*, app_artifact.key));
 
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
