@@ -45,22 +45,17 @@ pub fn runProc(store: *LirStore, proc_id: LIR.LirProcSpecId, scratch_allocator: 
     while (work.pop()) |stmt_id| {
         if ((try visited.getOrPut(stmt_id)).found_existing) continue;
         try BodyClone.appendSuccessors(store, &work, stmt_id, scratch_allocator);
-        const stmt = store.getCFStmt(stmt_id);
-        switch (stmt) {
-            inline .store_struct, .store_tag => |s| try define(&definitions, s.dest, stmt_id),
-            // A written local names different values at different points.
-            .set_local => |s| try definitions.put(s.target, null),
-            .join => |s| {
-                const params = store.getLocalSpan(s.params);
-                for (0..GuardedList.borrowLen(params)) |i| try definitions.put(GuardedList.at(params, i), null);
-            },
-            .switch_stmt => try switches.append(scratch_allocator, stmt_id),
-            .init_uninitialized,
+        switch (store.getCFStmt(stmt_id)) {
+            inline .init_uninitialized,
             .assign_ref,
             .assign_literal,
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_box,
@@ -72,29 +67,17 @@ pub fn runProc(store: *LirStore, proc_id: LIR.LirProcSpecId, scratch_allocator: 
             .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
-            .boxy_tag_match,
             .assign_call_dict,
-            .assign_low_level,
-            .assign_list,
-            .assign_struct,
-            .assign_tag,
-            .debug,
-            .expect,
-            .expect_err,
-            .runtime_error,
-            .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
-            .incref,
-            .decref,
-            .decref_if_initialized,
-            .free,
-            .switch_initialized_payload,
-            .str_match,
-            .str_match_set,
-            .jump,
-            .ret,
-            .crash,
-            => if (BodyClone.definedTarget(stmt)) |target| try define(&definitions, target, stmt_id),
+            => |s| try define(&definitions, s.target, stmt_id),
+            inline .store_struct, .store_tag => |s| try define(&definitions, s.dest, stmt_id),
+            // A written local names different values at different points.
+            .set_local => |s| try definitions.put(s.target, null),
+            .join => |s| {
+                const params = store.getLocalSpan(s.params);
+                for (0..GuardedList.borrowLen(params)) |i| try definitions.put(GuardedList.at(params, i), null);
+            },
+            .switch_stmt => try switches.append(scratch_allocator, stmt_id),
+            .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .jump, .ret, .crash => {},
         }
     }
 

@@ -936,6 +936,7 @@ const FutureFields = struct {
                 .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
+                .boxy_tag_match,
                 .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
@@ -945,6 +946,9 @@ const FutureFields = struct {
                 .store_tag,
                 .debug,
                 .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
                 .comptime_branch_taken,
                 .incref,
                 .decref,
@@ -953,12 +957,8 @@ const FutureFields = struct {
                 .switch_initialized_payload,
                 .str_match,
                 .str_match_set,
-                .boxy_tag_match,
                 .ret,
                 .crash,
-                .expect_err,
-                .runtime_error,
-                .comptime_exhaustiveness_failed,
                 => {
                     successors.clearRetainingCapacity();
                     try body_clone.appendSuccessors(store, &successors, cursor, gpa);
@@ -1038,6 +1038,7 @@ fn fieldObservedAfter(
             .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
+            .boxy_tag_match,
             .assign_call_dict,
             .assign_low_level,
             .assign_list,
@@ -1047,6 +1048,9 @@ fn fieldObservedAfter(
             .store_tag,
             .debug,
             .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
             .comptime_branch_taken,
             .incref,
             .decref,
@@ -1055,12 +1059,8 @@ fn fieldObservedAfter(
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .boxy_tag_match,
             .ret,
             .crash,
-            .expect_err,
-            .runtime_error,
-            .comptime_exhaustiveness_failed,
             => try body_clone.appendSuccessors(store, &work, cursor, gpa),
         }
     }
@@ -1865,10 +1865,7 @@ pub fn compute(
         const current_stmt = store.getCFStmt(current);
         body_clone.countStmtReads(store, operand_read_counts, current_stmt);
         switch (current_stmt) {
-            .init_uninitialized => |stmt| {
-                try analysis.useWhole(current, stmt.target);
-                try stack.append(gpa, stmt.next);
-            },
+            .init_uninitialized => |stmt| try analysis.useWhole(current, stmt.target),
             .assign_ref => |stmt| {
                 switch (stmt.op) {
                     .field => |op| {
@@ -1902,12 +1899,8 @@ pub fn compute(
                         analysis.disqualify(stmt.target);
                     },
                 }
-                try stack.append(gpa, stmt.next);
             },
-            .assign_literal => |stmt| {
-                try analysis.noteDef(stmt.target, current);
-                try stack.append(gpa, stmt.next);
-            },
+            .assign_literal => |stmt| try analysis.noteDef(stmt.target, current),
             .assign_call => |stmt| {
                 const args = store.getLocalSpan(stmt.args);
                 const callee_sig = solution.sigOf(stmt.proc);
@@ -1921,7 +1914,6 @@ pub fn compute(
                     if (callee_sig.paramMode(i) == .owned) analysis.demandOwned(arg);
                 }
                 try analysis.noteDef(stmt.target, current);
-                try stack.append(gpa, stmt.next);
             },
             .assign_call_erased => |stmt| {
                 try analysis.useWhole(current, stmt.closure);
@@ -1929,13 +1921,11 @@ pub fn compute(
                 const args = store.getLocalSpan(stmt.args);
                 for (0..GuardedList.borrowLen(args)) |i| try analysis.useWholeAt(GuardedList.at(args, i), current);
                 try analysis.noteDef(stmt.target, current);
-                try stack.append(gpa, stmt.next);
             },
             .assign_packed_erased_fn => |stmt| {
                 if (stmt.capture) |capture| try analysis.useWhole(current, capture);
                 if (stmt.reuse) |reuse| try analysis.useWhole(current, reuse);
                 try analysis.noteDef(stmt.target, current);
-                try stack.append(gpa, stmt.next);
             },
             .assign_boxy_desc_ref => |stmt| {
                 if (stmt.desc.localOrNull()) |local| try analysis.useWhole(current, local);
@@ -1944,7 +1934,6 @@ pub fn compute(
                 for (0..GuardedList.borrowLen(captures)) |i| try analysis.useWhole(current, GuardedList.at(captures, i));
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
             },
             .assign_boxy_dict_ref => |stmt| {
                 if (stmt.dict.localOrNull()) |local| try analysis.useWhole(current, local);
@@ -1952,46 +1941,39 @@ pub fn compute(
                 for (0..GuardedList.borrowLen(captures)) |i| try analysis.useWhole(current, GuardedList.at(captures, i));
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
             },
             .assign_boxy_box => |stmt| {
                 try analysis.useWhole(current, stmt.payload);
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
             },
             .assign_boxy_record_update => |stmt| {
                 try analysis.useWhole(current, stmt.base);
                 try analysis.useWhole(current, stmt.fields);
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
             },
             inline .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect => |stmt| {
                 try analysis.useWhole(current, stmt.source);
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
             },
             .assign_boxy_eq => |stmt| {
                 try analysis.useWhole(current, stmt.lhs);
                 try analysis.useWhole(current, stmt.rhs);
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
             },
             .assign_boxy_hash => |stmt| {
                 try analysis.useWhole(current, stmt.value);
                 try analysis.useWhole(current, stmt.hasher);
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
             },
             .assign_boxy_tag => |stmt| {
                 if (stmt.payload) |payload| try analysis.useWhole(current, payload);
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
             },
             .assign_boxy_tag_payload => |stmt| {
                 try analysis.useWhole(current, stmt.source);
@@ -2001,7 +1983,6 @@ pub fn compute(
                     try analysis.noteDef(target_desc, current);
                     analysis.disqualify(target_desc);
                 }
-                try stack.append(gpa, stmt.next);
             },
             .assign_call_dict => |stmt| {
                 if (stmt.dict.localOrNull()) |local| try analysis.useWhole(current, local);
@@ -2013,7 +1994,6 @@ pub fn compute(
                 for (0..GuardedList.borrowLen(hidden_args)) |i| try analysis.useWhole(current, GuardedList.at(hidden_args, i));
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
             },
             .assign_low_level => |stmt| {
                 const args = store.getLocalSpan(stmt.args);
@@ -2024,35 +2004,29 @@ pub fn compute(
                     if (i < 64 and (demand_mask & (@as(u64, 1) << @intCast(i))) != 0) analysis.demandOwned(arg);
                 }
                 try analysis.noteDef(stmt.target, current);
-                try stack.append(gpa, stmt.next);
             },
             .assign_list => |stmt| {
                 const elems = store.getLocalSpan(stmt.elems);
                 for (0..GuardedList.borrowLen(elems)) |i| try analysis.useWholeAt(GuardedList.at(elems, i), current);
                 try analysis.noteDef(stmt.target, current);
-                try stack.append(gpa, stmt.next);
             },
             .assign_struct => |stmt| {
                 const fields = store.getLocalSpan(stmt.fields);
                 for (0..GuardedList.borrowLen(fields)) |i| try analysis.useWholeAt(GuardedList.at(fields, i), current);
                 try analysis.noteDef(stmt.target, current);
-                try stack.append(gpa, stmt.next);
             },
             .assign_tag => |stmt| {
                 if (stmt.payload) |payload| try analysis.useWholeAt(payload, current);
                 try analysis.noteDef(stmt.target, current);
-                try stack.append(gpa, stmt.next);
             },
             .store_struct => |stmt| {
                 try analysis.useWhole(current, stmt.dest);
                 const fields = store.getLocalSpan(stmt.fields);
                 for (0..GuardedList.borrowLen(fields)) |i| try analysis.useWhole(current, GuardedList.at(fields, i));
-                try stack.append(gpa, stmt.next);
             },
             .store_tag => |stmt| {
                 try analysis.useWhole(current, stmt.dest);
                 if (stmt.payload) |payload| try analysis.useWhole(current, payload);
-                try stack.append(gpa, stmt.next);
             },
             .set_local => |stmt| {
                 try analysis.useWholeAt(stmt.value, current);
@@ -2061,44 +2035,22 @@ pub fn compute(
                 } else {
                     try analysis.useWhole(current, stmt.target);
                 }
-                try stack.append(gpa, stmt.next);
             },
-            .debug => |stmt| {
-                try analysis.useWhole(current, stmt.message);
-                try stack.append(gpa, stmt.next);
-            },
-            .expect => |stmt| {
-                try analysis.useWhole(current, stmt.condition);
-                try stack.append(gpa, stmt.next);
-            },
+            .debug => |stmt| try analysis.useWhole(current, stmt.message),
+            .expect => |stmt| try analysis.useWhole(current, stmt.condition),
             .expect_err => |stmt| try analysis.useWhole(current, stmt.message),
-            .runtime_error, .comptime_exhaustiveness_failed, .jump => {},
-            .comptime_branch_taken => |stmt| try stack.append(gpa, stmt.next),
+            .runtime_error, .comptime_exhaustiveness_failed, .jump, .comptime_branch_taken => {},
             // The input contract is RC-free LIR; if RC statements ever appear
             // here, classifying their operands as whole uses stays sound.
-            inline .incref, .decref, .free => |stmt| {
-                try analysis.useWhole(current, stmt.value);
-                try stack.append(gpa, stmt.next);
-            },
+            inline .incref, .decref, .free => |stmt| try analysis.useWhole(current, stmt.value),
             .decref_if_initialized => |stmt| {
                 try analysis.useWhole(current, stmt.cond);
                 try analysis.useWhole(current, stmt.value);
-                try stack.append(gpa, stmt.next);
             },
-            .switch_stmt => |stmt| {
-                try analysis.useWhole(current, stmt.cond);
-                const branches = store.getCFSwitchBranches(stmt.branches);
-                for (0..GuardedList.borrowLen(branches)) |i| {
-                    try stack.append(gpa, GuardedList.at(branches, i).body);
-                }
-                try stack.append(gpa, stmt.default_branch);
-                if (stmt.continuation) |continuation| try stack.append(gpa, continuation);
-            },
+            .switch_stmt => |stmt| try analysis.useWhole(current, stmt.cond),
             .switch_initialized_payload => |stmt| {
                 try analysis.useWhole(current, stmt.cond);
                 try analysis.useWhole(current, stmt.payload);
-                try stack.append(gpa, stmt.initialized_branch);
-                try stack.append(gpa, stmt.uninitialized_branch);
             },
             .str_match => |stmt| {
                 try analysis.useWhole(current, stmt.source);
@@ -2109,8 +2061,6 @@ pub fn compute(
                         .view => |view_local| try analysis.useWhole(current, view_local),
                     }
                 }
-                try stack.append(gpa, stmt.on_match);
-                try stack.append(gpa, stmt.on_miss);
             },
             .str_match_set => |stmt| {
                 try analysis.useWhole(current, stmt.source);
@@ -2124,24 +2074,16 @@ pub fn compute(
                             .view => |view_local| try analysis.useWhole(current, view_local),
                         }
                     }
-                    try stack.append(gpa, arm.on_match);
                 }
-                try stack.append(gpa, stmt.on_miss);
             },
-            .boxy_tag_match => |stmt| {
-                try analysis.useWhole(current, stmt.source);
-                try stack.append(gpa, stmt.on_match);
-                try stack.append(gpa, stmt.on_miss);
-            },
-            .join => |stmt| {
-                // Join parameters are excluded by the gate; the condition
-                // locals are scalar presence words.
-                try stack.append(gpa, stmt.body);
-                try stack.append(gpa, stmt.remainder);
-            },
+            .boxy_tag_match => |stmt| try analysis.useWhole(current, stmt.source),
+            // Join parameters are excluded by the gate; the condition locals
+            // are scalar presence words.
+            .join => {},
             .ret => |stmt| try analysis.useWholeAt(stmt.value, current),
             .crash => |stmt| if (stmt.msg.localId()) |message| try analysis.useWholeAt(message, current),
         }
+        try body_clone.appendSuccessorsInOrder(store, &stack, current, gpa, .{ .switch_edges = .arms_first });
     }
 
     analysis.closeOwnedDemand();

@@ -430,8 +430,7 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
 
         var crash_boundary = runtime_env.enterCrashBoundary();
         defer crash_boundary.deinit();
-        const sj = crash_boundary.set();
-        if (sj != 0) return crashResult(allocator, &runtime_env, null);
+        if (crash_boundary.set() != 0) return crashResult(allocator, &runtime_env, null);
 
         const entered = builtins.in_process_host.enter(runtime_env.get_ops(), null);
         defer builtins.in_process_host.leave(entered);
@@ -658,8 +657,7 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
     defer crash_boundary.deinit();
     const entered = builtins.in_process_host.enter(runtime_env.get_ops(), null);
     defer builtins.in_process_host.leave(entered);
-    const sj = crash_boundary.set();
-    if (sj != 0) return crashResult(allocator, &runtime_env, null);
+    if (crash_boundary.set() != 0) return crashResult(allocator, &runtime_env, null);
 
     entry(
         ret_buf.ptr,
@@ -776,7 +774,8 @@ pub fn zeroedEntrypointArgBuffer(
     return buffer;
 }
 
-fn copyReturnedRocStr(
+/// Copy the Roc `Str` an entrypoint returned at `value_ptr` and release the returned ownership through `roc_ops`.
+pub fn copyReturnedRocStr(
     allocator: Allocator,
     layouts: *const LayoutStore,
     ret_layout: LayoutIdx,

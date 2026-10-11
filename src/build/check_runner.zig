@@ -15,6 +15,97 @@ fn fail(comptime format: []const u8, args: anytype) error{CheckFailed} {
     return error.CheckFailed;
 }
 
+/// One offending source line found by a pattern check.
+const Violation = struct {
+    file_path: []const u8,
+    line_number: usize,
+    line_content: []const u8,
+};
+
+/// Which files and lines a recursive `.zig` source scan visits.
+const ZigTreeScanOptions = struct {
+    /// Skip files carrying `vendored_zig_marker`.
+    skip_vendored: bool = false,
+    /// Skip `_test.zig` files and anything under a `test` directory.
+    skip_tests: bool = false,
+    /// Skip lines whose trimmed text starts with `//`.
+    skip_comments: bool = false,
+};
+
+/// Records one violation per count that `lineViolations(full_path,
+/// line_number, line, trimmed)` reports for each newline-terminated line of
+/// every `.zig` file under `dir_path`.
+fn scanZigTree(
+    ctx: Context,
+    dir_path: []const u8,
+    options: ZigTreeScanOptions,
+    violations: *std.ArrayList(Violation),
+    comptime lineViolations: fn ([]const u8, usize, []const u8, []const u8) usize,
+) !void {
+    const allocator = ctx.allocator;
+    const io = ctx.io;
+    var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true }) catch |err| {
+        return fail("Failed to open {s} directory: {}", .{ dir_path, err });
+    };
+    defer dir.close(io);
+
+    var walker = try dir.walk(allocator);
+    defer walker.deinit();
+
+    while (try walker.next(io)) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.path, ".zig")) continue;
+        if (options.skip_tests) {
+            if (std.mem.endsWith(u8, entry.path, "_test.zig")) continue;
+            if (std.mem.find(u8, entry.path, "test/") != null) continue;
+            if (std.mem.startsWith(u8, entry.path, "test")) continue;
+        }
+
+        const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir_path, entry.path });
+
+        const content = dir.readFileAlloc(io, entry.path, allocator, .limited(10 * 1024 * 1024)) catch continue;
+        defer allocator.free(content);
+
+        if (options.skip_vendored and std.mem.find(u8, content, vendored_zig_marker) != null) continue;
+
+        var line_number: usize = 1;
+        var line_start: usize = 0;
+        for (content, 0..) |char, i| {
+            if (char != '\n') continue;
+            const line = content[line_start..i];
+            const trimmed = std.mem.trim(u8, line, " \t");
+            if (!(options.skip_comments and std.mem.startsWith(u8, trimmed, "//"))) {
+                for (0..lineViolations(full_path, line_number, line, trimmed)) |_| {
+                    try violations.append(allocator, .{
+                        .file_path = full_path,
+                        .line_number = line_number,
+                        .line_content = try allocator.dupe(u8, trimmed),
+                    });
+                }
+            }
+            line_number += 1;
+            line_start = i + 1;
+        }
+    }
+}
+
+/// Prints the banner, explanation, and violation list of a failed pattern check.
+fn printViolationReport(comptime title: []const u8, comptime explanation: []const u8, violations: []const Violation) void {
+    std.debug.print("\n", .{});
+    std.debug.print(@as([80]u8, @splat('=')) ++ "\n", .{});
+    std.debug.print(title ++ "\n", .{});
+    std.debug.print(@as([80]u8, @splat('=')) ++ "\n\n", .{});
+    std.debug.print(explanation, .{});
+    for (violations) |violation| {
+        std.debug.print("  {s}:{d}: {s}\n", .{
+            violation.file_path,
+            violation.line_number,
+            violation.line_content,
+        });
+    }
+    std.debug.print("\n" ++ @as([80]u8, @splat('=')) ++ "\n", .{});
+}
+
 /// Dispatch the requested build check using its declared inputs and arguments.
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.gpa);
@@ -53,22 +144,12 @@ const CheckTypeCheckerPatternsStep = struct {
         // TODO: uncomment "src/canonicalize" once its std.mem violations are fixed
         const dirs_to_scan = [_][]const u8{ "src/check", "src/layout", "src/eval" };
         for (dirs_to_scan) |dir_path| {
-            const io = ctx.io;
-            var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true }) catch |err| {
-                return fail("Failed to open {s} directory: {}", .{ dir_path, err });
-            };
-            defer dir.close(io);
-
-            try scanDirectory(allocator, io, dir, dir_path, &violations);
+            try scanZigTree(ctx, dir_path, .{ .skip_tests = true, .skip_comments = true }, &violations, lineViolations);
         }
 
         if (violations.items.len > 0) {
-            std.debug.print("\n", .{});
-            std.debug.print(@as([80]u8, @splat('=')) ++ "\n", .{});
-            std.debug.print("FORBIDDEN PATTERN DETECTED\n", .{});
-            std.debug.print(@as([80]u8, @splat('=')) ++ "\n\n", .{});
-
-            std.debug.print(
+            printViolationReport(
+                "FORBIDDEN PATTERN DETECTED",
                 \\Code in src/canonicalize/, src/check/, src/layout/, and src/eval/ must NOT do raw string comparison or manipulation.
                 \\
                 \\WHY THIS RULE EXISTS:
@@ -96,17 +177,9 @@ const CheckTypeCheckerPatternsStep = struct {
                 \\
                 \\VIOLATIONS FOUND:
                 \\
-            , .{});
-
-            for (violations.items) |violation| {
-                std.debug.print("  {s}:{d}: {s}\n", .{
-                    violation.file_path,
-                    violation.line_number,
-                    violation.line_content,
-                });
-            }
-
-            std.debug.print("\n" ++ @as([80]u8, @splat('=')) ++ "\n", .{});
+            ,
+                violations.items,
+            );
 
             return fail(
                 "Found {d} forbidden patterns (raw string comparison or manipulation) in src/canonicalize/, src/check/, src/layout/, or src/eval/. " ++
@@ -115,12 +188,6 @@ const CheckTypeCheckerPatternsStep = struct {
             );
         }
     }
-
-    const Violation = struct {
-        file_path: []const u8,
-        line_number: usize,
-        line_content: []const u8,
-    };
 
     const ExcludedRange = struct { file: []const u8, start: usize, end: usize };
     const excluded_ranges = [_]ExcludedRange{
@@ -171,113 +238,46 @@ const CheckTypeCheckerPatternsStep = struct {
         return false;
     }
 
-    fn scanDirectory(
-        allocator: std.mem.Allocator,
-        io: std.Io,
-        dir: std.Io.Dir,
-        path_prefix: []const u8,
-        violations: *std.ArrayList(Violation),
-    ) !void {
-        var walker = try dir.walk(allocator);
-        defer walker.deinit();
+    fn lineViolations(full_path: []const u8, line_number: usize, line: []const u8, _: []const u8) usize {
+        var count: usize = 0;
 
-        while (try walker.next(io)) |entry| {
-            if (entry.kind != .file) continue;
-            if (!std.mem.endsWith(u8, entry.path, ".zig")) continue;
+        // Check for std.mem. usage (but allow safe patterns)
+        if (std.mem.find(u8, line, "std.mem.")) |idx| {
+            const after_match = line[idx + 8 ..];
 
-            // Skip test files - they may legitimately need string comparison for assertions
-            if (std.mem.endsWith(u8, entry.path, "_test.zig")) continue;
-            if (std.mem.find(u8, entry.path, "test/") != null) continue;
-            if (std.mem.startsWith(u8, entry.path, "test")) continue;
+            // Allow these safe patterns that don't involve string/byte comparison:
+            // - std.mem.Allocator: a type, not a comparison
+            // - std.mem.Alignment: a type, not a comparison
+            // - std.mem.sort: sorting by custom comparator, not string comparison
+            // - std.mem.asBytes / bytesAsValue: type punning, not string comparison
+            // - std.mem.readInt / writeInt: fixed-width binary serialization
+            // - std.mem.reverse: reversing arrays, not string comparison
+            // - std.mem.alignForward: memory alignment arithmetic, not string comparison
+            // - std.mem.order: sort ordering (used by sort comparators), not string comparison
+            // - std.mem.copyForwards: byte copying, not string comparison
+            const is_allowed =
+                std.mem.startsWith(u8, after_match, "Allocator") or
+                std.mem.startsWith(u8, after_match, "Alignment") or
+                std.mem.startsWith(u8, after_match, "sort") or
+                std.mem.startsWith(u8, after_match, "asBytes") or
+                std.mem.startsWith(u8, after_match, "bytesAsValue(") or
+                std.mem.startsWith(u8, after_match, "readInt(") or
+                std.mem.startsWith(u8, after_match, "writeInt(") or
+                std.mem.startsWith(u8, after_match, "reverse") or
+                std.mem.startsWith(u8, after_match, "alignForward") or
+                std.mem.startsWith(u8, after_match, "order") or
+                std.mem.startsWith(u8, after_match, "copyForwards");
 
-            const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ path_prefix, entry.path });
-
-            const content = dir.readFileAlloc(io, entry.path, allocator, .limited(10 * 1024 * 1024)) catch continue;
-            defer allocator.free(content);
-
-            var line_number: usize = 1;
-            var line_start: usize = 0;
-
-            for (content, 0..) |char, i| {
-                if (char == '\n') {
-                    const line = content[line_start..i];
-
-                    const trimmed = std.mem.trim(u8, line, " \t");
-                    // Skip comments
-                    if (std.mem.startsWith(u8, trimmed, "//")) {
-                        line_number += 1;
-                        line_start = i + 1;
-                        continue;
-                    }
-
-                    // Check for std.mem. usage (but allow safe patterns)
-                    if (std.mem.find(u8, line, "std.mem.")) |idx| {
-                        const after_match = line[idx + 8 ..];
-
-                        // Allow these safe patterns that don't involve string/byte comparison:
-                        // - std.mem.Allocator: a type, not a comparison
-                        // - std.mem.Alignment: a type, not a comparison
-                        // - std.mem.sort: sorting by custom comparator, not string comparison
-                        // - std.mem.asBytes / bytesAsValue: type punning, not string comparison
-                        // - std.mem.readInt / writeInt: fixed-width binary serialization
-                        // - std.mem.reverse: reversing arrays, not string comparison
-                        // - std.mem.alignForward: memory alignment arithmetic, not string comparison
-                        // - std.mem.order: sort ordering (used by sort comparators), not string comparison
-                        // - std.mem.copyForwards: byte copying, not string comparison
-                        const is_allowed =
-                            std.mem.startsWith(u8, after_match, "Allocator") or
-                            std.mem.startsWith(u8, after_match, "Alignment") or
-                            std.mem.startsWith(u8, after_match, "sort") or
-                            std.mem.startsWith(u8, after_match, "asBytes") or
-                            std.mem.startsWith(u8, after_match, "bytesAsValue(") or
-                            std.mem.startsWith(u8, after_match, "readInt(") or
-                            std.mem.startsWith(u8, after_match, "writeInt(") or
-                            std.mem.startsWith(u8, after_match, "reverse") or
-                            std.mem.startsWith(u8, after_match, "alignForward") or
-                            std.mem.startsWith(u8, after_match, "order") or
-                            std.mem.startsWith(u8, after_match, "copyForwards");
-
-                        if (!is_allowed and !isInExcludedRange(full_path, line_number)) {
-                            try violations.append(allocator, .{
-                                .file_path = full_path,
-                                .line_number = line_number,
-                                .line_content = try allocator.dupe(u8, trimmed),
-                            });
-                        }
-                    }
-
-                    // Check for findByString usage - should use Ident.Idx comparison instead
-                    if (std.mem.find(u8, line, "findByString") != null and !isInExcludedRange(full_path, line_number)) {
-                        try violations.append(allocator, .{
-                            .file_path = full_path,
-                            .line_number = line_number,
-                            .line_content = try allocator.dupe(u8, trimmed),
-                        });
-                    }
-
-                    // Check for findIdent usage - should use pre-stored Ident.Idx instead
-                    if (std.mem.find(u8, line, "findIdent") != null and !isInExcludedRange(full_path, line_number)) {
-                        try violations.append(allocator, .{
-                            .file_path = full_path,
-                            .line_number = line_number,
-                            .line_content = try allocator.dupe(u8, trimmed),
-                        });
-                    }
-
-                    // Check for getMethodIdent usage - should use pre-stored Ident.Idx instead
-                    if (std.mem.find(u8, line, "getMethodIdent") != null and !isInExcludedRange(full_path, line_number)) {
-                        try violations.append(allocator, .{
-                            .file_path = full_path,
-                            .line_number = line_number,
-                            .line_content = try allocator.dupe(u8, trimmed),
-                        });
-                    }
-
-                    line_number += 1;
-                    line_start = i + 1;
-                }
-            }
+            if (!is_allowed and !isInExcludedRange(full_path, line_number)) count += 1;
         }
+
+        // findByString, findIdent, and getMethodIdent should use pre-stored
+        // Ident.Idx comparison instead.
+        for ([_][]const u8{ "findByString", "findIdent", "getMethodIdent" }) |pattern| {
+            if (std.mem.find(u8, line, pattern) != null and !isInExcludedRange(full_path, line_number)) count += 1;
+        }
+
+        return count;
     }
 };
 
@@ -288,22 +288,14 @@ const CheckEnumFromIntZeroStep = struct {
         var violations = std.ArrayList(Violation).empty;
         defer violations.deinit(allocator);
 
-        // Recursively scan src/ for .zig files
-        const io = ctx.io;
-        var dir = std.Io.Dir.cwd().openDir(io, "src", .{ .iterate = true }) catch |err| {
-            return fail("Failed to open src directory: {}", .{err});
-        };
-        defer dir.close(io);
-
-        try scanDirectoryForEnumFromIntZero(allocator, io, dir, "src", &violations);
+        // Vendored Zig-compiler files use upstream idioms this check would
+        // flag (e.g. zero-valued enum constants like `AddrSpace = @enumFromInt(0)`);
+        // exempt them, mirroring how ci/tidy.zig skips crates/.
+        try scanZigTree(ctx, "src", .{ .skip_vendored = true, .skip_comments = true }, &violations, lineViolations);
 
         if (violations.items.len > 0) {
-            std.debug.print("\n", .{});
-            std.debug.print(@as([80]u8, @splat('=')) ++ "\n", .{});
-            std.debug.print("FORBIDDEN PATTERN: @fromBackingInt(0) or @enumFromInt(0)\n", .{});
-            std.debug.print(@as([80]u8, @splat('=')) ++ "\n\n", .{});
-
-            std.debug.print(
+            printViolationReport(
+                "FORBIDDEN PATTERN: @fromBackingInt(0) or @enumFromInt(0)",
                 \\Using @fromBackingInt(0) or its legacy spelling @enumFromInt(0) is forbidden.
                 \\
                 \\WHY THIS RULE EXISTS:
@@ -327,17 +319,9 @@ const CheckEnumFromIntZeroStep = struct {
                 \\
                 \\VIOLATIONS FOUND:
                 \\
-            , .{});
-
-            for (violations.items) |violation| {
-                std.debug.print("  {s}:{d}: {s}\n", .{
-                    violation.file_path,
-                    violation.line_number,
-                    violation.line_content,
-                });
-            }
-
-            std.debug.print("\n" ++ @as([80]u8, @splat('=')) ++ "\n", .{});
+            ,
+                violations.items,
+            );
 
             return fail(
                 "Found {d} zero integer to enum conversions. Using placeholder values like this has consistently led to bugs in this code base. " ++
@@ -350,69 +334,13 @@ const CheckEnumFromIntZeroStep = struct {
         }
     }
 
-    const Violation = struct {
-        file_path: []const u8,
-        line_number: usize,
-        line_content: []const u8,
-    };
-
-    fn scanDirectoryForEnumFromIntZero(
-        allocator: std.mem.Allocator,
-        io: std.Io,
-        dir: std.Io.Dir,
-        path_prefix: []const u8,
-        violations: *std.ArrayList(Violation),
-    ) !void {
-        var walker = try dir.walk(allocator);
-        defer walker.deinit();
-
-        while (try walker.next(io)) |entry| {
-            if (entry.kind != .file) continue;
-            if (!std.mem.endsWith(u8, entry.path, ".zig")) continue;
-
-            const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ path_prefix, entry.path });
-
-            const content = dir.readFileAlloc(io, entry.path, allocator, .limited(10 * 1024 * 1024)) catch continue;
-            defer allocator.free(content);
-
-            // Vendored Zig-compiler files use upstream idioms this check would
-            // flag (e.g. zero-valued enum constants like `AddrSpace = @enumFromInt(0)`);
-            // exempt them, mirroring how ci/tidy.zig skips crates/.
-            if (std.mem.find(u8, content, vendored_zig_marker) != null) continue;
-
-            var line_number: usize = 1;
-            var line_start: usize = 0;
-
-            for (content, 0..) |char, i| {
-                if (char == '\n') {
-                    const line = content[line_start..i];
-
-                    const trimmed = std.mem.trim(u8, line, " \t");
-                    // Skip comments
-                    if (std.mem.startsWith(u8, trimmed, "//")) {
-                        line_number += 1;
-                        line_start = i + 1;
-                        continue;
-                    }
-
-                    // Zig 0.17's formatter renames the legacy builtin spelling.
-                    if (std.mem.find(u8, line, "@fromBackingInt(0)") != null or
-                        std.mem.find(u8, line, "@fromBackingInt(@intCast(0))") != null or
-                        std.mem.find(u8, line, "@enumFromInt(0)") != null or
-                        std.mem.find(u8, line, "@enumFromInt(@intCast(0))") != null)
-                    {
-                        try violations.append(allocator, .{
-                            .file_path = full_path,
-                            .line_number = line_number,
-                            .line_content = try allocator.dupe(u8, trimmed),
-                        });
-                    }
-
-                    line_number += 1;
-                    line_start = i + 1;
-                }
-            }
-        }
+    fn lineViolations(_: []const u8, _: usize, line: []const u8, _: []const u8) usize {
+        // Zig 0.17's formatter renames the legacy builtin spelling.
+        const found = std.mem.find(u8, line, "@fromBackingInt(0)") != null or
+            std.mem.find(u8, line, "@fromBackingInt(@intCast(0))") != null or
+            std.mem.find(u8, line, "@enumFromInt(0)") != null or
+            std.mem.find(u8, line, "@enumFromInt(@intCast(0))") != null;
+        return @intFromBool(found);
     }
 };
 
@@ -423,22 +351,14 @@ const CheckUnusedSuppressionStep = struct {
         var violations = std.ArrayList(Violation).empty;
         defer violations.deinit(allocator);
 
-        // Scan all src/ directories for .zig files
-        const io = ctx.io;
-        var dir = std.Io.Dir.cwd().openDir(io, "src", .{ .iterate = true }) catch |err| {
-            return fail("Failed to open src/ directory: {}", .{err});
-        };
-        defer dir.close(io);
-
-        try scanDirectoryForUnusedSuppression(allocator, io, dir, "src", &violations);
+        // Vendored Zig-compiler files carry upstream idioms this check would
+        // flag (e.g. `_ =` suppressions in unimplemented TODO stubs whose
+        // signatures are fixed by their callers); exempt them.
+        try scanZigTree(ctx, "src", .{ .skip_vendored = true }, &violations, lineViolations);
 
         if (violations.items.len > 0) {
-            std.debug.print("\n", .{});
-            std.debug.print(@as([80]u8, @splat('=')) ++ "\n", .{});
-            std.debug.print("UNUSED VARIABLE SUPPRESSION DETECTED\n", .{});
-            std.debug.print(@as([80]u8, @splat('=')) ++ "\n\n", .{});
-
-            std.debug.print(
+            printViolationReport(
+                "UNUSED VARIABLE SUPPRESSION DETECTED",
                 \\In this codebase, we do NOT use `_ = variable;` to suppress unused warnings.
                 \\
                 \\Instead, you should:
@@ -448,17 +368,9 @@ const CheckUnusedSuppressionStep = struct {
                 \\
                 \\VIOLATIONS FOUND:
                 \\
-            , .{});
-
-            for (violations.items) |violation| {
-                std.debug.print("  {s}:{d}: {s}\n", .{
-                    violation.file_path,
-                    violation.line_number,
-                    violation.line_content,
-                });
-            }
-
-            std.debug.print("\n" ++ @as([80]u8, @splat('=')) ++ "\n", .{});
+            ,
+                violations.items,
+            );
 
             return fail(
                 "Found {d} unused variable suppression patterns (`_ = identifier;`). " ++
@@ -468,59 +380,8 @@ const CheckUnusedSuppressionStep = struct {
         }
     }
 
-    const Violation = struct {
-        file_path: []const u8,
-        line_number: usize,
-        line_content: []const u8,
-    };
-
-    fn scanDirectoryForUnusedSuppression(
-        allocator: std.mem.Allocator,
-        io: std.Io,
-        dir: std.Io.Dir,
-        path_prefix: []const u8,
-        violations: *std.ArrayList(Violation),
-    ) !void {
-        var walker = try dir.walk(allocator);
-        defer walker.deinit();
-
-        while (try walker.next(io)) |entry| {
-            if (entry.kind != .file) continue;
-            if (!std.mem.endsWith(u8, entry.path, ".zig")) continue;
-
-            const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ path_prefix, entry.path });
-
-            const content = dir.readFileAlloc(io, entry.path, allocator, .limited(10 * 1024 * 1024)) catch continue;
-            defer allocator.free(content);
-
-            // Vendored Zig-compiler files carry upstream idioms this check would
-            // flag (e.g. `_ =` suppressions in unimplemented TODO stubs whose
-            // signatures are fixed by their callers); exempt them.
-            if (std.mem.find(u8, content, vendored_zig_marker) != null) continue;
-
-            var line_number: usize = 1;
-            var line_start: usize = 0;
-
-            for (content, 0..) |char, i| {
-                if (char == '\n') {
-                    const line = content[line_start..i];
-                    const trimmed = std.mem.trim(u8, line, " \t");
-
-                    // Check for pattern: _ = identifier;
-                    // where identifier is alphanumeric with underscores
-                    if (isUnusedSuppression(trimmed)) {
-                        try violations.append(allocator, .{
-                            .file_path = full_path,
-                            .line_number = line_number,
-                            .line_content = try allocator.dupe(u8, trimmed),
-                        });
-                    }
-
-                    line_number += 1;
-                    line_start = i + 1;
-                }
-            }
-        }
+    fn lineViolations(_: []const u8, _: usize, _: []const u8, trimmed: []const u8) usize {
+        return @intFromBool(isUnusedSuppression(trimmed));
     }
 
     fn isUnusedSuppression(line: []const u8) bool {
@@ -732,12 +593,8 @@ const CheckPanicStep = struct {
         }
 
         if (violations.items.len > 0) {
-            std.debug.print("\n", .{});
-            std.debug.print(@as([80]u8, @splat('=')) ++ "\n", .{});
-            std.debug.print("FORBIDDEN PATTERN: @panic / std.debug.panic in runtime code\n", .{});
-            std.debug.print(@as([80]u8, @splat('=')) ++ "\n\n", .{});
-
-            std.debug.print(
+            printViolationReport(
+                "FORBIDDEN PATTERN: @panic / std.debug.panic in runtime code",
                 \\Using @panic or std.debug.panic is forbidden in interpreter and builtins.
                 \\
                 \\WHY THIS RULE EXISTS:
@@ -763,17 +620,9 @@ const CheckPanicStep = struct {
                 \\
                 \\VIOLATIONS FOUND:
                 \\
-            , .{});
-
-            for (violations.items) |violation| {
-                std.debug.print("  {s}:{d}: {s}\n", .{
-                    violation.file_path,
-                    violation.line_number,
-                    violation.line_content,
-                });
-            }
-
-            std.debug.print("\n" ++ @as([80]u8, @splat('=')) ++ "\n", .{});
+            ,
+                violations.items,
+            );
 
             return fail(
                 "Found {d} uses of @panic or std.debug.panic in runtime code. " ++
@@ -783,19 +632,13 @@ const CheckPanicStep = struct {
             );
         }
     }
-
-    const Violation = struct {
-        file_path: []const u8,
-        line_number: usize,
-        line_content: []const u8,
-    };
 };
 
 const CheckCliGlobalStdioStep = struct {
     pub fn run(ctx: Context) !void {
         const allocator = ctx.allocator;
 
-        var violations = std.ArrayList(Violation).empty;
+        var violations = std.ArrayList(StdioViolation).empty;
         defer violations.deinit(allocator);
 
         // Only scan src/cli/main.zig
@@ -892,7 +735,7 @@ const CheckCliGlobalStdioStep = struct {
         }
     }
 
-    const Violation = struct {
+    const StdioViolation = struct {
         file_path: []const u8,
         line_number: usize,
         line_content: []const u8,

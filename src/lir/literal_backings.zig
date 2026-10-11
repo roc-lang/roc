@@ -50,8 +50,7 @@ const Collector = struct {
     }
     fn run(self: *Collector) Allocator.Error!void {
         while (self.stack.pop()) |stmt_id| {
-            const stmt = self.store.getCFStmt(stmt_id);
-            switch (stmt) {
+            switch (self.store.getCFStmt(stmt_id)) {
                 .assign_literal => |s| switch (s.value) {
                     .str_literal => |literal| try self.mark(literal.backing),
                     .bytes_literal => |literal| try self.mark(literal.bytes.backing),

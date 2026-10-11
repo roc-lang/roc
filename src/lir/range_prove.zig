@@ -2319,7 +2319,7 @@ const Pass = struct {
                     try stack.append(self.allocator, .{ .stmt = s.body, .join = s.id });
                     try stack.append(self.allocator, .{ .stmt = s.remainder, .join = item.join });
                 },
-                .jump => {},
+                // A jump's target is not followed: it has no structural successor.
                 .init_uninitialized,
                 .assign_ref,
                 .assign_literal,
@@ -2360,6 +2360,7 @@ const Pass = struct {
                 .switch_initialized_payload,
                 .str_match,
                 .str_match_set,
+                .jump,
                 .ret,
                 .crash,
                 => {
@@ -2625,7 +2626,55 @@ const Pass = struct {
         var back: u32 = 0;
         for (scan.cycle.items) |node| {
             const stmt = self.store.getCFStmt(scan.stmts.items[node]);
-            if (stmt == .jump and stmt.jump.target == join_id) back += 1;
+            switch (stmt) {
+                .jump => |j| if (j.target == join_id) {
+                    back += 1;
+                },
+                .init_uninitialized,
+                .assign_ref,
+                .assign_literal,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .join,
+                .ret,
+                .crash,
+                => {},
+            }
             if (BodyClone.definedTarget(stmt)) |local| {
                 try self.join_assigned.put(joinAssignedKey(join_id, local), {});
             }

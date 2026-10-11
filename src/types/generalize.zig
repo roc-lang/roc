@@ -846,12 +846,12 @@ test "generalize - effect cycles inherit the enclosing traversal rank" {
         var gen = try Generalizer.init(gpa, &store);
         defer gen.deinit(gpa);
 
-        const captured = try store.freshWithRank(outer);
-        const result = try store.freshWithRank(inner);
-        const independent = try store.freshWithRank(inner);
+        const captured = try store.freshFromContentWithRank(.{ .flex = @import("types.zig").Flex.init() }, outer);
+        const result = try store.freshFromContentWithRank(.{ .flex = @import("types.zig").Flex.init() }, inner);
+        const independent = try store.freshFromContentWithRank(.{ .flex = @import("types.zig").Flex.init() }, inner);
         const cycle = try gpa.alloc(Var, depth);
         defer gpa.free(cycle);
-        for (cycle) |*node| node.* = try store.freshWithRank(inner);
+        for (cycle) |*node| node.* = try store.freshFromContentWithRank(.{ .flex = @import("types.zig").Flex.init() }, inner);
         for (cycle, 0..) |node, i| {
             try store.setVarContent(node, try store.mkFuncUnboundWithEffectDeps(
                 &.{},

@@ -427,16 +427,9 @@ pub fn write(self: *TypeWriter, var_: Var, format: Format) error{ OutOfMemory, W
     collections_mod.managedWriterFinish(&aw, &self.buf);
 }
 
-/// Writes a type variable to the provided buffer, formatting it as a human-readable string.
-/// This APPENDS to the provided buffer
-/// Internal TypeWriter state will be reset before processing
-pub fn writeInto(self: *TypeWriter, into: *std.array_list.Managed(u8), var_: Var, format: Format) error{ OutOfMemory, WriteFailed }!void {
-    return self.writeIntoAtPolarity(into, var_, format, .pos);
-}
-
-/// `writeInto`, starting the polarity walk at `polarity` instead of `.pos`.
-/// Used when the caller knows the polarity of the position `var_` occupies
-/// (eg error snapshots of types nested inside a larger type).
+/// Writes a type variable to the provided buffer, formatting it as a human-readable string,
+/// starting the polarity walk at `polarity` (the polarity of the position `var_` occupies).
+/// This APPENDS to the provided buffer. Internal TypeWriter state is reset before processing.
 pub fn writeIntoAtPolarity(self: *TypeWriter, into: *std.array_list.Managed(u8), var_: Var, format: Format, polarity: types_mod.Polarity) error{ OutOfMemory, WriteFailed }!void {
     self.reset();
     self.polarity = polarity;
@@ -2052,7 +2045,7 @@ test "TypeWriter renders a tuple spine deeper than any native-stack budget" {
 
     var into = std.array_list.Managed(u8).init(testing.allocator);
     defer into.deinit();
-    try env.writer.writeInto(&into, current, .wrap);
+    try env.writer.writeIntoAtPolarity(&into, current, .wrap, .pos);
 
     // `depth` open parens, `{}`, then `depth` close parens.
     try testing.expectEqual(@as(usize, depth * 2 + 2), into.items.len);

@@ -638,23 +638,77 @@ const FindTagAtOffsetContext = struct {
 
     fn visitExpr(ctx: *FindTagAtOffsetContext, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) VisitAction {
         if (!regionContainsOffset(ctx.store.getExprRegion(expr_idx), ctx.target_offset)) return .skip_children;
-        if (expr == .e_tag) {
-            ctx.result = ctx.tagRef(expr.e_tag.name, ModuleEnv.varFrom(expr_idx));
-        } else if (expr == .e_nominal) {
-            ctx.findNominalBackingTag(expr.e_nominal.backing_expr, expr.e_nominal.nominal_type_decl, null);
-        } else if (expr == .e_nominal_external) {
-            const nom = expr.e_nominal_external;
-            ctx.findNominalBackingTag(nom.backing_expr, null, .{ .module_idx = nom.module_idx, .target_node_idx = nom.target_node_idx });
-        } else if (expr == .e_match) {
-            // A tag that a match branch pattern matches carries the match condition's type.
-            const cond_var = ModuleEnv.varFrom(expr.e_match.cond);
-            for (ctx.store.sliceMatchBranches(expr.e_match.branches)) |branch_idx| {
-                const branch = ctx.store.getMatchBranch(branch_idx);
-                for (ctx.store.sliceMatchBranchPatterns(branch.patterns)) |bp_idx| {
-                    ctx.findPatternTag(ctx.store.getMatchBranchPattern(bp_idx).pattern, cond_var);
-                    if (ctx.result != null) return .stop;
+        switch (expr) {
+            .e_tag => |tag| ctx.result = ctx.tagRef(tag.name, ModuleEnv.varFrom(expr_idx)),
+            .e_nominal => |nom| ctx.findNominalBackingTag(nom.backing_expr, nom.nominal_type_decl, null),
+            .e_nominal_external => |nom| ctx.findNominalBackingTag(nom.backing_expr, null, .{ .module_idx = nom.module_idx, .target_node_idx = nom.target_node_idx }),
+            .e_match => |match_expr| {
+                // A tag that a match branch pattern matches carries the match condition's type.
+                const cond_var = ModuleEnv.varFrom(match_expr.cond);
+                for (ctx.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
+                    const branch = ctx.store.getMatchBranch(branch_idx);
+                    for (ctx.store.sliceMatchBranchPatterns(branch.patterns)) |bp_idx| {
+                        ctx.findPatternTag(ctx.store.getMatchBranchPattern(bp_idx).pattern, cond_var);
+                        if (ctx.result != null) return .stop;
+                    }
                 }
-            }
+            },
+            .e_num,
+            .e_frac_f32,
+            .e_frac_f64,
+            .e_dec,
+            .e_dec_small,
+            .e_num_from_numeral,
+            .e_typed_int,
+            .e_typed_frac,
+            .e_typed_num_from_numeral,
+            .e_str_segment,
+            .e_str,
+            .e_bytes_literal,
+            .e_lookup_local,
+            .e_lookup_external,
+            .e_deferred_import_ref,
+            .e_lookup_associated_local,
+            .e_lookup_associated,
+            .e_lookup_associated_resolved,
+            .e_lookup_required,
+            .e_list,
+            .e_empty_list,
+            .e_tuple,
+            .e_if,
+            .e_call,
+            .e_record,
+            .e_empty_record,
+            .e_block,
+            .e_zero_argument_tag,
+            .e_closure,
+            .e_lambda,
+            .e_binop,
+            .e_unary_minus,
+            .e_field_access,
+            .e_method_call,
+            .e_dispatch_call,
+            .e_interpolation,
+            .e_structural_eq,
+            .e_structural_hash,
+            .e_method_eq,
+            .e_type_method_call,
+            .e_type_dispatch_call,
+            .e_tuple_access,
+            .e_runtime_error,
+            .e_crash,
+            .e_dbg,
+            .e_expect_err,
+            .e_expect,
+            .e_ellipsis,
+            .e_anno_only,
+            .e_derived_method,
+            .e_return,
+            .e_break,
+            .e_for,
+            .e_hosted_lambda,
+            .e_run_low_level,
+            => {},
         }
         return if (ctx.result != null) .stop else .continue_traversal;
     }
@@ -666,9 +720,70 @@ const FindTagAtOffsetContext = struct {
         nominal_decl: ?CIR.Statement.Idx,
         nominal_external: ?TagNominalExternal,
     ) void {
-        const backing = ctx.store.getSourceExpr(backing_expr);
-        if (backing != .e_tag or !regionContainsOffset(ctx.store.getExprRegion(backing_expr), ctx.target_offset)) return;
-        var found = ctx.tagRef(backing.e_tag.name, ModuleEnv.varFrom(backing_expr));
+        const tag = switch (ctx.store.getSourceExpr(backing_expr)) {
+            .e_tag => |tag| tag,
+            .e_num,
+            .e_frac_f32,
+            .e_frac_f64,
+            .e_dec,
+            .e_dec_small,
+            .e_num_from_numeral,
+            .e_typed_int,
+            .e_typed_frac,
+            .e_typed_num_from_numeral,
+            .e_str_segment,
+            .e_str,
+            .e_bytes_literal,
+            .e_lookup_local,
+            .e_lookup_external,
+            .e_deferred_import_ref,
+            .e_lookup_associated_local,
+            .e_lookup_associated,
+            .e_lookup_associated_resolved,
+            .e_lookup_required,
+            .e_list,
+            .e_empty_list,
+            .e_tuple,
+            .e_match,
+            .e_if,
+            .e_call,
+            .e_record,
+            .e_empty_record,
+            .e_block,
+            .e_nominal,
+            .e_nominal_external,
+            .e_zero_argument_tag,
+            .e_closure,
+            .e_lambda,
+            .e_binop,
+            .e_unary_minus,
+            .e_field_access,
+            .e_method_call,
+            .e_dispatch_call,
+            .e_interpolation,
+            .e_structural_eq,
+            .e_structural_hash,
+            .e_method_eq,
+            .e_type_method_call,
+            .e_type_dispatch_call,
+            .e_tuple_access,
+            .e_runtime_error,
+            .e_crash,
+            .e_dbg,
+            .e_expect_err,
+            .e_expect,
+            .e_ellipsis,
+            .e_anno_only,
+            .e_derived_method,
+            .e_return,
+            .e_break,
+            .e_for,
+            .e_hosted_lambda,
+            .e_run_low_level,
+            => return,
+        };
+        if (!regionContainsOffset(ctx.store.getExprRegion(backing_expr), ctx.target_offset)) return;
+        var found = ctx.tagRef(tag.name, ModuleEnv.varFrom(backing_expr));
         found.nominal_decl = nominal_decl;
         found.nominal_external = nominal_external;
         ctx.result = found;

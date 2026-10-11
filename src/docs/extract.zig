@@ -2420,47 +2420,7 @@ fn extractDocTypeInner(
                 origin_text,
                 ident_text,
             );
-            var display_moved = false;
-            errdefer if (!display_moved) {
-                gpa.free(display.module_path);
-                gpa.free(display.type_name);
-            };
-
-            var args_iter = types.iterAliasArgs(alias);
-            if (args_iter.count() > 0) {
-                // Type application
-                const constructor = try allocDocType(gpa, .{ .type_ref = .{
-                    .module_path = display.module_path,
-                    .type_name = display.type_name,
-                } });
-                display_moved = true;
-                errdefer {
-                    constructor.deinit(gpa);
-                    gpa.destroy(constructor);
-                }
-
-                var args = std.ArrayList(*const DocType).empty;
-                defer args.deinit(gpa);
-
-                while (args_iter.next()) |arg_var| {
-                    const arg_type = try extractDocTypeInner(ctx, arg_var) orelse
-                        try allocDocType(gpa, .@"error");
-                    try args.append(gpa, arg_type);
-                }
-
-                const args_slice = try args.toOwnedSlice(gpa);
-                return try allocDocType(gpa, .{ .apply = .{
-                    .constructor = constructor,
-                    .args = args_slice,
-                    .layout = .compact,
-                } });
-            } else {
-                // Simple type reference
-                return try allocDocType(gpa, .{ .type_ref = .{
-                    .module_path = display.module_path,
-                    .type_name = display.type_name,
-                } });
-            }
+            return displayedTypeApplication(ctx, display, types.iterAliasArgs(alias));
         },
         .structure => |flat_type| {
             return try extractFlatType(ctx, flat_type);
@@ -2549,11 +2509,59 @@ fn extractFunction(
     } });
 }
 
+/// Builds the doc type that refers to `display`, applied to the iterated
+/// type arguments when there are any. Takes ownership of `display`'s strings.
+fn displayedTypeApplication(
+    ctx: *ExtractContext,
+    display: TypeReferenceDisplay,
+    args_iter_in: anytype,
+) ExtractError!*const DocType {
+    const gpa = ctx.gpa;
+    var display_moved = false;
+    errdefer if (!display_moved) {
+        gpa.free(display.module_path);
+        gpa.free(display.type_name);
+    };
+
+    var args_iter = args_iter_in;
+    if (args_iter.count() == 0) {
+        return try allocDocType(gpa, .{ .type_ref = .{
+            .module_path = display.module_path,
+            .type_name = display.type_name,
+        } });
+    }
+
+    const constructor = try allocDocType(gpa, .{ .type_ref = .{
+        .module_path = display.module_path,
+        .type_name = display.type_name,
+    } });
+    display_moved = true;
+    errdefer {
+        constructor.deinit(gpa);
+        gpa.destroy(constructor);
+    }
+
+    var args = std.ArrayList(*const DocType).empty;
+    defer args.deinit(gpa);
+
+    while (args_iter.next()) |arg_var| {
+        const arg_type = try extractDocTypeInner(ctx, arg_var) orelse
+            try allocDocType(gpa, .@"error");
+        try args.append(gpa, arg_type);
+    }
+
+    const args_slice = try args.toOwnedSlice(gpa);
+    return try allocDocType(gpa, .{ .apply = .{
+        .constructor = constructor,
+        .args = args_slice,
+        .layout = .compact,
+    } });
+}
+
 fn extractNominalType(
     ctx: *ExtractContext,
     nominal: NominalType,
 ) ExtractError!*const DocType {
-    const gpa = ctx.gpa;
     const idents = ctx.idents;
     const origin_text = ctx.env.moduleIdentityDisplayText(nominal.origin_module);
     const ident_text = idents.getText(nominal.ident.ident_idx);
@@ -2564,45 +2572,7 @@ fn extractNominalType(
         origin_text,
         ident_text,
     );
-    var display_moved = false;
-    errdefer if (!display_moved) {
-        gpa.free(display.module_path);
-        gpa.free(display.type_name);
-    };
-
-    var args_iter = ctx.types.iterNominalArgs(nominal);
-    if (args_iter.count() > 0) {
-        const constructor = try allocDocType(gpa, .{ .type_ref = .{
-            .module_path = display.module_path,
-            .type_name = display.type_name,
-        } });
-        display_moved = true;
-        errdefer {
-            constructor.deinit(gpa);
-            gpa.destroy(constructor);
-        }
-
-        var args = std.ArrayList(*const DocType).empty;
-        defer args.deinit(gpa);
-
-        while (args_iter.next()) |arg_var| {
-            const arg_type = try extractDocTypeInner(ctx, arg_var) orelse
-                try allocDocType(gpa, .@"error");
-            try args.append(gpa, arg_type);
-        }
-
-        const args_slice = try args.toOwnedSlice(gpa);
-        return try allocDocType(gpa, .{ .apply = .{
-            .constructor = constructor,
-            .args = args_slice,
-            .layout = .compact,
-        } });
-    } else {
-        return try allocDocType(gpa, .{ .type_ref = .{
-            .module_path = display.module_path,
-            .type_name = display.type_name,
-        } });
-    }
+    return displayedTypeApplication(ctx, display, ctx.types.iterNominalArgs(nominal));
 }
 
 /// The documentation kind of a solved record field. A field whose kind solved

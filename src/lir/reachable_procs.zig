@@ -277,60 +277,11 @@ const Pass = struct {
             self.visited_stmts[stmt_index] = true;
             self.reachable_stmts[stmt_index] = true;
 
-            switch (self.store.getCFStmt(stmt_id)) {
-                .assign_literal => |s| {
-                    if (s.value == .proc_ref) {
-                        try self.markProc(s.value.proc_ref);
-                    } else if (s.value == .static_data) {
-                        try self.markStaticData(s.value.static_data);
-                    }
-                    // The fresh form stays available until ARC chooses.
-                    if (s.fresh_alternative) |fresh| try self.markProc(fresh);
-                },
-                inline .assign_call, .assign_packed_erased_fn => |s| try self.markProc(s.proc),
-                .init_uninitialized,
-                .assign_ref,
-                .assign_call_erased,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
-                .assign_low_level,
-                .assign_list,
-                .assign_struct,
-                .assign_tag,
-                .store_struct,
-                .store_tag,
-                .set_local,
-                .debug,
-                .expect,
-                .expect_err,
-                .runtime_error,
-                .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
-                .incref,
-                .decref,
-                .decref_if_initialized,
-                .free,
-                .switch_stmt,
-                .switch_initialized_payload,
-                .str_match,
-                .str_match_set,
-                .join,
-                .jump,
-                .ret,
-                .crash,
-                => {},
-            }
+            // The fresh form of a literal stays available until ARC chooses.
+            var stmt = self.store.getCFStmt(stmt_id);
+            const refs = stmtRefs(&stmt);
+            for (refs.procs) |callee| if (callee) |id| try self.markProc(id.*);
+            if (refs.static_data) |id| try self.markStaticData(id.*);
             try BodyClone.appendSuccessors(self.store, &self.stmt_stack, stmt_id, self.allocator);
         }
     }
@@ -488,59 +439,11 @@ const Pass = struct {
             // The successors are pushed before the edges are remapped, so
             // the walk follows the old ids this table is indexed by.
             try BodyClone.appendSuccessors(self.store, &self.stmt_stack, stmt_id, self.allocator);
-            switch (self.store.getCFStmtPtr(stmt_id).*) {
-                .assign_literal => |*s| {
-                    if (s.value == .proc_ref) {
-                        s.value.proc_ref = self.remapProc(s.value.proc_ref);
-                    } else if (s.value == .static_data) {
-                        s.value.static_data = self.remapStaticData(s.value.static_data);
-                    }
-                    if (s.fresh_alternative) |proc| s.fresh_alternative = self.remapProc(proc);
-                },
-                inline .assign_call, .assign_packed_erased_fn => |*s| s.proc = self.remapProc(s.proc),
-                .init_uninitialized,
-                .assign_ref,
-                .assign_call_erased,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
-                .assign_low_level,
-                .assign_list,
-                .assign_struct,
-                .assign_tag,
-                .store_struct,
-                .store_tag,
-                .set_local,
-                .debug,
-                .expect,
-                .expect_err,
-                .runtime_error,
-                .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
-                .incref,
-                .decref,
-                .decref_if_initialized,
-                .free,
-                .switch_stmt,
-                .switch_initialized_payload,
-                .str_match,
-                .str_match_set,
-                .join,
-                .jump,
-                .ret,
-                .crash,
-                => {},
+            const refs = stmtRefs(self.store.getCFStmtPtr(stmt_id));
+            for (refs.procs) |proc| {
+                if (proc) |id| id.* = self.remapProc(id.*);
             }
+            if (refs.static_data) |id| id.* = self.remapStaticData(id.*);
             BodyClone.redirectSuccessors(self.store, stmt_id, self, remapStmt);
         }
     }
@@ -931,64 +834,81 @@ const Pass = struct {
     }
 
     fn verifyStmtRefs(self: *Pass, stmt_id: LIR.CFStmtId, proc_count: usize, stmt_count: usize) Allocator.Error!void {
-        switch (self.store.getCFStmt(stmt_id)) {
-            .assign_literal => |s| {
-                if (s.value == .proc_ref) {
-                    self.verifyProcRef(s.value.proc_ref, proc_count);
-                } else if (s.value == .static_data) {
-                    self.verifyStaticDataRef(s.value.static_data);
-                }
-                if (s.fresh_alternative) |proc| self.verifyProcRef(proc, proc_count);
-            },
-            inline .assign_call, .assign_packed_erased_fn => |s| self.verifyProcRef(s.proc, proc_count),
-            .init_uninitialized,
-            .assign_ref,
-            .assign_call_erased,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
-            .assign_low_level,
-            .assign_list,
-            .assign_struct,
-            .assign_tag,
-            .store_struct,
-            .store_tag,
-            .set_local,
-            .debug,
-            .expect,
-            .expect_err,
-            .runtime_error,
-            .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
-            .incref,
-            .decref,
-            .decref_if_initialized,
-            .free,
-            .switch_stmt,
-            .switch_initialized_payload,
-            .str_match,
-            .str_match_set,
-            .join,
-            .jump,
-            .ret,
-            .crash,
-            => {},
-        }
+        var stmt = self.store.getCFStmt(stmt_id);
+        const refs = stmtRefs(&stmt);
+        for (refs.procs) |callee| if (callee) |id| self.verifyProcRef(id.*, proc_count);
+        if (refs.static_data) |id| self.verifyStaticDataRef(id.*);
         self.stmt_stack.clearRetainingCapacity();
         try BodyClone.appendSuccessors(self.store, &self.stmt_stack, stmt_id, self.allocator);
         for (self.stmt_stack.items) |successor| self.verifyStmtRef(successor, stmt_count);
     }
 };
+
+/// The procedure and static-data references one statement carries: a call's
+/// callee, a packed erased function's entry, and a literal's procedure,
+/// fresh alternative, or static data slot.
+const StmtRefs = struct {
+    procs: [2]?*LIR.LirProcSpecId = .{ null, null },
+    static_data: ?*LIR.StaticDataId = null,
+};
+
+fn stmtRefs(stmt: *LIR.CFStmt) StmtRefs {
+    switch (stmt.*) {
+        inline .assign_call, .assign_packed_erased_fn => |*s| return .{ .procs = .{ &s.proc, null } },
+        .assign_literal => |*literal| {
+            var refs: StmtRefs = .{};
+            if (literal.fresh_alternative) |*fresh| refs.procs[1] = fresh;
+            switch (literal.value) {
+                .proc_ref => |*proc| refs.procs[0] = proc,
+                .static_data => |*id| refs.static_data = id,
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .bytes_literal => {},
+            }
+            return refs;
+        },
+        .init_uninitialized,
+        .assign_ref,
+        .assign_call_erased,
+        .assign_boxy_desc_ref,
+        .assign_boxy_dict_ref,
+        .assign_boxy_box,
+        .assign_boxy_record_update,
+        .assign_boxy_unbox,
+        .assign_boxy_adapt,
+        .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_hash,
+        .assign_boxy_tag,
+        .assign_boxy_tag_payload,
+        .boxy_tag_match,
+        .assign_call_dict,
+        .assign_low_level,
+        .assign_list,
+        .assign_struct,
+        .assign_tag,
+        .store_struct,
+        .store_tag,
+        .set_local,
+        .debug,
+        .expect,
+        .expect_err,
+        .runtime_error,
+        .comptime_exhaustiveness_failed,
+        .comptime_branch_taken,
+        .incref,
+        .decref,
+        .decref_if_initialized,
+        .free,
+        .switch_stmt,
+        .switch_initialized_payload,
+        .str_match,
+        .str_match_set,
+        .join,
+        .jump,
+        .ret,
+        .crash,
+        => return .{},
+    }
+}
 
 fn reachableProcInvariant(msg: []const u8) noreturn {
     if (@import("builtin").mode == .debug) {

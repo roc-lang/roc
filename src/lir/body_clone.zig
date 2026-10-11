@@ -244,7 +244,58 @@ pub fn appendSuccessors(
     stmt_id: CFStmtId,
     allocator: Allocator,
 ) Allocator.Error!void {
-    switch (store.getCFStmt(stmt_id)) {
+    return appendSuccessorsInOrder(store, work, stmt_id, allocator, .{});
+}
+
+/// Which successor edges `forEachSuccessor` visits, and in what order.
+pub const EdgeOrder = struct {
+    /// A switch's edges: continuation, default, then branches in order;
+    /// branches in order, default, then continuation; or branches in order
+    /// and default without the continuation.
+    switch_edges: enum { continuation_first, arms_first, arms_only } = .continuation_first,
+    /// Whether a join's body is an edge of the join statement, before its
+    /// remainder. Without it the body is entered only through jumps.
+    join_body: bool = true,
+};
+
+/// `appendSuccessors` with an explicit edge order.
+pub fn appendSuccessorsInOrder(
+    store: *const LirStore,
+    work: *std.ArrayList(CFStmtId),
+    stmt_id: CFStmtId,
+    allocator: Allocator,
+    comptime order: EdgeOrder,
+) Allocator.Error!void {
+    const Appender = struct {
+        work: *std.ArrayList(CFStmtId),
+        allocator: Allocator,
+        failure: ?Allocator.Error = null,
+
+        fn push(self: *@This(), successor: CFStmtId) void {
+            if (self.failure != null) return;
+            self.work.append(self.allocator, successor) catch |err| {
+                self.failure = err;
+            };
+        }
+    };
+    var appender: Appender = .{ .work = work, .allocator = allocator };
+    forEachSuccessor(store, store.getCFStmt(stmt_id), order, &appender, Appender.push);
+    if (appender.failure) |err| return err;
+}
+
+/// Call `visit(ctx, successor)` for every structural successor of `stmt` in
+/// `order`: a straight-line `next`, switch branches, default and
+/// continuation, both payload-initialization arms, match hits before misses,
+/// and a join's body and remainder. A jump's target is not a structural
+/// successor; callers resolve it through their own join index.
+pub fn forEachSuccessor(
+    store: *const LirStore,
+    stmt: LIR.CFStmt,
+    comptime order: EdgeOrder,
+    ctx: anytype,
+    comptime visit: fn (@TypeOf(ctx), CFStmtId) void,
+) void {
+    switch (stmt) {
         inline .assign_ref,
         .assign_literal,
         .init_uninitialized,
@@ -277,34 +328,43 @@ pub fn appendSuccessors(
         .decref,
         .decref_if_initialized,
         .free,
-        => |s| try work.append(allocator, s.next),
+        => |s| visit(ctx, s.next),
 
         .switch_stmt => |s| {
-            if (s.continuation) |continuation| try work.append(allocator, continuation);
-            try work.append(allocator, s.default_branch);
             const branches = store.getCFSwitchBranches(s.branches);
-            for (0..branches.len) |index| {
-                try work.append(allocator, GuardedList.at(branches, index).body);
+            switch (order.switch_edges) {
+                .continuation_first => {
+                    if (s.continuation) |continuation| visit(ctx, continuation);
+                    visit(ctx, s.default_branch);
+                    for (0..branches.len) |index| visit(ctx, GuardedList.at(branches, index).body);
+                },
+                .arms_first => {
+                    for (0..branches.len) |index| visit(ctx, GuardedList.at(branches, index).body);
+                    visit(ctx, s.default_branch);
+                    if (s.continuation) |continuation| visit(ctx, continuation);
+                },
+                .arms_only => {
+                    for (0..branches.len) |index| visit(ctx, GuardedList.at(branches, index).body);
+                    visit(ctx, s.default_branch);
+                },
             }
         },
         .switch_initialized_payload => |s| {
-            try work.append(allocator, s.initialized_branch);
-            try work.append(allocator, s.uninitialized_branch);
+            visit(ctx, s.initialized_branch);
+            visit(ctx, s.uninitialized_branch);
         },
         inline .str_match, .boxy_tag_match => |s| {
-            try work.append(allocator, s.on_match);
-            try work.append(allocator, s.on_miss);
+            visit(ctx, s.on_match);
+            visit(ctx, s.on_miss);
         },
         .str_match_set => |s| {
             const arms = store.getStrMatchArms(s.arms);
-            for (0..arms.len) |index| {
-                try work.append(allocator, GuardedList.at(arms, index).on_match);
-            }
-            try work.append(allocator, s.on_miss);
+            for (0..arms.len) |index| visit(ctx, GuardedList.at(arms, index).on_match);
+            visit(ctx, s.on_miss);
         },
         .join => |s| {
-            try work.append(allocator, s.body);
-            try work.append(allocator, s.remainder);
+            if (order.join_body) visit(ctx, s.body);
+            visit(ctx, s.remainder);
         },
         .runtime_error,
         .comptime_exhaustiveness_failed,
@@ -455,11 +515,7 @@ pub fn forEachStmtRead(
     comptime note: fn (@TypeOf(ctx), LocalId) void,
 ) void {
     switch (stmt) {
-        .assign_ref => |s| switch (s.op) {
-            .local => |source| note(ctx, source),
-            inline .discriminant, .field, .tag_payload, .tag_payload_struct => |ref| note(ctx, ref.source),
-            inline .list_reinterpret, .nominal => |ref| note(ctx, ref.backing_ref),
-        },
+        .assign_ref => |s| note(ctx, refOpSource(s.op)),
         .assign_call => |s| {
             if (s.result_desc) |desc| emitDesc(ctx, note, desc);
             const args = store.getLocalSpan(s.args);
@@ -677,6 +733,79 @@ pub fn forEachStmtDef(
     }
 }
 
+/// The one local a reference operation reads.
+pub fn refOpSource(op: LIR.RefOp) LocalId {
+    return switch (op) {
+        .local => |local| local,
+        inline .discriminant, .field, .tag_payload, .tag_payload_struct => |ref| ref.source,
+        inline .list_reinterpret, .nominal => |ref| ref.backing_ref,
+    };
+}
+
+/// Whether `stmt` reads `needle` as an operand.
+pub fn stmtReadsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LocalId) bool {
+    var probe: LocalProbe = .{ .needle = needle };
+    forEachStmtRead(store, stmt, &probe, LocalProbe.note);
+    return probe.hit;
+}
+
+/// Whether `stmt` reads or defines `needle`.
+pub fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LocalId) bool {
+    var probe: LocalProbe = .{ .needle = needle };
+    forEachStmtRead(store, stmt, &probe, LocalProbe.note);
+    forEachStmtDef(store, stmt, &probe, LocalProbe.note);
+    return probe.hit;
+}
+
+const LocalProbe = struct {
+    needle: LocalId,
+    hit: bool = false,
+
+    fn note(self: *LocalProbe, local: LocalId) void {
+        if (local == self.needle) self.hit = true;
+    }
+};
+
+/// `forEachStmtRead` with a fallible `note`; stops noting after the first
+/// failure and returns it.
+pub fn tryForEachStmtRead(
+    store: *const LirStore,
+    stmt: LIR.CFStmt,
+    ctx: anytype,
+    comptime note: fn (@TypeOf(ctx), LocalId) Allocator.Error!void,
+) Allocator.Error!void {
+    var adapter: FallibleNote(@TypeOf(ctx), note) = .{ .ctx = ctx };
+    forEachStmtRead(store, stmt, &adapter, @TypeOf(adapter).call);
+    if (adapter.failure) |err| return err;
+}
+
+/// `forEachStmtDef` with a fallible `note`; stops noting after the first
+/// failure and returns it.
+pub fn tryForEachStmtDef(
+    store: *const LirStore,
+    stmt: LIR.CFStmt,
+    ctx: anytype,
+    comptime note: fn (@TypeOf(ctx), LocalId) Allocator.Error!void,
+) Allocator.Error!void {
+    var adapter: FallibleNote(@TypeOf(ctx), note) = .{ .ctx = ctx };
+    forEachStmtDef(store, stmt, &adapter, @TypeOf(adapter).call);
+    if (adapter.failure) |err| return err;
+}
+
+fn FallibleNote(comptime Ctx: type, comptime note: fn (Ctx, LocalId) Allocator.Error!void) type {
+    return struct {
+        ctx: Ctx,
+        failure: ?Allocator.Error = null,
+
+        fn call(self: *@This(), local: LocalId) void {
+            if (self.failure != null) return;
+            note(self.ctx, local) catch |err| {
+                self.failure = err;
+            };
+        }
+    };
+}
+
 /// The one local an assigning statement writes: its `target`, including a
 /// `set_local` rebinding. Statements that bind several locals (joins, string
 /// matches), write through a pointer (`store_*`), or write nothing have none;
@@ -732,23 +861,12 @@ pub fn definedTarget(stmt: LIR.CFStmt) ?LocalId {
     };
 }
 
-/// Call `visit(ctx, successor)` for every statement control can transfer to
-/// directly from `stmt`: a straight-line `next`, switch arms before the
-/// default, both payload-initialization arms, match hits before misses, and
-/// a join's remainder. A switch continuation is release-placement metadata
-/// that the arms reach through their own chains, so it is not an edge; a
-/// join body is entered only by jumps, and a jump's successor is its
-/// target's body, which the caller resolves through its own join index.
-/// Flow analyses that must not see dead join bodies walk these edges;
-/// `appendSuccessors` covers every reachable statement instead.
-pub fn forEachFlowSuccessor(
-    store: *const LirStore,
-    stmt: LIR.CFStmt,
-    ctx: anytype,
-    comptime visit: fn (@TypeOf(ctx), CFStmtId) Allocator.Error!void,
-) Allocator.Error!void {
-    switch (stmt) {
-        inline .init_uninitialized,
+/// The one local a statement overwrites as a value: `definedTarget`, or the
+/// destination a `store_struct`/`store_tag` writes through.
+pub fn writtenLocal(stmt: LIR.CFStmt) ?LocalId {
+    return switch (stmt) {
+        inline .store_struct, .store_tag => |s| s.dest,
+        .init_uninitialized,
         .assign_ref,
         .assign_literal,
         .assign_call,
@@ -765,49 +883,64 @@ pub fn forEachFlowSuccessor(
         .assign_boxy_hash,
         .assign_boxy_tag,
         .assign_boxy_tag_payload,
+        .boxy_tag_match,
         .assign_call_dict,
         .assign_low_level,
         .assign_list,
         .assign_struct,
         .assign_tag,
-        .store_struct,
-        .store_tag,
         .set_local,
         .debug,
         .expect,
+        .expect_err,
+        .runtime_error,
+        .comptime_exhaustiveness_failed,
         .comptime_branch_taken,
         .incref,
         .decref,
         .decref_if_initialized,
         .free,
-        => |s| try visit(ctx, s.next),
-        .switch_stmt => |s| {
-            const branches = store.getCFSwitchBranches(s.branches);
-            for (0..branches.len) |index| try visit(ctx, GuardedList.at(branches, index).body);
-            try visit(ctx, s.default_branch);
-        },
-        .switch_initialized_payload => |s| {
-            try visit(ctx, s.initialized_branch);
-            try visit(ctx, s.uninitialized_branch);
-        },
-        inline .str_match, .boxy_tag_match => |s| {
-            try visit(ctx, s.on_match);
-            try visit(ctx, s.on_miss);
-        },
-        .str_match_set => |s| {
-            const arms = store.getStrMatchArms(s.arms);
-            for (0..arms.len) |index| try visit(ctx, GuardedList.at(arms, index).on_match);
-            try visit(ctx, s.on_miss);
-        },
-        .join => |s| try visit(ctx, s.remainder),
+        .switch_stmt,
+        .switch_initialized_payload,
+        .str_match,
+        .str_match_set,
+        .join,
         .jump,
         .ret,
         .crash,
-        .expect_err,
-        .runtime_error,
-        .comptime_exhaustiveness_failed,
-        => {},
-    }
+        => definedTarget(stmt),
+    };
+}
+
+/// Call `visit(ctx, successor)` for every statement control can transfer to
+/// directly from `stmt`: a straight-line `next`, switch arms before the
+/// default, both payload-initialization arms, match hits before misses, and
+/// a join's remainder. A switch continuation is release-placement metadata
+/// that the arms reach through their own chains, so it is not an edge; a
+/// join body is entered only by jumps, and a jump's successor is its
+/// target's body, which the caller resolves through its own join index.
+/// Flow analyses that must not see dead join bodies walk these edges;
+/// `appendSuccessors` covers every reachable statement instead.
+pub fn forEachFlowSuccessor(
+    store: *const LirStore,
+    stmt: LIR.CFStmt,
+    ctx: anytype,
+    comptime visit: fn (@TypeOf(ctx), CFStmtId) Allocator.Error!void,
+) Allocator.Error!void {
+    const Visitor = struct {
+        ctx: @TypeOf(ctx),
+        failure: ?Allocator.Error = null,
+
+        fn call(self: *@This(), successor: CFStmtId) void {
+            if (self.failure != null) return;
+            visit(self.ctx, successor) catch |err| {
+                self.failure = err;
+            };
+        }
+    };
+    var visitor: Visitor = .{ .ctx = ctx };
+    forEachSuccessor(store, stmt, .{ .switch_edges = .arms_only, .join_body = false }, &visitor, Visitor.call);
+    if (visitor.failure) |err| return err;
 }
 
 fn emitStepCaptures(store: *const LirStore, ctx: anytype, comptime note: fn (@TypeOf(ctx), LocalId) void, span: LIR.StrMatchStepSpan) void {
@@ -2379,59 +2512,26 @@ pub const InterceptChildren = struct {
 /// The `next` of a straight-line statement. Every other kind has no single
 /// successor, and asking for one is a compiler bug.
 pub fn linearNext(stmt: LIR.CFStmt) CFStmtId {
-    return switch (stmt) {
-        inline .init_uninitialized,
-        .assign_ref,
-        .assign_literal,
-        .assign_call,
-        .assign_call_erased,
-        .assign_packed_erased_fn,
-        .assign_boxy_desc_ref,
-        .assign_boxy_dict_ref,
-        .assign_boxy_box,
-        .assign_boxy_record_update,
-        .assign_boxy_unbox,
-        .assign_boxy_adapt,
-        .assign_boxy_inspect,
-        .assign_boxy_eq,
-        .assign_boxy_hash,
-        .assign_boxy_tag,
-        .assign_boxy_tag_payload,
-        .assign_call_dict,
-        .assign_low_level,
-        .assign_list,
-        .assign_struct,
-        .assign_tag,
-        .store_struct,
-        .store_tag,
-        .set_local,
-        .debug,
-        .expect,
-        .comptime_branch_taken,
-        .incref,
-        .decref,
-        .decref_if_initialized,
-        .free,
-        => |s| s.next,
-        .boxy_tag_match,
-        .expect_err,
-        .runtime_error,
-        .comptime_exhaustiveness_failed,
-        .switch_stmt,
-        .switch_initialized_payload,
-        .str_match,
-        .str_match_set,
-        .join,
-        .jump,
-        .ret,
-        .crash,
-        => unreachable,
-    };
+    return linearNextOrNull(stmt) orelse unreachable;
+}
+
+/// The `next` of a straight-line statement, or null for a statement with no
+/// single successor (branches, joins, and terminals).
+pub fn linearNextOrNull(stmt: LIR.CFStmt) ?CFStmtId {
+    var copy = stmt;
+    const next = linearNextPtr(&copy) orelse return null;
+    return next.*;
 }
 
 /// Replace the `next` of a straight-line statement; see `linearNext`.
 pub fn setLinearNext(stmt: *LIR.CFStmt, next: CFStmtId) void {
-    switch (stmt.*) {
+    (linearNextPtr(stmt) orelse unreachable).* = next;
+}
+
+/// The `next` field of a straight-line statement, or null for a statement
+/// with no single successor.
+pub fn linearNextPtr(stmt: *LIR.CFStmt) ?*CFStmtId {
+    return switch (stmt.*) {
         inline .init_uninitialized,
         .assign_ref,
         .assign_literal,
@@ -2464,7 +2564,7 @@ pub fn setLinearNext(stmt: *LIR.CFStmt, next: CFStmtId) void {
         .decref,
         .decref_if_initialized,
         .free,
-        => |*s| s.next = next,
+        => |*s| &s.next,
         .boxy_tag_match,
         .expect_err,
         .runtime_error,
@@ -2477,8 +2577,8 @@ pub fn setLinearNext(stmt: *LIR.CFStmt, next: CFStmtId) void {
         .jump,
         .ret,
         .crash,
-        => unreachable,
-    }
+        => null,
+    };
 }
 
 const TestRetRewriter = struct {};

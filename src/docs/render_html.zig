@@ -2011,10 +2011,41 @@ fn renderDocTypeHtml(
         type_ref: DocType.TypeRef,
     };
 
+    const RenderFrames = std.ArrayList(RenderFrame);
+    const pushTypeList = struct {
+        /// Pushes the opening paren and the comma-separated `values` of a
+        /// parenthesized type list, in reverse because frames pop LIFO.
+        fn push(
+            allocator: Allocator,
+            stack: *RenderFrames,
+            values: []const *const DocType,
+            indent: usize,
+            multiline: bool,
+        ) Allocator.Error!void {
+            if (multiline) try stack.append(allocator, .{ .indent = indent });
+            var i = values.len;
+            while (i > 0) {
+                i -= 1;
+                if (multiline) try stack.append(allocator, .{ .html = ",\n" });
+                try stack.append(allocator, .{ .doc_type = .{
+                    .value = values[i],
+                    .needs_parens = false,
+                    .indent = if (multiline) indent + 1 else indent,
+                } });
+                if (multiline) {
+                    try stack.append(allocator, .{ .indent = indent + 1 });
+                } else if (i > 0) {
+                    try stack.append(allocator, .{ .html = ", " });
+                }
+            }
+            try stack.append(allocator, .{ .html = if (multiline) "(\n" else "(" });
+        }
+    }.push;
+
     var multiline_layouts = try MultilineLayoutSet.init(gpa, doc_type);
     defer multiline_layouts.deinit(gpa);
 
-    var frames = std.ArrayList(RenderFrame).empty;
+    var frames = RenderFrames.empty;
     defer frames.deinit(gpa);
 
     try frames.append(gpa, .{ .doc_type = .{
@@ -2214,65 +2245,11 @@ fn renderDocTypeHtml(
                     },
                     .tuple => |tup| {
                         try frames.append(gpa, .{ .html = ")" });
-                        const multiline = !ctx.single_line_signatures and multiline_layouts.contains(item.value);
-                        if (multiline) {
-                            try frames.append(gpa, .{ .indent = item.indent });
-                            var i = tup.elems.len;
-                            while (i > 0) {
-                                i -= 1;
-                                try frames.append(gpa, .{ .html = ",\n" });
-                                try frames.append(gpa, .{ .doc_type = .{
-                                    .value = tup.elems[i],
-                                    .needs_parens = false,
-                                    .indent = item.indent + 1,
-                                } });
-                                try frames.append(gpa, .{ .indent = item.indent + 1 });
-                            }
-                            try frames.append(gpa, .{ .html = "(\n" });
-                        } else {
-                            var i = tup.elems.len;
-                            while (i > 0) {
-                                i -= 1;
-                                try frames.append(gpa, .{ .doc_type = .{
-                                    .value = tup.elems[i],
-                                    .needs_parens = false,
-                                    .indent = item.indent,
-                                } });
-                                if (i > 0) try frames.append(gpa, .{ .html = ", " });
-                            }
-                            try frames.append(gpa, .{ .html = "(" });
-                        }
+                        try pushTypeList(gpa, &frames, tup.elems, item.indent, !ctx.single_line_signatures and multiline_layouts.contains(item.value));
                     },
                     .apply => |app| {
                         try frames.append(gpa, .{ .html = ")" });
-                        const multiline = !ctx.single_line_signatures and multiline_layouts.contains(item.value);
-                        if (multiline) {
-                            try frames.append(gpa, .{ .indent = item.indent });
-                            var i = app.args.len;
-                            while (i > 0) {
-                                i -= 1;
-                                try frames.append(gpa, .{ .html = ",\n" });
-                                try frames.append(gpa, .{ .doc_type = .{
-                                    .value = app.args[i],
-                                    .needs_parens = false,
-                                    .indent = item.indent + 1,
-                                } });
-                                try frames.append(gpa, .{ .indent = item.indent + 1 });
-                            }
-                            try frames.append(gpa, .{ .html = "(\n" });
-                        } else {
-                            var i = app.args.len;
-                            while (i > 0) {
-                                i -= 1;
-                                try frames.append(gpa, .{ .doc_type = .{
-                                    .value = app.args[i],
-                                    .needs_parens = false,
-                                    .indent = item.indent,
-                                } });
-                                if (i > 0) try frames.append(gpa, .{ .html = ", " });
-                            }
-                            try frames.append(gpa, .{ .html = "(" });
-                        }
+                        try pushTypeList(gpa, &frames, app.args, item.indent, !ctx.single_line_signatures and multiline_layouts.contains(item.value));
                         try frames.append(gpa, .{ .doc_type = .{
                             .value = app.constructor,
                             .needs_parens = false,

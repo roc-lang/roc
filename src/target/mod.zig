@@ -960,12 +960,6 @@ pub const RocTarget = enum {
         };
     }
 
-    /// Check if target is Linux-based
-    pub fn isLinux(self: RocTarget) bool {
-        const target_family = self.family();
-        return target_family == .linux_dynamic or target_family == .linux_static;
-    }
-
     /// Get the pointer bit width for this target
     pub fn ptrBitWidth(self: RocTarget) u16 {
         return switch (classifyCpuArch(self.toCpuArch())) {
@@ -1065,7 +1059,6 @@ test "every v1 target shares its default target's platform" {
         try std.testing.expectEqualStrings(default.toTriple(), target.toTriple());
         try std.testing.expectEqual(default.isStatic(), target.isStatic());
         try std.testing.expectEqual(default.isDynamic(), target.isDynamic());
-        try std.testing.expectEqual(default.isLinux(), target.isLinux());
         try std.testing.expectEqual(default.isMacOS(), target.isMacOS());
         try std.testing.expectEqual(default.isWindows(), target.isWindows());
         try std.testing.expectEqual(default.windowsAbi(), target.windowsAbi());

@@ -11,6 +11,8 @@ const roc_target = @import("roc_target");
 
 pub const dev = @import("dev/mod.zig");
 pub const wasm = @import("wasm/mod.zig");
+/// Backend-neutral operand plans for Boxy runtime wrapper calls.
+pub const boxy_call_plan = @import("boxy_call_plan.zig");
 
 comptime {
     if (@import("builtin").is_test) {

@@ -3809,22 +3809,31 @@ fn createBigRocStr(str: []const u8, roc_ops: *builtins.host_abi.RocOps) RocStr {
     }
 }
 
-/// Build a RocList of RecordFieldInfo from collected field info.
-fn buildRecordFieldsRocList(
+/// Write one RecordFieldInfo from collected field info.
+fn writeRecordFieldInfo(
     writer: *const GlueRocValueWriter,
-    fields: []const CollectedModuleTypeInfo.CollectedRecordFieldInfo,
+    value_base: [*]u8,
+    elem_layout: layout.Idx,
+    field: CollectedModuleTypeInfo.CollectedRecordFieldInfo,
+) void {
+    writer.zeroValue(value_base, elem_layout);
+    writer.writeField(value_base, elem_layout, "RecordFieldInfo", "name", RocStr, createBigRocStr(field.name, writer.roc_ops));
+    writer.writeField(value_base, elem_layout, "RecordFieldInfo", "type_str", RocStr, createBigRocStr(field.type_str, writer.roc_ops));
+}
+
+/// Build a RocList of `items`, writing each element with
+/// `writeItem(writer, element_base, element_layout, item)`.
+fn buildRocList(
+    writer: *const GlueRocValueWriter,
+    items: anytype,
     list_layout: layout.Idx,
+    comptime writeItem: anytype,
 ) RocList {
-    const allocated = writer.allocateList(list_layout, fields.len, true);
+    const allocated = writer.allocateList(list_layout, items.len, true);
     if (allocated.bytes == null) return allocated.list;
-
-    for (fields, 0..) |field, i| {
-        const elem_base = allocated.bytes.? + i * allocated.elem_size;
-        writer.zeroValue(elem_base, allocated.elem_layout);
-        writer.writeField(elem_base, allocated.elem_layout, "RecordFieldInfo", "name", RocStr, createBigRocStr(field.name, writer.roc_ops));
-        writer.writeField(elem_base, allocated.elem_layout, "RecordFieldInfo", "type_str", RocStr, createBigRocStr(field.type_str, writer.roc_ops));
+    for (items, 0..) |item, i| {
+        writeItem(writer, allocated.bytes.? + i * allocated.elem_size, allocated.elem_layout, item);
     }
-
     return allocated.list;
 }
 
@@ -3859,19 +3868,6 @@ fn writeRecordFieldTypeRepr(
     writer.writeField(value_base, record_field_layout, "RecordField", "type_id", u64, field.type_id);
 }
 
-fn buildRecordFieldTypeReprList(
-    writer: *const GlueRocValueWriter,
-    fields: []const CollectedRecordField,
-    list_layout: layout.Idx,
-) RocList {
-    const allocated = writer.allocateList(list_layout, fields.len, true);
-    if (allocated.bytes == null) return allocated.list;
-    for (fields, 0..) |field, i| {
-        writeRecordFieldTypeRepr(writer, allocated.bytes.? + i * allocated.elem_size, allocated.elem_layout, field);
-    }
-    return allocated.list;
-}
-
 fn writeTagVariant(
     writer: *const GlueRocValueWriter,
     value_base: [*]u8,
@@ -3882,19 +3878,6 @@ fn writeTagVariant(
     const payload_slot = writer.recordField(value_base, tag_variant_layout, "TagVariant", "payload");
     writer.writeField(value_base, tag_variant_layout, "TagVariant", "name", RocStr, createBigRocStr(tag.name, writer.roc_ops));
     writer.writeField(value_base, tag_variant_layout, "TagVariant", "payload", RocList, buildU64RocList(writer, tag.payload_ids, payload_slot.layout_idx));
-}
-
-fn buildTagVariantList(
-    writer: *const GlueRocValueWriter,
-    tags: []const CollectedTagInfo,
-    list_layout: layout.Idx,
-) RocList {
-    const allocated = writer.allocateList(list_layout, tags.len, true);
-    if (allocated.bytes == null) return allocated.list;
-    for (tags, 0..) |tag, i| {
-        writeTagVariant(writer, allocated.bytes.? + i * allocated.elem_size, allocated.elem_layout, tag);
-    }
-    return allocated.list;
 }
 
 fn writeAbiFieldLayout(
@@ -3916,19 +3899,6 @@ fn writeAbiFieldLayout(
     writer.writeField(value_base, abi_field_layout, "AbiFieldLayout", "type_id", u64, field.type_id);
 }
 
-fn buildAbiFieldLayoutList(
-    writer: *const GlueRocValueWriter,
-    fields: []const CollectedAbiFieldLayout,
-    list_layout: layout.Idx,
-) RocList {
-    const allocated = writer.allocateList(list_layout, fields.len, true);
-    if (allocated.bytes == null) return allocated.list;
-    for (fields, 0..) |field, i| {
-        writeAbiFieldLayout(writer, allocated.bytes.? + i * allocated.elem_size, allocated.elem_layout, field);
-    }
-    return allocated.list;
-}
-
 fn writeAbiTagLayout(
     writer: *const GlueRocValueWriter,
     value_base: [*]u8,
@@ -3941,24 +3911,11 @@ fn writeAbiTagLayout(
     writer.writeField(value_base, abi_tag_layout, "AbiTagLayout", "discriminant", u64, tag.discriminant);
     writer.writeField(value_base, abi_tag_layout, "AbiTagLayout", "name", RocStr, createBigRocStr(tag.name, writer.roc_ops));
     writer.writeField(value_base, abi_tag_layout, "AbiTagLayout", "payload", RocList, buildU64RocList(writer, tag.payload_ids, payload_slot.layout_idx));
-    writer.writeField(value_base, abi_tag_layout, "AbiTagLayout", "payload_fields", RocList, buildAbiFieldLayoutList(writer, tag.payload_fields, payload_fields_slot.layout_idx));
+    writer.writeField(value_base, abi_tag_layout, "AbiTagLayout", "payload_fields", RocList, buildRocList(writer, tag.payload_fields, payload_fields_slot.layout_idx, writeAbiFieldLayout));
     writer.writeField(value_base, abi_tag_layout, "AbiTagLayout", "payload_alignment32", u64, tag.payload_alignment32);
     writer.writeField(value_base, abi_tag_layout, "AbiTagLayout", "payload_alignment64", u64, tag.payload_alignment64);
     writer.writeField(value_base, abi_tag_layout, "AbiTagLayout", "payload_size32", u64, tag.payload_size32);
     writer.writeField(value_base, abi_tag_layout, "AbiTagLayout", "payload_size64", u64, tag.payload_size64);
-}
-
-fn buildAbiTagLayoutList(
-    writer: *const GlueRocValueWriter,
-    tags: []const CollectedAbiTagLayout,
-    list_layout: layout.Idx,
-) RocList {
-    const allocated = writer.allocateList(list_layout, tags.len, true);
-    if (allocated.bytes == null) return allocated.list;
-    for (tags, 0..) |tag, i| {
-        writeAbiTagLayout(writer, allocated.bytes.? + i * allocated.elem_size, allocated.elem_layout, tag);
-    }
-    return allocated.list;
 }
 
 fn writeAbiLayoutDetails(
@@ -3977,7 +3934,7 @@ fn writeAbiLayoutDetails(
             const payload_layout = writer.variantPayloadLayout(details_layout, tag_index);
             writer.zeroValue(value_base, payload_layout);
             const fields_slot = writer.recordField(value_base, payload_layout, "AbiRecordLayout", "fields");
-            writer.writeField(value_base, payload_layout, "AbiRecordLayout", "fields", RocList, buildAbiFieldLayoutList(writer, fields, fields_slot.layout_idx));
+            writer.writeField(value_base, payload_layout, "AbiRecordLayout", "fields", RocList, buildRocList(writer, fields, fields_slot.layout_idx, writeAbiFieldLayout));
             writer.writeTagDiscriminant(value_base, details_layout, tag_index);
         },
         .tag_union => |tu| {
@@ -3989,7 +3946,7 @@ fn writeAbiLayoutDetails(
             writer.writeField(value_base, payload_layout, "AbiTagUnionLayout", "discriminant_offset64", u64, tu.discriminant_offset64);
             writer.writeField(value_base, payload_layout, "AbiTagUnionLayout", "discriminant_size", u64, tu.discriminant_size);
             writer.writeField(value_base, payload_layout, "AbiTagUnionLayout", "has_payload", bool, tu.has_payload);
-            writer.writeField(value_base, payload_layout, "AbiTagUnionLayout", "tags", RocList, buildAbiTagLayoutList(writer, tu.tags, tags_slot.layout_idx));
+            writer.writeField(value_base, payload_layout, "AbiTagUnionLayout", "tags", RocList, buildRocList(writer, tu.tags, tags_slot.layout_idx, writeAbiTagLayout));
             writer.writeTagDiscriminant(value_base, details_layout, tag_index);
         },
     }
@@ -4082,7 +4039,7 @@ fn writeTypeRepr(
             writer.zeroValue(value_base, payload_layout);
             const fields_slot = writer.recordField(value_base, payload_layout, "RecordRepr", "fields");
             writer.writeField(value_base, payload_layout, "RecordRepr", "anonymous", bool, rec.anonymous);
-            writer.writeField(value_base, payload_layout, "RecordRepr", "fields", RocList, buildRecordFieldTypeReprList(writer, rec.fields, fields_slot.layout_idx));
+            writer.writeField(value_base, payload_layout, "RecordRepr", "fields", RocList, buildRocList(writer, rec.fields, fields_slot.layout_idx, writeRecordFieldTypeRepr));
             writer.writeField(value_base, payload_layout, "RecordRepr", "name", RocStr, createBigRocStr(rec.name, writer.roc_ops));
             writer.writeTagDiscriminant(value_base, type_repr_layout, tag_index);
             return;
@@ -4093,7 +4050,7 @@ fn writeTypeRepr(
             writer.zeroValue(value_base, payload_layout);
             const tags_slot = writer.recordField(value_base, payload_layout, "TagUnionRepr", "tags");
             writer.writeField(value_base, payload_layout, "TagUnionRepr", "name", RocStr, createBigRocStr(tu.name, writer.roc_ops));
-            writer.writeField(value_base, payload_layout, "TagUnionRepr", "tags", RocList, buildTagVariantList(writer, tu.tags, tags_slot.layout_idx));
+            writer.writeField(value_base, payload_layout, "TagUnionRepr", "tags", RocList, buildRocList(writer, tu.tags, tags_slot.layout_idx, writeTagVariant));
             writer.writeTagDiscriminant(value_base, type_repr_layout, tag_index);
             return;
         },
@@ -4124,103 +4081,67 @@ fn writeTypeInfo(
     writeTypeRepr(writer, repr_slot.ptr, repr_slot.layout_idx, entry.repr);
 }
 
-/// Build a RocList of TypeInfo from the type table.
-fn buildTypeInfoRocList(
+fn writeFunctionInfo(
     writer: *const GlueRocValueWriter,
-    type_table: *const TypeTable,
-    list_layout: layout.Idx,
-) RocList {
-    const allocated = writer.allocateList(list_layout, type_table.entries.items.len, true);
-    if (allocated.bytes == null) return allocated.list;
-
-    for (type_table.entries.items, 0..) |entry, i| {
-        writeTypeInfo(writer, allocated.bytes.? + i * allocated.elem_size, allocated.elem_layout, entry);
-    }
-
-    return allocated.list;
+    value_base: [*]u8,
+    elem_layout: layout.Idx,
+    func: CollectedModuleTypeInfo.CollectedFunctionInfo,
+) void {
+    writer.zeroValue(value_base, elem_layout);
+    writer.writeField(value_base, elem_layout, "FunctionInfo", "name", RocStr, createBigRocStr(func.name, writer.roc_ops));
+    writer.writeField(value_base, elem_layout, "FunctionInfo", "type_str", RocStr, createBigRocStr(func.type_str, writer.roc_ops));
 }
 
-fn buildFunctionInfoList(
+fn writeHostedFunctionInfo(
     writer: *const GlueRocValueWriter,
-    functions: []const CollectedModuleTypeInfo.CollectedFunctionInfo,
-    list_layout: layout.Idx,
-) RocList {
-    const allocated = writer.allocateList(list_layout, functions.len, true);
-    if (allocated.bytes == null) return allocated.list;
-    for (functions, 0..) |func, index| {
-        const elem_base = allocated.bytes.? + index * allocated.elem_size;
-        writer.zeroValue(elem_base, allocated.elem_layout);
-        writer.writeField(elem_base, allocated.elem_layout, "FunctionInfo", "name", RocStr, createBigRocStr(func.name, writer.roc_ops));
-        writer.writeField(elem_base, allocated.elem_layout, "FunctionInfo", "type_str", RocStr, createBigRocStr(func.type_str, writer.roc_ops));
-    }
-    return allocated.list;
+    value_base: [*]u8,
+    elem_layout: layout.Idx,
+    hosted: CollectedModuleTypeInfo.CollectedHostedFunctionInfo,
+) void {
+    writer.zeroValue(value_base, elem_layout);
+
+    const arg_fields_slot = writer.recordField(value_base, elem_layout, "HostedFunctionInfo", "arg_fields");
+    const arg_type_ids_slot = writer.recordField(value_base, elem_layout, "HostedFunctionInfo", "arg_type_ids");
+    const ret_fields_slot = writer.recordField(value_base, elem_layout, "HostedFunctionInfo", "ret_fields");
+
+    writer.writeField(value_base, elem_layout, "HostedFunctionInfo", "arg_fields", RocList, buildRocList(writer, hosted.arg_fields, arg_fields_slot.layout_idx, writeRecordFieldInfo));
+    writer.writeField(value_base, elem_layout, "HostedFunctionInfo", "arg_type_ids", RocList, buildU64RocList(writer, hosted.arg_type_ids, arg_type_ids_slot.layout_idx));
+    writer.writeField(value_base, elem_layout, "HostedFunctionInfo", "ffi_symbol", RocStr, createBigRocStr(hosted.ffi_symbol, writer.roc_ops));
+    writer.writeField(value_base, elem_layout, "HostedFunctionInfo", "index", u64, hosted.index);
+    writer.writeField(value_base, elem_layout, "HostedFunctionInfo", "name", RocStr, createBigRocStr(hosted.name, writer.roc_ops));
+    writer.writeField(value_base, elem_layout, "HostedFunctionInfo", "ret_fields", RocList, buildRocList(writer, hosted.ret_fields, ret_fields_slot.layout_idx, writeRecordFieldInfo));
+    writer.writeField(value_base, elem_layout, "HostedFunctionInfo", "ret_type_id", u64, hosted.ret_type_id);
+    writer.writeField(value_base, elem_layout, "HostedFunctionInfo", "type_str", RocStr, createBigRocStr(hosted.type_str, writer.roc_ops));
 }
 
-fn buildHostedFunctionInfoList(
+fn writeModuleTypeInfo(
     writer: *const GlueRocValueWriter,
-    hosted_functions: []const CollectedModuleTypeInfo.CollectedHostedFunctionInfo,
-    list_layout: layout.Idx,
-) RocList {
-    const allocated = writer.allocateList(list_layout, hosted_functions.len, true);
-    if (allocated.bytes == null) return allocated.list;
-    for (hosted_functions, 0..) |hosted, index| {
-        const elem_base = allocated.bytes.? + index * allocated.elem_size;
-        writer.zeroValue(elem_base, allocated.elem_layout);
+    value_base: [*]u8,
+    elem_layout: layout.Idx,
+    module: CollectedModuleTypeInfo,
+) void {
+    writer.zeroValue(value_base, elem_layout);
 
-        const arg_fields_slot = writer.recordField(elem_base, allocated.elem_layout, "HostedFunctionInfo", "arg_fields");
-        const arg_type_ids_slot = writer.recordField(elem_base, allocated.elem_layout, "HostedFunctionInfo", "arg_type_ids");
-        const ret_fields_slot = writer.recordField(elem_base, allocated.elem_layout, "HostedFunctionInfo", "ret_fields");
+    const functions_slot = writer.recordField(value_base, elem_layout, "ModuleTypeInfo", "functions");
+    const hosted_functions_slot = writer.recordField(value_base, elem_layout, "ModuleTypeInfo", "hosted_functions");
 
-        writer.writeField(elem_base, allocated.elem_layout, "HostedFunctionInfo", "arg_fields", RocList, buildRecordFieldsRocList(writer, hosted.arg_fields, arg_fields_slot.layout_idx));
-        writer.writeField(elem_base, allocated.elem_layout, "HostedFunctionInfo", "arg_type_ids", RocList, buildU64RocList(writer, hosted.arg_type_ids, arg_type_ids_slot.layout_idx));
-        writer.writeField(elem_base, allocated.elem_layout, "HostedFunctionInfo", "ffi_symbol", RocStr, createBigRocStr(hosted.ffi_symbol, writer.roc_ops));
-        writer.writeField(elem_base, allocated.elem_layout, "HostedFunctionInfo", "index", u64, hosted.index);
-        writer.writeField(elem_base, allocated.elem_layout, "HostedFunctionInfo", "name", RocStr, createBigRocStr(hosted.name, writer.roc_ops));
-        writer.writeField(elem_base, allocated.elem_layout, "HostedFunctionInfo", "ret_fields", RocList, buildRecordFieldsRocList(writer, hosted.ret_fields, ret_fields_slot.layout_idx));
-        writer.writeField(elem_base, allocated.elem_layout, "HostedFunctionInfo", "ret_type_id", u64, hosted.ret_type_id);
-        writer.writeField(elem_base, allocated.elem_layout, "HostedFunctionInfo", "type_str", RocStr, createBigRocStr(hosted.type_str, writer.roc_ops));
-    }
-    return allocated.list;
+    writer.writeField(value_base, elem_layout, "ModuleTypeInfo", "functions", RocList, buildRocList(writer, module.functions.items, functions_slot.layout_idx, writeFunctionInfo));
+    writer.writeField(value_base, elem_layout, "ModuleTypeInfo", "hosted_functions", RocList, buildRocList(writer, module.hosted_functions.items, hosted_functions_slot.layout_idx, writeHostedFunctionInfo));
+    writer.writeField(value_base, elem_layout, "ModuleTypeInfo", "main_type", RocStr, createBigRocStr(module.main_type, writer.roc_ops));
+    writer.writeField(value_base, elem_layout, "ModuleTypeInfo", "name", RocStr, createBigRocStr(module.name, writer.roc_ops));
 }
 
-fn buildModuleTypeInfoList(
+fn writeProvidesEntry(
     writer: *const GlueRocValueWriter,
-    modules: []const CollectedModuleTypeInfo,
-    list_layout: layout.Idx,
-) RocList {
-    const allocated = writer.allocateList(list_layout, modules.len, true);
-    if (allocated.bytes == null) return allocated.list;
-    for (modules, 0..) |module, index| {
-        const elem_base = allocated.bytes.? + index * allocated.elem_size;
-        writer.zeroValue(elem_base, allocated.elem_layout);
-
-        const functions_slot = writer.recordField(elem_base, allocated.elem_layout, "ModuleTypeInfo", "functions");
-        const hosted_functions_slot = writer.recordField(elem_base, allocated.elem_layout, "ModuleTypeInfo", "hosted_functions");
-
-        writer.writeField(elem_base, allocated.elem_layout, "ModuleTypeInfo", "functions", RocList, buildFunctionInfoList(writer, module.functions.items, functions_slot.layout_idx));
-        writer.writeField(elem_base, allocated.elem_layout, "ModuleTypeInfo", "hosted_functions", RocList, buildHostedFunctionInfoList(writer, module.hosted_functions.items, hosted_functions_slot.layout_idx));
-        writer.writeField(elem_base, allocated.elem_layout, "ModuleTypeInfo", "main_type", RocStr, createBigRocStr(module.main_type, writer.roc_ops));
-        writer.writeField(elem_base, allocated.elem_layout, "ModuleTypeInfo", "name", RocStr, createBigRocStr(module.name, writer.roc_ops));
-    }
-    return allocated.list;
-}
-
-fn buildProvidesEntryList(
-    writer: *const GlueRocValueWriter,
-    provides_entries: []const CollectedProvidesEntry,
-    list_layout: layout.Idx,
-) RocList {
-    const allocated = writer.allocateList(list_layout, provides_entries.len, true);
-    if (allocated.bytes == null) return allocated.list;
-    for (provides_entries, 0..) |entry, index| {
-        const elem_base = allocated.bytes.? + index * allocated.elem_size;
-        writer.zeroValue(elem_base, allocated.elem_layout);
-        const exported_slot = writer.recordField(elem_base, allocated.elem_layout, "ProvidesEntry", "exported");
-        writeProvidedExport(writer, exported_slot.ptr, exported_slot.layout_idx, entry.exported);
-        writer.writeField(elem_base, allocated.elem_layout, "ProvidesEntry", "ffi_symbol", RocStr, createBigRocStr(entry.ffi_symbol, writer.roc_ops));
-        writer.writeField(elem_base, allocated.elem_layout, "ProvidesEntry", "name", RocStr, createBigRocStr(entry.name, writer.roc_ops));
-    }
-    return allocated.list;
+    value_base: [*]u8,
+    elem_layout: layout.Idx,
+    entry: CollectedProvidesEntry,
+) void {
+    writer.zeroValue(value_base, elem_layout);
+    const exported_slot = writer.recordField(value_base, elem_layout, "ProvidesEntry", "exported");
+    writeProvidedExport(writer, exported_slot.ptr, exported_slot.layout_idx, entry.exported);
+    writer.writeField(value_base, elem_layout, "ProvidesEntry", "ffi_symbol", RocStr, createBigRocStr(entry.ffi_symbol, writer.roc_ops));
+    writer.writeField(value_base, elem_layout, "ProvidesEntry", "name", RocStr, createBigRocStr(entry.name, writer.roc_ops));
 }
 
 fn writeProvidedExport(
@@ -4291,9 +4212,9 @@ fn constructTypesRocList(
     const provides_slot = writer.recordField(types_base, allocated.elem_layout, "Types", "provides_entries");
     const types_slot = writer.recordField(types_base, allocated.elem_layout, "Types", "types");
 
-    writer.writeField(types_base, allocated.elem_layout, "Types", "modules", RocList, buildModuleTypeInfoList(writer, collected_modules, modules_slot.layout_idx));
-    writer.writeField(types_base, allocated.elem_layout, "Types", "provides_entries", RocList, buildProvidesEntryList(writer, provides_entries, provides_slot.layout_idx));
-    writer.writeField(types_base, allocated.elem_layout, "Types", "types", RocList, buildTypeInfoRocList(writer, type_table, types_slot.layout_idx));
+    writer.writeField(types_base, allocated.elem_layout, "Types", "modules", RocList, buildRocList(writer, collected_modules, modules_slot.layout_idx, writeModuleTypeInfo));
+    writer.writeField(types_base, allocated.elem_layout, "Types", "provides_entries", RocList, buildRocList(writer, provides_entries, provides_slot.layout_idx, writeProvidesEntry));
+    writer.writeField(types_base, allocated.elem_layout, "Types", "types", RocList, buildRocList(writer, type_table.entries.items, types_slot.layout_idx, writeTypeInfo));
 
     return allocated.list;
 }

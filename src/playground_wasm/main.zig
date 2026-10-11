@@ -1033,7 +1033,7 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
     errdefer root_artifact.deinitRetainingModuleEnv(allocator);
 
     var import_artifacts = [_]check.CheckedArtifact.CheckedModuleArtifact{builtin_artifact};
-    const lowered = try eval.Inspected.lowerCheckedModuleSetToLir(allocator, @as(std.Io, undefined), &root_artifact, &import_artifacts, .u32);
+    const lowered = try eval.Inspected.lowerCheckedModuleSetToLir(allocator, @as(std.Io, undefined), &root_artifact, &import_artifacts, .u32, .{});
 
     root_artifact.deinitRetainingModuleEnv(allocator);
     import_artifacts[0].deinitRetainingModuleEnv(allocator);
@@ -1792,11 +1792,12 @@ fn argLayoutsForProc(
 }
 
 fn buildEvaluateTestsHtml(data: CompilerStageData) PlaygroundEvaluateTestsError![]u8 {
-    var resources = try eval.Inspected.parseAndCanonicalizeProgramPublishedRoots(
+    var resources = try eval.Inspected.parseProgram(
         allocator,
         .module,
         data.module_env.common.source,
         &.{},
+        .{ .roots = .published_only },
     );
     defer eval.Inspected.cleanupParseAndCanonical(allocator, resources);
 

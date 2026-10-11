@@ -346,11 +346,7 @@ pub const Store = struct {
 
         const expected_idx = self.attributes.items.items.len;
         const attributes_idx = try self.attributes.append(gpa, attributes);
-        if (comptime builtin.mode == .debug) {
-            std.debug.assert(@backingInt(attributes_idx) == expected_idx);
-        } else if (@backingInt(attributes_idx) != expected_idx) {
-            unreachable;
-        }
+        std.debug.assert(@backingInt(attributes_idx) == expected_idx);
 
         const result = Idx{
             .attributes = attributes,

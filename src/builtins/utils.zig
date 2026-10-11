@@ -50,23 +50,6 @@ pub inline fn alignedPtrCast(comptime T: type, ptr: anytype, src: std.builtin.So
     return @ptrCast(@alignCast(ptr));
 }
 
-/// Reads a typed value from a raw pointer with debug-mode alignment verification.
-///
-/// In debug builds, verifies that the pointer is properly aligned for the target type
-/// and panics with diagnostic information if alignment is incorrect.
-/// In release builds, this is equivalent to `@as(*const T, @ptrCast(@alignCast(ptr))).*`.
-///
-/// Usage:
-/// ```
-/// const value = readAs(u64, raw_ptr, @src());
-/// ```
-///
-/// The `src` parameter should always be `@src()` at the call site - this captures
-/// the file, function, and line number to aid in reproducing alignment bugs.
-pub inline fn readAs(comptime T: type, ptr: anytype, src: std.builtin.SourceLocation) T {
-    return alignedPtrCast(*const T, ptr, src).*;
-}
-
 /// Writes a typed value to a raw pointer with debug-mode alignment verification.
 ///
 /// In debug builds, verifies that the pointer is properly aligned for the target type
@@ -365,11 +348,6 @@ pub fn increfRcPtr(ptr_to_refcount: *isize, amount: isize, atomicity: RcAtomicit
             DebugRefcountTracker.onIncref(@intFromPtr(ptr_to_refcount), amount);
         }
     }
-}
-
-/// Increments reference count of an RC pointer by specified amount
-pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize, roc_ops: *RocOps) callconv(.c) void {
-    increfRcPtr(ptr_to_refcount, amount, .atomic, roc_ops);
 }
 
 /// Decrements the refcount pointed to directly by `bytes_or_null`,
@@ -1078,7 +1056,7 @@ test "increfC, refcounted data" {
 
     var mock_rc: isize = 17;
     const ptr_to_refcount: *isize = &mock_rc;
-    @import("utils.zig").increfRcPtrC(ptr_to_refcount, 2, test_env.getOps());
+    @import("utils.zig").increfRcPtr(ptr_to_refcount, 2, .atomic, test_env.getOps());
     try std.testing.expectEqual(mock_rc, 19);
 }
 
@@ -1088,7 +1066,7 @@ test "increfC, static data" {
 
     var mock_rc: isize = @import("utils.zig").REFCOUNT_STATIC_DATA;
     const ptr_to_refcount: *isize = &mock_rc;
-    @import("utils.zig").increfRcPtrC(ptr_to_refcount, 2, test_env.getOps());
+    @import("utils.zig").increfRcPtr(ptr_to_refcount, 2, .atomic, test_env.getOps());
     try std.testing.expectEqual(mock_rc, @import("utils.zig").REFCOUNT_STATIC_DATA);
 }
 

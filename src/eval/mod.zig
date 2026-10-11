@@ -121,6 +121,7 @@ test "eval tests" {
     std.testing.refAllDecls(@import("const_store_writer.zig"));
     std.testing.refAllDecls(@import("native_root_export.zig"));
     std.testing.refAllDecls(@import("frozen_root_transcode.zig"));
+    std.testing.refAllDecls(@import("frozen_graph.zig"));
     std.testing.refAllDecls(@import("inspected_run.zig"));
     std.testing.refAllDecls(@import("rc_conformance.zig"));
     std.testing.refAllDecls(@import("inspected.zig"));

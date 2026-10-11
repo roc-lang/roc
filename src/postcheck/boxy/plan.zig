@@ -922,6 +922,31 @@ pub const WorkerDictionaryDescriptor = struct {
     hidden_index: u32,
 };
 
+/// The checked body a worker lowers, resolved by planning from the worker's
+/// source.
+pub const WorkerBody = struct {
+    view: ModuleView,
+    /// The checked procedure template the body belongs to, when it belongs
+    /// to one.
+    template: ?checked_names.ProcedureTemplateRef = null,
+    /// The stored function whose `ConstStore` captures the body binds.
+    stored_fn: ?StoredFnSource = null,
+    kind: Kind,
+
+    /// What the body runs.
+    pub const Kind = union(enum) {
+        checked_expr: checked.CheckedExprId,
+        intrinsic_wrapper: checked.IntrinsicWrapper,
+        hosted_proc: checked.HostedProc,
+        /// The declaration behind this worker has a type annotation and no
+        /// implementation, so reaching the worker crashes.
+        unimplemented,
+        /// A callable binding whose compile-time value is this crash or
+        /// checked error constant: the worker crashes with its message.
+        const_crash: checked.ConstNodeId,
+    };
+};
+
 /// Complete checked source and hidden-input plan for one worker.
 pub const WorkerPlan = struct {
     id: WorkerPlanId,
@@ -1238,6 +1263,10 @@ pub const ProgramPlan = struct {
     literal_evidence: ?LiteralEvidencePlan = null,
     roots: std.ArrayList(RootPlan),
     workers: std.ArrayList(WorkerPlan),
+    /// Each worker's resolved body, by worker id: null for a generated
+    /// worker, whose source describes its body, and for planning without a
+    /// root module.
+    worker_bodies: std.ArrayList(?WorkerBody) = .empty,
     direct_calls: std.ArrayList(DirectCallPlan),
     /// Calls whose checked direct target is an exact procedure alias. Boxy
     /// lowers these through the alias's materialized callable value, as a
@@ -1463,6 +1492,7 @@ pub const ProgramPlan = struct {
         self.direct_calls.deinit(self.allocator);
         self.alias_calls.deinit(self.allocator);
         self.workers.deinit(self.allocator);
+        self.worker_bodies.deinit(self.allocator);
         self.roots.deinit(self.allocator);
         self.* = ProgramPlan.init(self.allocator);
     }
@@ -2146,7 +2176,29 @@ pub const ModuleView = struct {
     interface_capabilities: *const checked.ModuleInterfaceCapabilities = &empty_interface_capabilities,
     const_store: ?*const check.ConstStore.ConstStore = null,
     const_templates: ?*const checked.ConstTemplateTable = null,
+    module_env: ?*const can.ModuleEnv = null,
 };
+
+/// The view of checked module `key` among the modules lowering received.
+pub fn moduleViewForKey(modules: Common.CheckedModules, key: checked.ModuleId) ModuleView {
+    if (moduleKeyEqual(modules.root.module.key, key)) return moduleViewFromCheckedModule(modules.root.module);
+    return importedModuleViewForKey(modules.imports, modules.root.relation_modules, key) orelse
+        boxyPlanInvariant("boxy referenced a checked module that was not available to lowering");
+}
+
+fn importedModuleViewForKey(
+    imports: []const checked.ImportedModuleView,
+    relation_modules: []const checked.ImportedModuleView,
+    key: checked.ModuleId,
+) ?ModuleView {
+    for (imports) |imported| {
+        if (moduleKeyEqual(key, imported.key)) return moduleViewFromImported(imported);
+    }
+    for (relation_modules) |relation| {
+        if (moduleKeyEqual(key, relation.key)) return moduleViewFromImported(relation);
+    }
+    return null;
+}
 
 /// Checked modules, roots, and standalone layout requests to analyze together.
 pub const ProgramInput = struct {
@@ -4027,8 +4079,7 @@ const Builder = struct {
 
     /// The module data the shared label-comparing queries need.
     pub fn moduleNames(self: *Builder, module_id: checked.ModuleId) ModuleNames {
-        const view = self.moduleForId(module_id);
-        return .{ .key = view.key, .canonical_names = view.canonical_names };
+        return moduleNamesOf(self.moduleForId(module_id));
     }
 
     /// Shared read-only queries over the plan built so far.
@@ -4050,13 +4101,8 @@ const Builder = struct {
         for (self.extra_module_views) |view| {
             if (moduleKeyEqual(module_id, view.key)) return view;
         }
-        for (self.imports) |imported| {
-            if (moduleKeyEqual(module_id, imported.key)) return moduleViewFromImported(imported);
-        }
-        for (self.relation_modules) |relation| {
-            if (moduleKeyEqual(module_id, relation.key)) return moduleViewFromImported(relation);
-        }
-        boxyPlanInvariant("checked nominal representation referenced a module outside boxy planner input");
+        return importedModuleViewForKey(self.imports, self.relation_modules, module_id) orelse
+            boxyPlanInvariant("checked nominal representation referenced a module outside boxy planner input");
     }
 
     fn moduleForCheckedModuleId(self: *Builder, checked_module: anytype) ModuleView {
@@ -4620,13 +4666,13 @@ const Builder = struct {
             .encoder_record_field => |state| try self.stepEncoderRecordField(actions, state),
             .descriptor_methods => |state| try self.stepDescriptorMethods(actions, state.rep_id, state.kind),
             .descriptor_override => |state| try self.finishDescriptorOverride(state.rep_id, state.kind, state.lookup, state.source_fn_type),
-            .worker_body => |body| switch (body) {
-                .checked_expr => |checked_body| {
-                    if (checked_body.stored_fn) |stored_fn| try self.analyzeStoredFnCaptureTypes(stored_fn);
-                    try actions.append(self.allocator, .{ .worker_root_expr = .{ .view = checked_body.view, .expr = checked_body.root_expr } });
+            .worker_body => |body| switch (body.kind) {
+                .checked_expr => |root_expr| {
+                    if (body.stored_fn) |stored_fn| try self.analyzeStoredFnCaptureTypes(stored_fn);
+                    try actions.append(self.allocator, .{ .worker_root_expr = .{ .view = body.view, .expr = root_expr } });
                 },
-                .intrinsic_wrapper => |intrinsic| try self.stepIntrinsicWrapper(actions, intrinsic.view, intrinsic.wrapper),
-                .hosted_proc => |hosted| try self.analyzeHostedProcTypes(hosted.view, hosted.proc),
+                .intrinsic_wrapper => |wrapper| try self.stepIntrinsicWrapper(actions, body.view, wrapper),
+                .hosted_proc => |proc| try self.analyzeHostedProcTypes(body.view, proc),
                 // A crash body references no types beyond the declared signature,
                 // which the worker's own representation already covers.
                 .unimplemented, .const_crash => {},
@@ -5017,11 +5063,9 @@ const Builder = struct {
             .source = source,
             .checked_type = worker_type,
             .rep = rep,
-            .stored_fn = if (body) |resolved_body| switch (resolved_body) {
-                .checked_expr => |checked_body| checked_body.stored_fn,
-                .intrinsic_wrapper, .hosted_proc, .unimplemented, .const_crash => null,
-            } else null,
+            .stored_fn = if (body) |resolved_body| resolved_body.stored_fn else null,
         });
+        try self.plan.worker_bodies.append(self.allocator, body);
 
         switch (source) {
             .generated_codec => |codec| switch (codec.kind) {
@@ -11310,13 +11354,13 @@ const Builder = struct {
         return switch (source) {
             .generated_codec,
             .generated_field_iterator,
+            .nested_expr,
             => null,
             .procedure_template,
             .procedure_binding,
             .procedure_use,
-            .nested_expr,
-            => switch (self.rootWorkerBody(source)) {
-                .intrinsic_wrapper => |intrinsic| intrinsic.wrapper.intrinsic,
+            => switch (self.rootWorkerBody(source).kind) {
+                .intrinsic_wrapper => |wrapper| wrapper.intrinsic,
                 .checked_expr, .hosted_proc, .unimplemented, .const_crash => null,
             },
         };
@@ -12062,8 +12106,9 @@ const Builder = struct {
                 },
                 .procedure_template, .procedure_binding, .procedure_use => blk: {
                     if (self.root_module == null) continue;
-                    switch (self.rootWorkerBody(worker.source)) {
-                        .checked_expr => |body| break :blk .{ body.view, body.root_expr },
+                    const body = self.rootWorkerBody(worker.source);
+                    switch (body.kind) {
+                        .checked_expr => |root_expr| break :blk .{ body.view, root_expr },
                         .intrinsic_wrapper, .hosted_proc, .unimplemented, .const_crash => continue,
                     }
                 },
@@ -13141,12 +13186,13 @@ const Builder = struct {
 
     fn workerResolvesToHosted(self: *Builder, source: WorkerSource) bool {
         if (source == .generated_codec or
-            source == .generated_field_iterator)
+            source == .generated_field_iterator or
+            source == .nested_expr)
         {
             return false;
         }
         if (self.root_module == null) return workerSourceIsHosted(source);
-        return switch (self.rootWorkerBody(source)) {
+        return switch (self.rootWorkerBody(source).kind) {
             .hosted_proc => true,
             .checked_expr,
             .intrinsic_wrapper,
@@ -14026,12 +14072,13 @@ const Builder = struct {
     fn workerIsStrInspectIntrinsic(self: *Builder, worker_id: WorkerPlanId) bool {
         const worker = self.plan.workers.items[@backingInt(worker_id)];
         if (worker.source == .generated_codec or
-            worker.source == .generated_field_iterator)
+            worker.source == .generated_field_iterator or
+            worker.source == .nested_expr)
         {
             return false;
         }
-        return switch (self.rootWorkerBody(worker.source)) {
-            .intrinsic_wrapper => |intrinsic| intrinsic.wrapper.intrinsic == .str_inspect,
+        return switch (self.rootWorkerBody(worker.source).kind) {
+            .intrinsic_wrapper => |wrapper| wrapper.intrinsic == .str_inspect,
             .checked_expr, .hosted_proc, .unimplemented, .const_crash => false,
         };
     }
@@ -19195,28 +19242,6 @@ const Builder = struct {
         return payloads[0].rep;
     }
 
-    const WorkerBody = union(enum) {
-        checked_expr: struct {
-            view: ModuleView,
-            root_expr: checked.CheckedExprId,
-            stored_fn: ?StoredFnSource = null,
-        },
-        intrinsic_wrapper: struct {
-            view: ModuleView,
-            wrapper: checked.IntrinsicWrapper,
-        },
-        hosted_proc: struct {
-            view: ModuleView,
-            proc: checked.HostedProc,
-        },
-        /// The declaration behind this worker has a type annotation and no
-        /// implementation, so reaching the worker crashes.
-        unimplemented,
-        /// A callable binding whose compile-time value is a crash or a
-        /// checked error: the worker crashes with that value's message.
-        const_crash,
-    };
-
     fn rootWorkerBody(self: *Builder, source: WorkerSource) WorkerBody {
         return switch (source) {
             .procedure_template => |template| self.rootProcedureTemplateBody(template),
@@ -19241,6 +19266,9 @@ const Builder = struct {
 
     fn nestedExprWorkerBody(self: *Builder, expr_ref: CheckedExprIdentity) WorkerBody {
         const view = self.moduleForId(expr_ref.module);
+        const site = for (view.nested_proc_sites.sites) |candidate| {
+            if (candidate.checked_expr == expr_ref.expr) break candidate;
+        } else boxyPlanInvariant("nested callable worker source had no nested procedure site");
         const expr = view.checked_bodies.expr(expr_ref.expr);
         const root_expr = if (expr.data == .lambda)
             expr_ref.expr
@@ -19248,10 +19276,12 @@ const Builder = struct {
             expr.data.closure.lambda
         else
             boxyPlanInvariant("nested callable worker source did not point at a lambda or closure");
-        return .{ .checked_expr = .{
-            .view = view,
-            .root_expr = root_expr,
-        } };
+        // A default-root site (a lambda inside a defaulted-field expression,
+        // design.md "Defaulted Fields") belongs to no checked procedure template.
+        return .{ .view = view, .template = switch (site.owner) {
+            .template => |template| template,
+            .default_root => null,
+        }, .kind = .{ .checked_expr = root_expr } };
     }
 
     /// Whether this binding's body is a callable-eval whose compile-time root
@@ -19390,66 +19420,47 @@ const Builder = struct {
     }
 
     fn rootProcedureBindingBody(self: *Builder, view: ModuleView, binding_ref: checked.TopLevelProcedureBindingRef) WorkerBody {
-        const binding = view.top_level_procedure_bindings.get(binding_ref);
-        return switch (binding.body) {
+        return self.procedureBindingBody(view, view.top_level_procedure_bindings.get(binding_ref).body);
+    }
+
+    fn importedProcedureBindingBody(self: *Builder, binding_ref: checked.ImportedProcedureBindingRef) WorkerBody {
+        const view = self.moduleForId(binding_ref.artifact);
+        return self.procedureBindingBody(view, importedProcedureBinding(view, binding_ref).body);
+    }
+
+    /// The worker body of a top-level or imported procedure binding's body.
+    fn procedureBindingBody(self: *Builder, view: ModuleView, body: anytype) WorkerBody {
+        return switch (body) {
             .direct_template => |direct| switch (direct.template) {
                 .checked => |template| self.rootProcedureTemplateBody(template),
                 .lifted,
                 .synthetic,
                 => boxyPlanInvariant("non-checked procedure template reached boxy body type planning"),
             },
-            .checked_error => |expr| .{ .checked_expr = .{ .view = view, .root_expr = expr } },
-            .callable_eval_template => |template| self.callableEvalTemplateBody(view, template),
-        };
-    }
-
-    fn importedProcedureBindingBody(self: *Builder, binding_ref: checked.ImportedProcedureBindingRef) WorkerBody {
-        const view = self.moduleForId(binding_ref.artifact);
-        const binding = importedProcedureBinding(view, binding_ref);
-        return switch (binding.body) {
-            .direct_template => |direct| switch (direct.template) {
-                .checked => |template| self.rootProcedureTemplateBody(template),
-                .lifted,
-                .synthetic,
-                => boxyPlanInvariant("non-checked imported procedure template reached boxy body type planning"),
-            },
-            .checked_error => |expr| .{ .checked_expr = .{ .view = view, .root_expr = expr } },
+            .checked_error => |expr| .{ .view = view, .kind = .{ .checked_expr = expr } },
             .callable_eval_template => |template| self.callableEvalTemplateBody(view, template),
         };
     }
 
     fn hostedProcedureBody(self: *Builder, hosted_ref: checked.HostedProcRef) WorkerBody {
         const view = self.moduleForId(checked.hostedProcedureTemplateModuleId(hosted_ref));
-        return .{ .hosted_proc = .{
-            .view = view,
-            .proc = hostedProcForTemplate(view, hosted_ref.template),
-        } };
+        if (view.checked_procedure_templates.get(hosted_ref.template.template).target != .hosted) {
+            boxyPlanInvariant("hosted procedure ref pointed at a non-hosted checked template");
+        }
+        return .{ .view = view, .template = hosted_ref.template, .kind = .{ .hosted_proc = hostedProcForTemplate(view, hosted_ref.template) } };
     }
 
     fn rootProcedureTemplateBody(self: *Builder, template_ref: checked_names.ProcedureTemplateRef) WorkerBody {
         const view = self.moduleForCheckedModuleId(template_ref.artifact);
         const template = view.checked_procedure_templates.get(template_ref.template);
-        if (template.target == .hosted) {
-            return .{ .hosted_proc = .{
-                .view = view,
-                .proc = hostedProcForTemplate(view, template_ref),
-            } };
-        }
-        return switch (template.body) {
-            .checked_body => |body| .{ .checked_expr = .{
-                .view = view,
-                .root_expr = view.checked_bodies.body(body).root_expr,
-            } },
-            .intrinsic_wrapper => |wrapper_id| .{ .intrinsic_wrapper = .{
-                .view = view,
-                .wrapper = view.intrinsic_wrappers.get(wrapper_id),
-            } },
-            .entry_wrapper => |wrapper_id| .{ .checked_expr = .{
-                .view = view,
-                .root_expr = view.entry_wrappers.get(wrapper_id).body_expr,
-            } },
+        return .{ .view = view, .template = template_ref, .kind = if (template.target == .hosted)
+            .{ .hosted_proc = hostedProcForTemplate(view, template_ref) }
+        else switch (template.body) {
+            .checked_body => |body| .{ .checked_expr = view.checked_bodies.body(body).root_expr },
+            .intrinsic_wrapper => |wrapper_id| .{ .intrinsic_wrapper = view.intrinsic_wrappers.get(wrapper_id) },
+            .entry_wrapper => |wrapper_id| .{ .checked_expr = view.entry_wrappers.get(wrapper_id).body_expr },
             .unimplemented => .unimplemented,
-        };
+        } };
     }
 
     fn callableEvalTemplateBody(
@@ -19467,7 +19478,7 @@ const Builder = struct {
                     boxyPlanInvariant("callable eval binding constant had no checked ConstStore");
                 break :blk switch (store.get(node)) {
                     .fn_value => |fn_id| self.constFnValueBody(view, fn_id),
-                    .crash, .checked_error => .const_crash,
+                    .crash, .checked_error => .{ .view = view, .kind = .{ .const_crash = node } },
                     .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .nominal => boxyPlanInvariant("callable eval binding constant was not a callable value"),
                 };
             },
@@ -19504,8 +19515,8 @@ const Builder = struct {
             => boxyPlanInvariant("generated parser/encoder stored function reached runtime boxy body type planning before generated runtime support"),
         };
         if (fn_value.captures.len != 0) {
-            switch (body) {
-                .checked_expr => |*checked_body| checked_body.stored_fn = .{
+            switch (body.kind) {
+                .checked_expr => body.stored_fn = .{
                     .module = store_view.key,
                     .fn_id = fn_id,
                 },
@@ -19543,11 +19554,13 @@ const Builder = struct {
 
     fn nestedConstFnBody(self: *Builder, nested: anytype) WorkerBody {
         const view = self.moduleForStoredNestedFn(nested);
-        const expr_id = checkedLambdaExprForNestedFn(view, nested);
-        return .{ .checked_expr = .{
+        // A default-root-qualified stored function's site belongs to no
+        // checked procedure template (design.md "Defaulted Fields").
+        return .{
             .view = view,
-            .root_expr = expr_id,
-        } };
+            .template = if (nested.default_root == null) nested.owner else null,
+            .kind = .{ .checked_expr = checkedLambdaExprForNestedFn(view, nested) },
+        };
     }
 
     fn generatedTagPayloadForRep(
@@ -20438,17 +20451,7 @@ const Builder = struct {
         binding_ref: checked.ArtifactTopLevelProcedureBindingRef,
     ) CheckedTypeIdentity {
         const view = self.moduleForId(binding_ref.artifact);
-        const binding = view.top_level_procedure_bindings.get(binding_ref.binding);
-        return switch (binding.body) {
-            .direct_template => |direct| switch (direct.template) {
-                .checked => |template| self.checkedTypeForTemplate(template),
-                .lifted,
-                .synthetic,
-                => boxyPlanInvariant("non-checked procedure template reached boxy worker type planning"),
-            },
-            .checked_error => |expr| typeRef(view, view.checked_bodies.expr(expr).ty),
-            .callable_eval_template => |template| typeRef(view, self.callableEvalTemplate(view, template).checked_fn_root),
-        };
+        return self.checkedTypeForBindingBody(view, view.top_level_procedure_bindings.get(binding_ref.binding).body);
     }
 
     fn checkedTypeForImportedBinding(
@@ -20456,13 +20459,17 @@ const Builder = struct {
         binding_ref: checked.ImportedProcedureBindingRef,
     ) CheckedTypeIdentity {
         const view = self.moduleForId(binding_ref.artifact);
-        const binding = importedProcedureBinding(view, binding_ref);
-        return switch (binding.body) {
+        return self.checkedTypeForBindingBody(view, importedProcedureBinding(view, binding_ref).body);
+    }
+
+    /// The checked type of a top-level or imported procedure binding's body.
+    fn checkedTypeForBindingBody(self: *Builder, view: ModuleView, body: anytype) CheckedTypeIdentity {
+        return switch (body) {
             .direct_template => |direct| switch (direct.template) {
                 .checked => |template| self.checkedTypeForTemplate(template),
                 .lifted,
                 .synthetic,
-                => boxyPlanInvariant("non-checked imported procedure template reached boxy worker type planning"),
+                => boxyPlanInvariant("non-checked procedure template reached boxy worker type planning"),
             },
             .checked_error => |expr| typeRef(view, view.checked_bodies.expr(expr).ty),
             .callable_eval_template => |template| typeRef(view, self.callableEvalTemplate(view, template).checked_fn_root),
@@ -21869,7 +21876,8 @@ pub fn workerSourceForMethodTarget(
     };
 }
 
-fn moduleViewFromImported(imported: checked.ImportedModuleView) ModuleView {
+/// The planner's view of an imported checked module.
+pub fn moduleViewFromImported(imported: checked.ImportedModuleView) ModuleView {
     return .{
         .key = imported.key,
         .canonical_names = imported.canonical_names,
@@ -21890,10 +21898,12 @@ fn moduleViewFromImported(imported: checked.ImportedModuleView) ModuleView {
         .interface_capabilities = imported.interface_capabilities,
         .const_store = imported.const_store,
         .const_templates = imported.const_templates,
+        .module_env = imported.module_env,
     };
 }
 
-fn moduleViewFromCheckedModule(checked_module: *const checked.CheckedModuleArtifact) ModuleView {
+/// The planner's view of a checked module artifact.
+pub fn moduleViewFromCheckedModule(checked_module: *const checked.CheckedModuleArtifact) ModuleView {
     return .{
         .key = checked_module.key,
         .canonical_names = &checked_module.canonical_names,
@@ -21914,6 +21924,7 @@ fn moduleViewFromCheckedModule(checked_module: *const checked.CheckedModuleArtif
         .interface_capabilities = &checked_module.interface_capabilities,
         .const_store = &checked_module.const_store,
         .const_templates = &checked_module.const_templates,
+        .module_env = checked_module.moduleEnvConst(),
     };
 }
 
@@ -22392,10 +22403,8 @@ test "boxy planner walks callable eval finalized const function bodies" {
     var body_builder = Builder.init(gpa, .{ .root_view = root_view });
     defer body_builder.deinit();
     const body = body_builder.callableEvalTemplateBody(root_view, @fromBackingInt(@intCast(fixtureTableIndex(0))));
-    const stored_fn = switch (body) {
-        .checked_expr => |checked_body| checked_body.stored_fn orelse return error.TestUnexpectedResult,
-        .intrinsic_wrapper, .hosted_proc, .unimplemented, .const_crash => return error.TestUnexpectedResult,
-    };
+    if (body.kind != .checked_expr) return error.TestUnexpectedResult;
+    const stored_fn = body.stored_fn orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(root_key, stored_fn.module);
     try std.testing.expectEqual(fn_id, stored_fn.fn_id);
     const worker_id = try body_builder.ensureWorker(
@@ -24829,4 +24838,180 @@ test "boxy nominal substitutions share formals independently of runtime demand a
             try std.testing.expectEqual(null, substitutions.next());
         }
     }
+}
+
+fn expectCheckedExprWorkerBody(
+    body: WorkerBody,
+    expected_template: checked_names.ProcedureTemplateRef,
+    expected_root: checked.CheckedExprId,
+) error{ TestExpectedEqual, TestUnexpectedResult }!void {
+    try std.testing.expect(checked_names.procedureTemplateRefEql(expected_template, body.template orelse return error.TestUnexpectedResult));
+    switch (body.kind) {
+        .checked_expr => |root_expr| try std.testing.expectEqual(expected_root, root_expr),
+        .intrinsic_wrapper, .hosted_proc, .unimplemented, .const_crash => return error.TestUnexpectedResult,
+    }
+}
+
+test "boxy planner resolves procedure-template workers to checked bodies" {
+    const gpa = std.testing.allocator;
+
+    var checked_module = minimalCheckedArtifact(gpa);
+    defer checked_module.canonical_names.deinit();
+    defer checked_module.checked_types.deinit(gpa);
+    defer checked_module.checked_bodies.deinit(gpa);
+
+    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    try checked_module.checked_bodies.bodies.append(gpa, .{
+        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
+        .root_expr = @fromBackingInt(@intCast(3)),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @fromBackingInt(@intCast(9)), @fromBackingInt(@intCast(fixtureTableIndex(0))), .roc),
+    };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len, .pointer_stability = .{} } };
+
+    var builder = Builder.init(gpa, .{ .root_module = .{ .module = &checked_module, .roots = undefined } });
+    defer builder.deinit();
+    try expectCheckedExprWorkerBody(builder.rootWorkerBody(.{ .procedure_template = template_ref }), template_ref, @fromBackingInt(@intCast(3)));
+}
+
+test "boxy planner resolves top-level direct bindings to checked bodies" {
+    const gpa = std.testing.allocator;
+
+    var checked_module = minimalCheckedArtifact(gpa);
+    defer checked_module.canonical_names.deinit();
+    defer checked_module.checked_types.deinit(gpa);
+    defer checked_module.checked_bodies.deinit(gpa);
+
+    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    try checked_module.checked_bodies.bodies.append(gpa, .{
+        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
+        .root_expr = @fromBackingInt(@intCast(5)),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @fromBackingInt(@intCast(7)), @fromBackingInt(@intCast(fixtureTableIndex(0))), .roc),
+    };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len, .pointer_stability = .{} } };
+
+    var bindings = [_]checked.TopLevelProcedureBinding{
+        .{
+            .source_scheme = typeSchemeKey(1),
+            .body = .{ .direct_template = .{
+                .proc_value = procedureValueRef(template_ref),
+                .template = .{ .checked = template_ref },
+            } },
+        },
+    };
+    checked_module.top_level_procedure_bindings = .{ .bindings = .{ .items = &bindings, .capacity = bindings.len, .pointer_stability = .{} } };
+
+    var builder = Builder.init(gpa, .{ .root_module = .{ .module = &checked_module, .roots = undefined } });
+    defer builder.deinit();
+    try expectCheckedExprWorkerBody(builder.rootWorkerBody(.{ .procedure_binding = .{ .artifact = checked_module.key, .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } }), template_ref, @fromBackingInt(@intCast(5)));
+}
+
+test "boxy planner resolves callable eval bindings to finalized const function expressions" {
+    const gpa = std.testing.allocator;
+
+    var checked_module = minimalCheckedArtifact(gpa);
+    defer checked_module.canonical_names.deinit();
+    defer checked_module.checked_types.deinit(gpa);
+    defer checked_module.checked_bodies.deinit(gpa);
+    checked_module.const_store = check.ConstStore.ConstStore.init(gpa);
+    defer checked_module.const_store.deinit();
+
+    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    var callable_templates = [_]checked.CallableEvalTemplate{
+        .{
+            .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
+            .module_idx = 0,
+            .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))),
+            .root = @fromBackingInt(@intCast(fixtureTableIndex(0))),
+            .source_scheme = typeSchemeKey(1),
+            .checked_fn_root = @fromBackingInt(@intCast(1)),
+        },
+    };
+    checked_module.callable_eval_templates = .{ .templates = .{ .items = &callable_templates, .capacity = callable_templates.len, .pointer_stability = .{} } };
+
+    const evidence_frames = [_]check.ConstStore.ConstFnEvidenceFrame{
+        check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 0),
+    };
+    const fn_id = try checked_module.const_store.appendFn(.{
+        .fn_def = .{ .nested = .{
+            .owner = template_ref,
+            .site = @fromBackingInt(@intCast(fixtureTableIndex(0))),
+            .context_fn_key = typeKey(1),
+        } },
+        .source_fn_ty = @fromBackingInt(@intCast(1)),
+        .source_fn_key = typeKey(1),
+        .evidence_frames = &evidence_frames,
+        .evidence_frame_head = 0,
+    });
+    var compile_time_roots = [_]checked.CompileTimeRoot{
+        .{
+            .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
+            .module_idx = 0,
+            .kind = .callable_binding,
+            .source = .{ .def = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
+            .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))),
+            .expr = @fromBackingInt(@intCast(fixtureTableIndex(0))),
+            .checked_type = @fromBackingInt(@intCast(1)),
+            .request_eligibility = .eligible,
+            .payload = .{ .fn_value = fn_id },
+        },
+    };
+    checked_module.compile_time_roots = .{ .roots = &compile_time_roots };
+
+    try checked_module.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
+        .ty = @fromBackingInt(@intCast(1)),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
+    });
+    var nested_sites = [_]checked.NestedProcSite{
+        .{
+            .site = @fromBackingInt(@intCast(fixtureTableIndex(0))),
+            .owner = .{ .template = template_ref },
+            .lexical_scope = .root,
+            .evidence_source = .inherited,
+            .evidence = .{},
+            .path_start = 0,
+            .path_len = 0,
+            .kind = .local_function,
+            .checked_expr = @fromBackingInt(@intCast(fixtureTableIndex(0))),
+            .checked_pattern = null,
+        },
+    };
+    checked_module.nested_proc_sites = .{ .sites = &nested_sites };
+
+    var templates = [_]checked.CheckedProcedureTemplate{
+        .{
+            .proc_base = template_ref.proc_base,
+            .template_id = template_ref.template,
+            .body = .{ .entry_wrapper = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
+            .checked_fn_scheme = typeSchemeKey(2),
+            .checked_fn_root = @fromBackingInt(@intCast(2)),
+            .static_dispatch_plans = .{},
+            .direct_dispatch_plans = .{},
+            .dispatch_relations = .{},
+            .resolved_value_refs = .{},
+            .top_level_value_uses = .{},
+            .nested_proc_sites = .{},
+            .target = .comptime_only,
+        },
+    };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len, .pointer_stability = .{} } };
+
+    var bindings = [_]checked.TopLevelProcedureBinding{
+        .{
+            .source_scheme = typeSchemeKey(1),
+            .body = .{ .callable_eval_template = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
+        },
+    };
+    checked_module.top_level_procedure_bindings = .{ .bindings = .{ .items = &bindings, .capacity = bindings.len, .pointer_stability = .{} } };
+
+    var builder = Builder.init(gpa, .{ .root_module = .{ .module = &checked_module, .roots = undefined } });
+    defer builder.deinit();
+    try expectCheckedExprWorkerBody(builder.rootWorkerBody(.{ .procedure_binding = .{ .artifact = checked_module.key, .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } }), template_ref, @fromBackingInt(@intCast(fixtureTableIndex(0))));
 }

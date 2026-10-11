@@ -59,19 +59,6 @@ pub const Owners = struct {
     pub fn noteStmt(self: *Owners, store: *const LirStore, layouts: *const layout_mod.Store, stmt: LIR.CFStmt) Allocator.Error!void {
         switch (stmt) {
             .assign_ref => |assign| try self.noteDefinition(assign.target, transparentSource(store, layouts, assign.op, assign.target)),
-            .str_match => |str_match| try self.noteStrMatchSteps(store, str_match.steps),
-            .str_match_set => |str_match_set| {
-                const arms = store.getStrMatchArms(str_match_set.arms);
-                for (0..GuardedList.borrowLen(arms)) |arm_index| {
-                    try self.noteStrMatchSteps(store, GuardedList.at(arms, arm_index).steps);
-                }
-            },
-            .join => |join_stmt| {
-                const params = store.getLocalSpan(join_stmt.params);
-                for (0..GuardedList.borrowLen(params)) |param_index| {
-                    try self.noteDefinition(GuardedList.at(params, param_index), null);
-                }
-            },
             .init_uninitialized,
             .assign_literal,
             .assign_call,
@@ -109,21 +96,18 @@ pub const Owners = struct {
             .free,
             .switch_stmt,
             .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .join,
             .jump,
             .ret,
             .crash,
-            => if (BodyClone.definedTarget(stmt)) |target| try self.noteDefinition(target, null),
+            => try BodyClone.tryForEachStmtDef(store, stmt, self, noteRoot),
         }
     }
 
-    fn noteStrMatchSteps(self: *Owners, store: *const LirStore, span: LIR.StrMatchStepSpan) Allocator.Error!void {
-        const steps = store.getStrMatchSteps(span);
-        for (0..GuardedList.borrowLen(steps)) |step_index| {
-            switch (GuardedList.at(steps, step_index).capture) {
-                .discard => {},
-                .view => |local| try self.noteDefinition(local, null),
-            }
-        }
+    fn noteRoot(self: *Owners, local: LIR.LocalId) Allocator.Error!void {
+        return self.noteDefinition(local, null);
     }
 
     /// The local whose ownership unit an owned erased call through `closure`

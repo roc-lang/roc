@@ -7881,14 +7881,7 @@ fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, staged: *default_a
         return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
     };
 
-    if (args.keep_temp) {
-        const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-        const config = reporting.ReportingConfig.initColorTerminal();
-        const headline = try std.fmt.allocPrint(ctx.arena, "Kept temporary directory: {s}.", .{temp_dir});
-        var report = try reporting.Report.init(ctx.arena, "Kept Temporary Directory", headline, .warning);
-        defer report.deinit();
-        reporting.renderReportToTerminal(&report, ctx.io.stderr(), palette, config) catch {};
-    }
+    if (args.keep_temp) try reportKeptTempDir(ctx, temp_dir);
     defer if (!args.keep_temp) std.Io.Dir.cwd().deleteTree(ctx.io.std_io, temp_dir) catch {};
 
     const platform_dir = try std.fs.path.join(ctx.arena, &.{ temp_dir, default_app.platform_dir_name });
@@ -9383,6 +9376,52 @@ fn writeDevWasmObject(
     );
 }
 
+/// Links one relocatable wasm app object against the platform's wasm inputs
+/// into `final_output_path`.
+fn linkWasmOutput(
+    ctx: *CliCtx,
+    args: cli_args.BuildArgs,
+    target: RocTarget,
+    link_inputs: PlatformLinkInputs,
+    final_output_path: []const u8,
+    obj_path: []const u8,
+    scratch_dir: []const u8,
+) CliMainError!void {
+    const object_files = try ctx.arena.alloc([]const u8, 1);
+    object_files[0] = obj_path;
+    const link_config = linker.LinkConfig{
+        .target_format = .wasm,
+        .target_abi = null,
+        .target_os = .freestanding,
+        .target_arch = .wasm32,
+        .output_path = final_output_path,
+        .object_files = object_files,
+        .platform_files_pre = link_inputs.platform_files_pre,
+        .platform_files_post = link_inputs.platform_files_post,
+        .extra_args = &.{},
+        .can_exit_early = false,
+        .disable_output = false,
+        .wasm_initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm),
+        .wasm_maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null,
+        .wasm_stack_size = configuredWasmStackBytes(args, link_inputs.wasm),
+        .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory.importsMemory() else false,
+        .wasm_zero_filled_memory = configuredWasmZeroFilledMemory(link_inputs.wasm),
+        .wasm_debug_info = args.debug,
+        .wasm_optimize = wasmOptimizeMode(args.opt),
+        .wasm_cpu_level = target.cpuLevel(),
+        .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
+        .wasm_exports = requiredWasmPlatformExports(link_inputs),
+        .platform_files_dir = link_inputs.platform_files_dir,
+        .scratch_dir = scratch_dir,
+    };
+    linker.link(ctx, link_config) catch |err| {
+        return ctx.fail(.{ .linker_failed = .{
+            .err = err,
+            .target = link_inputs.target_name,
+        } });
+    };
+}
+
 fn rocBuildWasm(
     ctx: *CliCtx,
     args: cli_args.BuildArgs,
@@ -9436,40 +9475,7 @@ fn rocBuildWasm(
         target.cpuLevel(),
     );
 
-    const object_files = try ctx.arena.alloc([]const u8, 1);
-    object_files[0] = obj_path;
-    const wasm_exports = requiredWasmPlatformExports(link_inputs);
-    const link_config = linker.LinkConfig{
-        .target_format = .wasm,
-        .target_abi = null,
-        .target_os = .freestanding,
-        .target_arch = .wasm32,
-        .output_path = final_output_path,
-        .object_files = object_files,
-        .platform_files_pre = link_inputs.platform_files_pre,
-        .platform_files_post = link_inputs.platform_files_post,
-        .extra_args = &.{},
-        .can_exit_early = false,
-        .disable_output = false,
-        .wasm_initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm),
-        .wasm_maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null,
-        .wasm_stack_size = configuredWasmStackBytes(args, link_inputs.wasm),
-        .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory.importsMemory() else false,
-        .wasm_zero_filled_memory = configuredWasmZeroFilledMemory(link_inputs.wasm),
-        .wasm_debug_info = args.debug,
-        .wasm_optimize = wasmOptimizeMode(args.opt),
-        .wasm_cpu_level = target.cpuLevel(),
-        .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
-        .wasm_exports = wasm_exports,
-        .platform_files_dir = link_inputs.platform_files_dir,
-        .scratch_dir = scratch_dir,
-    };
-    linker.link(ctx, link_config) catch |err| {
-        return ctx.fail(.{ .linker_failed = .{
-            .err = err,
-            .target = link_inputs.target_name,
-        } });
-    };
+    try linkWasmOutput(ctx, args, target, link_inputs, final_output_path, obj_path, scratch_dir);
 }
 
 const LlvmObjectPaths = struct {
@@ -9958,58 +9964,34 @@ fn rocBuildWasmLlvm(
     }
 
     const combined_obj = try writeCombinedLlvmWasmObject(ctx, app_object.artifact_dir, app_object.object_path, &lowered.lir_result, entrypoints, static_data_exports, args.opt, &owned_inputs);
-    const object_files = try ctx.arena.alloc([]const u8, 1);
-    object_files[0] = combined_obj;
-    const wasm_exports = requiredWasmPlatformExports(link_inputs);
-
-    const link_config = linker.LinkConfig{
-        .target_format = .wasm,
-        .target_abi = null,
-        .target_os = .freestanding,
-        .target_arch = .wasm32,
-        .output_path = final_output_path,
-        .object_files = object_files,
-        .platform_files_pre = link_inputs.platform_files_pre,
-        .platform_files_post = link_inputs.platform_files_post,
-        .extra_args = &.{},
-        .can_exit_early = false,
-        .disable_output = false,
-        .wasm_initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm),
-        .wasm_maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null,
-        .wasm_stack_size = configuredWasmStackBytes(args, link_inputs.wasm),
-        .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory.importsMemory() else false,
-        .wasm_zero_filled_memory = configuredWasmZeroFilledMemory(link_inputs.wasm),
-        .wasm_debug_info = args.debug,
-        .wasm_optimize = wasmOptimizeMode(args.opt),
-        .wasm_cpu_level = target.cpuLevel(),
-        .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
-        .wasm_exports = wasm_exports,
-        .platform_files_dir = link_inputs.platform_files_dir,
-        .scratch_dir = app_object.artifact_dir,
-    };
-
-    linker.link(ctx, link_config) catch |err| {
-        return ctx.fail(.{ .linker_failed = .{
-            .err = err,
-            .target = link_inputs.target_name,
-        } });
-    };
+    try linkWasmOutput(ctx, args, target, link_inputs, final_output_path, combined_obj, app_object.artifact_dir);
 }
 
-fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult {
-    const timer_start_ns = std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds;
+/// Base output path for `roc build`: `--output`, else the synthetic
+/// basename, else the module name.
+fn buildOutputBasePath(ctx: *CliCtx, args: cli_args.BuildArgs) Allocator.Error![]const u8 {
+    if (args.output) |output| return ctx.arena.dupe(u8, output);
+    if (args.synthetic_output_basename) |basename| return ctx.arena.dupe(u8, basename);
+    return base.module_path.getModuleNameAlloc(ctx.arena, args.path);
+}
 
-    var reporter = makeReporter(ctx, "roc build", args.timings);
-    defer reporter.deinit();
-    reporter.start();
+/// Final output path for `roc build`: an explicit `--output` is used as-is,
+/// otherwise the target's default extension for `link_type` is appended.
+fn buildFinalOutputPath(
+    ctx: *CliCtx,
+    args: cli_args.BuildArgs,
+    output_path: []const u8,
+    link_type: roc_target.OutputKind,
+    target: RocTarget,
+) Allocator.Error![]const u8 {
+    if (args.output != null) return output_path;
+    const ext = target_selection.defaultBuildOutputExtension(link_type, target);
+    return std.fmt.allocPrint(ctx.arena, "{s}{s}", .{ output_path, ext });
+}
 
-    const output_path = if (args.output) |output|
-        try ctx.arena.dupe(u8, output)
-    else if (args.synthetic_output_basename) |basename|
-        try ctx.arena.dupe(u8, basename)
-    else
-        try base.module_path.getModuleNameAlloc(ctx.arena, args.path);
-
+/// Creates the `BuildEnv` for a `roc build` invocation, including the
+/// synthetic root source mapping when the root was staged.
+fn initBuildCommandEnv(ctx: *CliCtx, args: cli_args.BuildArgs) InitCliBuildEnvError!BuildEnv {
     var build_env = try initCliBuildEnv(ctx, .{
         .max_threads = args.max_threads,
         .no_cache = args.no_cache,
@@ -10025,15 +10007,21 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
             build_env.setSyntheticRootSourceMappingWithLineOffset(original_path, original_source, args.synthetic_root_header_len, args.synthetic_root_header_lines);
         }
     }
-    defer build_env.deinit();
-    // Registered after build_env.deinit() so it runs first (LIFO), while build_env is still
-    // valid: records discovered source inputs for `roc build --watch` on every exit path.
-    defer writeBuildWatchInputsOnExit(ctx, args, &build_env);
+    return build_env;
+}
 
+/// Discovers the build's dependencies and selects the platform target,
+/// returning the platform directory and the selected target.
+fn resolveBuildCommandPlatform(
+    ctx: *CliCtx,
+    args: cli_args.BuildArgs,
+    build_env: *BuildEnv,
+    reporter: *progress.Reporter,
+) CliMainError!struct { []const u8, target_selection.SelectedTarget } {
     reporter.begin("Resolving Dependencies");
     build_env.discoverDependencies(args.path) catch |err| {
         reporter.fail();
-        try renderDiagnostics(ctx, &build_env);
+        try renderDiagnostics(ctx, build_env);
         return err;
     };
     reporter.end();
@@ -10051,6 +10039,149 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         try selectRunPlatformTarget(ctx, targets_config, platform_source, args.target)
     else
         try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
+    return .{ platform_dir, selected };
+}
+
+/// Type checks the discovered modules of a `roc build` and renders their
+/// diagnostics, returning the diagnostic counts (warnings include optimized
+/// `dbg` warnings) and the platform's targets config.
+fn typeCheckBuildCommand(
+    ctx: *CliCtx,
+    args: cli_args.BuildArgs,
+    build_env: *BuildEnv,
+    reporter: *progress.Reporter,
+) CliMainError!struct { CheckDiagnosticCounts, roc_target.TargetsConfig } {
+    reporter.begin("Type Checking");
+    build_env.compileDiscovered() catch |err| {
+        reporter.fail();
+        try renderDiagnostics(ctx, build_env);
+        return err;
+    };
+    finishFrontEndPhase(reporter, build_env.getTimingInfo());
+
+    const diag = try build_env.renderDiagnostics(ctx.io.stderr(), ctx.reportConfig(.stderr));
+    const total_warning_count = diag.warnings + try optimizedDbgWarningsForBuild(ctx, build_env, args.opt);
+    const resolved_targets_config = build_env.getPlatformTargetsConfig() orelse {
+        try renderProblem(ctx, .{
+            .no_platform_found = .{ .app_path = args.path },
+        });
+        return error.NoPlatformSource;
+    };
+    return .{ .{ .errors = diag.errors, .warnings = total_warning_count }, resolved_targets_config };
+}
+
+/// Finishes progress reporting for a successful `roc build`, prints the
+/// build summary unless suppressed, and returns the build result.
+fn finishBuildCommand(
+    ctx: *CliCtx,
+    args: cli_args.BuildArgs,
+    build_env: *BuildEnv,
+    reporter: *progress.Reporter,
+    final_output_path: []const u8,
+    diag: CheckDiagnosticCounts,
+    timer_start_ns: i96,
+) CliMainError!BuildResult {
+    const elapsed_ns = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - timer_start_ns));
+    reporter.finish();
+    if (!args.suppress_build_status) {
+        try printBuildSuccess(ctx, final_output_path, diag.errors, diag.warnings, elapsed_ns, args.verbose, build_env.getBuildStats());
+    }
+    return .{ .output_path = final_output_path, .diagnostics = diag };
+}
+
+/// Lowers a checked `roc build` program to LIR, reporting the post-check
+/// lowering phase.
+fn lowerBuildCommandToLir(
+    ctx: *CliCtx,
+    args: cli_args.BuildArgs,
+    build_env: *BuildEnv,
+    reporter: *progress.Reporter,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    imported_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+    relation_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+    roots: CheckedLirRoots,
+    target: RocTarget,
+    proc_debug_names: bool,
+    spec_cache: ?postcheck.Common.SpecCacheLookup,
+    code_provision: lir.CheckedPipeline.CodeProvision,
+) eval.CompileTimeFinalization.RuntimeMaterializationError!lir.CheckedPipeline.LoweredProgram {
+    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+    reporter.begin(loweringProgressLabel(specialization_strategy));
+    var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
+    if (args.timings) spec_timing.enableDetailedMonotypeBody();
+    const lowered = try lowerCheckedSourceToLir(
+        ctx.gpa,
+        ctx.gpa,
+        root_artifact,
+        imported_artifacts,
+        relation_artifacts,
+        roots,
+        args.opt,
+        specialization_strategy,
+        base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()),
+        proc_debug_names,
+        build_env.postCheckExecutor(),
+        &spec_timing,
+        build_env.runtimeProgramSession(),
+        spec_cache,
+        code_provision,
+    );
+    finishPostCheckLowering(reporter, &spec_timing, specialization_strategy);
+    return lowered;
+}
+
+/// Builds the readonly data symbols of a linked `roc build`, including the
+/// platform's provided constants, reporting the static data phase.
+fn buildCommandStaticData(
+    ctx: *CliCtx,
+    reporter: *progress.Reporter,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    imported_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+    relation_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    target: RocTarget,
+) CliMainError![]compile.static_data_exports.StaticDataExport {
+    reporter.begin("Static Data");
+    const static_data_exports = try compile.static_data_exports.buildStaticData(
+        ctx.gpa,
+        .{
+            .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+            .imports = imported_artifacts,
+        },
+        lowered,
+        target,
+        .{ .include_provided_exports = true },
+    );
+    reporter.end();
+    return static_data_exports;
+}
+
+/// Reports that `--keep-temp` kept the temporary directory `dir`.
+fn reportKeptTempDir(ctx: *CliCtx, dir: []const u8) Allocator.Error!void {
+    const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+    const config = reporting.ReportingConfig.initColorTerminal();
+    const headline = try std.fmt.allocPrint(ctx.arena, "Kept temporary directory: {s}.", .{dir});
+    var report = try reporting.Report.init(ctx.arena, "Kept Temporary Directory", headline, .warning);
+    defer report.deinit();
+    reporting.renderReportToTerminal(&report, ctx.io.stderr(), palette, config) catch {};
+}
+
+fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult {
+    const timer_start_ns = std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds;
+
+    var reporter = makeReporter(ctx, "roc build", args.timings);
+    defer reporter.deinit();
+    reporter.start();
+
+    const output_path = try buildOutputBasePath(ctx, args);
+
+    var build_env = try initBuildCommandEnv(ctx, args);
+    defer build_env.deinit();
+    // Registered after build_env.deinit() so it runs first (LIFO), while build_env is still
+    // valid: records discovered source inputs for `roc build --watch` on every exit path.
+    defer writeBuildWatchInputsOnExit(ctx, args, &build_env);
+
+    const platform_dir, const selected = try resolveBuildCommandPlatform(ctx, args, &build_env, &reporter);
     const target = selected.target;
     const link_type = selected.output;
 
@@ -10092,12 +10223,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         unreachable;
     }
 
-    const final_output_path = if (args.output != null)
-        output_path
-    else blk: {
-        const ext = target_selection.defaultBuildOutputExtension(link_type, target);
-        break :blk try std.fmt.allocPrint(ctx.arena, "{s}{s}", .{ output_path, ext });
-    };
+    const final_output_path = try buildFinalOutputPath(ctx, args, output_path, link_type, target);
 
     build_env.setTarget(target);
     build_env.setRuntimeLowering(checkedRuntimeLoweringConfig(
@@ -10109,23 +10235,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
     ));
     build_env.setValidateTargetFilesForSelectedTarget(true);
     build_env.setDetailedLoweringTiming(args.timings);
-    reporter.begin("Type Checking");
-    build_env.compileDiscovered() catch |err| {
-        reporter.fail();
-        try renderDiagnostics(ctx, &build_env);
-        return err;
-    };
-    finishFrontEndPhase(&reporter, build_env.getTimingInfo());
-
-    const diag = try build_env.renderDiagnostics(ctx.io.stderr(), ctx.reportConfig(.stderr));
-    var total_warning_count = diag.warnings;
-    total_warning_count += try optimizedDbgWarningsForBuild(ctx, &build_env, args.opt);
-    const resolved_targets_config = build_env.getPlatformTargetsConfig() orelse {
-        try renderProblem(ctx, .{
-            .no_platform_found = .{ .app_path = args.path },
-        });
-        return error.NoPlatformSource;
-    };
+    const diag, const resolved_targets_config = try typeCheckBuildCommand(ctx, args, &build_env, &reporter);
 
     const root_artifact = try checkedArtifactForBuild(ctx, &build_env, args.path);
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
@@ -10133,47 +10243,13 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(relation_artifacts);
 
-    const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
-
-    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
-    reporter.begin(loweringProgressLabel(specialization_strategy));
-    var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
-    if (args.timings) spec_timing.enableDetailedMonotypeBody();
-    var lowered = try lowerCheckedSourceToLir(
-        ctx.gpa,
-        ctx.gpa,
-        root_artifact,
-        imported_artifacts,
-        relation_artifacts,
-        .linked_output,
-        args.opt,
-        specialization_strategy,
-        target_usize,
-        args.synthetic_default_platform,
-        build_env.postCheckExecutor(),
-        &spec_timing,
-        build_env.runtimeProgramSession(),
-        null,
-        .source_bodies,
-    );
+    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, args.synthetic_default_platform, null, .source_bodies);
     defer lowered.deinit();
-    finishPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
     defer ctx.gpa.free(entrypoints);
 
-    reporter.begin("Static Data");
-    const static_data_exports = try compile.static_data_exports.buildStaticData(
-        ctx.gpa,
-        .{
-            .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
-            .imports = imported_artifacts,
-        },
-        &lowered,
-        target,
-        .{ .include_provided_exports = true },
-    );
-    reporter.end();
+    const static_data_exports = try buildCommandStaticData(ctx, &reporter, root_artifact, imported_artifacts, relation_artifacts, &lowered, target);
     defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
 
     if (entrypoints.len == 0 and static_data_exports.len == 0) {
@@ -10217,14 +10293,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
             &reporter,
         );
 
-        if (args.keep_temp) {
-            const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-            const config = reporting.ReportingConfig.initColorTerminal();
-            const headline = try std.fmt.allocPrint(ctx.arena, "Kept temporary directory: {s}.", .{app_object.artifact_dir});
-            var report = try reporting.Report.init(ctx.arena, "Kept Temporary Directory", headline, .warning);
-            defer report.deinit();
-            reporting.renderReportToTerminal(&report, ctx.io.stderr(), palette, config) catch {};
-        }
+        if (args.keep_temp) try reportKeptTempDir(ctx, app_object.artifact_dir);
         defer if (!args.keep_temp) std.Io.Dir.cwd().deleteTree(ctx.io.std_io, app_object.artifact_dir) catch {};
 
         var static_data_obj_path: ?[]const u8 = null;
@@ -10326,22 +10395,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         reporter.end();
     }
 
-    const elapsed_ns = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - timer_start_ns));
-    reporter.finish();
-    const cache_stats = build_env.getBuildStats();
-    const cache_percent = if (cache_stats.modules_total > 0)
-        @as(u32, @intCast((cache_stats.cache_hits * 100) / cache_stats.modules_total))
-    else
-        0;
-
-    if (!args.suppress_build_status) {
-        try printBuildSuccess(ctx, final_output_path, diag.errors, total_warning_count, elapsed_ns, args.verbose, cache_stats, cache_percent);
-    }
-
-    return .{
-        .output_path = final_output_path,
-        .diagnostics = .{ .errors = diag.errors, .warnings = total_warning_count },
-    };
+    return finishBuildCommand(ctx, args, &build_env, &reporter, final_output_path, diag, timer_start_ns);
 }
 
 fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult {
@@ -10351,12 +10405,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     defer reporter.deinit();
     reporter.start();
 
-    const output_path = if (args.output) |output|
-        try ctx.arena.dupe(u8, output)
-    else if (args.synthetic_output_basename) |basename|
-        try ctx.arena.dupe(u8, basename)
-    else
-        try base.module_path.getModuleNameAlloc(ctx.arena, args.path);
+    const output_path = try buildOutputBasePath(ctx, args);
 
     const cache_config = CacheConfig{
         .enabled = !args.no_cache,
@@ -10368,47 +10417,13 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
     try ensureCompilerCacheDirExists(ctx.io.std_io, build_cache_dir);
 
-    var build_env = try initCliBuildEnv(ctx, .{
-        .max_threads = args.max_threads,
-        .no_cache = args.no_cache,
-        .verbose_cache = args.verbose,
-        .timings = args.timings,
-        .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
-        .track_watch_inputs = args.watch_inputs_file != null,
-        .source_dir_override = args.source_dir_override,
-        .root_source_url = args.root_source_url,
-    });
-    if (args.synthetic_root_original_path) |original_path| {
-        if (args.synthetic_root_original_source) |original_source| {
-            build_env.setSyntheticRootSourceMappingWithLineOffset(original_path, original_source, args.synthetic_root_header_len, args.synthetic_root_header_lines);
-        }
-    }
+    var build_env = try initBuildCommandEnv(ctx, args);
     defer build_env.deinit();
     // Registered after build_env.deinit() so it runs first (LIFO), while build_env is still
     // valid: records discovered source inputs for `roc build --watch` on every exit path.
     defer writeBuildWatchInputsOnExit(ctx, args, &build_env);
 
-    reporter.begin("Resolving Dependencies");
-    build_env.discoverDependencies(args.path) catch |err| {
-        reporter.fail();
-        try renderDiagnostics(ctx, &build_env);
-        return err;
-    };
-    reporter.end();
-
-    const targets_config = build_env.getPlatformTargetsConfig() orelse {
-        try renderProblem(ctx, .{
-            .no_platform_found = .{ .app_path = args.path },
-        });
-        return error.NoPlatformSource;
-    };
-    const platform_source = build_env.getPlatformRootFile();
-    const platform_dir = if (platform_source) |path| std.fs.path.dirname(path) orelse "." else ".";
-
-    const selected = if (args.require_host_runnable_output)
-        try selectRunPlatformTarget(ctx, targets_config, platform_source, args.target)
-    else
-        try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
+    const platform_dir, const selected = try resolveBuildCommandPlatform(ctx, args, &build_env, &reporter);
     const target = selected.target;
     const link_type = selected.output;
 
@@ -10438,12 +10453,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     }
     const code_generation_phase_name = devBackendPhaseName(target_arch);
 
-    const final_output_path = if (args.output != null)
-        output_path
-    else blk: {
-        const ext = target_selection.defaultBuildOutputExtension(link_type, target);
-        break :blk try std.fmt.allocPrint(ctx.arena, "{s}{s}", .{ output_path, ext });
-    };
+    const final_output_path = try buildFinalOutputPath(ctx, args, output_path, link_type, target);
 
     build_env.setTarget(target);
     // `ROC_DEV_PACK_HITS` names a directory of pack files to serve closed
@@ -10499,23 +10509,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     build_env.setRuntimeLowering(runtime_lowering);
     build_env.setValidateTargetFilesForSelectedTarget(true);
     build_env.setDetailedLoweringTiming(args.timings);
-    reporter.begin("Type Checking");
-    build_env.compileDiscovered() catch |err| {
-        reporter.fail();
-        try renderDiagnostics(ctx, &build_env);
-        return err;
-    };
-    finishFrontEndPhase(&reporter, build_env.getTimingInfo());
-
-    const diag = try build_env.renderDiagnostics(ctx.io.stderr(), ctx.reportConfig(.stderr));
-    var total_warning_count = diag.warnings;
-    total_warning_count += try optimizedDbgWarningsForBuild(ctx, &build_env, args.opt);
-    const resolved_targets_config = build_env.getPlatformTargetsConfig() orelse {
-        try renderProblem(ctx, .{
-            .no_platform_found = .{ .app_path = args.path },
-        });
-        return error.NoPlatformSource;
-    };
+    const diag, const resolved_targets_config = try typeCheckBuildCommand(ctx, args, &build_env, &reporter);
 
     const root_artifact = try checkedArtifactForBuild(ctx, &build_env, args.path);
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
@@ -10523,31 +10517,8 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(relation_artifacts);
 
-    const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
-
-    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
-    reporter.begin(loweringProgressLabel(specialization_strategy));
-    var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
-    if (args.timings) spec_timing.enableDetailedMonotypeBody();
-    var lowered = try lowerCheckedSourceToLir(
-        ctx.gpa,
-        ctx.gpa,
-        root_artifact,
-        imported_artifacts,
-        relation_artifacts,
-        .linked_output,
-        args.opt,
-        specialization_strategy,
-        target_usize,
-        args.synthetic_default_platform,
-        build_env.postCheckExecutor(),
-        &spec_timing,
-        build_env.runtimeProgramSession(),
-        if (loaded_packs) |packs| packs.specCacheLookup() else null,
-        nativeObjectCodeProvision(target, args.opt, loaded_packs != null),
-    );
+    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, args.synthetic_default_platform, if (loaded_packs) |packs| packs.specCacheLookup() else null, nativeObjectCodeProvision(target, args.opt, loaded_packs != null));
     defer lowered.deinit();
-    finishPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
     // Cache statistics are diagnostic output. Ordinary successful builds must
     // leave stderr empty so build runners do not report false warnings.
     if (loaded_packs != null and std.c.getenv("ROC_PACK_STATS") != null) {
@@ -10564,18 +10535,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
     defer ctx.gpa.free(entrypoints);
 
-    reporter.begin("Static Data");
-    const static_data_exports = try compile.static_data_exports.buildStaticData(
-        ctx.gpa,
-        .{
-            .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
-            .imports = imported_artifacts,
-        },
-        &lowered,
-        target,
-        .{ .include_provided_exports = true },
-    );
-    reporter.end();
+    const static_data_exports = try buildCommandStaticData(ctx, &reporter, root_artifact, imported_artifacts, relation_artifacts, &lowered, target);
     defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
 
     if (target_arch == .wasm32) {
@@ -10594,21 +10554,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         );
         reporter.end();
 
-        const elapsed_ns = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - timer_start_ns));
-        reporter.finish();
-        const cache_stats = build_env.getBuildStats();
-        const cache_percent = if (cache_stats.modules_total > 0)
-            @as(u32, @intCast((cache_stats.cache_hits * 100) / cache_stats.modules_total))
-        else
-            0;
-
-        if (!args.suppress_build_status) {
-            try printBuildSuccess(ctx, final_output_path, diag.errors, total_warning_count, elapsed_ns, args.verbose, cache_stats, cache_percent);
-        }
-        return .{
-            .output_path = final_output_path,
-            .diagnostics = .{ .errors = diag.errors, .warnings = total_warning_count },
-        };
+        return finishBuildCommand(ctx, args, &build_env, &reporter, final_output_path, diag, timer_start_ns);
     }
 
     reporter.begin(code_generation_phase_name);
@@ -10743,22 +10689,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     }
     reporter.end();
 
-    const elapsed_ns = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - timer_start_ns));
-    reporter.finish();
-    const cache_stats = build_env.getBuildStats();
-    const cache_percent = if (cache_stats.modules_total > 0)
-        @as(u32, @intCast((cache_stats.cache_hits * 100) / cache_stats.modules_total))
-    else
-        0;
-
-    if (!args.suppress_build_status) {
-        try printBuildSuccess(ctx, final_output_path, diag.errors, total_warning_count, elapsed_ns, args.verbose, cache_stats, cache_percent);
-    }
-
-    return .{
-        .output_path = final_output_path,
-        .diagnostics = .{ .errors = diag.errors, .warnings = total_warning_count },
-    };
+    return finishBuildCommand(ctx, args, &build_env, &reporter, final_output_path, diag, timer_start_ns);
 }
 
 /// Build a standalone binary with the interpreter and an embedded LIR image.
@@ -10770,12 +10701,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     defer reporter.deinit();
     reporter.start();
 
-    const output_path = if (args.output) |output|
-        try ctx.arena.dupe(u8, output)
-    else if (args.synthetic_output_basename) |basename|
-        try ctx.arena.dupe(u8, basename)
-    else
-        try base.module_path.getModuleNameAlloc(ctx.arena, args.path);
+    const output_path = try buildOutputBasePath(ctx, args);
 
     const cache_config = CacheConfig{
         .enabled = true,
@@ -10787,47 +10713,13 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
     try ensureCompilerCacheDirExists(ctx.io.std_io, build_cache_dir);
 
-    var build_env = try initCliBuildEnv(ctx, .{
-        .max_threads = args.max_threads,
-        .no_cache = args.no_cache,
-        .verbose_cache = args.verbose,
-        .timings = args.timings,
-        .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
-        .track_watch_inputs = args.watch_inputs_file != null,
-        .source_dir_override = args.source_dir_override,
-        .root_source_url = args.root_source_url,
-    });
-    if (args.synthetic_root_original_path) |original_path| {
-        if (args.synthetic_root_original_source) |original_source| {
-            build_env.setSyntheticRootSourceMappingWithLineOffset(original_path, original_source, args.synthetic_root_header_len, args.synthetic_root_header_lines);
-        }
-    }
+    var build_env = try initBuildCommandEnv(ctx, args);
     defer build_env.deinit();
     // Registered after build_env.deinit() so it runs first (LIFO), while build_env is still
     // valid: records discovered source inputs for `roc build --watch` on every exit path.
     defer writeBuildWatchInputsOnExit(ctx, args, &build_env);
 
-    reporter.begin("Resolving Dependencies");
-    build_env.discoverDependencies(args.path) catch |err| {
-        reporter.fail();
-        try renderDiagnostics(ctx, &build_env);
-        return err;
-    };
-    reporter.end();
-
-    const targets_config = build_env.getPlatformTargetsConfig() orelse {
-        try renderProblem(ctx, .{
-            .no_platform_found = .{ .app_path = args.path },
-        });
-        return error.NoPlatformSource;
-    };
-    const platform_source = build_env.getPlatformRootFile();
-    const platform_dir = if (platform_source) |path| std.fs.path.dirname(path) orelse "." else ".";
-
-    const selected = if (args.require_host_runnable_output)
-        try selectRunPlatformTarget(ctx, targets_config, platform_source, args.target)
-    else
-        try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
+    const platform_dir, const selected = try resolveBuildCommandPlatform(ctx, args, &build_env, &reporter);
     const target = selected.target;
     const link_type = selected.output;
 
@@ -10847,12 +10739,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
 
     const target_arch = target.toCpuArch();
     const target_os = target.toOsTag();
-    const final_output_path = if (args.output != null)
-        output_path
-    else blk: {
-        const ext = target_selection.defaultBuildOutputExtension(link_type, target);
-        break :blk try std.fmt.allocPrint(ctx.arena, "{s}{s}", .{ output_path, ext });
-    };
+    const final_output_path = try buildFinalOutputPath(ctx, args, output_path, link_type, target);
 
     build_env.setTarget(target);
     build_env.setRuntimeLowering(checkedRuntimeLoweringConfig(
@@ -10864,23 +10751,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     ));
     build_env.setValidateTargetFilesForSelectedTarget(true);
     build_env.setDetailedLoweringTiming(args.timings);
-    reporter.begin("Type Checking");
-    build_env.compileDiscovered() catch |err| {
-        reporter.fail();
-        try renderDiagnostics(ctx, &build_env);
-        return err;
-    };
-    finishFrontEndPhase(&reporter, build_env.getTimingInfo());
-
-    const diag = try build_env.renderDiagnostics(ctx.io.stderr(), ctx.reportConfig(.stderr));
-    var total_warning_count = diag.warnings;
-    total_warning_count += try optimizedDbgWarningsForBuild(ctx, &build_env, args.opt);
-    const resolved_targets_config = build_env.getPlatformTargetsConfig() orelse {
-        try renderProblem(ctx, .{
-            .no_platform_found = .{ .app_path = args.path },
-        });
-        return error.NoPlatformSource;
-    };
+    const diag, const resolved_targets_config = try typeCheckBuildCommand(ctx, args, &build_env, &reporter);
 
     const root_artifact = try checkedArtifactForBuild(ctx, &build_env, args.path);
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
@@ -10895,29 +10766,8 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     const shm_allocator = shm.allocator();
     const image_header = try shm_allocator.create(lir.LirImage.Header);
 
-    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
-    reporter.begin(loweringProgressLabel(specialization_strategy));
-    var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
-    if (args.timings) spec_timing.enableDetailedMonotypeBody();
-    var lowered = try lowerCheckedSourceToLir(
-        ctx.gpa,
-        ctx.gpa,
-        root_artifact,
-        imported_artifacts,
-        relation_artifacts,
-        .{ .platform_entrypoints = .lir_image },
-        args.opt,
-        specialization_strategy,
-        base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()),
-        false,
-        build_env.postCheckExecutor(),
-        &spec_timing,
-        build_env.runtimeProgramSession(),
-        null,
-        .source_bodies,
-    );
+    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .{ .platform_entrypoints = .lir_image }, target, false, null, .source_bodies);
     defer lowered.deinit();
-    finishPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
 
     reporter.begin("LIR Image Generation");
     const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
@@ -10964,14 +10814,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     const build_scratch_dir = createUniqueTempDir(ctx) catch |err| {
         return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
     };
-    if (args.keep_temp) {
-        const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-        const config = reporting.ReportingConfig.initColorTerminal();
-        const headline = try std.fmt.allocPrint(ctx.arena, "Kept temporary directory: {s}.", .{build_scratch_dir});
-        var report = try reporting.Report.init(ctx.arena, "Kept Temporary Directory", headline, .warning);
-        defer report.deinit();
-        reporting.renderReportToTerminal(&report, ctx.io.stderr(), palette, config) catch {};
-    }
+    if (args.keep_temp) try reportKeptTempDir(ctx, build_scratch_dir);
     defer if (!args.keep_temp) compile.CacheCleanup.deleteTempDir(ctx.io.std_io, build_scratch_dir);
 
     const shim_filename = try shimLibraryCacheFilename(ctx, .lir, target);
@@ -11054,22 +10897,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     }
     reporter.end();
 
-    const elapsed_ns_embed = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - timer_start_ns));
-    reporter.finish();
-    const cache_stats = build_env.getBuildStats();
-    const cache_percent = if (cache_stats.modules_total > 0)
-        @as(u32, @intCast((cache_stats.cache_hits * 100) / cache_stats.modules_total))
-    else
-        0;
-
-    if (!args.suppress_build_status) {
-        try printBuildSuccess(ctx, final_output_path, diag.errors, total_warning_count, elapsed_ns_embed, args.verbose, cache_stats, cache_percent);
-    }
-
-    return .{
-        .output_path = final_output_path,
-        .diagnostics = .{ .errors = diag.errors, .warnings = total_warning_count },
-    };
+    return finishBuildCommand(ctx, args, &build_env, &reporter, final_output_path, diag, timer_start_ns);
 }
 
 // Test cache blob format
@@ -17052,9 +16880,12 @@ fn printBuildSuccess(
     warning_count: usize,
     elapsed_ns: u64,
     verbose: bool,
-    cache_stats: anytype,
-    cache_percent: u32,
+    cache_stats: BuildEnv.BuildStats,
 ) std.Io.Writer.Error!void {
+    const cache_percent = if (cache_stats.modules_total > 0)
+        @as(u32, @intCast((cache_stats.cache_hits * 100) / cache_stats.modules_total))
+    else
+        0;
     const stdout = ctx.io.stdout();
     const use_color = ctx.usesColor(.stdout);
     const green = if (use_color) ansi_term.green else "";
@@ -17435,105 +17266,15 @@ fn checkFileWithBuildEnvPreserved(
 
     buildForCheckWithOptionalMain(&build_env, filepath, main_filepath, reporter) catch |err| {
         try requireReportableCheckFailure(err);
-
         const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-
-        var error_count: u32 = 0;
-        var warning_count: u32 = 0;
-        for (drained) |mod| {
-            for (mod.reports) |report| {
-                if (report.severity.isError()) error_count += 1 else warning_count += 1;
-            }
-        }
-
-        var reports = try ctx.gpa.alloc(DrainedReport, drained.len);
-        for (drained, 0..) |mod, i| {
-            reports[i] = .{
-                .file_path = try ctx.gpa.dupe(u8, mod.abs_path),
-                .reports = mod.reports,
-            };
-        }
-        build_env.freeDrainedReportsPathsOnly(drained);
-
-        const timing = if (builtin.target.cpu.arch == .wasm32)
-            CheckTimingInfo{}
-        else
-            build_env.getTimingInfo();
-        const cache_stats = build_env.getBuildStats();
-
         return CheckResultWithBuildEnv{
-            .check_result = .{
-                .reports = reports,
-                .timing = timing,
-                .error_count = error_count,
-                .warning_count = warning_count,
-                .modules_total = cache_stats.modules_total,
-                .cache_hits = cache_stats.cache_hits,
-                .cache_misses = cache_stats.cache_misses,
-                .canonicalized_cache_hits = cache_stats.canonicalized_cache_hits,
-                .canonicalized_cache_misses = cache_stats.canonicalized_cache_misses,
-                .canonicalized_cache_stores = cache_stats.canonicalized_cache_stores,
-                .modules_compiled = cache_stats.modules_compiled,
-                .module_time_min_ns = cache_stats.module_time_min_ns,
-                .module_time_max_ns = cache_stats.module_time_max_ns,
-                .module_time_sum_ns = cache_stats.module_time_sum_ns,
-            },
+            .check_result = try collectCheckResult(ctx, &build_env, drained, true),
             .build_env = build_env,
         };
     };
 
-    // Drain all reports
-    const drained = try build_env.drainReports();
-
-    // Count errors and warnings
-    var error_count: u32 = 0;
-    var warning_count: u32 = 0;
-
-    for (drained) |mod| {
-        for (mod.reports) |report| {
-            if (report.severity.isError()) error_count += 1 else warning_count += 1;
-        }
-    }
-
-    // Convert BuildEnv drained reports to our format
-    var reports = try ctx.gpa.alloc(DrainedReport, drained.len);
-    for (drained, 0..) |mod, i| {
-        reports[i] = .{
-            .file_path = try ctx.gpa.dupe(u8, mod.abs_path),
-            .reports = mod.reports, // Transfer ownership
-        };
-    }
-
-    // Free the original drained reports (abs_path strings and outer slice only)
-    // Note: reports ownership was transferred above, abs_path was duped
-    build_env.freeDrainedReportsPathsOnly(drained);
-
-    // Get timing information from BuildEnv
-    const timing = if (builtin.target.cpu.arch == .wasm32)
-        CheckTimingInfo{}
-    else
-        build_env.getTimingInfo();
-    const cache_stats = build_env.getBuildStats();
-
-    const check_result = CheckResult{
-        .reports = reports,
-        .timing = timing,
-        .error_count = error_count,
-        .warning_count = warning_count,
-        .modules_total = cache_stats.modules_total,
-        .cache_hits = cache_stats.cache_hits,
-        .cache_misses = cache_stats.cache_misses,
-        .canonicalized_cache_hits = cache_stats.canonicalized_cache_hits,
-        .canonicalized_cache_misses = cache_stats.canonicalized_cache_misses,
-        .canonicalized_cache_stores = cache_stats.canonicalized_cache_stores,
-        .modules_compiled = cache_stats.modules_compiled,
-        .module_time_min_ns = cache_stats.module_time_min_ns,
-        .module_time_max_ns = cache_stats.module_time_max_ns,
-        .module_time_sum_ns = cache_stats.module_time_sum_ns,
-    };
-
     return CheckResultWithBuildEnv{
-        .check_result = check_result,
+        .check_result = try collectCheckResult(ctx, &build_env, try build_env.drainReports(), true),
         .build_env = build_env,
     };
 }
@@ -17576,45 +17317,23 @@ fn checkFileWithBuildEnv(
 
     buildForCheckWithOptionalMain(&build_env, filepath, main_filepath, reporter) catch |err| {
         try requireReportableCheckFailure(err);
-
         const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-        defer build_env.freeDrainedReportsPathsOnly(drained);
-
-        var error_count: u32 = 0;
-        var warning_count: u32 = 0;
-        for (drained) |mod| {
-            for (mod.reports) |report| {
-                if (report.severity.isError()) error_count += 1 else warning_count += 1;
-            }
-        }
-
-        var reports = try ctx.gpa.alloc(DrainedReport, drained.len);
-        for (drained, 0..) |mod, i| {
-            reports[i] = .{
-                .file_path = try ctx.gpa.dupe(u8, mod.abs_path),
-                .reports = mod.reports,
-            };
-        }
-
-        const cache_stats = build_env.getBuildStats();
-        return CheckResult{
-            .reports = reports,
-            .error_count = error_count,
-            .warning_count = warning_count,
-            .modules_total = cache_stats.modules_total,
-            .cache_hits = cache_stats.cache_hits,
-            .cache_misses = cache_stats.cache_misses,
-            .canonicalized_cache_hits = cache_stats.canonicalized_cache_hits,
-            .canonicalized_cache_misses = cache_stats.canonicalized_cache_misses,
-            .canonicalized_cache_stores = cache_stats.canonicalized_cache_stores,
-            .modules_compiled = cache_stats.modules_compiled,
-            .module_time_min_ns = cache_stats.module_time_min_ns,
-            .module_time_max_ns = cache_stats.module_time_max_ns,
-            .module_time_sum_ns = cache_stats.module_time_sum_ns,
-        };
+        return collectCheckResult(ctx, &build_env, drained, false);
     };
 
-    const drained = try build_env.drainReports();
+    return collectCheckResult(ctx, &build_env, try build_env.drainReports(), true);
+}
+
+/// Collects a check's drained reports (taking ownership of the reports and
+/// freeing the drained paths), their error and warning counts, and the build
+/// statistics of `build_env` into a `CheckResult`. Phase timings are included
+/// only when `include_timing` is set.
+fn collectCheckResult(
+    ctx: *CliCtx,
+    build_env: *BuildEnv,
+    drained: []const BuildEnv.DrainedModuleReports,
+    include_timing: bool,
+) Allocator.Error!CheckResult {
     defer build_env.freeDrainedReportsPathsOnly(drained);
 
     var error_count: u32 = 0;
@@ -17633,15 +17352,9 @@ fn checkFileWithBuildEnv(
         };
     }
 
-    const timing = if (builtin.target.cpu.arch == .wasm32)
-        CheckTimingInfo{}
-    else
-        build_env.getTimingInfo();
     const cache_stats = build_env.getBuildStats();
-
-    return CheckResult{
+    var result = CheckResult{
         .reports = reports,
-        .timing = timing,
         .error_count = error_count,
         .warning_count = warning_count,
         .modules_total = cache_stats.modules_total,
@@ -17655,6 +17368,8 @@ fn checkFileWithBuildEnv(
         .module_time_max_ns = cache_stats.module_time_max_ns,
         .module_time_sum_ns = cache_stats.module_time_sum_ns,
     };
+    if (builtin.target.cpu.arch != .wasm32 and include_timing) result.timing = build_env.getTimingInfo();
+    return result;
 }
 
 fn finishRocCheck(

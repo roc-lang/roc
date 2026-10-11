@@ -166,7 +166,7 @@ fn lowerModuleWithOptions(
     inline_mode: lir.CheckedPipeline.InlineMode,
     options: LowerModuleOptions,
 ) TestError!LoweredSource {
-    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, options.imports, try sharedPrePublishedBuiltin());
+    var resources = try helpers.parseProgram(allocator, .module, source, options.imports, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
     errdefer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
@@ -246,7 +246,7 @@ fn lowerMonotypeModuleWithOptions(
     source: []const u8,
     options: LowerMonotypeOptions,
 ) TestError!MonotypeSource {
-    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
+    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
     errdefer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
@@ -303,7 +303,7 @@ fn monotypeCountersForModuleWithImports(
     source: []const u8,
     imports: []const helpers.ModuleSource,
 ) TestError!postcheck.Monotype.Lower.SpecializationCounters {
-    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, imports, try sharedPrePublishedBuiltin());
+    var resources = try helpers.parseProgram(allocator, .module, source, imports, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
@@ -948,7 +948,7 @@ fn liftModuleAfterSpecConstr(
     allocator: Allocator,
     source: []const u8,
 ) TestError!LiftedSource {
-    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
+    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
     errdefer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
@@ -1152,7 +1152,7 @@ fn expectInlinePlanDecision(
     expected: bool,
 ) TestError!void {
     const allocator = std.testing.allocator;
-    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
+    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
@@ -2841,7 +2841,7 @@ test "issue 11144 nested lambdas in one large body specialize in linear work" {
     {
         const source = try issue11144EventHandlerViewSource(allocator, 2);
         defer allocator.free(source);
-        var resources = try helpers.parseAndCheckProgramForProblemsWithBuiltin(
+        var resources = try helpers.parseAndCheckProgramForProblems(
             allocator,
             .module,
             source,
@@ -3068,7 +3068,7 @@ test "differently ordered source record rows produce normalized monotype rows" {
         \\main = choose(Bool.True)
     ;
 
-    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
+    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
@@ -8803,7 +8803,7 @@ const dispatch_boundary_source =
 
 test "dispatch evidence boundary validator accepts a published artifact" {
     const allocator = std.testing.allocator;
-    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, dispatch_boundary_source, &.{}, try sharedPrePublishedBuiltin());
+    var resources = try helpers.parseProgram(allocator, .module, dispatch_boundary_source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     try std.testing.expect((try resources.checked_artifact.validateDispatchEvidence()) == null);
@@ -8826,7 +8826,7 @@ test "deeply nested tuple literal publishes evidence paths linear in its depth" 
     for (0..depth) |_| try source.appendSlice(allocator, ")");
     try source.appendSlice(allocator, "\n\nmain : Str\nmain = \"ok\"\n");
 
-    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source.items, &.{}, try sharedPrePublishedBuiltin());
+    var resources = try helpers.parseProgram(allocator, .module, source.items, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const templates = &resources.checked_artifact.checked_procedure_templates;
@@ -8863,12 +8863,12 @@ test "literal conversion ownership includes nested codec evidence" {
             "run : {} -> [Nope, Yes({})]\n" ++
             "run = |_| query(" ++ conversion[3] ++ ")\n" ++
             "main = run({})\n";
-        var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(
+        var resources = try helpers.parseProgram(
             allocator,
             .module,
             source,
             &.{},
-            try sharedPrePublishedBuiltin(),
+            .{ .pre_published_builtin = try sharedPrePublishedBuiltin() },
         );
         defer helpers.cleanupParseAndCanonical(allocator, resources);
         const artifact = &resources.checked_artifact;
@@ -8955,12 +8955,12 @@ test "custom literal field default gets an ordinary conversion root" {
         \\main = config.size
     ;
 
-    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(
+    var resources = try helpers.parseProgram(
         allocator,
         .module,
         source,
         &.{},
-        try sharedPrePublishedBuiltin(),
+        .{ .pre_published_builtin = try sharedPrePublishedBuiltin() },
     );
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
@@ -9061,7 +9061,7 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
         \\    wrap(f)()
         \\}
     ;
-    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
+    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const artifact = &resources.checked_artifact;
@@ -9209,7 +9209,7 @@ test "dispatch evidence boundary validator rejects non-normalized and malformed 
         \\main : Str
         \\main = helper("hi")
     ;
-    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
+    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const templates = &resources.checked_artifact.checked_procedure_templates;
@@ -9249,7 +9249,7 @@ test "dispatch evidence boundary validator rejects non-normalized and malformed 
 
 test "dispatch evidence boundary validator reports a removed dispatch plan by expression" {
     const allocator = std.testing.allocator;
-    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, dispatch_boundary_source, &.{}, try sharedPrePublishedBuiltin());
+    var resources = try helpers.parseProgram(allocator, .module, dispatch_boundary_source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     var removed: ?check.CheckedArtifact.CheckedExprId = null;
@@ -9270,7 +9270,7 @@ test "dispatch evidence boundary validator reports a removed dispatch plan by ex
 
 test "dispatch evidence boundary validator names the method of a dangling evidence node" {
     const allocator = std.testing.allocator;
-    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, dispatch_boundary_source, &.{}, try sharedPrePublishedBuiltin());
+    var resources = try helpers.parseProgram(allocator, .module, dispatch_boundary_source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const table = &resources.checked_artifact.static_dispatch_plans;
@@ -9320,7 +9320,7 @@ test "dispatch evidence boundary validator reports a site-evidence key outside t
         \\main : Str
         \\main = helper(Thing.Val("hi"))
     ;
-    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
+    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const table = &resources.checked_artifact.static_dispatch_plans;

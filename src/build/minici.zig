@@ -418,6 +418,30 @@ fn aarch64HasSha2() bool {
     return true;
 }
 
+/// Returns the value of option `name` when `args[i.*]` is `name value` or
+/// `name=value`, advancing `i.*` past a separate value; returns null when
+/// `args[i.*]` is a different argument.
+fn optionValue(args: []const []const u8, i: *usize, comptime name: []const u8) error{InvalidMiniCiArgument}!?[]const u8 {
+    const arg = args[i.*];
+    if (std.mem.eql(u8, arg, name)) {
+        if (i.* + 1 >= args.len) {
+            printUsageError("missing value after `{s}`", arg);
+            return error.InvalidMiniCiArgument;
+        }
+        i.* += 1;
+        return args[i.*];
+    }
+    if (std.mem.startsWith(u8, arg, name ++ "=")) {
+        const value = arg[name.len + 1 ..];
+        if (value.len == 0) {
+            printUsageError("missing value after `{s}`", arg);
+            return error.InvalidMiniCiArgument;
+        }
+        return value;
+    }
+    return null;
+}
+
 fn parseMiniArgs(allocator: std.mem.Allocator, args: []const []const u8) !ParsedArgs {
     const zig_exe = if (args.len >= 2) args[1] else "zig";
     var build_args = std.ArrayList([]const u8).empty;
@@ -432,113 +456,24 @@ fn parseMiniArgs(allocator: std.mem.Allocator, args: []const []const u8) !Parsed
         const arg = args[i];
         if (std.mem.eql(u8, arg, "--minici-skip-build")) {
             skip_build = true;
-        } else if (std.mem.eql(u8, arg, "--minici-from")) {
-            if (i + 1 >= args.len) {
-                printUsageError("missing value after `{s}`", arg);
-                return error.InvalidMiniCiArgument;
-            }
-            i += 1;
-            try rejectRangeWithShard(shard, arg);
-            try setSelectionFrom(&selection, args[i], arg);
-        } else if (std.mem.startsWith(u8, arg, "--minici-from=")) {
-            const value = arg["--minici-from=".len..];
-            if (value.len == 0) {
-                printUsageError("missing value after `{s}`", arg);
-                return error.InvalidMiniCiArgument;
-            }
+        } else if (try optionValue(args, &i, "--minici-from")) |value| {
             try rejectRangeWithShard(shard, arg);
             try setSelectionFrom(&selection, value, arg);
-        } else if (std.mem.eql(u8, arg, "--minici-to")) {
-            if (i + 1 >= args.len) {
-                printUsageError("missing value after `{s}`", arg);
-                return error.InvalidMiniCiArgument;
-            }
-            i += 1;
-            try rejectRangeWithShard(shard, arg);
-            try setSelectionTo(&selection, args[i], arg);
-        } else if (std.mem.startsWith(u8, arg, "--minici-to=")) {
-            const value = arg["--minici-to=".len..];
-            if (value.len == 0) {
-                printUsageError("missing value after `{s}`", arg);
-                return error.InvalidMiniCiArgument;
-            }
+        } else if (try optionValue(args, &i, "--minici-to")) |value| {
             try rejectRangeWithShard(shard, arg);
             try setSelectionTo(&selection, value, arg);
-        } else if (std.mem.eql(u8, arg, "--minici-after")) {
-            if (i + 1 >= args.len) {
-                printUsageError("missing value after `{s}`", arg);
-                return error.InvalidMiniCiArgument;
-            }
-            i += 1;
-            try rejectRangeWithShard(shard, arg);
-            try setSelectionAfter(&selection, args[i], arg);
-        } else if (std.mem.startsWith(u8, arg, "--minici-after=")) {
-            const value = arg["--minici-after=".len..];
-            if (value.len == 0) {
-                printUsageError("missing value after `{s}`", arg);
-                return error.InvalidMiniCiArgument;
-            }
+        } else if (try optionValue(args, &i, "--minici-after")) |value| {
             try rejectRangeWithShard(shard, arg);
             try setSelectionAfter(&selection, value, arg);
-        } else if (std.mem.eql(u8, arg, "--minici-before")) {
-            if (i + 1 >= args.len) {
-                printUsageError("missing value after `{s}`", arg);
-                return error.InvalidMiniCiArgument;
-            }
-            i += 1;
-            try rejectRangeWithShard(shard, arg);
-            try setSelectionBefore(&selection, args[i], arg);
-        } else if (std.mem.startsWith(u8, arg, "--minici-before=")) {
-            const value = arg["--minici-before=".len..];
-            if (value.len == 0) {
-                printUsageError("missing value after `{s}`", arg);
-                return error.InvalidMiniCiArgument;
-            }
+        } else if (try optionValue(args, &i, "--minici-before")) |value| {
             try rejectRangeWithShard(shard, arg);
             try setSelectionBefore(&selection, value, arg);
-        } else if (std.mem.eql(u8, arg, "--minici-only")) {
-            if (i + 1 >= args.len) {
-                printUsageError("missing value after `{s}`", arg);
-                return error.InvalidMiniCiArgument;
-            }
-            i += 1;
-            try rejectRangeWithShard(shard, arg);
-            try setSelectionOnly(&selection, args[i], arg);
-        } else if (std.mem.startsWith(u8, arg, "--minici-only=")) {
-            const value = arg["--minici-only=".len..];
-            if (value.len == 0) {
-                printUsageError("missing value after `{s}`", arg);
-                return error.InvalidMiniCiArgument;
-            }
+        } else if (try optionValue(args, &i, "--minici-only")) |value| {
             try rejectRangeWithShard(shard, arg);
             try setSelectionOnly(&selection, value, arg);
-        } else if (std.mem.eql(u8, arg, "--minici-shard")) {
-            if (i + 1 >= args.len) {
-                printUsageError("missing value after `{s}`", arg);
-                return error.InvalidMiniCiArgument;
-            }
-            i += 1;
-            try setShard(&shard, selection, args[i], arg);
-        } else if (std.mem.startsWith(u8, arg, "--minici-shard=")) {
-            const value = arg["--minici-shard=".len..];
-            if (value.len == 0) {
-                printUsageError("missing value after `{s}`", arg);
-                return error.InvalidMiniCiArgument;
-            }
+        } else if (try optionValue(args, &i, "--minici-shard")) |value| {
             try setShard(&shard, selection, value, arg);
-        } else if (std.mem.eql(u8, arg, "--minici-verify-workflow")) {
-            if (i + 1 >= args.len) {
-                printUsageError("missing value after `{s}`", arg);
-                return error.InvalidMiniCiArgument;
-            }
-            i += 1;
-            verify_workflow = args[i];
-        } else if (std.mem.startsWith(u8, arg, "--minici-verify-workflow=")) {
-            const value = arg["--minici-verify-workflow=".len..];
-            if (value.len == 0) {
-                printUsageError("missing value after `{s}`", arg);
-                return error.InvalidMiniCiArgument;
-            }
+        } else if (try optionValue(args, &i, "--minici-verify-workflow")) |value| {
             verify_workflow = value;
         } else {
             try build_args.append(allocator, arg);
@@ -996,28 +931,18 @@ fn decimalDigits(value: usize) usize {
     return digits;
 }
 
-fn appendProgressPrefix(out: *std.ArrayList(u8), allocator: std.mem.Allocator, progress: Progress) !void {
-    try out.appendSlice(allocator, "MiniCI ");
-    const width = decimalDigits(progress.total);
-    const current_width = decimalDigits(progress.current);
-    var padding = width -| current_width;
-    while (padding > 0) : (padding -= 1) {
-        try out.append(allocator, ' ');
-    }
-    const text = try std.fmt.allocPrint(allocator, "{d}/{d}: ", .{ progress.current, progress.total });
-    defer allocator.free(text);
-    try out.appendSlice(allocator, text);
+fn writeProgressPrefix(writer: *std.Io.Writer, progress: Progress) std.Io.Writer.Error!void {
+    try writer.writeAll("MiniCI ");
+    try writer.splatByteAll(' ', decimalDigits(progress.total) -| decimalDigits(progress.current));
+    try writer.print("{d}/{d}: ", .{ progress.current, progress.total });
 }
 
 fn printProgressPrefix(progress: Progress) void {
-    std.debug.print("MiniCI ", .{});
-    const width = decimalDigits(progress.total);
-    const current_width = decimalDigits(progress.current);
-    var padding = width -| current_width;
-    while (padding > 0) : (padding -= 1) {
-        std.debug.print(" ", .{});
-    }
-    std.debug.print("{d}/{d}: ", .{ progress.current, progress.total });
+    // Two 20-digit numbers, up to 20 bytes of padding, and the fixed text.
+    var buf: [96]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    writeProgressPrefix(&writer, progress) catch unreachable;
+    std.debug.print("{s}", .{writer.buffered()});
 }
 
 fn printBuildStart(progress: Progress) void {
@@ -2489,20 +2414,17 @@ pub fn main(init: std.process.Init) !void {
     }
 }
 
-test "appendProgressPrefix aligns current phase to total width" {
-    var out = std.ArrayList(u8).empty;
-    defer out.deinit(std.testing.allocator);
-
-    try appendProgressPrefix(&out, std.testing.allocator, .{ .current = 1, .total = 61 });
-    try std.testing.expectEqualStrings("MiniCI  1/61: ", out.items);
-
-    out.clearRetainingCapacity();
-    try appendProgressPrefix(&out, std.testing.allocator, .{ .current = 20, .total = 61 });
-    try std.testing.expectEqualStrings("MiniCI 20/61: ", out.items);
-
-    out.clearRetainingCapacity();
-    try appendProgressPrefix(&out, std.testing.allocator, .{ .current = 7, .total = 123 });
-    try std.testing.expectEqualStrings("MiniCI   7/123: ", out.items);
+test "writeProgressPrefix aligns current phase to total width" {
+    var buf: [96]u8 = undefined;
+    for ([_]struct { Progress, []const u8 }{
+        .{ .{ .current = 1, .total = 61 }, "MiniCI  1/61: " },
+        .{ .{ .current = 20, .total = 61 }, "MiniCI 20/61: " },
+        .{ .{ .current = 7, .total = 123 }, "MiniCI   7/123: " },
+    }) |case| {
+        var writer = std.Io.Writer.fixed(&buf);
+        try writeProgressPrefix(&writer, case[0]);
+        try std.testing.expectEqualStrings(case[1], writer.buffered());
+    }
 }
 
 test "parseAvailableRamBytes reads Linux MemAvailable" {

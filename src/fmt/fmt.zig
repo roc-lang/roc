@@ -262,18 +262,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []cons
             break :blk buf;
         } else |_| {
             // Fallback: read using a streaming reader.
-            var read_buf: [4096]u8 = undefined;
-            var file_reader = input_file.readerStreaming(io, &read_buf);
-            var contents_list = std.ArrayList(u8).empty;
-            errdefer contents_list.deinit(gpa);
-            while (true) {
-                const n = file_reader.interface.readSliceShort(contents_list.addManyAsSlice(gpa, 4096) catch return error.OutOfMemory) catch |err| switch (err) {
-                    error.ReadFailed => return error.ReadFailed,
-                };
-                contents_list.shrinkRetainingCapacity(contents_list.items.len - 4096 + n);
-                if (n < 4096) break;
-            }
-            break :blk try contents_list.toOwnedSlice(gpa);
+            break :blk try readAllStreaming(gpa, io, input_file);
         }
     };
     defer gpa.free(contents);
@@ -286,16 +275,9 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []cons
 
     // Explicit formatter migrations may consume their parser recovery AST.
     // Every other parsing problem is reported and leaves the file untouched.
-    if (!tokenizationPermitsFormatting(parse_ast.*) or !parseDiagnosticsPermitFormatting(parse_ast.parse_diagnostics.items)) {
-        try printParseErrors(gpa, module_env.common.source, parse_ast.*, stderr);
-        return error.ParsingFailed;
-    }
-    var migrates_optional_field_syntax = false;
-    var migrates_record_assignments = false;
-    for (parse_ast.parse_diagnostics.items) |diagnostic| {
-        migrates_optional_field_syntax = migrates_optional_field_syntax or diagnostic.tag == .optional_field_mark_after_colon;
-        migrates_record_assignments = migrates_record_assignments or diagnostic.tag == .record_field_assignment;
-    }
+    const migrations = try formattingMigrations(gpa, module_env.common.source, parse_ast, stderr);
+    const migrates_optional_field_syntax = migrations.optional_field_syntax;
+    const migrates_record_assignments = migrations.record_assignments;
 
     // Check if the file is formatted without actually formatting it
     if (unformatted_files != null) {
@@ -323,22 +305,46 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []cons
     }
 }
 
+/// Reads all of `file` through a streaming reader.
+fn readAllStreaming(gpa: std.mem.Allocator, io: std.Io, file: std.Io.File) (std.mem.Allocator.Error || error{ReadFailed})![]u8 {
+    var read_buf: [4096]u8 = undefined;
+    var file_reader = file.readerStreaming(io, &read_buf);
+    var contents_list = std.ArrayList(u8).empty;
+    errdefer contents_list.deinit(gpa);
+    while (true) {
+        const n = file_reader.interface.readSliceShort(try contents_list.addManyAsSlice(gpa, 4096)) catch |err| switch (err) {
+            error.ReadFailed => return error.ReadFailed,
+        };
+        contents_list.shrinkRetainingCapacity(contents_list.items.len - 4096 + n);
+        if (n < 4096) break;
+    }
+    return contents_list.toOwnedSlice(gpa);
+}
+
+/// The explicit source migrations a parse permits the formatter to apply.
+const FormattingMigrations = struct {
+    optional_field_syntax: bool = false,
+    record_assignments: bool = false,
+};
+
+/// Reports the parse's problems and fails unless every parse diagnostic is an
+/// explicit formatter migration; returns the migrations it will apply.
+fn formattingMigrations(gpa: std.mem.Allocator, source: []const u8, parse_ast: *const AST, stderr: *std.Io.Writer) FormatStdinError!FormattingMigrations {
+    if (!tokenizationPermitsFormatting(parse_ast.*) or !parseDiagnosticsPermitFormatting(parse_ast.parse_diagnostics.items)) {
+        try printParseErrors(gpa, source, parse_ast.*, stderr);
+        return error.ParsingFailed;
+    }
+    var migrations: FormattingMigrations = .{};
+    for (parse_ast.parse_diagnostics.items) |diagnostic| {
+        migrations.optional_field_syntax = migrations.optional_field_syntax or diagnostic.tag == .optional_field_mark_after_colon;
+        migrations.record_assignments = migrations.record_assignments or diagnostic.tag == .record_field_assignment;
+    }
+    return migrations;
+}
+
 /// Format the contents of stdin and output the result to stdout
 pub fn formatStdin(gpa: std.mem.Allocator, options: Options, io: std.Io, stdin: std.Io.File, stdout: std.Io.File, stderr: *std.Io.Writer) FormatStdinError!void {
-    const contents = blk: {
-        var read_buf: [4096]u8 = undefined;
-        var stdin_reader = stdin.readerStreaming(io, &read_buf);
-        var contents_list = std.ArrayList(u8).empty;
-        errdefer contents_list.deinit(gpa);
-        while (true) {
-            const n = stdin_reader.interface.readSliceShort(contents_list.addManyAsSlice(gpa, 4096) catch return error.OutOfMemory) catch |err| switch (err) {
-                error.ReadFailed => return error.ReadFailed,
-            };
-            contents_list.shrinkRetainingCapacity(contents_list.items.len - 4096 + n);
-            if (n < 4096) break;
-        }
-        break :blk try contents_list.toOwnedSlice(gpa);
-    };
+    const contents = try readAllStreaming(gpa, io, stdin);
     defer gpa.free(contents);
 
     // ModuleEnv retains a reference to contents for diagnostics
@@ -350,16 +356,9 @@ pub fn formatStdin(gpa: std.mem.Allocator, options: Options, io: std.Io, stdin: 
 
     // Keep stdin behavior identical to file formatting: only explicit source
     // migrations may proceed through a parser recovery AST.
-    if (!tokenizationPermitsFormatting(parse_ast.*) or !parseDiagnosticsPermitFormatting(parse_ast.parse_diagnostics.items)) {
-        try printParseErrors(gpa, module_env.common.source, parse_ast.*, stderr);
-        return error.ParsingFailed;
-    }
-    var migrates_optional_field_syntax = false;
-    var migrates_record_assignments = false;
-    for (parse_ast.parse_diagnostics.items) |diagnostic| {
-        migrates_optional_field_syntax = migrates_optional_field_syntax or diagnostic.tag == .optional_field_mark_after_colon;
-        migrates_record_assignments = migrates_record_assignments or diagnostic.tag == .record_field_assignment;
-    }
+    const migrations = try formattingMigrations(gpa, module_env.common.source, parse_ast, stderr);
+    const migrates_optional_field_syntax = migrations.optional_field_syntax;
+    const migrates_record_assignments = migrations.record_assignments;
 
     var stdout_buffer: [4096]u8 = undefined;
     var stdout_writer = stdout.writer(io, &stdout_buffer);

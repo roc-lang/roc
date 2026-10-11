@@ -59,7 +59,7 @@ pub fn validatePlatformHeader(
 ) ValidationError!PlatformValidation {
     // Read platform source
     var source = std.Io.Dir.cwd().readFileAlloc(std_io, platform_source_path, allocator, .unlimited) catch {
-        try renderFileReadError(allocator, platform_source_path, stderr, report_config);
+        try renderPlatformFileError(allocator, "File Read Error", "Failed to read platform source file.", "Check that the file exists and you have read permissions.", platform_source_path, stderr, report_config);
         return error.FileReadError;
     };
     source = base.source_utils.normalizeLineEndingsRealloc(allocator, source) catch {
@@ -74,7 +74,7 @@ pub fn validatePlatformHeader(
     };
 
     const ast = parse.file(allocator, &env) catch {
-        try renderParseError(allocator, platform_source_path, stderr, report_config);
+        try renderPlatformFileError(allocator, "Parse Error", "Failed to parse platform header.", "Check that the file contains valid Roc syntax.", platform_source_path, stderr, report_config);
         return error.ParseError;
     };
     defer ast.deinit();
@@ -130,44 +130,23 @@ pub fn validatePlatformHeader(
     };
 }
 
-/// Render a file read error report to stderr.
-fn renderFileReadError(
+/// Render a fatal report about the platform source file at `path` to stderr.
+fn renderPlatformFileError(
     allocator: std.mem.Allocator,
+    title: []const u8,
+    headline: []const u8,
+    hint: []const u8,
     path: []const u8,
     stderr: *std.Io.Writer,
     report_config: reporting.ReportingConfig,
 ) std.mem.Allocator.Error!void {
-    var report = try reporting.Report.init(allocator, "File Read Error", "Failed to read platform source file.", .fatal);
+    var report = try reporting.Report.init(allocator, title, headline, .fatal);
     defer report.deinit();
 
     try report.document.addText("    ");
     try report.document.addAnnotated(path, .path);
     try report.document.addLineBreaks(2);
-    try report.document.addText("Check that the file exists and you have read permissions.");
-    try report.document.addLineBreak();
-
-    reporting.renderReportToTerminal(
-        &report,
-        stderr,
-        reporting.ColorUtils.getPaletteForConfig(report_config),
-        report_config,
-    ) catch {};
-}
-
-/// Render a parse error report to stderr.
-fn renderParseError(
-    allocator: std.mem.Allocator,
-    path: []const u8,
-    stderr: *std.Io.Writer,
-    report_config: reporting.ReportingConfig,
-) std.mem.Allocator.Error!void {
-    var report = try reporting.Report.init(allocator, "Parse Error", "Failed to parse platform header.", .fatal);
-    defer report.deinit();
-
-    try report.document.addText("    ");
-    try report.document.addAnnotated(path, .path);
-    try report.document.addLineBreaks(2);
-    try report.document.addText("Check that the file contains valid Roc syntax.");
+    try report.document.addText(hint);
     try report.document.addLineBreak();
 
     reporting.renderReportToTerminal(

@@ -4072,24 +4072,37 @@ pub const CheckedTypeStore = struct {
     /// are released only once every copy succeeded, so a failing commit leaves
     /// the build intact for its owner to release exactly once.
     fn commitPayload(self: *CheckedTypeStore, allocator: Allocator, build: CheckedTypePayloadBuild) Allocator.Error!StoredCheckedTypePayload {
-        const stored: StoredCheckedTypePayload = if (build == .tag_union) blk: {
-            const tu = build.tag_union;
-            const tags_start: u32 = @intCast(self.tag_pool.items.len);
-            if (tu.tags.len != 0) try self.ownColumn(allocator, .tag_pool);
-            try self.tag_pool.ensureUnusedCapacity(allocator, tu.tags.len);
-            for (tu.tags) |tag| {
-                const args = try self.appendPool(allocator, CheckedTypeId, tag.args);
-                self.tag_pool.appendAssumeCapacity(.{
-                    .name = tag.name,
-                    .args_start = args.start,
-                    .args_len = args.len,
-                });
-            }
-            break :blk .{ .tag_union = .{
-                .tags = .{ .start = tags_start, .len = @intCast(tu.tags.len) },
-                .ext = tu.ext,
-            } };
-        } else try self.commitTypeData(allocator, StoredCheckedTypePayload, build);
+        const stored: StoredCheckedTypePayload = switch (build) {
+            .tag_union => |tu| blk: {
+                const tags_start: u32 = @intCast(self.tag_pool.items.len);
+                if (tu.tags.len != 0) try self.ownColumn(allocator, .tag_pool);
+                try self.tag_pool.ensureUnusedCapacity(allocator, tu.tags.len);
+                for (tu.tags) |tag| {
+                    const args = try self.appendPool(allocator, CheckedTypeId, tag.args);
+                    self.tag_pool.appendAssumeCapacity(.{
+                        .name = tag.name,
+                        .args_start = args.start,
+                        .args_len = args.len,
+                    });
+                }
+                break :blk .{ .tag_union = .{
+                    .tags = .{ .start = tags_start, .len = @intCast(tu.tags.len) },
+                    .ext = tu.ext,
+                } };
+            },
+            .pending,
+            .err,
+            .flex,
+            .rigid,
+            .alias,
+            .record,
+            .tuple,
+            .nominal,
+            .function,
+            .empty_record,
+            .empty_tag_union,
+            => try self.commitTypeData(allocator, StoredCheckedTypePayload, build),
+        };
         freeOwned(allocator, build);
         return stored;
     }
@@ -5181,16 +5194,21 @@ pub const CheckedTypeStore = struct {
         stored: StoredCheckedTypePayload,
     ) Allocator.Error!CheckedTypePayloadBuild {
         const read = reconstructTypeData(CheckedTypePayload, self, stored);
-        if (read != .tag_union) {
-            inline for (comptime std.enums.values(std.meta.Tag(CheckedTypePayload))) |tag| {
-                const name = @tagName(tag);
-                if (comptime !artifact_serialize.comptimeStrEq(name, "tag_union")) {
-                    if (read == tag) return @unionInit(CheckedTypePayloadBuild, name, try dupeOwned(allocator, @field(read, name)));
-                }
-            }
-            unreachable;
-        }
-        const tu = read.tag_union;
+        const tu = switch (read) {
+            .tag_union => |tu| tu,
+            inline .pending,
+            .err,
+            .flex,
+            .rigid,
+            .alias,
+            .record,
+            .tuple,
+            .nominal,
+            .function,
+            .empty_record,
+            .empty_tag_union,
+            => |value, tag| return @unionInit(CheckedTypePayloadBuild, @tagName(tag), try dupeOwned(allocator, value)),
+        };
         const tags = try allocator.alloc(CheckedTagBuild, tu.tags.len);
         for (tags) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
         errdefer freeOwned(allocator, tags);

@@ -38,6 +38,7 @@ const collections = @import("collections");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
 const erased_owner = @import("erased_owner.zig");
+const body_clone = @import("body_clone.zig");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
@@ -654,53 +655,74 @@ const Pass = struct {
             while (self.stack.pop()) |current| {
                 if (self.visited.contains(current)) continue;
                 try self.visited.put(current, {});
-                switch (self.store.getCFStmt(current)) {
-                    .join => |join_stmt| {
-                        // A rewrite replaces the join's parameter span, so
-                        // the join's remaining parameters wait for the next
-                        // round.
-                        const params = self.store.getLocalSpan(join_stmt.params);
-                        for (0..params.len) |position| {
-                            const param = GuardedList.at(params, position);
-                            const param_is_proc_arg = std.mem.findScalar(LIR.LocalId, proc_args, param) != null;
-                            if (try self.tryScalarizeTag(param_is_proc_arg, current, param)) {
-                                changed = true;
-                                break;
-                            }
-                            if (try self.tryScalarize(param_is_proc_arg, current, param)) {
-                                changed = true;
-                                break;
-                            }
-                        }
-                        try self.stack.append(self.allocator, join_stmt.body);
-                        try self.stack.append(self.allocator, join_stmt.remainder);
+                const join_stmt = switch (self.store.getCFStmt(current)) {
+                    .join => |j| j,
+                    .init_uninitialized,
+                    .assign_ref,
+                    .assign_literal,
+                    .assign_call,
+                    .assign_call_erased,
+                    .assign_packed_erased_fn,
+                    .assign_boxy_desc_ref,
+                    .assign_boxy_dict_ref,
+                    .assign_boxy_box,
+                    .assign_boxy_record_update,
+                    .assign_boxy_unbox,
+                    .assign_boxy_adapt,
+                    .assign_boxy_inspect,
+                    .assign_boxy_eq,
+                    .assign_boxy_hash,
+                    .assign_boxy_tag,
+                    .assign_boxy_tag_payload,
+                    .boxy_tag_match,
+                    .assign_call_dict,
+                    .assign_low_level,
+                    .assign_list,
+                    .assign_struct,
+                    .assign_tag,
+                    .store_struct,
+                    .store_tag,
+                    .set_local,
+                    .debug,
+                    .expect,
+                    .expect_err,
+                    .runtime_error,
+                    .comptime_exhaustiveness_failed,
+                    .comptime_branch_taken,
+                    .incref,
+                    .decref,
+                    .decref_if_initialized,
+                    .free,
+                    .switch_stmt,
+                    .switch_initialized_payload,
+                    .str_match,
+                    .str_match_set,
+                    .jump,
+                    .ret,
+                    .crash,
+                    => {
+                        try body_clone.appendSuccessorsInOrder(self.store, &self.stack, current, self.allocator, .{ .switch_edges = .arms_first });
+                        continue;
                     },
-                    .switch_stmt => |s| {
-                        const branches = self.store.getCFSwitchBranches(s.branches);
-                        for (0..branches.len) |index| try self.stack.append(self.allocator, GuardedList.at(branches, index).body);
-                        try self.stack.append(self.allocator, s.default_branch);
-                        if (s.continuation) |continuation| {
-                            try self.stack.append(self.allocator, continuation);
-                        }
-                    },
-                    .switch_initialized_payload => |s| {
-                        try self.stack.append(self.allocator, s.initialized_branch);
-                        try self.stack.append(self.allocator, s.uninitialized_branch);
-                    },
-                    inline .str_match, .boxy_tag_match => |s| {
-                        try self.stack.append(self.allocator, s.on_match);
-                        try self.stack.append(self.allocator, s.on_miss);
-                    },
-                    .str_match_set => |s| {
-                        const arms = self.store.getStrMatchArms(s.arms);
-                        for (0..arms.len) |index| try self.stack.append(self.allocator, GuardedList.at(arms, index).on_match);
-                        try self.stack.append(self.allocator, s.on_miss);
-                    },
-                    inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
-                        try self.stack.append(self.allocator, s.next);
-                    },
-                    .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed => {},
+                };
+                // A rewrite replaces the join's parameter span, so the join's
+                // remaining parameters wait for the next round. The walk
+                // continues from the join as it was before any rewrite.
+                const params = self.store.getLocalSpan(join_stmt.params);
+                for (0..params.len) |position| {
+                    const param = GuardedList.at(params, position);
+                    const param_is_proc_arg = std.mem.findScalar(LIR.LocalId, proc_args, param) != null;
+                    if (try self.tryScalarizeTag(param_is_proc_arg, current, param)) {
+                        changed = true;
+                        break;
+                    }
+                    if (try self.tryScalarize(param_is_proc_arg, current, param)) {
+                        changed = true;
+                        break;
+                    }
                 }
+                try self.stack.append(self.allocator, join_stmt.body);
+                try self.stack.append(self.allocator, join_stmt.remainder);
             }
         }
 
@@ -1784,59 +1806,64 @@ const Pass = struct {
             try self.visited.put(current, {});
             const stmt = self.store.getCFStmtPtr(current);
             switch (stmt.*) {
-                .switch_stmt => |*s| {
-                    const branches = self.store.getCFSwitchBranchesMut(s.branches);
-                    for (0..branches.len) |index| {
-                        const branch = GuardedList.atPtr(branches, index);
-                        branch.body = self.resolveRemoved(branch.body);
-                        try self.stack.append(self.allocator, branch.body);
-                    }
-                    s.default_branch = self.resolveRemoved(s.default_branch);
-                    try self.stack.append(self.allocator, s.default_branch);
-                    if (s.continuation) |continuation| {
-                        s.continuation = self.resolveRemoved(continuation);
-                        try self.stack.append(self.allocator, s.continuation.?);
-                    }
-                },
-                .switch_initialized_payload => |*s| {
-                    s.initialized_branch = self.resolveRemoved(s.initialized_branch);
-                    s.uninitialized_branch = self.resolveRemoved(s.uninitialized_branch);
-                    try self.stack.append(self.allocator, s.initialized_branch);
-                    try self.stack.append(self.allocator, s.uninitialized_branch);
-                },
-                inline .str_match, .boxy_tag_match => |*s| {
-                    s.on_match = self.resolveRemoved(s.on_match);
-                    s.on_miss = self.resolveRemoved(s.on_miss);
-                    try self.stack.append(self.allocator, s.on_match);
-                    try self.stack.append(self.allocator, s.on_miss);
-                },
+                // String-match arms are rewritten into a fresh span.
                 .str_match_set => |*s| {
                     const arms = self.store.getStrMatchArms(s.arms);
                     const rewritten_arms = try self.allocator.alloc(LIR.StrMatchArm, arms.len);
                     defer self.allocator.free(rewritten_arms);
                     for (0..arms.len) |index| {
-                        const arm = GuardedList.at(arms, index);
-                        const rewritten = &rewritten_arms[index];
-                        rewritten.* = arm;
-                        rewritten.on_match = self.resolveRemoved(arm.on_match);
-                        try self.stack.append(self.allocator, rewritten.on_match);
+                        rewritten_arms[index] = GuardedList.at(arms, index);
+                        rewritten_arms[index].on_match = self.resolveRemoved(rewritten_arms[index].on_match);
                     }
                     s.arms = try self.store.addStrMatchArms(rewritten_arms);
                     s.on_miss = self.resolveRemoved(s.on_miss);
-                    try self.stack.append(self.allocator, s.on_miss);
                 },
-                .join => |*j| {
-                    j.body = self.resolveRemoved(j.body);
-                    j.remainder = self.resolveRemoved(j.remainder);
-                    try self.stack.append(self.allocator, j.body);
-                    try self.stack.append(self.allocator, j.remainder);
-                },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |*s| {
-                    s.next = self.resolveRemoved(s.next);
-                    try self.stack.append(self.allocator, s.next);
-                },
-                .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed => {},
+                .init_uninitialized,
+                .assign_ref,
+                .assign_literal,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .join,
+                .jump,
+                .ret,
+                .crash,
+                => body_clone.redirectSuccessors(self.store, current, self, resolveRemoved),
             }
+            try body_clone.appendSuccessorsInOrder(self.store, &self.stack, current, self.allocator, .{ .switch_edges = .arms_first });
         }
     }
 
@@ -1870,22 +1897,8 @@ const Pass = struct {
             try self.visited.put(current, {});
             if (self.metrics) |metrics| metrics.collected_statements += 1;
             switch (self.store.getCFStmt(current)) {
-                .assign_struct => |assign| {
-                    try self.noteStructBuild(assign.target, current, assign.fields);
-                    try self.stack.append(self.allocator, assign.next);
-                },
-                .assign_tag => |assign| {
-                    try self.noteTagBuild(assign.target, current, assign);
-                    try self.stack.append(self.allocator, assign.next);
-                },
-                .switch_stmt => |s| {
-                    const branches = self.store.getCFSwitchBranches(s.branches);
-                    for (0..branches.len) |index| try self.stack.append(self.allocator, GuardedList.at(branches, index).body);
-                    try self.stack.append(self.allocator, s.default_branch);
-                    if (s.continuation) |continuation| {
-                        try self.stack.append(self.allocator, continuation);
-                    }
-                },
+                .assign_struct => |assign| try self.noteStructBuild(assign.target, current, assign.fields),
+                .assign_tag => |assign| try self.noteTagBuild(assign.target, current, assign),
                 .join => |join_stmt| {
                     const params = self.store.getLocalSpan(join_stmt.params);
                     for (0..GuardedList.borrowLen(params)) |index| {
@@ -1893,27 +1906,51 @@ const Pass = struct {
                         if (!entry.found_existing) entry.value_ptr.* = .empty;
                         try entry.value_ptr.append(self.allocator, current);
                     }
-                    try self.stack.append(self.allocator, join_stmt.body);
-                    try self.stack.append(self.allocator, join_stmt.remainder);
                 },
-                .switch_initialized_payload => |s| {
-                    try self.stack.append(self.allocator, s.initialized_branch);
-                    try self.stack.append(self.allocator, s.uninitialized_branch);
-                },
-                inline .str_match, .boxy_tag_match => |s| {
-                    try self.stack.append(self.allocator, s.on_match);
-                    try self.stack.append(self.allocator, s.on_miss);
-                },
-                .str_match_set => |s| {
-                    const arms = self.store.getStrMatchArms(s.arms);
-                    for (0..arms.len) |index| try self.stack.append(self.allocator, GuardedList.at(arms, index).on_match);
-                    try self.stack.append(self.allocator, s.on_miss);
-                },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |a| {
-                    try self.stack.append(self.allocator, a.next);
-                },
-                .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed => {},
+                .init_uninitialized,
+                .assign_ref,
+                .assign_literal,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
+                .assign_low_level,
+                .assign_list,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .jump,
+                .ret,
+                .crash,
+                => {},
             }
+            try body_clone.appendSuccessorsInOrder(self.store, &self.stack, current, self.allocator, .{ .switch_edges = .arms_first });
         }
 
         self.visited.clearRetainingCapacity();
@@ -1924,7 +1961,7 @@ const Pass = struct {
             try self.visited.put(current, {});
             if (self.metrics) |metrics| metrics.collected_statements += 1;
             switch (self.store.getCFStmt(current)) {
-                .assign_ref => |assign| {
+                .assign_ref => |assign| ref: {
                     switch (assign.op) {
                         .field => |op| try self.noteFieldRead(op.source, current),
                         .local => |source| {
@@ -1946,8 +1983,7 @@ const Pass = struct {
                                 } else {
                                     try self.noteUse(source);
                                 }
-                                try self.stack.append(self.allocator, assign.next);
-                                continue;
+                                break :ref;
                             } else {
                                 // Recorded, not yet counted as a use: whether
                                 // the source is used whole through this alias
@@ -1964,24 +2000,16 @@ const Pass = struct {
                                 } else {
                                     entry.value_ptr.* = .{ .stmt = current, .source = source, .def_count = 1 };
                                 }
-                                try self.stack.append(self.allocator, assign.next);
-                                continue;
+                                break :ref;
                             }
                         },
                         inline .discriminant, .tag_payload, .tag_payload_struct => |op| try self.noteTagRead(op.source, current),
                         inline .list_reinterpret, .nominal => |op| try self.noteUse(op.backing_ref),
                     }
                     try self.noteWrite(assign.target);
-                    try self.stack.append(self.allocator, assign.next);
                 },
-                .assign_literal => |assign| {
-                    try self.noteWrite(assign.target);
-                    try self.stack.append(self.allocator, assign.next);
-                },
-                .init_uninitialized => |initialize| {
-                    try self.noteWrite(initialize.target);
-                    try self.stack.append(self.allocator, initialize.next);
-                },
+                .assign_literal => |assign| try self.noteWrite(assign.target),
+                .init_uninitialized => |initialize| try self.noteWrite(initialize.target),
                 .assign_call => |assign| {
                     if (assign.result_desc) |result_desc| {
                         if (result_desc.localOrNull()) |local| try self.noteUse(local);
@@ -1989,7 +2017,6 @@ const Pass = struct {
                     const args = self.store.getLocalSpan(assign.args);
                     for (0..args.len) |index| try self.noteUse(GuardedList.at(args, index));
                     try self.noteWrite(assign.target);
-                    try self.stack.append(self.allocator, assign.next);
                 },
                 .assign_call_erased => |assign| {
                     try self.noteUse(assign.closure);
@@ -2001,7 +2028,6 @@ const Pass = struct {
                     for (0..args.len) |index| try self.noteUse(GuardedList.at(args, index));
                     try self.noteWrite(assign.target);
                     if (assign.out_desc) |out_desc| try self.noteWrite(out_desc);
-                    try self.stack.append(self.allocator, assign.next);
                 },
                 .assign_packed_erased_fn => |assign| {
                     if (assign.capture) |capture| try self.noteUse(capture);
@@ -2010,7 +2036,6 @@ const Pass = struct {
                     }
                     if (assign.reuse) |reuse| try self.noteUse(reuse);
                     try self.noteWrite(assign.target);
-                    try self.stack.append(self.allocator, assign.next);
                 },
                 .assign_boxy_desc_ref => |assign| {
                     try self.noteDescUse(assign.desc);
@@ -2018,20 +2043,17 @@ const Pass = struct {
                     const captures = self.store.getLocalSpan(assign.captures);
                     for (0..GuardedList.borrowLen(captures)) |index| try self.noteUse(GuardedList.at(captures, index));
                     try self.noteWrite(assign.target);
-                    try self.stack.append(self.allocator, assign.next);
                 },
                 .assign_boxy_dict_ref => |assign| {
                     try self.noteDictUse(assign.dict);
                     const captures = self.store.getLocalSpan(assign.captures);
                     for (0..GuardedList.borrowLen(captures)) |index| try self.noteUse(GuardedList.at(captures, index));
                     try self.noteWrite(assign.target);
-                    try self.stack.append(self.allocator, assign.next);
                 },
                 .assign_boxy_box => |assign| {
                     try self.noteUse(assign.payload);
                     if (assign.payload_desc) |desc| try self.noteDescUse(desc);
                     try self.noteWrite(assign.target);
-                    try self.stack.append(self.allocator, assign.next);
                 },
                 .assign_boxy_record_update => |assign| {
                     try self.noteUse(assign.base);
@@ -2039,61 +2061,51 @@ const Pass = struct {
                     try self.noteDescUse(assign.base_desc);
                     try self.noteDescUse(assign.fields_desc);
                     try self.noteWrite(assign.target);
-                    try self.stack.append(self.allocator, assign.next);
                 },
                 .assign_boxy_unbox => |assign| {
                     try self.noteUse(assign.source);
                     try self.noteDescUse(assign.source_desc);
                     if (assign.target_desc) |desc| try self.noteDescUse(desc);
                     try self.noteWrite(assign.target);
-                    try self.stack.append(self.allocator, assign.next);
                 },
                 .assign_boxy_adapt => |assign| {
                     try self.noteUse(assign.source);
                     if (assign.source_desc) |desc| try self.noteDescUse(desc);
                     if (assign.target_desc) |desc| try self.noteDescUse(desc);
                     try self.noteWrite(assign.target);
-                    try self.stack.append(self.allocator, assign.next);
                 },
                 .assign_boxy_inspect => |assign| {
                     try self.noteUse(assign.source);
                     try self.noteDescUse(assign.source_desc);
                     try self.noteWrite(assign.target);
-                    try self.stack.append(self.allocator, assign.next);
                 },
                 .assign_boxy_eq => |assign| {
                     try self.noteUse(assign.lhs);
                     try self.noteUse(assign.rhs);
                     try self.noteDescUse(assign.desc);
                     try self.noteWrite(assign.target);
-                    try self.stack.append(self.allocator, assign.next);
                 },
                 .assign_boxy_hash => |assign| {
                     try self.noteUse(assign.value);
                     try self.noteUse(assign.hasher);
                     try self.noteDescUse(assign.desc);
                     try self.noteWrite(assign.target);
-                    try self.stack.append(self.allocator, assign.next);
                 },
                 .assign_boxy_tag => |assign| {
                     try self.noteDescUse(assign.target_desc);
                     if (assign.payload) |payload| try self.noteUse(payload);
                     if (assign.payload_desc) |desc| try self.noteDescUse(desc);
                     try self.noteWrite(assign.target);
-                    try self.stack.append(self.allocator, assign.next);
                 },
                 .assign_boxy_tag_payload => |assign| {
                     try self.noteUse(assign.source);
                     try self.noteDescUse(assign.source_desc);
                     try self.noteWrite(assign.target);
                     if (assign.target_desc) |target_desc| try self.noteWrite(target_desc);
-                    try self.stack.append(self.allocator, assign.next);
                 },
                 .boxy_tag_match => |s| {
                     try self.noteUse(s.source);
                     try self.noteDescUse(s.source_desc);
-                    try self.stack.append(self.allocator, s.on_match);
-                    try self.stack.append(self.allocator, s.on_miss);
                 },
                 .assign_call_dict => |assign| {
                     try self.noteDictUse(assign.dict);
@@ -2104,19 +2116,16 @@ const Pass = struct {
                     const hidden_args = self.store.getLocalSpan(assign.hidden_args);
                     for (0..GuardedList.borrowLen(hidden_args)) |index| try self.noteUse(GuardedList.at(hidden_args, index));
                     try self.noteWrite(assign.target);
-                    try self.stack.append(self.allocator, assign.next);
                 },
                 .assign_low_level => |assign| {
                     const args = self.store.getLocalSpan(assign.args);
                     for (0..args.len) |index| try self.noteUse(GuardedList.at(args, index));
                     try self.noteWrite(assign.target);
-                    try self.stack.append(self.allocator, assign.next);
                 },
                 .assign_list => |assign| {
                     const elems = self.store.getLocalSpan(assign.elems);
                     for (0..elems.len) |index| try self.noteUse(GuardedList.at(elems, index));
                     try self.noteWrite(assign.target);
-                    try self.stack.append(self.allocator, assign.next);
                 },
                 .assign_struct => |assign| {
                     const fields = self.store.getLocalSpan(assign.fields);
@@ -2125,7 +2134,6 @@ const Pass = struct {
                         try self.noteUse(field);
                         if (self.struct_builds.getPtr(field)) |build| build.operand_uses += 1;
                     }
-                    try self.stack.append(self.allocator, assign.next);
                 },
                 .assign_tag => |assign| {
                     if (assign.target_desc) |target_desc| try self.noteDescUse(target_desc);
@@ -2133,18 +2141,15 @@ const Pass = struct {
                         try self.noteUse(payload);
                         if (self.tag_builds.getPtr(payload)) |build| build.payload_uses += 1;
                     }
-                    try self.stack.append(self.allocator, assign.next);
                 },
                 .store_struct => |assign| {
                     try self.noteUse(assign.dest);
                     const fields = self.store.getLocalSpan(assign.fields);
                     for (0..fields.len) |index| try self.noteUse(GuardedList.at(fields, index));
-                    try self.stack.append(self.allocator, assign.next);
                 },
                 .store_tag => |assign| {
                     try self.noteUse(assign.dest);
                     if (assign.payload) |payload| try self.noteUse(payload);
-                    try self.stack.append(self.allocator, assign.next);
                 },
                 .set_local => |assign| {
                     if (assign.mode == .initialize_join_param) {
@@ -2168,32 +2173,12 @@ const Pass = struct {
                         try self.noteUse(assign.value);
                         try self.noteWrite(assign.target);
                     }
-                    try self.stack.append(self.allocator, assign.next);
                 },
-                .debug => |s| {
-                    try self.noteUse(s.message);
-                    try self.stack.append(self.allocator, s.next);
-                },
+                .debug => |s| try self.noteUse(s.message),
                 .expect_err => |s| try self.noteUse(s.message),
-                .expect => |s| {
-                    try self.noteUse(s.condition);
-                    try self.stack.append(self.allocator, s.next);
-                },
-                .comptime_branch_taken => |s| try self.stack.append(self.allocator, s.next),
-                .switch_stmt => |s| {
-                    try self.noteUse(s.cond);
-                    const branches = self.store.getCFSwitchBranches(s.branches);
-                    for (0..branches.len) |index| try self.stack.append(self.allocator, GuardedList.at(branches, index).body);
-                    try self.stack.append(self.allocator, s.default_branch);
-                    if (s.continuation) |continuation| {
-                        try self.stack.append(self.allocator, continuation);
-                    }
-                },
-                .switch_initialized_payload => |s| {
-                    try self.noteUse(s.cond);
-                    try self.stack.append(self.allocator, s.initialized_branch);
-                    try self.stack.append(self.allocator, s.uninitialized_branch);
-                },
+                .expect => |s| try self.noteUse(s.condition),
+                .switch_stmt => |s| try self.noteUse(s.cond),
+                .switch_initialized_payload => |s| try self.noteUse(s.cond),
                 .str_match => |s| {
                     try self.noteUse(s.source);
                     const steps = self.store.getStrMatchSteps(s.steps);
@@ -2204,8 +2189,6 @@ const Pass = struct {
                             .view => |local| try self.noteWrite(local),
                         }
                     }
-                    try self.stack.append(self.allocator, s.on_match);
-                    try self.stack.append(self.allocator, s.on_miss);
                 },
                 .str_match_set => |s| {
                     try self.noteUse(s.source);
@@ -2220,27 +2203,19 @@ const Pass = struct {
                                 .view => |local| try self.noteWrite(local),
                             }
                         }
-                        try self.stack.append(self.allocator, arm.on_match);
                     }
-                    try self.stack.append(self.allocator, s.on_miss);
                 },
-                .join => |join_stmt| {
-                    try self.stack.append(self.allocator, join_stmt.body);
-                    try self.stack.append(self.allocator, join_stmt.remainder);
-                },
+
                 .ret => |ret_stmt| try self.noteUse(ret_stmt.value),
                 .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| try self.noteUse(message),
-                inline .incref, .decref, .free => |rc| {
-                    try self.noteUse(rc.value);
-                    try self.stack.append(self.allocator, rc.next);
-                },
+                inline .incref, .decref, .free => |rc| try self.noteUse(rc.value),
                 .decref_if_initialized => |rc| {
                     try self.noteUse(rc.cond);
                     try self.noteUse(rc.value);
-                    try self.stack.append(self.allocator, rc.next);
                 },
-                .jump, .runtime_error, .comptime_exhaustiveness_failed => {},
+                .join, .jump, .comptime_branch_taken, .runtime_error, .comptime_exhaustiveness_failed => {},
             }
+            try body_clone.appendSuccessorsInOrder(self.store, &self.stack, current, self.allocator, .{ .switch_edges = .arms_first });
         }
     }
 };

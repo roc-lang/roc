@@ -1128,7 +1128,7 @@ fn sharedPrePublishedBuiltin(allocator: Allocator) SweepError!helpers.PrePublish
 /// A source with problems still lowers to something runnable, but not to the
 /// program the case meant to write, and its ops quietly go uncovered.
 fn assertCaseChecks(allocator: Allocator, case: Case) SweepError!void {
-    var resources = try helpers.parseAndCheckProgramForProblemsWithBuiltin(
+    var resources = try helpers.parseAndCheckProgramForProblems(
         allocator,
         case.source_kind,
         case.source,
@@ -1158,7 +1158,7 @@ fn runCase(allocator: Allocator, case: Case) SweepError!void {
     // wrapper inlining, and it does not take a pre-published Builtin, so cases
     // pay for loading one only when they need that lowering.
     var wrapper_compiled = if (case.inline_wrappers)
-        try helpers.compileAllocationProgram(allocator, std.testing.io, case.source_kind, case.source, &.{})
+        try helpers.compileProgram(allocator, std.testing.io, case.source_kind, case.source, &.{}, helpers.allocation_test_lower_options)
     else
         null;
     defer if (wrapper_compiled) |*compiled| compiled.deinit(allocator);

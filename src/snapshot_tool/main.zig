@@ -3340,6 +3340,73 @@ pub fn extractSections(gpa: Allocator, content: []const u8) (Allocator.Error || 
 
 // Docs Snapshot Processing
 
+/// A multi-file snapshot's sources written to a fresh temp directory.
+const StagedSnapshotSources = struct {
+    tmp_dir_name: []const u8,
+    app_path: []const u8,
+
+    fn deinit(self: StagedSnapshotSources, allocator: Allocator) void {
+        allocator.free(self.app_path);
+        std.Io.Dir.cwd().deleteTree(app_io, self.tmp_dir_name) catch {};
+        allocator.free(self.tmp_dir_name);
+    }
+};
+
+/// Writes a multi-file snapshot's `## filename.roc` sources to a fresh temp
+/// directory and picks `app.roc` (or else the first file) as the app. Returns
+/// null after logging why the sources could not be staged.
+fn stageMultiFileSnapshot(
+    allocator: Allocator,
+    content: Content,
+    output_path: []const u8,
+    comptime kind: []const u8,
+    comptime tmp_prefix: []const u8,
+) SnapshotError!?StagedSnapshotSources {
+    const source_files = try parseMultiFileSource(allocator, content.source);
+    defer allocator.free(source_files);
+
+    if (source_files.len == 0) {
+        std.log.err(kind ++ " snapshot has no source files (need ## filename.roc sub-headings)", .{});
+        return null;
+    }
+
+    const tmp_dir_name = makeSnapshotTempDir(allocator, tmp_prefix, output_path) catch |err| {
+        std.log.err("Failed to resolve temp directory for {s}: {}", .{ output_path, err });
+        return null;
+    };
+    errdefer allocator.free(tmp_dir_name);
+
+    std.Io.Dir.cwd().createDirPath(app_io, tmp_dir_name) catch |err| {
+        std.log.err("Failed to create temp directory {s}: {}", .{ tmp_dir_name, err });
+        allocator.free(tmp_dir_name);
+        return null;
+    };
+    errdefer std.Io.Dir.cwd().deleteTree(app_io, tmp_dir_name) catch {};
+
+    var app_filename: ?[]const u8 = null;
+    for (source_files) |sf| {
+        const sub_path = try std.fs.path.join(allocator, &.{ tmp_dir_name, sf.filename });
+        defer allocator.free(sub_path);
+        std.Io.Dir.cwd().writeFile(app_io, .{
+            .sub_path = sub_path,
+            .data = sf.content,
+        }) catch |err| {
+            std.log.err("Failed to write {s}: {}", .{ sf.filename, err });
+            std.Io.Dir.cwd().deleteTree(app_io, tmp_dir_name) catch {};
+            allocator.free(tmp_dir_name);
+            return null;
+        };
+        if (std.mem.eql(u8, sf.filename, "app.roc") or app_filename == null) {
+            app_filename = sf.filename;
+        }
+    }
+
+    return .{
+        .tmp_dir_name = tmp_dir_name,
+        .app_path = try std.fs.path.join(allocator, &.{ tmp_dir_name, app_filename.? }),
+    };
+}
+
 /// Process a docs snapshot: parse multi-file source, compile with BuildEnv,
 /// extract documentation from compiled modules, and serialize to S-expressions.
 fn processDocsSnapshot(
@@ -3350,49 +3417,11 @@ fn processDocsSnapshot(
 ) SnapshotError!bool {
     log("Processing docs snapshot: {s}", .{output_path});
 
-    // 1. Parse multi-file source
-    const source_files = try parseMultiFileSource(allocator, content.source);
-    defer allocator.free(source_files);
+    const staged = try stageMultiFileSnapshot(allocator, content, output_path, "docs", "roc_snapshot_docs") orelse return false;
+    defer staged.deinit(allocator);
+    const app_path = staged.app_path;
 
-    if (source_files.len == 0) {
-        std.log.err("docs snapshot has no source files (need ## filename.roc sub-headings)", .{});
-        return false;
-    }
-
-    // 2. Write source files to a temp directory
-    const tmp_dir_name = makeSnapshotTempDir(allocator, "roc_snapshot_docs", output_path) catch |err| {
-        std.log.err("Failed to resolve temp directory for {s}: {}", .{ output_path, err });
-        return false;
-    };
-    defer allocator.free(tmp_dir_name);
-
-    std.Io.Dir.cwd().createDirPath(app_io, tmp_dir_name) catch |err| {
-        std.log.err("Failed to create temp directory {s}: {}", .{ tmp_dir_name, err });
-        return false;
-    };
-    defer std.Io.Dir.cwd().deleteTree(app_io, tmp_dir_name) catch {};
-
-    // Find the app file (first .roc file, or explicitly "app.roc")
-    var app_filename: ?[]const u8 = null;
-    for (source_files) |sf| {
-        const sub_path = try std.fs.path.join(allocator, &.{ tmp_dir_name, sf.filename });
-        defer allocator.free(sub_path);
-        std.Io.Dir.cwd().writeFile(app_io, .{
-            .sub_path = sub_path,
-            .data = sf.content,
-        }) catch |err| {
-            std.log.err("Failed to write {s}: {}", .{ sf.filename, err });
-            return false;
-        };
-        if (std.mem.eql(u8, sf.filename, "app.roc") or app_filename == null) {
-            app_filename = sf.filename;
-        }
-    }
-
-    const app_path = try std.fs.path.join(allocator, &.{ tmp_dir_name, app_filename.? });
-    defer allocator.free(app_path);
-
-    // 3. Build with BuildEnv
+    // 1. Build with BuildEnv
     const BuildEnv = compile.BuildEnv;
     const native_target = roc_target.RocTarget.detectNative();
 
@@ -3410,7 +3439,7 @@ fn processDocsSnapshot(
         return false;
     };
 
-    // 4. Get documentable modules and extract docs
+    // 2. Get documentable modules and extract docs
     const modules = build_env.getDocumentationModules(allocator) catch |err| {
         std.log.err("Failed to get documentable modules: {}", .{err});
         return false;
@@ -3493,7 +3522,7 @@ fn processDocsSnapshot(
     };
     defer package_docs.deinit(allocator);
 
-    // 5. Serialize to S-expression
+    // 3. Serialize to S-expression
     var sexpr_buffer = std.ArrayList(u8).empty;
     defer sexpr_buffer.deinit(allocator);
     var sexpr_writer: std.Io.Writer.Allocating = .fromArrayList(allocator, &sexpr_buffer);
@@ -3504,7 +3533,7 @@ fn processDocsSnapshot(
     const new_docs_text = try snapshotSafeMarkdownAlloc(allocator, sexpr_buffer.items);
     defer allocator.free(new_docs_text);
 
-    // 6. Compare against existing DOCS section and decide what to write
+    // 4. Compare against existing DOCS section and decide what to write
     var success = true;
     const write_new_docs = blk: {
         if (content.docs_output == null) {
@@ -3536,7 +3565,7 @@ fn processDocsSnapshot(
         }
     };
 
-    // 7. Generate output file
+    // 5. Generate output file
     var md_buffer = std.ArrayList(u8).empty;
     defer md_buffer.deinit(allocator);
     var md_writer: std.Io.Writer.Allocating = .fromArrayList(allocator, &md_buffer);
@@ -3830,44 +3859,9 @@ fn processDevObjectSnapshot(
 ) SnapshotError!bool {
     log("Processing dev_object snapshot: {s}", .{output_path});
 
-    const source_files = try parseMultiFileSource(allocator, content.source);
-    defer allocator.free(source_files);
-
-    if (source_files.len == 0) {
-        std.log.err("dev_object snapshot has no source files (need ## filename.roc sub-headings)", .{});
-        return false;
-    }
-
-    const tmp_dir_name = makeSnapshotTempDir(allocator, "roc_snapshot_dev", output_path) catch |err| {
-        std.log.err("Failed to resolve temp directory for {s}: {}", .{ output_path, err });
-        return false;
-    };
-    defer allocator.free(tmp_dir_name);
-
-    std.Io.Dir.cwd().createDirPath(app_io, tmp_dir_name) catch |err| {
-        std.log.err("Failed to create temp directory {s}: {}", .{ tmp_dir_name, err });
-        return false;
-    };
-    defer std.Io.Dir.cwd().deleteTree(app_io, tmp_dir_name) catch {};
-
-    var app_filename: ?[]const u8 = null;
-    for (source_files) |sf| {
-        const sub_path = try std.fs.path.join(allocator, &.{ tmp_dir_name, sf.filename });
-        defer allocator.free(sub_path);
-        std.Io.Dir.cwd().writeFile(app_io, .{
-            .sub_path = sub_path,
-            .data = sf.content,
-        }) catch |err| {
-            std.log.err("Failed to write {s}: {}", .{ sf.filename, err });
-            return false;
-        };
-        if (std.mem.eql(u8, sf.filename, "app.roc") or app_filename == null) {
-            app_filename = sf.filename;
-        }
-    }
-
-    const app_path = try std.fs.path.join(allocator, &.{ tmp_dir_name, app_filename.? });
-    defer allocator.free(app_path);
+    const staged = try stageMultiFileSnapshot(allocator, content, output_path, "dev_object", "roc_snapshot_dev") orelse return false;
+    defer staged.deinit(allocator);
+    const app_path = staged.app_path;
 
     const BuildEnv = compile.BuildEnv;
     const native_target = roc_target.RocTarget.detectNative();

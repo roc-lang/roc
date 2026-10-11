@@ -44538,7 +44538,10 @@ const BodyContext = struct {
             fn_view,
             fn_value,
             static_data_const_locator,
-            request == .node,
+            switch (request) {
+                .node => true,
+                .sealed => false,
+            },
         );
         defer self.builder.releaseConstSourceCaptures(&fn_ctx, &bound_captures);
         const captures = bound_captures.items;

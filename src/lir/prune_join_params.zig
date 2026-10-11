@@ -100,9 +100,7 @@ const Pass = struct {
         while (try walk.next()) |stmt_id| {
             try self.stmts.append(self.allocator, stmt_id);
             const stmt = store.getCFStmt(stmt_id);
-            var reads: ReadNote = .{ .reads = &self.reads };
-            BodyClone.forEachStmtRead(store, stmt, &reads, ReadNote.note);
-            if (reads.failure) |err| return err;
+            try BodyClone.tryForEachStmtRead(store, stmt, &self.reads, noteRead);
             switch (stmt) {
                 .join => |join| {
                     const params = store.getLocalSpan(join.params);
@@ -158,11 +156,7 @@ const Pass = struct {
                 .jump,
                 .ret,
                 .crash,
-                => {
-                    var defs: DefNote = .{ .pass = self };
-                    BodyClone.forEachStmtDef(store, stmt, &defs, DefNote.note);
-                    if (defs.failure) |err| return err;
-                },
+                => try BodyClone.tryForEachStmtDef(store, stmt, self, Pass.pinDefinition),
             }
         }
 
@@ -231,32 +225,11 @@ const Pass = struct {
     }
 };
 
-const ReadNote = struct {
-    reads: *collections.DenseMap(LocalId, u32),
-    failure: ?Allocator.Error = null,
-
-    fn note(self: *ReadNote, local: LocalId) void {
-        if (self.failure != null) return;
-        const entry = self.reads.getOrPut(local) catch |err| {
-            self.failure = err;
-            return;
-        };
-        if (!entry.found_existing) entry.value_ptr.* = 0;
-        entry.value_ptr.* += 1;
-    }
-};
-
-const DefNote = struct {
-    pass: *Pass,
-    failure: ?Allocator.Error = null,
-
-    fn note(self: *DefNote, local: LocalId) void {
-        if (self.failure != null) return;
-        self.pass.pinDefinition(local) catch |err| {
-            self.failure = err;
-        };
-    }
-};
+fn noteRead(reads: *collections.DenseMap(LocalId, u32), local: LocalId) Allocator.Error!void {
+    const entry = try reads.getOrPut(local);
+    if (!entry.found_existing) entry.value_ptr.* = 0;
+    entry.value_ptr.* += 1;
+}
 
 test {
     std.testing.refAllDecls(@This());

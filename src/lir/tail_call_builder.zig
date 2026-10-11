@@ -181,11 +181,7 @@ fn successor(self: *const Self, stmt: LIR.CFStmt) ?LIR.CFStmtId {
             .tag_payload_struct,
             => null,
         },
-        .assign_boxy_adapt => |assign| if (assign.source_mode == .move and
-            self.adapters[@backingInt(assign.adapter)].operation == .relabel)
-            assign.next
-        else
-            null,
+        .assign_boxy_adapt => |assign| if (assign.source_mode == .move and self.adapters[@backingInt(assign.adapter)].operation == .relabel) assign.next else null,
         .set_local => |assign| if (assign.mode == .initialize_join_param) assign.next else null,
         .init_uninitialized,
         .assign_literal,
@@ -248,6 +244,7 @@ fn returnedLocal(self: *Self, store: anytype, start: LIR.CFStmtId) std.mem.Alloc
     };
     while (self.path.pop()) |id| {
         if (result) |local| {
+            // The path holds only statements `successor` forwards through.
             switch (store.getCFStmt(id)) {
                 .assign_ref => |assign| {
                     result = if (assign.target != local) null else switch (assign.op) {

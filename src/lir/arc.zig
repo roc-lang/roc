@@ -24,6 +24,7 @@ const Allocator = std.mem.Allocator;
 const core = @import("lir_core");
 const layout_mod = @import("layout");
 const arc_sig = @import("arc_sig.zig");
+const body_clone = @import("body_clone.zig");
 const arc_solve = @import("arc_solve.zig");
 const arc_liveness = @import("arc_liveness.zig");
 const arc_certify = @import("arc_certify.zig");
@@ -2230,10 +2231,6 @@ const Inserter = struct {
                     .value = assign.value,
                     .next = next,
                 } }, origin),
-            .init_uninitialized => |uninit| try self.store.addCFStmt(.{ .init_uninitialized = .{
-                .target = uninit.target,
-                .next = next,
-            } }, origin),
             .assign_call => |assign| blk: {
                 if (step.retain_call_result) next = try self.retainLocalIfRc(assign.target, .{ .stmt = at, .reason = .borrowed_call_result }, next);
                 if (step.replaces_frame) {
@@ -2292,120 +2289,9 @@ const Inserter = struct {
                     .next = next,
                 } }, origin);
             },
-            .assign_boxy_desc_ref => |assign| try self.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
-                .target = assign.target,
-                .desc = assign.desc,
-                .nested_index = assign.nested_index,
-                .box_payload_layout = assign.box_payload_layout,
-                .tag_payload = assign.tag_payload,
-                .tag_ext = assign.tag_ext,
-                .tag_residual_for = assign.tag_residual_for,
-                .captures = assign.captures,
-                .next = next,
-            } }, origin),
-            .assign_boxy_dict_ref => |assign| try self.store.addCFStmt(.{ .assign_boxy_dict_ref = .{
-                .target = assign.target,
-                .dict = assign.dict,
-                .captures = assign.captures,
-                .next = next,
-            } }, origin),
-            .assign_boxy_box => |assign| try self.store.addCFStmt(.{ .assign_boxy_box = .{
-                .target = assign.target,
-                .payload = assign.payload,
-                .payload_layout = assign.payload_layout,
-                .source_desc = assign.source_desc,
-                .payload_desc = assign.payload_desc,
-                .payload_mode = assign.payload_mode,
-                .next = next,
-            } }, origin),
-            .assign_boxy_record_update => |assign| try self.store.addCFStmt(.{ .assign_boxy_record_update = .{
-                .target = assign.target,
-                .base = assign.base,
-                .base_desc = assign.base_desc,
-                .fields = assign.fields,
-                .fields_layout = assign.fields_layout,
-                .fields_desc = assign.fields_desc,
-                .next = next,
-            } }, origin),
-            .assign_boxy_unbox => |assign| blk: {
-                if (step.retain_assign_ref_target) next = try self.retainLocalIfRc(assign.target, .{ .stmt = at, .reason = .alias_bind }, next);
-                break :blk try self.store.addCFStmt(.{ .assign_boxy_unbox = .{
-                    .target = assign.target,
-                    .source = assign.source,
-                    .source_desc = assign.source_desc,
-                    .target_desc = assign.target_desc,
-                    .target_layout = assign.target_layout,
-                    .source_mode = assign.source_mode,
-                    .next = next,
-                } }, origin);
-            },
-            .assign_boxy_adapt => |assign| try self.store.addCFStmt(.{ .assign_boxy_adapt = .{
-                .target = assign.target,
-                .source = assign.source,
-                .adapter = assign.adapter,
-                .source_desc = assign.source_desc,
-                .target_desc = assign.target_desc,
-                .source_mode = assign.source_mode,
-                .next = next,
-            } }, origin),
-            .assign_boxy_inspect => |assign| try self.store.addCFStmt(.{ .assign_boxy_inspect = .{
-                .target = assign.target,
-                .source = assign.source,
-                .source_desc = assign.source_desc,
-                .source_mode = assign.source_mode,
-                .next = next,
-            } }, origin),
-            .assign_boxy_eq => |assign| try self.store.addCFStmt(.{ .assign_boxy_eq = .{
-                .target = assign.target,
-                .lhs = assign.lhs,
-                .rhs = assign.rhs,
-                .desc = assign.desc,
-                .next = next,
-            } }, origin),
-            .assign_boxy_hash => |assign| try self.store.addCFStmt(.{ .assign_boxy_hash = .{
-                .target = assign.target,
-                .value = assign.value,
-                .hasher = assign.hasher,
-                .desc = assign.desc,
-                .next = next,
-            } }, origin),
-            .assign_boxy_tag => |assign| try self.store.addCFStmt(.{ .assign_boxy_tag = .{
-                .target = assign.target,
-                .target_desc = assign.target_desc,
-                .tag_name = assign.tag_name,
-                .payload = assign.payload,
-                .payload_layout = assign.payload_layout,
-                .payload_desc = assign.payload_desc,
-                .payload_mode = assign.payload_mode,
-                .next = next,
-            } }, origin),
-            .assign_boxy_tag_payload => |assign| blk: {
-                if (step.retain_assign_ref_target) next = try self.retainLocalIfRc(assign.target, .{ .stmt = at, .reason = .alias_bind }, next);
-                break :blk try self.store.addCFStmt(.{ .assign_boxy_tag_payload = .{
-                    .target = assign.target,
-                    .target_desc = assign.target_desc,
-                    .source = assign.source,
-                    .source_desc = assign.source_desc,
-                    .tag_name = assign.tag_name,
-                    .payload_index = assign.payload_index,
-                    .source_mode = assign.source_mode,
-                    .next = next,
-                } }, origin);
-            },
             .assign_call_dict => |assign| blk: {
                 next = try self.retainSpanExcept(assign.args, step.transfer_mask, .{ .stmt = at, .reason = .dict_call_arg }, next);
-                break :blk try self.store.addCFStmt(.{ .assign_call_dict = .{
-                    .target = assign.target,
-                    .dict = assign.dict,
-                    .method = assign.method,
-                    .method_slot = assign.method_slot,
-                    .args = assign.args,
-                    .arg_descs = assign.arg_descs,
-                    .hidden_args = assign.hidden_args,
-                    .result_desc = assign.result_desc,
-                    .is_cold = assign.is_cold,
-                    .next = next,
-                } }, origin);
+                break :blk try self.addWithNext(stmt, next, origin);
             },
             .assign_low_level => |assign| blk: {
                 var op = if (step.low_level_selection) |selection| selection.op else assign.op;
@@ -2440,85 +2326,46 @@ const Inserter = struct {
             },
             .assign_list => |assign| blk: {
                 next = try self.retainSpanExceptPositions(assign.elems, step.transfer_positions.items, .{ .stmt = at, .reason = .stored_in_aggregate }, next);
-                break :blk try self.store.addCFStmt(.{ .assign_list = .{
-                    .target = assign.target,
-                    .elems = assign.elems,
-                    .next = next,
-                } }, origin);
+                break :blk try self.addWithNext(stmt, next, origin);
             },
-            .assign_struct => |assign| blk: {
+            inline .assign_struct, .store_struct => |assign| blk: {
                 next = try self.retainSpanExceptPositions(assign.fields, step.transfer_positions.items, .{ .stmt = at, .reason = .stored_in_aggregate }, next);
-                break :blk try self.store.addCFStmt(.{ .assign_struct = .{
-                    .target = assign.target,
-                    .fields = assign.fields,
-                    .contents_desc = assign.contents_desc,
-                    .next = next,
-                } }, origin);
+                break :blk try self.addWithNext(stmt, next, origin);
             },
-            .assign_tag => |assign| blk: {
+            inline .assign_tag, .store_tag => |assign| blk: {
                 if (assign.payload) |payload| {
                     if (!step.transfer_single) next = try self.retainLocalIfRc(payload, .{ .stmt = at, .reason = .stored_payload }, next);
                 }
-                break :blk try self.store.addCFStmt(.{ .assign_tag = .{
-                    .target = assign.target,
-                    .target_desc = assign.target_desc,
-                    .variant_index = assign.variant_index,
-                    .discriminant = assign.discriminant,
-                    .payload = assign.payload,
-                    .next = next,
-                } }, origin);
-            },
-            .store_struct => |assign| blk: {
-                next = try self.retainSpanExceptPositions(assign.fields, step.transfer_positions.items, .{ .stmt = at, .reason = .stored_in_aggregate }, next);
-                break :blk try self.store.addCFStmt(.{ .store_struct = .{
-                    .dest = assign.dest,
-                    .struct_layout = assign.struct_layout,
-                    .fields = assign.fields,
-                    .next = next,
-                } }, origin);
-            },
-            .store_tag => |assign| blk: {
-                if (assign.payload) |payload| {
-                    if (!step.transfer_single) next = try self.retainLocalIfRc(payload, .{ .stmt = at, .reason = .stored_payload }, next);
-                }
-                break :blk try self.store.addCFStmt(.{ .store_tag = .{
-                    .dest = assign.dest,
-                    .tag_layout = assign.tag_layout,
-                    .variant_index = assign.variant_index,
-                    .discriminant = assign.discriminant,
-                    .payload = assign.payload,
-                    .next = next,
-                } }, origin);
+                break :blk try self.addWithNext(stmt, next, origin);
             },
             .set_local => |assign| blk: {
                 if (assign.target != assign.value and step.retain_set_target) next = try self.retainLocalIfRc(assign.target, .{ .stmt = at, .reason = .alias_bind }, next);
-                break :blk try self.store.addCFStmt(.{ .set_local = .{
-                    .target = assign.target,
-                    .value = assign.value,
-                    .mode = assign.mode,
-                    .next = next,
-                } }, origin);
+                break :blk try self.addWithNext(stmt, next, origin);
             },
-            .debug => |debug_stmt| try self.store.addCFStmt(.{ .debug = .{
-                .message = debug_stmt.message,
-                .next = next,
-            } }, origin),
-            .expect => |expect_stmt| try self.store.addCFStmt(.{ .expect = .{
-                .condition = expect_stmt.condition,
-                .site = expect_stmt.site,
-                .next = next,
-            } }, origin),
+            inline .assign_boxy_unbox, .assign_boxy_tag_payload => |assign| blk: {
+                if (step.retain_assign_ref_target) next = try self.retainLocalIfRc(assign.target, .{ .stmt = at, .reason = .alias_bind }, next);
+                break :blk try self.addWithNext(stmt, next, origin);
+            },
+            .init_uninitialized,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_record_update,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
+            .assign_boxy_tag,
+            .debug,
+            .expect,
+            .comptime_branch_taken,
+            => try self.addWithNext(stmt, next, origin),
             .decref_if_initialized => |rc| try self.store.addCFStmt(.{ .decref_if_initialized = .{
                 .cond = rc.cond,
                 .cond_mask = rc.cond_mask,
                 .value = rc.value,
                 .rc = rc.rc,
                 .atomicity = self.rcAtomicity(rc.value),
-                .next = next,
-            } }, origin),
-            .comptime_branch_taken => |marker| try self.store.addCFStmt(.{ .comptime_branch_taken = .{
-                .site = marker.site,
-                .branch_index = marker.branch_index,
                 .next = next,
             } }, origin),
             .expect_err,
@@ -2552,6 +2399,13 @@ const Inserter = struct {
         }
         if (step.pre_retain.items.len != 0) cloned = try self.retainPlanned(at, step.pre_retain.items, cloned);
         return cloned;
+    }
+
+    /// Append a copy of the straight-line `stmt` continuing at `next`.
+    fn addWithNext(self: *Inserter, stmt: LIR.CFStmt, next: LIR.CFStmtId, origin: LIR.StmtOrigin) ResourceError!LIR.CFStmtId {
+        var copy = stmt;
+        body_clone.setLinearNext(&copy, next);
+        return self.store.addCFStmt(copy, origin);
     }
 
     /// Runs the join-summary solver for one proc emission: a structured
@@ -2749,21 +2603,18 @@ const Inserter = struct {
                     }
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     step.retain_assign_ref_target = transfer.retain_target;
-                    const singles = [_]LIR.LocalId{ refOpSource(assign.op), assign.target };
+                    const singles = [_]LIR.LocalId{ body_clone.refOpSource(assign.op), assign.target };
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next);
-                    segment.cursor = assign.next;
                 },
                 .init_uninitialized => |uninit| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     step.pre_release = if (try self.transferForInit(&segment.owned, uninit.target)) self.releaseDecision(uninit.target) else null;
-                    segment.cursor = uninit.next;
                 },
                 .assign_literal => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     step.pre_release = if (try self.transferForFreshBind(&segment.owned, assign.target)) self.releaseDecision(assign.target) else null;
                     const singles = [_]LIR.LocalId{assign.target};
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next);
-                    segment.cursor = assign.next;
                 },
                 .assign_call => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
@@ -2790,7 +2641,6 @@ const Inserter = struct {
                         try self.postStmtDeaths(&segment.owned, &.{}, assign.args, assign.next, self.death_scratch);
                         try self.copyDeathScratchToStep(step);
                     }
-                    segment.cursor = assign.next;
                 },
                 .assign_call_erased => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
@@ -2821,7 +2671,6 @@ const Inserter = struct {
                         try self.postStmtDeaths(&segment.owned, &singles, assign.args, assign.next, self.death_scratch);
                         try self.copyDeathScratchToStep(step);
                     }
-                    segment.cursor = assign.next;
                 },
                 .assign_packed_erased_fn => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
@@ -2832,7 +2681,6 @@ const Inserter = struct {
                     if (transfer.preserve_reuse) try step.pre_retain.append(self.solve_allocator, .{ .local = assign.reuse.?, .reason = .reuse_source_preserved });
                     const singles = [_]LIR.LocalId{ assign.capture orelse assign.target, assign.reuse orelse assign.target, assign.target };
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next);
-                    segment.cursor = assign.next;
                 },
                 .assign_boxy_desc_ref => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
@@ -2850,7 +2698,6 @@ const Inserter = struct {
                     const singles = [_]LIR.LocalId{ desc_local, residual_local, assign.target };
                     try self.postStmtDeaths(&segment.owned, &singles, assign.captures, assign.next, self.death_scratch);
                     try self.copyDeathScratchToStep(step);
-                    segment.cursor = assign.next;
                 },
                 .assign_boxy_dict_ref => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
@@ -2858,7 +2705,6 @@ const Inserter = struct {
                     const dict_local = assign.dict.localOrNull() orelse assign.target;
                     const singles = [_]LIR.LocalId{ dict_local, assign.target };
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, assign.captures, assign.next);
-                    segment.cursor = assign.next;
                 },
                 .assign_boxy_box => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
@@ -2876,7 +2722,6 @@ const Inserter = struct {
                     }
                     const singles = [_]LIR.LocalId{ assign.payload, assign.target };
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next);
-                    segment.cursor = assign.next;
                 },
                 .assign_boxy_record_update => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
@@ -2888,7 +2733,6 @@ const Inserter = struct {
                     }
                     const singles = [_]LIR.LocalId{ assign.fields, assign.base, assign.target };
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next);
-                    segment.cursor = assign.next;
                 },
                 inline .assign_boxy_unbox, .assign_boxy_tag_payload => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
@@ -2907,7 +2751,6 @@ const Inserter = struct {
                     step.retain_assign_ref_target = assign.source_mode == .borrow and !self.isBindingBorrowed(assign.target);
                     const singles = [_]LIR.LocalId{ assign.source, assign.target };
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next);
-                    segment.cursor = assign.next;
                 },
                 inline .assign_boxy_adapt, .assign_boxy_inspect => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
@@ -2925,7 +2768,6 @@ const Inserter = struct {
                     }
                     const singles = [_]LIR.LocalId{ assign.source, assign.target };
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next);
-                    segment.cursor = assign.next;
                 },
                 .assign_boxy_eq => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
@@ -2933,7 +2775,6 @@ const Inserter = struct {
                     step.pre_release = if (release_old_target) self.releaseDecision(assign.target) else null;
                     const singles = [_]LIR.LocalId{ assign.lhs, assign.rhs, assign.target };
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next);
-                    segment.cursor = assign.next;
                 },
                 .assign_boxy_hash => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
@@ -2941,7 +2782,6 @@ const Inserter = struct {
                     step.pre_release = if (release_old_target) self.releaseDecision(assign.target) else null;
                     const singles = [_]LIR.LocalId{ assign.value, assign.hasher, assign.target };
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next);
-                    segment.cursor = assign.next;
                 },
                 .assign_boxy_tag => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
@@ -2959,7 +2799,6 @@ const Inserter = struct {
                     }
                     const singles = [_]LIR.LocalId{ assign.payload orelse assign.target, assign.target };
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next);
-                    segment.cursor = assign.next;
                 },
                 .boxy_tag_match => |tag_match| {
                     const terminal = try self.prepareBoxyTagMatchPlan(segment.plan_index, segment.cursor, tag_match.on_match, tag_match.on_miss);
@@ -2978,7 +2817,6 @@ const Inserter = struct {
                     try self.postStmtDeaths(&segment.owned, &.{}, assign.arg_descs, assign.next, self.death_scratch);
                     try self.postStmtDeaths(&segment.owned, &.{}, assign.hidden_args, assign.next, self.death_scratch);
                     try self.copyDeathScratchToStep(step);
-                    segment.cursor = assign.next;
                 },
                 .assign_low_level => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
@@ -3012,7 +2850,6 @@ const Inserter = struct {
                     }
                     const singles = [_]LIR.LocalId{assign.target};
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, assign.args, assign.next);
-                    segment.cursor = assign.next;
                 },
                 .assign_list => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
@@ -3022,7 +2859,6 @@ const Inserter = struct {
                     try step.transfer_positions.appendSlice(self.solve_allocator, self.transfer_position_scratch.items);
                     const singles = [_]LIR.LocalId{assign.target};
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, assign.elems, assign.next);
-                    segment.cursor = assign.next;
                 },
                 .assign_struct => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
@@ -3032,7 +2868,6 @@ const Inserter = struct {
                     try step.transfer_positions.appendSlice(self.solve_allocator, self.transfer_position_scratch.items);
                     const singles = [_]LIR.LocalId{assign.target};
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, assign.fields, assign.next);
-                    segment.cursor = assign.next;
                 },
                 .assign_tag => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
@@ -3041,7 +2876,6 @@ const Inserter = struct {
                     step.transfer_single = transfer.transfer_single;
                     const singles = [_]LIR.LocalId{ assign.payload orelse assign.target, assign.target };
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next);
-                    segment.cursor = assign.next;
                 },
                 .store_struct => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
@@ -3049,7 +2883,6 @@ const Inserter = struct {
                     try self.spanTransferPositions(assign.fields, assign.next, assign.dest, &segment.owned, self.transfer_position_scratch);
                     try step.transfer_positions.appendSlice(self.solve_allocator, self.transfer_position_scratch.items);
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &.{}, assign.fields, assign.next);
-                    segment.cursor = assign.next;
                 },
                 .store_tag => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
@@ -3058,7 +2891,6 @@ const Inserter = struct {
                     }
                     const singles = [_]LIR.LocalId{assign.payload orelse assign.dest};
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next);
-                    segment.cursor = assign.next;
                 },
                 .set_local => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
@@ -3071,24 +2903,20 @@ const Inserter = struct {
                     step.retain_set_target = transfer.retain_target;
                     const singles = [_]LIR.LocalId{ assign.value, assign.target };
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next);
-                    segment.cursor = assign.next;
                 },
                 .debug => |debug_stmt| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     const singles = [_]LIR.LocalId{debug_stmt.message};
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, debug_stmt.next);
-                    segment.cursor = debug_stmt.next;
                 },
                 .expect => |expect_stmt| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     const singles = [_]LIR.LocalId{expect_stmt.condition};
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, expect_stmt.next);
-                    segment.cursor = expect_stmt.next;
                 },
                 .decref_if_initialized => |rc| {
                     _ = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     try self.noteEmittedRelease(&segment.owned, rc.value);
-                    segment.cursor = rc.next;
                 },
                 .incref, .decref, .free => arcInvariant("ARC summary solver received already-reference-counted LIR"),
                 .switch_stmt => |switch_stmt| {
@@ -3280,11 +3108,11 @@ const Inserter = struct {
                     try self.setArcPlanTerminal(segment.plan_index, segment.cursor, &segment.owned, null, retain_value);
                     return;
                 },
-                .comptime_branch_taken => |marker| {
-                    _ = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    segment.cursor = marker.next;
-                },
+                .comptime_branch_taken => _ = try self.nextArcPlanStep(segment.plan_index, segment.cursor),
             }
+            // Every statement that does not end the segment continues on its
+            // straight-line successor.
+            segment.cursor = body_clone.linearNext(stmt);
         }
     }
 
@@ -3893,11 +3721,22 @@ const Inserter = struct {
 
     fn prepareBoxyTagMatchPlan(self: *Inserter, plan_index: u32, stmt: LIR.CFStmtId, match_start: LIR.CFStmtId, miss_start: LIR.CFStmtId) ResourceError!*ArcPlanTerminal {
         const previous_terminal = self.arcPlan(plan_index).previous_terminal;
-        const children = if (previous_terminal == .boxy_tag_match) blk: {
-            const previous = previous_terminal.boxy_tag_match;
-            if (previous.stmt != stmt) arcInvariant("ARC Boxy tag-match plan changed structural shape");
-            break :blk .{ previous.match_plan, previous.miss_plan };
-        } else .{ try self.newArcPlan(match_start), try self.newArcPlan(miss_start) };
+        const children = switch (previous_terminal) {
+            .boxy_tag_match => |previous| blk: {
+                if (previous.stmt != stmt) arcInvariant("ARC Boxy tag-match plan changed structural shape");
+                break :blk .{ previous.match_plan, previous.miss_plan };
+            },
+            .none,
+            .stop,
+            .join,
+            .switch_stmt,
+            .initialized_payload_switch,
+            .str_match,
+            .str_match_set,
+            .jump,
+            .terminal,
+            => .{ try self.newArcPlan(match_start), try self.newArcPlan(miss_start) },
+        };
         if (self.arcPlan(children[0]).start != match_start or self.arcPlan(children[1]).start != miss_start) {
             arcInvariant("ARC Boxy tag-match child plan changed its structured start");
         }
@@ -5648,141 +5487,89 @@ const Inserter = struct {
     /// its own unit.
     fn stmtPlaceFacts(self: *const Inserter, stmt: LIR.CFStmtId, uses: *std.ArrayList(LIR.LocalId)) Allocator.Error!StmtPlaceFacts {
         const gpa = self.emission_allocator;
-        switch (self.store.getCFStmt(stmt)) {
-            .assign_ref => |assign| {
-                switch (assign.op) {
-                    .local => |source| if (source != assign.target and !self.isBindingBorrowed(assign.target)) try uses.append(gpa, source),
-                    .discriminant => {},
-                    .field => |op| if (self.localContainsRefcounted(assign.target)) try uses.append(gpa, op.source),
-                    .tag_payload => |op| if (self.localContainsRefcounted(assign.target)) try uses.append(gpa, op.source),
-                    .tag_payload_struct => |op| if (self.localContainsRefcounted(assign.target)) try uses.append(gpa, op.source),
-                    .list_reinterpret => |op| if (!self.isBindingBorrowed(assign.target)) try uses.append(gpa, op.backing_ref),
-                    .nominal => |op| if (!self.isBindingBorrowed(assign.target)) try uses.append(gpa, op.backing_ref),
-                }
-                return .{ .rebinds = assign.target };
+        const node = self.store.getCFStmt(stmt);
+        switch (node) {
+            .assign_ref => |assign| switch (assign.op) {
+                .local => |source| if (source != assign.target and !self.isBindingBorrowed(assign.target)) try uses.append(gpa, source),
+                .discriminant => {},
+                inline .field, .tag_payload, .tag_payload_struct => |op| if (self.localContainsRefcounted(assign.target)) try uses.append(gpa, op.source),
+                inline .list_reinterpret, .nominal => |op| if (!self.isBindingBorrowed(assign.target)) try uses.append(gpa, op.backing_ref),
             },
-            .assign_literal => |assign| return .{ .rebinds = assign.target },
-            .init_uninitialized => |assign| return .{ .rebinds = assign.target },
-            inline .assign_call, .assign_low_level => |assign| {
-                try self.appendSpanLocals(uses, assign.args);
-                return .{ .rebinds = assign.target };
-            },
+            inline .assign_call, .assign_low_level => |assign| try self.appendSpanLocals(uses, assign.args),
             .assign_call_erased => |assign| {
                 try uses.append(gpa, assign.closure);
                 if (assign.reuse_source) |reuse_source| try uses.append(gpa, reuse_source);
                 try self.appendSpanLocals(uses, assign.args);
-                return .{ .rebinds = assign.target };
             },
             .assign_packed_erased_fn => |assign| {
                 if (assign.capture) |capture| try uses.append(gpa, capture);
                 if (assign.reuse) |reuse| try uses.append(gpa, reuse);
-                return .{ .rebinds = assign.target };
             },
-            .assign_boxy_desc_ref => |assign| return .{ .rebinds = assign.target },
-            .assign_boxy_dict_ref => |assign| return .{ .rebinds = assign.target },
-            .assign_boxy_box => |assign| {
-                try uses.append(gpa, assign.payload);
-                return .{ .rebinds = assign.target };
-            },
+            .assign_boxy_box => |assign| try uses.append(gpa, assign.payload),
             .assign_boxy_record_update => |assign| {
                 try uses.append(gpa, assign.base);
                 try uses.append(gpa, assign.fields);
-                return .{ .rebinds = assign.target };
             },
-            inline .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_tag_payload,
-            => |assign| {
-                try uses.append(gpa, assign.source);
-                return .{ .rebinds = assign.target };
-            },
+            inline .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag_payload => |assign| try uses.append(gpa, assign.source),
             .assign_boxy_eq => |assign| {
                 try uses.append(gpa, assign.lhs);
                 try uses.append(gpa, assign.rhs);
-                return .{ .rebinds = assign.target };
             },
             .assign_boxy_hash => |assign| {
                 try uses.append(gpa, assign.value);
                 try uses.append(gpa, assign.hasher);
-                return .{ .rebinds = assign.target };
             },
-            inline .assign_boxy_tag, .assign_tag => |assign| {
-                if (assign.payload) |payload| try uses.append(gpa, payload);
-                return .{ .rebinds = assign.target };
-            },
+            inline .assign_boxy_tag, .assign_tag => |assign| if (assign.payload) |payload| try uses.append(gpa, payload),
             .assign_call_dict => |assign| {
                 try self.appendSpanLocals(uses, assign.args);
                 try self.appendSpanLocals(uses, assign.hidden_args);
-                return .{ .rebinds = assign.target };
             },
-            .assign_list => |assign| {
-                try self.appendSpanLocals(uses, assign.elems);
-                return .{ .rebinds = assign.target };
-            },
-            .assign_struct => |assign| {
-                try self.appendSpanLocals(uses, assign.fields);
-                return .{ .rebinds = assign.target };
-            },
+            .assign_list => |assign| try self.appendSpanLocals(uses, assign.elems),
+            .assign_struct => |assign| try self.appendSpanLocals(uses, assign.fields),
             .store_struct => |assign| {
                 try uses.append(gpa, assign.dest);
                 try self.appendSpanLocals(uses, assign.fields);
-                return .{};
             },
             .store_tag => |assign| {
                 try uses.append(gpa, assign.dest);
                 if (assign.payload) |payload| try uses.append(gpa, payload);
-                return .{};
             },
-            .set_local => |assign| {
-                try uses.append(gpa, assign.value);
-                // Rebinding the place ends this definition. Uses reached
-                // through the following jump belong to the newly written
-                // join value, not to the value whose projection is being
-                // considered here. Every statement that writes the place
-                // ends it the same way, which is what stops a walk when it
-                // follows a loop edge back to the definition.
-                return .{ .rebinds = assign.target };
-            },
-            .debug => |debug_stmt| {
-                try uses.append(gpa, debug_stmt.message);
-                return .{};
-            },
-            .expect => |expect_stmt| {
-                try uses.append(gpa, expect_stmt.condition);
-                return .{};
-            },
-            .comptime_branch_taken, .join, .jump, .runtime_error, .comptime_exhaustiveness_failed => return .{},
-            .incref => |rc| {
-                try uses.append(gpa, rc.value);
-                return .{};
-            },
-            .decref, .decref_if_initialized, .free, .str_match, .str_match_set, .boxy_tag_match => return .{ .uses_every_place = true },
-            .switch_stmt => |switch_stmt| {
-                try uses.append(gpa, switch_stmt.cond);
-                return .{};
-            },
+            // Rebinding the place ends this definition. Uses reached through
+            // the following jump belong to the newly written join value, not
+            // to the value whose projection is being considered here. Every
+            // statement that writes the place ends it the same way, which is
+            // what stops a walk when it follows a loop edge back to the
+            // definition.
+            .set_local => |assign| try uses.append(gpa, assign.value),
+            .debug => |debug_stmt| try uses.append(gpa, debug_stmt.message),
+            .expect => |expect_stmt| try uses.append(gpa, expect_stmt.condition),
+            .incref => |rc| try uses.append(gpa, rc.value),
+            .switch_stmt => |switch_stmt| try uses.append(gpa, switch_stmt.cond),
             .switch_initialized_payload => |switch_stmt| {
                 try uses.append(gpa, switch_stmt.cond);
                 try uses.append(gpa, switch_stmt.payload);
-                return .{};
             },
-            .ret => |ret_stmt| {
-                try uses.append(gpa, ret_stmt.value);
-                return .{};
-            },
-            .crash => |crash_stmt| {
-                if (crash_stmt.msg.localId()) |message| try uses.append(gpa, message);
-                return .{};
-            },
-            .expect_err => |expect_err_stmt| {
-                try uses.append(gpa, expect_err_stmt.message);
-                return .{};
-            },
+            .ret => |ret_stmt| try uses.append(gpa, ret_stmt.value),
+            .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| try uses.append(gpa, message),
+            .expect_err => |expect_err_stmt| try uses.append(gpa, expect_err_stmt.message),
+            .decref, .decref_if_initialized, .free, .str_match, .str_match_set, .boxy_tag_match => return .{ .uses_every_place = true },
+            .assign_literal,
+            .init_uninitialized,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .comptime_branch_taken,
+            .join,
+            .jump,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            => {},
         }
+        return .{ .rebinds = body_clone.definedTarget(node) };
     }
 
     /// The statements control reaches after `stmt` for the place-use query.
+    /// Releases and string or tag matches use every place, so the walk ends
+    /// at them.
     fn appendStmtWalkSuccessors(self: *Inserter, stmt: LIR.CFStmtId, out: *std.ArrayList(LIR.CFStmtId)) Allocator.Error!void {
         const gpa = self.emission_allocator;
         switch (self.store.getCFStmt(stmt)) {
@@ -6701,7 +6488,7 @@ const Inserter = struct {
     }
 
     fn noteLivenessUseRefOp(self: *const Inserter, reads: *Row, op: LIR.RefOp) ResourceError!void {
-        try self.noteLivenessUseLocal(reads, refOpSource(op));
+        try self.noteLivenessUseLocal(reads, body_clone.refOpSource(op));
     }
 
     fn setReadBeforeRebindDef(
@@ -6779,6 +6566,8 @@ const Inserter = struct {
         };
         var work = std.ArrayList(u32).empty;
         defer work.deinit(self.source_liveness.scratch_allocator);
+        var successors = std.ArrayList(LIR.CFStmtId).empty;
+        defer successors.deinit(self.source_liveness.scratch_allocator);
 
         // The source body is the complete ownership-neutral graph.
         _ = try self.ensureReadBeforeRebindNode(&graph, &work, self.current_proc_body);
@@ -6787,240 +6576,9 @@ const Inserter = struct {
             const node_index: usize = node_index_u32;
             const stmt = graph.nodes.items[node_index].stmt;
 
-            switch (self.store.getCFStmt(stmt)) {
-                .assign_ref => |assign| {
-                    if (!self.solution.isRepresentationAlias(assign.target)) {
-                        try self.noteLivenessUseRefOp(&graph.nodes.items[node_index].reads, assign.op);
-                    }
-                    setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_literal => |assign| {
-                    setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .init_uninitialized => |init| {
-                    setReadBeforeRebindDef(&graph, node_index, init.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, init.next);
-                },
-                .assign_call => |assign| {
-                    try self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.args);
-                    if (assign.result_desc) |result_desc| {
-                        if (result_desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    }
-                    setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_call_erased => |assign| {
-                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.closure);
-                    if (assign.reuse_source) |reuse_source| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, reuse_source);
-                    try self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.args);
-                    try self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.arg_descs);
-                    if (assign.result_desc) |result_desc| {
-                        if (result_desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    }
-                    setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    if (assign.out_desc) |out_desc| setReadBeforeRebindDef(&graph, node_index, out_desc);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_packed_erased_fn => |assign| {
-                    if (assign.capture) |capture| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, capture);
-                    if (assign.reuse) |reuse| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, reuse);
-                    setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_boxy_desc_ref => |assign| {
-                    if (assign.desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    if (assign.tag_residual_for) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    try self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.captures);
-                    setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_boxy_dict_ref => |assign| {
-                    if (assign.dict.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    try self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.captures);
-                    setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_boxy_box => |assign| {
-                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.payload);
-                    if (assign.source_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    if (assign.payload_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_boxy_record_update => |assign| {
-                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.base);
-                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.fields);
-                    if (assign.base_desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    if (assign.fields_desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_boxy_unbox => |assign| {
-                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.source);
-                    if (assign.source_desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_boxy_adapt => |assign| {
-                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.source);
-                    if (assign.source_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_boxy_inspect => |assign| {
-                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.source);
-                    if (assign.source_desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_boxy_eq => |assign| {
-                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.lhs);
-                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.rhs);
-                    if (assign.desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_boxy_hash => |assign| {
-                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.value);
-                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.hasher);
-                    if (assign.desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_boxy_tag => |assign| {
-                    if (assign.target_desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    if (assign.payload) |payload| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, payload);
-                    if (assign.payload_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_boxy_tag_payload => |assign| {
-                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.source);
-                    if (assign.source_desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    if (assign.target_desc) |target_desc| setReadBeforeRebindDef(&graph, node_index, target_desc);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_call_dict => |assign| {
-                    if (assign.dict.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    if (assign.result_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    try self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.args);
-                    try self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.arg_descs);
-                    try self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.hidden_args);
-                    setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_low_level => |assign| {
-                    const args = self.store.getLocalSpan(assign.args);
-                    const representation_args = assign.op.representationArgs();
-                    for (0..GuardedList.borrowLen(args)) |index| {
-                        if (index < 64 and (representation_args & argMaskBit(index)) != 0) continue;
-                        try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, GuardedList.at(args, index));
-                    }
-                    setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_list => |assign| {
-                    try self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.elems);
-                    setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_struct => |assign| {
-                    try self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.fields);
-                    setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_tag => |assign| {
-                    if (assign.target_desc) |target_desc| {
-                        if (target_desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    }
-                    if (assign.payload) |payload| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, payload);
-                    setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .store_struct => |assign| {
-                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.dest);
-                    try self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.fields);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .store_tag => |assign| {
-                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.dest);
-                    if (assign.payload) |payload| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, payload);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .set_local => |assign| {
-                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.value);
-                    setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .debug => |debug_stmt| {
-                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, debug_stmt.message);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, debug_stmt.next);
-                },
-                .expect => |expect_stmt| {
-                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, expect_stmt.condition);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, expect_stmt.next);
-                },
-                .expect_err => |expect_err_stmt| {
-                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, expect_err_stmt.message);
-                },
-                inline .incref, .decref, .free => |rc| {
-                    try self.noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, rc.value);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, rc.next);
-                },
-                .decref_if_initialized => |rc| {
-                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, rc.cond);
-                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, rc.value);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, rc.next);
-                },
-                .switch_stmt => |switch_stmt| {
-                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, switch_stmt.cond);
-                    if (switch_stmt.continuation) |continuation| {
-                        try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, continuation);
-                    }
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, switch_stmt.default_branch);
-                    const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
-                    for (0..GuardedList.borrowLen(branches)) |branch_index| {
-                        const branch = GuardedList.at(branches, branch_index);
-                        try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, branch.body);
-                    }
-                },
-                .switch_initialized_payload => |switch_stmt| {
-                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, switch_stmt.cond);
-                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, switch_stmt.payload);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, switch_stmt.initialized_branch);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, switch_stmt.uninitialized_branch);
-                },
-                .str_match => |str_match| {
-                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, str_match.source);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, str_match.on_match);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, str_match.on_miss);
-                    try self.attachStrMatchEdgeKills(&graph, node_index, str_match.steps, 0);
-                },
-                .str_match_set => |str_match_set| {
-                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, str_match_set.source);
-                    const arms = self.store.getStrMatchArms(str_match_set.arms);
-                    for (0..GuardedList.borrowLen(arms)) |arm_index| {
-                        const arm = GuardedList.at(arms, arm_index);
-                        try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, arm.on_match);
-                    }
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, str_match_set.on_miss);
-                    for (0..GuardedList.borrowLen(arms)) |arm_index| {
-                        const arm = GuardedList.at(arms, arm_index);
-                        try self.attachStrMatchEdgeKills(&graph, node_index, arm.steps, @intCast(arm_index));
-                    }
-                },
-                .boxy_tag_match => |tag_match| {
-                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, tag_match.source);
-                    if (tag_match.source_desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, tag_match.on_match);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, tag_match.on_miss);
-                },
-                .join => |join_stmt| {
+            const current = self.store.getCFStmt(stmt);
+            switch (current) {
+                .join => |join| {
                     // Entering a join statement itself continues with the
                     // remainder. The body is not a normal successor; it only
                     // runs through `.jump`, whose transfer semantics are
@@ -7029,28 +6587,264 @@ const Inserter = struct {
                     // body node exactly once. Every incoming jump then sees
                     // the same retained units through its existing successor
                     // edge, instead of expanding the environment per edge.
-                    const body_node = try self.ensureReadBeforeRebindNode(&graph, &work, join_stmt.body);
-                    try self.noteLivenessUseSpan(&graph.nodes.items[body_node].reads, join_stmt.retained);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, join_stmt.remainder);
+                    const body_node = try self.ensureReadBeforeRebindNode(&graph, &work, join.body);
+                    try self.noteLivenessUseSpan(&graph.nodes.items[body_node].reads, join.retained);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, join.remainder);
+                    continue;
                 },
                 .jump => {
-                    const join_index = self.solution.jumpTargetJoinIndexOf(graph.nodes.items[node_index].stmt);
+                    const join_index = self.solution.jumpTargetJoinIndexOf(stmt);
                     if (join_index >= self.join_bodies.len) arcInvariant("ARC liveness jump index exceeded its lifted join table");
-                    const target_body = self.join_bodies[join_index].body;
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, target_body);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, self.join_bodies[join_index].body);
+                    continue;
                 },
-                .ret => |ret_stmt| {
-                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, ret_stmt.value);
-                },
-                .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| {
-                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, message);
-                },
+                .init_uninitialized,
+                .assign_ref,
+                .assign_literal,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .ret,
+                .crash,
                 => {},
-                .comptime_branch_taken => |marker| {
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, marker.next);
+            }
+            successors.clearRetainingCapacity();
+            try body_clone.appendSuccessors(self.store, &successors, stmt, self.source_liveness.scratch_allocator);
+            for (successors.items) |successor| try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, successor);
+            if (body_clone.definedTarget(current)) |target| setReadBeforeRebindDef(&graph, node_index, target);
+            switch (current) {
+                .assign_call_erased => |s| if (s.out_desc) |out_desc| setReadBeforeRebindDef(&graph, node_index, out_desc),
+                .assign_boxy_tag_payload => |s| if (s.target_desc) |target_desc| setReadBeforeRebindDef(&graph, node_index, target_desc),
+                .init_uninitialized,
+                .assign_ref,
+                .assign_literal,
+                .assign_call,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .boxy_tag_match,
+                .assign_call_dict,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .join,
+                .jump,
+                .ret,
+                .crash,
+                => {},
+            }
+            const reads = &graph.nodes.items[node_index].reads;
+            switch (current) {
+                .assign_ref => |assign| {
+                    if (!self.solution.isRepresentationAlias(assign.target)) {
+                        try self.noteLivenessUseRefOp(reads, assign.op);
+                    }
                 },
+                .assign_call => |assign| {
+                    try self.noteLivenessUseSpan(reads, assign.args);
+                    if (assign.result_desc) |result_desc| {
+                        if (result_desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
+                    }
+                },
+                .assign_call_erased => |assign| {
+                    try self.noteLivenessUseLocal(reads, assign.closure);
+                    if (assign.reuse_source) |reuse_source| try self.noteLivenessUseLocal(reads, reuse_source);
+                    try self.noteLivenessUseSpan(reads, assign.args);
+                    try self.noteLivenessUseSpan(reads, assign.arg_descs);
+                    if (assign.result_desc) |result_desc| {
+                        if (result_desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
+                    }
+                },
+                .assign_packed_erased_fn => |assign| {
+                    if (assign.capture) |capture| try self.noteLivenessUseLocal(reads, capture);
+                    if (assign.reuse) |reuse| try self.noteLivenessUseLocal(reads, reuse);
+                },
+                .assign_boxy_desc_ref => |assign| {
+                    if (assign.desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
+                    if (assign.tag_residual_for) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
+                    try self.noteLivenessUseSpan(reads, assign.captures);
+                },
+                .assign_boxy_dict_ref => |assign| {
+                    if (assign.dict.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
+                    try self.noteLivenessUseSpan(reads, assign.captures);
+                },
+                .assign_boxy_box => |assign| {
+                    try self.noteLivenessUseLocal(reads, assign.payload);
+                    if (assign.source_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
+                    if (assign.payload_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
+                },
+                .assign_boxy_record_update => |assign| {
+                    try self.noteLivenessUseLocal(reads, assign.base);
+                    try self.noteLivenessUseLocal(reads, assign.fields);
+                    if (assign.base_desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
+                    if (assign.fields_desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
+                },
+                .assign_boxy_unbox => |assign| {
+                    try self.noteLivenessUseLocal(reads, assign.source);
+                    if (assign.source_desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
+                    if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
+                },
+                .assign_boxy_adapt => |assign| {
+                    try self.noteLivenessUseLocal(reads, assign.source);
+                    if (assign.source_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
+                    if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
+                },
+                .assign_boxy_inspect => |assign| {
+                    try self.noteLivenessUseLocal(reads, assign.source);
+                    if (assign.source_desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
+                },
+                .assign_boxy_eq => |assign| {
+                    try self.noteLivenessUseLocal(reads, assign.lhs);
+                    try self.noteLivenessUseLocal(reads, assign.rhs);
+                    if (assign.desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
+                },
+                .assign_boxy_hash => |assign| {
+                    try self.noteLivenessUseLocal(reads, assign.value);
+                    try self.noteLivenessUseLocal(reads, assign.hasher);
+                    if (assign.desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
+                },
+                .assign_boxy_tag => |assign| {
+                    if (assign.target_desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
+                    if (assign.payload) |payload| try self.noteLivenessUseLocal(reads, payload);
+                    if (assign.payload_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
+                },
+                .assign_boxy_tag_payload => |assign| {
+                    try self.noteLivenessUseLocal(reads, assign.source);
+                    if (assign.source_desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
+                },
+                .assign_call_dict => |assign| {
+                    if (assign.dict.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
+                    if (assign.result_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
+                    try self.noteLivenessUseSpan(reads, assign.args);
+                    try self.noteLivenessUseSpan(reads, assign.arg_descs);
+                    try self.noteLivenessUseSpan(reads, assign.hidden_args);
+                },
+                .assign_low_level => |assign| {
+                    const args = self.store.getLocalSpan(assign.args);
+                    const representation_args = assign.op.representationArgs();
+                    for (0..GuardedList.borrowLen(args)) |index| {
+                        if (index < 64 and (representation_args & argMaskBit(index)) != 0) continue;
+                        try self.noteLivenessUseLocal(reads, GuardedList.at(args, index));
+                    }
+                },
+                .assign_list => |assign| try self.noteLivenessUseSpan(reads, assign.elems),
+                .assign_struct => |assign| try self.noteLivenessUseSpan(reads, assign.fields),
+                .assign_tag => |assign| {
+                    if (assign.target_desc) |target_desc| {
+                        if (target_desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
+                    }
+                    if (assign.payload) |payload| try self.noteLivenessUseLocal(reads, payload);
+                },
+                .store_struct => |assign| {
+                    try self.noteLivenessUseLocal(reads, assign.dest);
+                    try self.noteLivenessUseSpan(reads, assign.fields);
+                },
+                .store_tag => |assign| {
+                    try self.noteLivenessUseLocal(reads, assign.dest);
+                    if (assign.payload) |payload| try self.noteLivenessUseLocal(reads, payload);
+                },
+                .set_local => |assign| try self.noteLivenessUseLocal(reads, assign.value),
+                .debug => |debug_stmt| try self.noteLivenessUseLocal(reads, debug_stmt.message),
+                .expect => |expect_stmt| try self.noteLivenessUseLocal(reads, expect_stmt.condition),
+                .expect_err => |expect_err_stmt| try self.noteLivenessUseLocal(reads, expect_err_stmt.message),
+                inline .incref, .decref, .free => |rc| try self.noteReadBeforeRebindLocal(reads, rc.value),
+                .decref_if_initialized => |rc| {
+                    try self.noteLivenessUseLocal(reads, rc.cond);
+                    try self.noteLivenessUseLocal(reads, rc.value);
+                },
+                .switch_stmt => |switch_stmt| try self.noteLivenessUseLocal(reads, switch_stmt.cond),
+                .switch_initialized_payload => |switch_stmt| {
+                    try self.noteLivenessUseLocal(reads, switch_stmt.cond);
+                    try self.noteLivenessUseLocal(reads, switch_stmt.payload);
+                },
+                .str_match => |str_match| {
+                    try self.noteLivenessUseLocal(reads, str_match.source);
+                    try self.attachStrMatchEdgeKills(&graph, node_index, str_match.steps, 0);
+                },
+                .str_match_set => |str_match_set| {
+                    try self.noteLivenessUseLocal(reads, str_match_set.source);
+                    const arms = self.store.getStrMatchArms(str_match_set.arms);
+                    for (0..GuardedList.borrowLen(arms)) |arm_index| {
+                        const arm = GuardedList.at(arms, arm_index);
+                        try self.attachStrMatchEdgeKills(&graph, node_index, arm.steps, @intCast(arm_index));
+                    }
+                },
+                .boxy_tag_match => |tag_match| {
+                    try self.noteLivenessUseLocal(reads, tag_match.source);
+                    if (tag_match.source_desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
+                },
+                .ret => |ret_stmt| try self.noteLivenessUseLocal(reads, ret_stmt.value),
+                .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| {
+                    try self.noteLivenessUseLocal(reads, message);
+                },
+                .assign_literal,
+                .init_uninitialized,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .join,
+                .jump,
+                => {},
             }
         }
 
@@ -7472,7 +7266,7 @@ const Inserter = struct {
                 std.debug.print("\n{s}\n", .{buffer.written()});
                 const ref_source: ?LIR.LocalId = if (self.current_rewrite_stmt) |stmt_id| blk: {
                     const stmt = self.store.getCFStmt(stmt_id);
-                    break :blk if (stmt == .assign_ref) refOpSource(stmt.assign_ref.op) else null;
+                    break :blk if (stmt == .assign_ref) body_clone.refOpSource(stmt.assign_ref.op) else null;
                 } else null;
                 const ref_source_layout: ?layout_mod.Idx = if (ref_source) |source| self.store.getLocal(source).layout_idx else null;
                 const ref_source_desc: ?LIR.BoxyDescRef = if (ref_source) |source| boxyDescForLocal(self.boxy_rc_descs, source) else null;
@@ -7678,14 +7472,6 @@ const OwnedSet = struct {
         if (self.domain != other.domain) arcInvariant("ARC combined ownership sets from different proc domains");
     }
 };
-
-fn refOpSource(op: LIR.RefOp) LIR.LocalId {
-    return switch (op) {
-        .local => |local| local,
-        inline .discriminant, .field, .tag_payload, .tag_payload_struct => |ref| ref.source,
-        inline .list_reinterpret, .nominal => |ref| ref.backing_ref,
-    };
-}
 
 fn addCanonicalRetain(
     store: *LirStore,
@@ -8237,70 +8023,13 @@ const ArcTest = struct {
         var cursor = start;
         var remaining: usize = self.store.cfStmtCount() + 1;
         while (remaining > 0) : (remaining -= 1) {
-            switch (self.store.getCFStmt(cursor)) {
-                .switch_stmt => |s| return s,
-                inline .incref, .decref, .decref_if_initialized, .free => |rc| cursor = rc.next,
-                .assign_ref => |assign| cursor = assign.next,
-                .assign_literal => |assign| cursor = assign.next,
-                .init_uninitialized => |uninit| cursor = uninit.next,
-                .assign_call => |assign| cursor = assign.next,
-                .assign_call_erased => |assign| cursor = assign.next,
-                .assign_packed_erased_fn => |assign| cursor = assign.next,
-                inline .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .assign_call_dict,
-                => |assign| cursor = assign.next,
-                .assign_low_level => |assign| cursor = assign.next,
-                .assign_list => |assign| cursor = assign.next,
-                .assign_struct => |assign| cursor = assign.next,
-                .assign_tag => |assign| cursor = assign.next,
-                .store_struct => |assign| cursor = assign.next,
-                .store_tag => |assign| cursor = assign.next,
-                .set_local => |assign| cursor = assign.next,
-                .debug => |debug_stmt| cursor = debug_stmt.next,
-                .expect => |expect_stmt| cursor = expect_stmt.next,
-                .comptime_branch_taken => |marker| cursor = marker.next,
-                .expect_err,
-                .runtime_error,
-                .comptime_exhaustiveness_failed,
-                .switch_initialized_payload,
-                .str_match,
-                .str_match_set,
-                .boxy_tag_match,
-                .join,
-                .jump,
-                .ret,
-                .crash,
-                => arcInvariant("ARC test fixture expected a switch_stmt on the linear path"),
-            }
-        }
-        arcInvariant("ARC test fixture cycled while walking to a switch_stmt");
-    }
-
-    /// Follows a linear fixture path to its first direct call.
-    fn walkToDirectCall(self: *const ArcTest, start: LIR.CFStmtId) @FieldType(LIR.CFStmt, "assign_call") {
-        var cursor = start;
-        var remaining: usize = self.store.cfStmtCount() + 1;
-        while (remaining > 0) : (remaining -= 1) {
-            switch (self.store.getCFStmt(cursor)) {
-                .assign_call => |assign| return assign,
-                inline .assign_ref,
-                .assign_literal,
+            const stmt = self.store.getCFStmt(cursor);
+            switch (stmt) {
+                .switch_stmt => |switch_stmt| return switch_stmt,
                 .init_uninitialized,
-                .incref,
-                .decref,
-                .decref_if_initialized,
-                .free,
-                => |linear| cursor = linear.next,
+                .assign_ref,
+                .assign_literal,
+                .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
                 .assign_boxy_desc_ref,
@@ -8325,10 +8054,65 @@ const ArcTest = struct {
                 .set_local,
                 .debug,
                 .expect,
-                .comptime_branch_taken,
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .join,
+                .jump,
+                .ret,
+                .crash,
+                => cursor = body_clone.linearNextOrNull(stmt) orelse arcInvariant("ARC test fixture expected a switch_stmt on the linear path"),
+            }
+        }
+        arcInvariant("ARC test fixture cycled while walking to a switch_stmt");
+    }
+
+    /// Follows a linear fixture path of bindings and reference counts to its
+    /// first direct call.
+    fn walkToDirectCall(self: *const ArcTest, start: LIR.CFStmtId) @FieldType(LIR.CFStmt, "assign_call") {
+        var cursor = start;
+        var remaining: usize = self.store.cfStmtCount() + 1;
+        while (remaining > 0) : (remaining -= 1) {
+            const stmt = self.store.getCFStmt(cursor);
+            switch (stmt) {
+                .assign_call => |call| return call,
+                inline .assign_ref, .assign_literal, .init_uninitialized, .incref, .decref, .decref_if_initialized, .free => |s| cursor = s.next,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
                 .switch_stmt,
                 .switch_initialized_payload,
                 .str_match,
@@ -8411,19 +8195,16 @@ const ArcTest = struct {
         var cursor = self.procBody();
         var remaining: usize = self.store.cfStmtCount() + 1;
         while (remaining > 0) : (remaining -= 1) {
-            switch (self.store.getCFStmt(cursor)) {
-                .assign_low_level => |assign| {
-                    if (assign.target == target) return assign;
-                    cursor = assign.next;
-                },
-                inline .incref, .decref, .decref_if_initialized, .free => |rc| cursor = rc.next,
-                .assign_ref => |assign| cursor = assign.next,
-                .assign_literal => |assign| cursor = assign.next,
-                .init_uninitialized => |uninit| cursor = uninit.next,
-                .assign_call => |assign| cursor = assign.next,
-                .assign_call_erased => |assign| cursor = assign.next,
-                .assign_packed_erased_fn => |assign| cursor = assign.next,
-                inline .assign_boxy_desc_ref,
+            const stmt = self.store.getCFStmt(cursor);
+            switch (stmt) {
+                .assign_low_level => |assign| if (assign.target == target) return assign,
+                .init_uninitialized,
+                .assign_ref,
+                .assign_literal,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
@@ -8434,31 +8215,35 @@ const ArcTest = struct {
                 .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
+                .boxy_tag_match,
                 .assign_call_dict,
-                => |assign| cursor = assign.next,
-                .assign_list => |assign| cursor = assign.next,
-                .assign_struct => |assign| cursor = assign.next,
-                .assign_tag => |assign| cursor = assign.next,
-                .store_struct => |assign| cursor = assign.next,
-                .store_tag => |assign| cursor = assign.next,
-                .set_local => |assign| cursor = assign.next,
-                .debug => |debug_stmt| cursor = debug_stmt.next,
-                .expect => |expect_stmt| cursor = expect_stmt.next,
-                .comptime_branch_taken => |marker| cursor = marker.next,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
                 .switch_stmt,
                 .switch_initialized_payload,
                 .str_match,
                 .str_match_set,
-                .boxy_tag_match,
                 .join,
                 .jump,
                 .ret,
                 .crash,
-                => arcInvariant("ARC test fixture expected a low-level op on a linear path"),
+                => {},
             }
+            cursor = body_clone.linearNextOrNull(stmt) orelse arcInvariant("ARC test fixture expected a low-level op on a linear path");
         }
         arcInvariant("ARC test fixture cycled while walking to a low-level op");
     }
@@ -8478,46 +8263,55 @@ const ArcTest = struct {
             if (visited.contains(current)) continue;
             try visited.put(current, {});
             switch (self.store.getCFStmt(current)) {
-                .assign_low_level => |assign| {
-                    if (assign.target == target) mask |= assign.unique_args;
-                    try stack.append(self.allocator, assign.next);
+                .assign_low_level => |assign| if (assign.target == target) {
+                    mask |= assign.unique_args;
                 },
-                .switch_stmt => |s| {
-                    const branches = self.store.getCFSwitchBranches(s.branches);
-                    for (0..GuardedList.borrowLen(branches)) |branch_index| {
-                        const branch = GuardedList.at(branches, branch_index);
-                        try stack.append(self.allocator, branch.body);
-                    }
-                    try stack.append(self.allocator, s.default_branch);
-                    if (s.continuation) |continuation| {
-                        try stack.append(self.allocator, continuation);
-                    }
-                },
-                .switch_initialized_payload => |s| {
-                    try stack.append(self.allocator, s.initialized_branch);
-                    try stack.append(self.allocator, s.uninitialized_branch);
-                },
-                inline .str_match, .boxy_tag_match => |s| {
-                    try stack.append(self.allocator, s.on_match);
-                    try stack.append(self.allocator, s.on_miss);
-                },
-                .str_match_set => |s| {
-                    const arms = self.store.getStrMatchArms(s.arms);
-                    for (0..GuardedList.borrowLen(arms)) |arm_index| {
-                        const arm = GuardedList.at(arms, arm_index);
-                        try stack.append(self.allocator, arm.on_match);
-                    }
-                    try stack.append(self.allocator, s.on_miss);
-                },
-                .join => |j| {
-                    try stack.append(self.allocator, j.body);
-                    try stack.append(self.allocator, j.remainder);
-                },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
-                    try stack.append(self.allocator, s.next);
-                },
-                .ret, .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed => {},
+                .init_uninitialized,
+                .assign_ref,
+                .assign_literal,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .join,
+                .jump,
+                .ret,
+                .crash,
+                => {},
             }
+            try body_clone.appendSuccessors(&self.store, &stack, current, self.allocator);
         }
         return mask;
     }
@@ -8542,47 +8336,56 @@ const ArcTest = struct {
         var remaining: usize = self.store.cfStmtCount() + 1;
         while (remaining > 0) : (remaining -= 1) {
             const stmt = self.store.getCFStmt(cursor);
-            switch (stmt) {
-                .incref => |rc| {
-                    if (kind == .incref and rc.value == local_id) return;
-                    cursor = rc.next;
-                },
-                inline .decref, .decref_if_initialized => |rc| {
-                    if (kind == .decref and rc.value == local_id) return;
-                    cursor = rc.next;
-                },
-                .free => |rc| {
-                    if (kind == .free and rc.value == local_id) return;
-                    cursor = rc.next;
-                },
-                .assign_ref => |assign| cursor = assign.next,
-                .assign_literal => |assign| cursor = assign.next,
-                .init_uninitialized => |uninit| cursor = uninit.next,
-                .assign_call => |assign| cursor = assign.next,
-                .assign_call_erased => |assign| cursor = assign.next,
-                .assign_packed_erased_fn => |assign| cursor = assign.next,
-                .assign_boxy_desc_ref => |assign| cursor = assign.next,
-                .assign_boxy_dict_ref => |assign| cursor = assign.next,
-                .assign_boxy_box => |assign| cursor = assign.next,
-                .assign_boxy_record_update => |assign| cursor = assign.next,
-                .assign_boxy_unbox => |assign| cursor = assign.next,
-                .assign_boxy_adapt => |assign| cursor = assign.next,
-                .assign_boxy_inspect => |assign| cursor = assign.next,
-                .assign_boxy_eq => |assign| cursor = assign.next,
-                .assign_boxy_hash => |assign| cursor = assign.next,
-                .assign_boxy_tag => |assign| cursor = assign.next,
-                .assign_boxy_tag_payload => |assign| cursor = assign.next,
-                .assign_call_dict => |assign| cursor = assign.next,
-                .assign_low_level => |assign| cursor = assign.next,
-                .assign_list => |assign| cursor = assign.next,
-                .assign_struct => |assign| cursor = assign.next,
-                .assign_tag => |assign| cursor = assign.next,
-                .store_struct => |assign| cursor = assign.next,
-                .store_tag => |assign| cursor = assign.next,
-                .set_local => |assign| cursor = assign.next,
-                .debug => |debug_stmt| cursor = debug_stmt.next,
-                .expect => |expect_stmt| cursor = expect_stmt.next,
-                .comptime_branch_taken => |marker| cursor = marker.next,
+            const rc_value: ?LIR.LocalId = switch (stmt) {
+                .incref => |rc| if (kind == .incref) rc.value else null,
+                inline .decref, .decref_if_initialized => |rc| if (kind == .decref) rc.value else null,
+                .free => |rc| if (kind == .free) rc.value else null,
+                .init_uninitialized,
+                .assign_ref,
+                .assign_literal,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .join,
+                .jump,
+                .ret,
+                .crash,
+                => null,
+            };
+            if (rc_value) |rc_local| if (rc_local == local_id) return;
+            if (body_clone.linearNextOrNull(stmt)) |next| {
+                cursor = next;
+            } else switch (stmt) {
                 .ret => {
                     if (before == .ret) return error.ExpectedRcBeforeStop;
                     return;
@@ -8591,7 +8394,49 @@ const ArcTest = struct {
                     if (before == .crash) return error.ExpectedRcBeforeStop;
                     return;
                 },
-                .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .join, .jump => return error.NonLinearPath,
+                .init_uninitialized,
+                .assign_ref,
+                .assign_literal,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .join,
+                .jump,
+                => return error.NonLinearPath,
             }
         }
         return error.CyclicPath;
@@ -8610,45 +8455,99 @@ const ArcTest = struct {
         while (remaining > 0) : (remaining -= 1) {
             const stmt = self.store.getCFStmt(cursor);
             switch (stmt) {
-                .decref_if_initialized => |rc| {
-                    if (rc.value == value and rc.cond == cond and rc.cond_mask == cond_mask) return;
-                    cursor = rc.next;
-                },
-                .set_local => |assign| {
-                    if (assign.target == set_target) return error.SetBeforeConditionalDecref;
-                    cursor = assign.next;
-                },
-                inline .incref, .decref, .free => |rc| cursor = rc.next,
-                .assign_ref => |assign| cursor = assign.next,
-                .assign_literal => |assign| cursor = assign.next,
-                .init_uninitialized => |uninit| cursor = uninit.next,
-                .assign_call => |assign| cursor = assign.next,
-                .assign_call_erased => |assign| cursor = assign.next,
-                .assign_packed_erased_fn => |assign| cursor = assign.next,
-                .assign_boxy_desc_ref => |assign| cursor = assign.next,
-                .assign_boxy_dict_ref => |assign| cursor = assign.next,
-                .assign_boxy_box => |assign| cursor = assign.next,
-                .assign_boxy_record_update => |assign| cursor = assign.next,
-                .assign_boxy_unbox => |assign| cursor = assign.next,
-                .assign_boxy_adapt => |assign| cursor = assign.next,
-                .assign_boxy_inspect => |assign| cursor = assign.next,
-                .assign_boxy_eq => |assign| cursor = assign.next,
-                .assign_boxy_hash => |assign| cursor = assign.next,
-                .assign_boxy_tag => |assign| cursor = assign.next,
-                .assign_boxy_tag_payload => |assign| cursor = assign.next,
-                .assign_call_dict => |assign| cursor = assign.next,
-                .assign_low_level => |assign| cursor = assign.next,
-                .assign_list => |assign| cursor = assign.next,
-                .assign_struct => |assign| cursor = assign.next,
-                .assign_tag => |assign| cursor = assign.next,
-                .store_struct => |assign| cursor = assign.next,
-                .store_tag => |assign| cursor = assign.next,
-                .debug => |debug_stmt| cursor = debug_stmt.next,
-                .expect => |expect_stmt| cursor = expect_stmt.next,
-                .comptime_branch_taken => |marker| cursor = marker.next,
-                .ret, .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed => return error.ExpectedConditionalDecref,
-                .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .join => return error.NonLinearPath,
+                .decref_if_initialized => |rc| if (rc.value == value and rc.cond == cond and rc.cond_mask == cond_mask) return,
+                .set_local => |set| if (set.target == set_target) return error.SetBeforeConditionalDecref,
+                .init_uninitialized,
+                .assign_ref,
+                .assign_literal,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .join,
+                .jump,
+                .ret,
+                .crash,
+                => {},
             }
+            cursor = body_clone.linearNextOrNull(stmt) orelse return switch (stmt) {
+                .jump => error.ExpectedConditionalDecref,
+                .init_uninitialized,
+                .assign_ref,
+                .assign_literal,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .join,
+                .ret,
+                .crash,
+                => if (fixtureTerminal(stmt)) error.ExpectedConditionalDecref else error.NonLinearPath,
+            };
         }
         return error.CyclicPath;
     }
@@ -8664,47 +8563,102 @@ const ArcTest = struct {
         while (remaining > 0) : (remaining -= 1) {
             const stmt = self.store.getCFStmt(cursor);
             switch (stmt) {
-                .decref => |rc| {
-                    if (rc.value == value) return;
-                    cursor = rc.next;
-                },
-                .set_local => |assign| {
-                    if (assign.target == set_target) return error.SetBeforeDecref;
-                    cursor = assign.next;
-                },
-                inline .incref, .decref_if_initialized, .free => |rc| cursor = rc.next,
-                .assign_ref => |assign| cursor = assign.next,
-                .assign_literal => |assign| cursor = assign.next,
-                .init_uninitialized => |uninit| cursor = uninit.next,
-                .assign_call => |assign| cursor = assign.next,
-                .assign_call_erased => |assign| cursor = assign.next,
-                .assign_packed_erased_fn => |assign| cursor = assign.next,
-                .assign_boxy_desc_ref => |assign| cursor = assign.next,
-                .assign_boxy_dict_ref => |assign| cursor = assign.next,
-                .assign_boxy_box => |assign| cursor = assign.next,
-                .assign_boxy_record_update => |assign| cursor = assign.next,
-                .assign_boxy_unbox => |assign| cursor = assign.next,
-                .assign_boxy_adapt => |assign| cursor = assign.next,
-                .assign_boxy_inspect => |assign| cursor = assign.next,
-                .assign_boxy_eq => |assign| cursor = assign.next,
-                .assign_boxy_hash => |assign| cursor = assign.next,
-                .assign_boxy_tag => |assign| cursor = assign.next,
-                .assign_boxy_tag_payload => |assign| cursor = assign.next,
-                .assign_call_dict => |assign| cursor = assign.next,
-                .assign_low_level => |assign| cursor = assign.next,
-                .assign_list => |assign| cursor = assign.next,
-                .assign_struct => |assign| cursor = assign.next,
-                .assign_tag => |assign| cursor = assign.next,
-                .store_struct => |assign| cursor = assign.next,
-                .store_tag => |assign| cursor = assign.next,
-                .debug => |debug_stmt| cursor = debug_stmt.next,
-                .expect => |expect_stmt| cursor = expect_stmt.next,
-                .comptime_branch_taken => |marker| cursor = marker.next,
-                .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed => return error.ExpectedDecref,
-                .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .join, .jump => return error.NonLinearPath,
+                .decref => |rc| if (rc.value == value) return,
+                .set_local => |set| if (set.target == set_target) return error.SetBeforeDecref,
+                .init_uninitialized,
+                .assign_ref,
+                .assign_literal,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .join,
+                .jump,
+                .ret,
+                .crash,
+                => {},
             }
+            cursor = body_clone.linearNextOrNull(stmt) orelse return if (fixtureTerminal(stmt)) error.ExpectedDecref else error.NonLinearPath;
         }
         return error.CyclicPath;
+    }
+
+    /// Whether `stmt` ends its path without a successor.
+    fn fixtureTerminal(stmt: LIR.CFStmt) bool {
+        return switch (stmt) {
+            .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed => true,
+            .init_uninitialized,
+            .assign_ref,
+            .assign_literal,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_record_update,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .debug,
+            .expect,
+            .comptime_branch_taken,
+            .incref,
+            .decref,
+            .decref_if_initialized,
+            .free,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .join,
+            .jump,
+            => false,
+        };
     }
 };
 

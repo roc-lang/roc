@@ -37,6 +37,7 @@ const RefOp = LIR.RefOp;
 const CpuLevel = @import("roc_target").CpuLevel;
 const WasmModule = @import("WasmModule.zig");
 const BoxyRuntimeLink = @import("BoxyRuntimeLink.zig");
+const boxy_call_plan = @import("../boxy_call_plan.zig");
 const WasmLinking = @import("WasmLinking.zig");
 const WasmLayout = @import("WasmLayout.zig");
 const Storage = @import("Storage.zig");
@@ -1091,6 +1092,44 @@ fn listElementCallbacks(self: *Self, list_abi: BuiltinListAbi) Allocator.Error!R
             .layout_idx = elem_layout_idx,
         }),
     };
+}
+
+/// How a list builtin call handles element refcounts.
+const ListElemRc = union(enum) {
+    /// Descriptor-governed elements: the Boxy runtime wrapper receives the
+    /// element layout and the resolved list descriptor.
+    boxy: BoxyListElementDesc,
+    /// The builtin receives the elements-refcounted flag and the layout-keyed
+    /// element callbacks.
+    callbacks: RocListElementCallbacks,
+};
+
+/// Choose a list builtin's element refcount handling: the Boxy element
+/// descriptor when one governs `list_locals` or `target_local`, the element
+/// callbacks otherwise.
+fn listElemRc(self: *Self, list_abi: BuiltinListAbi, list_locals: []const ProcLocalId, target_local: ?ProcLocalId) Allocator.Error!ListElemRc {
+    if (self.boxyListElementDescForLocals(list_abi, list_locals, target_local)) |boxy_elem| return .{ .boxy = boxy_elem };
+    return .{ .callbacks = try self.listElementCallbacks(list_abi) };
+}
+
+/// Push the element refcount arguments `rc` selects.
+fn emitListElemRcArgs(self: *Self, rc: ListElemRc) Allocator.Error!void {
+    switch (rc) {
+        .boxy => |boxy_elem| {
+            try self.emitI32Const(@intCast(@backingInt(boxy_elem.elem_layout)));
+            try self.resolveBoxyDesc(boxy_elem.desc);
+        },
+        .callbacks => |callbacks| try self.emitListElementCallbackArgs(callbacks),
+    }
+}
+
+/// Call `boxy_fn` for descriptor-governed elements, the builtin `kind`
+/// otherwise.
+fn emitListElemRcCall(self: *Self, rc: ListElemRc, kind: BuiltinKind, boxy_fn: boxy_call_plan.BoxyBuiltinFn) Allocator.Error!void {
+    switch (rc) {
+        .boxy => try self.emitBoxyCall(boxy_fn.symbolName()),
+        .callbacks => try self.emitBuiltinCall(kind),
+    }
 }
 
 fn boxyListElementDescForLocals(
@@ -2227,7 +2266,16 @@ fn emitBuiltinInternalFreeRcPtr(self: *Self, rc_ptr_local: u32, element_alignmen
 
 fn emitDataPtrIncref(self: *Self, data_ptr_local: u32, amount: u32) Allocator.Error!void {
     if (amount == 0) return;
+    try self.emitDataPtrIncrefBy(data_ptr_local, .{ .imm = amount });
+}
 
+fn emitDataPtrIncrefByLocal(self: *Self, data_ptr_local: u32, amount_local: u32) Allocator.Error!void {
+    try self.emitDataPtrIncrefBy(data_ptr_local, .{ .local = amount_local });
+}
+
+/// Add `amount` to the refcount of the allocation `data_ptr_local` points
+/// into, unless the pointer is null or the stored refcount is zero.
+fn emitDataPtrIncrefBy(self: *Self, data_ptr_local: u32, amount: union(enum) { imm: u32, local: u32 }) Allocator.Error!void {
     const masked_ptr, const rc_ptr, const rc_val = try self.allocAnonymousLocals(.i32, 3);
 
     try self.emitVoidBlock();
@@ -2252,38 +2300,10 @@ fn emitDataPtrIncref(self: *Self, data_ptr_local: u32, amount: u32) Allocator.Er
     try self.emitBrIf(0);
 
     try self.emitLocalGets(.{ rc_ptr, rc_val });
-    try self.emitI32Const(@intCast(amount));
-    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-    try self.emitStoreOp(.i32, 0);
-
-    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-}
-
-fn emitDataPtrIncrefByLocal(self: *Self, data_ptr_local: u32, amount_local: u32) Allocator.Error!void {
-    const masked_ptr, const rc_ptr, const rc_val = try self.allocAnonymousLocals(.i32, 3);
-
-    try self.emitVoidBlock();
-
-    try self.emitLocalGet(data_ptr_local);
-    self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
-    try self.emitBrIf(0);
-
-    try self.emitLocalGet(data_ptr_local);
-    try self.emitI32Const(-4);
-    self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-    try self.emitLocalSet(masked_ptr);
-
-    try self.emitLocalGet(masked_ptr);
-    try self.emitI32Const(-4);
-    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-    try self.emitLocalSet(rc_ptr);
-
-    try self.emitLoadI32AtPtrOffset(rc_ptr, 0, rc_val);
-    try self.emitLocalGet(rc_val);
-    self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
-    try self.emitBrIf(0);
-
-    try self.emitLocalGets(.{ rc_ptr, rc_val, amount_local });
+    switch (amount) {
+        .imm => |value| try self.emitI32Const(@intCast(value)),
+        .local => |local| try self.emitLocalGet(local),
+    }
     self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
     try self.emitStoreOp(.i32, 0);
 
@@ -2585,26 +2605,32 @@ fn rcHelperFuncIdx(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomicity)
     };
 }
 
+/// Open a block that the code emitted after it runs inside only when
+/// `ptr_local` is non-null and its allocation's refcount is exactly one; the
+/// caller closes it with `end`.
+fn emitIfUniqueBlockStart(self: *Self, ptr_local: u32) Allocator.Error!void {
+    const rc_val = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+
+    try self.emitVoidBlock();
+
+    try self.emitLocalGet(ptr_local);
+    self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+    try self.emitBrIf(0);
+
+    try self.emitLoadI32AtPtrOffset(ptr_local, -4, rc_val);
+    try self.emitLocalGet(rc_val);
+    try self.emitI32Const(1);
+    self.currentCode().append(self.allocator, Op.i32_ne) catch return error.OutOfMemory;
+    try self.emitBrIf(0);
+}
+
 fn emitBuiltinInternalBoxChildDropIfUnique(
     self: *Self,
     box_ptr_local: u32,
     child_key: RcHelperKey,
     atomicity: RcAtomicity,
 ) Allocator.Error!void {
-    const rc_val = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-
-    try self.emitVoidBlock();
-
-    try self.emitLocalGet(box_ptr_local);
-    self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
-    try self.emitBrIf(0);
-
-    try self.emitLoadI32AtPtrOffset(box_ptr_local, -4, rc_val);
-    try self.emitLocalGet(rc_val);
-    try self.emitI32Const(1);
-    self.currentCode().append(self.allocator, Op.i32_ne) catch return error.OutOfMemory;
-    try self.emitBrIf(0);
-
+    try self.emitIfUniqueBlockStart(box_ptr_local);
     try self.emitRawRcHelperCallByKey(child_key, atomicity, box_ptr_local, null);
 
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
@@ -2614,20 +2640,7 @@ fn emitErasedCallableOnDropIfUnique(
     self: *Self,
     payload_ptr_local: u32,
 ) Allocator.Error!void {
-    const rc_val = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-
-    try self.emitVoidBlock();
-
-    try self.emitLocalGet(payload_ptr_local);
-    self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
-    try self.emitBrIf(0);
-
-    try self.emitLoadI32AtPtrOffset(payload_ptr_local, -4, rc_val);
-    try self.emitLocalGet(rc_val);
-    try self.emitI32Const(1);
-    self.currentCode().append(self.allocator, Op.i32_ne) catch return error.OutOfMemory;
-    try self.emitBrIf(0);
-
+    try self.emitIfUniqueBlockStart(payload_ptr_local);
     try self.emitErasedCallableOnDrop(payload_ptr_local);
 
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
@@ -3802,41 +3815,34 @@ fn emitCheckedSignedAddSubOverflowCondition(self: *Self, comptime vt: ValType, p
     self.currentCode().append(self.allocator, @field(Op, @tagName(vt) ++ "_lt_s")) catch return error.OutOfMemory;
 }
 
+/// Push whether the unsigned add or subtract that produced `result` wrapped.
+fn emitCheckedUnsignedAddSubOverflowCondition(self: *Self, comptime vt: ValType, plain_op: NumericOp, lhs: u32, rhs: u32, result: u32) Allocator.Error!void {
+    switch (plain_op) {
+        .num_plus => try self.emitLocalGets(.{ result, lhs }),
+        .num_minus => try self.emitLocalGets(.{ lhs, rhs }),
+        .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by, .num_mod_by, .num_negate, .num_abs, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_abs_diff, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits => unreachable,
+    }
+    self.currentCode().append(self.allocator, @field(Op, @tagName(vt) ++ "_lt_u")) catch return error.OutOfMemory;
+}
+
+/// Push whether the i32 `result` lies outside `min`..`max` (signed compare).
+fn emitI32RangeOverflowCondition(self: *Self, result: u32, min: i64, max: i64) Allocator.Error!void {
+    try self.emitLocalGet(result);
+    try self.emitI32Const(@intCast(min));
+    self.currentCode().append(self.allocator, Op.i32_lt_s) catch return error.OutOfMemory;
+
+    try self.emitLocalGet(result);
+    try self.emitI32Const(@intCast(max));
+    self.currentCode().append(self.allocator, Op.i32_gt_s) catch return error.OutOfMemory;
+
+    self.currentCode().append(self.allocator, Op.i32_or) catch return error.OutOfMemory;
+}
+
 fn emitCheckedI32AddSubOverflowCondition(self: *Self, plain_op: NumericOp, lhs: u32, rhs: u32, result: u32, layout_idx: layout.Idx) Allocator.Error!void {
     switch (layout_idx) {
-        .u8, .u16 => {
-            try self.emitLocalGet(result);
-            try self.emitI32Const(0);
-            self.currentCode().append(self.allocator, Op.i32_lt_s) catch return error.OutOfMemory;
-
-            try self.emitLocalGet(result);
-            try self.emitI32Const(@intCast(unsignedMaxForI32Scalar(layout_idx)));
-            self.currentCode().append(self.allocator, Op.i32_gt_s) catch return error.OutOfMemory;
-
-            self.currentCode().append(self.allocator, Op.i32_or) catch return error.OutOfMemory;
-        },
-        .i8, .i16 => {
-            try self.emitLocalGet(result);
-            try self.emitI32Const(@intCast(signedMinForScalar(layout_idx)));
-            self.currentCode().append(self.allocator, Op.i32_lt_s) catch return error.OutOfMemory;
-
-            try self.emitLocalGet(result);
-            try self.emitI32Const(@intCast(signedMaxForScalar(layout_idx)));
-            self.currentCode().append(self.allocator, Op.i32_gt_s) catch return error.OutOfMemory;
-
-            self.currentCode().append(self.allocator, Op.i32_or) catch return error.OutOfMemory;
-        },
-        .u32 => switch (plain_op) {
-            .num_plus => {
-                try self.emitLocalGets(.{ result, lhs });
-                self.currentCode().append(self.allocator, Op.i32_lt_u) catch return error.OutOfMemory;
-            },
-            .num_minus => {
-                try self.emitLocalGets(.{ lhs, rhs });
-                self.currentCode().append(self.allocator, Op.i32_lt_u) catch return error.OutOfMemory;
-            },
-            .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by, .num_mod_by, .num_negate, .num_abs, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_abs_diff, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits => unreachable,
-        },
+        .u8, .u16 => try self.emitI32RangeOverflowCondition(result, 0, unsignedMaxForI32Scalar(layout_idx)),
+        .i8, .i16 => try self.emitI32RangeOverflowCondition(result, signedMinForScalar(layout_idx), signedMaxForScalar(layout_idx)),
+        .u32 => try self.emitCheckedUnsignedAddSubOverflowCondition(.i32, plain_op, lhs, rhs, result),
         .i32 => try self.emitCheckedSignedAddSubOverflowCondition(.i32, plain_op, lhs, rhs, result),
         .bool, .str, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => unreachable,
     }
@@ -3844,17 +3850,7 @@ fn emitCheckedI32AddSubOverflowCondition(self: *Self, plain_op: NumericOp, lhs: 
 
 fn emitCheckedI64AddSubOverflowCondition(self: *Self, plain_op: NumericOp, lhs: u32, rhs: u32, result: u32, layout_idx: layout.Idx) Allocator.Error!void {
     switch (layout_idx) {
-        .u64 => switch (plain_op) {
-            .num_plus => {
-                try self.emitLocalGets(.{ result, lhs });
-                self.currentCode().append(self.allocator, Op.i64_lt_u) catch return error.OutOfMemory;
-            },
-            .num_minus => {
-                try self.emitLocalGets(.{ lhs, rhs });
-                self.currentCode().append(self.allocator, Op.i64_lt_u) catch return error.OutOfMemory;
-            },
-            .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by, .num_mod_by, .num_negate, .num_abs, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_abs_diff, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits => unreachable,
-        },
+        .u64 => try self.emitCheckedUnsignedAddSubOverflowCondition(.i64, plain_op, lhs, rhs, result),
         .i64 => try self.emitCheckedSignedAddSubOverflowCondition(.i64, plain_op, lhs, rhs, result),
         .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u128, .i128, .f32, .f64, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => unreachable,
     }
@@ -3979,30 +3975,16 @@ fn emitCheckedScalarMul(self: *Self, checked_op: LIR.LowLevel, args: anytype, la
     }
 }
 
-fn emitScalarEqZero(self: *Self, value_local: u32, vt: ValType) Allocator.Error!void {
+/// Push whether the integer scalar local equals `value`.
+fn emitScalarEqConst(self: *Self, value_local: u32, value: i64, vt: ValType) Allocator.Error!void {
     try self.emitLocalGet(value_local);
     switch (vt) {
         .i32 => {
-            try self.emitI32Const(0);
+            try self.emitI32Const(@intCast(value));
             self.currentCode().append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
         },
         .i64 => {
-            try self.emitI64Const(0);
-            self.currentCode().append(self.allocator, Op.i64_eq) catch return error.OutOfMemory;
-        },
-        .f32, .f64, .v128 => unreachable,
-    }
-}
-
-fn emitScalarSignedLowestEq(self: *Self, value_local: u32, layout_idx: layout.Idx, vt: ValType) Allocator.Error!void {
-    try self.emitLocalGet(value_local);
-    switch (vt) {
-        .i32 => {
-            try self.emitI32Const(@intCast(signedMinForScalar(layout_idx)));
-            self.currentCode().append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
-        },
-        .i64 => {
-            try self.emitI64Const(signedMinForScalar(layout_idx));
+            try self.emitI64Const(value);
             self.currentCode().append(self.allocator, Op.i64_eq) catch return error.OutOfMemory;
         },
         .f32, .f64, .v128 => unreachable,
@@ -4010,19 +3992,8 @@ fn emitScalarSignedLowestEq(self: *Self, value_local: u32, layout_idx: layout.Id
 }
 
 fn emitScalarSignedMinNegOneCondition(self: *Self, lhs: u32, rhs: u32, layout_idx: layout.Idx, vt: ValType) Allocator.Error!void {
-    try self.emitScalarSignedLowestEq(lhs, layout_idx, vt);
-    try self.emitLocalGet(rhs);
-    switch (vt) {
-        .i32 => {
-            try self.emitI32Const(-1);
-            self.currentCode().append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
-        },
-        .i64 => {
-            try self.emitI64Const(-1);
-            self.currentCode().append(self.allocator, Op.i64_eq) catch return error.OutOfMemory;
-        },
-        .f32, .f64, .v128 => unreachable,
-    }
+    try self.emitScalarEqConst(lhs, signedMinForScalar(layout_idx), vt);
+    try self.emitScalarEqConst(rhs, -1, vt);
     self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
 }
 
@@ -4073,7 +4044,7 @@ fn emitCheckedScalarDivRemMod(self: *Self, checked_op: LIR.LowLevel, plain_op: N
     const lhs = try self.emitScalarArgLocal(GuardedList.at(args, 0), vt);
     const rhs = try self.emitScalarArgLocal(GuardedList.at(args, 1), vt);
 
-    try self.emitScalarEqZero(rhs, vt);
+    try self.emitScalarEqConst(rhs, 0, vt);
     try self.emitCrashIfStackBool(checkedZeroDenominatorMessage(checked_op, layout_idx));
 
     if (CheckedArithmetic.isSignedIntegerLayout(layout_idx)) {
@@ -4104,7 +4075,7 @@ fn emitCheckedScalarUnary(self: *Self, checked_op: LIR.LowLevel, plain_op: Numer
     if (!CheckedArithmetic.isSignedIntegerLayout(layout_idx)) unreachable;
 
     const value = try self.emitScalarArgLocal(GuardedList.at(args, 0), vt);
-    try self.emitScalarSignedLowestEq(value, layout_idx, vt);
+    try self.emitScalarEqConst(value, signedMinForScalar(layout_idx), vt);
     try self.emitCrashIfStackBool(checkedOverflowMessage(checked_op));
 
     switch (plain_op) {
@@ -5489,8 +5460,9 @@ fn emitI128TryNarrow(
     try self.emitLocalGet(result_local);
 }
 
-/// Emit i128 → u128 try conversion (or signed widening → u128 try).
-/// Source is an i32 pointer to 16 bytes. Check high word sign bit is 0.
+/// Emit an i128 → u128 or u128 → i128 try conversion (or signed widening →
+/// u128 try). Source is an i32 pointer to 16 bytes. Both succeed exactly when
+/// the high word's sign bit is 0.
 /// Result is a Result(U128, {})—16-byte payload at offset 0, disc at offset 16.
 fn emitI128TryToU128(self: *Self, _: bool) Allocator.Error!void {
     const src_ptr = try self.emitSetNewLocal(.i32);
@@ -5520,51 +5492,6 @@ fn emitI128TryToU128(self: *Self, _: bool) Allocator.Error!void {
     try self.emitVoidIf();
 
     // Store payload (copy both words)
-    try self.emitLocalGets(.{ result_local, low });
-    try self.emitStoreOp(.i64, 0);
-    try self.emitLocalGets(.{ result_local, high });
-    try self.emitStoreOp(.i64, 8);
-
-    // Set disc = 1 (Ok)
-    try self.emitLocalGet(result_local);
-    try self.emitI32Const(1);
-    try self.emitStoreOpSized(.i32, 1, 16);
-
-    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-
-    try self.emitLocalGet(result_local);
-}
-
-/// Emit u128 → i128 try conversion.
-/// Source is an i32 pointer to 16 bytes. Check value < 2^127 (high bit not set).
-fn emitI128TryToI128(self: *Self) Allocator.Error!void {
-    const src_ptr = try self.emitSetNewLocal(.i32);
-
-    // Load high word
-    try self.emitLoadAt(src_ptr, .i64, 8);
-    const high = try self.emitSetNewLocal(.i64);
-
-    // Load low word
-    try self.emitLoadAt(src_ptr, .i64, 0);
-    const low = try self.emitSetNewLocal(.i64);
-
-    // Allocate result: 16 bytes payload + 1 byte disc, aligned to 8
-    const result_offset = try self.allocStackMemory(24, 8);
-    const result_local = try self.emitFpOffsetToNewLocal(result_offset);
-
-    // Zero discriminant
-    try self.emitLocalGet(result_local);
-    try self.emitI32Const(0);
-    try self.emitStoreOpSized(.i32, 1, 16);
-
-    // Check: high >= 0 (MSB not set, value < 2^127)
-    try self.emitLocalGet(high);
-    try self.emitI64Const(0);
-    self.currentCode().append(self.allocator, Op.i64_ge_s) catch return error.OutOfMemory;
-
-    try self.emitVoidIf();
-
-    // Store payload
     try self.emitLocalGets(.{ result_local, low });
     try self.emitStoreOp(.i64, 0);
     try self.emitLocalGets(.{ result_local, high });
@@ -6770,149 +6697,43 @@ fn generateBoxyDictRef(self: *Self, assign: anytype) Allocator.Error!void {
     try self.emitBoxyCall("roc_boxy_dict_copy");
 }
 
-fn generateBoxyBox(self: *Self, assign: anytype) Allocator.Error!void {
-    const payload_desc = assign.payload_desc orelse wasmInvariantFmt(
-        "WASM/codegen invariant violated: Boxy box statement had no payload descriptor",
-        .{},
-    );
-    const target_layout = self.procLocalLayoutIdx(assign.target);
-    const out_ptr = try self.allocBoxyOutPtr(target_layout);
-    const out_desc_ptr = try self.allocBoxyOutDescPtr();
-    try self.emitLocalGets(.{ out_ptr, out_desc_ptr });
-    try self.emitBoxyValuePtr(assign.payload);
-    try self.emitI32Const(@intCast(@backingInt(assign.payload_layout)));
-    if (assign.source_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
-    try self.resolveBoxyDesc(payload_desc);
-    try self.emitI32Const(@intCast(@backingInt(assign.payload_mode)));
-    try self.emitI32Const(@intCast(@backingInt(target_layout)));
-    try self.emitBoxyCall("roc_boxy_box");
-    try self.bindBoxyOutDesc(assign.target, out_desc_ptr);
-    try self.emitBoxyOutValue(target_layout, out_ptr);
+/// Marshal a Boxy runtime call plan onto the wasm value stack in C
+/// parameter order and call its wrapper. `out_ptr` and `out_desc_ptr` hold
+/// the result slots for the plan's `out` and `out_desc` operands.
+fn emitBoxyPlanCall(self: *Self, plan: *const boxy_call_plan.Plan, out_ptr: u32, out_desc_ptr: u32) Allocator.Error!void {
+    for (plan.operands()) |operand| switch (operand) {
+        .out => try self.emitLocalGet(out_ptr),
+        .out_desc => try self.emitLocalGet(out_desc_ptr),
+        .value => |local| try self.emitBoxyValuePtr(local),
+        .opt_value => |local| if (local) |l| try self.emitBoxyValuePtr(l) else try self.emitNullPtr(),
+        .desc => |ref| try self.resolveBoxyDesc(ref),
+        .opt_desc => |ref| if (ref) |r| try self.resolveBoxyDesc(r) else try self.emitNullPtr(),
+        .local_layout => |local| try self.emitI32Const(@intCast(@backingInt(self.procLocalLayoutIdx(local)))),
+        .imm32 => |value| try self.emitI32Const(@intCast(value)),
+        .imm8 => |value| try self.emitI32Const(value),
+    };
+    try self.emitBoxyCall(plan.func.symbolName());
 }
 
-fn generateBoxyRecordUpdate(self: *Self, assign: anytype) Allocator.Error!void {
-    const target_layout = self.procLocalLayoutIdx(assign.target);
+/// Emit a Boxy value statement from its call plan, leaving the written
+/// value in assignment form and binding the descriptor it wrote where the
+/// plan says.
+fn generateBoxyValueOp(self: *Self, plan: boxy_call_plan.Plan) Allocator.Error!void {
+    const target_layout = self.procLocalLayoutIdx(plan.target);
     const out_ptr = try self.allocBoxyOutPtr(target_layout);
-    const out_desc_ptr = try self.allocBoxyOutDescPtr();
-    try self.emitLocalGets(.{ out_ptr, out_desc_ptr });
-    try self.emitBoxyValuePtr(assign.base);
-    try self.emitI32Const(@intCast(@backingInt(self.procLocalLayoutIdx(assign.base))));
-    try self.resolveBoxyDesc(assign.base_desc);
-    try self.emitBoxyValuePtr(assign.fields);
-    try self.emitI32Const(@intCast(@backingInt(assign.fields_layout)));
-    try self.resolveBoxyDesc(assign.fields_desc);
-    try self.emitI32Const(@intCast(@backingInt(target_layout)));
-    try self.emitBoxyCall("roc_boxy_record_update");
-    try self.bindBoxyOutDesc(assign.target, out_desc_ptr);
-    try self.emitBoxyOutValue(target_layout, out_ptr);
-}
-
-fn generateBoxyUnbox(self: *Self, assign: anytype) Allocator.Error!void {
-    const target_layout = self.procLocalLayoutIdx(assign.target);
-    const out_ptr = try self.allocBoxyOutPtr(target_layout);
-    const out_desc_ptr = try self.allocBoxyOutDescPtr();
-    try self.emitLocalGets(.{ out_ptr, out_desc_ptr });
-    try self.emitBoxyValuePtr(assign.source);
-    try self.emitI32Const(@intCast(@backingInt(self.procLocalLayoutIdx(assign.source))));
-    try self.resolveBoxyDesc(assign.source_desc);
-    if (assign.target_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
-    try self.emitI32Const(@intCast(@backingInt(assign.target_layout)));
-    try self.emitI32Const(@intCast(@backingInt(assign.source_mode)));
-    try self.emitBoxyCall("roc_boxy_unbox");
-    try self.bindBoxyOutDesc(assign.target, out_desc_ptr);
-    try self.emitBoxyOutValue(target_layout, out_ptr);
-}
-
-fn generateBoxyAdapt(self: *Self, assign: anytype) Allocator.Error!void {
-    const target_layout = self.procLocalLayoutIdx(assign.target);
-    const out_ptr = try self.allocBoxyOutPtr(target_layout);
-    const out_desc_ptr = try self.allocBoxyOutDescPtr();
-    try self.emitLocalGets(.{ out_ptr, out_desc_ptr });
-    try self.emitBoxyValuePtr(assign.source);
-    if (assign.source_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
-    if (assign.target_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
-    try self.emitI32Const(@intCast(@backingInt(assign.adapter)));
-    try self.emitI32Const(@intCast(@backingInt(assign.source_mode)));
-    try self.emitBoxyCall("roc_boxy_adapt");
-    try self.bindBoxyOutDesc(assign.target, out_desc_ptr);
-    try self.emitBoxyOutValue(target_layout, out_ptr);
-}
-
-fn generateBoxyInspect(self: *Self, assign: anytype) Allocator.Error!void {
-    const target_layout = self.procLocalLayoutIdx(assign.target);
-    const out_ptr = try self.allocBoxyOutPtr(target_layout);
-    try self.emitLocalGet(out_ptr);
-    try self.emitNullPtr();
-    try self.emitBoxyValuePtr(assign.source);
-    try self.emitI32Const(@intCast(@backingInt(self.procLocalLayoutIdx(assign.source))));
-    try self.resolveBoxyDesc(assign.source_desc);
-    try self.emitBoxyCall("roc_boxy_inspect");
-    try self.emitBoxyOutValue(target_layout, out_ptr);
-}
-
-fn generateBoxyEq(self: *Self, assign: anytype) Allocator.Error!void {
-    const target_layout = self.procLocalLayoutIdx(assign.target);
-    const value_layout = self.procLocalLayoutIdx(assign.lhs);
-    if (self.procLocalLayoutIdx(assign.rhs) != value_layout) {
-        wasmInvariantFmt(
-            "WASM/codegen invariant violated: boxy equality operands had layouts {d} and {d}",
-            .{ @backingInt(value_layout), @backingInt(self.procLocalLayoutIdx(assign.rhs)) },
-        );
-    }
-    const out_ptr = try self.allocBoxyOutPtr(target_layout);
-    try self.emitLocalGet(out_ptr);
-    try self.emitBoxyValuePtr(assign.lhs);
-    try self.emitBoxyValuePtr(assign.rhs);
-    try self.emitI32Const(@intCast(@backingInt(value_layout)));
-    try self.resolveBoxyDesc(assign.desc);
-    try self.emitBoxyCall("roc_boxy_eq");
-    try self.emitBoxyOutValue(target_layout, out_ptr);
-}
-
-fn generateBoxyHash(self: *Self, assign: anytype) Allocator.Error!void {
-    const target_layout = self.procLocalLayoutIdx(assign.target);
-    const out_ptr = try self.allocBoxyOutPtr(target_layout);
-    try self.emitLocalGet(out_ptr);
-    try self.emitBoxyValuePtr(assign.value);
-    try self.emitI32Const(@intCast(@backingInt(self.procLocalLayoutIdx(assign.value))));
-    try self.resolveBoxyDesc(assign.desc);
-    try self.emitBoxyValuePtr(assign.hasher);
-    try self.emitBoxyCall("roc_boxy_hash");
-    try self.emitBoxyOutValue(target_layout, out_ptr);
-}
-
-fn generateBoxyTag(self: *Self, assign: anytype) Allocator.Error!void {
-    const target_layout = self.procLocalLayoutIdx(assign.target);
-    const out_ptr = try self.allocBoxyOutPtr(target_layout);
-    try self.emitLocalGet(out_ptr);
-    try self.resolveBoxyDesc(assign.target_desc);
-    try self.emitI32Const(@intCast(@backingInt(assign.tag_name)));
-    if (assign.payload) |payload| try self.emitBoxyValuePtr(payload) else try self.emitNullPtr();
-    try self.emitI32Const(@intCast(@backingInt(assign.payload_layout)));
-    if (assign.payload_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
-    try self.emitI32Const(@intCast(@backingInt(assign.payload_mode)));
-    try self.emitI32Const(@intCast(@backingInt(target_layout)));
-    try self.emitBoxyCall("roc_boxy_tag");
-    try self.emitBoxyOutValue(target_layout, out_ptr);
-}
-
-fn generateBoxyTagPayload(self: *Self, assign: anytype) Allocator.Error!void {
-    const target_layout = self.procLocalLayoutIdx(assign.target);
-    const out_ptr = try self.allocBoxyOutPtr(target_layout);
-    const out_desc_ptr = try self.allocBoxyOutDescPtr();
-    try self.emitLocalGets(.{ out_ptr, out_desc_ptr });
-    try self.emitBoxyValuePtr(assign.source);
-    try self.emitI32Const(@intCast(@backingInt(self.procLocalLayoutIdx(assign.source))));
-    try self.resolveBoxyDesc(assign.source_desc);
-    try self.emitI32Const(@intCast(@backingInt(assign.tag_name)));
-    try self.emitI32Const(@intCast(assign.payload_index));
-    try self.emitI32Const(@intCast(@backingInt(target_layout)));
-    try self.emitI32Const(@intCast(@backingInt(assign.source_mode)));
-    try self.emitBoxyCall("roc_boxy_tag_payload");
-    if (assign.target_desc) |desc_local| {
-        try self.emitLocalGet(out_desc_ptr);
-        try self.emitLoadOpSized(.i32, 4, 0);
-        try self.bindAssignedLocal(desc_local);
+    const out_desc_ptr: u32 = switch (plan.out_desc) {
+        .none => undefined,
+        .target_boxy_desc, .local => try self.allocBoxyOutDescPtr(),
+    };
+    try self.emitBoxyPlanCall(&plan, out_ptr, out_desc_ptr);
+    switch (plan.out_desc) {
+        .none => {},
+        .target_boxy_desc => try self.bindBoxyOutDesc(plan.target, out_desc_ptr),
+        .local => |local| if (local) |desc_local| {
+            try self.emitLocalGet(out_desc_ptr);
+            try self.emitLoadOpSized(.i32, 4, 0);
+            try self.bindAssignedLocal(desc_local);
+        },
     }
     try self.emitBoxyOutValue(target_layout, out_ptr);
 }
@@ -7642,57 +7463,21 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             try self.bindAssignedLocal(assign.target);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         },
-        .assign_boxy_box => |assign| {
-            try self.generateBoxyBox(assign);
-            try self.bindAssignedLocal(assign.target);
-            try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
-        },
-        .assign_boxy_record_update => |assign| {
-            try self.generateBoxyRecordUpdate(assign);
-            try self.bindAssignedLocal(assign.target);
-            try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
-        },
-        .assign_boxy_unbox => |assign| {
-            try self.generateBoxyUnbox(assign);
-            try self.bindAssignedLocal(assign.target);
-            try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
-        },
-        .assign_boxy_adapt => |assign| {
-            try self.generateBoxyAdapt(assign);
-            try self.bindAssignedLocal(assign.target);
-            try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
-        },
-        .assign_boxy_inspect => |assign| {
-            try self.generateBoxyInspect(assign);
-            try self.bindAssignedLocal(assign.target);
-            try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
-        },
         .assign_boxy_eq => |assign| {
-            try self.generateBoxyEq(assign);
+            if (builtin.mode == .debug and self.procLocalLayoutIdx(assign.rhs) != self.procLocalLayoutIdx(assign.lhs)) {
+                wasmInvariantFmt("WASM/codegen invariant violated: boxy equality operands had different layouts", .{});
+            }
+            try self.generateBoxyValueOp(boxy_call_plan.forStatement(.assign_boxy_eq, assign));
             try self.bindAssignedLocal(assign.target);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         },
-        .assign_boxy_hash => |assign| {
-            try self.generateBoxyHash(assign);
-            try self.bindAssignedLocal(assign.target);
-            try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
-        },
-        .assign_boxy_tag => |assign| {
-            try self.generateBoxyTag(assign);
-            try self.bindAssignedLocal(assign.target);
-            try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
-        },
-        .assign_boxy_tag_payload => |assign| {
-            try self.generateBoxyTagPayload(assign);
+        inline .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload => |assign, tag| {
+            try self.generateBoxyValueOp(boxy_call_plan.forStatement(tag, assign));
             try self.bindAssignedLocal(assign.target);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         },
         .boxy_tag_match => |tag_match| {
-            try self.emitBoxyValuePtr(tag_match.source);
-            try self.emitI32Const(@intCast(@backingInt(self.procLocalLayoutIdx(tag_match.source))));
-            try self.resolveBoxyDesc(tag_match.source_desc);
-            try self.emitI32Const(@intCast(@backingInt(tag_match.tag_name)));
-            try self.emitBoxyCall("roc_boxy_tag_match");
+            try self.emitBoxyPlanCall(&boxy_call_plan.tagMatch(tag_match), undefined, undefined);
             try self.emitVoidIf();
             self.cf_depth += 1;
             try work.append(wa, .str_match_close);
@@ -10154,14 +9939,14 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             if (ll.ret_layout == .dec) {
                 try self.emitDecBinaryMath(args, BuiltinSignatures.kindOf(comptime LowLevelBuiltins.decBinaryArith(.num_pow)));
             } else {
-                try self.emitFloatPow(args, ll.ret_layout);
+                try self.emitFloatBinaryBuiltin(args, ll.ret_layout, "num_pow", .float_pow_f32, .float_pow);
             }
         },
         .num_atan2 => {
             if (ll.ret_layout == .dec) {
                 try self.emitDecBinaryMath(args, BuiltinSignatures.kindOf(comptime LowLevelBuiltins.decBinaryArith(.num_atan2)));
             } else {
-                try self.emitFloatAtan2(args, ll.ret_layout);
+                try self.emitFloatBinaryBuiltin(args, ll.ret_layout, "num_atan2", .float_atan2_f32, .float_atan2);
             }
         },
         .num_sin => {
@@ -10642,11 +10427,11 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         // list_reserve(list, spare) -> list with room for exactly spare more
         .list_reserve => {
-            try self.generateLLListReserve(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_reserve)), "roc_boxy_list_reserve", args, ll.ret_layout, ll.target, ll.unique_args);
+            try self.generateLLListReserve(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_reserve)), .list_reserve, args, ll.ret_layout, ll.target, ll.unique_args);
         },
         // list_reserve_for_append(list, spare) -> the same, growing geometrically
         .list_reserve_for_append => {
-            try self.generateLLListReserve(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_reserve_for_append)), "roc_boxy_list_reserve_for_append", args, ll.ret_layout, ll.target, ll.unique_args);
+            try self.generateLLListReserve(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_reserve_for_append)), .list_reserve_for_append, args, ll.ret_layout, ll.target, ll.unique_args);
         },
         // list_release_excess_capacity(list) -> list with capacity = length
         .list_release_excess_capacity => {
@@ -11876,7 +11661,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .u128_to_i128_try => {
             // u128 → i128: check high bit not set (value < 2^127)
             try self.emitProcLocal(GuardedList.at(args, 0));
-            try self.emitI128TryToI128();
+            try self.emitI128TryToU128(true);
         },
         .u128_to_u8_try => {
             try self.emitProcLocal(GuardedList.at(args, 0));
@@ -13160,42 +12945,21 @@ fn emitFloatToStr(self: *Self, value: ProcLocalId, is_f32: bool) Allocator.Error
     try self.emitLocalGet(result_local);
 }
 
-fn emitFloatPow(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
+/// Call the float builtin `f32_kind` or `f64_kind` on the two arguments, by
+/// the float return layout of `op_name`.
+fn emitFloatBinaryBuiltin(self: *Self, args: anytype, ret_layout: layout.Idx, comptime op_name: []const u8, f32_kind: BuiltinKind, f64_kind: BuiltinKind) Allocator.Error!void {
     const is_f32 = switch (ret_layout) {
         .f32 => true,
         .f64 => false,
         .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => wasmInvariantFmt(
-            "WASM/codegen invariant violated: num_pow received non-float return layout {s}",
+            "WASM/codegen invariant violated: " ++ op_name ++ " received non-float return layout {s}",
             .{@tagName(ret_layout)},
         ),
     };
 
     try self.emitProcLocal(GuardedList.at(args, 0));
     try self.emitProcLocal(GuardedList.at(args, 1));
-    if (is_f32) {
-        try self.emitBuiltinCall(.float_pow_f32);
-    } else {
-        try self.emitBuiltinCall(.float_pow);
-    }
-}
-
-fn emitFloatAtan2(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
-    const is_f32 = switch (ret_layout) {
-        .f32 => true,
-        .f64 => false,
-        .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => wasmInvariantFmt(
-            "WASM/codegen invariant violated: num_atan2 received non-float return layout {s}",
-            .{@tagName(ret_layout)},
-        ),
-    };
-
-    try self.emitProcLocal(GuardedList.at(args, 0));
-    try self.emitProcLocal(GuardedList.at(args, 1));
-    if (is_f32) {
-        try self.emitBuiltinCall(.float_atan2_f32);
-    } else {
-        try self.emitBuiltinCall(.float_atan2);
-    }
+    try self.emitBuiltinCall(if (is_f32) f32_kind else f64_kind);
 }
 
 const FloatUnaryMathOp = enum { num_sin, num_cos, num_tan, num_asin, num_acos, num_atan };
@@ -15501,27 +15265,15 @@ fn generateLLListPrepend(self: *Self, args: anytype, ret_layout: layout.Idx, tar
     self.requireBuiltinCalls("list_prepend");
     const fields = try self.loadRocListFields(list_ptr);
     const list_local = GuardedList.at(args, 0);
-    if (self.boxyListElementDescForLocals(list_abi, &.{list_local}, target)) |boxy_elem| {
-        try self.emitFpOffset(result_offset);
-        try self.emitRocListFields(fields);
-        try self.emitI32Const(@intCast(elem_align));
-        try self.emitLocalGet(elem_ptr);
-        try self.emitI32Const(@intCast(elem_size));
-        try self.emitI32Const(@intCast(@backingInt(boxy_elem.elem_layout)));
-        try self.resolveBoxyDesc(boxy_elem.desc);
-        try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-        try self.emitBoxyCall("roc_boxy_list_prepend");
-    } else {
-        const callbacks = try self.listElementCallbacks(list_abi);
-        try self.emitFpOffset(result_offset);
-        try self.emitRocListFields(fields);
-        try self.emitI32Const(@intCast(elem_align));
-        try self.emitLocalGet(elem_ptr);
-        try self.emitI32Const(@intCast(elem_size));
-        try self.emitListElementCallbackArgs(callbacks);
-        try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-        try self.emitBuiltinCall(.list_prepend);
-    }
+    const rc = try self.listElemRc(list_abi, &.{list_local}, target);
+    try self.emitFpOffset(result_offset);
+    try self.emitRocListFields(fields);
+    try self.emitI32Const(@intCast(elem_align));
+    try self.emitLocalGet(elem_ptr);
+    try self.emitI32Const(@intCast(elem_size));
+    try self.emitListElemRcArgs(rc);
+    try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+    try self.emitListElemRcCall(rc, .list_prepend, .list_prepend);
     try self.emitFpOffset(result_offset);
 }
 
@@ -15539,19 +15291,8 @@ fn generateLLListAppendRangeWithin(self: *Self, args: anytype, ret_layout: layou
 
     const result_offset = try self.allocStackMemory(12, 4);
 
-    if (elem_size == 0) {
-        // ZST elements: only the length grows.
-        const len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-        try self.emitLoadAt(list_ptr, .i32, 4);
-        try self.emitLocalGet(count_local);
-        try self.emitOps(.{ Op.i32_wrap_i64, Op.i32_add });
-        try self.emitLocalSet(len);
-
-        const zero = try self.emitI32ConstToNewLocal(0);
-
-        try self.buildRocListWithCap(zero, len, len);
-        return;
-    }
+    // Zero-width elements: only the length grows.
+    if (elem_size == 0) return self.emitZstListGrownBy(list_ptr, count_local);
 
     self.requireBuiltinCalls("list_append_range_within");
     const fields = try self.loadRocListFields(list_ptr);
@@ -15615,19 +15356,8 @@ fn generateLLListAppendRangeWithinUnsafe(self: *Self, args: anytype, ret_layout:
 
     const result_offset = try self.allocStackMemory(12, 4);
 
-    if (elem_size == 0) {
-        // ZST elements: only the length grows.
-        const len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-        try self.emitLoadAt(list_ptr, .i32, 4);
-        try self.emitLocalGet(count_local);
-        try self.emitOps(.{ Op.i32_wrap_i64, Op.i32_add });
-        try self.emitLocalSet(len);
-
-        const zero = try self.emitI32ConstToNewLocal(0);
-
-        try self.buildRocListWithCap(zero, len, len);
-        return;
-    }
+    // Zero-width elements: only the length grows.
+    if (elem_size == 0) return self.emitZstListGrownBy(list_ptr, count_local);
 
     self.requireBuiltinCalls("list_append_range_within_unsafe");
     const fields = try self.loadRocListFields(list_ptr);
@@ -15700,18 +15430,8 @@ fn generateLLListAppendSublist(self: *Self, args: anytype, ret_layout: layout.Id
 
     const result_offset = try self.allocStackMemory(12, 4);
 
-    if (elem_size == 0) {
-        const len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-        try self.emitLoadAt(list_ptr, .i32, 4);
-        try self.emitLocalGet(len_local);
-        try self.emitOps(.{ Op.i32_wrap_i64, Op.i32_add });
-        try self.emitLocalSet(len);
-
-        const zero = try self.emitI32ConstToNewLocal(0);
-
-        try self.buildRocListWithCap(zero, len, len);
-        return;
-    }
+    // Zero-width elements: only the length grows.
+    if (elem_size == 0) return self.emitZstListGrownBy(list_ptr, len_local);
 
     self.requireBuiltinCalls("list_append_sublist");
     const fields = try self.loadRocListFields(list_ptr);
@@ -15764,27 +15484,15 @@ fn generateLLListConcat(self: *Self, args: anytype, ret_layout: layout.Idx, targ
     const b_fields = try self.loadRocListFields(b_ptr);
     const list_a = GuardedList.at(args, 0);
     const list_b = GuardedList.at(args, 1);
-    if (self.boxyListElementDescForLocals(list_abi, &.{ list_a, list_b }, target)) |boxy_elem| {
-        try self.emitFpOffset(result_offset);
-        try self.emitRocListFields(a_fields);
-        try self.emitRocListFields(b_fields);
-        try self.emitI32Const(@intCast(elem_align));
-        try self.emitI32Const(@intCast(elem_size));
-        try self.emitI32Const(@intCast(@backingInt(boxy_elem.elem_layout)));
-        try self.resolveBoxyDesc(boxy_elem.desc);
-        try self.emitI64Const(@intCast(unique_args & 0b11));
-        try self.emitBoxyCall("roc_boxy_list_concat");
-    } else {
-        const callbacks = try self.listElementCallbacks(list_abi);
-        try self.emitFpOffset(result_offset);
-        try self.emitRocListFields(a_fields);
-        try self.emitRocListFields(b_fields);
-        try self.emitI32Const(@intCast(elem_align));
-        try self.emitI32Const(@intCast(elem_size));
-        try self.emitListElementCallbackArgs(callbacks);
-        try self.emitI64Const(@intCast(unique_args & 0b11));
-        try self.emitBuiltinCall(.list_concat);
-    }
+    const rc = try self.listElemRc(list_abi, &.{ list_a, list_b }, target);
+    try self.emitFpOffset(result_offset);
+    try self.emitRocListFields(a_fields);
+    try self.emitRocListFields(b_fields);
+    try self.emitI32Const(@intCast(elem_align));
+    try self.emitI32Const(@intCast(elem_size));
+    try self.emitListElemRcArgs(rc);
+    try self.emitI64Const(@intCast(unique_args & 0b11));
+    try self.emitListElemRcCall(rc, .list_concat, .list_concat);
     try self.emitFpOffset(result_offset);
 }
 
@@ -15826,27 +15534,15 @@ fn generateLLListDropAt(self: *Self, args: anytype, ret_layout: layout.Idx, targ
     self.requireBuiltinCalls("list_drop_at");
     const fields = try self.loadRocListFields(list_ptr);
     const list_local = GuardedList.at(args, 0);
-    if (self.boxyListElementDescForLocals(list_abi, &.{list_local}, target)) |boxy_elem| {
-        try self.emitFpOffset(result_offset);
-        try self.emitRocListFields(fields);
-        try self.emitI32Const(@intCast(elem_align));
-        try self.emitI32Const(@intCast(elem_size));
-        try self.emitLocalGet(index_local);
-        try self.emitI32Const(@intCast(@backingInt(boxy_elem.elem_layout)));
-        try self.resolveBoxyDesc(boxy_elem.desc);
-        try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-        try self.emitBoxyCall("roc_boxy_list_drop_at");
-    } else {
-        const callbacks = try self.listElementCallbacks(list_abi);
-        try self.emitFpOffset(result_offset);
-        try self.emitRocListFields(fields);
-        try self.emitI32Const(@intCast(elem_align));
-        try self.emitI32Const(@intCast(elem_size));
-        try self.emitLocalGet(index_local);
-        try self.emitListElementCallbackArgs(callbacks);
-        try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-        try self.emitBuiltinCall(.list_drop_at);
-    }
+    const rc = try self.listElemRc(list_abi, &.{list_local}, target);
+    try self.emitFpOffset(result_offset);
+    try self.emitRocListFields(fields);
+    try self.emitI32Const(@intCast(elem_align));
+    try self.emitI32Const(@intCast(elem_size));
+    try self.emitLocalGet(index_local);
+    try self.emitListElemRcArgs(rc);
+    try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+    try self.emitListElemRcCall(rc, .list_drop_at, .list_drop_at);
     try self.emitFpOffset(result_offset);
 }
 
@@ -15867,25 +15563,14 @@ fn generateLLListReverse(self: *Self, args: anytype, ret_layout: layout.Idx, tar
     self.requireBuiltinCalls("list_reverse");
     const fields = try self.loadRocListFields(list_ptr);
     const list_local = GuardedList.at(args, 0);
-    if (self.boxyListElementDescForLocals(list_abi, &.{list_local}, target)) |boxy_elem| {
-        try self.emitFpOffset(result_offset);
-        try self.emitRocListFields(fields);
-        try self.emitI32Const(@intCast(elem_align));
-        try self.emitI32Const(@intCast(elem_size));
-        try self.emitI32Const(@intCast(@backingInt(boxy_elem.elem_layout)));
-        try self.resolveBoxyDesc(boxy_elem.desc);
-        try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-        try self.emitBoxyCall("roc_boxy_list_reverse");
-    } else {
-        const callbacks = try self.listElementCallbacks(list_abi);
-        try self.emitFpOffset(result_offset);
-        try self.emitRocListFields(fields);
-        try self.emitI32Const(@intCast(elem_align));
-        try self.emitI32Const(@intCast(elem_size));
-        try self.emitListElementCallbackArgs(callbacks);
-        try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-        try self.emitBuiltinCall(.list_reverse);
-    }
+    const rc = try self.listElemRc(list_abi, &.{list_local}, target);
+    try self.emitFpOffset(result_offset);
+    try self.emitRocListFields(fields);
+    try self.emitI32Const(@intCast(elem_align));
+    try self.emitI32Const(@intCast(elem_size));
+    try self.emitListElemRcArgs(rc);
+    try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+    try self.emitListElemRcCall(rc, .list_reverse, .list_reverse);
     try self.emitFpOffset(result_offset);
 }
 
@@ -15900,58 +15585,35 @@ fn generateLLListSortWith(self: *Self, args: anytype, ret_layout: layout.Idx, ta
     const result_offset = try self.allocStackMemory(12, 4);
     const fields = try self.loadRocListFields(list_ptr);
     self.requireBuiltinCalls("list_sort_with");
-    if (self.boxyListElementDescForLocals(list_abi, &.{GuardedList.at(args, 0)}, target)) |boxy_elem| {
-        try self.emitFpOffset(result_offset);
-        try self.emitRocListFields(fields);
-        try self.emitLocalGet(callable_ptr);
-        try self.emitI32Const(@intCast(list_abi.elem_align));
-        try self.emitI32Const(@intCast(list_abi.elem_size));
-        try self.emitI32Const(1);
-        try self.emitI32Const(0);
-        try self.emitI32Const(0);
-        try self.emitI32Const(@intCast(@backingInt(boxy_elem.elem_layout)));
-        try self.resolveBoxyDesc(boxy_elem.desc);
-        try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-        try self.emitI32Const(0);
-        try self.emitI32Const(0);
-        try self.emitBoxyCall("roc_boxy_list_sort_with");
-    } else {
-        const callbacks = try self.listElementCallbacks(list_abi);
-        try self.emitFpOffset(result_offset);
-        try self.emitRocListFields(fields);
-        try self.emitLocalGet(callable_ptr);
-        try self.emitI32Const(@intCast(list_abi.elem_align));
-        try self.emitI32Const(@intCast(list_abi.elem_size));
-        try self.emitListElementCallbackArgs(callbacks);
-        try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-        try self.emitI32Const(0);
-        try self.emitI32Const(0);
-        try self.emitBuiltinCall(.list_sort_with);
+    const rc = try self.listElemRc(list_abi, &.{GuardedList.at(args, 0)}, target);
+    try self.emitFpOffset(result_offset);
+    try self.emitRocListFields(fields);
+    try self.emitLocalGet(callable_ptr);
+    try self.emitI32Const(@intCast(list_abi.elem_align));
+    try self.emitI32Const(@intCast(list_abi.elem_size));
+    // The Boxy sort wrapper also takes the callback arguments, all zero.
+    switch (rc) {
+        .boxy => inline for (.{ 1, 0, 0 }) |value| try self.emitI32Const(value),
+        .callbacks => {},
     }
+    try self.emitListElemRcArgs(rc);
+    try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+    try self.emitI32Const(0);
+    try self.emitI32Const(0);
+    try self.emitListElemRcCall(rc, .list_sort_with, .list_sort_with);
     try self.emitFpOffset(result_offset);
 }
 
-/// Build a RocList struct on the stack frame from data ptr and length locals.
-fn buildRocList(self: *Self, data_local: u32, len_local: u32) Allocator.Error!void {
-    const list_offset = try self.allocStackMemory(12, 4);
-    const list_base = try self.emitFpOffsetToNewLocal(list_offset);
-
-    // ptr (offset 0)
-    try self.emitLocalGet(data_local);
-    try self.emitStoreToMem(list_base, 0, .i32);
-
-    // len (offset 4)
-    try self.emitLocalGet(len_local);
-    try self.emitStoreToMem(list_base, 4, .i32);
-
-    // encoded cap (offset 8) = len << 1
-    try self.emitLocalGet(len_local);
-    try self.emitI32Const(1);
-    self.currentCode().append(self.allocator, Op.i32_shl) catch return error.OutOfMemory;
-    try self.emitStoreToMem(list_base, 8, .i32);
-
-    // Push pointer
-    try self.emitLocalGet(list_base);
+/// Push a zero-width-element list whose length is the list at `list_ptr`'s
+/// length plus the i64 `count_local`.
+fn emitZstListGrownBy(self: *Self, list_ptr: u32, count_local: u32) Allocator.Error!void {
+    const len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLoadAt(list_ptr, .i32, 4);
+    try self.emitLocalGet(count_local);
+    try self.emitOps(.{ Op.i32_wrap_i64, Op.i32_add });
+    try self.emitLocalSet(len);
+    const zero = try self.emitI32ConstToNewLocal(0);
+    try self.buildRocListWithCap(zero, len, len);
 }
 
 /// Build a RocList struct with separate capacity value.
@@ -16056,57 +15718,15 @@ fn materializeListIndex(self: *Self, index_arg: anytype) Allocator.Error!u32 {
     return index_local;
 }
 
-/// Emit the `roc_builtins_list_replace` call (used by both `list_set` and
-/// `list_replace_unsafe`). The new list is written to `out_list_offset` and the
-/// displaced element to `out_element_offset` (both frame-pointer offsets).
-fn emitListReplaceCall(
-    self: *Self,
-    list_abi: BuiltinListAbi,
-    list_ptr: u32,
-    index_local: u32,
-    elem_ptr: u32,
-    out_element_offset: u32,
-    out_list_offset: u32,
-    unique_args: u64,
-) Allocator.Error!void {
-    const elem_size = list_abi.elem_size;
-    const elem_align = list_abi.elem_align;
-    self.requireBuiltinCalls("list_replace");
-    const fields = try self.loadRocListFields(list_ptr);
-    const callbacks = try self.listElementCallbacks(list_abi);
-    try self.emitFpOffset(out_list_offset);
-    try self.emitRocListFields(fields);
-    try self.emitI32Const(@intCast(elem_align));
-    try self.emitLocalGets(.{ index_local, elem_ptr });
-    try self.emitI32Const(@intCast(elem_size));
-    try self.emitFpOffset(out_element_offset);
-    try self.emitListElementCallbackArgs(callbacks);
-    try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-    try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_replace_unsafe)));
-}
-
-fn emitListSetCall(
-    self: *Self,
-    list_abi: BuiltinListAbi,
-    list_ptr: u32,
-    index_local: u32,
-    elem_ptr: u32,
-    out_list_offset: u32,
-    unique_args: u64,
-) Allocator.Error!void {
-    const elem_size = list_abi.elem_size;
-    const elem_align = list_abi.elem_align;
-    self.requireBuiltinCalls("list_set");
-    const fields = try self.loadRocListFields(list_ptr);
-    const callbacks = try self.listElementCallbacks(list_abi);
-    try self.emitFpOffset(out_list_offset);
-    try self.emitRocListFields(fields);
-    try self.emitI32Const(@intCast(elem_align));
-    try self.emitLocalGets(.{ index_local, elem_ptr });
-    try self.emitI32Const(@intCast(elem_size));
-    try self.emitListElementCallbackArgs(callbacks);
-    try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-    try self.emitBuiltinCall(.list_set);
+/// Element refcount handling for `list_set` and `list_replace`: the Boxy
+/// element descriptor only when builtins link through relocations, the element
+/// callbacks of the builtin `builtin_name` otherwise.
+fn listReplaceElemRc(self: *Self, list_abi: BuiltinListAbi, list_local: ProcLocalId, target: ?ProcLocalId, comptime builtin_name: []const u8) Allocator.Error!ListElemRc {
+    if (self.external_calls == .builtin_relocs) {
+        if (self.boxyListElementDescForLocals(list_abi, &.{list_local}, target)) |boxy_elem| return .{ .boxy = boxy_elem };
+    }
+    self.requireBuiltinCalls(builtin_name);
+    return .{ .callbacks = try self.listElementCallbacks(list_abi) };
 }
 
 /// Generate list_set: replace the element at `index` and release the displaced
@@ -16133,22 +15753,16 @@ fn generateLLListSet(self: *Self, args: anytype, ret_layout: layout.Idx, target:
     const index_local = try self.materializeListIndex(GuardedList.at(args, 1));
     const elem_ptr = try self.materializeElementPtr(GuardedList.at(args, 2), elem_layout_idx, elem_size, elem_align);
 
-    const list_local = GuardedList.at(args, 0);
-    if (self.external_calls == .builtin_relocs and self.boxyListElementDescForLocals(list_abi, &.{list_local}, target) != null) {
-        const boxy_elem = self.boxyListElementDescForLocals(list_abi, &.{list_local}, target).?;
-        const fields = try self.loadRocListFields(list_ptr);
-        try self.emitFpOffset(result_offset);
-        try self.emitRocListFields(fields);
-        try self.emitI32Const(@intCast(elem_align));
-        try self.emitLocalGets(.{ index_local, elem_ptr });
-        try self.emitI32Const(@intCast(elem_size));
-        try self.emitI32Const(@intCast(@backingInt(boxy_elem.elem_layout)));
-        try self.resolveBoxyDesc(boxy_elem.desc);
-        try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-        try self.emitBoxyCall("roc_boxy_list_set");
-    } else {
-        try self.emitListSetCall(list_abi, list_ptr, index_local, elem_ptr, result_offset, unique_args);
-    }
+    const fields = try self.loadRocListFields(list_ptr);
+    const rc = try self.listReplaceElemRc(list_abi, GuardedList.at(args, 0), target, "list_set");
+    try self.emitFpOffset(result_offset);
+    try self.emitRocListFields(fields);
+    try self.emitI32Const(@intCast(elem_align));
+    try self.emitLocalGets(.{ index_local, elem_ptr });
+    try self.emitI32Const(@intCast(elem_size));
+    try self.emitListElemRcArgs(rc);
+    try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+    try self.emitListElemRcCall(rc, .list_set, .list_set);
     try self.emitFpOffset(result_offset);
 }
 
@@ -16178,31 +15792,17 @@ fn generateLLListReplaceUnsafe(self: *Self, args: anytype, ret_layout: layout.Id
     const index_local = try self.materializeListIndex(GuardedList.at(args, 1));
     const elem_ptr = try self.materializeElementPtr(GuardedList.at(args, 2), elem_layout_idx, elem_size, elem_align);
 
-    const list_local = GuardedList.at(args, 0);
-    if (self.external_calls == .builtin_relocs and self.boxyListElementDescForLocals(list_abi, &.{list_local}, target) != null) {
-        const boxy_elem = self.boxyListElementDescForLocals(list_abi, &.{list_local}, target).?;
-        const fields = try self.loadRocListFields(list_ptr);
-        try self.emitFpOffset(result_offset + pair.list_offset);
-        try self.emitRocListFields(fields);
-        try self.emitI32Const(@intCast(elem_align));
-        try self.emitLocalGets(.{ index_local, elem_ptr });
-        try self.emitI32Const(@intCast(elem_size));
-        try self.emitFpOffset(result_offset + pair.elem_offset);
-        try self.emitI32Const(@intCast(@backingInt(boxy_elem.elem_layout)));
-        try self.resolveBoxyDesc(boxy_elem.desc);
-        try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-        try self.emitBoxyCall("roc_boxy_list_replace");
-    } else {
-        try self.emitListReplaceCall(
-            list_abi,
-            list_ptr,
-            index_local,
-            elem_ptr,
-            result_offset + pair.elem_offset,
-            result_offset + pair.list_offset,
-            unique_args,
-        );
-    }
+    const fields = try self.loadRocListFields(list_ptr);
+    const rc = try self.listReplaceElemRc(list_abi, GuardedList.at(args, 0), target, "list_replace");
+    try self.emitFpOffset(result_offset + pair.list_offset);
+    try self.emitRocListFields(fields);
+    try self.emitI32Const(@intCast(elem_align));
+    try self.emitLocalGets(.{ index_local, elem_ptr });
+    try self.emitI32Const(@intCast(elem_size));
+    try self.emitFpOffset(result_offset + pair.elem_offset);
+    try self.emitListElemRcArgs(rc);
+    try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+    try self.emitListElemRcCall(rc, BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_replace_unsafe)), .list_replace);
     try self.emitFpOffset(result_offset);
 }
 
@@ -16231,34 +15831,22 @@ fn generateLLListSwap(self: *Self, args: anytype, ret_layout: layout.Idx, target
     self.requireBuiltinCalls("list_swap");
     const fields = try self.loadRocListFields(list_ptr);
     const list_local = GuardedList.at(args, 0);
-    if (self.boxyListElementDescForLocals(list_abi, &.{list_local}, target)) |boxy_elem| {
-        try self.emitFpOffset(result_offset);
-        try self.emitRocListFields(fields);
-        try self.emitI32Const(@intCast(elem_align));
-        try self.emitI32Const(@intCast(elem_size));
-        try self.emitLocalGets(.{ index_1_local, index_2_local });
-        try self.emitI32Const(@intCast(@backingInt(boxy_elem.elem_layout)));
-        try self.resolveBoxyDesc(boxy_elem.desc);
-        try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-        try self.emitBoxyCall("roc_boxy_list_swap");
-    } else {
-        const callbacks = try self.listElementCallbacks(list_abi);
-        try self.emitFpOffset(result_offset);
-        try self.emitRocListFields(fields);
-        try self.emitI32Const(@intCast(elem_align));
-        try self.emitI32Const(@intCast(elem_size));
-        try self.emitLocalGets(.{ index_1_local, index_2_local });
-        try self.emitListElementCallbackArgs(callbacks);
-        try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-        try self.emitBuiltinCall(.list_swap);
-    }
+    const rc = try self.listElemRc(list_abi, &.{list_local}, target);
+    try self.emitFpOffset(result_offset);
+    try self.emitRocListFields(fields);
+    try self.emitI32Const(@intCast(elem_align));
+    try self.emitI32Const(@intCast(elem_size));
+    try self.emitLocalGets(.{ index_1_local, index_2_local });
+    try self.emitListElemRcArgs(rc);
+    try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+    try self.emitListElemRcCall(rc, .list_swap, .list_swap);
     try self.emitFpOffset(result_offset);
 }
 
 /// Generate list_reserve or list_reserve_for_append: ensure the list has room
 /// for the given number of additional elements, calling the builtin `kind`
-/// or `boxy_symbol`
-fn generateLLListReserve(self: *Self, kind: BuiltinKind, boxy_symbol: []const u8, args: anytype, ret_layout: layout.Idx, target: ?ProcLocalId, unique_args: u64) Allocator.Error!void {
+/// or `boxy_fn`
+fn generateLLListReserve(self: *Self, kind: BuiltinKind, boxy_fn: boxy_call_plan.BoxyBuiltinFn, args: anytype, ret_layout: layout.Idx, target: ?ProcLocalId, unique_args: u64) Allocator.Error!void {
     const list_abi = self.builtinInternalListAbi("wasm.generateLLListReserve.builtin_list_abi", ret_layout);
     const elem_size = list_abi.elem_size;
 
@@ -16281,27 +15869,15 @@ fn generateLLListReserve(self: *Self, kind: BuiltinKind, boxy_symbol: []const u8
     self.requireBuiltinCalls("list_reserve");
     const fields = try self.loadRocListFields(list_ptr);
     const list_local = GuardedList.at(args, 0);
-    if (self.boxyListElementDescForLocals(list_abi, &.{list_local}, target)) |boxy_elem| {
-        try self.emitFpOffset(result_offset);
-        try self.emitRocListFields(fields);
-        try self.emitI32Const(@intCast(elem_align));
-        try self.emitLocalGet(spare_local);
-        try self.emitI32Const(@intCast(elem_size));
-        try self.emitI32Const(@intCast(@backingInt(boxy_elem.elem_layout)));
-        try self.resolveBoxyDesc(boxy_elem.desc);
-        try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-        try self.emitBoxyCall(boxy_symbol);
-    } else {
-        const callbacks = try self.listElementCallbacks(list_abi);
-        try self.emitFpOffset(result_offset);
-        try self.emitRocListFields(fields);
-        try self.emitI32Const(@intCast(elem_align));
-        try self.emitLocalGet(spare_local);
-        try self.emitI32Const(@intCast(elem_size));
-        try self.emitListElementCallbackArgs(callbacks);
-        try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-        try self.emitBuiltinCall(kind);
-    }
+    const rc = try self.listElemRc(list_abi, &.{list_local}, target);
+    try self.emitFpOffset(result_offset);
+    try self.emitRocListFields(fields);
+    try self.emitI32Const(@intCast(elem_align));
+    try self.emitLocalGet(spare_local);
+    try self.emitI32Const(@intCast(elem_size));
+    try self.emitListElemRcArgs(rc);
+    try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+    try self.emitListElemRcCall(rc, kind, boxy_fn);
     try self.emitFpOffset(result_offset);
 }
 
@@ -16467,7 +16043,7 @@ fn generateLLListReleaseExcessCapacity(self: *Self, args: anytype, ret_layout: l
     const zero5 = try self.emitI32ConstToNewLocal(0);
     try self.emitMemCopyLoop(new_data, zero5, old_data, total_size);
 
-    try self.buildRocList(new_data, old_len);
+    try self.buildRocListWithCap(new_data, old_len, old_len);
 }
 
 const ListElementPairLayout = struct {

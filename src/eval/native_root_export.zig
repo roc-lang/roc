@@ -12,10 +12,10 @@ const layout = @import("layout");
 const lir = @import("lir");
 const static_data = @import("static_data");
 const Value = @import("value.zig").Value;
+const frozen_graph = @import("frozen_graph.zig");
 const Allocator = std.mem.Allocator;
 const Program = lir.Program;
 const Error = Allocator.Error || error{RuntimeError};
-const SymbolId = static_data.StaticDataSymbolId;
 const word_size = @sizeOf(usize);
 
 /// The evaluator supplies identities recorded when it emitted native code.
@@ -69,15 +69,13 @@ pub fn freezeRootIntoSlot(
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     var builder = Builder{
-        .allocator = arena.allocator(),
-        .program = program,
-        .slot = slot,
+        .graph = .{ .allocator = arena.allocator(), .program = program, .slot = slot },
         .callables = callables,
     };
-    const root_symbol = try builder.addNode(
-        try Program.staticDataSymbolName(builder.allocator, slot),
-        builder.size(slot_layout),
-        builder.alignment(slot_layout),
+    const root_symbol = try builder.graph.addNode(
+        try Program.staticDataSymbolName(builder.graph.allocator, slot),
+        builder.graph.size(slot_layout),
+        builder.graph.alignment(slot_layout),
     );
     if (slot_layout == root.ret_layout) {
         try builder.enqueue(root.plan, root.ret_layout, value, .{ .symbol = root_symbol }, .value);
@@ -87,14 +85,14 @@ pub fn freezeRootIntoSlot(
             invariant("evaluated root slot was neither the root's layout nor a box around it");
         }
         const payload_layout = root.ret_layout;
-        const result = try builder.reserveAllocation(.{
+        const result = try builder.graph.reserveAllocation(.{
             .address = @intFromPtr(value.ptr),
             .plan = root.plan,
             .layout_idx = payload_layout,
             .count = 1,
             .kind = .value,
-        }, builder.size(payload_layout), builder.alignment(payload_layout), program.layouts.layoutContainsRefcounted(program.layouts.getLayout(payload_layout)), null);
-        try builder.relocate(.{ .symbol = root_symbol }, result.dest);
+        }, builder.graph.size(payload_layout), builder.graph.alignment(payload_layout), program.layouts.layoutContainsRefcounted(program.layouts.getLayout(payload_layout)), null);
+        try builder.graph.relocate(.{ .symbol = root_symbol }, result.dest);
         if (result.fresh) try builder.enqueue(root.plan, payload_layout, value, result.dest, .value);
     }
     var next: usize = 0;
@@ -102,17 +100,10 @@ pub fn freezeRootIntoSlot(
         const job = builder.jobs.items[next];
         try builder.visit(job);
     }
-    return builder.finish(allocator);
+    return builder.graph.finish(allocator);
 }
 
-const Destination = struct {
-    symbol: SymbolId,
-    offset: usize = 0,
-
-    fn offsetBy(self: Destination, amount: usize) Destination {
-        return .{ .symbol = self.symbol, .offset = self.offset + amount };
-    }
-};
+const Destination = frozen_graph.Destination;
 
 const Job = struct {
     plan: Program.ConstPlanId,
@@ -120,15 +111,6 @@ const Job = struct {
     source: Value,
     dest: Destination,
     storage: Program.CaptureSlotStorage,
-};
-
-const Node = struct {
-    name: []const u8,
-    bytes: []u8,
-    alignment: u32,
-    relocations: std.ArrayList(static_data.StaticDataRelocation) = .empty,
-    /// The evaluated capacities of the empty lists inside the root value.
-    empty_list_capacities: std.ArrayList(static_data.EmptyListCapacity) = .empty,
 };
 
 /// A typed view is explicit in the producer's plan. Reserving its destination
@@ -142,103 +124,47 @@ const AllocationKey = struct {
 };
 
 const Builder = struct {
-    allocator: Allocator,
-    program: *const Program.Result,
-    slot: lir.LIR.StaticDataId,
+    graph: frozen_graph.Graph(AllocationKey),
     callables: CallableResolver,
-    nodes: std.ArrayList(Node) = .empty,
     jobs: std.ArrayList(Job) = .empty,
-    allocations: std.AutoHashMapUnmanaged(AllocationKey, Destination) = .empty,
     frozen_descriptors: std.AutoHashMapUnmanaged(Program.BoxyTypeDescId, Destination) = .empty,
 
-    fn size(self: *const Builder, idx: layout.Idx) usize {
-        return self.program.layouts.layoutSize(self.program.layouts.getLayout(idx));
-    }
-
-    fn alignment(self: *const Builder, idx: layout.Idx) u32 {
-        return @intCast(self.program.layouts.getLayout(idx).alignment(self.program.layouts.targetUsize()).toByteUnits());
-    }
-
-    fn addNode(self: *Builder, name: []const u8, byte_count: usize, alignment_: u32) Allocator.Error!SymbolId {
-        const node_bytes = try self.allocator.alloc(u8, byte_count);
-        @memset(node_bytes, 0);
-        const symbol: SymbolId = @fromBackingInt(@intCast(self.nodes.items.len));
-        try self.nodes.append(self.allocator, .{ .name = name, .bytes = node_bytes, .alignment = alignment_ });
-        return symbol;
-    }
-
-    fn node(self: *Builder, dest: Destination) *Node {
-        return &self.nodes.items[@backingInt(dest.symbol)];
-    }
-
-    fn bytes(self: *Builder, dest: Destination, count: usize) []u8 {
-        return self.node(dest).bytes[dest.offset..][0..count];
-    }
-
-    fn writeWord(self: *Builder, dest: Destination, value: usize) void {
-        std.mem.writeInt(usize, self.bytes(dest, word_size)[0..word_size], value, .little);
-    }
-
     fn enqueue(self: *Builder, plan: Program.ConstPlanId, idx: layout.Idx, source: Value, dest: Destination, storage: Program.CaptureSlotStorage) Allocator.Error!void {
-        try self.jobs.append(self.allocator, .{ .plan = plan, .layout_idx = idx, .source = source, .dest = dest, .storage = storage });
-    }
-
-    fn relocate(self: *Builder, dest: Destination, target: Destination) Allocator.Error!void {
-        // Zero pointer bytes explicitly; only the relocation gives them meaning.
-        self.writeWord(dest, 0);
-        try self.node(dest).relocations.append(self.allocator, .{
-            .offset = dest.offset,
-            .target_symbol_name = self.node(target).name,
-            .target = .{ .data_symbol = target.symbol },
-            .addend = @intCast(target.offset),
-        });
-    }
-
-    fn reserveAllocation(self: *Builder, key: AllocationKey, byte_count: usize, alignment_: u32, contains_refcounted: bool, element_count: ?usize) Allocator.Error!struct { dest: Destination, fresh: bool } {
-        if (self.allocations.get(key)) |existing| return .{ .dest = existing, .fresh = false };
-        const header_size: usize = if (contains_refcounted) 2 * word_size else word_size;
-        const payload_offset = std.mem.alignForward(usize, header_size, alignment_);
-        const name = try Program.staticDataNodeSymbolName(self.allocator, @backingInt(self.slot), @intCast(self.nodes.items.len));
-        const symbol = try self.addNode(name, payload_offset + byte_count, @max(alignment_, word_size));
-        const dest = Destination{ .symbol = symbol, .offset = payload_offset };
-        // A zero RC header is the runtime's immutable/static allocation marker.
-        if (contains_refcounted) self.writeWord(.{ .symbol = symbol, .offset = payload_offset - 2 * word_size }, element_count orelse 0);
-        try self.allocations.put(self.allocator, key, dest);
-        return .{ .dest = dest, .fresh = true };
+        try self.jobs.append(self.graph.allocator, .{ .plan = plan, .layout_idx = idx, .source = source, .dest = dest, .storage = storage });
     }
 
     fn boxed(self: *Builder, job: Job, child_plan: Program.ConstPlanId, child_layout: layout.Idx) Allocator.Error!void {
         const address = job.source.read(usize);
         if (address == 0) invariant("nonzero-sized boxed root value had a null payload");
         const child_value = Value{ .ptr = @ptrFromInt(address) };
-        const result = try self.reserveAllocation(.{
+        const result = try self.graph.reserveAllocation(.{
             .address = address,
             .plan = child_plan,
             .layout_idx = child_layout,
             .count = 1,
             .kind = .value,
-        }, self.size(child_layout), self.alignment(child_layout), self.program.layouts.layoutContainsRefcounted(self.program.layouts.getLayout(child_layout)), null);
-        try self.relocate(job.dest, result.dest);
+        }, self.graph.size(child_layout), self.graph.alignment(child_layout), self.graph.program.layouts.layoutContainsRefcounted(self.graph.program.layouts.getLayout(child_layout)), null);
+        try self.graph.relocate(job.dest, result.dest);
         if (result.fresh) try self.enqueue(child_plan, child_layout, child_value, result.dest, .value);
     }
 
     fn visit(self: *Builder, job: Job) Error!void {
-        const physical = self.program.layouts.getLayout(job.layout_idx);
+        const physical = self.graph.program.layouts.getLayout(job.layout_idx);
         if (job.storage == .recursive_box) {
             if (physical.tag != .box) invariant("recursive capture plan lacked box storage");
             return self.boxed(job, job.plan, physical.getIdx());
         }
-        const plan = self.program.const_plans.items[@backingInt(job.plan)];
+        const plan = self.graph.program.const_plans.items[@backingInt(job.plan)];
         switch (plan) {
             .pending, .layout_only => invariant("incomplete const plan reached native root export"),
-            .boxy_box => |box| if (self.size(box.layout_idx) != 0) {
+            .boxy_box => |box| if (self.graph.size(box.layout_idx) != 0) {
                 try self.boxed(job, box.payload, box.layout_idx);
             },
             .zst => {},
             .scalar => {
                 if (physical.tag != .scalar or physical.getScalar().tag == .opaque_ptr or physical.getScalar().tag == .str) invariant("scalar export plan did not name pointer-free scalar bytes");
-                const dest = self.bytes(job.dest, self.size(job.layout_idx));
-                @memcpy(dest, job.source.readBytes(self.size(job.layout_idx)));
+                const dest = self.graph.bytes(job.dest, self.graph.size(job.layout_idx));
+                @memcpy(dest, job.source.readBytes(self.graph.size(job.layout_idx)));
                 // Frozen data is canonical: a NaN keeps whatever bits the
                 // evaluation produced until here, where it becomes Roc's one
                 // NaN.
@@ -251,7 +177,7 @@ const Builder = struct {
             .str => try self.string(job),
             .list => |element| try self.list(job, element),
             .box => |element| switch (physical.tag) {
-                .box_of_zst => self.writeWord(job.dest, 0),
+                .box_of_zst => self.graph.writeWord(job.dest, 0),
                 .box => try self.boxed(job, element, physical.getIdx()),
                 .erased_callable => try self.enqueue(element, job.layout_idx, job.source, job.dest, .value),
                 .scalar, .list, .list_of_zst, .struct_, .closure, .zst, .tag_union, .ptr, .erased_box => invariant("box export plan had incompatible layout"),
@@ -259,7 +185,7 @@ const Builder = struct {
             .tuple, .record => |child_plans| {
                 if (physical.tag == .box) return self.boxed(job, job.plan, physical.getIdx());
                 if (physical.tag == .box_of_zst) {
-                    self.writeWord(job.dest, 0);
+                    self.graph.writeWord(job.dest, 0);
                     return;
                 }
                 try self.children(child_plans, job.layout_idx, job.source, job.dest, false);
@@ -277,7 +203,7 @@ const Builder = struct {
             },
             .fn_value => |set_id| {
                 if (physical.tag == .box) return self.boxed(job, job.plan, physical.getIdx());
-                const set = self.program.fn_sets.items[@backingInt(set_id)];
+                const set = self.graph.program.fn_sets.items[@backingInt(set_id)];
                 const discriminant = self.tagDiscriminant(job);
                 for (set.variants) |variant| {
                     if (variant.discriminant != discriminant) continue;
@@ -295,49 +221,49 @@ const Builder = struct {
         const slice = str.asSlice();
         if (builtins.str.RocStr.fitsInSmallStr(slice.len)) {
             var small = builtins.str.RocStr.fromSliceSmall(slice);
-            @memcpy(self.bytes(job.dest, @sizeOf(builtins.str.RocStr)), std.mem.asBytes(&small));
+            @memcpy(self.graph.bytes(job.dest, @sizeOf(builtins.str.RocStr)), std.mem.asBytes(&small));
             return;
         }
-        const result = try self.reserveAllocation(.{
+        const result = try self.graph.reserveAllocation(.{
             .address = @intFromPtr(slice.ptr),
             .plan = job.plan,
             .layout_idx = job.layout_idx,
             .count = slice.len,
             .kind = .string,
         }, slice.len, 1, false, null);
-        if (result.fresh) @memcpy(self.bytes(result.dest, slice.len), slice);
-        try self.relocate(job.dest, result.dest);
-        self.writeWord(job.dest.offsetBy(@offsetOf(builtins.str.RocStr, "capacity_or_alloc_ptr")), builtins.str.RocStr.encodeCapacity(slice.len));
-        self.writeWord(job.dest.offsetBy(@offsetOf(builtins.str.RocStr, "length")), slice.len);
+        if (result.fresh) @memcpy(self.graph.bytes(result.dest, slice.len), slice);
+        try self.graph.relocate(job.dest, result.dest);
+        self.graph.writeWord(job.dest.offsetBy(@offsetOf(builtins.str.RocStr, "capacity_or_alloc_ptr")), builtins.str.RocStr.encodeCapacity(slice.len));
+        self.graph.writeWord(job.dest.offsetBy(@offsetOf(builtins.str.RocStr, "length")), slice.len);
     }
 
     fn list(self: *Builder, job: Job, element: Program.ConstPlanId) Allocator.Error!void {
-        const physical = self.program.layouts.getLayout(job.layout_idx);
+        const physical = self.graph.program.layouts.getLayout(job.layout_idx);
         if (physical.tag != .list and physical.tag != .list_of_zst) invariant("list export plan had non-list layout");
         const list_value = job.source.read(builtins.list.RocList);
-        self.writeWord(job.dest.offsetBy(word_size), list_value.len());
-        self.writeWord(job.dest.offsetBy(2 * word_size), builtins.list.RocList.encodeCapacity(list_value.len()));
+        self.graph.writeWord(job.dest.offsetBy(word_size), list_value.len());
+        self.graph.writeWord(job.dest.offsetBy(2 * word_size), builtins.list.RocList.encodeCapacity(list_value.len()));
         if (list_value.len() == 0) {
             // The descriptor cannot carry the capacity the value was
             // evaluated with; keep it on the root so the runtime can
             // construct the list as the `with_capacity` it came from.
             if (@backingInt(job.dest.symbol) == 0 and physical.tag == .list and list_value.getCapacity() != 0) {
-                try self.nodes.items[0].empty_list_capacities.append(self.allocator, .{ .offset = job.dest.offset, .capacity = list_value.getCapacity() });
+                try self.graph.nodes.items[0].empty_list_capacities.append(self.graph.allocator, .{ .offset = job.dest.offset, .capacity = list_value.getCapacity() });
             }
             return;
         }
         if (physical.tag == .list_of_zst) return;
         const ptr = list_value.bytes orelse invariant("nonempty native list had a null pointer");
         const element_layout = physical.getIdx();
-        const element_size = self.size(element_layout);
-        const result = try self.reserveAllocation(.{
+        const element_size = self.graph.size(element_layout);
+        const result = try self.graph.reserveAllocation(.{
             .address = @intFromPtr(ptr),
             .plan = element,
             .layout_idx = element_layout,
             .count = list_value.len(),
             .kind = .list,
-        }, element_size * list_value.len(), self.alignment(element_layout), self.program.layouts.layoutContainsRefcounted(self.program.layouts.getLayout(element_layout)), list_value.len());
-        try self.relocate(job.dest, result.dest);
+        }, element_size * list_value.len(), self.graph.alignment(element_layout), self.graph.program.layouts.layoutContainsRefcounted(self.graph.program.layouts.getLayout(element_layout)), list_value.len());
+        try self.graph.relocate(job.dest, result.dest);
         if (result.fresh) {
             for (0..list_value.len()) |index| {
                 try self.enqueue(element, element_layout, .{ .ptr = ptr + index * element_size }, result.dest.offsetBy(index * element_size), .value);
@@ -346,43 +272,43 @@ const Builder = struct {
     }
 
     fn children(self: *Builder, plans: []const Program.ConstPlanId, idx: layout.Idx, source: Value, dest: Destination, tag_payload: bool) Allocator.Error!void {
-        if (plans.len == 0 or self.size(idx) == 0) return;
+        if (plans.len == 0 or self.graph.size(idx) == 0) return;
         if (tag_payload and plans.len == 1) return self.enqueue(plans[0], idx, source, dest, .value);
-        const physical = self.program.layouts.getLayout(idx);
+        const physical = self.graph.program.layouts.getLayout(idx);
         if (physical.tag != .struct_) invariant("aggregate export plan had non-struct layout");
         for (plans, 0..) |plan, original_index| {
-            const child_layout = self.program.layouts.getStructFieldLayoutByOriginalIndex(physical.getStruct().idx, @intCast(original_index));
-            const offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(physical.getStruct().idx, @intCast(original_index));
+            const child_layout = self.graph.program.layouts.getStructFieldLayoutByOriginalIndex(physical.getStruct().idx, @intCast(original_index));
+            const offset = self.graph.program.layouts.getStructFieldOffsetByOriginalIndex(physical.getStruct().idx, @intCast(original_index));
             try self.enqueue(plan, child_layout, source.offset(offset), dest.offsetBy(offset), .value);
         }
     }
 
     fn tagDiscriminant(self: *Builder, job: Job) u32 {
-        const physical = self.program.layouts.getLayout(job.layout_idx);
+        const physical = self.graph.program.layouts.getLayout(job.layout_idx);
         if (physical.tag == .zst) return 0;
         if (physical.tag != .tag_union) invariant("native tag export had non-tag layout");
-        const data = self.program.layouts.getTagUnionData(physical.getTagUnion().idx);
-        const discriminant = data.readDiscriminant(job.source.ptr, self.program.layouts.targetUsize());
-        data.writeDiscriminant(self.bytes(job.dest, self.size(job.layout_idx)).ptr, discriminant, self.program.layouts.targetUsize());
+        const data = self.graph.program.layouts.getTagUnionData(physical.getTagUnion().idx);
+        const discriminant = data.readDiscriminant(job.source.ptr, self.graph.program.layouts.targetUsize());
+        data.writeDiscriminant(self.graph.bytes(job.dest, self.graph.size(job.layout_idx)).ptr, discriminant, self.graph.program.layouts.targetUsize());
         return @intCast(discriminant);
     }
 
     fn tagPayload(self: *Builder, idx: layout.Idx, discriminant: u32) layout.Idx {
-        const physical = self.program.layouts.getLayout(idx);
+        const physical = self.graph.program.layouts.getLayout(idx);
         if (physical.tag == .zst) return .zst;
-        const data = self.program.layouts.getTagUnionData(physical.getTagUnion().idx);
-        const variants = self.program.layouts.getTagUnionVariants(data);
+        const data = self.graph.program.layouts.getTagUnionData(physical.getTagUnion().idx);
+        const variants = self.graph.program.layouts.getTagUnionVariants(data);
         if (discriminant >= variants.len) invariant("native tag discriminant exceeded layout variants");
         return variants.get(discriminant).payload_layout;
     }
 
     fn captures(self: *Builder, slots: []const Program.CaptureSlot, idx: layout.Idx, source: Value, dest: Destination) Allocator.Error!void {
-        if (slots.len == 0 or self.size(idx) == 0) return;
-        const physical = self.program.layouts.getLayout(idx);
+        if (slots.len == 0 or self.graph.size(idx) == 0) return;
+        const physical = self.graph.program.layouts.getLayout(idx);
         if (physical.tag == .struct_) {
             for (slots) |slot| {
-                const child_layout = self.program.layouts.getStructFieldLayoutByOriginalIndex(physical.getStruct().idx, slot.slot);
-                const offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(physical.getStruct().idx, slot.slot);
+                const child_layout = self.graph.program.layouts.getStructFieldLayoutByOriginalIndex(physical.getStruct().idx, slot.slot);
+                const offset = self.graph.program.layouts.getStructFieldOffsetByOriginalIndex(physical.getStruct().idx, slot.slot);
                 try self.enqueue(slot.plan, child_layout, source.offset(offset), dest.offsetBy(offset), slot.storage);
             }
         } else if (slots.len == 1) {
@@ -392,54 +318,28 @@ const Builder = struct {
 
     fn frozenDescriptor(self: *Builder, id: Program.BoxyTypeDescId) Allocator.Error!Destination {
         if (self.frozen_descriptors.get(id)) |dest| return dest;
-        const descriptor = &self.program.boxy_type_descs.items[@backingInt(id)];
-        if (descriptor.closure != .closed) invariant("frozen descriptor recipe retained runtime context");
-        // Boxy descriptors are pointer-free image rows. Their child references
-        // remain IDs in this program's immutable sidecar, exactly as in LirImage.
-        const symbol = try self.addNode(try Program.staticDataNodeSymbolName(self.allocator, @backingInt(self.slot), @intCast(self.nodes.items.len)), @sizeOf(Program.BoxyTypeDesc), @alignOf(Program.BoxyTypeDesc));
-        const dest = Destination{ .symbol = symbol };
-        @memcpy(self.bytes(dest, @sizeOf(Program.BoxyTypeDesc)), std.mem.asBytes(descriptor));
-        try self.frozen_descriptors.put(self.allocator, id, dest);
-        return dest;
-    }
-
-    fn boxyCaptureLocation(self: *Builder, idx: layout.Idx, slot: u32) struct { idx: layout.Idx, offset: usize } {
-        const physical = self.program.layouts.getLayout(idx);
-        if (physical.tag == .struct_) return .{
-            .idx = self.program.layouts.getStructFieldLayoutByOriginalIndex(physical.getStruct().idx, @intCast(slot)),
-            .offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(physical.getStruct().idx, @intCast(slot)),
-        };
-        if (slot != 0) invariant("non-struct Boxy capture had multiple fields");
-        return .{ .idx = idx, .offset = 0 };
-    }
-
-    fn frozenDictionary(self: *Builder, id: Program.BoxyDictId) Allocator.Error!Destination {
-        const dict = self.program.boxy_dicts.items[@backingInt(id)];
-        if (dict.template) invariant("frozen dictionary retained a runtime template");
-        const name = try Program.staticDataNodeSymbolName(self.allocator, @backingInt(self.slot), @intCast(self.nodes.items.len));
-        const symbol = try self.addNode(name, @sizeOf(Program.BoxyDict), @alignOf(Program.BoxyDict));
-        const dest = Destination{ .symbol = symbol, .offset = 0 };
-        @memcpy(self.bytes(dest, @sizeOf(Program.BoxyDict)), std.mem.asBytes(&dict));
+        const dest = try self.graph.frozenDescriptor(id);
+        try self.frozen_descriptors.put(self.graph.allocator, id, dest);
         return dest;
     }
 
     fn matchesBoxyEnvironment(self: *Builder, entry: Program.ErasedFn, source: Value) Allocator.Error!bool {
         const boxy = entry.boxy orelse return true;
-        var matcher = @import("boxy_frozen_evidence.zig").Matcher{ .allocator = self.allocator, .program = self.program, .runtime = self.callables.runtime orelse invariant("Boxy freeze recipe lacked evaluator evidence tables") };
+        var matcher = @import("boxy_frozen_evidence.zig").Matcher{ .allocator = self.graph.allocator, .program = self.graph.program, .runtime = self.callables.runtime orelse invariant("Boxy freeze recipe lacked evaluator evidence tables") };
         defer matcher.deinit();
         for (boxy.captures) |capture| switch (capture.value) {
             .value, .contents_descriptor => {},
             .descriptor => |id| {
-                const field = self.boxyCaptureLocation(entry.capture_layout, capture.slot);
+                const field = frozen_graph.boxyCaptureLocation(self.graph.program, entry.capture_layout, capture.slot);
                 const ptr = source.offset(field.offset).read(usize);
                 if (ptr == 0) return false;
-                if (!try matcher.descriptor(@ptrFromInt(ptr), &self.program.boxy_type_descs.items[@backingInt(id)])) return false;
+                if (!try matcher.descriptor(@ptrFromInt(ptr), &self.graph.program.boxy_type_descs.items[@backingInt(id)])) return false;
             },
             .dictionary => |id| {
-                const field = self.boxyCaptureLocation(entry.capture_layout, capture.slot);
+                const field = frozen_graph.boxyCaptureLocation(self.graph.program, entry.capture_layout, capture.slot);
                 const ptr = source.offset(field.offset).read(usize);
                 if (ptr == 0) return false;
-                if (!try matcher.dictionary(@ptrFromInt(ptr), &self.program.boxy_dicts.items[@backingInt(id)])) return false;
+                if (!try matcher.dictionary(@ptrFromInt(ptr), &self.graph.program.boxy_dicts.items[@backingInt(id)])) return false;
             },
         };
         return true;
@@ -449,26 +349,26 @@ const Builder = struct {
         const address = job.source.read(usize);
         if (address == 0) invariant("native erased callable had a null payload");
         const resolved = try self.callables.resolve(self.callables.context, @ptrFromInt(address));
-        const set = self.program.erased_fns.items[@backingInt(set_id)];
+        const set = self.graph.program.erased_fns.items[@backingInt(set_id)];
         for (set.entries, 0..) |entry, recipe_index| {
             if (entry.entry != resolved.proc) continue;
             if (!try self.matchesBoxyEnvironment(entry, .{ .ptr = resolved.capture_ptr })) continue;
             // The program's erased capture prefix stays zeroed: a static value
             // is never dropped, so nothing reads the header it reserves.
-            const prefix = self.program.erased_capture_prefix;
+            const prefix = self.graph.program.erased_capture_prefix;
             const capture_offset = builtins.erased_callable.capture_offset + prefix;
-            const capture_size = prefix + self.size(entry.capture_layout);
-            const result = try self.reserveAllocation(.{
+            const capture_size = prefix + self.graph.size(entry.capture_layout);
+            const result = try self.graph.reserveAllocation(.{
                 .address = address,
                 .plan = job.plan,
                 .layout_idx = job.layout_idx,
                 .count = 1,
                 .kind = .erased,
             }, if (entry.boxy != null) builtins.erased_callable.compilerPayloadSize(capture_size) else builtins.erased_callable.payloadSize(capture_size), builtins.erased_callable.payload_alignment, builtins.erased_callable.allocation_has_refcounted_children, null);
-            try self.relocate(job.dest, result.dest);
+            try self.graph.relocate(job.dest, result.dest);
             if (!result.fresh) return;
-            const proc_name = try static_data.procSymbolName(self.allocator, self.program.store.getProcSpec(resolved.proc).identity);
-            try self.node(result.dest).relocations.append(self.allocator, .{
+            const proc_name = try static_data.procSymbolName(self.graph.allocator, self.graph.program.store.getProcSpec(resolved.proc).identity);
+            try self.graph.node(result.dest).relocations.append(self.graph.allocator, .{
                 .offset = result.dest.offset,
                 .target_symbol_name = proc_name,
                 .kind = .function_pointer,
@@ -482,80 +382,28 @@ const Builder = struct {
                 .boxy_capture => invariant("frozen callable lacks durable producer drop authority"),
             };
             if (on_drop) |helper| {
-                try self.node(result.dest).relocations.append(self.allocator, .{
+                try self.graph.node(result.dest).relocations.append(self.graph.allocator, .{
                     .offset = result.dest.offset + word_size,
-                    .target_symbol_name = try static_data.atomicRcHelperSymbolName(self.allocator, &self.program.layouts, helper),
+                    .target_symbol_name = try static_data.atomicRcHelperSymbolName(self.graph.allocator, &self.graph.program.layouts, helper),
                     .kind = .function_pointer,
                     .rc_helper = helper,
                 });
             }
             if (entry.boxy) |boxy| {
                 for (boxy.captures) |capture| {
-                    const field = self.boxyCaptureLocation(entry.capture_layout, capture.slot);
+                    const field = frozen_graph.boxyCaptureLocation(self.graph.program, entry.capture_layout, capture.slot);
                     const dest = result.dest.offsetBy(capture_offset + field.offset);
                     switch (capture.value) {
                         .value => |plan| try self.enqueue(plan, field.idx, .{ .ptr = resolved.capture_ptr + field.offset }, dest, .value),
-                        .descriptor, .contents_descriptor => |id| try self.relocate(dest, try self.frozenDescriptor(id)),
-                        .dictionary => |id| try self.relocate(dest, try self.frozenDictionary(id)),
+                        .descriptor, .contents_descriptor => |id| try self.graph.relocate(dest, try self.frozenDescriptor(id)),
+                        .dictionary => |id| try self.graph.relocate(dest, try self.graph.frozenDictionary(id)),
                     }
                 }
-                if (boxy.result_desc) |id| try self.relocate(result.dest.offsetBy(builtins.erased_callable.capture_offset + builtins.erased_callable.compilerMetadataOffset(capture_size)), try self.frozenDescriptor(id));
+                if (boxy.result_desc) |id| try self.graph.relocate(result.dest.offsetBy(builtins.erased_callable.capture_offset + builtins.erased_callable.compilerMetadataOffset(capture_size)), try self.frozenDescriptor(id));
             } else try self.captures(entry.captures, entry.capture_layout, .{ .ptr = resolved.capture_ptr }, result.dest.offsetBy(capture_offset));
             return;
         }
         invariant("native erased callable did not match an explicit entry");
-    }
-
-    fn finish(self: *Builder, allocator: Allocator) Allocator.Error![]static_data.StaticDataExport {
-        const exports = try allocator.alloc(static_data.StaticDataExport, self.nodes.items.len);
-        var done: usize = 0;
-        errdefer {
-            for (exports[0..done]) |export_| {
-                allocator.free(export_.symbol_name);
-                allocator.free(export_.bytes);
-                for (export_.relocations) |relocation| {
-                    if (relocation.owns_target_symbol_name) allocator.free(relocation.target_symbol_name);
-                }
-                allocator.free(export_.relocations);
-            }
-            allocator.free(exports);
-        }
-        for (self.nodes.items, exports, 0..) |source, *dest, index| {
-            const name = try allocator.dupe(u8, source.name);
-            errdefer allocator.free(name);
-            const owned_bytes = try allocator.dupe(u8, source.bytes);
-            errdefer allocator.free(owned_bytes);
-            const relocations = try allocator.dupe(static_data.StaticDataRelocation, source.relocations.items);
-            errdefer allocator.free(relocations);
-            const capacities = try allocator.dupe(static_data.EmptyListCapacity, source.empty_list_capacities.items);
-            errdefer allocator.free(capacities);
-            // All names are assigned in a separate pass once every symbol exists.
-            for (relocations) |*relocation| relocation.owns_target_symbol_name = false;
-            dest.* = .{
-                .symbol_name = name,
-                .value_id = if (index == 0) self.slot else null,
-                .bytes = owned_bytes,
-                .alignment = source.alignment,
-                .is_global = false,
-                .is_exported = false,
-                .relocations = relocations,
-                .empty_list_capacities = capacities,
-            };
-            done += 1;
-        }
-        for (exports) |*export_| {
-            const relocations: []static_data.StaticDataRelocation = @constCast(export_.relocations);
-            for (relocations) |*relocation| {
-                switch (relocation.target) {
-                    .data_symbol => |symbol| relocation.target_symbol_name = exports[@backingInt(symbol)].symbol_name,
-                    .named => {
-                        relocation.target_symbol_name = try allocator.dupe(u8, relocation.target_symbol_name);
-                        relocation.owns_target_symbol_name = true;
-                    },
-                }
-            }
-        }
-        return exports;
     }
 };
 

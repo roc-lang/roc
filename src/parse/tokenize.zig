@@ -1014,10 +1014,6 @@ pub const Cursor = struct {
         }
     }
 
-    pub fn chompEscapeSequence(self: *Cursor) error{ InvalidUnicodeEscapeSequence, InvalidEscapeSequence }!void {
-        return self.chompEscapeSequenceWithQuote(null);
-    }
-
     pub fn chompEscapeSequenceWithQuote(self: *Cursor, quote_char: ?u8) error{ InvalidUnicodeEscapeSequence, InvalidEscapeSequence }!void {
         // Store the start position of the escape sequence (before the backslash)
         const escape_start = if (self.pos > 0) self.pos - 1 else self.pos;
@@ -3299,7 +3295,7 @@ test "escape alphabet: tokenizer accepts exactly the shared table domain" {
         var messages: [4]Diagnostic = undefined;
         var cursor = Cursor.init(src, &messages);
         // Position the cursor as if the backslash were already consumed.
-        const accepted = if (cursor.chompEscapeSequence()) |_| true else |_| false;
+        const accepted = if (cursor.chompEscapeSequenceWithQuote(null)) |_| true else |_| false;
 
         try std.testing.expectEqual(in_domain, accepted);
     }

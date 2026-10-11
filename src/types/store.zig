@@ -762,12 +762,6 @@ pub const Store = struct {
         return try self.freshFromContent(Content{ .flex = Flex.init() });
     }
 
-    /// Create a new unbound, flexible type variable without a name
-    /// Used in canonicalization when creating type slots
-    pub fn freshWithRank(self: *Self, rank: Rank) std.mem.Allocator.Error!Var {
-        return try self.freshFromContentWithRank(Content{ .flex = Flex.init() }, rank);
-    }
-
     /// Create a new variable with the provided desc
     /// Used in tests
     /// TODO: Can we remove this function? It hardcodes rank, which is fine for

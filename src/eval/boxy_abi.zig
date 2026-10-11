@@ -1008,6 +1008,14 @@ fn boxyListElementDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) voi
     ) catch abiCrash(ctx.g, "list element decref");
 }
 
+/// Enter the boxy runtime for a descriptor-governed list builtin and resolve
+/// its element context.
+fn enterBoxyList(list_desc: *const BoxyTypeDesc, elem_layout: u32) BoxyListElementContext {
+    const g = requireGlobal();
+    enter(g);
+    return boxyListElementContext(g, list_desc, elem_layout);
+}
+
 fn boxyListElementContext(
     g: *GlobalBoxyRuntime,
     list_desc: *const BoxyTypeDesc,
@@ -1808,10 +1816,8 @@ pub fn roc_boxy_list_concat(
     list_desc: *const BoxyTypeDesc,
     update_modes: u64,
 ) callconv(.c) void {
-    const g = requireGlobal();
-    enter(g);
-    defer leave(g);
-    var ctx = boxyListElementContext(g, list_desc, elem_layout);
+    var ctx = enterBoxyList(list_desc, elem_layout);
+    defer leave(ctx.g);
     const update_mode_a: builtins.utils.UpdateMode = if (update_modes & 1 != 0) .InPlace else .Immutable;
     const update_mode_b: builtins.utils.UpdateMode = if (update_modes & 2 != 0) .InPlace else .Immutable;
     out.* = builtins.list.listConcat(
@@ -1826,7 +1832,7 @@ pub fn roc_boxy_list_concat(
         &boxyListElementDecref,
         update_mode_a,
         update_mode_b,
-        g.runtime.roc_ops,
+        ctx.g.runtime.roc_ops,
     );
 }
 
@@ -1843,10 +1849,8 @@ pub fn roc_boxy_list_prepend(
     list_desc: *const BoxyTypeDesc,
     update_mode: builtins.utils.UpdateMode,
 ) callconv(.c) void {
-    const g = requireGlobal();
-    enter(g);
-    defer leave(g);
-    var ctx = boxyListElementContext(g, list_desc, elem_layout);
+    var ctx = enterBoxyList(list_desc, elem_layout);
+    defer leave(ctx.g);
     out.* = builtins.list.listPrepend(
         .{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap },
         alignment,
@@ -1859,7 +1863,7 @@ pub fn roc_boxy_list_prepend(
         &boxyListElementDecref,
         update_mode,
         &builtins.list.copy_fallback,
-        g.runtime.roc_ops,
+        ctx.g.runtime.roc_ops,
     );
 }
 
@@ -1877,10 +1881,8 @@ pub fn roc_boxy_list_sublist(
     list_desc: *const BoxyTypeDesc,
     update_mode: builtins.utils.UpdateMode,
 ) callconv(.c) void {
-    const g = requireGlobal();
-    enter(g);
-    defer leave(g);
-    var ctx = boxyListElementContext(g, list_desc, elem_layout);
+    var ctx = enterBoxyList(list_desc, elem_layout);
+    defer leave(ctx.g);
     out.* = builtins.list.listSublist(
         .{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap },
         alignment,
@@ -1891,7 +1893,7 @@ pub fn roc_boxy_list_sublist(
         @ptrCast(&ctx),
         &boxyListElementDecref,
         update_mode,
-        g.runtime.roc_ops,
+        ctx.g.runtime.roc_ops,
     );
 }
 
@@ -1908,10 +1910,8 @@ pub fn roc_boxy_list_drop_at(
     list_desc: *const BoxyTypeDesc,
     update_mode: builtins.utils.UpdateMode,
 ) callconv(.c) void {
-    const g = requireGlobal();
-    enter(g);
-    defer leave(g);
-    var ctx = boxyListElementContext(g, list_desc, elem_layout);
+    var ctx = enterBoxyList(list_desc, elem_layout);
+    defer leave(ctx.g);
     out.* = builtins.list.listDropAt(
         .{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap },
         alignment,
@@ -1923,7 +1923,7 @@ pub fn roc_boxy_list_drop_at(
         @ptrCast(&ctx),
         &boxyListElementDecref,
         update_mode,
-        g.runtime.roc_ops,
+        ctx.g.runtime.roc_ops,
     );
 }
 
@@ -1948,10 +1948,8 @@ pub fn roc_boxy_list_replace(
         return;
     }
 
-    const g = requireGlobal();
-    enter(g);
-    defer leave(g);
-    var ctx = boxyListElementContext(g, list_desc, elem_layout);
+    var ctx = enterBoxyList(list_desc, elem_layout);
+    defer leave(ctx.g);
     out.* = builtins.list.listReplace(
         input,
         alignment,
@@ -1965,7 +1963,7 @@ pub fn roc_boxy_list_replace(
         &boxyListElementDecref,
         out_element,
         &builtins.list.copy_fallback,
-        g.runtime.roc_ops,
+        ctx.g.runtime.roc_ops,
     );
 }
 
@@ -1983,10 +1981,8 @@ pub fn roc_boxy_list_set(
     list_desc: *const BoxyTypeDesc,
     update_mode: builtins.utils.UpdateMode,
 ) callconv(.c) void {
-    const g = requireGlobal();
-    enter(g);
-    defer leave(g);
-    var ctx = boxyListElementContext(g, list_desc, elem_layout);
+    var ctx = enterBoxyList(list_desc, elem_layout);
+    defer leave(ctx.g);
     out.* = builtins.list.listSet(
         .{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap },
         alignment,
@@ -2000,7 +1996,7 @@ pub fn roc_boxy_list_set(
         &boxyListElementDecref,
         update_mode,
         &builtins.list.copy_fallback,
-        g.runtime.roc_ops,
+        ctx.g.runtime.roc_ops,
     );
 }
 
@@ -2018,10 +2014,8 @@ pub fn roc_boxy_list_swap(
     list_desc: *const BoxyTypeDesc,
     update_mode: builtins.utils.UpdateMode,
 ) callconv(.c) void {
-    const g = requireGlobal();
-    enter(g);
-    defer leave(g);
-    var ctx = boxyListElementContext(g, list_desc, elem_layout);
+    var ctx = enterBoxyList(list_desc, elem_layout);
+    defer leave(ctx.g);
     out.* = builtins.list.listSwap(
         .{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap },
         alignment,
@@ -2035,7 +2029,7 @@ pub fn roc_boxy_list_swap(
         &boxyListElementDecref,
         update_mode,
         &builtins.list.copy_fallback,
-        g.runtime.roc_ops,
+        ctx.g.runtime.roc_ops,
     );
 }
 
@@ -2051,10 +2045,8 @@ pub fn roc_boxy_list_reverse(
     list_desc: *const BoxyTypeDesc,
     update_mode: builtins.utils.UpdateMode,
 ) callconv(.c) void {
-    const g = requireGlobal();
-    enter(g);
-    defer leave(g);
-    var ctx = boxyListElementContext(g, list_desc, elem_layout);
+    var ctx = enterBoxyList(list_desc, elem_layout);
+    defer leave(ctx.g);
     out.* = builtins.list.listReverse(
         .{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap },
         alignment,
@@ -2066,7 +2058,7 @@ pub fn roc_boxy_list_reverse(
         &boxyListElementDecref,
         update_mode,
         &builtins.list.copy_fallback,
-        g.runtime.roc_ops,
+        ctx.g.runtime.roc_ops,
     );
 }
 
@@ -2193,10 +2185,8 @@ pub fn roc_boxy_list_reserve(
     list_desc: *const BoxyTypeDesc,
     update_mode: builtins.utils.UpdateMode,
 ) callconv(.c) void {
-    const g = requireGlobal();
-    enter(g);
-    defer leave(g);
-    var ctx = boxyListElementContext(g, list_desc, elem_layout);
+    var ctx = enterBoxyList(list_desc, elem_layout);
+    defer leave(ctx.g);
     out.* = builtins.list.listReserve(
         .{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap },
         alignment,
@@ -2208,7 +2198,7 @@ pub fn roc_boxy_list_reserve(
         @ptrCast(&ctx),
         &boxyListElementDecref,
         update_mode,
-        g.runtime.roc_ops,
+        ctx.g.runtime.roc_ops,
     );
 }
 
@@ -2226,10 +2216,8 @@ pub fn roc_boxy_list_reserve_for_append(
     list_desc: *const BoxyTypeDesc,
     update_mode: builtins.utils.UpdateMode,
 ) callconv(.c) void {
-    const g = requireGlobal();
-    enter(g);
-    defer leave(g);
-    var ctx = boxyListElementContext(g, list_desc, elem_layout);
+    var ctx = enterBoxyList(list_desc, elem_layout);
+    defer leave(ctx.g);
     out.* = builtins.list.listReserveForAppend(
         .{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap },
         alignment,
@@ -2241,7 +2229,7 @@ pub fn roc_boxy_list_reserve_for_append(
         @ptrCast(&ctx),
         &boxyListElementDecref,
         update_mode,
-        g.runtime.roc_ops,
+        ctx.g.runtime.roc_ops,
     );
 }
 
@@ -2257,10 +2245,8 @@ pub fn roc_boxy_list_release_excess_capacity(
     list_desc: *const BoxyTypeDesc,
     update_mode: builtins.utils.UpdateMode,
 ) callconv(.c) void {
-    const g = requireGlobal();
-    enter(g);
-    defer leave(g);
-    var ctx = boxyListElementContext(g, list_desc, elem_layout);
+    var ctx = enterBoxyList(list_desc, elem_layout);
+    defer leave(ctx.g);
     out.* = builtins.list.listReleaseExcessCapacity(
         .{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap },
         alignment,
@@ -2271,7 +2257,7 @@ pub fn roc_boxy_list_release_excess_capacity(
         @ptrCast(&ctx),
         &boxyListElementDecref,
         update_mode,
-        g.runtime.roc_ops,
+        ctx.g.runtime.roc_ops,
     );
 }
 
