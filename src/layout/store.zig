@@ -74,6 +74,14 @@ const GraphChildren = struct {
 };
 pub const ModuleVarKey = work_mod.ModuleVarKey;
 
+/// The position the next row of a table gets, as the field type `Position`
+/// that names it. A table that has already filled every position reports
+/// allocation failure rather than narrowing past the field.
+fn nextRowPosition(comptime Position: type, len: usize) std.mem.Allocator.Error!Position {
+    if (len > std.math.maxInt(Position)) return error.OutOfMemory;
+    return @intCast(len);
+}
+
 fn assertAppendIdx(expected: usize, idx: anytype) void {
     if (comptime builtin.mode == .debug) {
         std.debug.assert(@backingInt(idx) == expected);
@@ -546,6 +554,8 @@ pub const Store = struct {
     }
 
     pub fn reserveLayout(self: *Self, layout: Layout) std.mem.Allocator.Error!Idx {
+        // The top position is `Idx.none`, so it is never a layout's.
+        if (self.layouts.len() >= @backingInt(Idx.none)) return error.OutOfMemory;
         const safe_list_idx = try self.layouts.append(self.allocator, layout);
         const idx: Idx = @fromBackingInt(@intCast(@backingInt(safe_list_idx)));
         try self.resolved_list_layouts.append(self.allocator, self.computeResolvedListLayoutIdx(idx) orelse .none);
@@ -570,7 +580,7 @@ pub const Store = struct {
         try self.appendStructFieldPlacement(fields);
 
         const contains_refcounted = self.computeStructContainsRefcounted(fields);
-        const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
+        const struct_idx = StructIdx{ .int_idx = try nextRowPosition(@FieldType(StructIdx, "int_idx"), self.struct_data.len()) };
         const expected_idx = self.struct_data.items.items.len;
         const struct_data_idx = try self.struct_data.append(self.allocator, .{
             .size = sizes,
@@ -612,7 +622,7 @@ pub const Store = struct {
         }
 
         const contains_refcounted = self.computeTagUnionContainsRefcounted(variant_layouts);
-        const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
+        const tag_union_data_idx: u32 = try nextRowPosition(@FieldType(TagUnionIdx, "int_idx"), self.tag_union_data.len());
         {
             const expected_idx = self.tag_union_data.items.items.len;
             const idx = try self.tag_union_data.append(self.allocator, .{
@@ -861,7 +871,7 @@ pub const Store = struct {
         try self.appendStructFieldPlacement(temp_fields.items);
 
         const contains_refcounted = self.computeStructContainsRefcounted(temp_fields.items);
-        const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
+        const struct_idx = StructIdx{ .int_idx = try nextRowPosition(@FieldType(StructIdx, "int_idx"), self.struct_data.len()) };
         const expected_idx = self.struct_data.items.items.len;
         const struct_data_idx = try self.struct_data.append(self.allocator, .{
             .size = sizes,
@@ -898,7 +908,7 @@ pub const Store = struct {
         }
 
         const contains_refcounted = self.computeTagUnionContainsRefcounted(variant_layouts);
-        const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
+        const tag_union_data_idx: u32 = try nextRowPosition(@FieldType(TagUnionIdx, "int_idx"), self.tag_union_data.len());
         {
             const expected_idx = self.tag_union_data.items.items.len;
             const idx = try self.tag_union_data.append(self.allocator, .{

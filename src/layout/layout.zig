@@ -32,11 +32,9 @@ pub const LayoutTag = enum(u4) {
     erased_box, // Descriptor-backed refcounted box whose payload layout is known only at runtime.
 };
 
-/// The Layout untagged union should take up this many bits in memory. Its
-/// data holds a 32-bit layout or row index beside a sort key, since every
-/// index that grows with the program is 32 bits wide.
-/// We verify this with a test.
-const layout_bit_size = 64;
+/// The Layout untagged union should take up this many bits in memory.
+/// We verify this with a test, and make use of it to calculate Idx sizes.
+const layout_bit_size = 32;
 
 /// Tag for scalar variants
 ///
@@ -138,7 +136,7 @@ pub const Scalar = packed struct {
 };
 
 /// Index into a Layout Store
-pub const Idx = enum(u32) {
+pub const Idx = enum(@Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag))) {
     // Sentinel values for scalar builtin layouts. When we init the layout store, it automatically
     // adds entries for each of these at an index equal to the enum's value. That way, if you
     // look up one of these in the store, it's always returns the correct layout, and we can have
@@ -277,7 +275,7 @@ pub const TupleLayout = StructLayout;
 
 /// Index into the Store's struct data
 pub const StructIdx = packed struct {
-    int_idx: u32,
+    int_idx: @Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag) - @bitSizeOf(SortKey)),
 };
 
 /// Backwards-compat alias for `StructIdx`.
@@ -348,7 +346,7 @@ pub const TagUnionLayout = packed struct {
 
 /// Index into the Store's tag union data
 pub const TagUnionIdx = packed struct {
-    int_idx: u32,
+    int_idx: @Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag) - @bitSizeOf(SortKey)),
 };
 
 /// Tag union data stored in the layout Store

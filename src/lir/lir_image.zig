@@ -63,7 +63,7 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v41: `proc_ref` is the `LIR.LiteralValue` tag that follows `bytes_literal`.
 /// v42: wide-UTF decoding ops renumber later LowLevel ops.
 /// v43: Boxy type descriptors record rejected `is_eq` and `to_hash` declarations.
-pub const FORMAT_VERSION: u32 = 44;
+pub const FORMAT_VERSION: u32 = 45;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
