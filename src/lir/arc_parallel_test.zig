@@ -187,7 +187,7 @@ test "ARC executor reverse completions match inline RC bodies and identities acr
         const body = direct.store.getCFStmt(spec.body.?);
         try testing.expect(body == .decref);
         try testing.expectEqual(core.LirStore.GuardedList.at(direct.store.getLocalSpan(spec.args), 1), body.decref.value);
-        try testing.expect(direct.store.getCFStmt(body.decref.next) == .ret);
+        try testing.expect(direct.store.getCFStmtImmediate(body.decref.next).* == .ret);
     }
     var expected_metrics: ?arc.ParallelMetrics = null;
     for ([_]usize{ 2, 4 }) |lanes| {

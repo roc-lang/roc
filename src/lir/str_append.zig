@@ -270,7 +270,7 @@ test "str append fuses a single-use call result into a direct append call" {
 
     try run(&store);
 
-    const rewritten = store.getCFStmt(call).assign_call;
+    const rewritten = store.getCFStmtImmediate(call).assign_call;
     try std.testing.expect(rewritten.proc != callee);
     try std.testing.expectEqual(out, rewritten.target);
     try std.testing.expectEqual(ret, rewritten.next);
@@ -323,7 +323,7 @@ test "str append fuses through a single-use alias of the call result" {
 
     try run(&store);
 
-    const rewritten = store.getCFStmt(call).assign_call;
+    const rewritten = store.getCFStmtImmediate(call).assign_call;
     try std.testing.expect(rewritten.proc != callee);
     try std.testing.expectEqual(out, rewritten.target);
     try std.testing.expectEqual(ret, rewritten.next);
@@ -370,7 +370,7 @@ test "str append does not fuse across an alias of an unrelated local" {
     const before_proc_count = store.procSpecCount();
     try run(&store);
 
-    const unchanged = store.getCFStmt(call).assign_call;
+    const unchanged = store.getCFStmtImmediate(call).assign_call;
     try std.testing.expectEqual(callee, unchanged.proc);
     try std.testing.expectEqual(result, unchanged.target);
     try std.testing.expectEqual(before_proc_count, store.procSpecCount());
@@ -411,7 +411,7 @@ test "str append does not fuse a multi-use call result" {
     const before_proc_count = store.procSpecCount();
     try run(&store);
 
-    const unchanged = store.getCFStmt(call).assign_call;
+    const unchanged = store.getCFStmtImmediate(call).assign_call;
     try std.testing.expectEqual(callee, unchanged.proc);
     try std.testing.expectEqual(result, unchanged.target);
     try std.testing.expectEqual(before_proc_count, store.procSpecCount());

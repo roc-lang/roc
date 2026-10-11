@@ -840,7 +840,7 @@ test "completed empty list roots decode to their constructions; lists with eleme
     const origin = LIR.StmtOrigin{ .loc = .none, .region = .zero(), .inline_scope = .none, .kind = .scaffold };
     const empty_ret = try reader.store.addCFStmt(.{ .ret = .{ .value = empty_target } }, origin);
     const reserved = try emit(ctx, &reader.store, &reader.layouts, origin, empty_target, values.constructionFor(.{}, .{ .checked = @fromBackingInt(@intCast(1)) }, reader_list_layout).?, empty_ret) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(i64, 16), reader.store.getCFStmt(reserved).assign_literal.value.i64_literal.value);
+    try std.testing.expectEqual(@as(i64, 16), reader.store.getCFStmtImmediate(reserved).assign_literal.value.i64_literal.value);
 }
 
 test "an empty string root and a record of an empty list and a scalar decode to constructions" {

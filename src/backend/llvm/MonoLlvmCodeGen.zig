@@ -3467,7 +3467,7 @@ pub const MonoLlvmCodeGen = struct {
             if (visited.contains(key)) continue;
             try visited.put(key, {});
 
-            switch (self.store.getCFStmt(stmt_id)) {
+            switch (self.store.getCFStmtImmediate(stmt_id).*) {
                 inline .assign_ref,
                 .assign_literal,
                 .init_uninitialized,

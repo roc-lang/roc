@@ -16084,7 +16084,7 @@ test "typed boundaries from empty rows are terminal even with matching layouts" 
         const target = try lowerer.result.store.addLocal(.{ .layout_idx = target_layout });
         const next = try lowerer.result.store.addCFStmt(.{ .ret = .{ .value = target } }, test_site.scaffold());
         const boundary = try lowerer.assignTypedBoundary(test_site, target, target_ty, source, empty, next);
-        try std.testing.expect(lowerer.result.store.getCFStmt(boundary) == .runtime_error);
+        try std.testing.expect(lowerer.result.store.getCFStmtImmediate(boundary).* == .runtime_error);
     }
 }
 

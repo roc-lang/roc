@@ -1242,7 +1242,7 @@ fn collectAssignCallProcs(
         const visited_entry = try visited.getOrPut(stmt_id);
         if (visited_entry.found_existing) continue;
 
-        switch (lowered.lir_result.store.getCFStmt(stmt_id)) {
+        switch (lowered.lir_result.store.getCFStmtImmediate(stmt_id).*) {
             .assign_ref => |stmt| try work.append(allocator, stmt.next),
             .assign_literal => |stmt| try work.append(allocator, stmt.next),
             .init_uninitialized => |stmt| try work.append(allocator, stmt.next),
@@ -4556,7 +4556,7 @@ fn collectLirResultProcShape(
         const visited_entry = try visited.getOrPut(stmt_id);
         if (visited_entry.found_existing) continue;
 
-        switch (result.store.getCFStmt(stmt_id)) {
+        switch (result.store.getCFStmtImmediate(stmt_id).*) {
             .assign_ref => |stmt| try work.append(allocator, stmt.next),
             .assign_literal => |stmt| try work.append(allocator, stmt.next),
             .init_uninitialized => |stmt| try work.append(allocator, stmt.next),
@@ -10417,7 +10417,7 @@ fn recordFieldReadCounts(
     var seen_call = false;
     var steps: usize = 0;
     while (steps < 4096) : (steps += 1) {
-        switch (store.getCFStmt(cursor)) {
+        switch (store.getCFStmtImmediate(cursor).*) {
             .assign_ref => |stmt| {
                 switch (stmt.op) {
                     .local => |src| if (aliases.contains(src)) try aliases.put(stmt.target, {}),
@@ -10543,7 +10543,7 @@ fn fieldReadRetainCount(
         while (stack.pop()) |cursor| {
             const seen = try visited.getOrPut(@backingInt(cursor));
             if (seen.found_existing) continue;
-            switch (store.getCFStmt(cursor)) {
+            switch (store.getCFStmtImmediate(cursor).*) {
                 .assign_ref => |stmt| {
                     switch (stmt.op) {
                         .field => try read_targets.put(stmt.target, {}),
@@ -10941,7 +10941,7 @@ fn listSetCounts(store: *const lir.LirStore, proc_id: LIR.LirProcSpecId) ListSet
         const cursor = cursor_stack[top];
         if (seen.isSet(@backingInt(cursor))) continue;
         seen.set(@backingInt(cursor));
-        switch (store.getCFStmt(cursor)) {
+        switch (store.getCFStmtImmediate(cursor).*) {
             .assign_low_level => |stmt| {
                 if (stmt.op == .list_set) {
                     if (stmt.unique_args == 0) counts.checked += 1 else counts.check_free += 1;
@@ -12568,7 +12568,7 @@ test "provenance: TRMC statements state their kind at the site they rewrite" {
 
     // The loop join TRMC wraps around the body sits at the procedure body.
     const entry = store.getProcSpec(repeat).body.?;
-    try std.testing.expect(store.getCFStmt(entry) == .join);
+    try std.testing.expect(store.getCFStmtImmediate(entry).* == .join);
     try std.testing.expect(store.stmtOriginKind(entry) == .trmc);
     try std.testing.expectEqual(@as(u32, 5), store.stmtLoc(entry).line);
 
@@ -12587,7 +12587,7 @@ test "provenance: TRMC statements state their kind at the site they rewrite" {
         trmc_count += 1;
         // The loop-back that replaces the recursive call carries the
         // recursive call's location, not the procedure's.
-        if (store.getCFStmt(stmt_id) == .jump and loc.line == 8) recursive_site_loop_backs += 1;
+        if (store.getCFStmtImmediate(stmt_id).* == .jump and loc.line == 8) recursive_site_loop_backs += 1;
     }
     try std.testing.expect(trmc_count > 0);
     try std.testing.expectEqual(@as(usize, 1), recursive_site_loop_backs);
@@ -12618,7 +12618,7 @@ test "provenance: ARC RC statements state their subject, reason, and deciding lo
         defer allocator.free(stmts);
         for (stmts) |stmt_id| {
             const kind = store.stmtOriginKind(stmt_id);
-            switch (store.getCFStmt(stmt_id)) {
+            switch (store.getCFStmtImmediate(stmt_id).*) {
                 .incref => |rc| {
                     try std.testing.expect(kind == .arc_incref);
                     try std.testing.expectEqual(rc.value, kind.arc_incref.subject_local);
@@ -12643,7 +12643,7 @@ test "provenance: ARC RC statements state their subject, reason, and deciding lo
     const pair_stmts = try procStmts(allocator, store, pair);
     defer allocator.free(pair_stmts);
     for (pair_stmts) |stmt_id| {
-        if (store.getCFStmt(stmt_id) != .incref) continue;
+        if (store.getCFStmtImmediate(stmt_id).* != .incref) continue;
         try std.testing.expectEqual(LIR.RcReason.alias_bind, store.stmtOriginKind(stmt_id).arc_incref.reason);
         try std.testing.expectEqual(@as(u32, 3), store.stmtLoc(stmt_id).line);
     }
@@ -12652,7 +12652,7 @@ test "provenance: ARC RC statements state their subject, reason, and deciding lo
     const root_stmts = try procStmts(allocator, store, root);
     defer allocator.free(root_stmts);
     for (root_stmts) |stmt_id| {
-        if (store.getCFStmt(stmt_id) != .decref) continue;
+        if (store.getCFStmtImmediate(stmt_id).* != .decref) continue;
         try std.testing.expectEqual(LIR.RcReason.dead_after_stmt, store.stmtOriginKind(stmt_id).arc_decref.reason);
         try std.testing.expectEqual(@as(u32, 5), store.stmtLoc(stmt_id).line);
     }

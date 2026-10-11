@@ -48,7 +48,7 @@ fn expectCallBuiltRecordListSetHasNoRetain(
             const index = @backingInt(stmt_id);
             if (seen_stmts[index]) continue;
             seen_stmts[index] = true;
-            switch (store.getCFStmt(stmt_id)) {
+            switch (store.getCFStmtImmediate(stmt_id).*) {
                 .assign_low_level => |assign| {
                     if (assign.op == .list_set) {
                         saw_list_set = true;

@@ -180,9 +180,9 @@ test "range prove ordered procedure runs match whole-store constant arithmetic a
         } else {
             try run(&store, &layouts);
         }
-        try testing.expectEqual(.num_int_add_proven_cannot_overflow, store.getCFStmt(add).assign_low_level.op);
+        try testing.expectEqual(.num_int_add_proven_cannot_overflow, store.getCFStmtImmediate(add).assign_low_level.op);
         try testing.expectEqual(noop_body, store.getProcSpec(noop).body.?);
-        try testing.expectEqual(arg, store.getCFStmt(noop_body).ret.value);
+        try testing.expectEqual(arg, store.getCFStmtImmediate(noop_body).ret.value);
     }
 }
 
@@ -2044,7 +2044,7 @@ const Pass = struct {
         while (self.scratch.pop()) |current| {
             if (seen.contains(current)) continue;
             try seen.put(current, {});
-            switch (self.store.getCFStmt(current)) {
+            switch (self.store.getCFStmtImmediate(current).*) {
                 inline .init_uninitialized,
                 .assign_literal,
                 .assign_call,
@@ -2134,7 +2134,7 @@ const Pass = struct {
                     // already known by the time the first jump appears.
                     if (count.value_ptr.* == 1) {
                         if (self.join_stmts.get(s.target)) |join_stmt| {
-                            const body = self.store.getCFStmt(join_stmt).join.body;
+                            const body = self.store.getCFStmtImmediate(join_stmt).join.body;
                             try self.body_joins.put(body, s.target);
                             if (!seen.contains(body)) try self.scratch.append(self.allocator, body);
                         }
@@ -2252,7 +2252,7 @@ const Pass = struct {
             if (seen.contains(item.stmt)) continue;
             try seen.put(item.stmt, {});
             if (item.join) |join_id| try self.enclosing_join.put(item.stmt, join_id);
-            switch (self.store.getCFStmt(item.stmt)) {
+            switch (self.store.getCFStmtImmediate(item.stmt).*) {
                 .join => |s| {
                     if (item.join) |outer| try self.join_parent.put(s.id, outer);
                     try stack.append(self.allocator, .{ .stmt = s.body, .join = s.id });
@@ -2404,13 +2404,13 @@ const Pass = struct {
         while (cursor < scan.stmts.items.len) : (cursor += 1) {
             const stmt = scan.stmts.items[cursor];
             successors.clearRetainingCapacity();
-            switch (self.store.getCFStmt(stmt)) {
+            switch (self.store.getCFStmtImmediate(stmt).*) {
                 .jump => |j| {
                     const target_stmt = self.join_stmts.get(j.target) orelse continue;
                     const entry = try scan.jumps_to.getOrPut(j.target);
                     if (!entry.found_existing) entry.value_ptr.* = .empty;
                     try entry.value_ptr.append(gpa, cursor);
-                    try successors.append(gpa, self.store.getCFStmt(target_stmt).join.body);
+                    try successors.append(gpa, self.store.getCFStmtImmediate(target_stmt).join.body);
                 },
                 .join => |j| try successors.append(gpa, j.remainder),
                 .init_uninitialized,
@@ -2570,7 +2570,7 @@ const Pass = struct {
         var back: u32 = 0;
         for (scan.cycle.items) |node| {
             const stmt = scan.stmts.items[node];
-            switch (self.store.getCFStmt(stmt)) {
+            switch (self.store.getCFStmtImmediate(stmt).*) {
                 .jump => |j| {
                     if (j.target == join_id) back += 1;
                 },
@@ -3150,7 +3150,7 @@ const Pass = struct {
             if (captures != self.jumpCount(join_id)) {
                 try self.seedMergeEnv(head);
                 if (self.join_stmts.get(join_id)) |join_stmt| {
-                    const join = self.store.getCFStmt(join_stmt).join;
+                    const join = self.store.getCFStmtImmediate(join_stmt).join;
                     const params = self.store.getLocalSpan(join.params);
                     for (0..GuardedList.borrowLen(params)) |i| {
                         const param = GuardedList.at(params, i);
@@ -3655,7 +3655,7 @@ const Pass = struct {
             // would sit pending, never assumed, and its admission would
             // ask for another round for nothing.
             const join_stmt = self.join_stmts.get(join_id) orelse continue;
-            const params = self.store.getLocalSpan(self.store.getCFStmt(join_stmt).join.params);
+            const params = self.store.getLocalSpan(self.store.getCFStmtImmediate(join_stmt).join.params);
             for (state.env.items) |meet| {
                 if (meet.field != null) continue;
                 var is_param = false;
@@ -4155,7 +4155,7 @@ const Pass = struct {
         defer structural_jumps.deinit(self.allocator);
         var structural_jumps_ready = false;
         for (self.joins_in_order.items) |join_stmt| {
-            const join = switch (self.store.getCFStmt(join_stmt)) {
+            const join = switch (self.store.getCFStmtImmediate(join_stmt).*) {
                 .join => |j| j,
                 .init_uninitialized,
                 .assign_ref,
@@ -4211,7 +4211,7 @@ const Pass = struct {
             const param = GuardedList.at(params, 0);
             if (self.localLayout(param) != .bool) continue;
 
-            const body_switch = switch (self.store.getCFStmt(join.body)) {
+            const body_switch = switch (self.store.getCFStmtImmediate(join.body).*) {
                 .switch_stmt => |sw| sw,
                 .init_uninitialized,
                 .assign_ref,
@@ -4315,7 +4315,7 @@ const Pass = struct {
                 if (record.target != join.id) continue;
                 // A site already rewritten for an earlier join no longer
                 // holds a jump; skip anything that changed shape.
-                switch (self.store.getCFStmt(record.stmt)) {
+                switch (self.store.getCFStmtImmediate(record.stmt).*) {
                     .jump => |jump| if (jump.target != join.id) continue,
                     .init_uninitialized,
                     .assign_ref,
@@ -4554,7 +4554,7 @@ const Pass = struct {
                 }
                 if (self.visited.contains(current)) break :walk;
 
-                switch (self.store.getCFStmt(current)) {
+                switch (self.store.getCFStmtImmediate(current).*) {
                     .assign_ref => |s| {
                         try self.visited.put(current, {});
                         switch (s.op) {
@@ -4698,7 +4698,7 @@ const Pass = struct {
                     .jump => |s| {
                         try self.visited.put(current, {});
                         if (self.join_stmts.get(s.target)) |join_stmt| {
-                            const join = self.store.getCFStmt(join_stmt).join;
+                            const join = self.store.getCFStmtImmediate(join_stmt).join;
                             if (self.jumpCount(s.target) == 1) {
                                 if (!self.visited.contains(join.body)) {
                                     // Sole entry into the join body: bindings
@@ -6171,7 +6171,7 @@ const RangeProveCertify = struct {
         while (stack.pop()) |current| {
             if (graph.succs.contains(current)) continue;
             list.clearRetainingCapacity();
-            switch (store.getCFStmt(current)) {
+            switch (store.getCFStmtImmediate(current).*) {
                 .init_uninitialized => |t| try list.append(allocator, t.next),
                 .assign_ref => |t| try list.append(allocator, t.next),
                 .assign_literal => |t| try list.append(allocator, t.next),

@@ -241,6 +241,13 @@ stages it touches; the instruction-count effect is reported in "Results".
     144-byte statement it passes. The LLVM build of `query.roc` drops from
     351.2 G to 345.5 G instructions and `roc check` from 220.4 G to 218.6 G.
 
+43. Every statement read that is used immediately (a `switch` on it, one
+    field read, or a tag comparison) goes through
+    `LirStore.getCFStmtImmediate` instead of copying the 144-byte statement:
+    677 sites across the LIR passes, Boxy lowering, solved-to-LIR lowering,
+    and their tests. Switch captures still copy their payloads, so a prong
+    that grows the store reads nothing through the pointer.
+
 ## Findings from profiling
 
 These were found by profiling the ReleaseFast compiler with
@@ -2195,7 +2202,7 @@ reading code, and were not in the audit above.
 - category D/H; runs per statement visit in every LIR pass (≈700 call sites across src/lir; loop_append_promote 98, scalarize_joins 85, arc 63, tag_case_fusion 63, box_reuse 44, …; impact high (reduces the per-statement cost of every pass; …; risk low
 - Finding: `pub fn getCFStmt(self, id) CFStmt` returns by value. In release the `GuardedList` is a plain `ArrayList`, so a pointer return is sound as long as the caller does not append statements while holding it. Many callers do `switch (store.getCFStmt(id)) { .assign_call => |call| ... }` which copies 144 bytes then extracts 1-3 fields. The three-way lookup (proc_rewrite overlay hash probe -> body_coordinator prefix check -> …
 - Fix: provide `getCFStmtConst(id) *const CFStmt` for read-only traversals (the overlay case returns a pointer into `rewrite.cf_stmts.data.rows` or into the coordinator; both are stable during a traversal that does not mutate). For the overlay lookup, replace the `HashMap(u32,u32)` probe with a `collections.DenseMap`/paged column (see next finding) so the common prefix read is an array index. Verify: no caller retains the …
-- Status: open
+- Status: partly fixed (fix 43): immediate reads take a pointer; reads bound to a local still copy
 
 ### src/lir/LirStore.zig:68: `RewriteKeys.indices` is a `std.HashMap(u32,u32)` keyed by dense statement ids, probed on every statement read of a proc rewrite
 - category B; runs per statement read/write in every per-procedure pass that uses `cloneForProcRewrite` (branch_expectation, trmc, forwarding_join, tag_fusion, known_tag_jump, …; impact high; risk low

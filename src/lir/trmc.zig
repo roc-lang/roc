@@ -148,7 +148,7 @@ fn transformProc(
     var tail_site: ?CFStmtId = if (proc.tail_calls) |sites| sites.head else null;
     while (tail_site) |id| {
         tail_count += 1;
-        tail_site = store.getCFStmt(id).assign_call.tail_call.?.next;
+        tail_site = store.getCFStmtImmediate(id).assign_call.tail_call.?.next;
     }
     if (construct_count == 0 and tail_count == 0) return null;
     if (builtin.mode == .debug) detection.assertRewrittenStmtsUnshared();
@@ -243,9 +243,9 @@ test "trmc per-proc and serial TCE preserve metadata and no-op procs" {
         const proc = store.getProcSpec(proc_id);
         try std.testing.expectEqual(LIR.TailTransform.tce, proc.tail_transform);
         try std.testing.expect(proc.tail_calls == null);
-        const join = store.getCFStmt(proc.body.?).join;
+        const join = store.getCFStmtImmediate(proc.body.?).join;
         try std.testing.expectEqual(call, join.body);
-        try std.testing.expectEqual(join.id, store.getCFStmt(call).jump.target);
+        try std.testing.expectEqual(join.id, store.getCFStmtImmediate(call).jump.target);
     }
 }
 
@@ -1115,7 +1115,7 @@ const Transform = struct {
 
     /// `ret v` becomes: write v through the hole, load the head, return it.
     fn rewriteRetEpilogue(self: *Transform, ret_stmt: CFStmtId, ret_layout: layout_mod.Idx) ResourceError!void {
-        const value = self.store.getCFStmt(ret_stmt).ret.value;
+        const value = self.store.getCFStmtImmediate(ret_stmt).ret.value;
         const origin = trmcOrigin(self.store.stmtOrigin(ret_stmt));
 
         const final = try self.addLocal(ret_layout);
@@ -1141,7 +1141,7 @@ const Transform = struct {
         const empty_args = try self.store.addLocalSpan(&.{});
         const box_origin = trmcOrigin(self.store.stmtOrigin(candidate.box_stmt));
         const cell = blk: {
-            var alloc = self.store.getCFStmt(candidate.box_stmt).assign_low_level;
+            var alloc = self.store.getCFStmtImmediate(candidate.box_stmt).assign_low_level;
             alloc.op = .box_alloc_zeroed;
             alloc.rc_effect = LowLevelOp.box_alloc_zeroed.rcEffect();
             alloc.args = empty_args;
@@ -1190,7 +1190,7 @@ const Transform = struct {
     fn rewriteTailSites(self: *Transform) ResourceError!void {
         var site: ?CFStmtId = if (self.store.getProcSpec(self.proc_id).tail_calls) |sites| sites.head else null;
         while (site) |id| {
-            const call = self.store.getCFStmt(id).assign_call;
+            const call = self.store.getCFStmtImmediate(id).assign_call;
             site = call.tail_call.?.next;
             // Every incoming reference reaches the same replacement. The
             // shared return continuation remains available to other paths.
@@ -1437,7 +1437,7 @@ const Transform = struct {
     }
 
     fn nextOf(self: *const Transform, stmt_id: CFStmtId) CFStmtId {
-        return switch (self.store.getCFStmt(stmt_id)) {
+        return switch (self.store.getCFStmtImmediate(stmt_id).*) {
             inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| s.next,
             .expect_err,
             .runtime_error,
@@ -1488,7 +1488,7 @@ const Transform = struct {
             .join_body => |join_stmt| self.store.getCFStmtPtr(join_stmt).join.body = replacement,
             .join_remainder => |join_stmt| self.store.getCFStmtPtr(join_stmt).join.remainder = replacement,
             .switch_branch => |info| {
-                const span = self.store.getCFStmt(info.stmt).switch_stmt.branches;
+                const span = self.store.getCFStmtImmediate(info.stmt).switch_stmt.branches;
                 GuardedList.atPtr(self.store.getCFSwitchBranchesMut(span), info.index).body = replacement;
             },
             .switch_default => |switch_id| self.store.getCFStmtPtr(switch_id).switch_stmt.default_branch = replacement,

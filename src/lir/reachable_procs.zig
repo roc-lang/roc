@@ -1165,7 +1165,7 @@ test "reachable proc pass compacts proc specs and remaps root ids" {
     try std.testing.expectEqual(@as(usize, 3), result.store.cfStmtCount());
     try std.testing.expectEqual(@as(u32, 1), @backingInt(result.root_procs.items[0]));
     const compact_root = result.store.getProcSpec(result.root_procs.items[0]);
-    const call = result.store.getCFStmt(compact_root.body.?).assign_call;
+    const call = result.store.getCFStmtImmediate(compact_root.body.?).assign_call;
     try std.testing.expectEqual(@as(u32, 0), @backingInt(call.proc));
 }
 
@@ -1227,7 +1227,7 @@ test "reachable proc pass follows static initializer proc refs" {
     try std.testing.expectEqual(@as(u32, 2), @backingInt(result.root_procs.items[0]));
     const compact_initializer = result.store.getProcSpec(result.static_data_values.items[0].initializer.?);
     try std.testing.expect(compact_initializer.is_static_initializer);
-    const initializer_proc_ref = result.store.getCFStmt(compact_initializer.body.?).assign_literal.value.proc_ref;
+    const initializer_proc_ref = result.store.getCFStmtImmediate(compact_initializer.body.?).assign_literal.value.proc_ref;
     try std.testing.expectEqual(@as(u32, 0), @backingInt(initializer_proc_ref));
 }
 
@@ -1292,7 +1292,7 @@ test "reachable proc pass follows packed erased callable refs in static initiali
     try std.testing.expectEqual(@as(u32, 2), @backingInt(result.root_procs.items[0]));
     const compact_initializer = result.store.getProcSpec(result.static_data_values.items[0].initializer.?);
     try std.testing.expect(compact_initializer.is_static_initializer);
-    const packed_erased_proc = result.store.getCFStmt(compact_initializer.body.?).assign_packed_erased_fn.proc;
+    const packed_erased_proc = result.store.getCFStmtImmediate(compact_initializer.body.?).assign_packed_erased_fn.proc;
     try std.testing.expectEqual(@as(u32, 0), @backingInt(packed_erased_proc));
 }
 

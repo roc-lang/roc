@@ -17,7 +17,7 @@ fn retainReachesPrepare(
     var retained_alias = retained;
     var remaining = store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
-        switch (store.getCFStmt(current)) {
+        switch (store.getCFStmtImmediate(current).*) {
             .assign_low_level => |assign| {
                 if (assign.op == .list_map_prepare_reuse) {
                     const args = store.getLocalSpan(assign.args);

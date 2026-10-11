@@ -154,7 +154,7 @@ const Analysis = struct {
     /// The edge ending at `jump_id`, when threading it is exact.
     fn candidateAt(self: *Analysis, jump_id: CFStmtId) ResourceError!?Candidate {
         const chain = try self.edgeChain(jump_id);
-        const first_target = self.store.getCFStmt(jump_id).jump.target;
+        const first_target = self.store.getCFStmtImmediate(jump_id).jump.target;
 
         // The values the edge passes to its target join's parameters.
         var env = Env.init(self.allocator);
@@ -177,7 +177,7 @@ const Analysis = struct {
         const exit = while (true) {
             if ((try visited.getOrPut(target)).found_existing) return null;
             const join_stmt = self.joins.get(target) orelse return null;
-            const join = self.store.getCFStmt(join_stmt).join;
+            const join = self.store.getCFStmtImmediate(join_stmt).join;
             if (!plainJoin(join)) return null;
             const params = self.store.getLocalSpan(join.params);
             if (params.len == 0 or pending.count() != params.len) return null;
@@ -266,7 +266,7 @@ const Analysis = struct {
             .join => |exit_id| {
                 if (exit_id == first_target) return null;
                 const exit_stmt = self.joins.get(exit_id) orelse return null;
-                const exit_join = self.store.getCFStmt(exit_stmt).join;
+                const exit_join = self.store.getCFStmtImmediate(exit_stmt).join;
                 if (!plainJoin(exit_join) or exit_join.params.len != 0) return null;
                 if (try self.reachableOutside(chain[0], exit_stmt)) return null;
                 if (try self.exitReads(exit_join.body, &changed)) return null;
@@ -369,7 +369,7 @@ const Analysis = struct {
             if (probe.hit) return true;
             if (stmt == .jump) {
                 const target = self.joins.get(stmt.jump.target) orelse return true;
-                try work.append(self.allocator, self.store.getCFStmt(target).join.body);
+                try work.append(self.allocator, self.store.getCFStmtImmediate(target).join.body);
             } else {
                 try body_clone.appendSuccessors(self.store, &work, current, self.allocator);
             }
@@ -424,7 +424,7 @@ const Analysis = struct {
     fn outlineArm(self: *Analysis, switch_id: CFStmtId, arm: CFStmtId, joins: *body_clone.JoinParamIndex) ResourceError!LIR.JoinPointId {
         const exit = joins.freshJoinPoint();
         const origin = self.store.stmtOrigin(switch_id);
-        var switch_stmt = self.store.getCFStmt(switch_id).switch_stmt;
+        var switch_stmt = self.store.getCFStmtImmediate(switch_id).switch_stmt;
         const enter = try self.store.addCFStmt(.{ .jump = .{ .target = exit } }, self.store.stmtOrigin(arm));
         const old_branches = self.store.getCFSwitchBranches(switch_stmt.branches);
         const branches = try self.allocator.alloc(LIR.CFSwitchBranch, old_branches.len);

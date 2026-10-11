@@ -1630,7 +1630,7 @@ test "persisted image bytes do not depend on what store memory held before" {
         // The canonical image still holds the values the store holds.
         var view = try viewMappedImageWithAllocator(header, buffer.ptr, fba.end_index, .u64, gpa);
         defer view.deinit();
-        try std.testing.expectEqual(local, view.store.getCFStmt(ret).ret.value);
+        try std.testing.expectEqual(local, view.store.getCFStmtImmediate(ret).ret.value);
         try std.testing.expectEqual(layout_mod.Idx.u64, view.store.getLocal(local).layout_idx);
         try std.testing.expectEqual(@as(?LIR.BoxyDescRef, null), view.store.getLocal(local).boxy_desc);
         try std.testing.expectEqual(@as(?LIR.CFStmtId, ret), view.store.getProcSpec(proc).body);
@@ -1735,10 +1735,10 @@ test "LIR image round-trips ordered procedure rewrites with relocated suffixes" 
     try std.testing.expectEqual(prefix.locals + 2, store.captureBodyPrefix().locals);
     try std.testing.expectEqual(prefix.cf_stmts + 2, store.captureBodyPrefix().cf_stmts);
     for (roots, 0..) |root, index| {
-        const assign = store.getCFStmt(root).assign_ref;
+        const assign = store.getCFStmtImmediate(root).assign_ref;
         try std.testing.expectEqual(prefix.locals + index, @backingInt(assign.target));
         try std.testing.expectEqual(prefix.cf_stmts + index, @backingInt(assign.next));
-        try std.testing.expectEqual(assign.target, store.getCFStmt(assign.next).ret.value);
+        try std.testing.expectEqual(assign.target, store.getCFStmtImmediate(assign.next).ret.value);
     }
 
     const buffer = try gpa.alignedAlloc(u8, .@"16", 1 << 20);
@@ -1762,7 +1762,7 @@ test "LIR image round-trips ordered procedure rewrites with relocated suffixes" 
     try std.testing.expectEqual(lowered.layouts.layoutCount(), view.layouts.layoutCount());
     try std.testing.expectEqualSlices(u8, std.mem.sliceAsBytes(lowered.layouts.layouts.items.items), std.mem.sliceAsBytes(view.layouts.layouts.items.items));
     for (roots, [_][]const u8{ "first", "second" }) |root, name| {
-        const assign = view.store.getCFStmt(root).assign_ref;
+        const assign = view.store.getCFStmtImmediate(root).assign_ref;
         try std.testing.expectEqual(pointer_layout, view.store.getLocal(assign.target).layout_idx);
         try std.testing.expectEqualDeep(lowered.layouts.getLayout(pointer_layout), view.layouts.getLayout(pointer_layout));
         const scope = view.store.inlineScope(view.store.stmtInlineScope(assign.next));

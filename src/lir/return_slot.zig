@@ -351,7 +351,7 @@ test "return slot creates an explicit ptr-result variant for aggregate call stor
 
     try run(&store, &layouts);
 
-    const rewritten = store.getCFStmt(call).assign_call;
+    const rewritten = store.getCFStmtImmediate(call).assign_call;
     try std.testing.expect(rewritten.proc != callee);
     try std.testing.expectEqual(store_unit, rewritten.target);
     try std.testing.expectEqual(ret, rewritten.next);
@@ -369,14 +369,14 @@ test "return slot creates an explicit ptr-result variant for aggregate call stor
     try std.testing.expectEqual(aggregate_ptr, store.getLocal(variant_dest).layout_idx);
     try std.testing.expectEqual(layout_mod.Idx.u64, store.getLocal(variant_value).layout_idx);
 
-    const variant_store = store.getCFStmt(variant.body.?).store_struct;
+    const variant_store = store.getCFStmtImmediate(variant.body.?).store_struct;
     try std.testing.expectEqual(variant_dest, variant_store.dest);
     try std.testing.expectEqual(aggregate, variant_store.struct_layout);
     const variant_store_fields = store.getLocalSpan(variant_store.fields);
     try std.testing.expectEqual(@as(usize, 2), variant_store_fields.len);
     try std.testing.expectEqual(variant_value, GuardedList.at(variant_store_fields, 0));
     try std.testing.expectEqual(variant_value, GuardedList.at(variant_store_fields, 1));
-    try std.testing.expectEqual(layout_mod.Idx.zst, store.getLocal(store.getCFStmt(variant_store.next).ret.value).layout_idx);
+    try std.testing.expectEqual(layout_mod.Idx.zst, store.getLocal(store.getCFStmtImmediate(variant_store.next).ret.value).layout_idx);
 
     const caller_proc = store.getProcSpec(caller);
     try std.testing.expectEqual(call, caller_proc.body.?);
@@ -417,18 +417,18 @@ test "return slot lowers direct tag return into destination store" {
 
     try run(&store, &layouts);
 
-    const rewritten = store.getCFStmt(call).assign_call;
+    const rewritten = store.getCFStmtImmediate(call).assign_call;
     try std.testing.expect(rewritten.proc != callee);
     const variant = store.getProcSpec(rewritten.proc);
     const variant_args = store.getLocalSpan(variant.args);
 
-    const variant_store = store.getCFStmt(variant.body.?).store_tag;
+    const variant_store = store.getCFStmtImmediate(variant.body.?).store_tag;
     try std.testing.expectEqual(GuardedList.at(variant_args, 0), variant_store.dest);
     try std.testing.expectEqual(aggregate, variant_store.tag_layout);
     try std.testing.expectEqual(@as(u32, 0), variant_store.variant_index);
     try std.testing.expectEqual(@as(u32, 0), variant_store.discriminant);
     try std.testing.expectEqual(GuardedList.at(variant_args, 1), variant_store.payload.?);
-    try std.testing.expectEqual(layout_mod.Idx.zst, store.getLocal(store.getCFStmt(variant_store.next).ret.value).layout_idx);
+    try std.testing.expectEqual(layout_mod.Idx.zst, store.getLocal(store.getCFStmtImmediate(variant_store.next).ret.value).layout_idx);
 }
 
 test "return slot shares one variant for identical proc and layout demands" {
@@ -477,8 +477,8 @@ test "return slot shares one variant for identical proc and layout demands" {
     const before_proc_count = store.procSpecCount();
     try run(&store, &layouts);
 
-    const rewritten_a = store.getCFStmt(call_a).assign_call;
-    const rewritten_b = store.getCFStmt(call_b).assign_call;
+    const rewritten_a = store.getCFStmtImmediate(call_a).assign_call;
+    const rewritten_b = store.getCFStmtImmediate(call_b).assign_call;
     try std.testing.expectEqual(rewritten_a.proc, rewritten_b.proc);
     try std.testing.expectEqual(@as(usize, before_proc_count + 1), store.procSpecCount());
 }
@@ -522,7 +522,7 @@ test "return slot does not fuse a multi-use stored call result" {
     const before_proc_count = store.procSpecCount();
     try run(&store, &layouts);
 
-    const unchanged = store.getCFStmt(call).assign_call;
+    const unchanged = store.getCFStmtImmediate(call).assign_call;
     try std.testing.expectEqual(callee, unchanged.proc);
     try std.testing.expectEqual(temporary, unchanged.target);
     try std.testing.expectEqual(before_proc_count, store.procSpecCount());

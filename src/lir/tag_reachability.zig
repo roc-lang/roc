@@ -850,10 +850,10 @@ test "tag reachability bypasses call result and direct payload switches" {
 
     try run(&f.result);
 
-    const call_stmt = store.getCFStmt(caller_body).assign_call;
+    const call_stmt = store.getCFStmtImmediate(caller_body).assign_call;
     try testing.expectEqual(read_payload, call_stmt.next);
 
-    const payload_stmt = store.getCFStmt(read_payload).assign_ref;
+    const payload_stmt = store.getCFStmtImmediate(read_payload).assign_ref;
     try testing.expectEqual(success, payload_stmt.next);
 }
 
@@ -950,7 +950,7 @@ test "tag reachability tracks per-payload tags through payload structs" {
 
     try run(&f.result);
 
-    const payload_stmt = store.getCFStmt(read_payload).assign_ref;
+    const payload_stmt = store.getCFStmtImmediate(read_payload).assign_ref;
     try testing.expectEqual(success, payload_stmt.next);
 }
 
@@ -1075,8 +1075,8 @@ test "tag reachability preserves nested tag variants extracted across a loop joi
 
     try run(&f.result);
 
-    try testing.expectEqual(disc_read, store.getCFStmt(read_loop_inner).assign_ref.next);
-    const branches = store.getCFSwitchBranches(store.getCFStmt(switch_stmt).switch_stmt.branches);
+    try testing.expectEqual(disc_read, store.getCFStmtImmediate(read_loop_inner).assign_ref.next);
+    const branches = store.getCFSwitchBranches(store.getCFStmtImmediate(switch_stmt).switch_stmt.branches);
     try testing.expectEqual(@as(usize, 2), branches.len);
 }
 
@@ -1128,7 +1128,7 @@ test "tag reachability removes impossible explicit branches from multi-value set
 
     try run(&f.result);
 
-    const rewritten = store.getCFStmt(switch_stmt).switch_stmt;
+    const rewritten = store.getCFStmtImmediate(switch_stmt).switch_stmt;
     const branches = store.getCFSwitchBranches(rewritten.branches);
     try testing.expectEqual(@as(usize, 1), branches.len);
     try testing.expectEqual(@as(u64, 0), GuardedList.at(branches, 0).value);
@@ -1186,10 +1186,10 @@ test "tag reachability keeps unrelated live discriminant reads" {
 
     try run(&f.result);
 
-    const other_disc_stmt = store.getCFStmt(other_disc_read).assign_ref;
+    const other_disc_stmt = store.getCFStmtImmediate(other_disc_read).assign_ref;
     try testing.expectEqual(disc_read, other_disc_stmt.next);
 
-    const disc_stmt = store.getCFStmt(disc_read).assign_ref;
+    const disc_stmt = store.getCFStmtImmediate(disc_read).assign_ref;
     try testing.expectEqual(ret_stmt, disc_stmt.next);
 }
 
@@ -1228,10 +1228,10 @@ test "tag reachability retains branches for arg-derived tags" {
 
     try run(&f.result);
 
-    const read_stmt = store.getCFStmt(body).assign_ref;
+    const read_stmt = store.getCFStmtImmediate(body).assign_ref;
     try testing.expectEqual(switch_stmt, read_stmt.next);
 
-    const rewritten = store.getCFStmt(switch_stmt).switch_stmt;
+    const rewritten = store.getCFStmtImmediate(switch_stmt).switch_stmt;
     const branches = store.getCFSwitchBranches(rewritten.branches);
     try testing.expectEqual(@as(usize, 2), branches.len);
 }
@@ -1285,10 +1285,10 @@ test "tag reachability retains branches for hosted call results" {
 
     try run(&f.result);
 
-    const call_stmt = store.getCFStmt(body).assign_call;
+    const call_stmt = store.getCFStmtImmediate(body).assign_call;
     try testing.expectEqual(disc_read, call_stmt.next);
 
-    const read_stmt = store.getCFStmt(disc_read).assign_ref;
+    const read_stmt = store.getCFStmtImmediate(disc_read).assign_ref;
     try testing.expectEqual(switch_stmt, read_stmt.next);
 }
 
@@ -1332,9 +1332,9 @@ test "tag reachability retains branches for erased call results" {
 
     try run(&f.result);
 
-    const call_stmt = store.getCFStmt(body).assign_call_erased;
+    const call_stmt = store.getCFStmtImmediate(body).assign_call_erased;
     try testing.expectEqual(disc_read, call_stmt.next);
 
-    const read_stmt = store.getCFStmt(disc_read).assign_ref;
+    const read_stmt = store.getCFStmtImmediate(disc_read).assign_ref;
     try testing.expectEqual(switch_stmt, read_stmt.next);
 }

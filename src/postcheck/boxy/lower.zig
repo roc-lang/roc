@@ -7302,7 +7302,7 @@ const ProcedureBuilder = struct {
                 const entry = try visited.getOrPut(@backingInt(stmt_id));
                 if (entry.found_existing) continue;
 
-                switch (self.result.store.getCFStmt(stmt_id)) {
+                switch (self.result.store.getCFStmtImmediate(stmt_id).*) {
                     .assign_boxy_desc_ref => |assign| {
                         try stack.append(self.allocator, assign.next);
                         const desc_id = switch (assign.desc) {
@@ -15222,7 +15222,7 @@ const ProcedureBuilder = struct {
             const entry = try visited.getOrPut(@backingInt(stmt_id));
             if (entry.found_existing) continue;
             try statements.append(self.allocator, stmt_id);
-            switch (self.result.store.getCFStmt(stmt_id)) {
+            switch (self.result.store.getCFStmtImmediate(stmt_id).*) {
                 inline .assign_ref,
                 .assign_literal,
                 .init_uninitialized,
@@ -15363,7 +15363,7 @@ const ProcedureBuilder = struct {
         while (changed) {
             changed = false;
             for (statements) |stmt_id| {
-                switch (self.result.store.getCFStmt(stmt_id)) {
+                switch (self.result.store.getCFStmtImmediate(stmt_id).*) {
                     .assign_call => |assign| if (assign.out_desc) |out_desc| {
                         const entry = try dynamic.getOrPut(out_desc);
                         changed = changed or !entry.found_existing;
@@ -15472,7 +15472,7 @@ const ProcedureBuilder = struct {
         }
         for (0..self.result.store.cfStmtCount()) |stmt_index| {
             const stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(stmt_index))));
-            switch (self.result.store.getCFStmt(stmt_id)) {
+            switch (self.result.store.getCFStmtImmediate(stmt_id).*) {
                 .assign_call => |assign| {
                     const callee = self.result.store.getProcSpec(assign.proc);
                     const call_args = self.result.store.getLocalSpan(assign.args);
@@ -45046,7 +45046,7 @@ test "descriptor materialization captures close over recursive template graphs" 
     var builder = ProcedureBuilder.init(gpa, undefined, undefined, undefined, undefined, &result, .{});
     try builder.finalizeDescriptorMaterializationCaptures();
 
-    const assign = result.store.getCFStmt(materialize).assign_boxy_desc_ref;
+    const assign = result.store.getCFStmtImmediate(materialize).assign_boxy_desc_ref;
     const captures = result.store.getLocalSpan(assign.captures);
     try std.testing.expectEqual(@as(usize, 1), GuardedList.borrowLen(captures));
     try std.testing.expectEqual(captured, GuardedList.at(captures, 0));
@@ -45402,7 +45402,7 @@ test "boxy lowerer emits private worker proc for zero-arg numeric lambda root" {
     try std.testing.expectEqual(@as(LIR.LocalSpan, .{ .start = 0, .len = 1 }), proc.frame_locals);
     try std.testing.expectEqual(@as(@TypeOf(proc.ret_layout), .u64), proc.ret_layout);
 
-    const assign = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const assign = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (assign.value) {
         .i128_literal => |literal| {
             try std.testing.expectEqual(@as(i128, 42), literal.value);
@@ -45660,7 +45660,7 @@ test "boxy lowerer emits small decimal expressions as Dec literals" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const literal = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const literal = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (literal.value) {
         .dec_literal => |dec| try std.testing.expectEqual(value.toRocDec().num, dec),
         .i64_literal, .i128_literal, .f64_literal, .f32_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
@@ -45848,12 +45848,12 @@ test "boxy lowerer emits direct calls to planned private workers" {
 
     const root_proc_id = out.lir_result.root_procs.items[0];
     const root_proc = out.lir_result.store.getProcSpec(root_proc_id);
-    const arg = out.lir_result.store.getCFStmt(root_proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const arg = out.lir_result.store.getCFStmtImmediate(root_proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (arg.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 41), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    const call = out.lir_result.store.getCFStmt(arg.next).assign_call;
+    const call = out.lir_result.store.getCFStmtImmediate(arg.next).assign_call;
     try std.testing.expect(call.proc != root_proc_id);
     const call_args = out.lir_result.store.getLocalSpan(call.args);
     try std.testing.expectEqual(@as(usize, 1), call_args.len);
@@ -45863,7 +45863,7 @@ test "boxy lowerer emits direct calls to planned private workers" {
     const callee_proc = out.lir_result.store.getProcSpec(call.proc);
     const callee_args = out.lir_result.store.getLocalSpan(callee_proc.args);
     try std.testing.expectEqual(@as(usize, 1), callee_args.len);
-    const callee_copy = out.lir_result.store.getCFStmt(callee_proc.body orelse return error.TestUnexpectedResult).assign_ref;
+    const callee_copy = out.lir_result.store.getCFStmtImmediate(callee_proc.body orelse return error.TestUnexpectedResult).assign_ref;
     switch (callee_copy.op) {
         .local => |local| try std.testing.expectEqual(GuardedList.at(callee_args, 0), local),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
@@ -46126,7 +46126,7 @@ test "boxy lowerer emits direct calls to planned imported workers" {
 
     const root_proc_id = out.lir_result.root_procs.items[0];
     const root_proc = out.lir_result.store.getProcSpec(root_proc_id);
-    const call = out.lir_result.store.getCFStmt(root_proc.body orelse return error.TestUnexpectedResult).assign_call;
+    const call = out.lir_result.store.getCFStmtImmediate(root_proc.body orelse return error.TestUnexpectedResult).assign_call;
     try std.testing.expect(call.proc != root_proc_id);
     try std.testing.expect(call.args.isEmpty());
     const return_stmt = out.lir_result.store.getCFStmt(call.next);
@@ -46150,7 +46150,7 @@ test "boxy lowerer emits direct calls to planned imported workers" {
     const imported_proc_id = call.proc;
     const imported_proc = out.lir_result.store.getProcSpec(imported_proc_id);
     try std.testing.expect(imported_proc.args.isEmpty());
-    const helper_call = out.lir_result.store.getCFStmt(imported_proc.body orelse return error.TestUnexpectedResult).assign_call;
+    const helper_call = out.lir_result.store.getCFStmtImmediate(imported_proc.body orelse return error.TestUnexpectedResult).assign_call;
     try std.testing.expect(helper_call.proc != root_proc_id);
     try std.testing.expect(helper_call.proc != imported_proc_id);
     try std.testing.expect(helper_call.args.isEmpty());
@@ -46158,7 +46158,7 @@ test "boxy lowerer emits direct calls to planned imported workers" {
 
     const helper_proc = out.lir_result.store.getProcSpec(helper_call.proc);
     try std.testing.expect(helper_proc.args.isEmpty());
-    const literal = out.lir_result.store.getCFStmt(helper_proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const literal = out.lir_result.store.getCFStmtImmediate(helper_proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (literal.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 99), value.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
@@ -46296,7 +46296,7 @@ test "boxy lowerer emits recursive direct calls to the current private worker" {
         &out.lir_result.store,
         proc.body orelse return error.TestUnexpectedResult,
     );
-    const call = out.lir_result.store.getCFStmt(body).assign_call;
+    const call = out.lir_result.store.getCFStmtImmediate(body).assign_call;
     try std.testing.expectEqual(proc_id, call.proc);
     try std.testing.expect(call.args.isEmpty());
     // A U64 result carries no descriptor, so the call to the unfinished
@@ -46376,7 +46376,7 @@ test "boxy lowerer emits checked crash as terminal LIR crash" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const crash = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).crash;
+    const crash = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).crash;
     const msg = switch (crash.msg) {
         .literal => |literal| literal,
         .local => return error.TestUnexpectedResult,
@@ -46452,7 +46452,7 @@ test "boxy lowerer emits checked ellipsis as identity not-implemented crash" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const crash = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).crash;
+    const crash = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).crash;
     const msg = switch (crash.msg) {
         .literal => |literal| literal,
         .local => return error.TestUnexpectedResult,
@@ -46538,12 +46538,12 @@ test "boxy lowerer emits checked return expressions as terminal ret" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const assign = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const assign = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (assign.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 7), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    const copy = out.lir_result.store.getCFStmt(assign.next).assign_ref;
+    const copy = out.lir_result.store.getCFStmtImmediate(assign.next).assign_ref;
     try std.testing.expectEqual(LIR.RefOp{ .local = assign.target }, copy.op);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = copy.target } }, out.lir_result.store.getCFStmt(copy.next));
 }
@@ -46641,12 +46641,12 @@ test "boxy lowerer emits checked return statements as terminal ret" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const assign = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const assign = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (assign.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 7), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    const copy = out.lir_result.store.getCFStmt(assign.next).assign_ref;
+    const copy = out.lir_result.store.getCFStmtImmediate(assign.next).assign_ref;
     try std.testing.expectEqual(LIR.RefOp{ .local = assign.target }, copy.op);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = copy.target } }, out.lir_result.store.getCFStmt(copy.next));
 }
@@ -46923,23 +46923,23 @@ test "boxy lowerer emits checked while statements as join-backed loops" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const loop_join = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).join;
+    const loop_join = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).join;
     try std.testing.expect(loop_join.params.isEmpty());
     try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = loop_join.id } }, out.lir_result.store.getCFStmt(loop_join.remainder));
 
-    const cond = out.lir_result.store.getCFStmt(loop_join.body).assign_tag;
+    const cond = out.lir_result.store.getCFStmtImmediate(loop_join.body).assign_tag;
     try std.testing.expectEqual(@as(u32, 0), cond.variant_index);
-    const switch_stmt = out.lir_result.store.getCFStmt(cond.next).switch_stmt;
+    const switch_stmt = out.lir_result.store.getCFStmtImmediate(cond.next).switch_stmt;
     try std.testing.expectEqual(cond.target, switch_stmt.cond);
     const branches = out.lir_result.store.getCFSwitchBranches(switch_stmt.branches);
     try std.testing.expectEqual(@as(usize, 1), branches.len);
     try std.testing.expectEqual(@as(u64, 1), GuardedList.at(branches, 0).value);
 
-    const body_unit = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_struct;
+    const body_unit = out.lir_result.store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_struct;
     try std.testing.expect(body_unit.fields.isEmpty());
     try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = loop_join.id } }, out.lir_result.store.getCFStmt(body_unit.next));
 
-    const after_loop = out.lir_result.store.getCFStmt(switch_stmt.default_branch).assign_literal;
+    const after_loop = out.lir_result.store.getCFStmtImmediate(switch_stmt.default_branch).assign_literal;
     switch (after_loop.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 99), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
@@ -47057,19 +47057,19 @@ test "boxy lowerer emits checked break as the active loop exit" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const loop_join = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).join;
-    const cond = out.lir_result.store.getCFStmt(loop_join.body).assign_tag;
+    const loop_join = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).join;
+    const cond = out.lir_result.store.getCFStmtImmediate(loop_join.body).assign_tag;
     try std.testing.expectEqual(@as(u32, 1), cond.variant_index);
-    const switch_stmt = out.lir_result.store.getCFStmt(cond.next).switch_stmt;
+    const switch_stmt = out.lir_result.store.getCFStmtImmediate(cond.next).switch_stmt;
     const branches = out.lir_result.store.getCFSwitchBranches(switch_stmt.branches);
     try std.testing.expectEqual(@as(usize, 1), branches.len);
     try std.testing.expectEqual(@as(u64, 1), GuardedList.at(branches, 0).value);
 
-    const break_unit = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_struct;
+    const break_unit = out.lir_result.store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_struct;
     try std.testing.expect(break_unit.fields.isEmpty());
     try std.testing.expectEqual(switch_stmt.default_branch, break_unit.next);
 
-    const after_loop = out.lir_result.store.getCFStmt(break_unit.next).assign_literal;
+    const after_loop = out.lir_result.store.getCFStmtImmediate(break_unit.next).assign_literal;
     switch (after_loop.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 41), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
@@ -47182,29 +47182,29 @@ test "boxy lowerer emits checked if expressions with a shared continuation join"
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const join = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).join;
+    const join = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).join;
     const join_params = out.lir_result.store.getLocalSpan(join.params);
     try std.testing.expectEqual(@as(usize, 1), join_params.len);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = GuardedList.at(join_params, 0) } }, out.lir_result.store.getCFStmt(join.body));
 
-    const cond = out.lir_result.store.getCFStmt(join.remainder).assign_tag;
+    const cond = out.lir_result.store.getCFStmtImmediate(join.remainder).assign_tag;
     try std.testing.expectEqual(@as(u32, 1), cond.variant_index);
     try std.testing.expectEqual(@as(u32, 1), cond.discriminant);
 
-    const switch_stmt = out.lir_result.store.getCFStmt(cond.next).switch_stmt;
+    const switch_stmt = out.lir_result.store.getCFStmtImmediate(cond.next).switch_stmt;
     try std.testing.expectEqual(cond.target, switch_stmt.cond);
     const branches = out.lir_result.store.getCFSwitchBranches(switch_stmt.branches);
     try std.testing.expectEqual(@as(usize, 1), branches.len);
     try std.testing.expectEqual(@as(u64, 1), GuardedList.at(branches, 0).value);
 
-    const then_value = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_literal;
+    const then_value = out.lir_result.store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_literal;
     switch (then_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 11), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = join.id } }, out.lir_result.store.getCFStmt(then_value.next));
 
-    const else_value = out.lir_result.store.getCFStmt(switch_stmt.default_branch).assign_literal;
+    const else_value = out.lir_result.store.getCFStmtImmediate(switch_stmt.default_branch).assign_literal;
     switch (else_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 22), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
@@ -47338,37 +47338,37 @@ test "boxy lowerer emits checked tag matches as ordered discriminant tests" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const outer_join = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).join;
-    const cond_tag = out.lir_result.store.getCFStmt(outer_join.remainder).assign_tag;
+    const outer_join = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).join;
+    const cond_tag = out.lir_result.store.getCFStmtImmediate(outer_join.remainder).assign_tag;
     try std.testing.expectEqual(@as(u32, 1), cond_tag.variant_index);
 
-    const first_join = out.lir_result.store.getCFStmt(cond_tag.next).join;
-    const first_disc = out.lir_result.store.getCFStmt(first_join.remainder).assign_ref;
+    const first_join = out.lir_result.store.getCFStmtImmediate(cond_tag.next).join;
+    const first_disc = out.lir_result.store.getCFStmtImmediate(first_join.remainder).assign_ref;
     switch (first_disc.op) {
         .discriminant => |disc| try std.testing.expectEqual(cond_tag.target, disc.source),
         .local, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
-    const first_switch = out.lir_result.store.getCFStmt(first_disc.next).switch_stmt;
+    const first_switch = out.lir_result.store.getCFStmtImmediate(first_disc.next).switch_stmt;
     const first_branches = out.lir_result.store.getCFSwitchBranches(first_switch.branches);
     try std.testing.expectEqual(@as(usize, 1), first_branches.len);
     try std.testing.expectEqual(@as(u64, 0), GuardedList.at(first_branches, 0).value);
-    const first_value = out.lir_result.store.getCFStmt(GuardedList.at(first_branches, 0).body).assign_literal;
+    const first_value = out.lir_result.store.getCFStmtImmediate(GuardedList.at(first_branches, 0).body).assign_literal;
     switch (first_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 11), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
-    const second_join = out.lir_result.store.getCFStmt(first_join.body).join;
-    const second_disc = out.lir_result.store.getCFStmt(second_join.remainder).assign_ref;
+    const second_join = out.lir_result.store.getCFStmtImmediate(first_join.body).join;
+    const second_disc = out.lir_result.store.getCFStmtImmediate(second_join.remainder).assign_ref;
     switch (second_disc.op) {
         .discriminant => |disc| try std.testing.expectEqual(cond_tag.target, disc.source),
         .local, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
-    const second_switch = out.lir_result.store.getCFStmt(second_disc.next).switch_stmt;
+    const second_switch = out.lir_result.store.getCFStmtImmediate(second_disc.next).switch_stmt;
     const second_branches = out.lir_result.store.getCFSwitchBranches(second_switch.branches);
     try std.testing.expectEqual(@as(usize, 1), second_branches.len);
     try std.testing.expectEqual(@as(u64, 1), GuardedList.at(second_branches, 0).value);
-    const second_value = out.lir_result.store.getCFStmt(GuardedList.at(second_branches, 0).body).assign_literal;
+    const second_value = out.lir_result.store.getCFStmtImmediate(GuardedList.at(second_branches, 0).body).assign_literal;
     switch (second_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 22), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
@@ -47525,22 +47525,22 @@ test "boxy lowerer binds checked tag payload match patterns before branch bodies
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const outer_join = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).join;
-    const payload_literal = out.lir_result.store.getCFStmt(outer_join.remainder).assign_literal;
+    const outer_join = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).join;
+    const payload_literal = out.lir_result.store.getCFStmtImmediate(outer_join.remainder).assign_literal;
     switch (payload_literal.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 41), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    const cond_tag = out.lir_result.store.getCFStmt(payload_literal.next).assign_tag;
+    const cond_tag = out.lir_result.store.getCFStmtImmediate(payload_literal.next).assign_tag;
     try std.testing.expect(cond_tag.payload != null);
 
-    const first_join = out.lir_result.store.getCFStmt(cond_tag.next).join;
-    const disc = out.lir_result.store.getCFStmt(first_join.remainder).assign_ref;
-    const switch_stmt = out.lir_result.store.getCFStmt(disc.next).switch_stmt;
+    const first_join = out.lir_result.store.getCFStmtImmediate(cond_tag.next).join;
+    const disc = out.lir_result.store.getCFStmtImmediate(first_join.remainder).assign_ref;
+    const switch_stmt = out.lir_result.store.getCFStmtImmediate(disc.next).switch_stmt;
     const branches = out.lir_result.store.getCFSwitchBranches(switch_stmt.branches);
     try std.testing.expectEqual(@as(u64, 0), GuardedList.at(branches, 0).value);
 
-    const payload_read = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_ref;
+    const payload_read = out.lir_result.store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_ref;
     switch (payload_read.op) {
         .tag_payload_struct => |payload| {
             try std.testing.expectEqual(cond_tag.target, payload.source);
@@ -47550,13 +47550,13 @@ test "boxy lowerer binds checked tag payload match patterns before branch bodies
         .local, .discriminant, .field, .tag_payload, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
 
-    const binder_assign = out.lir_result.store.getCFStmt(payload_read.next).assign_ref;
+    const binder_assign = out.lir_result.store.getCFStmtImmediate(payload_read.next).assign_ref;
     switch (binder_assign.op) {
         .local => |source| try std.testing.expectEqual(payload_read.target, source),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
 
-    const branch_result = out.lir_result.store.getCFStmt(binder_assign.next).assign_ref;
+    const branch_result = out.lir_result.store.getCFStmtImmediate(binder_assign.next).assign_ref;
     switch (branch_result.op) {
         .local => |source| try std.testing.expectEqual(binder_assign.target, source),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
@@ -47715,17 +47715,17 @@ test "boxy lowerer emits checked list match patterns as length checks and elemen
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const outer_join = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).join;
-    const first = out.lir_result.store.getCFStmt(outer_join.remainder).assign_literal;
-    const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
-    const list = out.lir_result.store.getCFStmt(second.next).assign_list;
+    const outer_join = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).join;
+    const first = out.lir_result.store.getCFStmtImmediate(outer_join.remainder).assign_literal;
+    const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
+    const list = out.lir_result.store.getCFStmtImmediate(second.next).assign_list;
 
-    const miss_join = out.lir_result.store.getCFStmt(list.next).join;
-    const len = out.lir_result.store.getCFStmt(miss_join.remainder).assign_low_level;
+    const miss_join = out.lir_result.store.getCFStmtImmediate(list.next).join;
+    const len = out.lir_result.store.getCFStmtImmediate(miss_join.remainder).assign_low_level;
     try std.testing.expectEqual(LIR.LowLevel.list_len, len.op);
     try std.testing.expectEqual(list.target, GuardedList.at(out.lir_result.store.getLocalSpan(len.args), 0));
 
-    const required = out.lir_result.store.getCFStmt(len.next).assign_literal;
+    const required = out.lir_result.store.getCFStmtImmediate(len.next).assign_literal;
     switch (required.value) {
         .i64_literal => |literal| {
             try std.testing.expectEqual(@as(i64, 2), literal.value);
@@ -47734,31 +47734,31 @@ test "boxy lowerer emits checked list match patterns as length checks and elemen
         .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
-    const cmp = out.lir_result.store.getCFStmt(required.next).assign_low_level;
+    const cmp = out.lir_result.store.getCFStmtImmediate(required.next).assign_low_level;
     try std.testing.expectEqual(LIR.LowLevel.num_is_eq, cmp.op);
     const cmp_args = out.lir_result.store.getLocalSpan(cmp.args);
     try std.testing.expectEqual(len.target, GuardedList.at(cmp_args, 0));
     try std.testing.expectEqual(required.target, GuardedList.at(cmp_args, 1));
 
-    const switch_stmt = out.lir_result.store.getCFStmt(cmp.next).switch_stmt;
+    const switch_stmt = out.lir_result.store.getCFStmtImmediate(cmp.next).switch_stmt;
     try std.testing.expectEqual(cmp.target, switch_stmt.cond);
     const branches = out.lir_result.store.getCFSwitchBranches(switch_stmt.branches);
     try std.testing.expectEqual(@as(usize, 1), branches.len);
 
-    const item_index = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_literal;
+    const item_index = out.lir_result.store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_literal;
     switch (item_index.value) {
         .i64_literal => |literal| try std.testing.expectEqual(@as(i64, 1), literal.value),
         .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    const item = out.lir_result.store.getCFStmt(item_index.next).assign_low_level;
+    const item = out.lir_result.store.getCFStmtImmediate(item_index.next).assign_low_level;
     try std.testing.expectEqual(LIR.LowLevel.list_get_unsafe, item.op);
     const item_args = out.lir_result.store.getLocalSpan(item.args);
     try std.testing.expectEqual(list.target, GuardedList.at(item_args, 0));
     try std.testing.expectEqual(item_index.target, GuardedList.at(item_args, 1));
 
-    const bind = out.lir_result.store.getCFStmt(item.next).assign_ref;
+    const bind = out.lir_result.store.getCFStmtImmediate(item.next).assign_ref;
     try std.testing.expectEqual(item.target, bind.op.local);
-    const branch_result = out.lir_result.store.getCFStmt(bind.next).assign_ref;
+    const branch_result = out.lir_result.store.getCFStmtImmediate(bind.next).assign_ref;
     try std.testing.expectEqual(bind.target, branch_result.op.local);
     try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = outer_join.id } }, out.lir_result.store.getCFStmt(branch_result.next));
 }
@@ -47896,10 +47896,10 @@ test "boxy lowerer emits checked string interpolation match patterns" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const outer_join = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).join;
-    const source = out.lir_result.store.getCFStmt(outer_join.remainder).assign_literal;
-    const miss_join = out.lir_result.store.getCFStmt(source.next).join;
-    const str_match = out.lir_result.store.getCFStmt(miss_join.remainder).str_match;
+    const outer_join = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).join;
+    const source = out.lir_result.store.getCFStmtImmediate(outer_join.remainder).assign_literal;
+    const miss_join = out.lir_result.store.getCFStmtImmediate(source.next).join;
+    const str_match = out.lir_result.store.getCFStmtImmediate(miss_join.remainder).str_match;
 
     try std.testing.expectEqual(source.target, str_match.source);
     try std.testing.expectEqualStrings("pre", out.lir_result.store.getStringLiteral(str_match.prefix));
@@ -47913,9 +47913,9 @@ test "boxy lowerer emits checked string interpolation match patterns" {
         .discard => return error.TestUnexpectedResult,
     };
 
-    const bind = out.lir_result.store.getCFStmt(str_match.on_match).assign_ref;
+    const bind = out.lir_result.store.getCFStmtImmediate(str_match.on_match).assign_ref;
     try std.testing.expectEqual(capture, bind.op.local);
-    const branch_result = out.lir_result.store.getCFStmt(bind.next).assign_ref;
+    const branch_result = out.lir_result.store.getCFStmtImmediate(bind.next).assign_ref;
     try std.testing.expectEqual(bind.target, branch_result.op.local);
     try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = outer_join.id } }, out.lir_result.store.getCFStmt(branch_result.next));
 }
@@ -48082,29 +48082,29 @@ test "boxy lowerer maps checked alternative binders onto representative match lo
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const outer_join = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).join;
-    const payload_literal = out.lir_result.store.getCFStmt(outer_join.remainder).assign_literal;
-    const cond_tag = out.lir_result.store.getCFStmt(payload_literal.next).assign_tag;
+    const outer_join = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).join;
+    const payload_literal = out.lir_result.store.getCFStmtImmediate(outer_join.remainder).assign_literal;
+    const cond_tag = out.lir_result.store.getCFStmtImmediate(payload_literal.next).assign_tag;
     try std.testing.expectEqual(@as(u32, 1), cond_tag.variant_index);
 
-    const first_alt_join = out.lir_result.store.getCFStmt(cond_tag.next).join;
-    const second_alt_join = out.lir_result.store.getCFStmt(first_alt_join.body).join;
-    const second_disc = out.lir_result.store.getCFStmt(second_alt_join.remainder).assign_ref;
-    const second_switch = out.lir_result.store.getCFStmt(second_disc.next).switch_stmt;
+    const first_alt_join = out.lir_result.store.getCFStmtImmediate(cond_tag.next).join;
+    const second_alt_join = out.lir_result.store.getCFStmtImmediate(first_alt_join.body).join;
+    const second_disc = out.lir_result.store.getCFStmtImmediate(second_alt_join.remainder).assign_ref;
+    const second_switch = out.lir_result.store.getCFStmtImmediate(second_disc.next).switch_stmt;
     const second_branches = out.lir_result.store.getCFSwitchBranches(second_switch.branches);
     try std.testing.expectEqual(@as(u64, 1), GuardedList.at(second_branches, 0).value);
 
-    const payload_read = out.lir_result.store.getCFStmt(GuardedList.at(second_branches, 0).body).assign_ref;
+    const payload_read = out.lir_result.store.getCFStmtImmediate(GuardedList.at(second_branches, 0).body).assign_ref;
     switch (payload_read.op) {
         .tag_payload_struct => |payload| try std.testing.expectEqual(cond_tag.target, payload.source),
         .local, .discriminant, .field, .tag_payload, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
-    const remapped_assign = out.lir_result.store.getCFStmt(payload_read.next).assign_ref;
+    const remapped_assign = out.lir_result.store.getCFStmtImmediate(payload_read.next).assign_ref;
     switch (remapped_assign.op) {
         .local => |source| try std.testing.expectEqual(payload_read.target, source),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
-    const branch_result = out.lir_result.store.getCFStmt(remapped_assign.next).assign_ref;
+    const branch_result = out.lir_result.store.getCFStmtImmediate(remapped_assign.next).assign_ref;
     switch (branch_result.op) {
         .local => |source| try std.testing.expectEqual(remapped_assign.target, source),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
@@ -48228,23 +48228,23 @@ test "boxy lowerer emits checked numeric literal match patterns as equality test
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const outer_join = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).join;
-    const cond_literal = out.lir_result.store.getCFStmt(outer_join.remainder).assign_literal;
-    const first_join = out.lir_result.store.getCFStmt(cond_literal.next).join;
-    const pattern_literal = out.lir_result.store.getCFStmt(first_join.remainder).assign_literal;
-    const compare = out.lir_result.store.getCFStmt(pattern_literal.next).assign_low_level;
+    const outer_join = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).join;
+    const cond_literal = out.lir_result.store.getCFStmtImmediate(outer_join.remainder).assign_literal;
+    const first_join = out.lir_result.store.getCFStmtImmediate(cond_literal.next).join;
+    const pattern_literal = out.lir_result.store.getCFStmtImmediate(first_join.remainder).assign_literal;
+    const compare = out.lir_result.store.getCFStmtImmediate(pattern_literal.next).assign_low_level;
     try std.testing.expectEqual(LIR.LowLevel.num_is_eq, compare.op);
     const args = out.lir_result.store.getLocalSpan(compare.args);
     try std.testing.expectEqual(@as(usize, 2), args.len);
     try std.testing.expectEqual(cond_literal.target, GuardedList.at(args, 0));
     try std.testing.expectEqual(pattern_literal.target, GuardedList.at(args, 1));
 
-    const switch_stmt = out.lir_result.store.getCFStmt(compare.next).switch_stmt;
+    const switch_stmt = out.lir_result.store.getCFStmtImmediate(compare.next).switch_stmt;
     try std.testing.expectEqual(compare.target, switch_stmt.cond);
     const branches = out.lir_result.store.getCFSwitchBranches(switch_stmt.branches);
     try std.testing.expectEqual(@as(usize, 1), branches.len);
     try std.testing.expectEqual(@as(u64, 1), GuardedList.at(branches, 0).value);
-    const matched_value = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_literal;
+    const matched_value = out.lir_result.store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_literal;
     switch (matched_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 11), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
@@ -48374,33 +48374,33 @@ test "boxy lowerer emits checked small decimal match patterns as Dec equality te
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const outer_join = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).join;
-    const cond_literal = out.lir_result.store.getCFStmt(outer_join.remainder).assign_literal;
+    const outer_join = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).join;
+    const cond_literal = out.lir_result.store.getCFStmtImmediate(outer_join.remainder).assign_literal;
     switch (cond_literal.value) {
         .dec_literal => |literal| try std.testing.expectEqual(expected_dec, literal),
         .i64_literal, .i128_literal, .f64_literal, .f32_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
-    const first_join = out.lir_result.store.getCFStmt(cond_literal.next).join;
-    const pattern_literal = out.lir_result.store.getCFStmt(first_join.remainder).assign_literal;
+    const first_join = out.lir_result.store.getCFStmtImmediate(cond_literal.next).join;
+    const pattern_literal = out.lir_result.store.getCFStmtImmediate(first_join.remainder).assign_literal;
     switch (pattern_literal.value) {
         .dec_literal => |literal| try std.testing.expectEqual(expected_dec, literal),
         .i64_literal, .i128_literal, .f64_literal, .f32_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
-    const compare = out.lir_result.store.getCFStmt(pattern_literal.next).assign_low_level;
+    const compare = out.lir_result.store.getCFStmtImmediate(pattern_literal.next).assign_low_level;
     try std.testing.expectEqual(LIR.LowLevel.num_is_eq, compare.op);
     const args = out.lir_result.store.getLocalSpan(compare.args);
     try std.testing.expectEqual(@as(usize, 2), args.len);
     try std.testing.expectEqual(cond_literal.target, GuardedList.at(args, 0));
     try std.testing.expectEqual(pattern_literal.target, GuardedList.at(args, 1));
 
-    const switch_stmt = out.lir_result.store.getCFStmt(compare.next).switch_stmt;
+    const switch_stmt = out.lir_result.store.getCFStmtImmediate(compare.next).switch_stmt;
     try std.testing.expectEqual(compare.target, switch_stmt.cond);
     const branches = out.lir_result.store.getCFSwitchBranches(switch_stmt.branches);
     try std.testing.expectEqual(@as(usize, 1), branches.len);
     try std.testing.expectEqual(@as(u64, 1), GuardedList.at(branches, 0).value);
-    const matched_value = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_literal;
+    const matched_value = out.lir_result.store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_literal;
     switch (matched_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 11), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
@@ -48530,11 +48530,11 @@ test "boxy lowerer emits checked string literal match patterns as string equalit
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const outer_join = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).join;
-    const cond_literal = out.lir_result.store.getCFStmt(outer_join.remainder).assign_literal;
-    const first_join = out.lir_result.store.getCFStmt(cond_literal.next).join;
-    const pattern_literal = out.lir_result.store.getCFStmt(first_join.remainder).assign_literal;
-    const compare = out.lir_result.store.getCFStmt(pattern_literal.next).assign_low_level;
+    const outer_join = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).join;
+    const cond_literal = out.lir_result.store.getCFStmtImmediate(outer_join.remainder).assign_literal;
+    const first_join = out.lir_result.store.getCFStmtImmediate(cond_literal.next).join;
+    const pattern_literal = out.lir_result.store.getCFStmtImmediate(first_join.remainder).assign_literal;
+    const compare = out.lir_result.store.getCFStmtImmediate(pattern_literal.next).assign_low_level;
     try std.testing.expectEqual(LIR.LowLevel.str_is_eq, compare.op);
     const args = out.lir_result.store.getLocalSpan(compare.args);
     try std.testing.expectEqual(@as(usize, 2), args.len);
@@ -48623,11 +48623,11 @@ test "boxy lowerer emits checked unary not as bool low-level call" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const literal = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_tag;
+    const literal = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_tag;
     try std.testing.expectEqual(@as(u32, 1), literal.variant_index);
     try std.testing.expectEqual(@as(u32, 1), literal.discriminant);
 
-    const not = out.lir_result.store.getCFStmt(literal.next).assign_low_level;
+    const not = out.lir_result.store.getCFStmtImmediate(literal.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .bool_not), not.op);
     const args = out.lir_result.store.getLocalSpan(not.args);
     try std.testing.expectEqual(@as(usize, 1), args.len);
@@ -48730,20 +48730,20 @@ test "boxy lowerer emits short-circuit checked boolean and" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const lhs = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_tag;
+    const lhs = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_tag;
     try std.testing.expectEqual(@as(u32, 0), lhs.variant_index);
 
-    const switch_stmt = out.lir_result.store.getCFStmt(lhs.next).switch_stmt;
+    const switch_stmt = out.lir_result.store.getCFStmtImmediate(lhs.next).switch_stmt;
     try std.testing.expectEqual(lhs.target, switch_stmt.cond);
     const branches = out.lir_result.store.getCFSwitchBranches(switch_stmt.branches);
     try std.testing.expectEqual(@as(usize, 1), branches.len);
     try std.testing.expectEqual(@as(u64, 1), GuardedList.at(branches, 0).value);
 
-    const true_branch = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_tag;
+    const true_branch = out.lir_result.store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_tag;
     try std.testing.expectEqual(@as(u32, 1), true_branch.variant_index);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = true_branch.target } }, out.lir_result.store.getCFStmt(true_branch.next));
 
-    const false_branch = out.lir_result.store.getCFStmt(switch_stmt.default_branch).assign_tag;
+    const false_branch = out.lir_result.store.getCFStmtImmediate(switch_stmt.default_branch).assign_tag;
     try std.testing.expectEqual(@as(u32, 0), false_branch.variant_index);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = false_branch.target } }, out.lir_result.store.getCFStmt(false_branch.next));
 }
@@ -48837,17 +48837,17 @@ test "boxy lowerer emits primitive structural equality as low-level equality" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const lhs = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const lhs = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (lhs.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 42), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    const rhs = out.lir_result.store.getCFStmt(lhs.next).assign_literal;
+    const rhs = out.lir_result.store.getCFStmtImmediate(lhs.next).assign_literal;
     switch (rhs.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 42), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    const eq = out.lir_result.store.getCFStmt(rhs.next).assign_low_level;
+    const eq = out.lir_result.store.getCFStmtImmediate(rhs.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .num_is_eq), eq.op);
     const args = out.lir_result.store.getLocalSpan(eq.args);
     try std.testing.expectEqual(@as(usize, 2), args.len);
@@ -48983,40 +48983,40 @@ test "boxy lowerer emits tuple structural equality with field short-circuiting" 
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const lhs_first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
-    const lhs_second = out.lir_result.store.getCFStmt(lhs_first.next).assign_literal;
-    const lhs_tuple = out.lir_result.store.getCFStmt(lhs_second.next).assign_struct;
-    const rhs_first = out.lir_result.store.getCFStmt(lhs_tuple.next).assign_literal;
-    const rhs_second = out.lir_result.store.getCFStmt(rhs_first.next).assign_literal;
-    const rhs_tuple = out.lir_result.store.getCFStmt(rhs_second.next).assign_struct;
+    const lhs_first = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const lhs_second = out.lir_result.store.getCFStmtImmediate(lhs_first.next).assign_literal;
+    const lhs_tuple = out.lir_result.store.getCFStmtImmediate(lhs_second.next).assign_struct;
+    const rhs_first = out.lir_result.store.getCFStmtImmediate(lhs_tuple.next).assign_literal;
+    const rhs_second = out.lir_result.store.getCFStmtImmediate(rhs_first.next).assign_literal;
+    const rhs_tuple = out.lir_result.store.getCFStmtImmediate(rhs_second.next).assign_struct;
 
     // Every outcome writes the result and jumps to one join before the
     // comparison's continuation.
-    const result_join = out.lir_result.store.getCFStmt(rhs_tuple.next).join;
+    const result_join = out.lir_result.store.getCFStmtImmediate(rhs_tuple.next).join;
     const result = GuardedList.at(out.lir_result.store.getLocalSpan(result_join.params), 0);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = result } }, out.lir_result.store.getCFStmt(result_join.body));
 
-    const read_lhs_field0 = out.lir_result.store.getCFStmt(result_join.remainder).assign_ref;
+    const read_lhs_field0 = out.lir_result.store.getCFStmtImmediate(result_join.remainder).assign_ref;
     try std.testing.expectEqual(lhs_tuple.target, read_lhs_field0.op.field.source);
     try std.testing.expectEqual(@as(u32, 0), read_lhs_field0.op.field.field_idx);
-    const read_rhs_field0 = out.lir_result.store.getCFStmt(read_lhs_field0.next).assign_ref;
+    const read_rhs_field0 = out.lir_result.store.getCFStmtImmediate(read_lhs_field0.next).assign_ref;
     try std.testing.expectEqual(rhs_tuple.target, read_rhs_field0.op.field.source);
     try std.testing.expectEqual(@as(u32, 0), read_rhs_field0.op.field.field_idx);
 
-    const compare_field0 = out.lir_result.store.getCFStmt(read_rhs_field0.next).assign_low_level;
+    const compare_field0 = out.lir_result.store.getCFStmtImmediate(read_rhs_field0.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .num_is_eq), compare_field0.op);
-    const switch_field0 = out.lir_result.store.getCFStmt(compare_field0.next).switch_stmt;
+    const switch_field0 = out.lir_result.store.getCFStmtImmediate(compare_field0.next).switch_stmt;
     try std.testing.expectEqual(compare_field0.target, switch_field0.cond);
     const branches = out.lir_result.store.getCFSwitchBranches(switch_field0.branches);
     try std.testing.expectEqual(@as(usize, 1), branches.len);
     try std.testing.expectEqual(@as(u64, 1), GuardedList.at(branches, 0).value);
 
-    const failed = out.lir_result.store.getCFStmt(switch_field0.default_branch).assign_tag;
+    const failed = out.lir_result.store.getCFStmtImmediate(switch_field0.default_branch).assign_tag;
     try std.testing.expectEqual(@as(u32, 0), failed.variant_index);
     try std.testing.expectEqual(result, failed.target);
     try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = result_join.id } }, out.lir_result.store.getCFStmt(failed.next));
 
-    const read_lhs_field1 = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_ref;
+    const read_lhs_field1 = out.lir_result.store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_ref;
     try std.testing.expectEqual(lhs_tuple.target, read_lhs_field1.op.field.source);
     try std.testing.expectEqual(@as(u32, 1), read_lhs_field1.op.field.field_idx);
 }
@@ -49104,17 +49104,17 @@ test "boxy lowerer emits primitive structural hash as hasher low-level" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const value = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const value = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 5), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    const seed = out.lir_result.store.getCFStmt(value.next).assign_literal;
+    const seed = out.lir_result.store.getCFStmtImmediate(value.next).assign_literal;
     switch (seed.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 99), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    const hash = out.lir_result.store.getCFStmt(seed.next).assign_low_level;
+    const hash = out.lir_result.store.getCFStmtImmediate(seed.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .hasher_write_u64), hash.op);
     const args = out.lir_result.store.getLocalSpan(hash.args);
     try std.testing.expectEqual(@as(usize, 2), args.len);
@@ -49230,24 +49230,24 @@ test "boxy lowerer emits tuple structural hash by threading hasher through field
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
-    const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
-    const tuple = out.lir_result.store.getCFStmt(second.next).assign_struct;
-    const seed = out.lir_result.store.getCFStmt(tuple.next).assign_literal;
+    const first = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
+    const tuple = out.lir_result.store.getCFStmtImmediate(second.next).assign_struct;
+    const seed = out.lir_result.store.getCFStmtImmediate(tuple.next).assign_literal;
 
-    const read_field0 = out.lir_result.store.getCFStmt(seed.next).assign_ref;
+    const read_field0 = out.lir_result.store.getCFStmtImmediate(seed.next).assign_ref;
     try std.testing.expectEqual(tuple.target, read_field0.op.field.source);
     try std.testing.expectEqual(@as(u32, 0), read_field0.op.field.field_idx);
-    const hash_field0 = out.lir_result.store.getCFStmt(read_field0.next).assign_low_level;
+    const hash_field0 = out.lir_result.store.getCFStmtImmediate(read_field0.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .hasher_write_u64), hash_field0.op);
     const first_args = out.lir_result.store.getLocalSpan(hash_field0.args);
     try std.testing.expectEqual(seed.target, GuardedList.at(first_args, 0));
     try std.testing.expectEqual(read_field0.target, GuardedList.at(first_args, 1));
 
-    const read_field1 = out.lir_result.store.getCFStmt(hash_field0.next).assign_ref;
+    const read_field1 = out.lir_result.store.getCFStmtImmediate(hash_field0.next).assign_ref;
     try std.testing.expectEqual(tuple.target, read_field1.op.field.source);
     try std.testing.expectEqual(@as(u32, 1), read_field1.op.field.field_idx);
-    const hash_field1 = out.lir_result.store.getCFStmt(read_field1.next).assign_low_level;
+    const hash_field1 = out.lir_result.store.getCFStmtImmediate(read_field1.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .hasher_write_u64), hash_field1.op);
     const second_args = out.lir_result.store.getLocalSpan(hash_field1.args);
     try std.testing.expectEqual(hash_field0.target, GuardedList.at(second_args, 0));
@@ -49326,7 +49326,7 @@ test "boxy lowerer emits checked string segment literals" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const assign = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const assign = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (assign.value) {
         .str_literal => |literal| try std.testing.expectEqualStrings("hello", out.lir_result.store.getStringLiteral(literal)),
         .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
@@ -49409,7 +49409,7 @@ test "boxy lowerer emits checked bytes literals as byte-backed LIR literals" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const assign = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const assign = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (assign.value) {
         .str_literal => |literal| try std.testing.expectEqualStrings("abc", out.lir_result.store.getStringLiteral(literal)),
         .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
@@ -49515,32 +49515,32 @@ test "boxy lowerer emits checked string interpolation segments as concat chain" 
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const first = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (first.value) {
         .str_literal => |literal| try std.testing.expectEqualStrings("a", out.lir_result.store.getStringLiteral(literal)),
         .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
-    const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
+    const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
     switch (second.value) {
         .str_literal => |literal| try std.testing.expectEqualStrings("b", out.lir_result.store.getStringLiteral(literal)),
         .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
-    const first_concat = out.lir_result.store.getCFStmt(second.next).assign_low_level;
+    const first_concat = out.lir_result.store.getCFStmtImmediate(second.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .str_concat), first_concat.op);
     const first_args = out.lir_result.store.getLocalSpan(first_concat.args);
     try std.testing.expectEqual(@as(usize, 2), first_args.len);
     try std.testing.expectEqual(first.target, GuardedList.at(first_args, 0));
     try std.testing.expectEqual(second.target, GuardedList.at(first_args, 1));
 
-    const third = out.lir_result.store.getCFStmt(first_concat.next).assign_literal;
+    const third = out.lir_result.store.getCFStmtImmediate(first_concat.next).assign_literal;
     switch (third.value) {
         .str_literal => |literal| try std.testing.expectEqualStrings("c", out.lir_result.store.getStringLiteral(literal)),
         .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
-    const second_concat = out.lir_result.store.getCFStmt(third.next).assign_low_level;
+    const second_concat = out.lir_result.store.getCFStmtImmediate(third.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .str_concat), second_concat.op);
     const second_args = out.lir_result.store.getLocalSpan(second_concat.args);
     try std.testing.expectEqual(@as(usize, 2), second_args.len);
@@ -49624,19 +49624,19 @@ test "boxy lowerer emits checked dbg expressions before unit result" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const value = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const value = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 7), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    const message = out.lir_result.store.getCFStmt(value.next).assign_low_level;
+    const message = out.lir_result.store.getCFStmtImmediate(value.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .u64_to_str), message.op);
     const args = out.lir_result.store.getLocalSpan(message.args);
     try std.testing.expectEqual(@as(usize, 1), args.len);
     try std.testing.expectEqual(value.target, GuardedList.at(args, 0));
-    const debug = out.lir_result.store.getCFStmt(message.next).debug;
+    const debug = out.lir_result.store.getCFStmtImmediate(message.next).debug;
     try std.testing.expectEqual(message.target, debug.message);
-    const unit = out.lir_result.store.getCFStmt(debug.next).assign_struct;
+    const unit = out.lir_result.store.getCFStmtImmediate(debug.next).assign_struct;
     try std.testing.expect(unit.fields.isEmpty());
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = unit.target } }, out.lir_result.store.getCFStmt(unit.next));
 }
@@ -49723,11 +49723,11 @@ test "boxy lowerer emits checked expect expressions before unit result" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const cond = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_tag;
+    const cond = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_tag;
     try std.testing.expectEqual(@as(u32, 1), cond.variant_index);
-    const expect = out.lir_result.store.getCFStmt(cond.next).expect;
+    const expect = out.lir_result.store.getCFStmtImmediate(cond.next).expect;
     try std.testing.expectEqual(cond.target, expect.condition);
-    const unit = out.lir_result.store.getCFStmt(expect.next).assign_struct;
+    const unit = out.lir_result.store.getCFStmtImmediate(expect.next).assign_struct;
     try std.testing.expect(unit.fields.isEmpty());
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = unit.target } }, out.lir_result.store.getCFStmt(unit.next));
 }
@@ -49812,13 +49812,13 @@ test "boxy lowerer emits expect_err messages from inspected payloads" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const payload = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const payload = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (payload.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 42), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
-    const prefix = out.lir_result.store.getCFStmt(payload.next).assign_literal;
+    const prefix = out.lir_result.store.getCFStmtImmediate(payload.next).assign_literal;
     switch (prefix.value) {
         .str_literal => |literal| {
             try std.testing.expectEqualStrings(
@@ -49829,33 +49829,33 @@ test "boxy lowerer emits expect_err messages from inspected payloads" {
         .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
-    const rendered = out.lir_result.store.getCFStmt(prefix.next).assign_low_level;
+    const rendered = out.lir_result.store.getCFStmtImmediate(prefix.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .u64_to_str), rendered.op);
     const rendered_args = out.lir_result.store.getLocalSpan(rendered.args);
     try std.testing.expectEqual(@as(usize, 1), rendered_args.len);
     try std.testing.expectEqual(payload.target, GuardedList.at(rendered_args, 0));
 
-    const with_value = out.lir_result.store.getCFStmt(rendered.next).assign_low_level;
+    const with_value = out.lir_result.store.getCFStmtImmediate(rendered.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .str_concat), with_value.op);
     const with_value_args = out.lir_result.store.getLocalSpan(with_value.args);
     try std.testing.expectEqual(@as(usize, 2), with_value_args.len);
     try std.testing.expectEqual(prefix.target, GuardedList.at(with_value_args, 0));
     try std.testing.expectEqual(rendered.target, GuardedList.at(with_value_args, 1));
 
-    const suffix = out.lir_result.store.getCFStmt(with_value.next).assign_literal;
+    const suffix = out.lir_result.store.getCFStmtImmediate(with_value.next).assign_literal;
     switch (suffix.value) {
         .str_literal => |literal| try std.testing.expectEqualStrings(")", out.lir_result.store.getStringLiteral(literal)),
         .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
-    const message = out.lir_result.store.getCFStmt(suffix.next).assign_low_level;
+    const message = out.lir_result.store.getCFStmtImmediate(suffix.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .str_concat), message.op);
     const message_args = out.lir_result.store.getLocalSpan(message.args);
     try std.testing.expectEqual(@as(usize, 2), message_args.len);
     try std.testing.expectEqual(with_value.target, GuardedList.at(message_args, 0));
     try std.testing.expectEqual(suffix.target, GuardedList.at(message_args, 1));
 
-    const terminal = out.lir_result.store.getCFStmt(message.next).expect_err;
+    const terminal = out.lir_result.store.getCFStmtImmediate(message.next).expect_err;
     try std.testing.expectEqual(message.target, terminal.message);
     try std.testing.expectEqual(base.Region.zero(), terminal.region);
 }
@@ -49951,19 +49951,19 @@ test "boxy lowerer emits checked dbg statements in block order" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const value = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const value = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 13), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    const message = out.lir_result.store.getCFStmt(value.next).assign_low_level;
+    const message = out.lir_result.store.getCFStmtImmediate(value.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .u64_to_str), message.op);
     const args = out.lir_result.store.getLocalSpan(message.args);
     try std.testing.expectEqual(@as(usize, 1), args.len);
     try std.testing.expectEqual(value.target, GuardedList.at(args, 0));
-    const debug = out.lir_result.store.getCFStmt(message.next).debug;
+    const debug = out.lir_result.store.getCFStmtImmediate(message.next).debug;
     try std.testing.expectEqual(message.target, debug.message);
-    const final_unit = out.lir_result.store.getCFStmt(debug.next).assign_struct;
+    const final_unit = out.lir_result.store.getCFStmtImmediate(debug.next).assign_struct;
     try std.testing.expect(final_unit.fields.isEmpty());
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_unit.target } }, out.lir_result.store.getCFStmt(final_unit.next));
 }
@@ -50075,7 +50075,7 @@ test "boxy lowerer emits block declaration bindings with checked type layouts" {
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     try std.testing.expectEqual(@as(LIR.LocalSpan, .{ .start = 0, .len = 2 }), proc.frame_locals);
 
-    const decl_assign = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const decl_assign = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (decl_assign.value) {
         .i128_literal => |literal| {
             try std.testing.expectEqual(@as(i128, 99), literal.value);
@@ -50084,7 +50084,7 @@ test "boxy lowerer emits block declaration bindings with checked type layouts" {
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
-    const final_copy = out.lir_result.store.getCFStmt(decl_assign.next).assign_ref;
+    const final_copy = out.lir_result.store.getCFStmtImmediate(decl_assign.next).assign_ref;
     try std.testing.expectEqual(decl_assign.target, final_copy.op.local);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_copy.target } }, out.lir_result.store.getCFStmt(final_copy.next));
 }
@@ -50187,8 +50187,8 @@ test "boxy lowerer emits uninitialized mutable block bindings" {
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     try std.testing.expectEqual(@as(LIR.LocalSpan, .{ .start = 0, .len = 2 }), proc.frame_locals);
 
-    const init = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).init_uninitialized;
-    const final_assign = out.lir_result.store.getCFStmt(init.next).assign_literal;
+    const init = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).init_uninitialized;
+    const final_assign = out.lir_result.store.getCFStmtImmediate(init.next).assign_literal;
     try std.testing.expect(init.target != final_assign.target);
     switch (final_assign.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 5), literal.value),
@@ -50323,24 +50323,24 @@ test "boxy lowerer emits mutable reassignment as set_local replace" {
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     try std.testing.expectEqual(@as(LIR.LocalSpan, .{ .start = 0, .len = 3 }), proc.frame_locals);
 
-    const initial = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const initial = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (initial.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 1), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
-    const replacement = out.lir_result.store.getCFStmt(initial.next).assign_literal;
+    const replacement = out.lir_result.store.getCFStmtImmediate(initial.next).assign_literal;
     switch (replacement.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 2), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
-    const write = out.lir_result.store.getCFStmt(replacement.next).set_local;
+    const write = out.lir_result.store.getCFStmtImmediate(replacement.next).set_local;
     try std.testing.expectEqual(initial.target, write.target);
     try std.testing.expectEqual(replacement.target, write.value);
     try std.testing.expectEqual(LIR.SetLocalWriteMode.replace_existing, write.mode);
 
-    const final_copy = out.lir_result.store.getCFStmt(write.next).assign_ref;
+    const final_copy = out.lir_result.store.getCFStmtImmediate(write.next).assign_ref;
     try std.testing.expectEqual(write.target, final_copy.op.local);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_copy.target } }, out.lir_result.store.getCFStmt(final_copy.next));
 }
@@ -50505,14 +50505,14 @@ test "boxy lowerer destructures tuple declaration patterns" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
-    const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
-    const tuple = out.lir_result.store.getCFStmt(second.next).assign_struct;
-    const read_first = out.lir_result.store.getCFStmt(tuple.next).assign_ref;
-    const bind_first = out.lir_result.store.getCFStmt(read_first.next).assign_ref;
-    const read_second = out.lir_result.store.getCFStmt(bind_first.next).assign_ref;
-    const bind_second = out.lir_result.store.getCFStmt(read_second.next).assign_ref;
-    const final_copy = out.lir_result.store.getCFStmt(bind_second.next).assign_ref;
+    const first = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
+    const tuple = out.lir_result.store.getCFStmtImmediate(second.next).assign_struct;
+    const read_first = out.lir_result.store.getCFStmtImmediate(tuple.next).assign_ref;
+    const bind_first = out.lir_result.store.getCFStmtImmediate(read_first.next).assign_ref;
+    const read_second = out.lir_result.store.getCFStmtImmediate(bind_first.next).assign_ref;
+    const bind_second = out.lir_result.store.getCFStmtImmediate(read_second.next).assign_ref;
+    const final_copy = out.lir_result.store.getCFStmtImmediate(bind_second.next).assign_ref;
 
     switch (first.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 1), value.value),
@@ -50707,14 +50707,14 @@ test "boxy lowerer materializes record rest declaration patterns" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
-    const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
-    const source_record = out.lir_result.store.getCFStmt(second.next).assign_struct;
-    const read_rest_field = out.lir_result.store.getCFStmt(source_record.next).assign_ref;
-    const rest_record = out.lir_result.store.getCFStmt(read_rest_field.next).assign_struct;
-    const bind_rest = out.lir_result.store.getCFStmt(rest_record.next).assign_ref;
-    const final_receiver = out.lir_result.store.getCFStmt(bind_rest.next).assign_ref;
-    const final_read = out.lir_result.store.getCFStmt(final_receiver.next).assign_ref;
+    const first = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
+    const source_record = out.lir_result.store.getCFStmtImmediate(second.next).assign_struct;
+    const read_rest_field = out.lir_result.store.getCFStmtImmediate(source_record.next).assign_ref;
+    const rest_record = out.lir_result.store.getCFStmtImmediate(read_rest_field.next).assign_struct;
+    const bind_rest = out.lir_result.store.getCFStmtImmediate(rest_record.next).assign_ref;
+    const final_receiver = out.lir_result.store.getCFStmtImmediate(bind_rest.next).assign_ref;
+    const final_read = out.lir_result.store.getCFStmtImmediate(final_receiver.next).assign_ref;
 
     switch (first.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 11), value.value),
@@ -50871,14 +50871,14 @@ test "boxy lowerer binds irrefutable list rest declaration patterns" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
-    const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
-    const list = out.lir_result.store.getCFStmt(second.next).assign_list;
-    const pattern_join = out.lir_result.store.getCFStmt(list.next).join;
+    const first = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
+    const list = out.lir_result.store.getCFStmtImmediate(second.next).assign_list;
+    const pattern_join = out.lir_result.store.getCFStmtImmediate(list.next).join;
     try std.testing.expect(pattern_join.params.isEmpty());
-    try std.testing.expect(out.lir_result.store.getCFStmt(pattern_join.body) == .crash);
-    const bind_rest = out.lir_result.store.getCFStmt(pattern_join.remainder).assign_ref;
-    const final_copy = out.lir_result.store.getCFStmt(bind_rest.next).assign_ref;
+    try std.testing.expect(out.lir_result.store.getCFStmtImmediate(pattern_join.body).* == .crash);
+    const bind_rest = out.lir_result.store.getCFStmtImmediate(pattern_join.remainder).assign_ref;
+    const final_copy = out.lir_result.store.getCFStmtImmediate(bind_rest.next).assign_ref;
 
     switch (first.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 3), value.value),
@@ -50987,17 +50987,17 @@ test "boxy lowerer emits tuple construction in element order" {
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     try std.testing.expectEqual(@as(usize, 3), out.lir_result.store.getLocalSpan(proc.frame_locals).len);
 
-    const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const first = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (first.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 1), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
+    const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
     switch (second.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 2), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    const build = out.lir_result.store.getCFStmt(second.next).assign_struct;
+    const build = out.lir_result.store.getCFStmtImmediate(second.next).assign_struct;
     const fields = out.lir_result.store.getLocalSpan(build.fields);
     try std.testing.expectEqual(@as(usize, 2), fields.len);
     try std.testing.expectEqual(first.target, GuardedList.at(fields, 0));
@@ -51103,10 +51103,10 @@ test "boxy lowerer emits tuple access as field_read" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
-    const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
-    const build = out.lir_result.store.getCFStmt(second.next).assign_struct;
-    const read = out.lir_result.store.getCFStmt(build.next).assign_ref;
+    const first = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
+    const build = out.lir_result.store.getCFStmtImmediate(second.next).assign_struct;
+    const read = out.lir_result.store.getCFStmtImmediate(build.next).assign_ref;
     switch (read.op) {
         .field => |field| {
             try std.testing.expectEqual(build.target, field.source);
@@ -51219,17 +51219,17 @@ test "boxy lowerer emits record construction in layout order after source-order 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     try std.testing.expectEqual(@as(usize, 3), out.lir_result.store.getLocalSpan(proc.frame_locals).len);
 
-    const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const first = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (first.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 2), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
+    const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
     switch (second.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 1), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    const build = out.lir_result.store.getCFStmt(second.next).assign_struct;
+    const build = out.lir_result.store.getCFStmtImmediate(second.next).assign_struct;
     const fields = out.lir_result.store.getLocalSpan(build.fields);
     try std.testing.expectEqual(@as(usize, 2), fields.len);
     try std.testing.expectEqual(second.target, GuardedList.at(fields, 0));
@@ -51342,26 +51342,26 @@ test "boxy lowerer evaluates empty record extensions before explicit fields" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const extension_value = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const extension_value = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (extension_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 5), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    const extension_message = out.lir_result.store.getCFStmt(extension_value.next).assign_low_level;
+    const extension_message = out.lir_result.store.getCFStmtImmediate(extension_value.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .u64_to_str), extension_message.op);
     const extension_args = out.lir_result.store.getLocalSpan(extension_message.args);
     try std.testing.expectEqual(@as(usize, 1), extension_args.len);
     try std.testing.expectEqual(extension_value.target, GuardedList.at(extension_args, 0));
-    const extension_debug = out.lir_result.store.getCFStmt(extension_message.next).debug;
+    const extension_debug = out.lir_result.store.getCFStmtImmediate(extension_message.next).debug;
     try std.testing.expectEqual(extension_message.target, extension_debug.message);
-    const extension_unit = out.lir_result.store.getCFStmt(extension_debug.next).assign_struct;
+    const extension_unit = out.lir_result.store.getCFStmtImmediate(extension_debug.next).assign_struct;
     try std.testing.expect(extension_unit.fields.isEmpty());
-    const field_value = out.lir_result.store.getCFStmt(extension_unit.next).assign_literal;
+    const field_value = out.lir_result.store.getCFStmtImmediate(extension_unit.next).assign_literal;
     switch (field_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 9), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    const build = out.lir_result.store.getCFStmt(field_value.next).assign_struct;
+    const build = out.lir_result.store.getCFStmtImmediate(field_value.next).assign_struct;
     const fields = out.lir_result.store.getLocalSpan(build.fields);
     try std.testing.expectEqual(@as(usize, 1), fields.len);
     try std.testing.expectEqual(field_value.target, GuardedList.at(fields, 0));
@@ -51483,10 +51483,10 @@ test "boxy lowerer emits record field access using layout field index" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
-    const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
-    const build = out.lir_result.store.getCFStmt(second.next).assign_struct;
-    const read = out.lir_result.store.getCFStmt(build.next).assign_ref;
+    const first = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
+    const build = out.lir_result.store.getCFStmtImmediate(second.next).assign_struct;
+    const read = out.lir_result.store.getCFStmtImmediate(build.next).assign_ref;
     switch (read.op) {
         .field => |field| {
             try std.testing.expectEqual(build.target, field.source);
@@ -51602,12 +51602,12 @@ test "boxy lowerer emits nominal construction for representation-equivalent back
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const literal = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const literal = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (literal.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 5), value.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    const copy = out.lir_result.store.getCFStmt(literal.next).assign_ref;
+    const copy = out.lir_result.store.getCFStmtImmediate(literal.next).assign_ref;
     try std.testing.expectEqual(literal.target, copy.op.local);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = copy.target } }, out.lir_result.store.getCFStmt(copy.next));
 }
@@ -51630,15 +51630,15 @@ fn expectDeclaredNominalRecordBoundary(
     var field_locals: [2]LIR.LocalId = undefined;
     var idx: u32 = 0;
     while (idx < 2) : (idx += 1) {
-        const read = store.getCFStmt(cursor).assign_ref;
+        const read = store.getCFStmtImmediate(cursor).assign_ref;
         try std.testing.expectEqual(source, read.op.field.source);
         try std.testing.expectEqual(idx, read.op.field.field_idx);
-        const copy = store.getCFStmt(read.next).assign_ref;
+        const copy = store.getCFStmtImmediate(read.next).assign_ref;
         try std.testing.expectEqual(read.target, copy.op.local);
         field_locals[idx] = copy.target;
         cursor = copy.next;
     }
-    const assembled = store.getCFStmt(cursor).assign_struct;
+    const assembled = store.getCFStmtImmediate(cursor).assign_struct;
     const fields = store.getLocalSpan(assembled.fields);
     try std.testing.expectEqual(@as(usize, 2), GuardedList.borrowLen(fields));
     try std.testing.expectEqual(field_locals[0], GuardedList.at(fields, 0));
@@ -51857,9 +51857,9 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
-    const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
-    const backing_record = out.lir_result.store.getCFStmt(second.next).assign_struct;
+    const first = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
+    const backing_record = out.lir_result.store.getCFStmtImmediate(second.next).assign_struct;
 
     switch (first.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 7), value.value),
@@ -51876,9 +51876,9 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
     const construct_nominal = try expectDeclaredNominalRecordBoundary(&out.lir_result.store, backing_record.next, backing_record.target);
     const destruct_backing = try expectDeclaredNominalRecordBoundary(&out.lir_result.store, construct_nominal.next, construct_nominal.target);
 
-    const read_field = out.lir_result.store.getCFStmt(destruct_backing.next).assign_ref;
-    const bind_field = out.lir_result.store.getCFStmt(read_field.next).assign_ref;
-    const final_copy = out.lir_result.store.getCFStmt(bind_field.next).assign_ref;
+    const read_field = out.lir_result.store.getCFStmtImmediate(destruct_backing.next).assign_ref;
+    const bind_field = out.lir_result.store.getCFStmtImmediate(read_field.next).assign_ref;
+    const final_copy = out.lir_result.store.getCFStmtImmediate(bind_field.next).assign_ref;
 
     try std.testing.expectEqual(destruct_backing.target, read_field.op.field.source);
     try std.testing.expectEqual(@as(u32, 0), read_field.op.field.field_idx);
@@ -52040,9 +52040,9 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
-    const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
-    const backing_record = out.lir_result.store.getCFStmt(second.next).assign_struct;
+    const first = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
+    const backing_record = out.lir_result.store.getCFStmtImmediate(second.next).assign_struct;
 
     // Construction repositions the backing record's fields into the nominal's
     // declared byte layout, and inspection projects that nominal back to a
@@ -52055,7 +52055,7 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
     var read_count: usize = 0;
     var guard: usize = 0;
     while (guard < 100) : (guard += 1) {
-        switch (out.lir_result.store.getCFStmt(cursor)) {
+        switch (out.lir_result.store.getCFStmtImmediate(cursor).*) {
             .assign_ref => |assign| {
                 switch (assign.op) {
                     .field => |field| {
@@ -52247,15 +52247,15 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
-    const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
-    const backing_record = out.lir_result.store.getCFStmt(second.next).assign_struct;
+    const first = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
+    const backing_record = out.lir_result.store.getCFStmtImmediate(second.next).assign_struct;
 
     // Construction repositions the backing record's fields into the nominal's
     // declared byte layout, and hashing projects that nominal back to a backing
     // record the same way before threading its fields through the hasher.
     const construct_nominal = try expectDeclaredNominalRecordBoundary(&out.lir_result.store, backing_record.next, backing_record.target);
-    const seed = out.lir_result.store.getCFStmt(construct_nominal.next).assign_literal;
+    const seed = out.lir_result.store.getCFStmtImmediate(construct_nominal.next).assign_literal;
     const destruct_backing = try expectDeclaredNominalRecordBoundary(&out.lir_result.store, seed.next, construct_nominal.target);
 
     var cursor = destruct_backing.next;
@@ -52263,7 +52263,7 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
     var read_count: usize = 0;
     var guard: usize = 0;
     while (guard < 32) : (guard += 1) {
-        switch (out.lir_result.store.getCFStmt(cursor)) {
+        switch (out.lir_result.store.getCFStmtImmediate(cursor).*) {
             .assign_ref => |assign| {
                 switch (assign.op) {
                     .field => |field| {
@@ -52364,7 +52364,7 @@ test "boxy lowerer emits builtin Bool tags by checked Bool names" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const tag = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_tag;
+    const tag = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_tag;
     try std.testing.expectEqual(@as(u32, 1), tag.variant_index);
     try std.testing.expectEqual(@as(u32, 1), tag.discriminant);
     try std.testing.expect(tag.payload == null);
@@ -52470,10 +52470,10 @@ test "boxy lowerer emits payload tag construction using planned variant payload 
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
-    const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
-    const payload = out.lir_result.store.getCFStmt(second.next).assign_struct;
-    const tag = out.lir_result.store.getCFStmt(payload.next).assign_tag;
+    const first = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
+    const payload = out.lir_result.store.getCFStmtImmediate(second.next).assign_struct;
+    const tag = out.lir_result.store.getCFStmtImmediate(payload.next).assign_tag;
     switch (first.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 3), value.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
@@ -52579,9 +52579,9 @@ test "boxy lowerer emits list construction with committed element layout" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
-    const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
-    const list = out.lir_result.store.getCFStmt(second.next).assign_list;
+    const first = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
+    const list = out.lir_result.store.getCFStmtImmediate(second.next).assign_list;
     switch (first.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 8), value.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
@@ -52723,38 +52723,38 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
 
     var cursor = proc.body orelse return error.TestUnexpectedResult;
     while (true) {
-        cursor = switch (out.lir_result.store.getCFStmt(cursor)) {
+        cursor = switch (out.lir_result.store.getCFStmtImmediate(cursor).*) {
             .set_local => |set| set.next,
             .assign_boxy_desc_ref => |assign| assign.next,
             .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
         };
     }
-    const first = out.lir_result.store.getCFStmt(cursor).assign_ref;
+    const first = out.lir_result.store.getCFStmtImmediate(cursor).assign_ref;
     switch (first.op) {
         .local => |local| try std.testing.expectEqual(GuardedList.at(args, 0), local),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
     cursor = first.next;
     while (true) {
-        cursor = switch (out.lir_result.store.getCFStmt(cursor)) {
+        cursor = switch (out.lir_result.store.getCFStmtImmediate(cursor).*) {
             .set_local => |set| set.next,
             .assign_boxy_desc_ref => |assign| assign.next,
             .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
         };
     }
-    const second = out.lir_result.store.getCFStmt(cursor).assign_ref;
+    const second = out.lir_result.store.getCFStmtImmediate(cursor).assign_ref;
     switch (second.op) {
         .local => |local| try std.testing.expectEqual(GuardedList.at(args, 1), local),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
     cursor = second.next;
     while (true) {
-        cursor = switch (out.lir_result.store.getCFStmt(cursor)) {
+        cursor = switch (out.lir_result.store.getCFStmtImmediate(cursor).*) {
             .assign_boxy_desc_ref => |assign| assign.next,
             .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
         };
     }
-    const list = out.lir_result.store.getCFStmt(cursor).assign_list;
+    const list = out.lir_result.store.getCFStmtImmediate(cursor).assign_list;
     const list_layout = out.lir_result.layouts.getLayout(out.lir_result.store.getLocal(list.target).layout_idx);
     try std.testing.expectEqual(layout.LayoutTag.list, list_layout.tag);
     try std.testing.expectEqual(list_layout.getIdx(), out.lir_result.store.getLocal(first.target).layout_idx);
@@ -52860,49 +52860,49 @@ test "boxy lowerer inspects concrete lists with an index and string accumulator 
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
-    const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
-    const list = out.lir_result.store.getCFStmt(second.next).assign_list;
-    const join = out.lir_result.store.getCFStmt(list.next).join;
+    const first = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
+    const list = out.lir_result.store.getCFStmtImmediate(second.next).assign_list;
+    const join = out.lir_result.store.getCFStmtImmediate(list.next).join;
     const params = out.lir_result.store.getLocalSpan(join.params);
     try std.testing.expectEqual(@as(usize, 2), params.len);
     try std.testing.expectEqual(@as(layout.Idx, .u64), out.lir_result.store.getLocal(GuardedList.at(params, 0)).layout_idx);
     try std.testing.expectEqual(@as(layout.Idx, .str), out.lir_result.store.getLocal(GuardedList.at(params, 1)).layout_idx);
 
-    const len = out.lir_result.store.getCFStmt(join.remainder).assign_low_level;
+    const len = out.lir_result.store.getCFStmtImmediate(join.remainder).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .list_len), len.op);
     const len_args = out.lir_result.store.getLocalSpan(len.args);
     try std.testing.expectEqual(@as(usize, 1), len_args.len);
     try std.testing.expectEqual(list.target, GuardedList.at(len_args, 0));
 
-    const done = out.lir_result.store.getCFStmt(join.body).assign_low_level;
+    const done = out.lir_result.store.getCFStmtImmediate(join.body).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .num_is_eq), done.op);
     const done_args = out.lir_result.store.getLocalSpan(done.args);
     try std.testing.expectEqual(@as(usize, 2), done_args.len);
     try std.testing.expectEqual(GuardedList.at(params, 0), GuardedList.at(done_args, 0));
     try std.testing.expectEqual(len.target, GuardedList.at(done_args, 1));
 
-    const switch_stmt = out.lir_result.store.getCFStmt(done.next).switch_stmt;
+    const switch_stmt = out.lir_result.store.getCFStmtImmediate(done.next).switch_stmt;
     const branches = out.lir_result.store.getCFSwitchBranches(switch_stmt.branches);
     try std.testing.expectEqual(@as(usize, 1), branches.len);
     try std.testing.expectEqual(@as(u128, 1), GuardedList.at(branches, 0).value);
 
-    const close = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_literal;
+    const close = out.lir_result.store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_literal;
     switch (close.value) {
         .str_literal => |literal| try std.testing.expectEqualStrings("]", out.lir_result.store.getStringLiteral(literal)),
         .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    const finish = out.lir_result.store.getCFStmt(close.next).assign_low_level;
+    const finish = out.lir_result.store.getCFStmtImmediate(close.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .str_concat), finish.op);
-    const debug = out.lir_result.store.getCFStmt(finish.next).debug;
+    const debug = out.lir_result.store.getCFStmtImmediate(finish.next).debug;
     try std.testing.expectEqual(finish.target, debug.message);
 
-    const step_zero = out.lir_result.store.getCFStmt(switch_stmt.default_branch).assign_literal;
+    const step_zero = out.lir_result.store.getCFStmtImmediate(switch_stmt.default_branch).assign_literal;
     switch (step_zero.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 0), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    const separator_check = out.lir_result.store.getCFStmt(step_zero.next).assign_low_level;
+    const separator_check = out.lir_result.store.getCFStmtImmediate(step_zero.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .num_is_eq), separator_check.op);
 }
 
@@ -52978,7 +52978,7 @@ test "boxy lowerer emits empty list construction" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const list = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_list;
+    const list = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_list;
     try std.testing.expect(list.elems.isEmpty());
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = list.target } }, out.lir_result.store.getCFStmt(list.next));
 }
@@ -53073,17 +53073,17 @@ test "boxy lowerer emits checked low-level calls after source-order argument low
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     try std.testing.expectEqual(@as(usize, 3), out.lir_result.store.getLocalSpan(proc.frame_locals).len);
 
-    const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const first = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (first.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 10), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
+    const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
     switch (second.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 20), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    const add = out.lir_result.store.getCFStmt(second.next).assign_low_level;
+    const add = out.lir_result.store.getCFStmtImmediate(second.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .num_int_add_crash_on_overflow), add.op);
     try std.testing.expectEqual(LIR.LowLevel.num_int_add_crash_on_overflow.rcEffect(), add.rc_effect);
     const args = out.lir_result.store.getLocalSpan(add.args);
@@ -53176,12 +53176,12 @@ test "boxy lowerer boxes concrete values with ordinary box low-level" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const value = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const value = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 42), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    const boxed = out.lir_result.store.getCFStmt(value.next).assign_low_level;
+    const boxed = out.lir_result.store.getCFStmtImmediate(value.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .box_box), boxed.op);
     const args = out.lir_result.store.getLocalSpan(boxed.args);
     try std.testing.expectEqual(@as(usize, 1), args.len);
@@ -53293,12 +53293,12 @@ test "boxy lowerer reuses dynamic boxes for Box(a)" {
 
     var cursor = proc.body orelse return error.TestUnexpectedResult;
     while (true) {
-        cursor = switch (out.lir_result.store.getCFStmt(cursor)) {
+        cursor = switch (out.lir_result.store.getCFStmtImmediate(cursor).*) {
             .assign_boxy_desc_ref => |assign| assign.next,
             .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
         };
     }
-    const from_arg = out.lir_result.store.getCFStmt(cursor).assign_ref;
+    const from_arg = out.lir_result.store.getCFStmtImmediate(cursor).assign_ref;
     switch (from_arg.op) {
         .local => |local| try std.testing.expectEqual(GuardedList.at(args, 0), local),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
@@ -53307,7 +53307,7 @@ test "boxy lowerer reuses dynamic boxes for Box(a)" {
     cursor = from_arg.next;
     var descriptor_materialization_target: ?LIR.LocalId = null;
     while (true) {
-        cursor = switch (out.lir_result.store.getCFStmt(cursor)) {
+        cursor = switch (out.lir_result.store.getCFStmtImmediate(cursor).*) {
             .assign_boxy_desc_ref => |assign| blk: {
                 var uses_source_desc = assign.desc.localOrNull() == GuardedList.at(args, 1);
                 const captures = out.lir_result.store.getLocalSpan(assign.captures);
@@ -53320,7 +53320,7 @@ test "boxy lowerer reuses dynamic boxes for Box(a)" {
             .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
         };
     }
-    const reused = out.lir_result.store.getCFStmt(cursor).assign_ref;
+    const reused = out.lir_result.store.getCFStmtImmediate(cursor).assign_ref;
     switch (reused.op) {
         .local => |local| try std.testing.expectEqual(from_arg.target, local),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
@@ -53428,18 +53428,18 @@ test "boxy lowerer unboxes concrete values with ordinary box low-level" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const value = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const value = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 99), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    const boxed = out.lir_result.store.getCFStmt(value.next).assign_low_level;
+    const boxed = out.lir_result.store.getCFStmtImmediate(value.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .box_box), boxed.op);
     const boxed_args = out.lir_result.store.getLocalSpan(boxed.args);
     try std.testing.expectEqual(@as(usize, 1), boxed_args.len);
     try std.testing.expectEqual(value.target, GuardedList.at(boxed_args, 0));
 
-    const unboxed = out.lir_result.store.getCFStmt(boxed.next).assign_low_level;
+    const unboxed = out.lir_result.store.getCFStmtImmediate(boxed.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .box_unbox), unboxed.op);
     const unboxed_args = out.lir_result.store.getLocalSpan(unboxed.args);
     try std.testing.expectEqual(@as(usize, 1), unboxed_args.len);
@@ -53537,41 +53537,41 @@ test "boxy lowerer inspects concrete Box payloads" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const value = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const value = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 42), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    const boxed = out.lir_result.store.getCFStmt(value.next).assign_low_level;
+    const boxed = out.lir_result.store.getCFStmtImmediate(value.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .box_box), boxed.op);
 
-    const prefix = out.lir_result.store.getCFStmt(boxed.next).assign_literal;
+    const prefix = out.lir_result.store.getCFStmtImmediate(boxed.next).assign_literal;
     switch (prefix.value) {
         .str_literal => |literal| try std.testing.expectEqualStrings("Box(", out.lir_result.store.getStringLiteral(literal)),
         .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    const unboxed = out.lir_result.store.getCFStmt(prefix.next).assign_low_level;
+    const unboxed = out.lir_result.store.getCFStmtImmediate(prefix.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .box_unbox), unboxed.op);
     const unbox_args = out.lir_result.store.getLocalSpan(unboxed.args);
     try std.testing.expectEqual(@as(usize, 1), unbox_args.len);
     try std.testing.expectEqual(boxed.target, GuardedList.at(unbox_args, 0));
 
-    const rendered = out.lir_result.store.getCFStmt(unboxed.next).assign_low_level;
+    const rendered = out.lir_result.store.getCFStmtImmediate(unboxed.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .u64_to_str), rendered.op);
     const rendered_args = out.lir_result.store.getLocalSpan(rendered.args);
     try std.testing.expectEqual(@as(usize, 1), rendered_args.len);
     try std.testing.expectEqual(unboxed.target, GuardedList.at(rendered_args, 0));
 
-    const with_value = out.lir_result.store.getCFStmt(rendered.next).assign_low_level;
+    const with_value = out.lir_result.store.getCFStmtImmediate(rendered.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .str_concat), with_value.op);
-    const suffix = out.lir_result.store.getCFStmt(with_value.next).assign_literal;
+    const suffix = out.lir_result.store.getCFStmtImmediate(with_value.next).assign_literal;
     switch (suffix.value) {
         .str_literal => |literal| try std.testing.expectEqualStrings(")", out.lir_result.store.getStringLiteral(literal)),
         .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    const message = out.lir_result.store.getCFStmt(suffix.next).assign_low_level;
+    const message = out.lir_result.store.getCFStmtImmediate(suffix.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .str_concat), message.op);
-    const debug = out.lir_result.store.getCFStmt(message.next).debug;
+    const debug = out.lir_result.store.getCFStmtImmediate(message.next).debug;
     try std.testing.expectEqual(message.target, debug.message);
 }
 
@@ -53594,19 +53594,19 @@ test "boxy lowerer emits list_map_can_reuse when list map layouts are interchang
     const proc_args = out.lir_result.store.getLocalSpan(proc.args);
     try std.testing.expectEqual(@as(usize, 2), proc_args.len);
 
-    const list_arg = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_ref;
+    const list_arg = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_ref;
     switch (list_arg.op) {
         .local => |local| try std.testing.expectEqual(GuardedList.at(proc_args, 0), local),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
 
-    const transform_arg = out.lir_result.store.getCFStmt(list_arg.next).assign_ref;
+    const transform_arg = out.lir_result.store.getCFStmtImmediate(list_arg.next).assign_ref;
     switch (transform_arg.op) {
         .local => |local| try std.testing.expectEqual(GuardedList.at(proc_args, 1), local),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
 
-    const reuse = out.lir_result.store.getCFStmt(transform_arg.next).assign_low_level;
+    const reuse = out.lir_result.store.getCFStmtImmediate(transform_arg.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .list_map_can_reuse), reuse.op);
     try std.testing.expectEqual(LIR.LowLevel.list_map_can_reuse.rcEffect(), reuse.rc_effect);
     try std.testing.expect(reuse.interchangeable.get(.u32));
@@ -53725,9 +53725,9 @@ test "boxy lowerer emits checked integer division low-level calls" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const lhs = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
-    const rhs = out.lir_result.store.getCFStmt(lhs.next).assign_literal;
-    const div = out.lir_result.store.getCFStmt(rhs.next).assign_low_level;
+    const lhs = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const rhs = out.lir_result.store.getCFStmtImmediate(lhs.next).assign_literal;
+    const div = out.lir_result.store.getCFStmtImmediate(rhs.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .num_div_trunc_by_checked), div.op);
     const div_args = out.lir_result.store.getLocalSpan(div.args);
     try std.testing.expectEqual(@as(usize, 2), div_args.len);
@@ -53829,7 +53829,7 @@ test "boxy lowerer publishes host wrapper proc for exported roots" {
     const wrapper = out.lir_result.store.getProcSpec(wrapper_id);
     const wrapper_args = out.lir_result.store.getLocalSpan(wrapper.args);
     try std.testing.expectEqual(@as(usize, 1), wrapper_args.len);
-    const call = out.lir_result.store.getCFStmt(wrapper.body orelse return error.TestUnexpectedResult).assign_call;
+    const call = out.lir_result.store.getCFStmtImmediate(wrapper.body orelse return error.TestUnexpectedResult).assign_call;
     const call_args = out.lir_result.store.getLocalSpan(call.args);
     try std.testing.expectEqual(@as(usize, 1), call_args.len);
     try std.testing.expectEqual(GuardedList.at(wrapper_args, 0), GuardedList.at(call_args, 0));
@@ -53840,7 +53840,7 @@ test "boxy lowerer publishes host wrapper proc for exported roots" {
     const worker = out.lir_result.store.getProcSpec(call.proc);
     const worker_args = out.lir_result.store.getLocalSpan(worker.args);
     try std.testing.expectEqual(@as(usize, 1), worker_args.len);
-    const worker_copy = out.lir_result.store.getCFStmt(worker.body orelse return error.TestUnexpectedResult).assign_ref;
+    const worker_copy = out.lir_result.store.getCFStmtImmediate(worker.body orelse return error.TestUnexpectedResult).assign_ref;
     switch (worker_copy.op) {
         .local => |local| try std.testing.expectEqual(GuardedList.at(worker_args, 0), local),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
@@ -54317,7 +54317,7 @@ fn expectListMapCanReuseFalse(out: *Output) error{ TestExpectedEqual, TestUnexpe
         &out.lir_result.store,
         proc.body orelse return error.TestUnexpectedResult,
     );
-    const literal = out.lir_result.store.getCFStmt(body).assign_literal;
+    const literal = out.lir_result.store.getCFStmtImmediate(body).assign_literal;
     switch (literal.value) {
         .i64_literal => |value| {
             try std.testing.expectEqual(@as(i64, 0), value.value);
@@ -54331,7 +54331,7 @@ fn expectListMapCanReuseFalse(out: *Output) error{ TestExpectedEqual, TestUnexpe
 fn skipLeadingDescriptorInitializers(store: *const LirStore, start: LIR.CFStmtId) LIR.CFStmtId {
     var cursor = start;
     while (true) {
-        cursor = switch (store.getCFStmt(cursor)) {
+        cursor = switch (store.getCFStmtImmediate(cursor).*) {
             .assign_boxy_desc_ref => |assign| assign.next,
             .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => return cursor,
         };

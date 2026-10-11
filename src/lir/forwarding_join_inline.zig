@@ -302,7 +302,7 @@ fn collectMovedBody(
         // statement targets, jump initialization is not represented by a
         // structural successor edge to the declaration; retaining a parameter
         // identity can therefore merge two distinct control-flow binders.
-        if (store.getCFStmt(stmt_id) == .join and !shared_stmts.contains(stmt_id)) {
+        if (store.getCFStmtImmediate(stmt_id).* == .join and !shared_stmts.contains(stmt_id)) {
             try body_clone.markStmtDefinitionsSparse(store, &fresh_definitions, stmt_id);
         }
     }
@@ -340,7 +340,7 @@ fn applyCandidate(
     candidate: Candidate,
     allocator: Allocator,
 ) ResourceError!void {
-    const outer = store.getCFStmt(candidate.outer_stmt).join;
+    const outer = store.getCFStmtImmediate(candidate.outer_stmt).join;
 
     var cloner = try body_clone.BodyCloner(RetRewriter).initWithFreshDeclaredJoinsAndAllocator(store, .{}, outer.body, join_params, allocator);
     defer cloner.deinit();

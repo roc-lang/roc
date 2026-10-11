@@ -175,12 +175,12 @@ fn expectFusionJoins(fixture: *Fixture, phase: passes.Phase) TestError!void {
             const params = fixture.store.getLocalSpan(stmt.join.params);
             if (params.len == 0) continue;
             nested += 1;
-            const initialized = fixture.store.getCFStmt(stmt.join.remainder).assign_literal;
+            const initialized = fixture.store.getCFStmtImmediate(stmt.join.remainder).assign_literal;
             try testing.expectEqual(core.LirStore.GuardedList.at(params, 0), initialized.target);
-            try testing.expectEqual(stmt.join.id, fixture.store.getCFStmt(initialized.next).jump.target);
-            const bridge = fixture.store.getCFStmt(stmt.join.body).set_local;
+            try testing.expectEqual(stmt.join.id, fixture.store.getCFStmtImmediate(initialized.next).jump.target);
+            const bridge = fixture.store.getCFStmtImmediate(stmt.join.body).set_local;
             try testing.expectEqual(core.LirStore.GuardedList.at(params, 0), bridge.value);
-            try testing.expectEqual(joins.external, fixture.store.getCFStmt(bridge.next).jump.target);
+            try testing.expectEqual(joins.external, fixture.store.getCFStmtImmediate(bridge.next).jump.target);
         }
         try testing.expectEqual(@as(usize, if (phase == .tag_fusion) 2 else 1), nested);
         try testing.expect(external_jumps > 0);
@@ -508,16 +508,16 @@ test "LIR proc pass forwarding generated joins become frozen source for tag fusi
         var external_ids: [8]core.LIR.JoinPointId = undefined;
         for (&external_ids, 0..) |*external, index| {
             const proc = fixture.store.getProcSpec(@fromBackingInt(@intCast(index)));
-            const inner = fixture.store.getCFStmt(proc.body.?).join;
+            const inner = fixture.store.getCFStmtImmediate(proc.body.?).join;
             try testing.expectEqual(@as(u32, 3), @backingInt(inner.id));
-            external.* = fixture.store.getCFStmt(inner.body).join.id;
+            external.* = fixture.store.getCFStmtImmediate(inner.body).join.id;
             try testing.expect(@backingInt(external.*) > 4);
         }
         try passes.run(testing.allocator, &fixture.store, &fixture.layouts, .tag_fusion, exec, &metrics);
         for (external_ids, 0..) |external, index| {
             const proc = fixture.store.getProcSpec(@fromBackingInt(@intCast(index)));
-            const inner = fixture.store.getCFStmt(proc.body.?).join;
-            try testing.expectEqual(external, fixture.store.getCFStmt(inner.body).join.id);
+            const inner = fixture.store.getCFStmtImmediate(proc.body.?).join;
+            try testing.expectEqual(external, fixture.store.getCFStmtImmediate(inner.body).join.id);
             var walk = try body_clone.ReachableStmts.init(&fixture.store, proc.body.?);
             defer walk.deinit();
             var external_jumps: usize = 0;
@@ -875,8 +875,8 @@ test "LIR proc pass keeps join parameters that are read or are procedure argumen
     try passes.run(testing.allocator, &store, &layouts, .prune_join_params, null, &metrics);
 
     try testing.expectEqual(join, store.getProcSpec(proc).body.?);
-    try testing.expectEqual(@as(usize, 2), store.getLocalSpan(store.getCFStmt(join).join.params).len);
-    try testing.expectEqual(write_arg, store.getCFStmt(join).join.remainder);
+    try testing.expectEqual(@as(usize, 2), store.getLocalSpan(store.getCFStmtImmediate(join).join.params).len);
+    try testing.expectEqual(write_arg, store.getCFStmtImmediate(join).join.remainder);
 }
 
 test "LIR proc pass range phase admits a body whose only provable statement is an unsigned comparison" {
@@ -960,7 +960,7 @@ test "LIR proc pass range phase admits a body whose only provable statement is a
 
     try passes.run(testing.allocator, &store, &layouts, .range, null, null);
 
-    try testing.expectEqual(@as(?u5, 3), store.getCFStmt(shift).assign_low_level.simd_concat_count);
+    try testing.expectEqual(@as(?u5, 3), store.getCFStmtImmediate(shift).assign_low_level.simd_concat_count);
 }
 
 test "LIR store records an unsigned comparison shape only for range-tracked operand layouts" {

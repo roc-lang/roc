@@ -45,7 +45,7 @@ pub fn runProc(store: *LirStore, proc_id: LIR.LirProcSpecId, scratch_allocator: 
     while (work.pop()) |stmt_id| {
         if ((try visited.getOrPut(stmt_id)).found_existing) continue;
         try BodyClone.appendSuccessors(store, &work, stmt_id, scratch_allocator);
-        switch (store.getCFStmt(stmt_id)) {
+        switch (store.getCFStmtImmediate(stmt_id).*) {
             inline .init_uninitialized,
             .assign_ref,
             .assign_literal,
@@ -83,7 +83,7 @@ pub fn runProc(store: *LirStore, proc_id: LIR.LirProcSpecId, scratch_allocator: 
     }
 
     for (switches.items) |stmt_id| {
-        const sw = store.getCFStmt(stmt_id).switch_stmt;
+        const sw = store.getCFStmtImmediate(stmt_id).switch_stmt;
         if (sw.default_is_cold) continue;
         const branches = store.getCFSwitchBranches(sw.branches);
         if (GuardedList.borrowLen(branches) != 1 or GuardedList.at(branches, 0).value != 1) continue;
@@ -104,7 +104,7 @@ fn carriesExpectation(store: *const LirStore, definitions: *const collections.De
     var hops: usize = 0;
     while (hops < max_alias_hops) : (hops += 1) {
         const definition = (definitions.get(local) orelse return false) orelse return false;
-        switch (store.getCFStmt(definition)) {
+        switch (store.getCFStmtImmediate(definition).*) {
             .assign_low_level => |s| return s.op == .bool_likely,
             .assign_ref => |s| switch (s.op) {
                 .local => |source| local = source,
@@ -185,7 +185,7 @@ const Fixture = struct {
     }
 
     fn coldDefault(self: *const Fixture) bool {
-        return self.store.getCFStmt(self.switch_stmt).switch_stmt.default_is_cold;
+        return self.store.getCFStmtImmediate(self.switch_stmt).switch_stmt.default_is_cold;
     }
 };
 

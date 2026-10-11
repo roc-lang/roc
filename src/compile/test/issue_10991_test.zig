@@ -37,7 +37,7 @@ const ProcScan = struct {
             const index = @backingInt(stmt_id);
             if (seen_stmts[index]) continue;
             seen_stmts[index] = true;
-            switch (store.getCFStmt(stmt_id)) {
+            switch (store.getCFStmtImmediate(stmt_id).*) {
                 .assign_low_level => |assign| {
                     if (assign.op == .list_get_unsafe) result.reads_list_elements = true;
                     try stack.append(allocator, assign.next);

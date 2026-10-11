@@ -2114,7 +2114,7 @@ fn liftProcStmtFacts(
     proc_index: u32,
     current: LIR.CFStmtId,
 ) SolveError!void {
-    switch (solver.store.getCFStmt(current)) {
+    switch (solver.store.getCFStmtImmediate(current).*) {
         .assign_call => |assign| try solver.direct_calls.append(solver.allocator, .{
             .caller = proc_index,
             .stmt = current,
@@ -2671,7 +2671,7 @@ fn liftBoxyTransfer(solver: *Solver, local: LIR.LocalId, mode: LIR.BoxyTransferM
 fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
     const store = solver.store;
     const allocator = solver.allocator;
-    switch (store.getCFStmt(current)) {
+    switch (store.getCFStmtImmediate(current).*) {
         .assign_ref => |assign| {
             switch (assign.op) {
                 .local => |source| {
@@ -3496,7 +3496,7 @@ fn computeVisibilityFromLift(
                 if (visited.contains(current)) continue;
                 try visited.put(current, {});
                 reachable.set(@backingInt(current));
-                switch (store.getCFStmt(current)) {
+                switch (store.getCFStmtImmediate(current).*) {
                     .ret => |ret_stmt| try ret_values[proc_index].append(allocator, @backingInt(ret_stmt.value)),
                     .switch_stmt => |stmt| {
                         const branches = store.getCFSwitchBranches(stmt.branches);
@@ -6658,7 +6658,7 @@ fn noteFieldRead(
     const container = marks.indexOf(container_local) orelse return;
     const take = switch (takes) {
         .none => false,
-        .stamped => store.getCFStmt(@fromBackingInt(@intCast(stmt))).assign_ref.take_kind == .take,
+        .stamped => store.getCFStmtImmediate(@fromBackingInt(@intCast(stmt))).assign_ref.take_kind == .take,
         .set => |set| set.isSet(stmt),
     };
     try reads.append(allocator, .{ .container = container, .target = target, .field = field, .stmt = stmt, .take = take });

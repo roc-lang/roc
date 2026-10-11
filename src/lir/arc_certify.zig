@@ -638,7 +638,7 @@ fn writeFailureContext(
         while (walk.pop()) |current| {
             if (reachable.contains(current)) continue;
             reachable.put(current, {}) catch return;
-            switch (store.getCFStmt(current)) {
+            switch (store.getCFStmtImmediate(current).*) {
                 .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break, .jump, .ret, .crash, .expect_err => {},
                 .comptime_branch_taken => |s| walk.append(store.allocator, s.next) catch return,
                 .switch_stmt => |s| {
@@ -4229,7 +4229,7 @@ const Certifier = struct {
         while (stack.pop()) |current| {
             if ((try self.memo_walked.getOrPut(current)).found_existing) continue;
 
-            switch (self.store.getCFStmt(current)) {
+            switch (self.store.getCFStmtImmediate(current).*) {
                 inline .assign_ref,
                 .assign_literal,
                 .init_uninitialized,
@@ -4458,7 +4458,7 @@ const Certifier = struct {
             const node_index = graph.indices.get(stmt) orelse unreachable;
             node_reads.clearRetainingCapacity();
 
-            switch (self.store.getCFStmt(stmt)) {
+            switch (self.store.getCFStmtImmediate(stmt).*) {
                 .assign_ref => |assign| {
                     try self.noteExposedRefOpRead(&node_reads, assign.op);
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
@@ -7619,7 +7619,7 @@ test "erased owner resolution re-derives a reuse source that became an alias" {
     try testing.expectError(error.Certification, f.certify());
 
     try erased_owner.resolveProcReuseSources(f.allocator, &f.store, &f.layouts, proc_id);
-    try testing.expectEqual(owner, f.store.getCFStmt(call).assign_call_erased.reuse_source.?);
+    try testing.expectEqual(owner, f.store.getCFStmtImmediate(call).assign_call_erased.reuse_source.?);
     try f.certify();
 }
 

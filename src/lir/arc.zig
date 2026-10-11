@@ -752,7 +752,7 @@ fn recordObjectCacheFacts(
     for (0..proc_count) |proc_index| {
         const caller: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
         for (solution.tailCallsOf(caller)) |tail_call| {
-            const callee = store.getCFStmt(tail_call.stmt).assign_call.proc;
+            const callee = store.getCFStmtImmediate(tail_call.stmt).assign_call.proc;
             if (callee != caller) tail_targets.set(@backingInt(callee));
         }
     }
@@ -809,7 +809,7 @@ fn recordTailGroups(store: *LirStore, solution: *const arc_solve.Solution) Resou
     for (0..proc_count) |proc_index| {
         const caller: LIR.LirProcSpecId = @fromBackingInt(@as(u32, @intCast(proc_index)));
         for (solution.tailCallsOf(caller)) |tail_call| {
-            const callee = store.getCFStmt(tail_call.stmt).assign_call.proc;
+            const callee = store.getCFStmtImmediate(tail_call.stmt).assign_call.proc;
             grouped.set(proc_index);
             grouped.set(@backingInt(callee));
             const caller_root = find(parent, @intCast(proc_index));
@@ -2179,7 +2179,7 @@ const Inserter = struct {
                 try self.completeMaterializedPath(path.plan_index, tail, path.result);
             },
             .jump => |jump| {
-                const source = self.store.getCFStmt(jump.stmt).jump;
+                const source = self.store.getCFStmtImmediate(jump.stmt).jump;
                 var tail = try self.addCFStmtAtSource(jump.stmt, .{ .jump = .{ .target = source.target } });
                 tail = try self.materializeTerminalReleases(jump.releases.items, .{ .stmt = jump.stmt, .reason = .jump_balance }, tail);
                 try self.completeMaterializedPath(path.plan_index, tail, path.result);
@@ -2209,7 +2209,7 @@ const Inserter = struct {
                 try self.pushMaterializePath(tasks, join.remainder_plan, &state.remainder);
             },
             .switch_stmt => |switch_plan| {
-                const source = self.store.getCFStmt(switch_plan.stmt).switch_stmt;
+                const source = self.store.getCFStmtImmediate(switch_plan.stmt).switch_stmt;
                 const branch_count = switch_plan.branch_plans.len;
                 const child_count = branch_count + 1 + @intFromBool(switch_plan.continuation_reachable);
                 const state = try self.emission_allocator.create(MaterializeControlTask);
@@ -2281,7 +2281,7 @@ const Inserter = struct {
 
     fn finishMaterializeJoin(self: *Inserter, state: *MaterializeJoinTask) ResourceError!void {
         const terminal = self.arcPlan(state.plan_index).terminal.join;
-        const source = self.store.getCFStmt(terminal.stmt).join;
+        const source = self.store.getCFStmtImmediate(terminal.stmt).join;
         var tail: LIR.CFStmtId = undefined;
         if (terminal.body_reachable) {
             tail = try self.addCFStmtAtSource(terminal.stmt, .{ .join = .{
@@ -2312,7 +2312,7 @@ const Inserter = struct {
         var tail: LIR.CFStmtId = undefined;
         switch (plan.terminal) {
             .switch_stmt => |switch_plan| {
-                const source = self.store.getCFStmt(switch_plan.stmt).switch_stmt;
+                const source = self.store.getCFStmtImmediate(switch_plan.stmt).switch_stmt;
                 const source_branches = self.store.getCFSwitchBranches(source.branches);
                 if (source_branches.len != switch_plan.branch_plans.len) arcInvariant("ARC materializer switch branch count changed");
                 const branches = try self.emission_allocator.alloc(LIR.CFSwitchBranch, source_branches.len);
@@ -2333,7 +2333,7 @@ const Inserter = struct {
                 } });
             },
             .initialized_payload_switch => |switch_plan| {
-                const source = self.store.getCFStmt(switch_plan.stmt).switch_initialized_payload;
+                const source = self.store.getCFStmtImmediate(switch_plan.stmt).switch_initialized_payload;
                 tail = try self.addCFStmtAtSource(switch_plan.stmt, .{ .switch_initialized_payload = .{
                     .cond = source.cond,
                     .cond_mask = source.cond_mask,
@@ -2344,7 +2344,7 @@ const Inserter = struct {
                 } });
             },
             .str_match => |str_plan| {
-                const source = self.store.getCFStmt(str_plan.stmt).str_match;
+                const source = self.store.getCFStmtImmediate(str_plan.stmt).str_match;
                 const on_match = try self.retainLocalIfRcCount(source.source, str_plan.capture_retain_count, .{ .stmt = str_plan.stmt, .reason = .str_match_capture }, state.child_results[0]);
                 tail = try self.addCFStmtAtSource(str_plan.stmt, .{ .str_match = .{
                     .source = source.source,
@@ -2356,7 +2356,7 @@ const Inserter = struct {
                 } });
             },
             .boxy_tag_match => |tag_plan| {
-                const source = self.store.getCFStmt(tag_plan.stmt).boxy_tag_match;
+                const source = self.store.getCFStmtImmediate(tag_plan.stmt).boxy_tag_match;
                 tail = try self.addCFStmtAtSource(tag_plan.stmt, .{ .boxy_tag_match = .{
                     .source = source.source,
                     .source_desc = source.source_desc,
@@ -2366,7 +2366,7 @@ const Inserter = struct {
                 } });
             },
             .str_match_set => |str_plan| {
-                const source = self.store.getCFStmt(str_plan.stmt).str_match_set;
+                const source = self.store.getCFStmtImmediate(str_plan.stmt).str_match_set;
                 const source_arms = self.store.getStrMatchArms(source.arms);
                 if (source_arms.len != str_plan.match_plans.len) arcInvariant("ARC materializer string arm count changed");
                 const arms = try self.emission_allocator.alloc(LIR.StrMatchArm, source_arms.len);
@@ -4220,7 +4220,7 @@ const Inserter = struct {
         if (self.arcPlan(children[0]).start != match_start or self.arcPlan(children[1]).start != miss_start) {
             arcInvariant("ARC string-match child plan changed its structured start");
         }
-        const capture_retain_count = self.strMatchCaptureRetainCount(self.store.getCFStmt(stmt).str_match.steps);
+        const capture_retain_count = self.strMatchCaptureRetainCount(self.store.getCFStmtImmediate(stmt).str_match.steps);
         self.arcPlan(plan_index).terminal = .{ .str_match = .{
             .stmt = stmt,
             .match_plan = children[0],
@@ -5993,7 +5993,7 @@ const Inserter = struct {
         resource: RestoredResource,
     ) ResourceError!void {
         const bit = arc_sig.paramBit(position) orelse return;
-        const switch_stmt = self.store.getCFStmt(refinement.stmt).switch_stmt;
+        const switch_stmt = self.store.getCFStmtImmediate(refinement.stmt).switch_stmt;
         const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
         const entry = try self.restitution_switches.getOrPut(self.solve_allocator, refinement.stmt);
         if (!entry.found_existing) {
@@ -6080,7 +6080,7 @@ const Inserter = struct {
     /// its own unit.
     fn stmtPlaceFacts(self: *const Inserter, stmt: LIR.CFStmtId, uses: *std.ArrayList(LIR.LocalId)) Allocator.Error!StmtPlaceFacts {
         const gpa = self.emission_allocator;
-        switch (self.store.getCFStmt(stmt)) {
+        switch (self.store.getCFStmtImmediate(stmt).*) {
             .assign_ref => |assign| {
                 switch (assign.op) {
                     .local => |source| if (source != assign.target and !self.isBindingBorrowed(assign.target)) try uses.append(gpa, source),
@@ -6221,7 +6221,7 @@ const Inserter = struct {
     /// The statements control reaches after `stmt` for the place-use query.
     fn appendStmtWalkSuccessors(self: *Inserter, stmt: LIR.CFStmtId, out: *std.ArrayList(LIR.CFStmtId)) Allocator.Error!void {
         const gpa = self.emission_allocator;
-        switch (self.store.getCFStmt(stmt)) {
+        switch (self.store.getCFStmtImmediate(stmt).*) {
             inline .assign_ref,
             .assign_literal,
             .init_uninitialized,
@@ -6676,7 +6676,7 @@ const Inserter = struct {
     ) ResourceError!?OutcomeRestitution {
         const bit = arc_sig.paramBit(position) orelse return null;
         const refinement = try self.findOutcomeRefinement(target, next, sig) orelse return null;
-        const switch_stmt = self.store.getCFStmt(refinement.stmt).switch_stmt;
+        const switch_stmt = self.store.getCFStmtImmediate(refinement.stmt).switch_stmt;
         const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
         const outcomes = self.solution.sigTable().outcomesOf(sig);
         var has_restored_outcome = false;
@@ -7334,7 +7334,7 @@ const Inserter = struct {
             const node_index: usize = node_index_u32;
             const stmt = graph.nodes.items[node_index].stmt;
 
-            switch (self.store.getCFStmt(stmt)) {
+            switch (self.store.getCFStmtImmediate(stmt).*) {
                 .assign_ref => |assign| {
                     if (!self.solution.isRepresentationAlias(assign.target)) {
                         try self.noteLivenessUseRefOp(&graph.nodes.items[node_index].reads, assign.op);
@@ -9374,7 +9374,7 @@ test "RC elision lowers adjacent multi retain count" {
         f.store.stmtOrigin(release),
         release,
     );
-    const stmt = f.store.getCFStmt(retain).incref;
+    const stmt = f.store.getCFStmtImmediate(retain).incref;
     try testing.expectEqual(@as(u32, 2), stmt.count);
     try testing.expectEqual(ret, stmt.next);
 }
@@ -9720,7 +9720,7 @@ const ArcTest = struct {
         var cursor = start;
         var remaining: usize = self.store.cfStmtCount() + 1;
         while (remaining > 0) : (remaining -= 1) {
-            switch (self.store.getCFStmt(cursor)) {
+            switch (self.store.getCFStmtImmediate(cursor).*) {
                 .switch_stmt => |s| return s,
                 inline .incref, .decref, .decref_if_initialized, .free => |rc| cursor = rc.next,
                 .assign_ref => |assign| cursor = assign.next,
@@ -9777,7 +9777,7 @@ const ArcTest = struct {
         var cursor = start;
         var remaining: usize = self.store.cfStmtCount() + 1;
         while (remaining > 0) : (remaining -= 1) {
-            switch (self.store.getCFStmt(cursor)) {
+            switch (self.store.getCFStmtImmediate(cursor).*) {
                 .assign_call => |assign| return assign,
                 inline .assign_ref,
                 .assign_literal,
@@ -9900,7 +9900,7 @@ const ArcTest = struct {
         var cursor = self.procBody();
         var remaining: usize = self.store.cfStmtCount() + 1;
         while (remaining > 0) : (remaining -= 1) {
-            switch (self.store.getCFStmt(cursor)) {
+            switch (self.store.getCFStmtImmediate(cursor).*) {
                 .assign_low_level => |assign| {
                     if (assign.target == target) return assign;
                     cursor = assign.next;
@@ -9969,7 +9969,7 @@ const ArcTest = struct {
         while (stack.pop()) |current| {
             if (visited.contains(current)) continue;
             try visited.put(current, {});
-            switch (self.store.getCFStmt(current)) {
+            switch (self.store.getCFStmtImmediate(current).*) {
                 .assign_low_level => |assign| {
                     if (assign.target == target) mask |= assign.unique_args;
                     try stack.append(self.allocator, assign.next);
@@ -10340,7 +10340,7 @@ test "ARC preserves erased callable repack reuse" {
     var found = false;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
-        switch (f.store.getCFStmt(cursor)) {
+        switch (f.store.getCFStmtImmediate(cursor).*) {
             .assign_packed_erased_fn => |assign| {
                 if (assign.target == new_callable) {
                     try testing.expect(cursor != new_pack);
@@ -10500,7 +10500,7 @@ test "ARC runtime-checks erased callable repack from an ordinary parameter" {
     var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
-        switch (f.store.getCFStmt(cursor)) {
+        switch (f.store.getCFStmtImmediate(cursor).*) {
             .assign_packed_erased_fn => |assign| {
                 try testing.expectEqual(old_callable, assign.reuse.?);
                 try testing.expect(!assign.reuse_unique);
@@ -10588,7 +10588,7 @@ test "ARC transfers erased call ownership from an explicit outer source" {
     var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
-        switch (f.store.getCFStmt(cursor)) {
+        switch (f.store.getCFStmtImmediate(cursor).*) {
             .assign_call_erased => |assign| {
                 try testing.expect(assign.reuse_closure);
                 try testing.expectEqual(owned_callable, assign.reuse_source.?);
@@ -10679,7 +10679,7 @@ test "ARC retains an erased call reuse source that is read after the call" {
     var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
-        switch (f.store.getCFStmt(cursor)) {
+        switch (f.store.getCFStmtImmediate(cursor).*) {
             .assign_ref => |assign| cursor = assign.next,
             .incref => |rc| {
                 if (rc.value == owned_callable) {
@@ -10793,7 +10793,7 @@ test "ARC retains an erased callable whose repack input is used later" {
     var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
-        switch (f.store.getCFStmt(cursor)) {
+        switch (f.store.getCFStmtImmediate(cursor).*) {
             .assign_packed_erased_fn => |assign| {
                 try testing.expectEqual(old_callable, assign.reuse.?);
                 try testing.expect(!assign.reuse_unique);
@@ -15702,7 +15702,7 @@ test "RC sublist of a dying unique argument passed to a non-inlined callee consu
 
         // Follow the caller's call to the callee emission it actually runs.
         var cursor = f.store.getProcSpec(caller).body.?;
-        const target_proc = while (true) switch (f.store.getCFStmt(cursor)) {
+        const target_proc = while (true) switch (f.store.getCFStmtImmediate(cursor).*) {
             .assign_call => |assign| break assign.proc,
             .assign_list => |assign| cursor = assign.next,
             inline .incref, .decref => |rc| cursor = rc.next,
@@ -15752,7 +15752,7 @@ test "RC sublist of a dying unique argument passed to a non-inlined callee consu
             => return error.TestUnexpectedResult,
         };
         cursor = f.store.getProcSpec(target_proc).body.?;
-        const emitted_op = while (true) switch (f.store.getCFStmt(cursor)) {
+        const emitted_op = while (true) switch (f.store.getCFStmtImmediate(cursor).*) {
             .assign_low_level => |assign| {
                 if (assign.target == slice) break assign.op;
                 cursor = assign.next;
@@ -17672,7 +17672,7 @@ test "RC specialization: caller body survives variant proc append" {
     var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
-        switch (f.store.getCFStmt(cursor)) {
+        switch (f.store.getCFStmtImmediate(cursor).*) {
             .assign_call => |assign| {
                 if (assign.target == result) {
                     try testing.expectEqual(variant, assign.proc);

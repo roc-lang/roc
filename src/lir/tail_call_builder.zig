@@ -136,7 +136,7 @@ pub fn finish(self: *Self, store: anytype) std.mem.Allocator.Error!?LIR.TailCall
                 const target_desc = store.getLocal(erased.target).boxy_desc orelse continue;
                 if (target_desc.localOrNull() != out_desc) continue;
             }
-            if (store.getCFStmt(erased.next) == .ret) continue;
+            if (store.getCFStmtImmediate(erased.next).* == .ret) continue;
             if (store.getLocal(erased.target).layout_idx != ret_layout) continue;
             const returned = try self.returnedLocal(store, erased.next) orelse continue;
             if (returned != erased.target) continue;
@@ -163,7 +163,7 @@ pub fn finish(self: *Self, store: anytype) std.mem.Allocator.Error!?LIR.TailCall
         if (call.proc == proc and call.out_desc == null) {
             store.getCFStmtPtr(id).assign_call.tail_call = .{ .next = head };
             head = id;
-        } else if (store.getCFStmt(call.next) != .ret and store.getLocal(call.target).layout_idx == ret_layout) {
+        } else if (store.getCFStmtImmediate(call.next).* != .ret and store.getLocal(call.target).layout_idx == ret_layout) {
             const ret = try store.addCFStmt(.{ .ret = .{ .value = call.target } }, store.stmtOrigin(id));
             store.getCFStmtPtr(id).assign_call.next = ret;
         }
@@ -254,7 +254,7 @@ fn returnedLocal(self: *Self, store: anytype, start: LIR.CFStmtId) std.mem.Alloc
     };
     while (self.path.pop()) |id| {
         if (result) |local| {
-            switch (store.getCFStmt(id)) {
+            switch (store.getCFStmtImmediate(id).*) {
                 .assign_ref => |assign| {
                     result = if (assign.target != local) null else switch (assign.op) {
                         .local => |source| source,

@@ -39,7 +39,7 @@ fn procReachesListSet(store: *const lir.LirStore, start: lir.LIR.LirProcSpecId) 
             const index = @backingInt(stmt_id);
             if (seen_stmts[index]) continue;
             seen_stmts[index] = true;
-            switch (store.getCFStmt(stmt_id)) {
+            switch (store.getCFStmtImmediate(stmt_id).*) {
                 .assign_low_level => |assign| {
                     if (assign.op == .list_set) return true;
                     try stack.append(allocator, .{ .stmt = assign.next });
@@ -144,7 +144,7 @@ fn retainReachesListSetCall(
     var current = start;
     var remaining = store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
-        switch (store.getCFStmt(current)) {
+        switch (store.getCFStmtImmediate(current).*) {
             .assign_call => |assign| {
                 if (spanContainsLocal(store, assign.args, retained) and
                     try procReachesListSet(store, assign.proc))

@@ -468,7 +468,7 @@ fn hasSelfCall(allocator: Allocator, store: *const LirStore, proc_id: LIR.LirPro
     while (work.pop()) |stmt_id| {
         const entry = try visited.getOrPut(stmt_id);
         if (entry.found_existing) continue;
-        switch (store.getCFStmt(stmt_id)) {
+        switch (store.getCFStmtImmediate(stmt_id).*) {
             .assign_call => |s| {
                 if (s.proc == proc_id) return true;
                 try work.append(allocator, s.next);
@@ -1330,7 +1330,7 @@ test "tce has no site or forwarding-depth cap and preserves a shared base return
     try std.testing.expectEqual(branches.len + 2, store.cfStmtCount() - stmts_before);
     try std.testing.expectEqual(LIR.TailTransform.tce, store.getProcSpec(proc).tail_transform);
     try std.testing.expect(!(try hasSelfCall(allocator, &store, proc)));
-    try std.testing.expect(store.getCFStmt(ret) == .ret);
+    try std.testing.expect(store.getCFStmtImmediate(ret).* == .ret);
     try lir.Arc.insert(&store, &layouts, .{});
     try std.testing.expectEqual(@as(u64, 0), try runProcU64Args(allocator, &store, &layouts, proc, &runtime_env, &.{96}));
     try runtime_env.checkForLeaks();
@@ -1676,8 +1676,8 @@ test "tce emits an identity loop directly into the original call" {
     try lir.Trmc.run(&store, &layouts);
     try std.testing.expectEqual(stmts_before + 2, store.cfStmtCount());
     try std.testing.expectEqualDeep(loc, store.stmtLoc(call));
-    const join = store.getCFStmt(store.getProcSpec(proc).body.?).join;
+    const join = store.getCFStmtImmediate(store.getProcSpec(proc).body.?).join;
     try std.testing.expectEqual(call, join.body);
-    try std.testing.expectEqual(join.id, store.getCFStmt(call).jump.target);
-    try std.testing.expect(store.getCFStmt(ret) == .ret);
+    try std.testing.expectEqual(join.id, store.getCFStmtImmediate(call).jump.target);
+    try std.testing.expect(store.getCFStmtImmediate(ret).* == .ret);
 }
