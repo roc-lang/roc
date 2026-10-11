@@ -4975,13 +4975,13 @@ const Builder = struct {
         defer scratch.deinit();
         for (entries) |entry| {
             _ = scratch.reset(.retain_capacity);
-            const summary = try entry.summary.copy(scratch.allocator(), relocation);
-            _ = try self.interface_summaries.insert(&self.program.types, &self.program.names, .{
-                .address = entry.address,
-                .evidence = entry.evidence,
-                .request = try entry.request.copy(scratch.allocator(), relocation),
-                .summary = summary,
-            });
+            _ = try self.interface_summaries.insertRelocated(
+                &self.program.types,
+                &self.program.names,
+                entry,
+                try entry.request.copy(scratch.allocator(), relocation),
+                relocation,
+            );
         }
     }
 
@@ -12883,6 +12883,14 @@ const Builder = struct {
         );
         defer commit_map.deinit(self.allocator);
         const body_ids = commit_map.ids;
+        try body_draft.commitRetainedTypeCells(
+            self.allocator,
+            committed_types,
+            body_ids,
+            commit_map.emit_fns,
+            commit_map.emit_defs,
+            commit_map.emit_nested_defs,
+        );
         const output_before = FinalBodyOutputCounts.fromProgram(self.program);
         try body_draft.sealCoreIntoProgramWithMap(
             self.program,
@@ -14475,6 +14483,14 @@ const DraftTypeCell = union(enum) {
             .sealed => {},
             .graph_node => Common.invariant("graph-qualified type cell remained in a sealed body draft"),
         }
+    }
+
+    /// The sealed type a graph-free coordinator commit reads from this cell.
+    fn committedSealed(self: DraftTypeCell) Type.TypeId {
+        return switch (self) {
+            .sealed => |ty| ty,
+            .graph_node => Common.invariant("graph-qualified type cell reached graph-free coordinator commit"),
+        };
     }
 
     fn sealCommitted(
@@ -17944,6 +17960,57 @@ const BodyDraftStore = struct {
         );
     }
 
+    /// Relocate every sealed type cell the core commit below will read, in
+    /// one import and interning transaction. The per-cell commits then reuse
+    /// that relocation instead of each opening its own transaction.
+    fn commitRetainedTypeCells(
+        self: *const BodyDraftStore,
+        allocator: Allocator,
+        committed_types: *CommittedGraphTypes,
+        ids: FinalIdOffsets,
+        emit_fns: ?[]const bool,
+        emit_defs: ?[]const bool,
+        emit_nested_defs: ?[]const bool,
+    ) Allocator.Error!void {
+        if (committed_types.destination == null) return;
+        var tys = std.ArrayList(Type.TypeId).empty;
+        defer tys.deinit(allocator);
+        for (self.locals.items, 0..) |local, index| {
+            if (ids.retained(.locals, index)) try tys.append(allocator, local.ty.committedSealed());
+        }
+        for (self.typed_locals.items, 0..) |typed, index| {
+            if (ids.retained(.typed_locals, index)) try tys.append(allocator, typed.ty.committedSealed());
+        }
+        for (self.pats.items, 0..) |pat, index| {
+            if (ids.retained(.pats, index)) try tys.append(allocator, pat.ty.committedSealed());
+        }
+        for (self.exprs.items, 0..) |expr, index| {
+            if (ids.retained(.exprs, index)) try tys.append(allocator, expr.ty.committedSealed());
+        }
+        for (self.fns.items, 0..) |fn_, index| {
+            if (emit_fns) |emit| if (!emit[index]) continue;
+            try tys.append(allocator, fn_.source.mono_fn_ty.committedSealed());
+        }
+        for (self.defs.items, 0..) |def, index| {
+            if (emit_defs) |emit| if (!emit[index]) continue;
+            if (def.fn_def) |template| try tys.append(allocator, template.mono_fn_ty.committedSealed());
+            try tys.append(allocator, def.ret.committedSealed());
+        }
+        for (self.nested_defs.items, 0..) |def, index| {
+            if (emit_nested_defs) |emit| if (!emit[index]) continue;
+            try tys.append(allocator, def.fn_def.mono_fn_ty.committedSealed());
+            try tys.append(allocator, def.ret.committedSealed());
+        }
+        for (self.layout_requests.items, 0..) |request, index| {
+            if (ids.retained(.layout_requests, index)) try tys.append(allocator, request.ty.committedSealed());
+        }
+        for (self.runtime_schema_requests.items, 0..) |request, index| {
+            if (ids.retained(.runtime_schema_requests, index)) try tys.append(allocator, request.ty.committedSealed());
+        }
+        if (tys.items.len == 0) return;
+        allocator.free(try committed_types.commitTypes(allocator, tys.items));
+    }
+
     fn sealCoreIntoProgramWithMap(
         self: *const BodyDraftStore,
         program: *Ast.Program,
@@ -19255,6 +19322,16 @@ const InterfaceSummaryRelocation = struct {
             return self.importing.?.importProgramType(value);
         }
         if (self.source_names == self.destination_names) return value;
+        if (self.committed) |committed| if (committed.destination) |destination| {
+            // A committed domain owns a cumulative name relocation, so each
+            // source name is interned once per domain rather than per use.
+            const relocation = destination.relocation.namesRelocation();
+            if (T == names.ModuleIdentityId) return relocation.relocateModuleIdentity(self.source_names, value);
+            if (T == names.TypeNameId) return relocation.relocateTypeName(self.source_names, value);
+            if (T == names.RecordFieldNameId) return relocation.relocateRecordFieldLabel(self.source_names, value);
+            if (T == names.TagNameId) return relocation.relocateTagLabel(self.source_names, value);
+            return value;
+        };
         if (T == names.ModuleIdentityId) return self.destination_names.internModuleIdentity(self.source_names.moduleIdentityBytes(value));
         if (T == names.TypeNameId) return self.destination_names.internTypeName(self.source_names.typeNameText(value));
         if (T == names.RecordFieldNameId) return self.destination_names.internRecordFieldLabel(self.source_names.recordFieldLabelText(value));
@@ -19286,25 +19363,43 @@ const InterfaceSummaryCache = struct {
     }
 
     fn insert(self: *InterfaceSummaryCache, types_: *Type.Store, name_store: *const names.NameStore, entry: InterfaceSummaryEntry) Allocator.Error!InterfaceSummary {
-        const bucket = try self.buckets.getOrPut(entry.address);
+        return self.insertRelocated(types_, name_store, entry, entry.request, InterfaceSummaryCopy{});
+    }
+
+    /// Insert an entry whose `request` is already expressed in this cache's
+    /// type and name domain, while `source.summary` is still expressed in its
+    /// producer's domain. A resident equal request answers without touching
+    /// the summary; a new summary is relocated once, directly into owned
+    /// storage.
+    fn insertRelocated(
+        self: *InterfaceSummaryCache,
+        types_: *Type.Store,
+        name_store: *const names.NameStore,
+        source: InterfaceSummaryEntry,
+        request: InterfaceConstraints.Identity,
+        summary_relocation: anytype,
+    ) Allocator.Error!InterfaceSummary {
+        const bucket = try self.buckets.getOrPut(source.address);
         if (!bucket.found_existing) bucket.value_ptr.* = .empty;
         for (bucket.value_ptr.items) |index| {
             const existing = self.entries.items[index];
-            if (storedConstFnEvidenceEql(existing.evidence, entry.evidence) and
-                try existing.request.eql(entry.request, types_, name_store)) return existing.summary;
+            if (storedConstFnEvidenceEql(existing.evidence, source.evidence) and
+                try existing.request.eql(request, types_, name_store)) return existing.summary;
         }
         try bucket.value_ptr.ensureUnusedCapacity(self.allocator, 1);
         try self.entries.ensureUnusedCapacity(self.allocator, 1);
-        var owned = entry;
         const arena = self.evidence_arena.allocator();
-        owned.evidence = .{
-            .nodes = try arena.dupe(check.ConstStore.ConstFnEvidence, entry.evidence.nodes),
-            .frames = try arena.dupe(check.ConstStore.ConstFnEvidenceFrame, entry.evidence.frames),
-            .head = entry.evidence.head,
-            .digest = entry.evidence.digest,
+        const owned: InterfaceSummaryEntry = .{
+            .address = source.address,
+            .evidence = .{
+                .nodes = try arena.dupe(check.ConstStore.ConstFnEvidence, source.evidence.nodes),
+                .frames = try arena.dupe(check.ConstStore.ConstFnEvidenceFrame, source.evidence.frames),
+                .head = source.evidence.head,
+                .digest = source.evidence.digest,
+            },
+            .request = try request.copy(arena, InterfaceSummaryCopy{}),
+            .summary = try source.summary.copy(arena, summary_relocation),
         };
-        owned.request = try entry.request.copy(arena, InterfaceSummaryCopy{});
-        owned.summary = try entry.summary.copy(arena, InterfaceSummaryCopy{});
         bucket.value_ptr.appendAssumeCapacity(@intCast(self.entries.items.len));
         self.entries.appendAssumeCapacity(owned);
         return owned.summary;
@@ -25105,12 +25200,13 @@ const BodyContext = struct {
         };
         var scratch = std.heap.ArenaAllocator.init(self.allocator);
         defer scratch.deinit();
-        return try binding.cache.insert(self.typeStore(), self.nameStore(), .{
-            .address = entry.address,
-            .evidence = entry.evidence,
-            .request = try entry.request.copy(scratch.allocator(), relocation),
-            .summary = try entry.summary.copy(scratch.allocator(), relocation),
-        });
+        return try binding.cache.insertRelocated(
+            self.typeStore(),
+            self.nameStore(),
+            entry,
+            try entry.request.copy(scratch.allocator(), relocation),
+            relocation,
+        );
     }
 
     fn parametricRequestHoles(
