@@ -360,13 +360,13 @@ const Solver = struct {
 
     fn deinit(self: *Solver) void {
         var row_indexes = self.tag_row_indexes.valueIterator();
-        while (row_indexes.next()) |row_index| row_index.by_name.deinit(self.allocator);
+        while (row_indexes.next()) |row_index| row_index.deinit(self.allocator);
         self.tag_row_indexes.deinit(self.allocator);
         var set_indexes = self.lambda_set_indexes.valueIterator();
         while (set_indexes.next()) |set_index| set_index.by_lambda.deinit(self.allocator);
         self.lambda_set_indexes.deinit(self.allocator);
         var record_indexes = self.record_row_indexes.valueIterator();
-        while (record_indexes.next()) |row_index| row_index.by_name.deinit(self.allocator);
+        while (record_indexes.next()) |row_index| row_index.deinit(self.allocator);
         self.record_row_indexes.deinit(self.allocator);
         self.clone_map_pool.deinit();
         for (self.spare_clone_stacks.items) |*stack| stack.deinit(self.allocator);
@@ -1184,7 +1184,7 @@ const Solver = struct {
             const target_index = try self.tagRowIndex(target_content.tag_union);
             for (0..source_content.tag_union.count()) |source_index| {
                 const source_tag = self.program.types.tagItem(source_content.tag_union, source_index);
-                const target_position = target_index.by_name.get(source_tag.name) orelse
+                const target_position = target_index.get(source_tag.name) orelse
                     Common.invariant("return source tag was absent from its destination row");
                 const target_payloads = self.program.types.tagItem(target_content.tag_union, target_position).payloads;
                 if (source_tag.payloads.count() != target_payloads.count()) Common.invariant("return tag payload arity differed");
@@ -1813,7 +1813,7 @@ const Solver = struct {
     fn recordField(self: *Solver, ty: Type.TypeVarId, name: Type.names.RecordFieldNameId) Allocator.Error!Type.TypeVarId {
         const content = try self.shapeContent(ty);
         if (std.meta.activeTag(content) != .record) Common.invariant("record field operation had a non-record checked type");
-        const index = (try self.recordRowIndex(content.record)).by_name.get(name) orelse
+        const index = (try self.recordRowIndex(content.record)).get(name) orelse
             Common.invariant("record field was absent from checked record type");
         return self.program.types.fieldItem(content.record, index).ty;
     }
@@ -1831,7 +1831,7 @@ const Solver = struct {
     fn tagPayloadsSpan(self: *Solver, ty: Type.TypeVarId, name: Type.names.TagNameId) Allocator.Error!Type.Span {
         const content = try self.shapeContent(ty);
         if (std.meta.activeTag(content) != .tag_union) Common.invariant("tag operation had a non-tag-union checked type");
-        const index = (try self.tagRowIndex(content.tag_union)).by_name.get(name) orelse
+        const index = (try self.tagRowIndex(content.tag_union)).get(name) orelse
             Common.invariant("tag was absent from checked tag-union type");
         return self.program.types.tagItem(content.tag_union, index).payloads;
     }
@@ -3094,41 +3094,91 @@ const Solver = struct {
     /// caller to unify once the merged span has been recorded.
     /// Positions of a stored tag row's tags by name; the first position wins
     /// for a repeated name.
-    const TagRowIndex = struct {
-        len: u32,
-        by_name: collections.DenseMapUnmanaged(Type.names.TagNameId, usize),
-    };
+    /// Positions of a stored row's labels by name, sorted by name for binary
+    /// search; the first position wins for a repeated name. A row is short
+    /// and its label ids are spread over the whole name table, so a sorted
+    /// slice holds it more compactly than a direct-indexed map.
+    fn RowNameIndex(comptime Name: type) type {
+        return struct {
+            const Self = @This();
+            const Entry = struct { name: Name, position: u32 };
+
+            len: u32,
+            entries: std.ArrayList(Entry) = .empty,
+
+            fn get(self: *const Self, name: Name) ?usize {
+                const key = @backingInt(name);
+                var low: usize = 0;
+                var high: usize = self.entries.items.len;
+                while (low < high) {
+                    const mid = low + (high - low) / 2;
+                    const mid_key = @backingInt(self.entries.items[mid].name);
+                    if (mid_key < key) low = mid + 1 else high = mid;
+                }
+                if (low < self.entries.items.len and self.entries.items[low].name == name) return self.entries.items[low].position;
+                return null;
+            }
+
+            fn lessThan(_: void, lhs: Entry, rhs: Entry) bool {
+                const lhs_key = @backingInt(lhs.name);
+                const rhs_key = @backingInt(rhs.name);
+                return lhs_key < rhs_key or (lhs_key == rhs_key and lhs.position < rhs.position);
+            }
+
+            /// Index `labels`, which lists the row's labels in row order.
+            fn rebuild(self: *Self, allocator: Allocator, len: u32, labels: anytype) Allocator.Error!void {
+                self.len = len;
+                self.entries.clearRetainingCapacity();
+                try self.entries.ensureTotalCapacity(allocator, len);
+                for (0..len) |position| self.entries.appendAssumeCapacity(.{ .name = labels.at(position), .position = @intCast(position) });
+                std.sort.pdq(Entry, self.entries.items, {}, lessThan);
+                var kept: usize = 0;
+                for (self.entries.items) |entry| {
+                    if (kept != 0 and self.entries.items[kept - 1].name == entry.name) continue;
+                    self.entries.items[kept] = entry;
+                    kept += 1;
+                }
+                self.entries.shrinkRetainingCapacity(kept);
+            }
+
+            fn deinit(self: *Self, allocator: Allocator) void {
+                self.entries.deinit(allocator);
+            }
+        };
+    }
+
+    const TagRowIndex = RowNameIndex(Type.names.TagNameId);
+    const RecordRowIndex = RowNameIndex(Type.names.RecordFieldNameId);
 
     fn tagRowIndex(self: *Solver, span: Type.Span) Allocator.Error!*const TagRowIndex {
         const gop = try self.tag_row_indexes.getOrPut(self.allocator, span.start);
         if (gop.found_existing and gop.value_ptr.len == span.len) return gop.value_ptr;
-        if (!gop.found_existing) gop.value_ptr.* = .{ .len = span.len, .by_name = .empty };
+        if (!gop.found_existing) gop.value_ptr.* = .{ .len = span.len };
+        const Labels = struct {
+            solver: *Solver,
+            span: Type.Span,
+            fn at(row: @This(), position: usize) Type.names.TagNameId {
+                return row.solver.program.types.tagItem(row.span, position).name;
+            }
+        };
+        try gop.value_ptr.rebuild(self.allocator, @intCast(span.count()), Labels{ .solver = self, .span = span });
         gop.value_ptr.len = span.len;
-        gop.value_ptr.by_name.clearRetainingCapacity();
-        try gop.value_ptr.by_name.ensureTotalCapacity(self.allocator, span.len);
-        for (0..span.count()) |index| {
-            const entry = try gop.value_ptr.by_name.getOrPut(self.allocator, self.program.types.tagItem(span, index).name);
-            if (!entry.found_existing) entry.value_ptr.* = index;
-        }
         return gop.value_ptr;
     }
-
-    const RecordRowIndex = struct {
-        len: u32,
-        by_name: collections.DenseMapUnmanaged(Type.names.RecordFieldNameId, usize),
-    };
 
     fn recordRowIndex(self: *Solver, span: Type.Span) Allocator.Error!*const RecordRowIndex {
         const gop = try self.record_row_indexes.getOrPut(self.allocator, span.start);
         if (gop.found_existing and gop.value_ptr.len == span.len) return gop.value_ptr;
-        if (!gop.found_existing) gop.value_ptr.* = .{ .len = span.len, .by_name = .empty };
+        if (!gop.found_existing) gop.value_ptr.* = .{ .len = span.len };
+        const Labels = struct {
+            solver: *Solver,
+            span: Type.Span,
+            fn at(row: @This(), position: usize) Type.names.RecordFieldNameId {
+                return row.solver.program.types.fieldItem(row.span, position).name;
+            }
+        };
+        try gop.value_ptr.rebuild(self.allocator, @intCast(span.count()), Labels{ .solver = self, .span = span });
         gop.value_ptr.len = span.len;
-        gop.value_ptr.by_name.clearRetainingCapacity();
-        try gop.value_ptr.by_name.ensureTotalCapacity(self.allocator, span.len);
-        for (0..span.count()) |index| {
-            const entry = try gop.value_ptr.by_name.getOrPut(self.allocator, self.program.types.fieldItem(span, index).name);
-            if (!entry.found_existing) entry.value_ptr.* = index;
-        }
         return gop.value_ptr;
     }
 
@@ -3143,7 +3193,7 @@ const Solver = struct {
         var every_left_in_right = true;
         for (0..lhs.count()) |left_index| {
             const left_tag = self.program.types.tagItem(lhs, left_index);
-            if (right_index.by_name.get(left_tag.name)) |right_position| {
+            if (right_index.get(left_tag.name)) |right_position| {
                 try payload_pairs.append(self.allocator, .{
                     .lhs = left_tag.payloads,
                     .rhs = self.program.types.tagItem(rhs, right_position).payloads,

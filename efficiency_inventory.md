@@ -484,6 +484,13 @@ stages it touches; the instruction-count effect is reported in "Results".
     check` +0.7%, +0.4%, +0.3% and the LLVM build +1.4%, +1.9%, +2.3%. A
     vectorized `std.mem.findScalar` scan was worse still (+5%).
 
+75. Lambda Solved: a cached row index (positions of a tag or record row's
+    labels by name) is a slice of (name, position) pairs sorted by name and
+    searched by bisection, instead of a dense map whose few, far-apart label
+    ids each opened a page. Measured neutral: ten alternating runs give the
+    same peak-memory median (2.67 GB) and instruction counts are flat. Peak
+    memory measurements vary by about 50 MB between runs of one binary.
+
 ## Findings from profiling
 
 These were found by profiling the ReleaseFast compiler with
