@@ -181,6 +181,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_11449_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11158_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11199_test.zig"));
+    std.testing.refAllDecls(@import("test/structural_codec_worker_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11175_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11233_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11259_test.zig"));
@@ -228,10 +229,12 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_11525_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11526_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11527_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11908_test.zig"));
     std.testing.refAllDecls(@import("test/optimized_literal_roots_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11528_test.zig"));
     std.testing.refAllDecls(@import("test/consumer_manifest_test.zig"));
     std.testing.refAllDecls(@import("test/package_effect_boundary_test.zig"));
+    std.testing.refAllDecls(@import("test/hosted_error_diagnostic_test.zig"));
     std.testing.refAllDecls(@import("test/tce_capture_test.zig"));
     std.testing.refAllDecls(@import("test/list_map_target_independent_lir_test.zig"));
     std.testing.refAllDecls(@import("test/platform_box_update_lir_test.zig"));

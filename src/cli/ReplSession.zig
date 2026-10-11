@@ -1374,7 +1374,6 @@ pub fn programFailureKind(err: eval.Inspected.Error) ProgramFailureKind {
         error.VirtualAllocFailed,
         error.VirtualProtectFailed,
         error.WasmExecFailed,
-        error.WindowsSDKNotFound,
         error.WouldBlock,
         error.WriteFailed,
         => .operational,

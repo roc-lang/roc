@@ -2395,6 +2395,8 @@ pub const CheckedTypeId = checked_ids.CheckedTypeId;
 pub const ConstStore = const_store.ConstStore;
 pub const ConstNodeId = const_store.ConstNodeId;
 pub const ConstFnId = const_store.ConstFnId;
+pub const ConstCaptureKind = const_store.ConstCaptureKind;
+pub const ConstRecursiveBinding = const_store.ConstRecursiveBinding;
 pub const ConstValue = const_store.ConstValue;
 pub const ConstScalar = const_store.ConstScalar;
 pub const ConstList = const_store.ConstList;
@@ -4461,6 +4463,13 @@ pub const CheckedTypeStore = struct {
         // the constraint function that identifies a selected dispatch target
         // or a per-use where-method callable.
         try output_type_roots.forEachSchemeUseTypeRoot(module_env, &publisher);
+
+        // A row-coerced use reads its value at the value's own type
+        // (`ModuleEnv.RowCoercedUse`), which checked-body construction gives
+        // the coercion's child.
+        for (module_env.row_coerced_uses.items.items) |use| {
+            _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @fromBackingInt(use.value_var));
+        }
 
         for (module_env.store.sliceDefs(module_env.global_value_defs)) |def_idx| {
             const root = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, module.defType(def_idx));
@@ -10721,7 +10730,7 @@ pub fn literalConversionRootOf(data: CheckedExprData) ?ComptimeRootId {
     return switch (data) {
         .numeral => |numeral| numeral.conversion_root,
         .str_from_quote => |quote| quote.conversion_root,
-        .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
+        .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => null,
     };
 }
 
@@ -10902,6 +10911,13 @@ pub const CheckedExprData = union(enum) {
         lambda: CheckedExprId,
         context: CheckedReturnContext,
     },
+    /// A checker-stamped row coercion (design.md "Row Coercion Primitive"):
+    /// `value` is a closed tag row whose every tag this expression's wider
+    /// type lists. The two types are related, never unified, and lowering
+    /// re-tags the value. No checker site emits it yet.
+    row_coerce: struct {
+        value: CheckedExprId,
+    },
     for_: struct {
         pattern: CheckedPatternId,
         expr: CheckedExprId,
@@ -11062,6 +11078,13 @@ pub const StoredCheckedExprData = union(enum) {
         expr: CheckedExprId,
         lambda: CheckedExprId,
         context: CheckedReturnContext,
+    },
+    /// A checker-stamped row coercion (design.md "Row Coercion Primitive"):
+    /// `value` is a closed tag row whose every tag this expression's wider
+    /// type lists. The two types are related, never unified, and lowering
+    /// re-tags the value. No checker site emits it yet.
+    row_coerce: struct {
+        value: CheckedExprId,
     },
     for_: struct {
         pattern: CheckedPatternId,
@@ -11290,6 +11313,7 @@ fn reconstructCheckedExprData(pool_owner: anytype, stored: StoredCheckedExprData
         .expect => |e| .{ .expect = e },
         .break_ => .break_,
         .return_ => |r| .{ .return_ = .{ .expr = r.expr, .lambda = r.lambda, .context = r.context } },
+        .row_coerce => |c| .{ .row_coerce = .{ .value = c.value } },
         .for_ => |f| .{ .for_ = .{ .pattern = f.pattern, .expr = f.expr, .body = f.body, .plan = f.plan, .mutations = f.mutations } },
         .hosted_lambda => |h| .{ .hosted_lambda = .{
             .symbol_name = h.symbol_name,
@@ -12365,6 +12389,7 @@ const CheckedLoopMutationPublisher = struct {
             },
             .tag => |tag| for (tag.args) |arg| try self.pushExpr(arg),
             .nominal => |nominal| try self.pushExpr(nominal.backing_expr),
+            .row_coerce => |coerce| try self.pushExpr(coerce.value),
             .binop => |binop| {
                 try self.pushExpr(binop.lhs);
                 try self.pushExpr(binop.rhs);
@@ -12655,7 +12680,10 @@ pub const CheckedBodyStore = struct {
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
             if (source_nodes.hasExpr(@fromBackingInt(@intCast(node_idx)))) {
                 const id = source_node_map.exprAtRawNode(node_idx) orelse unreachable;
-                exprs.items[@backingInt(id)].data = try copier.copyExprData(@fromBackingInt(@intCast(node_idx)));
+                // Copying a row-coerced use appends its coercion's child to
+                // `exprs`, so take the slot only after the copy has grown it.
+                const data = try copier.copyExprData(@fromBackingInt(@intCast(node_idx)));
+                exprs.items[@backingInt(id)].data = data;
             } else if (source_nodes.hasPattern(@fromBackingInt(@intCast(node_idx)))) {
                 const id = source_node_map.patternAtRawNode(node_idx) orelse unreachable;
                 patterns.items[@backingInt(id)].data = try copier.copyPatternData(@fromBackingInt(@intCast(node_idx)));
@@ -13134,6 +13162,7 @@ pub const CheckedBodyStore = struct {
             .expect => |e| .{ .expect = e },
             .break_ => .break_,
             .return_ => |r| .{ .return_ = .{ .expr = r.expr, .lambda = r.lambda, .context = r.context } },
+            .row_coerce => |c| .{ .row_coerce = .{ .value = c.value } },
             .for_ => |f| .{ .for_ = .{ .pattern = f.pattern, .expr = f.expr, .body = f.body, .plan = f.plan, .mutations = f.mutations } },
             .hosted_lambda => |h| .{ .hosted_lambda = .{
                 .symbol_name = h.symbol_name,
@@ -14281,6 +14310,7 @@ fn CheckedBodyDiagnosticErrorScan(comptime follow_constants: bool) type {
                 },
                 .tag => |tag| try self.pushExprSpan(tag.args),
                 .nominal => |nominal| try self.pushExpr(nominal.backing_expr),
+                .row_coerce => |coerce| try self.pushExpr(coerce.value),
                 .closure => |closure| {
                     try self.pushExpr(closure.lambda);
                     for (closure.captures) |capture| try self.pushPattern(capture.pattern);
@@ -14772,6 +14802,7 @@ const DivergenceScan = struct {
             },
             .tag => |tag| try anyOf(items, tag.args),
             .nominal => |nominal| try one(items, nominal.backing_expr),
+            .row_coerce => |coerce| try one(items, coerce.value),
             .closure => .{ .value = false },
             .lambda => .{ .value = false },
             .binop => |binop| try anyOf(items, &.{ binop.lhs, binop.rhs }),
@@ -15217,11 +15248,11 @@ const CheckedBodyPayloadCopier = struct {
             .e_str_segment => |str| .{ .str_segment = try self.string_builder.intern(str.literal) },
             .e_str => |str| try self.copyStrExpr(expr_idx, str.span),
             .e_bytes_literal => |bytes| .{ .bytes_literal = try self.string_builder.intern(bytes.literal) },
-            .e_lookup_local => |lookup| .{ .lookup_local = .{
+            .e_lookup_local => |lookup| try self.rowCoercedUseData(expr_idx, .{ .lookup_local = .{
                 .pattern = self.checkedPattern(lookup.pattern_idx),
                 .resolved = null,
-            } },
-            .e_lookup_external, .e_lookup_associated_resolved => .{ .lookup_external = null },
+            } }),
+            .e_lookup_external, .e_lookup_associated_resolved => try self.rowCoercedUseData(expr_idx, .{ .lookup_external = null }),
             .e_lookup_associated_local, .e_lookup_associated => checkedArtifactInvariant("unresolved associated lookup reached checked body publication", .{}),
             .e_lookup_required => .{ .lookup_required = null },
             .e_list => |list| .{ .list = try self.copyExprSpan(list.elems) },
@@ -16132,6 +16163,24 @@ const CheckedBodyPayloadCopier = struct {
         return null;
     }
 
+    /// A use checking recorded as a widening of a top-level value
+    /// (`ModuleEnv.RowCoercedUse`) coerces the value—the lookup, at the
+    /// value's own type—to the row this use relates to, which is this
+    /// expression's checked type (design.md "Value Rows: Local Values Share,
+    /// Top-Level Values Widen At Each Use", "Row Coercion Primitive"). Every
+    /// other lookup is the lookup itself.
+    fn rowCoercedUseData(self: *@This(), expr_idx: CIR.Expr.Idx, lookup_data: CheckedExprData) Allocator.Error!CheckedExprData {
+        const value_var = self.module.moduleEnvConst().rowCoercedUseValueVar(ModuleEnv.nodeIdxFrom(expr_idx)) orelse return lookup_data;
+        const value_id: CheckedExprId = @fromBackingInt(try checkedSourceNodeIdFromLen(self.exprs.items.len));
+        try self.exprs.append(self.allocator, .{
+            .id = value_id,
+            .ty = try self.checkedTypeForRequiredVar(value_var, "row-coerced value type root was not published"),
+            .source_region = self.module.regionAt(ModuleEnv.nodeIdxFrom(expr_idx)),
+            .data = lookup_data,
+        });
+        return .{ .row_coerce = .{ .value = value_id } };
+    }
+
     fn checkedTypeForRequiredVar(
         self: *@This(),
         var_: Var,
@@ -16266,6 +16315,7 @@ fn deinitCheckedExprData(allocator: Allocator, data: *CheckedExprData) void {
         .anno_only,
         .break_,
         .return_,
+        .row_coerce,
         .for_,
         => {},
         inline .str, .list, .tuple => |items| allocator.free(items),
@@ -16388,6 +16438,11 @@ fn verifyCheckedExprDataComplete(
             }
         },
         .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .hosted_lambda, .run_low_level => {},
+        .row_coerce => |coerce| {
+            if (@backingInt(coerce.value) >= checked_bodies.exprCount()) {
+                checkedArtifactInvariant("checked row coercion value expression was out of range", .{});
+            }
+        },
     }
 }
 
@@ -17128,7 +17183,22 @@ pub const ResolvedValueRefTable = struct {
                 tag != .expr_required_lookup) continue;
 
             const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(node_idx));
-            const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse continue;
+            const source_checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse continue;
+            // A row-coerced use of a top-level value is a coercion of the
+            // value: the lookup, and so the reference and its type, is the
+            // coercion's child (design.md "Value Rows: Local Values Share,
+            // Top-Level Values Widen At Each Use").
+            const coerced_lookup: ?CheckedExpr = switch (checked_bodies.expr(source_checked_expr).data) {
+                .row_coerce => |coerce| blk: {
+                    const value = checked_bodies.expr(coerce.value);
+                    if (value.data != .lookup_local and value.data != .lookup_external) {
+                        checkedArtifactInvariant("row coercion of a value use did not wrap a lookup", .{});
+                    }
+                    break :blk value;
+                },
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
+            };
+            const checked_expr = if (coerced_lookup) |value| value.id else source_checked_expr;
             var resolved_ref = try categorizeValueRef(
                 allocator,
                 module,
@@ -17146,7 +17216,7 @@ pub const ResolvedValueRefTable = struct {
                 &local_pattern_roles,
                 checked_bodies,
             );
-            const checked_ty = checked_types.rootForSourceVar(module, module.exprType(expr_idx)) orelse {
+            const checked_ty = if (coerced_lookup) |value| value.ty else checked_types.rootForSourceVar(module, module.exprType(expr_idx)) orelse {
                 if (builtin.mode == .debug) {
                     base.invariant("checked artifact invariant violated: resolved value ref type root was not published", .{});
                 }
@@ -17154,7 +17224,7 @@ pub const ResolvedValueRefTable = struct {
             };
             // Publication keys every source root by this same writer.
             const checked_type_key = checked_types.store.view().rootKey(checked_ty);
-            if (builtin.mode == .debug) {
+            if (builtin.mode == .debug and coerced_lookup == null) {
                 const written = (try key_writer.fromVar(module.exprType(expr_idx))).key;
                 if (@as(u256, @bitCast(written.bytes)) != @as(u256, @bitCast(checked_type_key.bytes))) {
                     base.invariant("checked artifact invariant violated: resolved value ref type key differs from its published root", .{});
@@ -17316,6 +17386,7 @@ fn checkedExprDataCategory(tag: std.meta.Tag(CheckedExprData)) CheckedExprDataCa
         .anno_only,
         .break_,
         .return_,
+        .row_coerce,
         .for_,
         .hosted_lambda,
         .run_low_level,
@@ -22251,6 +22322,7 @@ const CheckedTemplateRefCollector = struct {
                 self.endChildren(children);
             },
             .nominal => |nominal| try self.pushChild(.{ .expr = nominal.backing_expr }),
+            .row_coerce => |coerce| try self.pushChild(.{ .expr = coerce.value }),
             .closure => |closure| try self.pushChild(.{ .expr = closure.lambda }),
             .lambda => |lambda| {
                 const children = self.beginChildren();
@@ -22671,10 +22743,10 @@ pub const ProcTarget = union(enum) {
     comptime_only,
 };
 
-/// Checker-owned capability for adapting a hosted function whose exact
-/// `Builtin.Try` result has a closed structural error row and is requested with
-/// a wider error row. The nominal, tags, and type argument positions are
-/// explicit so postcheck never recognizes Try by names or backing shape.
+/// Checker-owned capability for a closed `Builtin.Try` result row. General
+/// dispatch adapters use it to retag results, including hosted selections;
+/// hosted ABI validation also uses it. The nominal, tags, and type argument positions
+/// are explicit so postcheck never recognizes Try by names or backing shape.
 pub const HostedTryAdapterCapability = struct {
     nominal: canonical.NominalTypeKey,
     ok_tag: canonical.TagLabelId,
@@ -23750,6 +23822,7 @@ const NestedProcSiteBuilder = struct {
                 for (tag.args) |arg| try self.pushExpr(arg, owner);
             },
             .nominal => |nominal| try self.pushExpr(nominal.backing_expr, owner),
+            .row_coerce => |coerce| try self.pushExpr(coerce.value, owner),
             .binop => |binop| {
                 try self.pushExpr(binop.lhs, owner);
                 try self.pushExpr(binop.rhs, owner);
@@ -24056,7 +24129,7 @@ const NestedProcSiteBuilder = struct {
         const expr_id = site.checked_expr orelse return &.{};
         return switch (self.checked_bodies.expr(expr_id).data) {
             .closure => |closure| closure.captures,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => &.{},
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => &.{},
         };
     }
 
@@ -24092,7 +24165,7 @@ const NestedProcSiteBuilder = struct {
             try site_by_expr.put(allocator, expr_id, @intCast(index));
             switch (self.checked_bodies.expr(expr_id).data) {
                 .closure => |closure| try site_by_expr.put(allocator, closure.lambda, @intCast(index)),
-                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => {},
             }
         }
 
@@ -26095,6 +26168,7 @@ fn publishLiteralConversionRoots(
             .anno_only,
             .break_,
             .return_,
+            .row_coerce,
             .for_,
             .hosted_lambda,
             .run_low_level,
@@ -26184,6 +26258,7 @@ fn publishLiteralConversionRoots(
             .anno_only,
             .break_,
             .return_,
+            .row_coerce,
             .for_,
             .hosted_lambda,
             .run_low_level,
@@ -27346,6 +27421,7 @@ pub fn pairCheckedPlatform(
             .anno_only,
             .break_,
             .return_,
+            .row_coerce,
             .for_,
             .hosted_lambda,
             .run_low_level,
@@ -28312,7 +28388,7 @@ fn checkedTypeHasNoReachableCallableSlots(
 }
 
 /// Public `ComptimeRootId` declaration.
-pub const ComptimeRootId = enum(u32) { _ };
+pub const ComptimeRootId = checked_ids.ComptimeRootId;
 
 /// Public `CompileTimeRootKind` declaration.
 pub const CompileTimeRootKind = enum {
@@ -29376,6 +29452,7 @@ fn checkedExprContains(
                 },
                 .tag => |tag| for (tag.args) |arg| try pending.append(allocator, .{ .expr = arg }),
                 .nominal => |nominal| try pending.append(allocator, .{ .expr = nominal.backing_expr }),
+                .row_coerce => |coerce| try pending.append(allocator, .{ .expr = coerce.value }),
                 .closure => |closure| try pending.append(allocator, .{ .expr = closure.lambda }),
                 .lambda => |lambda| {
                     if (patterns) for (lambda.args) |arg| try pending.append(allocator, .{ .pattern = arg });
@@ -34560,6 +34637,7 @@ pub const CheckedModuleArtifact = struct {
                     .anno_only,
                     .break_,
                     .return_,
+                    .row_coerce,
                     .for_,
                     .hosted_lambda,
                     .run_low_level,
@@ -40277,8 +40355,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x22, 0x1E, 0xDC, 0xAA, 0xFE, 0xF0, 0xDA, 0xA0, 0x8F, 0x11, 0xF2, 0x70, 0x4B, 0xE9, 0xED, 0x93,
-        0x7C, 0x88, 0x20, 0xB5, 0xB8, 0xD3, 0x0C, 0xF7, 0x76, 0xBB, 0xCC, 0xCE, 0xF0, 0xA0, 0xB9, 0xF7,
+        0xCB, 0x93, 0x2F, 0x32, 0xE6, 0x50, 0x9F, 0x7C, 0x31, 0xAD, 0x36, 0x9F, 0xDB, 0x72, 0x98, 0xB3,
+        0xA6, 0x9E, 0x0F, 0x89, 0x51, 0x93, 0x19, 0x10, 0x96, 0x60, 0x8C, 0x91, 0x91, 0x79, 0x08, 0x33,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
