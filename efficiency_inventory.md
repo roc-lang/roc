@@ -31,15 +31,17 @@ measured with every fix below applied:
 | Workload | Baseline | This branch | Change |
 | --- | ---: | ---: | ---: |
 | `roc check -j1 package/main.roc` (roc-pg) | 266.28 G | 216.19 G | -18.8% |
-| `roc build --opt=dev examples/query.roc` | 244.83 G | 222.54 G | -9.1% |
-| `roc build examples/query.roc` (LLVM) | 524.75 G | 344.94 G | -34.3% |
+| `roc build --opt=dev examples/query.roc` | 244.83 G | 223.02 G | -8.9% |
+| `roc build examples/query.roc` (LLVM) | 524.75 G | 340.51 G | -35.1% |
 | `roc test test/fx/issue8826_full.roc` | 141.4 M | 139.9 M | -1.1% |
 
 Peak resident memory (`/usr/bin/time -f %M`) of `roc check -j1` on roc-pg:
 3.16 GB on the baseline, 2.66 GB on this branch (-16%).
 
-Validation: the module unit tests of every touched module, the lint gates,
-and all CLI suites (platforms, echo, subcommands, glue: 2198 tests) pass.
+Validation: every `run-test-zig-*` step except MiniCI's, the snapshot check,
+the lint gates, and all CLI suites (platforms, echo, subcommands, glue: 2198
+tests) pass; generated `.text` is byte-identical to the baseline's for both
+backends.
 
 ## Method
 
