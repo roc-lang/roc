@@ -574,10 +574,6 @@ test "normal native source certificates reload only against current checked auth
                 .cpu_level = .default,
                 .hot_reload = false,
                 .default_platform_runtime = false,
-                .dict_seed_mode = .runtime,
-                .hooks_enabled = false,
-                .initialize_boxy_runtime = false,
-                .static_data_readonly = false,
             },
             .source_events = &.{.{
                 .data_name = "event",
@@ -1004,10 +1000,9 @@ test "Pack18 literal projection retains producer declarations after source retir
             \\    value = Test.helper(0.U64)
             \\    helper : a -> U64
             \\    helper = |_unused| {
-            \\        captured = 3.U64
             \\        Local(t) := [Local(U64)].{
             \\            from_numeral : Numeral -> Try(Local(t), [InvalidNumeral(Str)])
-            \\            from_numeral = |_| Ok(Local(captured))
+            \\            from_numeral = |_| Ok(Local(3.U64))
             \\        }
             \\        literal : Local(a)
             \\        literal = 42

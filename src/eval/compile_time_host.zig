@@ -867,7 +867,7 @@ test "source event adapter resets partial frame state after known frame allocati
     // Reserve the presence push independently of arena chunk sizes so the next
     // allocation fails exactly at the known-frame push.
     var presence_storage: [1]bool = undefined;
-    host.source_event_frames = .{ .items = presence_storage[0..0], .capacity = presence_storage.len };
+    host.source_event_frames = .initBuffer(&presence_storage);
     const frame: SourceEvents.Descriptor = .{
         .header = .{ .kind = @backingInt(SourceEvents.Kind.call_enter) },
         .source = .{ .has_location = 1, .region = .{ .start = 12, .end = 24 }, .line = 7, .column = 9 },

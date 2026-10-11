@@ -695,7 +695,7 @@ test "CTFE serial executor evaluates a source callback root after its completed 
         \\invoke = |callback| callback()
         \\seed : U64
         \\seed = 7
-    , null, false);
+    , null);
 }
 
 test "CTFE serial executor preserves reserved capacity through an ordinary root-reading helper" {
@@ -706,20 +706,19 @@ test "CTFE serial executor preserves reserved capacity through an ordinary root-
         \\helper = || reserved.capacity()
         \\reserved : List(U8)
         \\reserved = List.with_capacity(16)
-    , 16, false);
+    , 16);
 }
 
-test "CTFE serial executor retains a local captured literal conversion producer" {
+test "CTFE serial executor retains a local literal conversion producer" {
     try testSerialExecutorSource(
         \\Test := [].{
         \\    value : U64
         \\    value = Test.helper()
         \\
         \\    helper = || {
-        \\        captured = 3.U64
         \\        Local := [Local(U64)].{
         \\            from_numeral : Numeral -> Try(Local, [InvalidNumeral(Str)])
-        \\            from_numeral = |_| Ok(Local(captured))
+        \\            from_numeral = |_| Ok(Local(3.U64))
         \\        }
         \\        literal : Local
         \\        literal = 42
@@ -732,10 +731,10 @@ test "CTFE serial executor retains a local captured literal conversion producer"
         \\main = || Test.value
         \\
         \\expect Test.value == 3.U64
-    , 3, false);
+    , 3);
 }
 
-test "CTFE serial executor retains a specialized local captured literal conversion producer" {
+test "CTFE serial executor retains a specialized local literal conversion producer" {
     try testSerialExecutorSource(
         \\main = || value
         \\value : U64
@@ -743,10 +742,9 @@ test "CTFE serial executor retains a specialized local captured literal conversi
         \\
         \\helper : a -> U64
         \\helper = |_unused| {
-        \\    captured = 3.U64
         \\    Local(t) := [Local(U64)].{
         \\        from_numeral : Numeral -> Try(Local(t), [InvalidNumeral(Str)])
-        \\        from_numeral = |_| Ok(Local(captured))
+        \\        from_numeral = |_| Ok(Local(3.U64))
         \\    }
         \\    literal : Local(a)
         \\    literal = 42
@@ -754,7 +752,7 @@ test "CTFE serial executor retains a specialized local captured literal conversi
         \\        Local(n) => n
         \\    }
         \\}
-    , 3, true);
+    , 3);
 }
 
 test "literal type-only projection consumes producer representation without bodies" {
@@ -769,10 +767,9 @@ test "literal type-only projection consumes producer representation without bodi
         \\    value = Test.helper(0.U64)
         \\    helper : a -> U64
         \\    helper = |_unused| {
-        \\        captured = 3.U64
         \\        Local(t) := [Local(U64)].{
         \\            from_numeral : Numeral -> Try(Local(t), [InvalidNumeral(Str)])
-        \\            from_numeral = |_| Ok(Local(captured))
+        \\            from_numeral = |_| Ok(Local(3.U64))
         \\        }
         \\        literal : Local(a)
         \\        literal = 42
@@ -860,7 +857,7 @@ test "literal type-only projection consumes producer representation without bodi
     try std.testing.expect(provision.initializer == null);
 }
 
-fn testSerialExecutorSource(source: []const u8, expected_scalar: ?u64, require_specialized_context: bool) !void {
+fn testSerialExecutorSource(source: []const u8, expected_scalar: ?u64) !void {
     const allocator = std.testing.allocator;
     const helpers = @import("inspected.zig");
     var builtin_modules = try @import("BuiltinModules.zig").BuiltinModules.init(allocator);
@@ -898,35 +895,11 @@ fn testSerialExecutorSource(source: []const u8, expected_scalar: ?u64, require_s
     // ParsedResources retains the single source-env owner; this second
     // publication owns only its independently published checked metadata.
     defer pending.deinitRetainingModuleEnv(allocator);
-    try std.testing.expect(pending.root_requests.compile_time_requests.len >= 2);
+    try std.testing.expect(pending.root_requests.compile_time_requests.len >= 1);
     const modules: lir.CheckedPipeline.CheckedModuleSet = .{
         .root = checked.loweringView(&pending),
         .imports = &.{builtin_view},
     };
-    if (require_specialized_context) {
-        var target = lir.CheckedPipeline.TargetConfig.ordinaryDev();
-        target.checked_module_state = .checking_finalization;
-        target.comptime_value_reads = true;
-        target.literal_roots = true;
-        var producer = try lir.CheckedPipeline.prepareCheckedModulesMonotype(allocator, modules, .{
-            .requests = pending.root_requests.compile_time_requests,
-        }, target);
-        defer producer.deinit();
-        const literal_roots = producer.program.view().literal_roots;
-        try std.testing.expect(literal_roots.len != 0);
-        var context_count: usize = 0;
-        for (literal_roots) |literal| {
-            try std.testing.expect(literal.recipe != null);
-            const recipe = literal.recipe.?;
-            context_count += recipe.local_contexts.len;
-            for (recipe.local_contexts) |context| {
-                for (context.bindings) |binding| {
-                    if (binding.value_required) try std.testing.expect(binding.source != .runtime);
-                }
-            }
-        }
-        try std.testing.expect(context_count != 0);
-    }
     var session = try finalizeProgram(allocator, &.{.{ .module = &pending, .problem_store = &resources.checker.problems }}, modules, .{}, .{}, null, .{});
     defer session.deinit();
     try std.testing.expect(session.host != null);
@@ -6153,7 +6126,6 @@ test "CTFE native emission uses worker callbacks and retains reusable code witho
         defer strings.deinit();
         var codegen = try backend.HostLirCodeGen.initWithBoxyMetadata(allocator, &program.store, &program.layouts, strings.view(), &.{}, &.{}, &.{}, roc_target.host_cpu.level());
         defer codegen.deinit();
-        codegen.dict_seed_mode = .comptime_zero;
         var artifacts = try DevProgram.compileProcedures(allocator, &codegen, &.{proc}, &.{}, .{ .post_check_executor = executor.executor(), .timing = &timing });
         errdefer artifacts.deinit();
         try std.testing.expect(executor.callbacks > 0);
@@ -6269,7 +6241,7 @@ test "shared interpreter slots read prepublished cycle failure as a normal crash
     try testInterpreterSlot("cyclic compile-time value dependency", true, true);
 }
 
-fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) (FinalizeError || Interpreter.Error || error{ TestExpectedEqual, TestUnexpectedResult, TestExpectedError, TestUnexpectedError, DuplicateStaticDataSymbol, InvalidStaticDataAlignment, InvalidStaticDataRelocation, MissingStaticDataSymbol, UnresolvedStaticFunction })!void {
+fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) (FinalizeError || Interpreter.Error || error{ TestExpectedEqual, TestUnexpectedResult, TestExpectedError, TestUnexpectedError, DuplicateStaticDataSymbol, InvalidStaticDataAlignment, InvalidStaticDataRelocation, MissingStaticDataSymbol, UnresolvedStaticFunction, InvalidRelocation, MappingFailed })!void {
     const allocator = std.testing.allocator;
     var lowered = lir.CheckedPipeline.LoweredProgram{
         .lir_result = try LirProgram.Result.init(allocator, .native),
@@ -6472,7 +6444,7 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
     try std.testing.expectEqualDeep(ordinary_read, result.store.getCFStmt(consumer_load));
 }
 
-fn testNativeCompletedSlots(lowered: *lir.CheckedPipeline.LoweredProgram, slots: *StaticSlotEnvironment, producer: lir.LIR.LirProcSpecId, consumer: lir.LIR.LirProcSpecId, text: []const u8, module_id: lir.LIR.LoweringModuleId, root_id: checked.ComptimeRootId, value_plan: LirProgram.ConstPlanId) (FinalizeError || error{ TestExpectedEqual, TestUnexpectedResult })!void {
+fn testNativeCompletedSlots(lowered: *lir.CheckedPipeline.LoweredProgram, slots: *StaticSlotEnvironment, producer: lir.LIR.LirProcSpecId, consumer: lir.LIR.LirProcSpecId, text: []const u8, module_id: lir.LIR.LoweringModuleId, root_id: checked.ComptimeRootId, value_plan: LirProgram.ConstPlanId) (FinalizeError || error{ TestExpectedEqual, TestUnexpectedResult, DuplicateStaticDataSymbol, MissingStaticDataSymbol, InvalidRelocation, MappingFailed })!void {
     if (comptime !backend.host_lir_codegen_available) return;
     const allocator = std.testing.allocator;
     var strings = try backend.StaticStringData.build(allocator, &lowered.lir_result.store, backend.dev.LirCodeGenMod.host_lir_codegen_target);

@@ -884,7 +884,7 @@ test "frozen root transcode changes callable carrier using producer member and c
     var other_template = finite_template;
     other_template.frozen_fn = 13;
     other_template.frozen_context.?.source = 13;
-    const capture = Program.CaptureSlot{ .id = @fromBackingInt(@intCast(5)), .slot = 0, .ty = undefined, .plan = str_plan, .storage = .value };
+    const capture = Program.CaptureSlot{ .id = @fromBackingInt(@intCast(5)), .slot = 0, .ty = undefined, .plan = str_plan, .storage = .value, .kind = .lexical };
     const drop = lir.LIR.ErasedCallableOnDrop{ .rc_helper = .{ .op = .host_drop, .layout_idx = .str } };
     const erased_captures = try allocator.dupe(Program.CaptureSlot, &.{capture});
     const erased_entries = try allocator.dupe(Program.ErasedFn, &.{.{ .entry = proc, .capture_layout = .str, .template = template, .captures = erased_captures, .on_drop = drop }});
