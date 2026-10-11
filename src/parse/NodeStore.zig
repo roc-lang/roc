@@ -509,8 +509,13 @@ pub fn addNumericLiteral(
     text: []const u8,
     kind: NumericLiteral.Kind,
 ) std.mem.Allocator.Error!NumericLiteral.Idx {
-    const parsed = try NumericLiteral.parse(store.gpa, text, kind);
-    defer parsed.deinit(store.gpa);
+    // The parse's digit buffers die here once copied into the store, so the
+    // usual literal parses entirely on this frame.
+    var parse_buffer: [1024]u8 align(@alignOf(usize)) = undefined;
+    var parse_state = std.heap.BufferFirstAllocator.init(&parse_buffer, store.gpa);
+    const parse_allocator = parse_state.allocator();
+    const parsed = try NumericLiteral.parse(parse_allocator, text, kind);
+    defer parsed.deinit(parse_allocator);
 
     const digits_start: u32 = @intCast(store.numeric_literal_bytes.items.len);
     try store.numeric_literal_bytes.appendSlice(store.gpa, parsed.before);

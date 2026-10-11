@@ -513,6 +513,12 @@ stages it touches; the instruction-count effect is reported in "Results".
     `braceHasFieldComma` skips matched groups through the bracket table.
     Snapshots are unchanged.
 
+79. Parser: open scopes share one declaration stack (each scope's run sits on
+    top while it is open and moves to `scope_decl_ids` when it closes; an
+    invariant checks a declaration joins the innermost scope) instead of one
+    list per scope; and numeric-literal parsing takes its temporaries from a
+    stack-first buffer. Snapshots and counts are unchanged.
+
 ## Findings from profiling
 
 These were found by profiling the ReleaseFast compiler with
@@ -1649,7 +1655,7 @@ X: widen the packed `Layout` so its indices are 32 bits (a 64-bit packed layout,
 - category A/D; runs per numeric literal token (expressions and patterns; `Parser.zig:3529,3566,6543,6588`); impact medium (literals are 3-8% of tokens in typical code; each …; risk low-medium
 - Finding: `NodeStore.addNumericLiteral` calls `NumericLiteral.parse`, which returns `Owned` with heap-allocated `before`/`after` slices, then copies both into `numeric_literal_bytes` (lines 516-517) and frees them (`parsed.deinit`). Inside `parse`: `parseExactInteger` builds a temporary `ArrayList` in `intDigitsToBase256` (line 873) and then `bytesLeToBe` allocates the result (line 975); even the empty `after` is …
 - Fix: give `NumericLiteral.parse` an output writer that appends base-256 digits directly to `NodeStore.numeric_literal_bytes` (reserve, write little-endian into the tail, reverse in place), reuse two store-owned scratch `ArrayList(u8)` for `before_raw`/`after_raw`, compute `compactFrac` from the already-computed `DecimalParts` instead of reparsing, and pass the suffix split from the parser into `parse`. Verify with the …
-- Status: open
+- Status: partly fixed (fix 79): the parse's temporaries come from a stack-first buffer; the digits are still copied into the store
 
 ### src/parse/NumericLiteral.zig:117-143 + src/parse/NodeStore.zig:361: `NumericLiteral.Stored` is ~64 bytes with 16-byte alignment, pre-reserved at tokens/8
 - category C/G; runs per numeric literal (storage); per module (reservation); impact low-medium (memory); risk low
@@ -1721,7 +1727,7 @@ X: widen the packed `Layout` so its indices are 32 bits (a 64-bit packed layout,
 - category F/D; runs per scope enter/exit and per declaration; impact low-medium; risk low
 - Finding: `enterScope` appends an empty `ArrayListUnmanaged(DeclIdx)` to `scope_decl_builders` (line 339), `addDecl` appends to that per-scope list (384), and `exitScope` `appendSlice`s it into `scope_decl_ids` (356): an ArrayList-of-ArrayLists whose contents are copied once and whose storage lives until `deinit` (279-281). Scopes are strictly nested and exit LIFO, which is exactly the "scratch + spanFrom" pattern the …
 - Fix: a single scratch `ArrayList(DeclIdx)`: on `addDecl` push; on `exitScope` move the entries above the scope's recorded scratch top into `scope_decl_ids` and truncate. One allocation instead of one per scope, no retained per-scope lists.
-- Status: open
+- Status: fixed (fix 79)
 
 ### src/parse/DeclIndex.zig:239,244,385,399: `decl_by_statement` / `type_path_by_statement` hash maps keyed by dense statement node index
 - category B; runs per declaration (`put`) and per canonicalized statement (`get`); impact low-medium; risk low

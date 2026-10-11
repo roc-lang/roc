@@ -236,7 +236,13 @@ gpa: std.mem.Allocator,
 scopes: std.ArrayList(Scope),
 decls: std.ArrayList(Decl),
 scope_decl_ids: std.ArrayList(DeclIdx),
-scope_decl_builders: std.ArrayList(std.ArrayListUnmanaged(DeclIdx)),
+/// Declarations of the open scopes, innermost last; a declaration always
+/// joins the innermost open scope, so each scope's run sits on top while it
+/// is open and moves to `scope_decl_ids` when it closes.
+open_scope_decls: std.ArrayList(DeclIdx),
+/// Where each open scope's run in `open_scope_decls` starts, parallel to
+/// `scope_stack`.
+open_scope_decl_starts: std.ArrayList(u32),
 decl_by_statement: collections.DenseMap(u32, DeclIdx),
 type_dependencies: std.ArrayList(TypeDependency),
 type_dependency_segments: std.ArrayList(Ident.Idx),
@@ -258,7 +264,8 @@ pub fn init(gpa: std.mem.Allocator) DeclIndex {
         .scopes = .empty,
         .decls = .empty,
         .scope_decl_ids = .empty,
-        .scope_decl_builders = .empty,
+        .open_scope_decls = .empty,
+        .open_scope_decl_starts = .empty,
         .decl_by_statement = .init(gpa),
         .type_dependencies = .empty,
         .type_dependency_segments = .empty,
@@ -277,9 +284,6 @@ pub fn init(gpa: std.mem.Allocator) DeclIndex {
 
 /// Release all declaration-index storage.
 pub fn deinit(self: *DeclIndex) void {
-    for (self.scope_decl_builders.items) |*builder| {
-        builder.deinit(self.gpa);
-    }
     for (self.scopes.items) |*scope| {
         deinitNameBuckets(Ident.Idx, self.gpa, &scope.value_decls);
         deinitNameBuckets(Ident.Idx, self.gpa, &scope.type_decls);
@@ -287,7 +291,8 @@ pub fn deinit(self: *DeclIndex) void {
     }
     deinitNameBuckets(AssocValue, self.gpa, &self.assoc_value_decls);
     deinitNameBuckets(TypePathIdx, self.gpa, &self.assoc_owner_value_decls);
-    self.scope_decl_builders.deinit(self.gpa);
+    self.open_scope_decls.deinit(self.gpa);
+    self.open_scope_decl_starts.deinit(self.gpa);
     self.scopes.deinit(self.gpa);
     self.decls.deinit(self.gpa);
     self.scope_decl_ids.deinit(self.gpa);
@@ -337,8 +342,9 @@ pub fn enterScope(
         .import_alias_decls = .{},
         .region = region,
     });
-    try self.scope_decl_builders.append(self.gpa, .empty);
+    try self.open_scope_decl_starts.ensureUnusedCapacity(self.gpa, 1);
     try self.scope_stack.append(self.gpa, idx);
+    self.open_scope_decl_starts.appendAssumeCapacity(@intCast(self.open_scope_decls.items.len));
     return idx;
 }
 
@@ -350,12 +356,13 @@ pub fn exitScope(
 ) std.mem.Allocator.Error!void {
     std.debug.assert(self.scope_stack.items.len > 0);
     std.debug.assert(self.scope_stack.items[self.scope_stack.items.len - 1] == idx);
-    _ = self.scope_stack.pop();
-
+    const run_start = self.open_scope_decl_starts.items[self.open_scope_decl_starts.items.len - 1];
     const start: u32 = @intCast(self.scope_decl_ids.items.len);
-    const builder = &self.scope_decl_builders.items[@backingInt(idx)];
-    try self.scope_decl_ids.appendSlice(self.gpa, builder.items);
+    try self.scope_decl_ids.appendSlice(self.gpa, self.open_scope_decls.items[run_start..]);
     const end: u32 = @intCast(self.scope_decl_ids.items.len);
+    self.open_scope_decls.shrinkRetainingCapacity(run_start);
+    _ = self.open_scope_decl_starts.pop();
+    _ = self.scope_stack.pop();
     var scope = self.scopes.items[@backingInt(idx)];
     scope.decls = .{ .start = start, .len = end - start };
     scope.region = region;
@@ -380,9 +387,10 @@ pub fn setScopeOwnerTypePath(self: *DeclIndex, idx: ScopeIdx, owner_type_path: ?
 
 /// Append a declaration to its owning scope.
 pub fn addDecl(self: *DeclIndex, decl: Decl) std.mem.Allocator.Error!DeclIdx {
+    if (self.currentScope() != decl.scope) base.invariant("parser declaration joined a scope other than the innermost open one", .{});
     const idx: DeclIdx = @fromBackingInt(@intCast(self.decls.items.len));
     try self.decls.append(self.gpa, decl);
-    try self.scope_decl_builders.items[@backingInt(decl.scope)].append(self.gpa, idx);
+    try self.open_scope_decls.append(self.gpa, idx);
     try self.decl_by_statement.put(decl.statement, idx);
     if (decl.name_ident) |ident| {
         if (declKindMayBindValue(decl.kind)) {
