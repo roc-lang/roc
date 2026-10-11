@@ -30,14 +30,20 @@ measured with every fix below applied:
 
 | Workload | Baseline | This branch | Change |
 | --- | ---: | ---: | ---: |
-| `roc check -j1 package/main.roc` (roc-pg) | 266.28 G | 214.18 G | -19.6% |
-| `roc build --opt=dev examples/query.roc` | 244.83 G | 220.49 G | -9.9% |
-| `roc build examples/query.roc` (LLVM) | 524.75 G | 337.97 G | -35.6% |
-| `roc test test/fx/issue8826_full.roc` | 141.4 M | 139.9 M | -1.1% |
+| `roc check -j1 package/main.roc` (roc-pg) | 178.71 G | 135.22 G | -24.3% |
+| `roc build --opt=dev examples/query.roc` | 244.37 G | 220.65 G | -9.7% |
+| `roc build examples/query.roc` (LLVM) | 522.52 G | 337.73 G | -35.4% |
 
-Peak resident memory (`/usr/bin/time -f %M`) of `roc check -j1` on roc-pg:
-3.09-3.15 GB on the baseline, 2.65 GB on this branch (about -15%), each the
-minimum of five runs.
+The baseline is the tip of #12186 (demand-driven compile-time evaluation,
+`b3aa56926d`), which this branch merges; both binaries were built and measured
+the same day. Against the earlier `main` baseline (`rel-base`), before that
+merge, the branch measured `roc check` 266.28 G to 214.16 G (-19.6%), the dev
+build 244.83 G to 220.5 G, and the LLVM build 524.75 G to 338.1 G, and
+`roc test test/fx/issue8826_full.roc` 141.4 M to 139.9 M.
+
+Peak resident memory (`/usr/bin/time -f %M`) of `roc check -j1` on roc-pg,
+median of six alternating runs: 2.25 GB on the baseline, 1.94 GB on this
+branch (-14%).
 
 Validation: every `run-test-zig-*` step except MiniCI's, the snapshot check,
 the lint gates, and all CLI suites (platforms, echo, subcommands, glue: 2198
