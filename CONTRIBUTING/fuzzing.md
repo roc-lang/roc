@@ -4,25 +4,65 @@ Roc uses [zig-afl-kit](https://github.com/bhansconnect/zig-afl-kit) for fuzzing,
 
 ## Prerequisites
 
-Install AFL++ on your system:
+### Ubuntu/Debian
+
+Linux fuzz builds pass Zig's LLVM bitcode to `afl-cc`. Its Clang must be at least
+as new as Zig's LLVM version: the project's Zig 0.17.0 uses LLVM 22. Older
+distribution packages of AFL++ cannot read this bitcode, so build AFL++ against
+LLVM 22 using [apt.llvm.org](https://apt.llvm.org/):
 
 ```bash
-# Ubuntu/Debian
-sudo apt install afl++
+sudo apt update
+sudo apt install build-essential git wget gnupg lsb-release software-properties-common
 
-# macOS
+# Install Clang/LLVM 22 and the development files needed to build AFL++.
+wget https://apt.llvm.org/llvm.sh
+chmod +x llvm.sh
+sudo ./llvm.sh 22
+sudo apt install llvm-22-dev
+```
+
+In a directory outside your Roc checkout, build and install AFL++ following its
+[source build instructions](https://github.com/AFLplusplus/AFLplusplus/blob/stable/docs/INSTALL.md):
+
+```bash
+git clone --depth 1 --branch stable https://github.com/AFLplusplus/AFLplusplus.git
+(
+    cd AFLplusplus
+    make source-only LLVM_CONFIG=llvm-config-22 NO_PYTHON=1 NO_NYX=1
+    sudo make install LLVM_CONFIG=llvm-config-22 NO_PYTHON=1 NO_NYX=1
+)
+```
+
+The build summary must include `[+] LLVM mode successfully built`. Python and
+Nyx support are disabled because Roc's source fuzz targets do not need them.
+Keep `LLVM_CONFIG=llvm-config-22` on the install command too, since installation
+can rebuild the LLVM instrumentation.
+
+Check which compiler will consume Zig's bitcode:
+
+```bash
+zig cc --version
+afl-cc --version
+```
+
+The Clang version reported by `afl-cc` must be 22 or newer for Zig 0.17.0. If it
+reports an older version, use `command -v afl-cc` to check that your `PATH` selects
+the new installation (by default `/usr/local/bin/afl-cc`). Recheck these versions
+when upgrading Zig.
+
+### macOS
+
+```bash
 brew install afl++
-
-# Verify installation
-afl-fuzz --version
 ```
 
 ## Building Fuzz Targets
 
-Build the fuzz executables with:
+From your Roc checkout, build the fuzz executables with:
 
 ```bash
-zig build -Dfuzz
+zig build -j2 -Dfuzz
 ```
 
 This builds:
@@ -41,7 +81,7 @@ Generate a seed corpus from the snapshot tests:
 
 ```bash
 mkdir -p /tmp/corpus
-zig build run-snapshot-tool -- --fuzz-corpus /tmp/corpus
+zig build -j2 run-snapshot-tool -- --fuzz-corpus /tmp/corpus
 ```
 
 This extracts source code from all snapshot tests. For REPL snapshots, it strips the `»` delimiters and creates separate corpus files for each expression.
@@ -124,7 +164,7 @@ Keep your corpus between sessions for incremental improvement:
 
 ```bash
 # First run - generate initial corpus
-zig build run-snapshot-tool -- --fuzz-corpus ~/roc-fuzz-corpus
+zig build -j2 run-snapshot-tool -- --fuzz-corpus ~/roc-fuzz-corpus
 
 # Subsequent runs - AFL++ will add new interesting inputs
 afl-fuzz -i ~/roc-fuzz-corpus -o /tmp/parse-out zig-out/bin/fuzz-parse
