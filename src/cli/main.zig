@@ -16953,13 +16953,14 @@ fn recordDevTestExecution(reporter: *progress.Reporter, timing: *const eval.test
     );
 }
 
-fn demandCounters(demand: lir.CheckedPipeline.DemandMetrics) [12]progress.Counter {
+fn demandCounters(demand: lir.CheckedPipeline.DemandMetrics) [13]progress.Counter {
     return .{
         .{ .name = "Program roots", .count = demand.program_roots },
         .{ .name = "Discovery roots", .count = demand.discovery_roots },
         .{ .name = "Checked modules", .count = demand.modules },
-        .{ .name = "Literal source modules", .count = demand.source_modules },
-        .{ .name = "Literal reaching modules", .count = demand.reaching_modules },
+        .{ .name = "Procedure templates", .count = demand.templates },
+        .{ .name = "Literal source templates", .count = demand.source_templates },
+        .{ .name = "Literal reaching templates", .count = demand.reaching_templates },
         .{ .name = "Custom literal types", .count = demand.custom_literal_types },
         .{ .name = "Discovery roots lowered", .count = demand.monotype.discovery_roots },
         .{ .name = "Discovery bodies", .count = demand.monotype.discovery_bodies },

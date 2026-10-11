@@ -732,8 +732,9 @@ pub fn finalizeProgram(
                 .program_roots = program_roots.requests.len,
                 .discovery_roots = selected.items.len,
                 .modules = counters.modules,
-                .source_modules = counters.source_modules,
-                .reaching_modules = counters.reaching_modules,
+                .templates = counters.templates,
+                .source_templates = counters.source_templates,
+                .reaching_templates = counters.reaching_templates,
                 .custom_literal_types = counters.custom_literal_types,
             });
         }

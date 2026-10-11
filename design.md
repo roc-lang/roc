@@ -1771,25 +1771,37 @@ continue its program does none of it. Its program roots are *discovery
 roots*, specialized only to find those literal roots.
 
 Which bodies can register a literal root is decided from explicit checked
-data (`postcheck.LiteralDemand`). A *custom literal type* is a nominal with a
-`from_numeral` or `from_quote` method of its own. A checked module is a
-*source* when one of its checked expressions is a custom interpolation; or a
-literal whose conversion root no evaluation of this compilation requests and
-whose payload is not stored; or a numeral (quote) whose conversion depends on
-its instance, when the program has a custom numeral (quote) type. Every other
-literal is either served by its checked root or converts at a builtin type
-directly at every instance. A module *reaches* a literal root when it is a
-source or calls into a module that reaches one, through an import or through
-a platform requirement its app fills. A specialization of a procedure from a
-module that reaches no literal root, at types naming no nominal of a reaching
-module, with dispatch evidence selecting no procedure of a reaching module,
-cannot register a literal root: every body it would lower belongs to a
-non-reaching module, which has no literal that registers one at any
-instance, and the methods its types can select by structural derivation or
-synthesized evidence belong to non-reaching modules too. Dispatch evidence
-that selects a local procedure, or abstract scheme evidence, is never treated
-as non-reaching. The analysis over-approximates; it never consults procedure
-names, syntax, or emitted code.
+data (`postcheck.LiteralDemand`), per checked procedure template. The
+analysis is a graph over templates, the checked types their bodies use,
+nominal types, and the builtin types, with each node carrying flags for what
+it can contribute to a literal root. A template's own flags are *strict*
+when its body has a custom interpolation, or a literal whose conversion root
+no evaluation of this compilation requests and whose payload is not stored,
+or a read of a constant that is neither stored nor evaluated (its
+computation lowers in place); *dependent numeral* (*quote*) when its body has
+a numeral (quote) whose conversion depends on its instance. A nominal's own
+flags are *custom numeral* (*quote*) when it has a `from_numeral`
+(`from_quote`) method of its own. A template reaches the templates its
+resolved value references and its direct dispatch plans (with their nested
+evidence) select, and the types of its signature, references, and plans. A
+type reaches its component types and the nominals it names. A nominal, and
+the builtin types, reach the procedures of their methods whose names
+dispatch can select by type rather than by an explicit plan: names of
+where-clause obligations, evidence-dependent and structural plans, generated
+codec calls, and iterator loops, and `to_inspect`. Every other method is
+reached only through a plan that selects it. A node's reach flags are its
+own and those of every node it reaches.
+
+A specialization can register a literal root only when the reach flags of
+its template, the types of its request, and its dispatch evidence include
+*strict*, or a dependent kind together with the custom type of that kind:
+every body it would lower is reached from its template, every type a
+dependent conversion is instantiated at is named by the request or by a
+reached body, and every method dispatch can select is reached through the
+types it dispatches on. Dispatch evidence that selects a local procedure,
+abstract scheme evidence, and a template outside the lowering's modules are
+never bounded. The analysis over-approximates; it never consults procedure
+names other than method names, syntax, or emitted code.
 
 Discovery roots that cannot register a literal root are not specialized at
 all. Each Monotype body records the demand it is lowered for: `evaluation`
@@ -1829,8 +1841,8 @@ same object-cache keys in either program, so compiled compile-time code
 serves both.
 
 `--timings` reports these decisions under "Demand-driven specialization":
-the program roots offered, the discovery roots kept, the analysis's source
-and reaching modules and custom literal types, and the discovery bodies,
+the program roots offered, the discovery roots kept, the analysis's
+templates, source and reaching templates, and custom literal types, and the discovery bodies,
 parked, unparked, and upgraded requests, and never-run stubs.
 
 #### Compile-Time Object Packs

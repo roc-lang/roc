@@ -7432,17 +7432,20 @@ const Builder = struct {
     ) Allocator.Error!bool {
         const demand = self.literal_demand orelse
             Common.invariant("discovery request reached Monotype without its literal demand");
-        const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
-        if (demand.moduleReaches(view.key)) return false;
-        if (try self.monoTypeReachesLiteral(demand, fn_ty)) return false;
+        var flags = demand.templateFlags(template_ref);
+        flags = flags.merge(try self.monoTypeLiteralFlags(demand, fn_ty));
         if (subst) |slots| for (slots) |slot| switch (slot) {
-            .ty => |ty| if (try self.monoTypeReachesLiteral(demand, ty)) return false,
+            .ty => |ty| flags = flags.merge(try self.monoTypeLiteralFlags(demand, ty)),
             .checked_error => {},
         };
-        return !try self.specEvidenceReachesLiteral(demand, evidence);
+        flags = flags.merge(try self.specEvidenceLiteralFlags(demand, evidence));
+        return !flags.reachesLiteralRoot();
     }
 
-    fn monoTypeReachesLiteral(self: *Builder, demand: *const LiteralDemand.LiteralDemand, root: Type.TypeId) Allocator.Error!bool {
+    /// The reach flags of the nominals and builtin types a request type
+    /// names (`LiteralDemand`).
+    fn monoTypeLiteralFlags(self: *Builder, demand: *const LiteralDemand.LiteralDemand, root: Type.TypeId) Allocator.Error!LiteralDemand.Flags {
+        var flags: LiteralDemand.Flags = .{};
         const types = self.program.types.view();
         var pending = std.ArrayList(Type.TypeId).empty;
         defer pending.deinit(self.allocator);
@@ -7452,9 +7455,15 @@ const Builder = struct {
         while (pending.pop()) |ty| {
             if ((try seen.getOrPut(ty)).found_existing) continue;
             switch (types.get(ty)) {
-                .primitive, .zst, .erased => {},
+                .zst, .erased => {},
+                .primitive => flags = flags.merge(demand.builtinFlags()),
                 .named => |named| {
-                    if (demand.nominalReaches(self.program.names.moduleIdentityBytes(named.def.module))) return true;
+                    flags = flags.merge(demand.nominalFlags(
+                        self.program.names.moduleIdentityBytes(named.def.module),
+                        self.program.names.typeNameText(named.def.type_name),
+                        named.def.source_decl,
+                    ));
+                    if (named.builtin_owner != null) flags = flags.merge(demand.builtinFlags());
                     for (types.span(named.args)) |arg| try pending.append(self.allocator, arg);
                     if (named.backing) |backing| try pending.append(self.allocator, backing.ty);
                 },
@@ -7463,14 +7472,17 @@ const Builder = struct {
                 .tag_union => |tags| for (types.tagSpan(tags)) |tag| {
                     for (types.span(tag.payloads)) |payload| try pending.append(self.allocator, payload);
                 },
-                .list, .box => |elem| try pending.append(self.allocator, elem),
+                .list, .box => |elem| {
+                    flags = flags.merge(demand.builtinFlags());
+                    try pending.append(self.allocator, elem);
+                },
                 .func => |func| {
                     for (types.span(func.args)) |arg| try pending.append(self.allocator, arg);
                     try pending.append(self.allocator, func.ret);
                 },
             }
         }
-        return false;
+        return flags;
     }
 
     /// Complete every body still parked once every body has lowered. Only
@@ -7508,15 +7520,19 @@ const Builder = struct {
         self.parked_spec_jobs.clearRetainingCapacity();
     }
 
-    fn specEvidenceReachesLiteral(self: *Builder, demand: *const LiteralDemand.LiteralDemand, evidence: []const SpecEvidence) Allocator.Error!bool {
+    /// The reach flags of the procedures dispatch evidence selects. A local
+    /// procedure or abstract scheme evidence is not bounded by checked data.
+    fn specEvidenceLiteralFlags(self: *Builder, demand: *const LiteralDemand.LiteralDemand, evidence: []const SpecEvidence) Allocator.Error!LiteralDemand.Flags {
+        var flags: LiteralDemand.Flags = .{};
+        const unbounded: LiteralDemand.Flags = .{ .strict = true };
         var pending = std.ArrayList(SpecEvidence).empty;
         defer pending.deinit(self.allocator);
         try pending.appendSlice(self.allocator, evidence);
         while (pending.pop()) |entry| switch (entry) {
             .target => |target| {
                 switch (target.target.kind) {
-                    .procedure => |procedure| if (demand.moduleReaches(.{ .bytes = procedure.template.artifact.bytes })) return true,
-                    .local_proc => return true,
+                    .procedure => |procedure| flags = flags.merge(demand.templateFlags(procedure.template)),
+                    .local_proc => return unbounded,
                     .structural => {},
                 }
                 switch (target.nested) {
@@ -7529,10 +7545,10 @@ const Builder = struct {
             },
             .structural => |structural| try pending.appendSlice(self.allocator, structural.callable_contracts),
             .from_callable => |from_callable| try pending.appendSlice(self.allocator, from_callable.callable_contracts),
-            .from_scheme => return true,
+            .from_scheme => return unbounded,
             .unreachable_value, .checked_error => {},
         };
-        return false;
+        return flags;
     }
 
     /// Whether a queued specialization completes on the coordinator instead

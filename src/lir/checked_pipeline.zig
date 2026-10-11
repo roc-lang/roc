@@ -243,10 +243,12 @@ pub const DemandMetrics = struct {
     discovery_roots: u64 = 0,
     /// Checked modules the literal-demand analysis read.
     modules: u64 = 0,
-    /// Modules whose own checked data can register a literal root.
-    source_modules: u64 = 0,
-    /// Modules that can reach a literal root.
-    reaching_modules: u64 = 0,
+    /// Procedure templates the literal-demand analysis read.
+    templates: u64 = 0,
+    /// Templates whose own checked data can contribute to a literal root.
+    source_templates: u64 = 0,
+    /// Templates whose specializations can register a literal root.
+    reaching_templates: u64 = 0,
     /// Nominal types with their own literal conversion.
     custom_literal_types: u64 = 0,
     /// Monotype counters; see `postcheck.Monotype.Lower.DemandCounters`.
