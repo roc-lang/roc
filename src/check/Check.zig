@@ -171,6 +171,11 @@ generalizer: Generalizer,
 constraints: Constraint.SafeList,
 /// Return-flow constraints (`return` and `?`) owned by the lambda that produced them.
 return_constraints: std.ArrayListUnmanaged(ReturnConstraint),
+/// Diagnostic provenance: a generated `Err` return's original `?` operand.
+/// Keep occurrence identities, not solved roots, which unification can merge.
+try_return_conditions: collections.DenseMap(Var, CIR.Expr.Idx),
+/// Host origins of unchanged error returns produced by a lambda's plain `?`.
+try_lambda_host_origins: collections.DenseMap(CIR.Expr.Idx, Ident.Idx),
 /// Operands of every early return, owned by the lambda that produced them. A
 /// lambda's result is its body tail *or* one of these, so the constructed-tag
 /// facts a payload closing rests on must see them too.
@@ -703,6 +708,23 @@ host_boundary_annotations: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, void),
 /// `annotation_implicit_open_exts` slices it per annotation for the post-body
 /// audit (`auditImplicitOpenExts`).
 implicit_open_exts: std.ArrayListUnmanaged(ImplicitOpenExt),
+/// Scratch for `computeCoercionReach`: the positions the row coercion
+/// reaches from a value's type, and the positions below one it does not.
+coercion_reach_stack: std.ArrayListUnmanaged(Var) = .empty,
+coercion_reach_seen: std.AutoHashMapUnmanaged(Var, void) = .empty,
+coercion_outside_stack: std.ArrayListUnmanaged(Var) = .empty,
+coercion_outside_seen: std.AutoHashMapUnmanaged(Var, void) = .empty,
+/// Scratch for `widenedValueUseVar`: each reached variable's copy.
+widened_use_copies: std.AutoHashMapUnmanaged(Var, Var) = .empty,
+/// Scratch for `widenedValueUseVar`: one row's tags, gathered along its
+/// extension chain.
+widened_use_tags: std.ArrayListUnmanaged(types_mod.Tag) = .empty,
+/// Every row a use's widening copy re-opened, paired with the value's row it
+/// copies (`WidenedUseRow`). A value's row can still gain tags after a use
+/// copied it (a generated codec's validation adds its error tags during
+/// finalize), so `propagateValueRowsToWidenedUses` carries them into the
+/// copies once constraints settle.
+widened_use_rows: std.ArrayListUnmanaged(WidenedUseRow) = .empty,
 /// The annotation whose definition's body check is about to generate it; its
 /// implicitly opened rows are bounded for the rest of that body check
 /// (`beginBoundedAnnotationRows`).
@@ -1139,8 +1161,10 @@ local_type_context_depths: std.AutoHashMapUnmanaged(CIR.Statement.Idx, u32) = .e
 /// Type declarations being generated, innermost last.
 type_decl_generation_frames: std.ArrayListUnmanaged(TypeDeclGenerationFrame) = .empty,
 /// The right-hand side of each local declaration, by binding pattern. Built on
-/// first use, and only in a module that declares a method in a function body.
+/// first use by local method resolution or diagnostic provenance tracing.
 local_decl_expr_by_pattern: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty,
+/// Whether the declaration index has been built, including an empty index.
+local_decl_exprs_indexed: bool = false,
 /// Reusable scratch for the receiver-embedding walk of recursive-dispatch
 /// detection: the in-progress (small, big) pair stack that cuts cyclic
 /// structure, and the completed-pair memo that keeps shared substructure
@@ -3634,6 +3658,8 @@ fn initAssumePrepared(
         .method_mint_names = canonical_names.CanonicalNameStore.init(gpa),
         .constraints = try Constraint.SafeList.initCapacity(gpa, 32),
         .return_constraints = .empty,
+        .try_return_conditions = collections.DenseMap(Var, CIR.Expr.Idx).init(gpa),
+        .try_lambda_host_origins = collections.DenseMap(CIR.Expr.Idx, Ident.Idx).init(gpa),
         .return_value_exprs = .empty,
         .return_constraint_frames = .empty,
         .try_return_rows = TryReturnRows.init(gpa),
@@ -3868,6 +3894,13 @@ pub fn deinit(self: *Self) void {
     while (position_values.next()) |positions| if (positions.*) |items| self.gpa.free(items);
     self.nominal_positions.deinit(self.gpa);
     self.implicit_open_exts.deinit(self.gpa);
+    self.coercion_reach_stack.deinit(self.gpa);
+    self.coercion_reach_seen.deinit(self.gpa);
+    self.coercion_outside_stack.deinit(self.gpa);
+    self.coercion_outside_seen.deinit(self.gpa);
+    self.widened_use_copies.deinit(self.gpa);
+    self.widened_use_tags.deinit(self.gpa);
+    self.widened_use_rows.deinit(self.gpa);
     self.annotation_implicit_open_exts.deinit(self.gpa);
     self.bounded_row_marks.deinit(self.gpa);
     self.weak_value_implicit_open_ext_ranges.deinit(self.gpa);
@@ -3934,6 +3967,8 @@ pub fn deinit(self: *Self) void {
     self.snapshot_ground_copies.deinit(self.gpa);
     self.constraints.deinit(self.gpa);
     self.return_constraints.deinit(self.gpa);
+    self.try_return_conditions.deinit();
+    self.try_lambda_host_origins.deinit();
     self.return_value_exprs.deinit(self.gpa);
     self.return_constraint_frames.deinit(self.gpa);
     self.try_return_rows.deinit(self.gpa);
@@ -5005,7 +5040,7 @@ fn moduleDeclaresLocalMethodNamed(self: *Self, name: Ident.Idx) Allocator.Error!
 
 /// The right-hand side of the local declaration binding `pattern`.
 fn localDeclExprForPattern(self: *Self, pattern: CIR.Pattern.Idx) Allocator.Error!?CIR.Expr.Idx {
-    if (self.local_decl_expr_by_pattern.count() == 0) {
+    if (!self.local_decl_exprs_indexed) {
         var raw_node: u32 = 0;
         const node_count: u32 = @intCast(self.cir.store.nodes.len());
         while (raw_node < node_count) : (raw_node += 1) {
@@ -5013,6 +5048,7 @@ fn localDeclExprForPattern(self: *Self, pattern: CIR.Pattern.Idx) Allocator.Erro
             const decl = self.cir.store.getStatement(@fromBackingInt(@intCast(raw_node))).s_decl;
             try self.local_decl_expr_by_pattern.put(self.gpa, decl.pattern, decl.expr);
         }
+        self.local_decl_exprs_indexed = true;
     }
     return self.local_decl_expr_by_pattern.get(pattern);
 }
@@ -7010,6 +7046,12 @@ fn appendTypeMismatch(
     actual: Var,
     ctx: problem.Context,
 ) std.mem.Allocator.Error!problem.Problem.Idx {
+    var diagnostic_ctx = ctx;
+    if (diagnostic_ctx == .try_operator) {
+        if (self.try_return_conditions.get(actual)) |condition| {
+            diagnostic_ctx.try_operator.hosted_origin = try self.tryHostedErrorOrigin(condition, false);
+        }
+    }
     const expected_snapshot = try self.snapshotVarForError(expected);
     const actual_snapshot = try self.snapshotVarForError(actual);
     const unify_env = self.unifyEnv();
@@ -7021,7 +7063,7 @@ fn appendTypeMismatch(
             .actual_var = actual,
             .actual_snapshot = actual_snapshot,
         },
-        .context = ctx,
+        .context = diagnostic_ctx,
         .evidence = evidence,
     } });
 }
@@ -11147,6 +11189,59 @@ fn exactNumeralInfoForLiteral(self: *const Self, literal: ModuleEnv.NumeralLiter
 
 const NumeralOccurrence = enum { expression, pattern };
 
+/// Concrete Builtin Numeral Introduction (design.md): a producer-supplied
+/// concrete builtin target and an exact successful fit leave no conversion
+/// obligation to solve. All other occurrences retain their ordinary constraint.
+fn checkConcreteBuiltinNumeral(
+    self: *Self,
+    node_idx: CIR.Node.Idx,
+    occurrence_var: Var,
+    region: Region,
+    expected: Expected,
+    env: *Env,
+) Allocator.Error!bool {
+    const suffix = self.cir.numericSuffixTargetForNode(node_idx);
+    const kind: CIR.NumKind = if (suffix) |target| switch (target.target()) {
+        .builtin => |kind| kind,
+        .local, .external, .external_identity, .invalid => return false,
+        .pending => unreachable,
+    } else context: {
+        const context = expected.aggregateType() orelse return false;
+        if (context.record_field != null) return false;
+        var target = context.var_;
+        while (true) {
+            const content = self.types.resolveVar(target).desc.content;
+            switch (content) {
+                .alias => |alias| target = self.types.getAliasBackingVar(alias),
+                .structure => |structure| switch (structure) {
+                    .nominal_type => |nominal| break :context self.builtinNumKindFromNominalType(nominal) orelse return false,
+                    .record, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => return false,
+                },
+                .flex, .rigid, .field_presence, .err => return false,
+            }
+        }
+    };
+    const literal = self.recordedNumeralLiteralForNode(node_idx);
+    var info = try self.exactNumeralInfoForLiteral(literal, region);
+    info.explicit_suffix = suffix != null;
+    if (validateBuiltinFromNumeralLiteral(kind, info) != null) return false;
+    try self.unifyWith(occurrence_var, try self.mkBuiltinNumberTypeContentFromKind(kind), env);
+    try self.cir.store.recordLiteralDispatchPlan(node_idx, .numeral, occurrence_var, null, null);
+    return true;
+}
+
+fn checkNumeralExpression(
+    self: *Self,
+    node_idx: CIR.Node.Idx,
+    occurrence_var: Var,
+    region: Region,
+    expected: Expected,
+    env: *Env,
+) Allocator.Error!void {
+    if (try self.checkConcreteBuiltinNumeral(node_idx, occurrence_var, region, expected, env)) return;
+    try self.checkNumeralLiteral(node_idx, occurrence_var, region, .expression, null, env);
+}
+
 /// Check one exact numeric source occurrence. Exact digits and the optional
 /// resolved suffix target are producer-owned node data shared by expressions
 /// and patterns; patterns add only the equality requirement needed for matching.
@@ -11887,6 +11982,16 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.recheckNominalConstructorBackings(&env);
 
     try self.rejectEffectfulCompileTimeExecutableRoots();
+    // Publish diagnostic origins while the producer still owns its private
+    // imports. Consumers use these summaries, never transitively reopen them.
+    var hosted_origins = HostedErrorOrigins.init(self.gpa);
+    defer hosted_origins.deinit();
+    for (self.cir.store.sliceDefs(self.cir.global_value_defs)) |def_idx| {
+        const def = self.cir.store.getDef(def_idx);
+        if (try self.traceHostedErrorOrigin(def.expr, true, &hosted_origins)) |origin| {
+            try self.cir.setDiagnosticHostedReturn(def_idx, origin);
+        }
+    }
     if (self.pending_predeclared_use_relations.items.len != 0) {
         base.invariant("type checker invariant violated: a predeclared scheme use was never related to its binding's published scheme", .{});
     }
@@ -11917,6 +12022,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.reportNonExhaustiveForPatterns(&env);
 
     try self.closeWeakValueImplicitOpenExts(&env);
+    try self.closeTopLevelValueRows(&env);
 
     try self.pruneSelectedHoistedRootsAfterSolving();
     try self.withdrawProblemsOfVoidRelations();
@@ -13869,7 +13975,7 @@ fn literalDispatchPlanMatchesConstraint(
     // The raw callable is the literal occurrence's stable identity. Distinct
     // occurrences may share both a receiver root and a callable equivalence
     // class after unification, so either resolved root would conflate owners.
-    return plan.fn_var == @backingInt(constraint.fn_var) and
+    return plan.fnVar() == constraint.fn_var and
         self.literalDispatchPlanMatches(plan, literal_kind, dispatcher_root);
 }
 
@@ -13942,7 +14048,8 @@ fn poisonLiteralFailureOwners(
 
         for (self.cir.store.literalDispatchPlans()) |plan| {
             if (!self.literalDispatchPlanMatches(plan, literal_kind, dispatcher_root)) continue;
-            if (self.types.resolveVar(@fromBackingInt(@intCast(plan.fn_var))).var_ != literal_fn_root) continue;
+            const plan_fn_var = plan.fnVar() orelse continue;
+            if (self.types.resolveVar(plan_fn_var).var_ != literal_fn_root) continue;
             const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(plan.node_idx));
             if (isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) {
                 try literal_exprs.append(self.gpa, @fromBackingInt(@intCast(plan.node_idx)));
@@ -16778,6 +16885,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     try self.recheckNominalConstructorBackings(&env);
 
     try self.closeWeakValueImplicitOpenExts(&env);
+    try self.closeTopLevelValueRows(&env);
 
     try self.finalizeExpectEffectSlots();
     // Expression checking suppresses root selection, but constant-condition
@@ -19882,6 +19990,390 @@ fn runLateImplicitOpenExtAudit(self: *Self, env: *Env) std.mem.Allocator.Error!v
 
 /// The resolved extension a tag row ends in, through aliases and extension
 /// chains. Rows related by unification share it.
+/// Mark the positions of `root` that the row coercion reaches
+/// (`coercion_reach_seen`) and every position below one it does not
+/// (`coercion_outside_seen`), exactly as the coercion reaches rows (design.md
+/// "Row Coercion Primitive"): a tag union's tags' payloads and its extension,
+/// an alias's backing, and both arguments of `Try`, whose backing
+/// `[Ok(a), Err(e)]` places each in a tag payload. Every other position—a
+/// record field, a tuple item, a function argument or result, an argument of
+/// `List` or of a user nominal—ends the reach.
+///
+/// Reach is a property of POSITIONS, not of variables: a variable at any
+/// position outside the reach is outside it, even when it is also reachable
+/// from a position inside, because the coercion must leave it unchanged at the
+/// outside position.
+fn computeCoercionReach(self: *Self, root: Var) std.mem.Allocator.Error!void {
+    self.coercion_reach_stack.clearRetainingCapacity();
+    self.coercion_reach_seen.clearRetainingCapacity();
+    self.coercion_outside_stack.clearRetainingCapacity();
+    self.coercion_outside_seen.clearRetainingCapacity();
+    try self.coercion_reach_stack.append(self.gpa, root);
+    while (self.coercion_reach_stack.pop()) |var_| {
+        const resolved = self.types.resolveVar(var_);
+        const entry = try self.coercion_reach_seen.getOrPut(self.gpa, resolved.var_);
+        if (entry.found_existing) continue;
+        switch (resolved.desc.content) {
+            .alias => |alias| try self.coercion_reach_stack.append(self.gpa, self.types.getAliasBackingVar(alias)),
+            .structure => |flat| switch (flat) {
+                .tag_union => |union_| {
+                    for (0..union_.tags.count) |index| {
+                        const tag = self.types.getTagAt(union_.tags, @intCast(index));
+                        try self.coercion_reach_stack.appendSlice(self.gpa, self.types.sliceVars(tag.args));
+                    }
+                    try self.coercion_reach_stack.append(self.gpa, union_.ext);
+                },
+                .nominal_type => |nominal| {
+                    if (self.nominalIsBuiltinTry(nominal)) {
+                        try self.coercion_reach_stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal));
+                    } else {
+                        try self.appendCoercionOutsideChildren(flat);
+                    }
+                },
+                .fn_pure, .fn_effectful, .fn_unbound, .tuple, .record => try self.appendCoercionOutsideChildren(flat),
+                .empty_record, .empty_tag_union => {},
+            },
+            .flex, .rigid, .err, .field_presence => {},
+        }
+    }
+    while (self.coercion_outside_stack.pop()) |var_| {
+        const resolved = self.types.resolveVar(var_);
+        const entry = try self.coercion_outside_seen.getOrPut(self.gpa, resolved.var_);
+        if (entry.found_existing) continue;
+        switch (resolved.desc.content) {
+            .alias => |alias| {
+                try self.coercion_outside_stack.appendSlice(self.gpa, self.types.sliceAliasAllArgs(alias));
+                try self.coercion_outside_stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+            },
+            .structure => |flat| try self.appendCoercionOutsideChildren(flat),
+            .flex, .rigid, .err, .field_presence => {},
+        }
+    }
+}
+
+/// Push every child of one structure onto the outside-the-reach worklist of
+/// `computeCoercionReach`.
+fn appendCoercionOutsideChildren(self: *Self, flat: FlatType) std.mem.Allocator.Error!void {
+    switch (flat) {
+        .tag_union => |union_| {
+            for (0..union_.tags.count) |index| {
+                const tag = self.types.getTagAt(union_.tags, @intCast(index));
+                try self.coercion_outside_stack.appendSlice(self.gpa, self.types.sliceVars(tag.args));
+            }
+            try self.coercion_outside_stack.append(self.gpa, union_.ext);
+        },
+        .nominal_type => |nominal| try self.coercion_outside_stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+        .fn_pure, .fn_effectful, .fn_unbound => |func| {
+            try self.coercion_outside_stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+            try self.coercion_outside_stack.append(self.gpa, func.ret);
+            try self.coercion_outside_stack.appendSlice(self.gpa, self.types.sliceVars(func.effect_deps));
+        },
+        .tuple => |tuple| try self.coercion_outside_stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+        .record => |record| {
+            const presences = self.types.getRecordFieldsSlice(record.fields).items(.presence);
+            for (presences) |presence| {
+                try self.coercion_outside_stack.append(self.gpa, presence.typeVar());
+                if (presence.presenceVar()) |presence_var| {
+                    try self.coercion_outside_stack.append(self.gpa, presence_var);
+                }
+            }
+            try self.coercion_outside_stack.append(self.gpa, record.ext);
+        },
+        .empty_record, .empty_tag_union => {},
+    }
+}
+
+fn nominalIsBuiltinTry(self: *const Self, nominal: types_mod.NominalType) bool {
+    return nominal.originIsBuiltin() and nominal.sourceDeclOptional() == self.builtinTrySourceDecl();
+}
+
+/// The type a use of a top-level value relates to (design.md "Value Rows:
+/// Local Values Share, Top-Level Values Widen At Each Use"): a copy of the
+/// value's type in which every tag union the row coercion reaches has a fresh
+/// open extension, whether the value's own row is open or closed, so the use
+/// may need the value at any wider union without changing the value's type.
+/// Every position outside the reach, and every variable that is not a reached
+/// row, is shared with the value, so those stay one type for every use. Null
+/// when the coercion reaches no tag union, so the use relates to the value's
+/// type itself.
+fn widenedValueUseVar(self: *Self, value_var: Var, env: *Env, region: Region) std.mem.Allocator.Error!?Var {
+    try self.computeCoercionReach(value_var);
+    self.widened_use_copies.clearRetainingCapacity();
+    const copy = try self.widenedReachCopy(value_var, env, region);
+    return if (copy == self.types.resolveVar(value_var).var_) null else copy;
+}
+
+/// Whether the row coercion may widen the row at `var_`: a position it
+/// reaches and no position outside it shares.
+fn coercionMayWiden(self: *const Self, var_: Var) bool {
+    const root = self.types.resolveVar(var_).var_;
+    return self.coercion_reach_seen.contains(root) and !self.coercion_outside_seen.contains(root);
+}
+
+/// One reached variable's copy for `widenedValueUseVar`; the variable itself
+/// when nothing under it widens. Copies are shared through
+/// `widened_use_copies`. The walk keeps an explicit stack, since a value's type
+/// can nest tag payloads arbitrarily deep, and builds each copy after its
+/// children's (post-order). The reach never passes through a recursive type
+/// (recursion goes through a nominal, which ends the reach); a variable met
+/// again while its own copy is in progress keeps itself, so the walk is finite
+/// regardless.
+fn widenedReachCopy(self: *Self, root: Var, env: *Env, region: Region) std.mem.Allocator.Error!Var {
+    const Step = struct { var_: Var, expanded: bool };
+    var stack: std.ArrayListUnmanaged(Step) = .empty;
+    defer stack.deinit(self.gpa);
+    var in_progress: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    defer in_progress.deinit(self.gpa);
+    var children: std.ArrayListUnmanaged(Var) = .empty;
+    defer children.deinit(self.gpa);
+    try stack.append(self.gpa, .{ .var_ = root, .expanded = false });
+    while (stack.pop()) |step| {
+        const resolved = self.types.resolveVar(step.var_);
+        if (!self.coercionMayWiden(resolved.var_)) continue;
+        if (self.widened_use_copies.contains(resolved.var_)) continue;
+        if (!step.expanded) {
+            if ((try in_progress.getOrPut(self.gpa, resolved.var_)).found_existing) continue;
+            try stack.append(self.gpa, .{ .var_ = resolved.var_, .expanded = true });
+            children.clearRetainingCapacity();
+            try self.appendWidenedReachChildren(resolved.var_, &children);
+            for (children.items) |child| try stack.append(self.gpa, .{ .var_ = child, .expanded = false });
+            continue;
+        }
+        const copy: Var = switch (resolved.desc.content) {
+            // The copy's union is the alias's backing, widened; the alias's
+            // parameters describe the value's own row, not the widened one.
+            // An alias whose backing widens nothing is the alias itself.
+            .alias => |alias| blk: {
+                const backing = self.types.getAliasBackingVar(alias);
+                const backing_copy = self.widenedCopyOf(backing);
+                break :blk if (backing_copy == self.types.resolveVar(backing).var_) resolved.var_ else backing_copy;
+            },
+            .structure => |flat| switch (flat) {
+                .tag_union => try self.widenedRowCopy(resolved.var_, env, region),
+                .nominal_type => |nominal| blk: {
+                    // Copying appends to the type store, so read the arguments
+                    // out of it first.
+                    const args = try self.gpa.dupe(Var, self.types.sliceNominalArgs(nominal));
+                    defer self.gpa.free(args);
+                    var changed = false;
+                    for (args) |*arg| {
+                        const arg_copy = self.widenedCopyOf(arg.*);
+                        changed = changed or arg_copy != self.types.resolveVar(arg.*).var_;
+                        arg.* = arg_copy;
+                    }
+                    if (!changed) break :blk resolved.var_;
+                    var widened = nominal;
+                    widened.args = try self.types.appendVars(args);
+                    break :blk try self.freshFromContent(.{ .structure = .{ .nominal_type = widened } }, env, region);
+                },
+                .fn_pure, .fn_effectful, .fn_unbound, .tuple, .record, .empty_record, .empty_tag_union => resolved.var_,
+            },
+            .flex, .rigid, .err, .field_presence => resolved.var_,
+        };
+        try self.widened_use_copies.put(self.gpa, resolved.var_, copy);
+    }
+    return self.widenedCopyOf(root);
+}
+
+/// The copy `widenedReachCopy` built for `var_`, or `var_` itself when the
+/// coercion does not widen it.
+fn widenedCopyOf(self: *const Self, var_: Var) Var {
+    const resolved = self.types.resolveVar(var_).var_;
+    return self.widened_use_copies.get(resolved) orelse resolved;
+}
+
+/// The variables a reached variable's copy is built from: an alias's backing,
+/// every payload on a tag union's extension chain, and a `Try`'s arguments.
+fn appendWidenedReachChildren(self: *Self, var_: Var, children: *std.ArrayListUnmanaged(Var)) std.mem.Allocator.Error!void {
+    const resolved = self.types.resolveVar(var_);
+    switch (resolved.desc.content) {
+        .alias => |alias| try children.append(self.gpa, self.types.getAliasBackingVar(alias)),
+        .structure => |flat| switch (flat) {
+            .tag_union => {
+                var current = resolved.var_;
+                while (true) {
+                    const row = self.types.resolveVar(current);
+                    switch (row.desc.content) {
+                        .alias => |alias| current = self.types.getAliasBackingVar(alias),
+                        .structure => |row_flat| switch (row_flat) {
+                            .tag_union => |union_| {
+                                for (0..union_.tags.count) |index| {
+                                    const tag = self.types.getTagAt(union_.tags, @intCast(index));
+                                    try children.appendSlice(self.gpa, self.types.sliceVars(tag.args));
+                                }
+                                current = union_.ext;
+                            },
+                            .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return,
+                        },
+                        .flex, .rigid, .err, .field_presence => return,
+                    }
+                }
+            },
+            .nominal_type => |nominal| try children.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+            .fn_pure, .fn_effectful, .fn_unbound, .tuple, .record, .empty_record, .empty_tag_union => {},
+        },
+        .flex, .rigid, .err, .field_presence => {},
+    }
+}
+
+/// A reached tag union's copy: every tag on its extension chain, each payload
+/// copied through the reach, under a fresh open extension. A row whose chain
+/// ends in a rigid is not the value's to widen and is shared.
+fn widenedRowCopy(self: *Self, row: Var, env: *Env, region: Region) std.mem.Allocator.Error!Var {
+    const tags_start = self.widened_use_tags.items.len;
+    defer self.widened_use_tags.shrinkRetainingCapacity(tags_start);
+    var current = row;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .tag_union => |union_| {
+                    for (0..union_.tags.count) |index| {
+                        try self.widened_use_tags.append(self.gpa, self.types.getTagAt(union_.tags, @intCast(index)));
+                    }
+                    current = union_.ext;
+                },
+                .empty_tag_union => break,
+                .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return self.types.resolveVar(row).var_,
+            },
+            .flex => break,
+            .rigid, .err, .field_presence => return self.types.resolveVar(row).var_,
+        }
+    }
+    // A row with no tags asserts that no value has it (design.md "Polarity"
+    // exempts `[]` from implicit opening for this reason), so there is no
+    // value to widen and the row stays shared.
+    if (self.widened_use_tags.items.len == tags_start) return self.types.resolveVar(row).var_;
+    // Building the copy appends to the type store and to these scratch lists,
+    // so read the row's tags and each tag's payloads out of them first. Every
+    // payload's own copy was built before this row's (`widenedReachCopy`).
+    const tags = try self.gpa.dupe(types_mod.Tag, self.widened_use_tags.items[tags_start..]);
+    defer self.gpa.free(tags);
+    for (tags) |*tag| {
+        const args = try self.gpa.dupe(Var, self.types.sliceVars(tag.args));
+        defer self.gpa.free(args);
+        for (args) |*arg| arg.* = self.widenedCopyOf(arg.*);
+        tag.* = try self.types.mkTag(tag.name, args);
+    }
+    const ext = try self.freshFromContent(.{ .flex = Flex.init() }, env, region);
+    const copy = try self.freshFromContent(try self.types.mkTagUnion(tags, ext), env, region);
+    try self.widened_use_rows.append(self.gpa, .{ .value_row = self.types.resolveVar(row).var_, .use_row = copy });
+    return copy;
+}
+
+/// One row a use's widening copy re-opened (`widened_use_rows`).
+const WidenedUseRow = struct {
+    /// The value's own row.
+    value_row: Var,
+    /// The use's copy of it.
+    use_row: Var,
+    /// Set once the copy needs nothing more: the use's type was found not to
+    /// admit a tag of the value's row (that mismatch is reported), or the copy
+    /// is no longer a tag row because the use related it to a nominal type,
+    /// whose declared backing that relation already checked.
+    settled: bool = false,
+};
+
+/// Add to every use's widened copy each tag its value's row gained after the
+/// use copied it, with the value's own payloads, so the copy still lists
+/// every tag the value can have (design.md "Value Rows: Local Values Share,
+/// Top-Level Values Widen At Each Use"). A use whose type no longer admits
+/// such a tag is a type mismatch at the use. Returns whether any copy gained
+/// a tag, since unifying one can introduce constraints of its own.
+fn propagateValueRowsToWidenedUses(self: *Self, env: *Env) std.mem.Allocator.Error!bool {
+    var changed = false;
+    var missing: std.ArrayListUnmanaged(types_mod.Tag) = .empty;
+    defer missing.deinit(self.gpa);
+    var index: usize = 0;
+    while (index < self.widened_use_rows.items.len) : (index += 1) {
+        const pair = self.widened_use_rows.items[index];
+        if (pair.settled) continue;
+        if (!self.varIsTagRow(pair.use_row)) {
+            self.widened_use_rows.items[index].settled = true;
+            continue;
+        }
+        try self.collectTagsMissingFromUse(pair, &missing);
+        if (missing.items.len == 0) continue;
+        const region = self.getRegionAt(pair.use_row);
+        const ext = try self.freshFromContent(.{ .flex = Flex.init() }, env, region);
+        const extra = try self.freshFromContent(try self.types.mkTagUnion(missing.items, ext), env, region);
+        // A relation that fails reports its mismatch at the use and settles
+        // the pair. One that succeeds gives the copy every missing tag, which
+        // a second look confirms; a copy the relation did not extend settles
+        // too, so this loop always ends.
+        if ((try self.unify(self.tagRowTail(pair.use_row), extra, env)).isProblem()) {
+            self.widened_use_rows.items[index].settled = true;
+            continue;
+        }
+        try self.collectTagsMissingFromUse(pair, &missing);
+        if (missing.items.len == 0) {
+            changed = true;
+        } else {
+            self.widened_use_rows.items[index].settled = true;
+        }
+    }
+    return changed;
+}
+
+/// The tags of `pair`'s value row that its use's copy does not list, into
+/// `missing`.
+fn collectTagsMissingFromUse(self: *Self, pair: WidenedUseRow, missing: *std.ArrayListUnmanaged(types_mod.Tag)) std.mem.Allocator.Error!void {
+    missing.clearRetainingCapacity();
+    const tags_start = self.widened_use_tags.items.len;
+    defer self.widened_use_tags.shrinkRetainingCapacity(tags_start);
+    try self.appendRowTags(pair.value_row);
+    const value_end = self.widened_use_tags.items.len;
+    try self.appendRowTags(pair.use_row);
+    const value_tags = self.widened_use_tags.items[tags_start..value_end];
+    const use_tags = self.widened_use_tags.items[value_end..];
+    for (value_tags) |value_tag| {
+        for (use_tags) |use_tag| {
+            if (value_tag.name.eql(use_tag.name)) break;
+        } else try missing.append(self.gpa, value_tag);
+    }
+}
+
+/// Whether `var_`'s extension chain is made of tag unions (through aliases),
+/// ending in an open or empty tail.
+fn varIsTagRow(self: *const Self, var_: Var) bool {
+    var current = var_;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .tag_union => |union_| current = union_.ext,
+                .empty_tag_union => return true,
+                .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return false,
+            },
+            .flex => return true,
+            .rigid, .field_presence, .err => return false,
+        }
+    }
+}
+
+/// Append every tag on `row`'s extension chain to `widened_use_tags`.
+fn appendRowTags(self: *Self, row: Var) std.mem.Allocator.Error!void {
+    var current = row;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .tag_union => |union_| {
+                    for (0..union_.tags.count) |tag_index| {
+                        try self.widened_use_tags.append(self.gpa, self.types.getTagAt(union_.tags, @intCast(tag_index)));
+                    }
+                    current = union_.ext;
+                },
+                .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return,
+            },
+            .flex, .rigid, .field_presence, .err => return,
+        }
+    }
+}
+
 fn tagRowTail(self: *const Self, row: Var) Var {
     var current = row;
     while (true) {
@@ -20132,6 +20624,50 @@ fn definitionBodyExpr(self: *const Self, rhs: CIR.Expr.Idx) CIR.Expr.Idx {
 /// Every entry point runs this AFTER `runLateImplicitOpenExtAudit`, for the
 /// reason stated there: grounding an extension empties it, and the late audit
 /// only reads extensions that still carry tags.
+/// Close every still-open row a top-level value's type reaches through the
+/// row coercion, annotated or not: the value is evaluated once, at the type
+/// its definition produces (design.md "Value Rows: Local Values Share,
+/// Top-Level Values Widen At Each Use"), and no use relates to these rows,
+/// since each use widens a copy. A row outside the reach is shared by every
+/// use and is sealed by Monotype's row defaults, and a row whose tail carries
+/// a constraint the empty row does not discharge, or that a scheme
+/// quantified, is left alone.
+fn closeTopLevelValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    for (self.cir.store.sliceDefs(self.cir.global_value_defs)) |def_idx| {
+        const def = self.cir.store.getDef(def_idx);
+        if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr))) continue;
+        const pattern_var = ModuleEnv.varFrom(def.pattern);
+        if (self.isBindingSchemeVar(pattern_var)) continue;
+        try self.computeCoercionReach(pattern_var);
+        // Collect first: closing a tail unifies, which must not run while the
+        // reach set is being iterated.
+        var tails: std.ArrayListUnmanaged(Var) = .empty;
+        defer tails.deinit(self.gpa);
+        var reached = self.coercion_reach_seen.keyIterator();
+        while (reached.next()) |row_ptr| {
+            const row = self.types.resolveVar(row_ptr.*);
+            const ext = switch (row.desc.content) {
+                .structure => |flat| switch (flat) {
+                    .tag_union => |union_| union_.ext,
+                    .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => continue,
+                },
+                .alias, .flex, .rigid, .field_presence, .err => continue,
+            };
+            if (self.coercion_outside_seen.contains(row.var_)) continue;
+            const tail = self.types.resolveVar(ext);
+            if (self.coercion_outside_seen.contains(tail.var_)) continue;
+            if (tail.desc.content != .flex) continue;
+            if (tail.desc.rank == .generalized) continue;
+            if (!self.rowDefaultDischargesConstraints(tail.desc.content.flex.constraints)) continue;
+            try tails.append(self.gpa, tail.var_);
+        }
+        for (tails.items) |tail| {
+            const empty_tu_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, self.getRegionAt(tail));
+            _ = try self.unify(tail, empty_tu_var, env);
+        }
+    }
+}
+
 fn closeWeakValueImplicitOpenExts(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     for (self.weak_value_implicit_open_ext_ranges.items) |range| {
         for (self.implicit_open_exts.items[range.start..][0..range.len]) |entry| {
@@ -25319,25 +25855,25 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
         .e_num => |num| {
             switch (num.kind) {
                 // For unannotated literals, create a flex var with from_numeral constraint
-                .num_unbound, .int_unbound => try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, null, env),
+                .num_unbound, .int_unbound => try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, frame.nested_expected, env),
                 .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => try self.unifyWith(expr_var, try self.mkNumberTypeContent(num.kind), env),
             }
         },
         .e_num_from_numeral => {
-            try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, null, env);
+            try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, frame.nested_expected, env);
         },
         .e_frac_f32 => |frac| {
             if (frac.has_suffix) {
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent(.f32), env);
             } else {
-                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, null, env);
+                try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, frame.nested_expected, env);
             }
         },
         .e_frac_f64 => |frac| {
             if (frac.has_suffix) {
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent(.f64), env);
             } else {
-                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, null, env);
+                try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, frame.nested_expected, env);
             }
         },
         inline .e_dec, .e_dec_small => |frac| {
@@ -25347,19 +25883,19 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                 _ = try self.reportInvalidBuiltinFromNumeralInfo(expr_var, .dec, num_literal_info, env);
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent(.dec), env);
             } else {
-                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, null, env);
+                try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, frame.nested_expected, env);
             }
         },
         .e_typed_int => {
             // Typed integer literal like 123.U64
-            try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, null, env);
+            try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, frame.nested_expected, env);
         },
         .e_typed_frac => {
             // Typed fractional literal like 3.14.Dec
-            try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, null, env);
+            try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, frame.nested_expected, env);
         },
         .e_typed_num_from_numeral => {
-            try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, null, env);
+            try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, frame.nested_expected, env);
         },
         // list //
         .e_empty_list => {
@@ -25715,7 +26251,20 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                     try self.instantiateVarOrphan(pat_var, env, env.rank(), .use_last_var)
                 else
                     pat_var;
-                _ = try self.unify(expr_var, use_var, env);
+                // A use of a checked top-level value relates to a widening
+                // copy of the value's type, and reads the value through a
+                // row coercion (design.md "Value Rows: Local Values Share,
+                // Top-Level Values Widen At Each Use").
+                const widened_use_var = if (mb_processing_def) |processing_def|
+                    if (processing_def.status == .processed) try self.widenedValueUseVar(use_var, env, expr_region) else null
+                else
+                    null;
+                if (widened_use_var) |widened| {
+                    _ = try self.unify(expr_var, widened, env);
+                    try self.cir.recordRowCoercedUse(ModuleEnv.nodeIdxFrom(expr_idx), pat_var);
+                } else {
+                    _ = try self.unify(expr_var, use_var, env);
+                }
                 if (mb_processing_def) |processing_def| {
                     try self.recordSharedSchemeUse(
                         @backingInt(expr_idx),
@@ -25756,7 +26305,19 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                         .{ .explicit = expr_region },
                         .{ .value_use = expr_idx },
                     );
-                    _ = try self.unify(expr_var, ext_instantiated_var, env);
+                    // A use of an imported value that is not a binding scheme
+                    // widens exactly as a use in its own module does (design.md
+                    // "Value Rows: Local Values Share, Top-Level Values Widen
+                    // At Each Use"); a scheme's instantiation already has
+                    // fresh rows.
+                    const is_value = !ext_ref.other_cir.nodeIsBindingScheme(ext_ref.other_cir_node_idx);
+                    const widened_use_var = if (is_value) try self.widenedValueUseVar(ext_instantiated_var, env, expr_region) else null;
+                    if (widened_use_var) |widened| {
+                        _ = try self.unify(expr_var, widened, env);
+                        try self.cir.recordRowCoercedUse(ModuleEnv.nodeIdxFrom(expr_idx), ext_instantiated_var);
+                    } else {
+                        _ = try self.unify(expr_var, ext_instantiated_var, env);
+                    }
                 }
             } else {
                 try self.markErroneous(expr_var);
@@ -29375,6 +29936,11 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
             // unifies with Try type FIRST. If it doesn't, report the specific
             // error and skip pattern checking to avoid confusing errors.
             if (match.is_try_suffix) {
+                // Canonicalization explicitly identifies the generated Err
+                // branch. Preserve its operand before checking can retire it.
+                if (unchangedTryErrorReturn(self.cir, match)) |err_return| {
+                    try self.try_return_conditions.put(ModuleEnv.varFrom(err_return), match.cond);
+                }
                 // Get the actual Try type from builtins and instantiate it with fresh type vars
                 const try_type_var = ModuleEnv.varFrom(self.builtin_ctx.try_stmt);
                 const copied_try_var = if (self.builtin_ctx.builtin_module) |builtin_env|
@@ -29390,10 +29956,6 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
                 if (!try_result.isEstablished()) {
                     state.has_invalid_try = true;
                     state.had_type_error = true;
-                } else if (self.currentExpectedReturnResult()) |expected_return| {
-                    if (self.tryConditionIsDirectHostedCall(match.cond)) {
-                        try self.widenTryConditionForExpectedReturn(cond_var, expected_return, env, expr_region);
-                    }
                 }
             }
             if (!match.is_try_suffix and !match.skip_exhaustiveness) {
@@ -31079,228 +31641,134 @@ fn tryArgsFromVar(self: *Self, try_var: Var) ?TryArgs {
     }
 }
 
-/// Whether a `?` condition is a direct call of a hosted function—the only
-/// shape the hosted-try-question-widening rule (design.md "Hosted Try Question
-/// Widening") applies to. The callee is statically resolved from the call's
-/// function expression (the local or external lookup canonicalization
-/// produced); dispatch calls and value-carried functions are never direct
-/// hosted calls, so `?` on them gets no widening.
-fn tryConditionIsDirectHostedCall(self: *Self, cond_idx: CIR.Expr.Idx) bool {
-    const expr = self.cir.store.getExpr(cond_idx);
-    if (expr != .e_call) return false;
-    const call = expr.e_call;
-    const callable_def = self.hoistedCallableDefForExpr(self.cir, call.func) orelse return false;
-    const def = callable_def.module.store.getDef(callable_def.def);
-    return callable_def.module.store.getExpr(def.expr) == .e_hosted_lambda;
+/// Both forms of `?` are marked is_try_suffix. Only the plain form returns
+/// the matched error binder unchanged; `lhs ? handler` constructs/calls a
+/// conversion. Compare explicit binder identities rather than source syntax.
+fn unchangedTryErrorReturn(module: *const ModuleEnv, match: CIR.Expr.Match) ?CIR.Expr.Idx {
+    const branches = module.store.sliceMatchBranches(match.branches);
+    const branch = module.store.getMatchBranch(branches[1]);
+    const ret = module.store.getExpr(branch.value);
+    if (ret != .e_return) return null;
+    const result = module.store.getExpr(ret.e_return.expr);
+    const backing = switch (result) {
+        .e_nominal => |nominal| nominal.backing_expr,
+        .e_nominal_external => |nominal| nominal.backing_expr,
+        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str_segment, .e_str, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => return null,
+    };
+    const tag = module.store.getExpr(backing);
+    if (tag != .e_tag) return null;
+    const args = module.store.sliceExpr(tag.e_tag.args);
+    if (args.len != 1) return null;
+    const payload = module.store.getExpr(args[0]);
+    if (payload != .e_lookup_local) return null;
+
+    const patterns = module.store.sliceMatchBranchPatterns(branch.patterns);
+    if (patterns.len != 1) return null;
+    const pattern = module.store.getPattern(module.store.getMatchBranchPattern(patterns[0]).pattern);
+    const pattern_backing = switch (pattern) {
+        .nominal => |nominal| nominal.backing_pattern,
+        .nominal_external => |nominal| nominal.backing_pattern,
+        .assign, .var_assign, .as, .applied_tag, .deferred_import_ref, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .num_from_numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => return null,
+    };
+    const tag_pattern = module.store.getPattern(pattern_backing);
+    if (tag_pattern != .applied_tag) return null;
+    const tag_args = module.store.slicePatterns(tag_pattern.applied_tag.args);
+    if (tag_args.len != 1 or tag_args[0] != payload.e_lookup_local.pattern_idx) return null;
+    return ret.e_return.expr;
 }
 
-/// The hosted-try-question-widening rule (design.md "Hosted Try Question
-/// Widening"): `?` on a direct call of a hosted function widens the condition
-/// to a fresh `Try` at the enclosing annotated return's error row when every
-/// visible error in the callee's row is included in it. The redirect targets
-/// the fresh `Try`, so the hosted callee's declared closed row—the host
-/// ABI's shape—is what checking outputs for the callee itself. For every
-/// other callee, a closed error row meeting an open annotated row stays a
-/// type error (issue #9798's program is rejected by design); the caller gates
-/// on `tryConditionIsDirectHostedCall`.
-///
-/// This is a typing mechanism, not the host ABI's protection. What a hosted
-/// extern is emitted at is decided at the producer: Monotype lowering admits
-/// only the hosted declaration's own type at an extern boundary and stops the
-/// build otherwise (`requireHostedExternAtDeclaredAbi`,
-/// src/postcheck/monotype/lower.zig, and design.md "Host Symbol ABI"). Widening
-/// the condition here therefore changes which programs typecheck and which
-/// caller-side adapter lowering generates; it cannot change the boundary. Judge
-/// changes to this rewrite as type-semantics choices on that basis.
-fn widenTryConditionForExpectedReturn(
-    self: *Self,
-    cond_var: Var,
-    expected_return: Var,
-    env: *Env,
-    region: Region,
-) std.mem.Allocator.Error!void {
-    const actual_try = self.tryArgsFromVar(cond_var) orelse return;
-    const expected_try = self.tryArgsFromVar(expected_return) orelse return;
-
-    if (!try self.tryErrorRowNeedsUseSiteWidening(actual_try.err, expected_try.err)) {
-        return;
-    }
-
-    // Ordinary tag-union unification rejects closed-vs-open rigid rows; this
-    // use-site rewrite runs only after proving the callee's visible errors are
-    // included in the expected row.
-    const widened_try_var = try self.freshFromContent(
-        try self.mkTryContent(actual_try.ok, expected_try.err),
-        env,
-        region,
-    );
-    const cond_root = self.types.resolveVar(cond_var).var_;
-    if (cond_root != widened_try_var) {
-        try self.types.dangerousSetVarRedirect(.hosted_try_question_widening, cond_root, widened_try_var);
-    }
+/// Diagnostic-only origin of an unchanged forwarded result. Follow explicit
+/// CIR reference and result edges, including imported aliases; never infer a
+/// host from a type's shape or reuse this walk to admit a widening relation.
+/// Constructors, dispatch, and value-carried callables end the known path.
+fn tryHostedErrorOrigin(self: *Self, condition: CIR.Expr.Idx, called: bool) Allocator.Error!?Ident.Idx {
+    return self.traceHostedErrorOrigin(condition, called, null);
 }
 
-fn tryErrorRowNeedsUseSiteWidening(self: *Self, actual_err: Var, expected_err: Var) std.mem.Allocator.Error!bool {
-    // The shortcut below declines the rule when ordinary unification already
-    // relates the pair. That is sound only when taking it is observationally
-    // the same as applying the rule, and it is not when the relation is bought
-    // by GROUNDING the expected row's still-open extension: rolling the probe
-    // back and then performing that same binding for real publishes a CLOSED
-    // row from an annotation that reads open, so two definitions with
-    // byte-identical annotations stop being interchangeable for their callers
-    // (design.md "Polarity"). So when the expected row still ends open, the
-    // declared condition—every visible error in the callee's row is included
-    // in the expected row—decides on its own. Widening then targets the
-    // annotated row itself, which leaves the extension unbound and hands
-    // lowering the same adapter request an annotation listing strictly more
-    // tags already produces.
-    if (!self.tryErrorRowEndsOpen(expected_err) and
-        try self.probeCanUseAs(expected_err, actual_err))
-    {
-        return false;
-    }
+// Each expression has separate value and called-result origins. A null slot
+// is unvisited; Ident.Idx.NONE records a completed walk with no hosted origin.
+const HostedErrorOrigins = collections.DenseMap(CIR.Expr.Idx, [2]?Ident.Idx);
 
-    var visited_actual = collections.DenseMap(Var, void).init(self.gpa);
-    defer visited_actual.deinit();
-    return try self.actualTagRowIsIncludedInExpected(actual_err, expected_err, &visited_actual);
-}
-
-/// Whether an error row's extension chain still ends in an unbound extension.
-/// The expected row here is always an annotated return's error row
-/// (`expected_result` is set only for an annotated lambda), so an unbound tail
-/// is the annotation's implicitly opened extension (design.md "Polarity") and
-/// unifying a closed row into it would ground it rather than flow through it.
-/// A rigid tail (a written `..others`) and an already-closed row are both
-/// bound, so both read as not-open. This walks explicit row topology produced
-/// by checking; it inspects no source syntax.
-fn tryErrorRowEndsOpen(self: *Self, err_var: Var) bool {
-    var current = err_var;
-    var guard = types_mod.debug.IterationGuard.init("tryErrorRowEndsOpen");
-    while (true) {
-        guard.tick();
-        const resolved = self.types.resolveVar(current);
-        switch (resolved.desc.content) {
-            .alias => |alias| current = self.types.getAliasBackingVar(alias),
-            .structure => |flat| switch (flat) {
-                .tag_union => |tag_union| current = tag_union.ext,
-                .empty_tag_union => return false,
-                .record,
-                .tuple,
-                .nominal_type,
-                .fn_pure,
-                .fn_effectful,
-                .fn_unbound,
-                .empty_record,
-                => return false,
-            },
-            .flex => return true,
-            .rigid, .field_presence, .err => return false,
+/// Share completed walks only during the final immutable definition pass.
+/// Earlier diagnostic walks cannot cache across changes to lambda summaries.
+fn traceHostedErrorOrigin(self: *Self, condition: CIR.Expr.Idx, called: bool, memo: ?*HostedErrorOrigins) Allocator.Error!?Ident.Idx {
+    const Position = struct {
+        expr: CIR.Expr.Idx,
+        called: bool,
+    };
+    var position = Position{ .expr = condition, .called = called };
+    var visited = collections.DenseMap(CIR.Expr.Idx, u2).init(self.gpa);
+    defer visited.deinit();
+    const resolved_origin: ?Ident.Idx = walk: while (true) {
+        if (memo) |cache| {
+            if (cache.get(position.expr)) |origins| {
+                if (origins[@intFromBool(position.called)]) |known| {
+                    break :walk if (known.isNone()) null else known;
+                }
+            }
         }
-    }
-}
-
-fn probeCanUseAs(self: *Self, expected_var: Var, actual_var: Var) std.mem.Allocator.Error!bool {
-    var probe = try self.beginProbe(null);
-    defer probe.rollback();
-    return try self.probeUnifyWithoutRecordingProblems(expected_var, actual_var);
-}
-
-fn actualTagRowIsIncludedInExpected(
-    self: *Self,
-    actual_var: Var,
-    expected_var: Var,
-    visited_actual: *collections.DenseMap(Var, void),
-) std.mem.Allocator.Error!bool {
-    // Follow the actual row through aliases and extensions.
-    var current = actual_var;
-    while (true) {
-        const actual_resolved = self.types.resolveVar(current);
-        if (visited_actual.contains(actual_resolved.var_)) return true;
-        try visited_actual.put(actual_resolved.var_, {});
-
-        switch (actual_resolved.desc.content) {
-            .alias => |alias| current = self.types.getAliasBackingVar(alias),
-            .structure => |flat| switch (flat) {
-                .empty_tag_union => return true,
-                .tag_union => |tag_union| {
-                    const tags = self.types.getTagsSlice(tag_union.tags);
-                    const names = tags.items(.name);
-                    const args_ranges = tags.items(.args);
-                    for (names, args_ranges) |name, args| {
-                        const actual_tag = types_mod.Tag{ .name = name, .args = args };
-                        if (!try self.expectedTagRowContainsTag(expected_var, actual_tag)) {
-                            return false;
+        const bit: u2 = if (position.called) 2 else 1;
+        const seen = visited.get(position.expr) orelse 0;
+        if (seen & bit != 0) break :walk null;
+        try visited.put(position.expr, seen | bit);
+        const expr = self.cir.store.getExpr(position.expr);
+        switch (expr) {
+            .e_call => |call| {
+                if (position.called) break :walk null;
+                position.expr = call.func;
+                position.called = true;
+            },
+            .e_lookup_local, .e_lookup_external, .e_lookup_associated_resolved => {
+                if (expr == .e_lookup_local) {
+                    const pattern = expr.e_lookup_local.pattern_idx;
+                    if (self.cir.store.getPattern(pattern) == .assign) {
+                        if (try self.localDeclExprForPattern(pattern)) |value| {
+                            position.expr = value;
+                            continue;
                         }
                     }
-                    current = tag_union.ext;
-                },
-                .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return false,
+                }
+                const target = self.hoistedCallableDefForExpr(self.cir, position.expr) orelse break :walk null;
+                if (target.module != self.cir) {
+                    const origin = target.module.diagnosticHostedReturn(target.def) orelse break :walk null;
+                    if (!position.called) break :walk null;
+                    break :walk try self.cir.insertIdent(Ident.for_text(target.module.getIdent(origin)));
+                }
+                position.expr = target.module.store.getDef(target.def).expr;
             },
-            .err => return true,
-            .flex, .rigid, .field_presence => return false,
-        }
-    }
-}
-
-fn expectedTagRowContainsTag(
-    self: *Self,
-    expected_var: Var,
-    actual_tag: types_mod.Tag,
-) std.mem.Allocator.Error!bool {
-    var visited_expected = collections.DenseMap(Var, void).init(self.gpa);
-    defer visited_expected.deinit();
-
-    const expected_tag = try self.findVisibleTagInRow(expected_var, actual_tag.name, &visited_expected) orelse return false;
-    return try self.tagsCanUseSamePayloads(expected_tag, actual_tag);
-}
-
-fn findVisibleTagInRow(
-    self: *Self,
-    row_var: Var,
-    tag_name: Ident.Idx,
-    visited: *collections.DenseMap(Var, void),
-) std.mem.Allocator.Error!?types_mod.Tag {
-    // Follow the row through aliases and extensions.
-    var current = row_var;
-    while (true) {
-        const row_resolved = self.types.resolveVar(current);
-        if (visited.contains(row_resolved.var_)) return null;
-        try visited.put(row_resolved.var_, {});
-
-        switch (row_resolved.desc.content) {
-            .alias => |alias| current = self.types.getAliasBackingVar(alias),
-            .structure => |flat| switch (flat) {
-                .tag_union => |tag_union| {
-                    const tags = self.types.getTagsSlice(tag_union.tags);
-                    const names = tags.items(.name);
-                    const args_ranges = tags.items(.args);
-                    for (names, args_ranges) |name, args| {
-                        if (name.eql(tag_name)) {
-                            return types_mod.Tag{ .name = name, .args = args };
-                        }
-                    }
-                    current = tag_union.ext;
-                },
-                .empty_tag_union => return null,
-                .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return null,
+            .e_lambda => |lambda| {
+                if (!position.called) break :walk null;
+                if (self.try_lambda_host_origins.get(position.expr)) |origin| break :walk origin;
+                position.expr = lambda.body;
+                position.called = false;
             },
-            .err, .flex, .rigid, .field_presence => return null,
+            .e_closure => |closure| {
+                if (!position.called) break :walk null;
+                position.expr = closure.lambda_idx;
+            },
+            .e_block => |block| position.expr = block.final_expr,
+            .e_return => |ret| position.expr = ret.expr,
+            .e_hosted_lambda => |hosted| {
+                if (!position.called) break :walk null;
+                const name = try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{
+                    self.cir.module_name,
+                    self.cir.getIdent(hosted.symbol_name),
+                });
+                defer self.gpa.free(name);
+                break :walk try self.cir.insertIdent(Ident.for_text(name));
+            },
+            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str_segment, .e_str, .e_bytes_literal, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_record, .e_empty_record, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_break, .e_for, .e_run_low_level => break :walk null,
+        }
+    };
+    if (memo) |cache| {
+        var entries = visited.iterator();
+        while (entries.next()) |entry| {
+            const result = try cache.getOrPutValue(entry.key_ptr.*, .{ null, null });
+            if (entry.value_ptr.* & 1 != 0) result.value_ptr[0] = resolved_origin orelse Ident.Idx.NONE;
+            if (entry.value_ptr.* & 2 != 0) result.value_ptr[1] = resolved_origin orelse Ident.Idx.NONE;
         }
     }
-}
-
-fn tagsCanUseSamePayloads(self: *Self, expected_tag: types_mod.Tag, actual_tag: types_mod.Tag) std.mem.Allocator.Error!bool {
-    if (expected_tag.args.len() != actual_tag.args.len()) return false;
-
-    var expected_args = self.types.iterVars(expected_tag.args);
-    var actual_args = self.types.iterVars(actual_tag.args);
-    while (expected_args.next()) |expected_arg| {
-        const actual_arg = actual_args.next().?;
-        if (!try self.probeCanUseAs(expected_arg, actual_arg)) {
-            return false;
-        }
-    }
-    return true;
+    return resolved_origin;
 }
 
 // match //
@@ -36062,6 +36530,9 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
     }
     try self.validateResolvedOpenNumeralLiterals(env);
     try self.finalizeGeneratedCodecConstraintsToQuiescence(env, scope == .module);
+    while (try self.propagateValueRowsToWidenedUses(env)) {
+        try self.finalizeGeneratedCodecConstraintsToQuiescence(env, scope == .module);
+    }
     try self.resolvePendingTupleAccesses(env, true);
     try self.checkAllConstraints(env);
     try self.checkDefaultRestrictions();
@@ -39817,11 +40288,6 @@ fn pushReturnConstraintFrame(
     });
 }
 
-fn currentExpectedReturnResult(self: *const Self) ?Var {
-    if (self.return_constraint_frames.items.len == 0) return null;
-    return self.return_constraint_frames.items[self.return_constraint_frames.items.len - 1].expected_result;
-}
-
 fn expectedReturnResultFor(self: *const Self, lambda_idx: CIR.Expr.Idx) ?Var {
     std.debug.assert(self.return_constraint_frames.items.len > 0);
     const frame = self.return_constraint_frames.items[self.return_constraint_frames.items.len - 1];
@@ -40068,6 +40534,9 @@ fn tryReturnErrorTail(self: *Self, error_var: Var) Var {
 fn checkProjectedTryReturn(self: *Self, expected: Var, plan: TryReturnRows.Plan, row: Var, env: *Env, ctx: problem.Context) Allocator.Error!void {
     const region = self.cir.store.getExprRegion(plan.expr);
     const actual = try self.freshFromContent(try self.mkTryContent(plan.ok, row), env, region);
+    if (self.try_return_conditions.get(ModuleEnv.varFrom(plan.expr))) |condition| {
+        try self.try_return_conditions.put(actual, condition);
+    }
     const result = try self.unifyReturnContribution(expected, actual, env, ctx);
     if (result.isProblem()) {
         self.problems.problems.items[@backingInt(result.problem)].type_mismatch.types.actual_var = ModuleEnv.varFrom(plan.expr);
@@ -40243,6 +40712,13 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, an
     }
 
     const constraints = self.return_constraints.items[frame.start..];
+    for (constraints) |constraint| {
+        const condition = self.try_return_conditions.get(ModuleEnv.varFrom(constraint.actual_expr)) orelse continue;
+        if (try self.tryHostedErrorOrigin(condition, false)) |origin| {
+            try self.try_lambda_host_origins.put(lambda_idx, origin);
+            break;
+        }
+    }
     const lambda_body = self.cir.store.getExpr(lambda_idx).e_lambda.body;
     const body_tail_try = try self.tailTrySuffixExpr(lambda_body);
 
@@ -48633,14 +49109,16 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
         }
 
         const target_var: Var = @fromBackingInt(@intCast(plan.target_var));
-        const fn_var: Var = @fromBackingInt(@intCast(plan.fn_var));
+        const maybe_fn_var = plan.fnVar();
         const resolution: can.NodeStore.LiteralDispatchPlan.Resolution = resolution: {
             // A dispatch-specific rejection is stronger than a concrete
             // builtin target (for example, an out-of-range U8 literal).
-            if (self.types.varStaticDispatchRejected(fn_var) or
-                self.dispatchDerivationHasRejectedAncestor(fn_var))
-            {
-                break :resolution .checked_error;
+            if (maybe_fn_var) |fn_var| {
+                if (self.types.varStaticDispatchRejected(fn_var) or
+                    self.dispatchDerivationHasRejectedAncestor(fn_var))
+                {
+                    break :resolution .checked_error;
+                }
             }
 
             const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(plan.node_idx));
@@ -48663,6 +49141,8 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
                 break :resolution .builtin_direct;
             }
 
+            const fn_var = maybe_fn_var orelse
+                base.invariant("validated builtin numeral lost its concrete builtin target", .{});
             visited.clearRetainingCapacity();
             if (try self.literalTargetContainsIdentity(target_var, &visited)) {
                 break :resolution .specialization_dispatch;

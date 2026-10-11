@@ -1781,6 +1781,28 @@ pub const ReportBuilder = struct {
                 D.bytes("Try").withAnnotation(.inline_code),
                 D.bytes("the body would otherwise return. Removing it may fix this."),
             }, self, &report);
+        } else if (self.tryErrorRowNeedsWideningHint(types)) {
+            if (ctx.hosted_origin) |hosted_origin| {
+                try D.renderSlice(&.{
+                    D.bytes("This error is forwarded from host function"),
+                    D.ident(hosted_origin).withAnnotation(.inline_code),
+                    D.bytes(".").withNoPrecedingSpace(),
+                    D.bytes("Its error type has a fixed representation at the host boundary. Forwarding it through a Roc function does not make its error union open."),
+                }, self, &report);
+                try report.document.addLineBreak();
+                try report.document.addLineBreak();
+            }
+            try D.renderSlice(&.{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes("This error payload is a closed tag union. It cannot gain the additional variants in the function's error type, even when all its variants are listed there. The two unions can have different runtime representations."),
+            }, self, &report);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try D.renderSlice(&.{
+                D.bytes("Use an explicit"),
+                D.bytes("match").withAnnotation(.inline_code),
+                D.bytes("to reconstruct each error variant in the return type, or wrap the original error in a tag of that type. Reconstructed payloads must also match the expected payload types. Forwarding the unchanged error payload does not convert it."),
+            }, self, &report);
         } else {
             try D.renderSlice(&.{
                 D.bytes("Hint:").withAnnotation(.emphasized),
@@ -1791,6 +1813,67 @@ pub const ReportBuilder = struct {
         }
 
         return report;
+    }
+
+    /// Inspect immutable diagnostic snapshots only. Do not attribute a closed
+    /// row to a host: parameters and nominal fields can also supply one.
+    fn tryErrorRowNeedsWideningHint(self: *const Self, pair: TypePair) bool {
+        const snapshots = self.snapshots.?;
+        const actual = snapshots.getContentUnwrapAlias(pair.actual_snapshot);
+        const expected = snapshots.getContentUnwrapAlias(pair.expected_snapshot);
+        if (actual != .structure or actual.structure != .nominal_type or
+            expected != .structure or expected.structure != .nominal_type) return false;
+        const a = actual.structure.nominal_type;
+        const e = expected.structure.nominal_type;
+        if (!std.meta.eql(a.ident, e.ident) or a.origin_module != e.origin_module) return false;
+        const actual_args = snapshots.sliceVars(a.vars);
+        const expected_args = snapshots.sliceVars(e.vars);
+        // Nominal snapshots store the backing before the two Try arguments.
+        if (actual_args.len != 3 or expected_args.len != 3) return false;
+        const actual_err = actual_args[2];
+        const expected_err = expected_args[2];
+
+        var cursor = actual_err;
+        var has_tags = false;
+        while (true) {
+            const content = snapshots.getContentUnwrapAlias(cursor);
+            if (content != .structure) return false;
+            switch (content.structure) {
+                .empty_tag_union => break,
+                .tag_union => |row| {
+                    for (snapshots.sliceTags(row.tags).items(.name)) |name| {
+                        has_tags = true;
+                        if (!self.snapshotRowHasTag(expected_err, name)) return false;
+                    }
+                    cursor = row.ext;
+                },
+                .box, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return false,
+            }
+        }
+        if (!has_tags) return false;
+        cursor = expected_err;
+        while (true) {
+            const content = snapshots.getContentUnwrapAlias(cursor);
+            if (content != .structure or content.structure != .tag_union) return false;
+            const row = content.structure.tag_union;
+            for (snapshots.sliceTags(row.tags).items(.name)) |name| {
+                if (!self.snapshotRowHasTag(actual_err, name)) return true;
+            }
+            cursor = row.ext;
+        }
+    }
+
+    fn snapshotRowHasTag(self: *const Self, root: SnapshotContentIdx, name: Ident.Idx) bool {
+        var cursor = root;
+        while (true) {
+            const content = self.snapshots.?.getContentUnwrapAlias(cursor);
+            if (content != .structure or content.structure != .tag_union) return false;
+            const row = content.structure.tag_union;
+            for (self.snapshots.?.sliceTags(row.tags).items(.name)) |tag_name| {
+                if (tag_name.eql(name)) return true;
+            }
+            cursor = row.ext;
+        }
     }
 
     /// The region to highlight for a `?` desugared into `expr_idx`: just the
