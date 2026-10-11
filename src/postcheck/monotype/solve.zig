@@ -281,7 +281,8 @@ pub const InstNode = union(enum) {
     /// Stored out of line: a named payload is an order of magnitude larger
     /// than every other variant, and most nodes are not named.
     named: *const InstNamed,
-    erased: names.TypeDigest,
+    /// Stored out of line for the same reason as `named`.
+    erased: *const names.TypeDigest,
     zst,
 };
 
@@ -7547,7 +7548,11 @@ pub const InstGraph = struct {
                     .declared_order = declared_order,
                 });
             },
-            .erased => |digest| .{ .erased = digest },
+            .erased => |digest| blk: {
+                const stored = try self.arena().create(names.TypeDigest);
+                stored.* = digest;
+                break :blk .{ .erased = stored };
+            },
             .zst => .zst,
         };
     }
@@ -8583,7 +8588,7 @@ pub const GraphTypeFinals = struct {
                     .declared_order = try self.finishDeclaredFields(named.declared_order, reader),
                 } };
             },
-            .erased => |digest| .{ .erased = digest },
+            .erased => |digest| .{ .erased = digest.* },
             .zst => .zst,
         };
     }

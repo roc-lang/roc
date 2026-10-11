@@ -268,6 +268,10 @@ stages it touches; the instruction-count effect is reported in "Results".
     2.96 GB to 2.66 GB; instruction counts rise about 0.5% for the assembly
     in `get`, and pinned cycle counts are unchanged within run-to-run noise.
 
+46. `src/postcheck/monotype/solve.zig` `InstNode`: an erased node's 32-byte
+    digest is stored out of line in the graph arena, like a named node's
+    payload, so every graph node is 32 bytes instead of 40.
+
 ## Findings from profiling
 
 These were found by profiling the ReleaseFast compiler with
@@ -1840,7 +1844,7 @@ reading code, and were not in the audit above.
 - category C; runs one `InstNode` per graph node (`nodes: ArrayList(InstNode)`), tens of thousands per specialization; also embedded in every `InterfaceConstraints.OpenNode` …; impact medium (20% smaller node column, better `find` locality); risk low
 - Finding: payload sizes: `tag_union {tags: []InstTag(16), ext(4), tags_sorted(1)}` ~24, `record` ~20, `func` ~20, `leaf` ~12, `unresolved: InstVariable` (u8 + two optionals) ~8-12, `named: *const InstNamed` 8 (already boxed "because a named payload is an order of magnitude larger"), but `erased: names.TypeDigest` is 32 bytes, so the union is 32 + tag -> 40 bytes instead of 24 + tag -> 32 (or 28 if `tags_sorted` moved to a bit …
 - Fix: store erased digests out of line (`erased: *const names.TypeDigest` in the graph arena, like `named`), or intern them into a graph-owned `ArrayList(TypeDigest)` and hold a `u32`. Verify `instNodeEql` (9150) compares bytes through the pointer.
-- Status: open
+- Status: fixed (fix 46)
 
 ### src/postcheck/monotype/solve.zig:3781-3798: union-find `find` walks and rewrites 40-byte `InstNode` entries
 - category C/H; runs per `find` (every graph read, unify, sameClass, nominal-backing hash/eql at 1873-1891 does one per argument); impact medium; risk medium (touches every …
