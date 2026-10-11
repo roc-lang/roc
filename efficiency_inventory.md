@@ -30,7 +30,7 @@ measured with every fix below applied:
 
 | Workload | Baseline | This branch | Change |
 | --- | ---: | ---: | ---: |
-| `roc check -j1 package/main.roc` (roc-pg) | 266.28 G | 218.24 G | -18.0% |
+| `roc check -j1 package/main.roc` (roc-pg) | 266.28 G | 217.88 G | -18.2% |
 | `roc build --opt=dev examples/query.roc` | 244.83 G | 222.54 G | -9.1% |
 | `roc build examples/query.roc` (LLVM) | 524.75 G | 344.94 G | -34.3% |
 | `roc test test/fx/issue8826_full.roc` | 141.4 M | 139.9 M | -1.1% |
@@ -374,6 +374,14 @@ stages it touches; the instruction-count effect is reported in "Results".
     changed; and statement successors are read in place. Generated code is
     byte-identical and instruction counts are flat (dev build 222.8 G, LLVM
     build 344.8 G).
+
+62. Representation capacity: `Layout.Idx` and the struct and tag-union row
+    indices are `u32`, with the packed `Layout` widened to 64 bits to hold
+    them beside the tag and sort key; and `SafeList` and `SafeMultiList`
+    return `error.OutOfMemory` for a length past the 32-bit index range
+    instead of narrowing it unchecked, which also keeps the top `Idx` value
+    free for `Idx.none`. Generated code is byte-identical; `roc check` is
+    217.88 G, the dev build 222.9 G, and the LLVM build 344.9 G.
 
 ## Findings from profiling
 

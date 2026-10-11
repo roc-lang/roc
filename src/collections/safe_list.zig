@@ -7,6 +7,15 @@ const Allocator = std.mem.Allocator;
 
 const CompactWriter = @import("CompactWriter.zig");
 
+/// The most elements a safe list holds, so every index and range count is a
+/// `u32`.
+const max_len: usize = std.math.maxInt(u32);
+
+/// Rejects a length past the 32-bit index range as allocation failure.
+fn checkLen(new_len: usize) Allocator.Error!void {
+    if (new_len > max_len) return error.OutOfMemory;
+}
+
 /// L-10 bounds check: reject an `(offset)`+`span_bytes` extent that would reach
 /// outside the `backing_len`-byte relocated buffer (truncated/corrupt blob), with
 /// overflow-safe arithmetic. An empty span is always valid. The single primitive
@@ -234,6 +243,7 @@ pub fn SafeList(comptime T: type) type {
 
         /// Initialize the `SafeList` with the specified capacity.
         pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!SafeList(T) {
+            try checkLen(capacity);
             return .{
                 .items = try std.ArrayList(T).initCapacity(gpa, capacity),
             };
@@ -260,6 +270,7 @@ pub fn SafeList(comptime T: type) type {
         /// Add an item to the end of this list.
         pub fn append(self: *SafeList(T), gpa: Allocator, item: T) std.mem.Allocator.Error!Idx {
             const length = self.len();
+            try checkLen(self.items.items.len + 1);
             try self.items.append(gpa, item);
 
             return @fromBackingInt(@intCast(@as(u32, @intCast(length))));
@@ -283,6 +294,7 @@ pub fn SafeList(comptime T: type) type {
         /// Add all the items in a slice to the end of this list.
         pub fn appendSlice(self: *SafeList(T), gpa: Allocator, items: []const T) std.mem.Allocator.Error!Range {
             const start_length = self.len();
+            try checkLen(self.items.items.len + items.len);
             try self.items.appendSlice(gpa, items);
             const end_length = self.len();
             return Range{ .start = @fromBackingInt(@intCast(start_length)), .count = @intCast(end_length - start_length) };
@@ -564,6 +576,7 @@ pub fn SafeMultiList(comptime T: type) type {
 
         /// Initialize the `SafeMultiList` with the specified capacity.
         pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!SafeMultiList(T) {
+            try checkLen(capacity);
             var items = std.MultiArrayList(T){};
             try items.ensureTotalCapacity(gpa, capacity);
             return .{
@@ -611,6 +624,7 @@ pub fn SafeMultiList(comptime T: type) type {
         /// Add a new item to the end of this list.
         pub fn append(self: *SafeMultiList(T), gpa: Allocator, item: T) std.mem.Allocator.Error!Idx {
             const length = self.len();
+            try checkLen(self.items.len + 1);
             try self.items.append(gpa, item);
 
             return @fromBackingInt(@intCast(@as(u32, @intCast(length))));
@@ -629,6 +643,7 @@ pub fn SafeMultiList(comptime T: type) type {
                 return .{ .start = .first, .count = 0 };
             }
             const start_length = self.len();
+            try checkLen(self.items.len + elems.len);
             try self.items.ensureUnusedCapacity(gpa, elems.len);
             for (elems) |elem| {
                 self.items.appendAssumeCapacity(elem);
@@ -661,6 +676,7 @@ pub fn SafeMultiList(comptime T: type) type {
 
         /// Make sure that the backing array has at least capacity for the specified number of elements.
         pub fn ensureTotalCapacity(self: *SafeMultiList(T), gpa: Allocator, capacity: usize) std.mem.Allocator.Error!void {
+            try checkLen(capacity);
             try self.items.ensureTotalCapacity(gpa, capacity);
         }
 
