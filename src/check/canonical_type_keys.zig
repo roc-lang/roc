@@ -64,7 +64,7 @@ pub fn fromVarWithAnchoredIdentities(
     store: *const TypeStore,
     env: *const ModuleEnv,
     var_: Var,
-    anchors: *const std.AutoHashMap(Var, void),
+    anchors: *const collections.DenseMap(Var, void),
 ) Allocator.Error!canonical.CanonicalTypeKey {
     var digester = Digester.init(allocator, store, env);
     defer digester.deinit();
@@ -322,7 +322,7 @@ pub const TypeWriter = struct {
         self.mode_digester.engine.reset();
     }
 
-    pub fn fromVarWithAnchoredIdentities(self: *TypeWriter, var_: Var, anchors: *const std.AutoHashMap(Var, void)) Allocator.Error!canonical.CanonicalTypeKey {
+    pub fn fromVarWithAnchoredIdentities(self: *TypeWriter, var_: Var, anchors: *const collections.DenseMap(Var, void)) Allocator.Error!canonical.CanonicalTypeKey {
         self.mode_digester.adapter.identity_anchors = anchors;
         self.mode_digester.adapter.write_identity_names = false;
         defer {
@@ -481,7 +481,7 @@ const SourceAdapter = struct {
     err_by_var: bool = false,
     /// Checker-local identities that keep their store identity instead of
     /// being alpha-renamed while comparing private requirement shapes.
-    identity_anchors: ?*const std.AutoHashMap(Var, void) = null,
+    identity_anchors: ?*const collections.DenseMap(Var, void) = null,
     /// Durable canonical keys preserve source-level variable names. Ephemeral
     /// requirement-shape keys ignore them because names do not affect type
     /// compatibility.
@@ -1589,7 +1589,7 @@ test "type writer resets checker digest modes between requests" {
     }});
     const root = try store.freshFromContent(.{ .flex = types.Flex.init().withConstraints(constraints) });
     const err = try store.freshFromContent(.err);
-    var anchors = std.AutoHashMap(Var, void).init(gpa);
+    var anchors = collections.DenseMap(Var, void).init(gpa);
     defer anchors.deinit();
     try anchors.put(root, {});
     var writer = TypeWriter.init(gpa, &store, &env);

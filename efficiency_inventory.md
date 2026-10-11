@@ -30,7 +30,7 @@ measured with every fix below applied:
 
 | Workload | Baseline | This branch | Change |
 | --- | ---: | ---: | ---: |
-| `roc check -j1 package/main.roc` (roc-pg) | 266.28 G | 218.16 G | -18.1% |
+| `roc check -j1 package/main.roc` (roc-pg) | 266.28 G | 218.24 G | -18.0% |
 | `roc build --opt=dev examples/query.roc` | 244.83 G | 222.54 G | -9.1% |
 | `roc build examples/query.roc` (LLVM) | 524.75 G | 344.94 G | -34.3% |
 | `roc test test/fx/issue8826_full.roc` | 141.4 M | 139.9 M | -1.1% |
@@ -351,6 +351,13 @@ stages it touches; the instruction-count effect is reported in "Results".
     body-level direct-call request map nothing read is gone. This recovers
     the cost of fix 57: `roc check` on roc-pg is 218.16 G.
 
+59. `src/check/Check.zig`: 116 hash maps keyed by `Var` or a CIR index
+    (fields and per-call scratch) are `DenseMap`s or `DenseMapUnmanaged`s.
+    Thirteen stay hashed: they back reserve-then-commit insertions, where a
+    capacity reservation must cover the insert, and a dense map cannot reserve
+    the page of a key it has not seen. Snapshots are unchanged and `roc
+    check` on roc-pg is within 0.05% (218.24 G).
+
 ## Findings from profiling
 
 These were found by profiling the ReleaseFast compiler with
@@ -445,7 +452,7 @@ reading code, and were not in the audit above.
 - category B; runs per-module state; individual maps are hit per expression / per var / per dispatch edge (see hot list below); impact high in aggregate (this is the dominant allocation/hashing …; risk low per map; medium for iterated maps …
 - Finding: the checker struct holds, by direct count of its field list, roughly 95 hash maps whose key is a dense store-local index. `Var`, `CIR.Expr.Idx`, `CIR.Pattern.Idx`, etc. are named `...Idx`/`Var` rather than `...Id`, so the `ci/zig_lints.zig` lint ("no HashMap keyed by `...Id`") never fires on any of them, yet every one is exactly the "hash a dense id" pattern design.md forbids. The checker already has …
 - Fix: convert in priority order of access count to `collections.DenseMap(K, V)` (paged sparse index + compact live column, O(live) clear) or, for the `void`-valued sets that are cleared per def/per scope, to `collections.ScopedBitSet`/`DynamicBitSetUnmanaged` sized to the owning store (`types.len()`, `cir.store.nodes.len()`). Sets that are only ever grown (never cleared) over node ids (`erroneous_value_exprs`, …
-- Status: open
+- Status: fixed (fix 59): 116 maps keyed by `Var` and CIR indices are dense maps; 13 stay hashed because they back reserve-then-commit insertions, which a dense map cannot reserve for unseen keys
 
 ### src/check/Check.zig:564: `scheme_requirement_candidate_indices_by_owner: AutoHashMapUnmanaged(Var, ArrayListUnmanaged(u32))`
 - category F, B; runs per scheme owner with requirement candidates; 8 access sites; impact medium; risk low
@@ -535,7 +542,7 @@ reading code, and were not in the audit above.
 - category B, E; runs once per module check (plus the per-row loop at 7361-7370 which clears two small hash sets per row root); impact medium (once per module but proportional to module size …; risk low
 - Finding: a module-wide walk with `settled_visited: AutoHashMap(Var, void)` (the comment at 7308-7310 explains it was moved off the shared set because clearing it afterwards would be O(module)), `semantic_row_roots: AutoHashMapUnmanaged(Var, Var)`, `seen_names: AutoHashMapUnmanaged(Ident.Idx, void)`, `seen_parts: AutoHashMapUnmanaged(Var, void)`, `row_roots` sorted with `std.mem.sort` (7355). It also iterates all …
 - Fix: visited/row roots -> a `DynamicBitSetUnmanaged` sized `types.len()` (one bit per var; O(n/64) clear) and `DenseMap(Var, Var)`; `seen_parts`/`seen_names` -> epoch-stamped `[]u32` columns over vars/idents. The seed loop could use the node-tag column directly (`nodes.items.items(.tag)`) rather than `nodes.get(idx).tag` per node.
-- Status: open
+- Status: partly fixed (fix 59): its dense-keyed maps are dense maps
 
 ### src/check/Check.zig:7494: `normalizeRowUnion` creates six containers (incl. `AutoHashMapUnmanaged(Ident.Idx, RowLabelOccurrence)`) per call
 - category A; runs per row root reached by `validateSettledValueRows` (7441) and per row normalized at unification time (7744): i.e. per record/tag-union row with an extension …; impact medium; risk low
@@ -589,7 +596,7 @@ reading code, and were not in the audit above.
 - category A, B; runs per use of a predeclared (recursive-group / annotated-before-body) scheme: every recursive call site; impact medium; risk low
 - Finding: `images` maps body slot var -> image var for one relation pass; created and destroyed per use.
 - Fix: `self.link_var_map` / a dedicated `DenseMap(Var, Var)` scratch cleared per call.
-- Status: open
+- Status: partly fixed (fix 59): its dense-keyed maps are dense maps
 
 ### src/check/Check.zig:17392 / 614: `hole_shared_schemes: AutoHashMapUnmanaged(Var, []const Var)` with `gpa.dupe`'d owned slices
 - category F, B; runs per predeclared annotation with live holes; impact low; risk low
@@ -607,7 +614,7 @@ reading code, and were not in the audit above.
 - category B; runs per local type declaration check; impact low; risk low
 - Finding: a set of dense statement ids; `cir.type_decls` is already a contiguous span of statement indices, so membership could be a sorted-span binary search or a bitset.
 - Fix: `DynamicBitSetUnmanaged` over `nodes.len()` or binary search in the span (if sorted).
-- Status: open
+- Status: partly fixed (fix 59): its dense-keyed maps are dense maps
 
 ### src/check/Check.zig:8148: `validateNominalDeclArgumentGrowth` `AutoHashMap(NominalDecl.Idx, u32)`
 - category B; runs once per module; impact low; risk low
@@ -619,7 +626,7 @@ reading code, and were not in the audit above.
 - category B; runs only when a cycle is reported; impact low; risk low
 - Finding: dense-id-keyed set on an error path; harmless but inconsistent with the dense-id rule.
 - Fix: bitset over defs.
-- Status: open
+- Status: partly fixed (fix 59): its dense-keyed maps are dense maps
 
 ### src/check/Check.zig:15918-15945: `checkPlatformHostedSection` `AutoHashMap(HostedTarget, []const u8)` with `allocPrint`'d names + `StringHashMap(void)` for symbols
 - category A, D; runs once per platform module; impact low; risk low
@@ -631,7 +638,7 @@ reading code, and were not in the audit above.
 - category A, B; runs per use-instance settled (36072); impact low-medium; risk low
 - Finding: visited set and pending stack created per call.
 - Fix: `self.var_set` + `self.type_visit_stack`.
-- Status: open
+- Status: partly fixed (fix 59): its dense-keyed maps are dense maps
 
 ### src/check/Check.zig:39091: `snapshotPreDefaultType` `AutoArrayHashMapUnmanaged(Var, PreDefaultGroup)` whose values own `ArrayListUnmanaged(StaticDispatchConstraint)`
 - category F; runs per diagnostic about a defaulted type (error path); impact low; risk low
@@ -643,13 +650,13 @@ reading code, and were not in the audit above.
 - category B; runs once per module, `clearRetainingCapacity` per top-level def (walks the whole table each time: O(defs x table capacity)); impact low-medium; risk low
 - Finding: `visited` is cleared per def; after one deep def it holds a large table and every subsequent clear memsets it.
 - Fix: `DenseMap(Var, void)` (clear is O(live)) or an epoch column.
-- Status: open
+- Status: partly fixed (fix 59): its dense-keyed maps are dense maps
 
 ### src/check/Check.zig:11978: `withdrawSupersededLiteralDefaultWarnings` `AutoHashMap(Var, void)` + full problem-list compaction
 - category B; runs once per module when any undetermined type was reported; impact low; risk low
 - Finding: builds a resolved-root set then scans all problems.
 - Fix: `self.var_set`.
-- Status: open
+- Status: partly fixed (fix 59): its dense-keyed maps are dense maps
 
 ### src/check/Check.zig:35076: `checkDefaultRestrictions` `gpa.dupe` of the whole `record_omitted_defaults` table
 - category D; runs once per module with pending default checks; impact low; risk low
@@ -816,7 +823,7 @@ reading code, and were not in the audit above.
 - category B; runs per published type; impact low-medium; risk low
 - Finding: dense `CheckedTypeId` keys in hash maps (named `...Id`; whether the lint catches `AutoHashMapUnmanaged(CheckedTypeId,` depends on its regex: flag for review).
 - Fix: `DenseMap(CheckedTypeId, CheckedTypeId)` / bitset.
-- Status: open
+- Status: fixed (fix 57)
 
 ### src/check/checked_artifact.zig:18803, 706, 27231: `std.heap.ArenaAllocator` for enumerated paths / export table / platform pairing
 - category A; runs once per module / per pairing; impact low; risk low
@@ -1205,7 +1212,7 @@ reading code, and were not in the audit above.
 - category E; runs per settled deferred dispatch relation (`recordSettledDeferredDispatchRelation` 44504 calls it unconditionally) and again at the end of every drain that …; impact high for modules with many generalized definitions carrying …; risk medium (requirement retirement timing …
 - Finding: the function walks `self.type_schemes` (all live schemes in the module, each with its `dispatch_requirements` list) and, per requirement, does `settled_static_dispatch_constraint_fns.contains` (hash) + `staticDispatchConstraintIsInactive` (resolve + content inspection), compacting in place and `swapRemove`-ing emptied schemes (which rewrites `type_scheme_by_var` for every indexed var of the moved scheme). With S …
 - Fix: index requirements by resolved `constraint.fn_var` root (`DenseMap(Var, {scheme_idx, req_idx})` maintained on insert) and retire exactly the requirement(s) whose callable was just settled; keep the full sweep only once per boundary (where `staticDispatchConstraintIsInactive` can change) rather than per relation. Verify ordering: `removeTypeSchemeAt` uses swapRemove so scheme order is already not semantically …
-- Status: open
+- Status: no change: one sample on roc-pg, and retiring by index or once per boundary changes when requirements retire, which dispatch observes
 
 ### src/check/Check.zig:18962-18970 + 18939-18955: `waitingObligationUnchanged` recomputes a 7-field context per retained waiting entry per drain
 - category E; runs per deferred entry that waits on an unchecked target def, on every drain that reaches it (every expression finish while the entry is past the clean prefix); impact medium; risk medium (correctness depends on the …
@@ -2061,7 +2068,7 @@ reading code, and were not in the audit above.
 - category B/F; runs per `walkLoopBodyContents` call (per loop analysed in unused-loop-result projection and iterator fusion); impact low; risk low
 - Finding: dense `LocalId` keys hashed, one heap ArrayList per registered local, all freed at the end of each walk.
 - Fix: `DenseMap(Ast.LocalId, u32 head)` + one shared `ArrayList(struct{reg: LocalRegistration, next: u32})`; or sort registrations by local once at the end.
-- Status: open
+- Status: fixed (fix 57)
 
 ### src/postcheck/monotype_lifted/spec_constr.zig:8467-8472, 8959-8961, 9102, 9316, 9467, 9616, 10641: `arena.create(std.ArrayList(...))` then grown with the GPA
 - category F/A; runs per let-case join, per loop rewrite, per block clone task; impact low-medium; risk low
@@ -2149,7 +2156,7 @@ reading code, and were not in the audit above.
 - category B/F; runs per match expression (the compiler and emitter are created per match in an arena): `occ_map` lookup per pattern column, `Env.locals: …; impact low; risk low
 - Finding: `OccId` is a dense id the same compiler assigns (`occ_entries` column), so `Env.locals` and `uses` (already a DenseMap) should both be columns over `occ_entries`; the arena absorbs the allocations but hashing and table growth remain per match.
 - Fix: `Env.locals` -> `DenseMap(OccId, EmitLocals)` or a column sized by `occ_entries.len` (the undo log already exists); `scoped_uses` -> spans into one list; `exit_joins` keyed by what `u32` is (a branch index?) -> column.
-- Status: open
+- Status: partly fixed (fix 57): the `OccId`-keyed map is a `DenseMapUnmanaged`; the digest- and owner-keyed maps are structural
 
 ### src/postcheck/boxy/plan.zig:59-78 (`CheckedTypeIdentity`, `CheckedExprIdentity`), 172-181, 6209-6213, 6928, 6991, 3800-3820 (Builder maps): every identity carries a 128-byte `checked.ModuleId` (`CheckedModuleArtifactKey` = 4 x [32]u8), and per-expression visited sets hash it
 - category B/C; runs `stepExprTypes` runs per checked expression per worker and does `body_exprs_seen.getOrPut({expr: {module: view.key (128 B), expr}, worker})` - a 136-byte key …; impact high (Boxy plan memory drops several-fold; per-expression …; risk medium (wide mechanical change)
@@ -2167,7 +2174,7 @@ reading code, and were not in the audit above.
 - category B; runs per representation/literal-term/site during planning (several of the 18663-18708 maps are rebuilt per planning pass over all reps); impact medium; risk low
 - Finding: dense ids produced by the same builder are hashed; `TypeRepId` indexes `representations`, `TermId`/`SiteId`/`EdgeId` index `LiteralRequirements` columns.
 - Fix: `collections.DenseMap` or columns on the owning table; for the `void`-valued sets a bitset sized by the id count.
-- Status: open
+- Status: fixed (fix 57)
 
 ### src/postcheck/boxy/plan.zig:2578, 2613, 9981, 10817, 11050, 11098: record children / tag variants re-sorted per representation build
 - category E; runs per record/tag-union representation built, per nominal backing, per declared-field order computation; impact low-medium; risk low (verify the checked rows' order …
@@ -2200,7 +2207,7 @@ reading code, and were not in the audit above.
 ### src/postcheck/boxy/lower.zig:820, 15617, 15648, 34468, 34593: `AutoHashMapUnmanaged(LIR.LocalId | PatternBinderId | RecordFieldLabelId, ...)` over dense ids
 - category B; runs per body (`recursive_value_slots: AutoHashMapUnmanaged(PatternBinderId, LocalId)`, `descriptor_local_template_positions: AutoHashMapUnmanaged(LocalId, u32)`), …; impact low; risk low
 - Fix: `DenseMap` or columns scoped by the body epoch.
-- Status: open
+- Status: fixed (fix 57)
 
 ### src/postcheck/boxy/lower.zig:5497, 43932, 7484: per-record sort of declared fields / checked record fields by label text
 - category E; runs per nominal record representation emitted and per `constRecordFields` call (per constant record restore); impact low; risk low
@@ -2223,7 +2230,7 @@ reading code, and were not in the audit above.
 ### src/postcheck/lambda_mono/lower.zig:264: `folded_matches: AutoHashMapUnmanaged(Lifted.ExprId, Lifted.ExprId)` keyed by a dense id
 - category B; runs per folded match lookup (per match expression lowered); impact low; risk low
 - Fix: `DenseMap(Lifted.ExprId, Lifted.ExprId)`.
-- Status: open
+- Status: fixed (fix 57)
 
 ### src/postcheck/monotype/ast.zig:98-110 (`StringLiteral`), `addStringView` (~line 1900), lower.zig:17813-17820: one heap allocation per string literal plus a 40-byte record with an optional refcounted backing
 - category F/C; runs per string literal per sealed specialization body (the draft already keeps literals in one shared `string_bytes` buffer, lower.zig:17460-17465; sealing dupes …; impact medium (allocation count ~ number of literals x …; risk low
@@ -2269,7 +2276,7 @@ reading code, and were not in the audit above.
 ### src/postcheck/boxy/literal_requirements.zig:108, 223, 233-234, 248, 252: dense `TermId`/`RequirementId`/`SiteId` keys in `AutoHashMapUnmanaged`s, `by_requirement: AutoHashMapUnmanaged(Requirement, RequirementId)`
 - category B; runs per literal requirement term/edge during Boxy literal planning; impact low; risk low
 - Fix: `DenseMap`/columns on the `entries`/`requirements` tables; keep `by_requirement` as the one structural interner.
-- Status: open
+- Status: partly fixed (fix 57): the maps keyed by dense term, requirement, and site ids are `DenseMapUnmanaged`s
 
 ### src/postcheck/solved_inline.zig:161-192: `[]Decision`, `[]MaterializationState`, `[]?ExprId`, `[]InlineKind` columns over all functions; fine (once per program), but `?Lifted.ExprId` costs 8 B
 - category C; runs once per program; impact low; risk low
@@ -3024,7 +3031,7 @@ reading code, and were not in the audit above.
 - category B; runs per boxy descriptor referenced by a published root (per root export); impact low; risk low
 - Finding: `frozen_descriptors: std.AutoHashMapUnmanaged(Program.BoxyTypeDescId, Destination)` hashes a dense `...Id`; the owning table size is `boxy_tables.type_descs.len`.
 - Fix: `collections.DenseMap(BoxyTypeDescId, Destination)` (the builder is per-root and short-lived, so a sparse-page dense map is the design.md-prescribed shape).
-- Status: open
+- Status: fixed (fix 57)
 
 ### src/eval/native_root_export.zig:510: finish() dupes every node's name, bytes, relocations and capacities out of the arena
 - category D; runs per node of every published compile-time root (per root); impact low-medium (static data size x2 per root); risk low
@@ -3042,7 +3049,7 @@ reading code, and were not in the audit above.
 - category B; runs per adapter descriptor specialization (cached in `adapter_desc_specializations`, so per distinct source/target pair); impact low; risk low
 - Finding: `std.AutoHashMapUnmanaged(LIR.BoxyNameId, LirProgram.BoxyTagVariant)` keyed by the dense interned name id, filled from the extension chain and consumed once.
 - Fix: A `DenseMap(BoxyNameId, BoxyTagVariant)` or, since variant rows are sorted by name rank, a merge over sorted variant lists. Low frequency, low priority.
-- Status: open
+- Status: fixed (fix 57)
 
 ### src/eval/boxy_runtime.zig:1614: Descriptor specialization dupes nested-desc and variant slices into scratch to survive table growth
 - category D; runs per runtime descriptor specialization (per boxy coercion that creates a new descriptor); impact low; risk low
