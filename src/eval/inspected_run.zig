@@ -387,6 +387,7 @@ test "native inspected exhaustion uses common crash semantics and restores the o
     const sites = [_]?backend.dev.CtfeContext.SiteDescriptor{.{
         .checked_module = @splat(74),
         .checked_site = 7,
+        .checked_origin = .{ .checked_expr = 7 },
         .procedure_identity = identity.bytes,
         .kind = .match,
         .region = .from_raw_offsets(10, 20),

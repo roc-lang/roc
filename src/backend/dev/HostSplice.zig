@@ -657,6 +657,7 @@ test "nonfragment ordinary code links shared static cells and common source even
     const sites = [_]?@import("CtfeContext.zig").SiteDescriptor{.{
         .checked_module = @splat(81),
         .checked_site = 82,
+        .checked_origin = .{ .checked_expr = 82 },
         .procedure_identity = identity.bytes,
         .kind = .if_,
         .region = .from_raw_offsets(10, 20),
