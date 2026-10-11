@@ -290,7 +290,7 @@ pub const MonoLlvmCodeGen = struct {
     /// Default-platform crash lowering consumes its explicit inline-scope chain.
     current_source_stmt: ?CFStmtId = null,
 
-    proc_registry: std.AutoHashMap(u32, LlvmBuilder.Function.Index),
+    proc_registry: collections.DenseMap(u32, LlvmBuilder.Function.Index),
     /// Per procedure, the function direct Roc calls target: parameters and
     /// small results classified into registers under `fastCallConv`. The packed
     /// `(ret_ptr, args_ptr)` function in `proc_registry` adapts to it for
@@ -335,7 +335,7 @@ pub const MonoLlvmCodeGen = struct {
     /// under. Non-zero routes builtin calls through preserve_most shims.
     cold_depth: u32 = 0,
     static_bytes: std.StringHashMap(LlvmBuilder.Value),
-    static_refcounted_backings: std.AutoHashMap(u32, LlvmBuilder.Value),
+    static_refcounted_backings: collections.DenseMap(u32, LlvmBuilder.Value),
     static_data_globals: std.AutoHashMap(u32, LlvmBuilder.Value),
     /// In-process consumers supply a relocated image that outlives execution.
     /// Object emission leaves this null and uses linker-visible data symbols.
@@ -364,7 +364,7 @@ pub const MonoLlvmCodeGen = struct {
     /// LLVM pipeline can see every call site and specialize across them.
     static_data_procs: []const LirProcSpecId = &.{},
     boxy_capture_drop_helpers: std.AutoHashMap(u64, BoxyCaptureDropHelper),
-    boxy_dict_thunks: std.AutoHashMap(u32, LlvmBuilder.Function.Index),
+    boxy_dict_thunks: collections.DenseMap(u32, LlvmBuilder.Function.Index),
     join_points: collections.DenseMap(u32, JoinInfo),
     compiled_joins: collections.DenseMap(u32, void),
     stmt_incoming_counts: collections.DenseMap(u32, u32),
@@ -588,18 +588,18 @@ pub const MonoLlvmCodeGen = struct {
             .erased_arg_desc_offsets = erased_arg_desc_offsets,
             .erased_arg_desc_params = erased_arg_desc_params,
             .boxy_worker_procs = boxy_worker_procs,
-            .proc_registry = std.AutoHashMap(u32, LlvmBuilder.Function.Index).init(allocator),
+            .proc_registry = collections.DenseMap(u32, LlvmBuilder.Function.Index).init(allocator),
             .fast_registry = collections.DenseMap(u32, LlvmBuilder.Function.Index).init(allocator),
             .builtin_functions = std.StringHashMap(LlvmBuilder.Function.Index).init(allocator),
             .cold_shims = std.StringHashMap(ColdShim).init(allocator),
             .static_bytes = std.StringHashMap(LlvmBuilder.Value).init(allocator),
-            .static_refcounted_backings = std.AutoHashMap(u32, LlvmBuilder.Value).init(allocator),
+            .static_refcounted_backings = collections.DenseMap(u32, LlvmBuilder.Value).init(allocator),
             .static_data_globals = std.AutoHashMap(u32, LlvmBuilder.Value).init(allocator),
             .static_data_export_rows = std.AutoHashMap(u32, u32).init(allocator),
             .static_data_symbols = std.StringHashMap(LlvmBuilder.Constant).init(allocator),
             .rc_helpers = std.AutoHashMap(u64, RcHelperEntry).init(allocator),
             .boxy_capture_drop_helpers = std.AutoHashMap(u64, BoxyCaptureDropHelper).init(allocator),
-            .boxy_dict_thunks = std.AutoHashMap(u32, LlvmBuilder.Function.Index).init(allocator),
+            .boxy_dict_thunks = collections.DenseMap(u32, LlvmBuilder.Function.Index).init(allocator),
             .join_points = collections.DenseMap(u32, JoinInfo).init(allocator),
             .compiled_joins = collections.DenseMap(u32, void).init(allocator),
             .stmt_incoming_counts = collections.DenseMap(u32, u32).init(allocator),

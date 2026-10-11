@@ -232,7 +232,7 @@ erased_arg_desc_params: []const LIR.ErasedArgDescParam,
 /// Exact dense LIR proc ids reachable through Boxy method slots.
 boxy_worker_procs: []const LIR.LirProcSpecId,
 module: WasmModule,
-pending_bodies: std.AutoHashMap(LocalFunctionIndex, CodeBuilder),
+pending_bodies: collections.DenseMap(LocalFunctionIndex, CodeBuilder),
 active_fn_stack: std.ArrayList(LocalFunctionIndex),
 storage: Storage,
 /// Accumulated stack frame size for the current function (for stack memory values).
@@ -365,7 +365,7 @@ pub fn init(
         .erased_arg_desc_params = erased_arg_desc_params,
         .boxy_worker_procs = boxy_worker_procs,
         .module = WasmModule.init(allocator),
-        .pending_bodies = std.AutoHashMap(LocalFunctionIndex, CodeBuilder).init(allocator),
+        .pending_bodies = collections.DenseMap(LocalFunctionIndex, CodeBuilder).init(allocator),
         .active_fn_stack = .empty,
         .storage = Storage.init(allocator),
         .stack_frame_size = 0,

@@ -291,6 +291,12 @@ stages it touches; the instruction-count effect is reported in "Results".
     aligned fields, so `CFStmt` aligns to 8 instead of 16 and shrinks from 144
     to 136 bytes per statement.
 
+51. Backend tables keyed by dense ids: the LLVM backend's procedure
+    registry, static refcounted backings, and Boxy dictionary thunks, and the
+    wasm backend's pending function bodies, are `DenseMap`s (the dev, LLVM,
+    and wasm per-procedure maps were converted earlier). Generated code is
+    byte-identical.
+
 ## Findings from profiling
 
 These were found by profiling the ReleaseFast compiler with
@@ -2565,7 +2571,7 @@ reading code, and were not in the audit above.
 - category B; runs per Boxy frozen method / per expect site (once per program).; impact low; risk low
 - Finding: the first is keyed by a dense proc id (lint evaded via `Unmanaged`); sparse, so a `DenseMap` is the stated replacement. `ExpectSiteKey` is a structural key (fine).
 - Fix: `collections.DenseMap(LirProcSpecId, BoxyFrozenMethodOrigin)`.
-- Status: open
+- Status: no change: both maps hold a handful of entries per program, and as unmanaged maps with empty defaults they keep every `Program` literal allocator-free, which `DenseMap` cannot
 
 ### src/lir/lir_image.zig:1230: `copyProgramIntoBuffer` copies every column through `allocator.dupe`/`alloc` into the image buffer (expected for serialization; no finding beyond noting that `cf_stmts` at 144 bytes/stmt dominates image size, so the `CFStmt` repack shrinks LIR images 2-3x as well).
 - 
@@ -2587,7 +2593,7 @@ reading code, and were not in the audit above.
 - category B; runs `stmt_locations` get+put per generated statement (`generateStmt`, line 22463-22470); `proc_registry.get` per call site; `join_points`/`join_point_params` per …; impact medium; risk low
 - Finding: all keyed by dense ids over domains the store already numbers. `CompiledProc` is 56 bytes and `proc_registry` is also iterated to find procs by id in `compileAllProcSpecs` (`contains` + `get` per proc).
 - Fix: `stmt_locations` -> store-indexed `ArrayList(u32)` of code offsets with a per-proc stamp (statements of one procedure are visited once; a `maxInt` sentinel + stamp avoids clearing); `proc_registry` -> `[]CompiledProc` indexed by proc id (procs are registered up front for all ids at 20267-20279, so it is already dense); `join_points`/`join_point_params` -> `DenseMap(JoinPointId, …)` or stamped columns; …
-- Status: open
+- Status: fixed: the per-procedure tables are `DenseMap`s and the write-only join table is gone
 
 ### src/backend/dev/LirCodeGen.zig:1039: `join_point_jumps: AutoHashMap(u32, std.ArrayList(JumpRecord))` is a map of lists, cleared by iterating all values and deep-cloned per procedure
 - category F; runs per jump (append), per join (patch loop), per procedure (`clearFunctionControlFlowState` walks every list; `reset` likewise; `compileProcSpec` clones every …; impact medium; risk low
@@ -2685,7 +2691,7 @@ reading code, and were not in the audit above.
 - category B; runs `fast_registry.get`/`proc_registry.get` per call site; `static_data_globals` per static-data read; `debug_types` per debug type lookup.; impact medium; risk low
 - Finding: procedure ids, static-data ids and layout ids are dense store domains; design.md names columns for these. `proc_registry`/`fast_registry` are populated for every proc up front, so a `[]Function.Index` (sentinel `.none`) is exact.
 - Fix: `ArrayList(Function.Index)` indexed by proc id (two columns), `DenseMap` for the static-data and layout-keyed caches.
-- Status: open
+- Status: fixed (fix 51)
 
 ### src/backend/llvm/MonoLlvmCodeGen.zig:367: `join_points: AutoHashMap(u32, JoinInfo)`, `compiled_joins: AutoHashMap(u32, void)`, `stmt_incoming_counts: AutoHashMap(u32, u32)`, `stmt_entry_blocks: AutoHashMap(u32, Block.Index)` keyed by `JoinPointId`/`CFStmtId`, and `collectStmtIncomingCounts`/`inlineShapeOf` build an `AutoHashMap(u32, void)` visited set per procedure
 - category B/A; runs `stmt_incoming_counts`/`stmt_entry_blocks` are probed per statement during emission; the visited maps are created per procedure (3457) and per inline-shape …; impact medium; risk low
@@ -2721,7 +2727,7 @@ reading code, and were not in the audit above.
 - category B; runs `registered_procs.get` per call site, `join_point_*` per join/jump, `pending_bodies` per function (and `std.sort.heap` over its keys at 1452 to get …; impact medium; risk low
 - Finding: the wasm backend keeps its local bindings in a store-indexed column (`Storage.zig`) but every other per-id table is a hash map. The per-statement generation-count guard (`stmt_generation_counts`) is a hash probe + insert per statement in release builds.
 - Fix: columns indexed by proc id / function index / join id / statement id (stamped where per-proc); gate the generation-count bookkeeping behind `builtin.mode == .debug` (it is documented as debug-only at lines 317-320).
-- Status: open
+- Status: fixed (fix 51)
 
 ### src/backend/wasm/WasmCodeGen.zig:6432: `func_type_cache: StringHashMap(u32)` keyed by a formatted signature string rebuilt into `func_type_key_scratch` on every lookup
 - category D/E; runs per call-signature lookup (per indirect/direct call needing a type index, per function declaration).; impact low; risk low
