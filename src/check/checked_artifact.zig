@@ -4490,6 +4490,12 @@ pub const CheckedTypeStore = struct {
         for (module_env.row_coerced_uses.items.items) |use| {
             _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @fromBackingInt(use.value_var));
         }
+        // A row-coerced call is lowered at its function's own type and result
+        // (`ModuleEnv.RowCoercedCallee`).
+        for (module_env.row_coerced_callees.items.items) |callee| {
+            _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @fromBackingInt(callee.fn_var));
+            _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @fromBackingInt(callee.ret_var));
+        }
 
         for (module_env.store.sliceDefs(module_env.global_value_defs)) |def_idx| {
             const root = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, module.defType(def_idx));
@@ -12810,7 +12816,13 @@ pub const CheckedBodyStore = struct {
             const node: CIR.Node.Idx = @fromBackingInt(@intCast(node_idx));
             if (source_nodes.hasExpr(@fromBackingInt(@intCast(node_idx)))) {
                 const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(node_idx));
-                const ty = checked_types.rootForSourceVar(module, module.exprType(expr_idx)) orelse {
+                // A row-coerced callee is read at its function's own type; the
+                // call widens the result (`ModuleEnv.RowCoercedCallee`).
+                const source_var = if (module.moduleEnvConst().rowCoercedCallee(node)) |callee|
+                    @as(Var, @fromBackingInt(callee.fn_var))
+                else
+                    module.exprType(expr_idx);
+                const ty = checked_types.rootForSourceVar(module, source_var) orelse {
                     if (builtin.mode == .debug) {
                         base.invariant("checked artifact invariant violated: checked expr type root was not published", .{});
                     }
@@ -15479,15 +15491,7 @@ const CheckedBodyPayloadCopier = struct {
                 .final_else = self.checkedExpr(if_.final_else),
                 .warn_unused_branches = if_.origin == .source,
             } },
-            .e_call => |call| .{ .call = .{
-                .func = self.checkedExpr(call.func),
-                .args = try self.copyExprSpan(call.args),
-                .called_via = call.called_via,
-                .source_fn_ty_payload = try self.checkedTypeForRequiredVar(
-                    call.constraint_fn_var orelse checkedArtifactInvariant("checked call expression had no published function constraint type", .{}),
-                    "checked call function constraint type root was not published",
-                ),
-            } },
+            .e_call => |call| try self.copyCallData(expr_idx, call),
             .e_record => |record| .{ .record = .{
                 .fields = try self.copyRecordFields(record.fields),
                 .unsets = try self.copyUnsetFieldLabels(record.unsets),
@@ -16370,6 +16374,36 @@ const CheckedBodyPayloadCopier = struct {
             };
         }
         return null;
+    }
+
+    /// A call, or, when its callee is a row-coerced callee
+    /// (`ModuleEnv.RowCoercedCallee`), a row coercion of the call made at the
+    /// function's own type: the inner call's result is the function's own
+    /// result, and the coercion's type is this expression's wider one
+    /// (design.md "Row Subsumption").
+    fn copyCallData(self: *@This(), expr_idx: CIR.Expr.Idx, call: @FieldType(CIR.Expr, "e_call")) Allocator.Error!CheckedExprData {
+        const callee = self.module.moduleEnvConst().rowCoercedCallee(ModuleEnv.nodeIdxFrom(call.func));
+        const call_data: CheckedExprData = .{ .call = .{
+            .func = self.checkedExpr(call.func),
+            .args = try self.copyExprSpan(call.args),
+            .called_via = call.called_via,
+            .source_fn_ty_payload = if (callee) |coerced|
+                try self.checkedTypeForRequiredVar(@fromBackingInt(coerced.fn_var), "row-coerced callee function type root was not published")
+            else
+                try self.checkedTypeForRequiredVar(
+                    call.constraint_fn_var orelse checkedArtifactInvariant("checked call expression had no published function constraint type", .{}),
+                    "checked call function constraint type root was not published",
+                ),
+        } };
+        const coerced = callee orelse return call_data;
+        const call_id: CheckedExprId = @fromBackingInt(try checkedSourceNodeIdFromLen(self.exprs.items.len));
+        try self.exprs.append(self.allocator, .{
+            .id = call_id,
+            .ty = try self.checkedTypeForRequiredVar(@fromBackingInt(coerced.ret_var), "row-coerced call result type root was not published"),
+            .source_region = self.module.regionAt(ModuleEnv.nodeIdxFrom(expr_idx)),
+            .data = call_data,
+        });
+        return .{ .row_coerce = .{ .value = call_id } };
     }
 
     /// A use checking recorded as a widening of a top-level value
@@ -17425,7 +17459,8 @@ pub const ResolvedValueRefTable = struct {
                 &local_pattern_roles,
                 checked_bodies,
             );
-            const checked_ty = if (coerced_lookup) |value| value.ty else checked_types.rootForSourceVar(module, module.exprType(expr_idx)) orelse {
+            const coerced_callee = module.moduleEnvConst().rowCoercedCallee(ModuleEnv.nodeIdxFrom(expr_idx)) != null;
+            const checked_ty = if (coerced_lookup) |value| value.ty else if (coerced_callee) checked_bodies.expr(checked_expr).ty else checked_types.rootForSourceVar(module, module.exprType(expr_idx)) orelse {
                 if (builtin.mode == .debug) {
                     base.invariant("checked artifact invariant violated: resolved value ref type root was not published", .{});
                 }
@@ -17433,7 +17468,7 @@ pub const ResolvedValueRefTable = struct {
             };
             // Publication keys every source root by this same writer.
             const checked_type_key = checked_types.store.view().rootKey(checked_ty);
-            if (builtin.mode == .debug and coerced_lookup == null) {
+            if (builtin.mode == .debug and coerced_lookup == null and !coerced_callee) {
                 const written = (try key_writer.fromVar(module.exprType(expr_idx))).key;
                 if (@as(u256, @bitCast(written.bytes)) != @as(u256, @bitCast(checked_type_key.bytes))) {
                     base.invariant("checked artifact invariant violated: resolved value ref type key differs from its published root", .{});

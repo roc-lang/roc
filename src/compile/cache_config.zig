@@ -304,7 +304,9 @@ pub const Constants = struct {
     ///      "Row Coercion Primitive").
     /// 142: Module environments record the uses of top-level values that read
     ///      the value through a row coercion.
-    pub const CACHE_VERSION = 142;
+    /// 143: Module environments record row-coerced callees and the definitions
+    ///      whose bodies closed an annotated open result row.
+    pub const CACHE_VERSION = 143;
 };
 
 /// Configuration for the Roc cache system.
