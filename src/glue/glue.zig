@@ -785,7 +785,6 @@ fn buildGluePlugin(
         error.ModuleLinkFailed,
         error.NoBitcodeModules,
         error.UnsupportedLlvmTriple,
-        error.WindowsSDKNotFound,
         => return error.CompilationFailed,
     };
 }
