@@ -287,6 +287,10 @@ stages it touches; the instruction-count effect is reported in "Results".
 49. `src/lir/LirStore.zig`: `addCFStmt` and `appendBodyShard` append into the
     capacity they reserve up front without re-checking it per element.
 
+50. `src/lir/LIR.zig` `LiteralValue`: the 128-bit literal payloads are 8-byte
+    aligned fields, so `CFStmt` aligns to 8 instead of 16 and shrinks from 144
+    to 136 bytes per statement.
+
 ## Findings from profiling
 
 These were found by profiling the ReleaseFast compiler with
@@ -2223,7 +2227,7 @@ reading code, and were not in the audit above.
 - category C; runs per statement, for every store (coordinator + every body shard + every proc-rewrite overlay), and every pass that reads statements (the union is copied by …; impact high (3x less statement memory in every shard and the …; risk medium (mechanical but wide: every …
 - Finding: `CFStmt` is a `union(enum)` stored in `LirStore.cf_stmts` (src/lir/LirStore.zig:852). Its size is set by `assign_call_erased` (target 4 + closure 4 + 3 spans 24 + LocalSpan 8 + `?BoxyDescRef` 28 + `?LocalId` 8 + plan 4 + 3 bools + `?LocalId` 8 + `drive` 1 + `?PendingReturn` 36 + next 4 = ~132 bytes) and its alignment by `assign_literal.value: LiteralValue`, whose `i128_literal`/`dec_literal`/`boxy_dynamic_*` …
 - Fix: (1) Move the i128-bearing literal payloads out of line: store `i128_literal`/`dec_literal`/`boxy_dynamic_*` values in a dedicated `i128s` column (or as two entries in the existing `u64s` pool) and keep a `U64Span`/index in `LiteralValue`; this drops `@alignOf(CFStmt)` from 16 to 8 (or 4) and `LiteralValue` from 64 to ~32 bytes. (2) Side-table the Boxy-only call metadata: give …
-- Status: open
+- Status: partly fixed (fix 50): 128-bit literal payloads are 8-byte aligned, so the union is 136 bytes at alignment 8; the largest call variants still size it, and moving them to side tables would end the by-reference statement reads every pass now uses
 
 ### src/lir/LIR.zig:1402: `assign_low_level` embeds a 56-byte `RcEffect` that is a pure function of `op` plus a transfer mask
 - category C/D; runs per `assign_low_level` statement (the most common statement kind after `assign_ref`/`set_local` in lowered bodies).; impact medium; risk low
