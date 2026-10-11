@@ -325,6 +325,11 @@ stages it touches; the instruction-count effect is reported in "Results".
     and `CommonEnv.calcLineStarts` finds newlines with the vectorized scalar
     search instead of a byte loop.
 
+56. `src/canonicalize`: the canonicalizer's ten maps keyed by pattern,
+    statement, and parser-scope ids, the alias-cycle Tarjan state, and the
+    dependency graph's Tarjan state, pattern-to-def map, def positions, and
+    def-to-group map are `DenseMap`s.
+
 ## Findings from profiling
 
 These were found by profiling the ReleaseFast compiler with
@@ -903,13 +908,13 @@ reading code, and were not in the audit above.
 - category B; runs per module; `used_patterns` / `globally_resolvable_patterns` / `import_indices` / `active_decl_*` are hit per identifier reference; impact medium; risk low
 - Finding: dense ids hashed: `used_patterns`, `globally_resolvable_patterns` (Pattern.Idx -> void; probed per lookup at `isGloballyResolvablePattern`), `active_decl_values/types/import_aliases` (Ident.Idx -> usize), `exposed_idents/types`, `import_indices`, `parser_type_decl_states`, `forward_type_scope_eligibility`, `alias_cycle_*`, `assoc_*`, `type_decl_paths`, `forward_prepared_import_aliases`, `active_decl_scopes`, …
 - Fix: bitsets over `nodes.len()` for the pattern sets; `DenseMap(Ident.Idx, ...)` for the ident-keyed ones; `exposed_ident_texts` -> keyed by `Ident.Idx`.
-- Status: open
+- Status: partly fixed (fix 56): the ten maps keyed by pattern, statement, and scope ids are `DenseMap`s; maps keyed by `Ident.Idx` stay hashed, since the identifier's attribute bits make its raw value sparse
 
 ### src/canonicalize/Can.zig:2407-2409: `AliasCycleContext` Tarjan state in three `AutoHashMapUnmanaged(AST.Statement.Idx, ...)`
 - category B; runs once per module (alias cycle detection over type decl statements); impact low; risk low
 - Finding: index/lowlink/on_stack keyed by dense statement ids through hash maps.
 - Fix: three `[]u32`/bitset columns sized to the statement count (the pattern used by `finalizeTypeDeclarationValidity` in Check.zig).
-- Status: open
+- Status: fixed (fix 56)
 
 ### src/canonicalize/Can.zig:535: `SeenLabels.positions: AutoHashMapUnmanaged({run_top, ident}, u32)` for duplicate record-field/tag detection
 - category B; runs per record literal field / per tag in a union annotation; `clearFrom` removes entries one by one (hash remove per label); impact low-medium; risk low
@@ -921,7 +926,7 @@ reading code, and were not in the audit above.
 - category F, B; runs once per module; one heap list per def with dependencies; impact medium (once per module, but O(defs) hash maps and per-def …; risk low
 - Finding: adjacency as hash-map-of-lists keyed by dense def ids; Tarjan (`TarjanState` 1921-1936) keeps `indices`, `lowlinks`, `visited`, `on_stack` as four more hash maps keyed by `Def.Idx`; `computeCheckOrder` (1743-1812) builds `pattern_to_def`, `def_position`, `def_to_group`, `refs`, `seen_edges: AutoHashMapUnmanaged(u64, void)` and `successors: []std.ArrayList(u32)` (list per group).
 - Fix: CSR adjacency (`edge_starts: []u32` over the def list + flat `edges: []Def.Idx`), Tarjan columns as `[]u32`/bitset indexed by the def's position in `nodes` (a `DenseMap(Def.Idx, u32)` position index built once). `successors` -> CSR.
-- Status: open
+- Status: partly fixed (fix 56): Tarjan state, the pattern-to-def map, and def positions are `DenseMap`s; the adjacency is still a map of lists
 
 ### src/canonicalize/DependencyGraph.zig:316, 738: `DemandAnalyzer.resolved_literal_targets: AutoHashMapUnmanaged(Var, ArrayListUnmanaged(Def.Idx))` and `create(DemandSummary)` per lambda
 - category F, B, A; runs per lambda summarized (per local function in the module); per literal requirement; impact low-medium; risk low
@@ -945,7 +950,7 @@ reading code, and were not in the audit above.
 - category C, H; runs per serialized module env; impact low; risk low
 - Finding: 48 bytes of reserved space in the serialized struct for a hash map that is rebuilt at runtime; harmless but it means the serialized struct carries dead bytes and the import mapping is rebuilt per load.
 - Fix: keep (low); note that the import mapping could be a serialized sorted table.
-- Status: open
+- Status: no change: reserved serialized bytes; the finding recommends keeping them
 
 ### src/canonicalize/ImportResolution.zig:225-250: `outcomes: StringHashMap(Resolution)` keyed by import path text; `scratch`/`path_buf` ArrayLists; `dupe` of relative path (1000)
 - category D, B; runs per import resolved (per module x imports); impact low; risk low
@@ -968,7 +973,7 @@ reading code, and were not in the audit above.
 ### src/canonicalize/Node.zig:314 + NodeStore.zig:286-313: CIR `Node` is tag + 16-byte extern-union payload in a `SafeMultiList`; typed side tables for larger data
 - category C (reviewed, mostly good); runs per CIR node; impact, ; risk, - Finding: `Payload` is asserted to be exactly 16 bytes (test at 1381) and `Node.List = SafeMultiList` splits the 1-byte tag into its own column, so nodes cost 17 bytes with no padding; larger payloads go to typed `SafeList`s (`match_data`, `if_data`, `method_call_data`, ...). `regions: Region.List` (8 bytes/node) is parallel. This is already the SoA layout the brief asks for. One note: `CIR.Expr` (Expression.zig:70) is the …
 - Fix: none for the store; for consumers, pass `Expr.Idx` and re-decode on demand rather than caching the decoded union in long-lived frames.
-- Status: open
+- Status: no change: the finding recommends none for the store
 
 ### src/parse/DeclIndex.zig:66-82, 327-341: every parser scope owns three `AutoHashMapUnmanaged(Ident.Idx, NameBucket)`, each bucket with an `overflow: ArrayListUnmanaged(DeclIdx)`; one scope per block
 - category F, B; runs per block/lambda/associated scope entered during parsing (`enterScope` from Parser.zig:387); impact medium (the parser creates a scope per block; each costs …; risk medium (forward-reference policy …

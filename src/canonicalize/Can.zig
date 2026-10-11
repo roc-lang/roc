@@ -287,7 +287,7 @@ value_forward_references: std.AutoHashMapUnmanaged(ValueForwardKey, Scope.Forwar
 /// it ahead of the declaration, so that the reference resolves to the binder.
 adopting_forward_decl: ?AST.DeclIndex.DeclIdx = null,
 /// Active parser declaration scopes keyed by parser scope index.
-active_decl_scopes: std.AutoHashMapUnmanaged(AST.DeclIndex.ScopeIdx, ActiveDeclBinding) = .{},
+active_decl_scopes: collections.DenseMap(AST.DeclIndex.ScopeIdx, ActiveDeclBinding),
 /// Top active declaration owner for each whole-scope type name.
 active_decl_types: std.AutoHashMapUnmanaged(Ident.Idx, usize) = .{},
 /// Change log backing active_decl_types so scope exit restores shadowed names.
@@ -297,7 +297,7 @@ active_decl_import_aliases: std.AutoHashMapUnmanaged(Ident.Idx, usize) = .{},
 /// Change log backing active_decl_import_aliases so scope exit restores shadowed aliases.
 active_decl_import_alias_entries: std.ArrayListUnmanaged(ActiveDeclImportAliasEntry) = .empty,
 /// Import aliases already prepared from parser declarations before source-order canonicalization.
-forward_prepared_import_aliases: std.AutoHashMapUnmanaged(AST.Statement.Idx, void) = .{},
+forward_prepared_import_aliases: collections.DenseMap(AST.Statement.Idx, void),
 /// Active rigid type variables in annotations, indexed for expected constant-time lookup.
 type_var_scopes: TypeVarScopes = .{},
 /// Set of identifiers exposed from this module header (values not used)
@@ -334,38 +334,38 @@ pending_provides_entries: std.ArrayListUnmanaged(PendingProvidesEntry) = .empty,
 /// extensions independently of source order.
 method_registrations: std.AutoHashMapUnmanaged(ModuleEnv.MethodKey, MethodRegistration) = .{},
 /// Tracks which pattern indices have been used/referenced
-used_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
+used_patterns: collections.DenseMap(Pattern.Idx, void),
 /// Patterns for values that resolve from module-global storage rather than
 /// closure capture.
-globally_resolvable_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
+globally_resolvable_patterns: collections.DenseMap(Pattern.Idx, void),
 /// Builtin types that are automatically available in every non-Builtin module.
 builtin_auto_imported_types: std.AutoHashMapUnmanaged(Ident.Idx, AutoImportedType) = .{},
 /// Map from module identifier to Import.Idx for tracking unique imports.
 import_indices: std.AutoHashMapUnmanaged(Ident.Idx, Import.Idx),
 /// Canonicalization state for parser-owned type declarations.
-parser_type_decl_states: std.AutoHashMapUnmanaged(AST.Statement.Idx, ParserTypeDeclState) = .{},
+parser_type_decl_states: collections.DenseMap(AST.Statement.Idx, ParserTypeDeclState),
 /// Type declarations whose CIR statements were prepared by a forward reference.
 forward_prepared_type_decls: std.ArrayListUnmanaged(Statement.Idx) = .empty,
 /// Whether an associated parser scope belongs to the selected occurrence of each
 /// enclosing type declaration. Populated only by nested forward type lookup.
-forward_type_scope_eligibility: std.AutoHashMapUnmanaged(AST.DeclIndex.ScopeIdx, bool) = .{},
+forward_type_scope_eligibility: collections.DenseMap(AST.DeclIndex.ScopeIdx, bool),
 /// All canonical type-declaration statements produced by this module.
 type_decl_statements: std.ArrayListUnmanaged(Statement.Idx) = .empty,
 /// Parser alias-cycle members keyed by the AST alias statement, with the member
 /// it directly references inside the cycle.
-alias_cycle_references: std.AutoHashMapUnmanaged(AST.Statement.Idx, AST.Statement.Idx) = .{},
+alias_cycle_references: collections.DenseMap(AST.Statement.Idx, AST.Statement.Idx),
 /// Parser scopes whose alias-cycle graph has already been indexed.
-alias_cycle_scopes: std.AutoHashMapUnmanaged(AST.DeclIndex.ScopeIdx, void) = .{},
+alias_cycle_scopes: collections.DenseMap(AST.DeclIndex.ScopeIdx, void),
 /// Associated value patterns keyed by parser structural owner path and item name.
 assoc_value_patterns: std.AutoHashMapUnmanaged(AST.DeclIndex.AssocValue, Pattern.Idx) = .{},
 /// Qualified associated value references created before their definitions.
 assoc_forward_references: std.AutoHashMapUnmanaged(AST.DeclIndex.AssocValue, Scope.ForwardReference) = .{},
 /// Reverse lookup from associated forward-reference patterns to their parser key.
-assoc_forward_pattern_keys: std.AutoHashMapUnmanaged(Pattern.Idx, AST.DeclIndex.AssocValue) = .{},
+assoc_forward_pattern_keys: collections.DenseMap(Pattern.Idx, AST.DeclIndex.AssocValue),
 /// Local associated value statements parked before a later definition fills them.
 assoc_local_statement_placeholders: std.AutoHashMapUnmanaged(AST.DeclIndex.AssocValue, Statement.Idx) = .{},
 /// Parser structural owner path for each canonical type-declaration statement.
-type_decl_paths: std.AutoHashMapUnmanaged(Statement.Idx, AST.DeclIndex.TypePathIdx) = .{},
+type_decl_paths: collections.DenseMap(Statement.Idx, AST.DeclIndex.TypePathIdx),
 /// Interned identifier cache for parser type paths.
 type_path_names: std.ArrayList(TypePathNames) = .empty,
 /// Parser type path for the declaration annotation currently being canonicalized.
@@ -807,30 +807,30 @@ pub fn deinit(
         forward_ref.reference_regions.deinit(gpa);
     }
     self.value_forward_references.deinit(gpa);
-    self.active_decl_scopes.deinit(gpa);
+    self.active_decl_scopes.deinit();
     self.active_decl_types.deinit(gpa);
     self.active_decl_type_entries.deinit(gpa);
     self.active_decl_import_aliases.deinit(gpa);
     self.active_decl_import_alias_entries.deinit(gpa);
-    self.forward_prepared_import_aliases.deinit(gpa);
-    self.used_patterns.deinit(gpa);
-    self.globally_resolvable_patterns.deinit(gpa);
+    self.forward_prepared_import_aliases.deinit();
+    self.used_patterns.deinit();
+    self.globally_resolvable_patterns.deinit();
     self.builtin_auto_imported_types.deinit(gpa);
-    self.parser_type_decl_states.deinit(gpa);
+    self.parser_type_decl_states.deinit();
     self.forward_prepared_type_decls.deinit(gpa);
-    self.forward_type_scope_eligibility.deinit(gpa);
+    self.forward_type_scope_eligibility.deinit();
     self.type_decl_statements.deinit(gpa);
-    self.alias_cycle_references.deinit(gpa);
-    self.alias_cycle_scopes.deinit(gpa);
+    self.alias_cycle_references.deinit();
+    self.alias_cycle_scopes.deinit();
     self.assoc_value_patterns.deinit(gpa);
     var assoc_fr_iter = self.assoc_forward_references.valueIterator();
     while (assoc_fr_iter.next()) |forward_ref| {
         forward_ref.reference_regions.deinit(gpa);
     }
     self.assoc_forward_references.deinit(gpa);
-    self.assoc_forward_pattern_keys.deinit(gpa);
+    self.assoc_forward_pattern_keys.deinit();
     self.assoc_local_statement_placeholders.deinit(gpa);
-    self.type_decl_paths.deinit(gpa);
+    self.type_decl_paths.deinit();
     self.type_path_names.deinit(gpa);
     self.type_anno_owner_path_stack.deinit(gpa);
     self.scratch_vars.deinit();
@@ -893,22 +893,26 @@ fn initInternal(
         .env = env,
         .parse_ir = parse_ir,
         .scopes = .empty,
-        .used_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
-        .globally_resolvable_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
+        .used_patterns = .init(gpa),
+        .forward_prepared_import_aliases = .init(gpa),
+        .parser_type_decl_states = .init(gpa),
+        .forward_type_scope_eligibility = .init(gpa),
+        .active_decl_scopes = .init(gpa),
+        .globally_resolvable_patterns = .init(gpa),
         .compiler_version = if (maybe_context) |context| context.compiler_version else null,
         .validation = if (maybe_context) |context| context.validation else .checking,
         // `initBuiltin` passes no context. A builtin module is never a default
         // app, and the fail-closed answer is the correct one for it anyway.
         .is_entry_module = if (maybe_context) |context| context.is_entry_module else false,
         .import_indices = std.AutoHashMapUnmanaged(Ident.Idx, Import.Idx){},
-        .alias_cycle_references = std.AutoHashMapUnmanaged(AST.Statement.Idx, AST.Statement.Idx){},
-        .alias_cycle_scopes = std.AutoHashMapUnmanaged(AST.DeclIndex.ScopeIdx, void){},
+        .alias_cycle_references = .init(gpa),
+        .alias_cycle_scopes = .init(gpa),
         .value_forward_references = std.AutoHashMapUnmanaged(ValueForwardKey, Scope.ForwardReference){},
         .assoc_value_patterns = std.AutoHashMapUnmanaged(AST.DeclIndex.AssocValue, Pattern.Idx){},
         .assoc_forward_references = std.AutoHashMapUnmanaged(AST.DeclIndex.AssocValue, Scope.ForwardReference){},
-        .assoc_forward_pattern_keys = std.AutoHashMapUnmanaged(Pattern.Idx, AST.DeclIndex.AssocValue){},
+        .assoc_forward_pattern_keys = .init(gpa),
         .assoc_local_statement_placeholders = std.AutoHashMapUnmanaged(AST.DeclIndex.AssocValue, Statement.Idx){},
-        .type_decl_paths = std.AutoHashMapUnmanaged(Statement.Idx, AST.DeclIndex.TypePathIdx){},
+        .type_decl_paths = .init(gpa),
         .scratch_vars = try base.Scratch(TypeVar).init(gpa),
         .scratch_idents = try base.Scratch(Ident.Idx).init(gpa),
         .scratch_type_var_validation = try base.Scratch(Ident.Idx).init(gpa),
@@ -1294,7 +1298,7 @@ pub fn explicitRootDefByName(self: *const Self, name: []const u8) ?CIR.Def.Idx {
 }
 
 fn markGloballyResolvablePattern(self: *Self, pattern_idx: Pattern.Idx) std.mem.Allocator.Error!void {
-    try self.globally_resolvable_patterns.put(self.env.gpa, pattern_idx, {});
+    try self.globally_resolvable_patterns.put(pattern_idx, {});
 }
 
 fn markBoundPatternsGloballyResolvable(self: *Self, pattern_idx: Pattern.Idx) std.mem.Allocator.Error!void {
@@ -1754,7 +1758,7 @@ fn declScopeEnter(self: *Self, scope_idx: AST.DeclIndex.ScopeIdx) std.mem.Alloca
     const type_entry_start = self.active_decl_type_entries.items.len;
     const import_alias_entry_start = self.active_decl_import_alias_entries.items.len;
 
-    try self.active_decl_scopes.put(self.env.gpa, scope_idx, active_binding);
+    try self.active_decl_scopes.put(scope_idx, active_binding);
 
     var value_iter = parser_scope.value_decls.iterator();
     while (value_iter.next()) |entry| {
@@ -2004,11 +2008,11 @@ fn parserScopeCanSupplyForwardTypeDecl(
         switch (self.forwardTypeScopeStep(scope_idx)) {
             .done => break,
             .parent => |parent| {
-                try self.forward_type_scope_eligibility.put(self.env.gpa, scope_idx, eligible);
+                try self.forward_type_scope_eligibility.put(scope_idx, eligible);
                 scope_idx = parent;
             },
             .ineligible => {
-                try self.forward_type_scope_eligibility.put(self.env.gpa, scope_idx, false);
+                try self.forward_type_scope_eligibility.put(scope_idx, false);
                 break;
             },
         }
@@ -2041,7 +2045,7 @@ fn recordTypeDeclPath(
     maybe_path: ?AST.DeclIndex.TypePathIdx,
 ) std.mem.Allocator.Error!void {
     const path = maybe_path orelse return;
-    try self.type_decl_paths.put(self.env.gpa, stmt_idx, path);
+    try self.type_decl_paths.put(stmt_idx, path);
 }
 
 fn parserTypeDeclStatement(
@@ -2097,7 +2101,7 @@ fn recordParserTypeDeclState(
     state: ParserTypeDeclState,
 ) std.mem.Allocator.Error!void {
     const idx = ast_stmt_idx orelse return;
-    try self.parser_type_decl_states.put(self.env.gpa, idx, state);
+    try self.parser_type_decl_states.put(idx, state);
 }
 
 fn parserTypePathForAstStatement(
@@ -2332,8 +2336,8 @@ fn getOrCreateAssocForwardPattern(
     if (globally_resolvable) {
         try self.markGloballyResolvablePattern(pattern_idx);
     }
-    try self.assoc_forward_pattern_keys.put(self.env.gpa, pattern_idx, key);
-    try self.used_patterns.put(self.env.gpa, pattern_idx, {});
+    try self.assoc_forward_pattern_keys.put(pattern_idx, key);
+    try self.used_patterns.put(pattern_idx, {});
     return pattern_idx;
 }
 
@@ -2361,7 +2365,7 @@ fn ensureAliasCycleReferencesForScope(
     self: *Self,
     scope_idx: AST.DeclIndex.ScopeIdx,
 ) std.mem.Allocator.Error!void {
-    const scope_entry = try self.alias_cycle_scopes.getOrPut(self.env.gpa, scope_idx);
+    const scope_entry = try self.alias_cycle_scopes.getOrPut(scope_idx);
     if (scope_entry.found_existing) return;
     scope_entry.value_ptr.* = {};
 
@@ -2371,6 +2375,9 @@ fn ensureAliasCycleReferencesForScope(
     const decls = decl_index.scopeDecls(scope_idx);
     var alias_sccs = AliasCycleContext{
         .can = self,
+        .index_by_stmt = .init(self.env.gpa),
+        .lowlink_by_stmt = .init(self.env.gpa),
+        .on_stack = .init(self.env.gpa),
     };
     defer alias_sccs.deinit();
 
@@ -2411,17 +2418,17 @@ fn mutuallyRecursiveAliasAnno(
 
 const AliasCycleContext = struct {
     can: *Self,
-    index_by_stmt: std.AutoHashMapUnmanaged(AST.Statement.Idx, u32) = .{},
-    lowlink_by_stmt: std.AutoHashMapUnmanaged(AST.Statement.Idx, u32) = .{},
-    on_stack: std.AutoHashMapUnmanaged(AST.Statement.Idx, void) = .{},
+    index_by_stmt: collections.DenseMap(AST.Statement.Idx, u32),
+    lowlink_by_stmt: collections.DenseMap(AST.Statement.Idx, u32),
+    on_stack: collections.DenseMap(AST.Statement.Idx, void),
     stack: std.ArrayListUnmanaged(AST.Statement.Idx) = .empty,
     next_index: u32 = 0,
 
     fn deinit(self: *AliasCycleContext) void {
         const gpa = self.can.env.gpa;
-        self.index_by_stmt.deinit(gpa);
-        self.lowlink_by_stmt.deinit(gpa);
-        self.on_stack.deinit(gpa);
+        self.index_by_stmt.deinit();
+        self.lowlink_by_stmt.deinit();
+        self.on_stack.deinit();
         self.stack.deinit(gpa);
     }
 
@@ -2430,10 +2437,10 @@ const AliasCycleContext = struct {
         const index = self.next_index;
         self.next_index += 1;
 
-        try self.index_by_stmt.put(gpa, stmt_idx, index);
-        try self.lowlink_by_stmt.put(gpa, stmt_idx, index);
+        try self.index_by_stmt.put(stmt_idx, index);
+        try self.lowlink_by_stmt.put(stmt_idx, index);
         try self.stack.append(gpa, stmt_idx);
-        try self.on_stack.put(gpa, stmt_idx, {});
+        try self.on_stack.put(stmt_idx, {});
     }
 
     fn finishStatement(self: *AliasCycleContext, stmt_idx: AST.Statement.Idx) std.mem.Allocator.Error!void {
@@ -2585,7 +2592,7 @@ const AliasCycleContext = struct {
 
         for (members) |member| {
             const referenced_member = self.referencedSccMember(member, members);
-            try self.can.alias_cycle_references.put(self.can.env.gpa, member, referenced_member);
+            try self.can.alias_cycle_references.put(member, referenced_member);
         }
     }
 
@@ -2914,7 +2921,6 @@ fn registerTypeDecl(
     try self.env.store.setStatementNode(type_decl_stmt_idx, type_decl_stmt);
     if (ast_stmt_idx) |idx| {
         try self.parser_type_decl_states.put(
-            self.env.gpa,
             idx,
             if (is_redeclaration)
                 ParserTypeDeclState{ .redeclared = type_decl_stmt_idx }
@@ -3346,7 +3352,7 @@ fn ensureParserTypeDeclBinding(
             } },
         };
         const new_stmt_idx = try self.env.addStatement(placeholder_stmt, region);
-        try self.parser_type_decl_states.put(self.env.gpa, ast_stmt_idx, .{ .prepared = new_stmt_idx });
+        try self.parser_type_decl_states.put(ast_stmt_idx, .{ .prepared = new_stmt_idx });
         try self.forward_prepared_type_decls.append(self.env.gpa, new_stmt_idx);
         try self.recordTypeDeclPath(new_stmt_idx, type_path);
         break :blk new_stmt_idx;
@@ -4059,7 +4065,7 @@ fn recordAssociatedValue(
 ) std.mem.Allocator.Error!ModuleEnv.MethodBinding {
     const def_idx = associated_def.def_idx;
     const def = self.env.store.getDef(def_idx);
-    try self.used_patterns.put(self.env.gpa, def.pattern, {});
+    try self.used_patterns.put(def.pattern, {});
 
     if (owner_is_module_visible) {
         try self.env.store.addScratchDef(def_idx);
@@ -8142,7 +8148,7 @@ fn canonicalizedLocalLookup(
     pattern_idx: Pattern.Idx,
     region: Region,
 ) std.mem.Allocator.Error!CanonicalizedExpr {
-    try self.used_patterns.put(self.env.gpa, pattern_idx, {});
+    try self.used_patterns.put(pattern_idx, {});
 
     const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
         .pattern_idx = pattern_idx,
@@ -8167,7 +8173,7 @@ fn canonicalizedAssociatedLookup(
             .region = region,
         } });
     }
-    try self.used_patterns.put(self.env.gpa, pattern_idx, {});
+    try self.used_patterns.put(pattern_idx, {});
     return self.canonicalizedAssociatedForwardLookup(owner_path, pattern_idx, region);
 }
 
@@ -9069,7 +9075,7 @@ fn appendTryOkPassthroughBranch(
     const ok_lookup_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
         .pattern_idx = ok_assign_pattern_idx,
     } }, region);
-    try self.used_patterns.put(self.env.gpa, ok_assign_pattern_idx, {});
+    try self.used_patterns.put(ok_assign_pattern_idx, {});
 
     try self.appendTryMatchBranch(ok_branch_pat_span, ok_lookup_idx, region);
 }
@@ -9294,7 +9300,7 @@ fn finishSuffixSingleQuestionExpr(
         const err_lookup_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
             .pattern_idx = err_assign_pattern_idx,
         } }, region);
-        try self.used_patterns.put(self.env.gpa, err_assign_pattern_idx, {});
+        try self.used_patterns.put(err_assign_pattern_idx, {});
 
         const branch_value_idx = try self.addTryErrBranchValue(try_target, err_lookup_idx, region);
 
@@ -9345,7 +9351,7 @@ fn finishSingleQuestionBinop(
         const err_lookup_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
             .pattern_idx = err_assign_pattern_idx,
         } }, region);
-        try self.used_patterns.put(self.env.gpa, err_assign_pattern_idx, {});
+        try self.used_patterns.put(err_assign_pattern_idx, {});
 
         // Build the mapped err: either Tag(#err) (when rhs is a bare tag
         // constructor) or <handler>(#err) (when rhs is any other expression).
@@ -10303,7 +10309,7 @@ fn scheduleBlockDeclContinuation(
         self.current_local_def_index = if (decl_ident) |di| self.blockLocalDefIndex(di) else null;
         if (self.current_local_def_index) |idx| {
             if (self.scratch_block_local_defs.items.items[idx].fwd_ref_region != null) {
-                try self.used_patterns.put(self.env.gpa, pattern_idx, {});
+                try self.used_patterns.put(pattern_idx, {});
             }
         }
     } else {
@@ -10403,7 +10409,7 @@ fn canonicalizeBlockTypeDeclStatement(
         const placeholder_stmt = placeholderTypeDeclStatement(type_decl, header_idx);
         const stmt_idx = try self.env.addStatement(placeholder_stmt, region);
         try self.recordTypeDeclPath(stmt_idx, self.parserTypePathForAstStatement(ast_stmt_idx));
-        try self.parser_type_decl_states.put(self.env.gpa, ast_stmt_idx, .{ .registered = stmt_idx });
+        try self.parser_type_decl_states.put(ast_stmt_idx, .{ .registered = stmt_idx });
         try self.introduceType(type_header.name, stmt_idx, region);
         break :blk_predeclare stmt_idx;
     };
@@ -10469,7 +10475,7 @@ fn canonicalizeBlockTypeDeclStatement(
     } else blk_stmt: {
         const new_stmt_idx = try self.env.addStatement(type_decl_stmt, region);
         try self.recordTypeDeclPath(new_stmt_idx, self.parserTypePathForAstStatement(ast_stmt_idx));
-        try self.parser_type_decl_states.put(self.env.gpa, ast_stmt_idx, .{ .registered = new_stmt_idx });
+        try self.parser_type_decl_states.put(ast_stmt_idx, .{ .registered = new_stmt_idx });
         try self.introduceType(type_header.name, new_stmt_idx, region);
         break :blk_stmt new_stmt_idx;
     };
@@ -10766,7 +10772,7 @@ fn canonicalizeStandaloneBlockDecl(
         self.current_local_def_index = if (decl_ident) |di| self.blockLocalDefIndex(di) else null;
         if (self.current_local_def_index) |idx| {
             if (self.scratch_block_local_defs.items.items[idx].fwd_ref_region != null) {
-                try self.used_patterns.put(self.env.gpa, pattern_idx, {});
+                try self.used_patterns.put(pattern_idx, {});
             }
         }
     } else {
@@ -14072,7 +14078,7 @@ fn runExprKernel(
             };
 
             if (map2_callee == .local) {
-                try self.used_patterns.put(self.env.gpa, map2_callee.local, {});
+                try self.used_patterns.put(map2_callee.local, {});
             }
 
             const field_names = self.scratch_idents.slice(field_names_top, self.scratch_idents.top());
@@ -14439,7 +14445,7 @@ fn runExprKernel(
                             const alt_bound_vars = self.scratch_bound_vars.sliceFromStart(alt_bound_vars_top);
 
                             for (alt_bound_vars) |alt_bound_pattern_idx| {
-                                try self.used_patterns.put(self.env.gpa, alt_bound_pattern_idx, {});
+                                try self.used_patterns.put(alt_bound_pattern_idx, {});
                             }
 
                             if (alt_index == 0) {
@@ -14999,8 +15005,8 @@ fn buildInnerMap2WithTuple(
     const args_span = try self.env.store.patternSpanFrom(patterns_start);
 
     // Mark patterns as used
-    try self.used_patterns.put(self.env.gpa, p1, {});
-    try self.used_patterns.put(self.env.gpa, p2, {});
+    try self.used_patterns.put(p1, {});
+    try self.used_patterns.put(p2, {});
 
     // Create tuple body (a, b)
     const lookup1 = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{ .pattern_idx = p1 } }, region);
@@ -15041,7 +15047,7 @@ fn buildIntermediateMap2(
     const p_new = try self.env.addPattern(Pattern{ .assign = .{ .ident = new_name } }, region);
     _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, new_name, p_new, true);
     try self.env.store.scratch.?.patterns.append(p_new);
-    try self.used_patterns.put(self.env.gpa, p_new, {});
+    try self.used_patterns.put(p_new, {});
 
     // Second parameter: tuple pattern (b, c, ...) or nested tuple pattern
     const tuple_pattern = try self.buildTuplePattern(region, tuple_names);
@@ -15059,7 +15065,7 @@ fn buildIntermediateMap2(
     // Add lookups for tuple elements
     for (tuple_names) |name| {
         if (self.scopeContains(.ident, name)) |pattern_idx| {
-            try self.used_patterns.put(self.env.gpa, pattern_idx, {});
+            try self.used_patterns.put(pattern_idx, {});
             const lookup = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{ .pattern_idx = pattern_idx } }, region);
             try self.env.store.addScratchExpr(lookup);
         }
@@ -15105,7 +15111,7 @@ fn buildFinalRecordLambda(self: *Self, region: base.Region, field_names: []const
         _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, name, p, true);
         try self.env.store.scratch.?.patterns.append(p);
         try self.scratch_pattern_ids.append(p);
-        try self.used_patterns.put(self.env.gpa, p, {});
+        try self.used_patterns.put(p, {});
     }
 
     const args_span = try self.env.store.patternSpanFrom(patterns_start);
@@ -15140,7 +15146,7 @@ fn buildFinalLambdaWithTupleDestructure(self: *Self, region: base.Region, field_
     const p_first = try self.env.addPattern(Pattern{ .assign = .{ .ident = field_names[0] } }, region);
     _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, field_names[0], p_first, true);
     try self.env.store.scratch.?.patterns.append(p_first);
-    try self.used_patterns.put(self.env.gpa, p_first, {});
+    try self.used_patterns.put(p_first, {});
 
     // Second parameter: tuple pattern for remaining fields
     const tuple_pattern = try self.buildTuplePattern(region, field_names[1..]);
@@ -15153,7 +15159,7 @@ fn buildFinalLambdaWithTupleDestructure(self: *Self, region: base.Region, field_
 
     for (field_names) |name| {
         if (self.scopeContains(.ident, name)) |pattern_idx| {
-            try self.used_patterns.put(self.env.gpa, pattern_idx, {});
+            try self.used_patterns.put(pattern_idx, {});
             const lookup = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{ .pattern_idx = pattern_idx } }, region);
             const field_idx = try self.env.addRecordField(CIR.RecordField{ .name = name, .value = lookup }, region);
             try self.env.store.scratch.?.record_fields.append(field_idx);
@@ -21572,7 +21578,7 @@ fn ensureParserImportAlias(self: *Self, alias_name: Ident.Idx) std.mem.Allocator
         module_name,
         module_import_idx,
     );
-    try self.forward_prepared_import_aliases.put(self.env.gpa, ast_stmt_idx, {});
+    try self.forward_prepared_import_aliases.put(ast_stmt_idx, {});
 }
 
 /// Bind a module a platform or package header exposes, so a signature in that
