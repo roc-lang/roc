@@ -34965,10 +34965,13 @@ const BodyContext = struct {
     }
 
     /// Function rendering does not consume the function value, but the
-    /// source expression must still run: it lowers normally, the produced
-    /// callable is discarded, and the representation is the result.
+    /// source expression must still run: it lowers at its own type node, the
+    /// produced callable is discarded, and the representation is the result.
+    /// Nothing ever calls that callable, so its parameter types may have no
+    /// evidence; they settle with the rest of the body rather than being
+    /// demanded as an active type before the expression lowers.
     fn stepInspectOnly(self: *BodyContext, task: *InspectOnlyTask, input: ?LowerResult) Allocator.Error!LowerStep {
-        const evaluated = if (input) |lowered| lowered.exprValue() else return requestLowerTask(self, .{ .expr = .{ .expr = task.arg } });
+        const evaluated = if (input) |lowered| lowered.exprValue() else return requestLowerChild(self, task.arg, DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(task.arg)));
         const evaluation = try self.addStmt(.{ .expr = evaluated });
         return loweredExprStep(try self.addExpr(.{ .ty = task.str_ty, .data = .{ .block = .{
             .statements = try self.addStmtSpan(&.{evaluation}),
