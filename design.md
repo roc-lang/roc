@@ -12525,7 +12525,18 @@ joined. This keeps memo reuse concurrent without exposing mutable hash-table
 storage or making results depend on completion order. Global identities are still
 assigned solely by ordered coordinator commit. Root kinds
 that reserve durable identities or write directly to the final program remain
-serial barriers until they have the same sealed-draft boundary.
+serial barriers until they have the same sealed-draft boundary. A template
+root's function type is a function of its checked type alone, so before those
+barriers run, every template root's type lowers in one executor batch, each
+lane sealing into its own workspace, and the coordinator relocates the results
+into the program store in request order. Each request lowers its type once,
+however many root passes reach it.
+
+Committing a shard's interface summaries relocates each request into the
+coordinator's domain first, so an equal resident request answers without
+copying its summary; a new summary is relocated once, straight into the
+cache's own storage, and its names cross through the lane's cumulative name
+relocation rather than being interned again by text.
 
 Post-check timing keeps two distinct measures for this boundary. Monotype wall
 time is the elapsed coordinator interval, including worker waits and ordered
@@ -12618,6 +12629,12 @@ root union update producer membership explicitly. Equal keys retain
 independently constructed nodes until an explicit relation joins them. A
 monotone provenance counter lets both iterator finalizers return immediately for
 graphs without generated iterators.
+
+Nominal backing instances are indexed the same way, by declaration and current
+argument roots, and a root union rekeys only the instances that mention its
+loser. An index slot holds just an instance's hash and id: the key lives in the
+instance table, and an instance's arguments change only while it is out of the
+index, so every resident hash is the hash of its instance's current key.
 Generated identity hashes a snapshot of the current graph representation after
 joins, under the equality digest: `typeEql` compares the stamped identity, so
 checked provenance such as `named_type.ty` must not make requests that are
