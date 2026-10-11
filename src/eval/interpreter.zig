@@ -354,6 +354,12 @@ pub const Interpreter = struct {
     descriptor_arena: base.SingleThreadArena,
     /// Arena for interpreter-allocated memory (temporaries, copies).
     arena: base.SingleThreadArena,
+    /// Scratch of hosted calls: argument offsets and the C-ABI lowering. A
+    /// host may call back into Roc and make further hosted calls, so the
+    /// arena is reset, keeping its capacity, only when the outermost hosted
+    /// call returns.
+    hosted_call_arena: base.SingleThreadArena,
+    hosted_call_depth: u32 = 0,
     /// RocOps environment for builtin dispatch.
     roc_env: *InterpreterRocEnv,
     roc_ops: RocOps,
@@ -407,15 +413,10 @@ pub const Interpreter = struct {
     call_stack: std.ArrayList(LirProcSpecId),
     /// Call stack captured at the first failed exit in the current evaluation.
     failed_call_stack: std.ArrayList(LirProcSpecId),
-    /// Source location of the LIR statement currently being interpreted.
-    active_stmt_loc: base.SourceLoc = base.SourceLoc.none,
-    /// Checked source region of the LIR statement currently being interpreted.
-    active_stmt_region: base.Region = base.Region.zero(),
     active_proc_id: ?LirProcSpecId = null,
+    /// The LIR statement currently being interpreted. Its source location,
+    /// region, and inline scope are read from the store when needed.
     active_stmt_id: ?CFStmtId = null,
-    /// Exact virtual source frame of the LIR statement currently being
-    /// interpreted. This is independent of the physical proc call stack.
-    active_stmt_inline_scope: InlineScopeId = InlineScopeId.none,
     /// Source location captured when the current evaluation first failed.
     failure_origins: []const ?LIR.ComptimeFailureOrigin = &.{},
     failed_stmt_loc: base.SourceLoc = base.SourceLoc.none,
@@ -586,9 +587,17 @@ pub const Interpreter = struct {
     }
 
     const LocalSlot = struct {
-        assigned: bool = false,
-        val: Value,
+        /// `unassigned_value` until the local is assigned.
+        val: Value = unassigned_value,
         desc: ?*const LirProgram.BoxyTypeDesc = null,
+
+        /// No allocation and no zero-sized sentinel offset is ever at this
+        /// address, so it marks a slot whose local has no value yet.
+        const unassigned_value: Value = .{ .ptr = @ptrFromInt(1) };
+
+        fn assigned(self: LocalSlot) bool {
+            return self.val.ptr != unassigned_value.ptr;
+        }
     };
 
     /// See `frame_slot_indexes`.
@@ -656,13 +665,13 @@ pub const Interpreter = struct {
         }
 
         fn isAssigned(self: *const Frame, local_id: LocalId) bool {
-            return self.slots[self.slotIndex(local_id)].assigned;
+            return self.slots[self.slotIndex(local_id)].assigned();
         }
 
         fn setLocal(self: *Frame, local_id: LocalId, value: Value) void {
             const slot = &self.slots[self.slotIndex(local_id)];
+            std.debug.assert(value.ptr != LocalSlot.unassigned_value.ptr);
             slot.* = .{
-                .assigned = true,
                 .val = value,
                 .desc = null,
             };
@@ -670,7 +679,7 @@ pub const Interpreter = struct {
 
         fn setLocalDesc(self: *Frame, local_id: LocalId, desc: ?*const LirProgram.BoxyTypeDesc) void {
             const slot = &self.slots[self.slotIndex(local_id)];
-            if (builtin.mode == .debug and !slot.assigned) {
+            if (builtin.mode == .debug and !slot.assigned()) {
                 debugPrint(
                     "LIR/interpreter invariant violated: proc {d} tried to attach descriptor to unassigned local {d}\n",
                     .{ @backingInt(self.proc_id), @backingInt(local_id) },
@@ -681,7 +690,7 @@ pub const Interpreter = struct {
 
         fn localDesc(self: *const Frame, local_id: LocalId) ?*const LirProgram.BoxyTypeDesc {
             const slot = self.slots[self.slotIndex(local_id)];
-            return if (slot.assigned) slot.desc else null;
+            return if (slot.assigned()) slot.desc else null;
         }
     };
 
@@ -924,6 +933,7 @@ pub const Interpreter = struct {
             .helper = LayoutHelper.init(layout_store),
             .descriptor_arena = base.SingleThreadArena.init(allocator),
             .arena = base.SingleThreadArena.init(allocator),
+            .hosted_call_arena = base.SingleThreadArena.init(allocator),
             .frame_slot_indexes = collections.DenseMap(LirProcSpecId, FrameSlotIndex).init(allocator),
             .roc_env = roc_env,
             .roc_ops = RocOps{
@@ -992,6 +1002,7 @@ pub const Interpreter = struct {
         self.allocator.destroy(self.roc_env);
         self.descriptor_arena.deinit();
         self.arena.deinit();
+        self.hosted_call_arena.deinit();
         self.inflight_zeroed_box_payloads.deinit(self.allocator);
         for (self.free_frame_slots.items) |*pool| {
             for (pool.items) |slots| self.allocator.free(slots);
@@ -1127,11 +1138,27 @@ pub const Interpreter = struct {
 
     fn recordActiveFailureLocIfUnset(self: *LirInterpreter) void {
         if (self.failed_stmt_loc.hasLocation()) return;
-        if (self.active_stmt_loc.hasLocation()) {
-            self.failed_stmt_loc = self.active_stmt_loc;
-            self.failed_stmt_region = self.active_stmt_region;
-            self.failed_stmt_inline_scope = self.active_stmt_inline_scope;
+        if (self.activeStmtLoc().hasLocation()) {
+            self.failed_stmt_loc = self.activeStmtLoc();
+            self.failed_stmt_region = self.activeStmtRegion();
+            self.failed_stmt_inline_scope = self.activeStmtInlineScope();
         }
+    }
+
+    /// Source location of the LIR statement currently being interpreted.
+    fn activeStmtLoc(self: *const LirInterpreter) base.SourceLoc {
+        return self.store.stmtLoc(self.active_stmt_id orelse return base.SourceLoc.none);
+    }
+
+    /// Checked source region of the LIR statement currently being interpreted.
+    fn activeStmtRegion(self: *const LirInterpreter) base.Region {
+        return self.store.stmtRegion(self.active_stmt_id orelse return base.Region.zero());
+    }
+
+    /// Exact virtual source frame of the LIR statement currently being
+    /// interpreted, independent of the physical proc call stack.
+    fn activeStmtInlineScope(self: *const LirInterpreter) InlineScopeId {
+        return self.store.stmtInlineScope(self.active_stmt_id orelse return InlineScopeId.none);
     }
 
     fn recordCallerFailureLocForSourcelessCallee(
@@ -1243,9 +1270,7 @@ pub const Interpreter = struct {
         _ = self.arena.reset(.retain_capacity);
 
         self.roc_env.resetForEval();
-        self.active_stmt_loc = base.SourceLoc.none;
-        self.active_stmt_region = base.Region.zero();
-        self.active_stmt_inline_scope = InlineScopeId.none;
+        self.active_stmt_id = null;
         self.failed_stmt_loc = base.SourceLoc.none;
         self.failed_stmt_region = base.Region.zero();
         self.failed_stmt_inline_scope = InlineScopeId.none;
@@ -1566,8 +1591,11 @@ pub const Interpreter = struct {
 
         const proc = view.store.getProcSpec(selected.root_proc);
         const arg_ids = view.store.getLocalSpan(proc.args);
-        const arg_layouts = try self.allocator.alloc(layout_mod.Idx, arg_ids.len);
-        defer self.allocator.free(arg_layouts);
+        var arg_layouts_buffer: [16 * @sizeOf(layout_mod.Idx)]u8 align(@alignOf(layout_mod.Idx)) = undefined;
+        var arg_layouts_storage = std.heap.BufferFirstAllocator.init(&arg_layouts_buffer, self.allocator);
+        const arg_layouts_allocator = arg_layouts_storage.allocator();
+        const arg_layouts = try arg_layouts_allocator.alloc(layout_mod.Idx, arg_ids.len);
+        defer arg_layouts_allocator.free(arg_layouts);
         for (0..arg_ids.len) |i| {
             const local_id = GuardedList.at(arg_ids, i);
             arg_layouts[i] = view.store.getLocal(local_id).layout_idx;
@@ -1596,9 +1624,7 @@ pub const Interpreter = struct {
         self.roc_env.resetForEval();
         self.call_stack.clearRetainingCapacity();
         self.failed_call_stack.clearRetainingCapacity();
-        self.active_stmt_loc = base.SourceLoc.none;
-        self.active_stmt_region = base.Region.zero();
-        self.active_stmt_inline_scope = InlineScopeId.none;
+        self.active_stmt_id = null;
         self.failed_stmt_loc = base.SourceLoc.none;
         self.failed_stmt_region = base.Region.zero();
         self.failed_stmt_inline_scope = InlineScopeId.none;
@@ -1734,7 +1760,7 @@ pub const Interpreter = struct {
 
     fn getLocalChecked(self: *LirInterpreter, frame: *const Frame, local_id: LocalId) Error!Value {
         const slot = frame.slots[frame.slotIndex(local_id)];
-        if (!slot.assigned) {
+        if (!slot.assigned()) {
             if (comptime builtin.target.os.tag != .freestanding) {
                 const proc = self.store.getProcSpec(frame.proc_id);
                 debugPrint(
@@ -2608,9 +2634,9 @@ pub const Interpreter = struct {
         const locals = self.store.getLocalSpan(proc_spec.frame_locals);
         const slot_index = try self.frameSlotIndex(proc_id, proc_spec.frame_locals, locals);
         const slots = try self.acquireFrameSlots(locals.len);
-        @memset(slots, .{ .assigned = false, .val = Value.zst, .desc = null });
+        @memset(slots, .{});
         // A zero-sized local holds its only value from the start.
-        for (slot_index.zst_slots) |slot| slots[slot].assigned = true;
+        for (slot_index.zst_slots) |slot| slots[slot].val = Value.zst;
 
         return .{
             .proc_id = proc_id,
@@ -2702,13 +2728,9 @@ pub const Interpreter = struct {
     ) Error!ExecOutcome {
         var current = start_stmt;
         while (true) {
-            const stmt = self.store.getCFStmt(current);
-            self.active_stmt_loc = self.store.stmtLoc(current);
-            self.active_stmt_region = self.store.stmtRegion(current);
             self.active_proc_id = frame.proc_id;
             self.active_stmt_id = current;
-            self.active_stmt_inline_scope = self.store.stmtInlineScope(current);
-            switch (stmt) {
+            switch (self.store.getCFStmtImmediate(current).*) {
                 .assign_ref => |assign| {
                     const target_layout = self.store.getLocal(assign.target).layout_idx;
                     const value = try self.evalAssignRef(frame, assign.op, target_layout);
@@ -2784,9 +2806,9 @@ pub const Interpreter = struct {
                     if (assign.replaces_frame) {
                         return .{ .tail_call = .{ .proc = assign.proc, .args = arg_values, .arg_layouts = arg_layouts } };
                     }
-                    const call_loc = self.active_stmt_loc;
-                    const call_region = self.active_stmt_region;
-                    const call_inline_scope = self.active_stmt_inline_scope;
+                    const call_loc = self.activeStmtLoc();
+                    const call_region = self.activeStmtRegion();
+                    const call_inline_scope = self.activeStmtInlineScope();
                     var result = self.evalProcById(assign.proc, arg_values, arg_layouts) catch |err| {
                         self.recordCallerFailureLocForCalleeError(call_loc, call_region, call_inline_scope, err);
                         return err;
@@ -2901,9 +2923,9 @@ pub const Interpreter = struct {
                         const raw_ptr = self.readPointerInt(try self.getLocalChecked(frame, local));
                         arg_descs[index] = @ptrFromInt(raw_ptr);
                     }
-                    const call_loc = self.active_stmt_loc;
-                    const call_region = self.active_stmt_region;
-                    const call_inline_scope = self.active_stmt_inline_scope;
+                    const call_loc = self.activeStmtLoc();
+                    const call_region = self.activeStmtRegion();
+                    const call_inline_scope = self.activeStmtInlineScope();
                     const target_layout = self.store.getLocal(assign.target).layout_idx;
                     const result = if (assign.deferred) deferred: {
                         if (self.pending_erased != null) {
@@ -3040,9 +3062,9 @@ pub const Interpreter = struct {
                         hidden_values,
                         .move,
                     );
-                    const call_loc = self.active_stmt_loc;
-                    const call_region = self.active_stmt_region;
-                    const call_inline_scope = self.active_stmt_inline_scope;
+                    const call_loc = self.activeStmtLoc();
+                    const call_region = self.activeStmtRegion();
+                    const call_inline_scope = self.activeStmtInlineScope();
                     const result = self.evalProcById(call.proc, call.arg_values, call.arg_layouts) catch |err| {
                         self.recordCallerFailureLocForCalleeError(call_loc, call_region, call_inline_scope, err);
                         return err;
@@ -5482,8 +5504,12 @@ pub const Interpreter = struct {
         // so the C-ABI trampoline can scatter them into registers.
         var total_args_size: usize = 0;
         var args_alignment: layout_mod.RocAlignment = .@"1";
-        const arg_offsets = try self.allocator.alloc(u32, arg_layouts.len);
-        defer self.allocator.free(arg_offsets);
+        self.hosted_call_depth += 1;
+        defer {
+            self.hosted_call_depth -= 1;
+            if (self.hosted_call_depth == 0) _ = self.hosted_call_arena.reset(.retain_capacity);
+        }
+        const arg_offsets = try self.hosted_call_arena.allocator().alloc(u32, arg_layouts.len);
         for (arg_layouts, arg_offsets) |arg_layout, *arg_offset| {
             const sa = self.helper.sizeAlignOf(arg_layout);
             args_alignment = maxRocAlignment(args_alignment, sa.alignment);
@@ -5530,11 +5556,9 @@ pub const Interpreter = struct {
             const hosted_fn = self.roc_ops.hosted_fns.fns[hosted.dispatch_index];
             // Call the hosted function with the platform C ABI via the fixed register-image
             // trampoline (no runtime code generation).
-            var arena_state = base.SingleThreadArena.init(self.allocator);
-            defer arena_state.deinit();
             host_trampoline.call(
                 self.layout_store,
-                arena_state.allocator(),
+                self.hosted_call_arena.allocator(),
                 @ptrCast(hosted_fn),
                 arg_layouts,
                 ret_layout,
@@ -9196,8 +9220,10 @@ pub const Interpreter = struct {
     }
 
     fn numToStr(self: *LirInterpreter, comptime T: type, arg: Value, _: layout_mod.Idx) Error!Value {
-        const arena = self.arena.allocator();
-        const formatted = std.fmt.allocPrint(arena, "{d}", .{arg.read(T)}) catch return error.OutOfMemory;
+        comptime std.debug.assert(@typeInfo(T) == .int and @bitSizeOf(T) <= 128);
+        // A 128-bit integer has at most 39 digits and a sign.
+        var buffer: [40]u8 = undefined;
+        const formatted = std.fmt.bufPrint(&buffer, "{d}", .{arg.read(T)}) catch unreachable;
         return try self.makeRocStr(formatted);
     }
 

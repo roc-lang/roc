@@ -297,6 +297,16 @@ stages it touches; the instruction-count effect is reported in "Results".
     and wasm per-procedure maps were converted earlier). Generated code is
     byte-identical.
 
+52. `src/eval/interpreter.zig`: the statement loop records only the active
+    statement id and switches on the statement by reference, reading its
+    location, region, and inline scope from the store when a call or failure
+    needs them; a frame slot marks "unassigned" with a sentinel value pointer
+    instead of a padded bool, so slots are 16 bytes instead of 24; integer
+    `to_str` formats into a stack buffer; entrypoint argument layouts start
+    on the stack; and hosted calls keep their argument offsets and C-ABI
+    scratch in one retained arena reset when the outermost hosted call
+    returns.
+
 ## Findings from profiling
 
 These were found by profiling the ReleaseFast compiler with
@@ -2826,7 +2836,7 @@ reading code, and were not in the audit above.
 - category E; runs per statement; impact medium (removes ~30 bytes of stores and 3 column loads per …; risk low
 - Finding: At the top of the `execStmtChain` loop (lines 2629-2633) the interpreter does `self.active_stmt_loc = self.store.stmtLoc(current); self.active_stmt_region = self.store.stmtRegion(current); self.active_proc_id = frame.proc_id; self.active_stmt_id = current; self.active_stmt_inline_scope = self.store.stmtInlineScope(current);`. `stmtLoc`/`stmtRegion`/`stmtInlineScope` are three separate column reads (SourceLoc is 12+ …
 - Fix: Record only `active_stmt_id` (and `active_proc_id`) per statement and derive loc/region/inline scope from the id at the failure site and at the call sites that need them. The failure paths already have the stmt id (`getLocalChecked` does exactly this at line 1711). Verify that `active_stmt_loc` consumers in `compile_time_host`/`runtime_host` are updated to call a `self.store.stmtLoc(self.active_stmt_id)` accessor …
-- Status: open
+- Status: fixed (fix 52)
 
 ### src/eval/interpreter.zig:2580: initFrame scans every local's layout to pre-assign ZST slots
 - category E; runs per call; impact medium (recursive compile-time functions with many locals …; risk low
@@ -2862,13 +2872,13 @@ reading code, and were not in the audit above.
 - category A; runs per hosted function call (runtime interpretation; `roc run`/`roc test` through the interpreter); impact medium for effectful interpreted programs; risk low
 - Finding: `arg_offsets = try self.allocator.alloc(u32, arg_layouts.len)` / `defer free` (lines 5373-5374), then `var arena_state = std.heap.ArenaAllocator.init(self.allocator)` (line 5421) created and destroyed per call for `host_trampoline.call`. The std arena pays atomics on each allocation and a fresh arena allocates its first chunk from the GPA every time.
 - Fix: Allocate `arg_offsets` from `self.arena` (the hosted call's args buffer already comes from there) and pass `self.arena.allocator()` (or a retained `base.SingleThreadArena` reset per hosted call) to `host_trampoline.call`. Verify `host_trampoline.call` does not retain the memory past return (it builds a register image; the image is consumed synchronously).
-- Status: open
+- Status: fixed (fix 52)
 
 ### src/eval/interpreter.zig:5629: Str.inspect builds into a temporary ArrayList then copies into a RocStr
 - category D; runs per `inspect` evaluation; impact low-medium; risk low
 - Finding: `inspectBoxyValue` creates `std.ArrayList(u8).empty` on the eval arena, appends the whole rendering, then `makeRocStr(out.items)` copies the bytes into a fresh Roc heap string, and `out.deinit` on an arena is a no-op so the ArrayList's growth doublings all stay allocated in the arena.
 - Fix: Keep one reusable `inspect_scratch: std.ArrayListUnmanaged(u8)` on the interpreter (general allocator, `clearRetainingCapacity` per use) so growth capacity is retained across inspects; or render directly into a `RocStr` grown with `RocStr.reserve`/`appendSlice` to avoid the final copy. Verify nested inspects (to_inspect methods calling inspect) by using a depth-indexed scratch or save/restore of the scratch length.
-- Status: open
+- Status: no change: an inspect can run a user `to_inspect` that inspects again, so one reused buffer would be appended to by the nested render while the outer one is in progress
 
 ### src/eval/boxy_runtime.zig:5990: appendScalarInspect dupes a stack-formatted number into the arena before appending
 - category D; runs per scalar rendered by inspect; impact low; risk low
@@ -2886,7 +2896,7 @@ reading code, and were not in the audit above.
 - category D; runs per `Num.to_str` on integers; impact low; risk low
 - Finding: `std.fmt.allocPrint(arena, "{d}", ...)` allocates up to ~40 bytes in the arena, then `makeRocStr(formatted)` copies the bytes into a Roc string; the arena copy is never reclaimed.
 - Fix: `std.fmt.bufPrint` into a `[48]u8` stack buffer (i128 max is 40 chars) and `makeRocStr` from that. Same pattern as `appendScalarInspect` which already uses stack buffers.
-- Status: open
+- Status: fixed (fix 52)
 
 ### src/eval/interpreter.zig:1460: marshalAbiArgs sorts argument indices with an O(n^2) selection sort and three arena arrays
 - category E/A; runs per entrypoint evaluation (`runEntrypoint`/`eval` with `arg_ptr`); impact low; risk low
@@ -2898,13 +2908,13 @@ reading code, and were not in the audit above.
 - category A; runs per entrypoint call from a host; impact low; risk low
 - Finding: `self.allocator.alloc(layout_mod.Idx, arg_ids.len)` + `defer free` to build the layout list that `localLayoutsFromSpan` (line 4083) already knows how to build from the arena.
 - Fix: Use `localLayoutsFromSpan(proc.args)` (arena) or a stack buffer; delete the GPA round trip.
-- Status: open
+- Status: fixed (fix 52)
 
 ### src/eval/interpreter.zig:582: LocalSlot wastes 7 bytes of padding per slot
 - category C; runs per frame slot (allocated per call via the pool; memset per call); impact low-medium (33% less frame memory, smaller memset per call); risk low
 - Finding: `LocalSlot { assigned: bool, val: Value (one pointer), desc: ?*const BoxyTypeDesc }` is 24 bytes with 7 bytes padding after the bool; `initFrame` memsets every slot on every call.
 - Fix: Fold `assigned` into the pointer (use a null/sentinel `val.ptr` to mean unassigned, since `Value.zst` already uses a sentinel) giving a 16-byte slot, or move `assigned` to a separate `[]bool`/bitset parallel array that is cleared with one memset of n/8 bytes. Verify every `slot.assigned` reader (`getLocalChecked`, `localDesc`, `isAssigned`, `setLocalDesc` debug check).
-- Status: open
+- Status: fixed (fix 52)
 
 ### src/eval/interpreter.zig:374: free_frame_slots is an ArrayList of ArrayLists indexed by slot count
 - category F; runs per call (acquire/release); impact medium; risk low
@@ -3012,7 +3022,7 @@ reading code, and were not in the audit above.
 - category H (debug-only, noted for completeness); runs per low-level statement in debug builds only (`rc_conformance.enabled` is comptime false in release, so `beginStatement` returns null); impact none; risk none
 - Finding: No release cost; included so the reviewer knows it was checked.
 - Fix: none
-- Status: open
+- Status: no change: no release cost
 
 ### src/compile/coordinator.zig:1240: Packages are addressed by name string everywhere instead of a dense package id
 - category B; runs per module event (every `handleResult`, `tryUnblock`, `externalImportReadiness`, `getExternalEnv/Artifact`, `checkedArtifactByKey`, `wakeDependents`) and per …; impact medium (coordinator thread is the serial bottleneck of a …; risk low
@@ -3332,5 +3342,5 @@ reading code, and were not in the audit above.
 - category H (acceptable; noted); runs per list literal evaluation; impact none; risk none
 - Finding: One `getLocalChecked` (binary search) + `coerceExplicitRefValueToLayout` + `@memcpy` per element; no extra allocations beyond the single Roc allocation. The binary search per element is the only waste, covered by the frame slot finding.
 - Fix: none beyond the slot-index finding
-- Status: open
+- Status: no change: the per-element lookup is the direct slot index of fix 18
 
