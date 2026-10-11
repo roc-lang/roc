@@ -1839,7 +1839,7 @@ A runtime build fills the object cache with packs of runtime-policy code;
 compile-time evaluation reads them. A command that only checks fills it too:
 once checking completes with no error, the CLI compiles the compile-time
 evaluation program's LIR again for the object cache (no compile-time hooks,
-ordinary relocatable code) and publishes its keyed closed specializations as
+ordinary relocatable code) and stores its keyed closed specializations as
 one pack, under the same withholding rules as a runtime pack: an entry whose
 closure reads a compile-time value slot, names another program-local symbol,
 or still converts a literal is not offered. The pack is filed beside the root

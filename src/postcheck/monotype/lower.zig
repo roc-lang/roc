@@ -7267,8 +7267,7 @@ const Builder = struct {
         self.next_spec_dispatch_index += 1;
     }
 
-    fn traceLink(self: *Builder, comptime how: []const u8, body_draft: *const BodyDraftStore, demand: Demand, callee: Ast.FnId) void {
-        _ = self;
+    fn traceLink(comptime how: []const u8, body_draft: *const BodyDraftStore, demand: Demand, callee: Ast.FnId) void {
         if (!LiteralDemand.traceEnabled()) return;
         std.debug.print("ctfe-demand link {s} owner={d} draft={s} demand={s} -> fn#{d}\n", .{
             how,
@@ -12521,7 +12520,7 @@ const Builder = struct {
                 demand,
             );
             switch (body_draft.sealed_template_specs.items[spec_index].resolved_slot.?) {
-                .local => |fn_id| self.traceLink("resolve", body_draft, demand, fn_id),
+                .local => |fn_id| traceLink("resolve", body_draft, demand, fn_id),
             }
             if (demand == .discovery) {
                 const callee = switch (body_draft.sealed_template_specs.items[spec_index].resolved_slot orelse
@@ -12779,7 +12778,7 @@ const Builder = struct {
                             .evaluation => try self.upgradeDiscoverySpec(hit.local.fn_id),
                             .discovery => try self.recordDiscoveryCallee(body_draft, hit.local.fn_id),
                         }
-                        self.traceLink("merge", body_draft, merged_demand, hit.local.fn_id);
+                        traceLink("merge", body_draft, merged_demand, hit.local.fn_id);
                         if (fn_.signature_relation == .exact_graph) {
                             self.promoteFnSignatureRelation(hit.local.fn_id, .exact_graph);
                         }
@@ -17186,7 +17185,7 @@ const BodyDraftStore = struct {
             .deferred => spec.demand = .evaluation,
             // Its body is already lowered in this draft, and so are the
             // demands of the requests it made.
-            else => self.upgrade_all = true,
+            .lowering, .lowered, .resolved => self.upgrade_all = true,
         }
     }
 

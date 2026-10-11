@@ -1,6 +1,6 @@
 //! Which runtime specializations compile-time evaluation must still lower.
 //!
-//! Checking already published a compile-time root for every literal
+//! Checking already recorded a compile-time root for every literal
 //! conversion whose dispatch is closed. A specialization registers a further
 //! literal root only where a conversion depends on its instance or where the
 //! checked root is one no evaluation requests (design.md "Demand-Driven
@@ -28,6 +28,7 @@
 //! has no literal that registers one at any instance.
 
 const std = @import("std");
+const collections = @import("collections");
 const check = @import("check");
 
 const Common = @import("common.zig");
@@ -37,7 +38,7 @@ const Allocator = std.mem.Allocator;
 pub const CheckedModules = Common.CheckedModules;
 const checked = check.CheckedModule;
 const static_dispatch = check.StaticDispatchRegistry;
-const canonical = check.CanonicalNames;
+const checked_names = check.CanonicalNames;
 
 /// Builds without libc (the playground) never read the environment and
 /// compile no trace output.
@@ -45,8 +46,9 @@ const trace_available = @import("builtin").link_libc;
 
 /// `ROC_CTFE_DEMAND_TRACE` is set: print every demand decision, from the
 /// module analysis to each discovery root and each parked, unparked, and
-/// upgraded specialization.
-pub fn traceEnabled() bool {
+/// upgraded specialization. Inline, so a build without libc sees a
+/// compile-time false and compiles none of the trace output.
+pub inline fn traceEnabled() bool {
     return trace_available and std.c.getenv("ROC_CTFE_DEMAND_TRACE") != null;
 }
 
@@ -135,13 +137,13 @@ pub const LiteralDemand = struct {
     pub fn checkedTypeReaches(
         self: *const LiteralDemand,
         allocator: Allocator,
-        names: *const canonical.CanonicalNameStore,
+        names: *const checked_names.CanonicalNameStore,
         types: checked.CheckedTypeStoreView,
         root: checked.CheckedTypeId,
     ) Allocator.Error!bool {
         var pending = std.ArrayList(checked.CheckedTypeId).empty;
         defer pending.deinit(allocator);
-        var seen = std.AutoHashMap(checked.CheckedTypeId, void).init(allocator);
+        var seen = collections.DenseMap(checked.CheckedTypeId, void).init(allocator);
         defer seen.deinit();
         try pending.append(allocator, root);
         while (pending.pop()) |ty| {
@@ -224,7 +226,7 @@ pub fn compute(
 ) Allocator.Error!LiteralDemand {
     var inputs = std.ArrayList(ModuleInput).empty;
     defer inputs.deinit(allocator);
-    var positions = std.AutoHashMap(checked.ModuleId, usize).init(allocator);
+    var positions = std.AutoHashMap([32]u8, usize).init(allocator);
     defer positions.deinit();
     try appendModule(allocator, &inputs, &positions, checked.importedView(modules.root.module));
     for (modules.root.relation_modules) |view| try appendModule(allocator, &inputs, &positions, view);
@@ -278,12 +280,12 @@ pub fn compute(
     }
     try callers.appendNTimes(allocator, .empty, inputs.items.len);
     for (inputs.items, 0..) |input, caller| {
-        for (input.view.direct_import_artifact_keys) |key| {
-            const callee = positions.get(key) orelse continue;
+        for (input.view.directImportKeys()) |key| {
+            const callee = positions.get(key.bytes) orelse continue;
             try callers.items[callee].append(allocator, caller);
         }
         for (input.view.platform_required_bindings.bindings) |binding| {
-            const callee = positions.get(.{ .bytes = binding.app_value.artifact.bytes }) orelse continue;
+            const callee = positions.get(binding.app_value.artifact.bytes) orelse continue;
             try callers.items[callee].append(allocator, caller);
         }
         // A platform's requirements are filled by the app, whichever
@@ -332,10 +334,10 @@ pub fn compute(
 fn appendModule(
     allocator: Allocator,
     inputs: *std.ArrayList(ModuleInput),
-    positions: *std.AutoHashMap(checked.ModuleId, usize),
+    positions: *std.AutoHashMap([32]u8, usize),
     view: checked.ImportedModuleView,
 ) Allocator.Error!void {
-    const entry = try positions.getOrPut(view.key);
+    const entry = try positions.getOrPut(view.key.bytes);
     if (entry.found_existing) return;
     entry.value_ptr.* = inputs.items.len;
     try inputs.append(allocator, .{ .view = view });
@@ -354,7 +356,51 @@ fn isSource(
             .numeral => |numeral| .{ numeral.plan, numeral.conversion_root, demand.custom_numerals },
             .str_from_quote => |quote| .{ quote.plan, quote.conversion_root, demand.custom_quotes },
             .interpolation => |interpolation| .{ interpolation.plan, null, true },
-            else => continue,
+            .pending,
+            .str_segment,
+            .str,
+            .bytes_literal,
+            .lookup_local,
+            .lookup_external,
+            .lookup_required,
+            .list,
+            .empty_list,
+            .tuple,
+            .match_,
+            .if_,
+            .call,
+            .record,
+            .empty_record,
+            .block,
+            .tag,
+            .nominal,
+            .zero_argument_tag,
+            .closure,
+            .lambda,
+            .binop,
+            .unary_minus,
+            .unary_not,
+            .field_access,
+            .dispatch_call,
+            .structural_eq,
+            .structural_hash,
+            .method_eq,
+            .type_dispatch_call,
+            .tuple_access,
+            .runtime_error,
+            .crash,
+            .dbg,
+            .expect_err,
+            .expect,
+            .ellipsis,
+            .anno_only,
+            .break_,
+            .return_,
+            .row_coerce,
+            .for_,
+            .hosted_lambda,
+            .run_low_level,
+            => continue,
         };
         const plan = plan_id orelse continue;
         if (plans.plans[@backingInt(plan)].resolution == .checked_error) continue;

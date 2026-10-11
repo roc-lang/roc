@@ -15,6 +15,16 @@ const is_freestanding = @import("../threading.zig").is_freestanding;
 
 const SourceFile = struct { path: []const u8, source: []const u8 };
 
+/// Every way checking a fixture app can fail.
+const CheckAppError = std.mem.Allocator.Error ||
+    std.Io.Dir.CreateDirPathError ||
+    std.Io.Dir.WriteFileError ||
+    std.Io.Dir.RealPathFileAllocError ||
+    eval.BuiltinModules.InitError ||
+    std.Thread.SpawnError ||
+    Coordinator.AppDiscoveryError ||
+    @import("../coordinator.zig").CoordinatorError;
+
 const platform_files = [_]SourceFile{
     .{ .path = ".roc_echo_platform/main.roc", .source =
     \\platform ""
@@ -83,7 +93,7 @@ const Checked = struct {
     }
 
     /// The titles of the reports checking produced, for a failing test to show.
-    fn expectErrors(self: *Checked, expected: bool) !void {
+    fn expectErrors(self: *Checked, expected: bool) error{TestUnexpectedResult}!void {
         if (self.coord.hasUserErrors() == expected) return;
         var reports = self.coord.iterReports();
         while (reports.next()) |entry| std.debug.print("unexpected report: {s}\n", .{entry.report.title});
@@ -96,7 +106,7 @@ const Checked = struct {
 };
 
 /// Check (and, given a runtime target, prepare to build) an echo-platform app.
-fn checkApp(allocator: std.mem.Allocator, app: []const u8, extra: []const SourceFile, runtime: ?lir.CheckedPipeline.TargetConfig) !Checked {
+fn checkApp(allocator: std.mem.Allocator, app: []const u8, extra: []const SourceFile, runtime: ?lir.CheckedPipeline.TargetConfig) CheckAppError!Checked {
     const io = std.testing.io;
     var tmp_dir = std.testing.tmpDir(.{});
     errdefer tmp_dir.cleanup();

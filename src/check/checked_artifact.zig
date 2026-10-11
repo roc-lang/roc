@@ -35929,6 +35929,11 @@ pub const ImportedModuleView = struct {
     method_registry: *const static_dispatch.MethodRegistry,
     interface_capabilities: *const ModuleInterfaceCapabilities,
     const_store: *const ConstStore,
+
+    /// The keys of the modules this module imports directly.
+    pub fn directImportKeys(self: ImportedModuleView) []const CheckedModuleArtifactKey {
+        return self.direct_import_artifact_keys;
+    }
 };
 
 /// Public `LoweringModuleView` declaration.
