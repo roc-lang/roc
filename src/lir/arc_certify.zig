@@ -2180,6 +2180,10 @@ const Certifier = struct {
     summary_index_scratch: collections.DenseMap(u32, u32),
     /// Relevant positions the summarized state binds, ascending.
     relevant_bound_scratch: std.ArrayList(u32) = .empty,
+    /// Bound positions the join's body never reads that are nonetheless
+    /// relevant to one summary: each is the only carrier of a container in a
+    /// relevant value's payload chain.
+    provenance_carrier_scratch: collections.DenseMap(u32, void),
     /// Values bound to a position of the summary domain.
     domain_values_scratch: collections.DenseMap(ValueId, void),
     value_reach_seen: collections.DenseMap(ValueId, void),
@@ -2235,6 +2239,7 @@ const Certifier = struct {
             .region_of_join = collections.DenseMap(LIR.JoinPointId, u32).init(allocator),
             .domain_scratch = collections.DenseMap(u32, void).init(allocator),
             .carrier_scratch = collections.DenseMap(ValueId, u32).init(allocator),
+            .provenance_carrier_scratch = collections.DenseMap(u32, void).init(allocator),
             .summary_index_scratch = collections.DenseMap(u32, u32).init(allocator),
             .domain_values_scratch = collections.DenseMap(ValueId, void).init(allocator),
             .value_reach_seen = collections.DenseMap(ValueId, void).init(allocator),
@@ -2291,6 +2296,7 @@ const Certifier = struct {
         self.domain_scratch.deinit();
         self.domain_list_scratch.deinit(self.allocator);
         self.carrier_scratch.deinit();
+        self.provenance_carrier_scratch.deinit();
         self.summary_index_scratch.deinit();
         self.relevant_bound_scratch.deinit(self.allocator);
         self.domain_values_scratch.deinit();
@@ -4966,6 +4972,7 @@ const Certifier = struct {
             const carrier = try self.carrier_scratch.getOrPut(binding.value);
             if (!carrier.found_existing) carrier.value_ptr.* = binding.index;
         }
+        try self.addProvenanceCarriers(state);
 
         // A relevant join value can be the only carrier of storage selected
         // from an aggregate that is not itself relevant after this edge. Move
@@ -5204,10 +5211,43 @@ const Certifier = struct {
         return self.summary_scratch.items;
     }
 
+    /// A relevant value selected from a container borrows that container's
+    /// storage, and a later take of the selection claims the container's unit
+    /// through the whole payload chain. A container on that chain whose only
+    /// carrier is a local the join's body never reads is still part of the
+    /// relevant state: dropping its carrier would cut the chain, so the
+    /// selection could no longer reach the unit that pays for it. Each such
+    /// carrier joins the relevant bound positions for this summary.
+    fn addProvenanceCarriers(self: *Certifier, state: *const State) Allocator.Error!void {
+        self.provenance_carrier_scratch.clearRetainingCapacity();
+        self.repr_scratch.clearRetainingCapacity();
+        var bound = state.local_value.iterator();
+        while (bound.next()) |binding| {
+            const carrier = try self.repr_scratch.getOrPut(binding.value);
+            if (!carrier.found_existing) carrier.value_ptr.* = binding.index;
+        }
+        const relevant_len = self.relevant_bound_scratch.items.len;
+        var index: usize = 0;
+        while (index < self.relevant_bound_scratch.items.len) : (index += 1) {
+            var link = self.values.items[state.valueAtDense(self.relevant_bound_scratch.items[index])].payload_source;
+            while (link != no_value) : (link = self.values.items[link].payload_source) {
+                if (self.carrier_scratch.contains(link)) break;
+                const carrier = self.repr_scratch.get(link) orelse continue;
+                try self.provenance_carrier_scratch.put(carrier, {});
+                try self.relevant_bound_scratch.append(self.allocator, carrier);
+                try self.carrier_scratch.put(link, carrier);
+                break;
+            }
+        }
+        if (self.relevant_bound_scratch.items.len != relevant_len) {
+            std.mem.sort(u32, self.relevant_bound_scratch.items, {}, std.sort.asc(u32));
+        }
+    }
+
     /// Adds a relevant position to the summary domain. At an entry, a local
     /// the join's region never names stays in the frame.
     fn addSummaryDomainCandidate(self: *Certifier, state: *const State, record: *const JoinRecord, dense: u32, entry: bool) Allocator.Error!void {
-        if (!record.relevant.isSet(dense)) return;
+        if (!record.relevant.isSet(dense) and !self.provenance_carrier_scratch.contains(dense)) return;
         if (entry and !self.regionMentions(record.region, dense)) return;
         try self.addSummaryDomain(state, dense);
     }
