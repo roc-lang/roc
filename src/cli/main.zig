@@ -2065,16 +2065,34 @@ fn checkedInterpreterHostIdentity(
     return hasher.finalResult();
 }
 
+/// What identifies the contents of one host file a run links.
+const LinkFileContent = union(enum) {
+    /// The file lives in a downloaded bundle's content-addressed package-cache
+    /// directory, so the bundle's verified hash determines its contents.
+    bundle_hash: []const u8,
+    /// A digest of the file's bytes, for files outside a downloaded bundle.
+    digest: [32]u8,
+};
+
 fn updateInterpreterExeFileLinkInput(
     hasher: *base.Sha256,
     declared_path: []const u8,
     resolved_path: []const u8,
-    content_digest: [32]u8,
+    content: LinkFileContent,
 ) void {
     updateHashBytes(hasher, "file");
     updateHashBytes(hasher, declared_path);
     updateHashBytes(hasher, resolved_path);
-    hasher.update(&content_digest);
+    switch (content) {
+        .bundle_hash => |hash| {
+            updateHashBytes(hasher, "bundle");
+            updateHashBytes(hasher, hash);
+        },
+        .digest => |digest| {
+            updateHashBytes(hasher, "digest");
+            hasher.update(&digest);
+        },
+    }
 }
 
 fn updateInterpreterExeAppLinkInput(
@@ -2174,12 +2192,13 @@ fn interpreterExeLinkInputsIdentity(
     link_items: []const roc_target.LinkItem,
     platform_dir: []const u8,
     files_dir: []const u8,
+    bundle_hash: ?[]const u8,
     target: RocTarget,
     entrypoint_names: []const []const u8,
     debug: bool,
 ) (Allocator.Error || CliError)![32]u8 {
     var hasher = base.Sha256.init(.{});
-    updateHashBytes(&hasher, "roc-run-link-inputs-v3");
+    updateHashBytes(&hasher, "roc-run-link-inputs-v4");
     updateHashBytes(&hasher, @tagName(target));
 
     const target_name = @tagName(target);
@@ -2187,8 +2206,11 @@ fn interpreterExeLinkInputsIdentity(
         switch (item) {
             .file_path => |file_name| {
                 const full_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir, target_name, file_name });
-                const content_digest = try fileContentsDigest(ctx, full_path);
-                updateInterpreterExeFileLinkInput(&hasher, file_name, full_path, content_digest);
+                const content: LinkFileContent = if (bundle_hash) |hash|
+                    .{ .bundle_hash = hash }
+                else
+                    .{ .digest = try fileContentsDigest(ctx, full_path) };
+                updateInterpreterExeFileLinkInput(&hasher, file_name, full_path, content);
             },
             .app => updateInterpreterExeAppLinkInput(&hasher, shim_kind, target, entrypoint_names, debug),
             .win_gui => updateHashBytes(&hasher, "win_gui"),
@@ -2294,8 +2316,8 @@ fn testLinkInputsIdentityForFiles(
     var hasher = base.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-run-link-inputs-v1");
     updateHashBytes(&hasher, @tagName(RocTarget.x64linux));
-    updateInterpreterExeFileLinkInput(&hasher, first_declared, first_resolved, bytesDigest(first_contents));
-    updateInterpreterExeFileLinkInput(&hasher, second_declared, second_resolved, bytesDigest(second_contents));
+    updateInterpreterExeFileLinkInput(&hasher, first_declared, first_resolved, .{ .digest = bytesDigest(first_contents) });
+    updateInterpreterExeFileLinkInput(&hasher, second_declared, second_resolved, .{ .digest = bytesDigest(second_contents) });
     return hasher.finalResult();
 }
 
@@ -2624,8 +2646,12 @@ const RunPlatformLink = struct {
     items: []const roc_target.LinkItem,
     platform_dir: []const u8,
     files_dir: []const u8,
+    /// Present iff the platform is a downloaded bundle: its verified content
+    /// hash, which names the content-addressed package-cache directory
+    /// `platform_dir`.
+    bundle_hash: ?[]const u8,
 
-    fn init(arena: Allocator, platform: PlatformTargets, link_spec: roc_target.TargetLinkSpec) Allocator.Error!RunPlatformLink {
+    fn init(arena: Allocator, platform: PlatformTargets, link_spec: roc_target.TargetLinkSpec, bundle_hash: ?[]const u8) Allocator.Error!RunPlatformLink {
         const items = try arena.alloc(roc_target.LinkItem, link_spec.items.len);
         for (link_spec.items, items) |item, *copy| {
             copy.* = switch (item) {
@@ -2638,6 +2664,7 @@ const RunPlatformLink = struct {
             .items = items,
             .platform_dir = try arena.dupe(u8, std.fs.path.dirname(platform.root_file) orelse "."),
             .files_dir = try arena.dupe(u8, platform.config.inputs_dir orelse "targets"),
+            .bundle_hash = if (bundle_hash) |hash| try arena.dupe(u8, hash) else null,
         };
     }
 };
@@ -2780,7 +2807,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
             .size, .speed => unreachable,
         }
 
-        break :blk try RunPlatformLink.init(ctx.arena, platform, selected.link_spec);
+        break :blk try RunPlatformLink.init(ctx.arena, platform, selected.link_spec, build_env.getPlatformBundleHash());
     };
 
     reporter.finish();
@@ -2810,6 +2837,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         platform_link.items,
         platform_dir,
         files_dir,
+        platform_link.bundle_hash,
         selected_target,
         entrypoint_names,
         enable_debug,
