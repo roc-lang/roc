@@ -358,6 +358,12 @@ stages it touches; the instruction-count effect is reported in "Results".
     the page of a key it has not seen. Snapshots are unchanged and `roc
     check` on roc-pg is within 0.05% (218.24 G).
 
+60. Monotype: the `dec_lit` payloads of the draft and final expression and
+    pattern unions are 8-byte aligned fields, so those unions align to 8
+    instead of 16; and the type digest engine keeps its Tarjan state (visit
+    and low-link columns, on-stack flags, stacks, SCC members) in the store's
+    retained digest storage instead of allocating it per request.
+
 ## Findings from profiling
 
 These were found by profiling the ReleaseFast compiler with
@@ -1798,7 +1804,7 @@ reading code, and were not in the audit above.
 - category C; runs one `DraftExpr` per lowered expression per specialization (the largest draft table); impact medium (25% less memory and cache traffic in the …; risk low
 - Finding: `DraftExprData = union(enum(u8))` has `dec_lit: RocDec` (extern struct with `i128`, alignment 16) while every other payload is 4/8-aligned; largest ordinary payload is `DraftTryRecordSequence` (~36 bytes) / `DraftInitializedPayloadSwitch` (32, contains `u64` mask). Alignment 16 rounds the union to 48 bytes and `DraftExpr = {ty: DraftTypeCell(8), data}` to 64 bytes; with 8-byte alignment it would be 40 + 8 = 48. …
 - Fix: store `dec_lit` as `[16]u8` (or `extern struct { bytes: [16]u8 }`) in the draft/final expression union and convert with `@bitCast` at the single consumer; alternatively keep a `dec_lits: ArrayList(RocDec)` side table and store a u32 index. Pure representation change; verify `@sizeOf(DraftExpr)` drops to 48 and the snapshot/eval tests pass.
-- Status: open
+- Status: fixed (fix 60)
 
 ### src/postcheck/monotype/lower.zig:16591-16593, 16600: `expr_impossibility_proofs`/`pat_impossibility_proofs`/`stmt_impossibility_proofs: ArrayList(?RuntimeImpossibilityProofId)`
 - category C; runs one slot per draft expr/pat/stmt; impact low; risk low
@@ -1858,7 +1864,7 @@ reading code, and were not in the audit above.
 - category E/B; runs per `nodeIsProvenUninhabited` call (13 callers of `typeIsProvenUninhabited`, plus per produced runtime value), i.e. per lowered expression whose type is …; impact low-medium; risk low
 - Finding: `AutoHashMapUnmanaged(NodeId, usize)` clear is proportional to the map's capacity, which stays at the high-water mark of the largest scan. `inhabitation_visiting` is already a bitset; `inhabitation_entered` is a dense-id keyed map (NodeId) that dodges the lint (see cross-cutting entry).
 - Fix: replace with `collections.DenseMap(NodeId, u32)` (clear is proportional to live entries) or an epoch-stamped column on the graph (`entered_epoch[node] == scan_epoch`), and store the count as `u32`.
-- Status: open
+- Status: fixed (fixes 57 and 58)
 
 ### src/postcheck/monotype/lower.zig (methodTargetContext, 6 callers; e.g. 50705-50707): a full `BodyContext` is built and torn down to instantiate one node
 - category A; runs per method-contract relation / per dispatch target instantiation; impact medium; risk medium
@@ -1918,13 +1924,13 @@ reading code, and were not in the audit above.
 - category A; runs every materialised `SpecEvidence`, every stored evidence conversion, every interface summary copy; impact low-medium; risk low
 - Finding: both are `std.heap.ArenaAllocator`, which the brief notes pays atomics per allocation; `base.SingleThreadArena` exists. The graph arena (`graph.arena()`) should be checked the same way in solve.zig.
 - Fix: switch to `base.SingleThreadArena`; identical semantics as long as the Builder is single-threaded per worker (it is: workers own their builders).
-- Status: open
+- Status: fixed (fix 15)
 
 ### src/postcheck/monotype/lower.zig:58717-58745: `patternNeedsExplicitBinding` allocates two worklists per unmemoised pattern root
 - category A; runs per match-branch pattern root (memoised per pattern afterwards); impact low; risk low
 - Finding: `pending`/`children` are fresh `ArrayListUnmanaged`s on every call; the memo map `explicit_binding_memo` is an `AutoHashMapUnmanaged(CheckedPatternId, bool)` (dense id key, lint-dodging).
 - Fix: reuse BodyContext scratch lists; memo as `DenseMap(CheckedPatternId, bool)` or a 2-bit column.
-- Status: open
+- Status: partly fixed (fixes 57 and 58): the memo is a pooled dense map; the two worklists remain per call
 
 ### src/postcheck/monotype/solve.zig:247-281: `InstNode` carries a 32-byte `erased: names.TypeDigest` inline, inflating every graph node
 - category C; runs one `InstNode` per graph node (`nodes: ArrayList(InstNode)`), tens of thousands per specialization; also embedded in every `InterfaceConstraints.OpenNode` …; impact medium (20% smaller node column, better `find` locality); risk low
@@ -1972,7 +1978,7 @@ reading code, and were not in the audit above.
 - category A; runs every row merge (`6895`, `6971`, `7093`, `7244` dupe merged rows into the arena), every `InstNamed`, every instantiated slice (`lower.zig` `graph.arena().dupe` …; impact low-medium; risk low
 - Finding: the graph arena is the hottest allocator in specialization; std's arena pays atomics per allocation. `base.SingleThreadArena` exists for this.
 - Fix: switch `arena_impl` and `spare_arenas` to `base.SingleThreadArena`; identical semantics (graph is single-threaded per worker).
-- Status: open
+- Status: fixed (fix 15)
 
 ### src/postcheck/monotype/solve.zig:283-291 (`PureInstanceKey`), 234-238 (`ClosedCheckedKey`): 72-byte / 36-byte hashed memo keys
 - category B; runs per pure-instance record/lookup (`pure_instances`, per checked type instantiated under an evidence chain); per closed checked type (`closed_checked_monos`); impact low; risk low
@@ -2002,7 +2008,7 @@ reading code, and were not in the audit above.
 - category A; runs per uncached digest computation (per type x digest kind; specialization keys, equality digests, representation digests are all requested per specialization …; impact medium; risk low
 - Finding: `DigestEngine.Storage` (3246-3268) already retains `nodes`, `node_lookup`, `link_pool`, `child_offsets`, `scalar_bytes`, `render_buf` across requests, but `resolveSccs` allocates three `node_count`-sized arrays plus three fresh ArrayLists every call and the cycle-labelling path allocates ~10 more temporaries. `child_offsets: ArrayList(usize)` could be `u32`.
 - Fix: add the SCC scratch (as one `ArrayList(SccNode{visit_index, low_link, on_stack})` and the three stacks) and the labelling scratch to `Storage`, cleared with `clearRetainingCapacity` per request. No output change.
-- Status: open
+- Status: fixed (fix 60)
 
 ### src/postcheck/monotype/type.zig:345, 1457, 2162: `AutoHashMap(DigestBucketKey, std.ArrayList(TypeId|u32))` map-of-lists for digest interning
 - category F; runs per interned type (`full_digest_interned`) and per commit suffix (`suffix_by_digest`, allocated fresh per commit at 1457); impact low-medium; risk low

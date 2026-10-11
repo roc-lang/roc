@@ -3385,10 +3385,41 @@ pub const Store = struct {
         child_offsets: std.ArrayList(usize),
         scalar_bytes: std.ArrayList(u8),
         render_buf: std.ArrayList(u8),
+        scc: SccScratch,
 
         /// Whether this engine runs on the store's kept lists and returns
         /// them; an engine started while another is running owns its own.
         uses_store_storage: bool,
+
+        /// Tarjan state of one SCC pass, kept between digest requests.
+        const SccScratch = struct {
+            visit_index: std.ArrayList(u32) = .empty,
+            low_link: std.ArrayList(u32) = .empty,
+            on_stack: std.ArrayList(bool) = .empty,
+            stack: std.ArrayList(u32) = .empty,
+            frames: std.ArrayList(SccFrame) = .empty,
+            members: std.ArrayList(u32) = .empty,
+
+            fn clear(self: *SccScratch) void {
+                self.visit_index.clearRetainingCapacity();
+                self.low_link.clearRetainingCapacity();
+                self.on_stack.clearRetainingCapacity();
+                self.stack.clearRetainingCapacity();
+                self.frames.clearRetainingCapacity();
+                self.members.clearRetainingCapacity();
+            }
+
+            fn deinit(self: *SccScratch, allocator: std.mem.Allocator) void {
+                self.visit_index.deinit(allocator);
+                self.low_link.deinit(allocator);
+                self.on_stack.deinit(allocator);
+                self.stack.deinit(allocator);
+                self.frames.deinit(allocator);
+                self.members.deinit(allocator);
+            }
+        };
+
+        const SccFrame = struct { node: u32, edge_cursor: u32 };
 
         const no_scc_position = std.math.maxInt(u32);
         const unvisited = std.math.maxInt(u32);
@@ -3400,6 +3431,7 @@ pub const Store = struct {
             child_offsets: std.ArrayList(usize) = .empty,
             scalar_bytes: std.ArrayList(u8) = .empty,
             render_buf: std.ArrayList(u8) = .empty,
+            scc: SccScratch = .{},
             in_use: bool = false,
 
             const retained_lookup_capacity = 64;
@@ -3411,6 +3443,7 @@ pub const Store = struct {
                 self.child_offsets.deinit(allocator);
                 self.scalar_bytes.deinit(allocator);
                 self.render_buf.deinit(allocator);
+                self.scc.deinit(allocator);
                 self.* = .{};
             }
         };
@@ -3428,6 +3461,7 @@ pub const Store = struct {
                 .child_offsets = .empty,
                 .scalar_bytes = .empty,
                 .render_buf = .empty,
+                .scc = .{},
                 .uses_store_storage = false,
             };
             kept.in_use = true;
@@ -3442,6 +3476,7 @@ pub const Store = struct {
                 .child_offsets = kept.child_offsets,
                 .scalar_bytes = kept.scalar_bytes,
                 .render_buf = kept.render_buf,
+                .scc = kept.scc,
                 .uses_store_storage = true,
             };
             kept.* = .{ .in_use = true };
@@ -3456,8 +3491,10 @@ pub const Store = struct {
                 self.scalar_bytes.deinit(self.gpa);
                 self.node_lookup.deinit();
                 self.nodes.deinit(self.gpa);
+                self.scc.deinit(self.gpa);
                 return;
             }
+            self.scc.clear();
             self.nodes.clearRetainingCapacity();
             // Clearing a map touches its whole capacity, so one that a large
             // type grew is released instead of being cleared before every
@@ -3478,6 +3515,7 @@ pub const Store = struct {
                 .child_offsets = self.child_offsets,
                 .scalar_bytes = self.scalar_bytes,
                 .render_buf = self.render_buf,
+                .scc = self.scc,
             };
         }
 
@@ -3663,22 +3701,20 @@ pub const Store = struct {
         /// already points at finalized digests and it can resolve on the spot.
         fn resolveSccs(self: *DigestEngine) std.mem.Allocator.Error!void {
             const node_count = self.nodes.items.len;
-            const visit_index = try self.gpa.alloc(u32, node_count);
-            defer self.gpa.free(visit_index);
+            const scratch = &self.scc;
+            scratch.clear();
+            try scratch.visit_index.resize(self.gpa, node_count);
+            const visit_index = scratch.visit_index.items;
             @memset(visit_index, unvisited);
-            const low_link = try self.gpa.alloc(u32, node_count);
-            defer self.gpa.free(low_link);
-            const on_stack = try self.gpa.alloc(bool, node_count);
-            defer self.gpa.free(on_stack);
+            try scratch.low_link.resize(self.gpa, node_count);
+            const low_link = scratch.low_link.items;
+            try scratch.on_stack.resize(self.gpa, node_count);
+            const on_stack = scratch.on_stack.items;
             @memset(on_stack, false);
 
-            var scc_stack: std.ArrayList(u32) = .empty;
-            defer scc_stack.deinit(self.gpa);
-            const Frame = struct { node: u32, edge_cursor: u32 };
-            var frames: std.ArrayList(Frame) = .empty;
-            defer frames.deinit(self.gpa);
-            var scc_members: std.ArrayList(u32) = .empty;
-            defer scc_members.deinit(self.gpa);
+            const scc_stack = &scratch.stack;
+            const frames = &scratch.frames;
+            const scc_members = &scratch.members;
 
             var next_visit: u32 = 0;
             for (0..node_count) |start| {
@@ -5046,8 +5082,12 @@ test "monotype cross-store import is atomic under allocation failure" {
             std.debug.assert(stable == relocation.remapType(source_store, shared));
         }
     };
+    // The digest engine grows retained buffers, whose in-place growth under
+    // the testing allocator depends on the heap's layout, so the failure check
+    // runs over an allocator that refuses in-place growth.
+    var deterministic = @import("base").DeterministicAllocator.init(std.testing.allocator);
     try std.testing.checkAllAllocationFailures(
-        std.testing.allocator,
+        deterministic.allocator(),
         Helper.run,
         .{ &source, &source_names, unit, recursive_result.root },
     );
