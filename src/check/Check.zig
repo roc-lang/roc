@@ -11441,6 +11441,13 @@ const FreshRank = enum { current, target };
 /// Unify `target_var` against freshly-built `content`. When `target_var` is a
 /// root flex placeholder we mutate its descriptor in place (the common case),
 /// saving a typeslot and a full unification run.
+fn isUnconstrainedFlex(content: types_mod.Content) bool {
+    return switch (content) {
+        .flex => |flex| flex.constraints.isEmpty(),
+        .rigid, .alias, .structure, .field_presence, .err => false,
+    };
+}
+
 fn unifyWithFresh(
     self: *Self,
     target_var: Var,
@@ -11454,10 +11461,12 @@ fn unifyWithFresh(
     const resolved_target = self.types.resolveVar(target_var);
     switch (rank_policy) {
         .current => {
-            if (resolved_target.is_root and resolved_target.desc.rank == env.rank() and resolved_target.desc.content == .flex) {
+            if (resolved_target.is_root and resolved_target.desc.rank == env.rank() and isUnconstrainedFlex(resolved_target.desc.content)) {
                 // The vast majority of the time, we call unify with on a placeholder
                 // CIR var. In this case, we can safely replace the type descriptor
-                // directly, saving a typeslot and unifcation run
+                // directly, saving a typeslot and unifcation run. A flex that
+                // carries static-dispatch constraints (a literal's conversion)
+                // must unify, so the constraints are checked against `content`.
                 var desc = resolved_target.desc;
                 desc.content = content;
                 try self.types.dangerousSetVarDesc(target_var, desc);
@@ -11474,7 +11483,7 @@ fn unifyWithFresh(
             _ = try self.unify(target_var, fresh_var, env);
         },
         .target => {
-            if (resolved_target.is_root and resolved_target.desc.content == .flex) {
+            if (resolved_target.is_root and isUnconstrainedFlex(resolved_target.desc.content)) {
                 var desc = resolved_target.desc;
                 desc.content = content;
                 try self.types.dangerousSetVarDesc(target_var, desc);
