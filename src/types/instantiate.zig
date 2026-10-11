@@ -1710,7 +1710,7 @@ pub const Instantiator = struct {
                     if (frame.tag_idx == frame.source_tags.count) {
                         // Sort the fresh tags alphabetically by name before appending.
                         // This ensures tag discriminants are consistent after instantiation.
-                        std.mem.sort(Tag, machine.pending_tags.items[frame.tags_base..], self.idents, comptime Tag.sortByNameAsc);
+                        sortTagsByName(machine.pending_tags.items[frame.tags_base..], self.idents);
                         frame.tags_range = try self.store.appendTags(machine.pending_tags.items[frame.tags_base..]);
                         machine.pending_tags.items.len = frame.tags_base;
                         frame.stage = .await_ext;
@@ -1822,3 +1822,14 @@ pub const Instantiator = struct {
         };
     }
 };
+
+/// Order tags by name text. Instantiation copies a source union's tags in
+/// order, and source unions are almost always already ordered, so the ordered
+/// case is confirmed in one pass before sorting.
+fn sortTagsByName(tags: []Tag, idents: *const Ident.Store) void {
+    var index: usize = 1;
+    while (index < tags.len) : (index += 1) {
+        if (Tag.orderByName(idents, tags[index - 1], tags[index]) == .gt) break;
+    } else return;
+    std.mem.sort(Tag, tags, idents, comptime Tag.sortByNameAsc);
+}
