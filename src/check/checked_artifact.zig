@@ -10523,7 +10523,7 @@ test "imported origin resolution visits each import view and owner declaration o
 
     var index = ImportedOriginIndex.init(allocator);
     defer index.deinit();
-    for (type_names, 0..) |type_name, statement| {
+    for (0..type_names.len) |statement| {
         try testing.expect(checkedArtifactKeyEql(testCheckedModuleKey(owner_view_index), try index.owner(module_env, imports, origin)));
         const found = try index.nominalDeclaration(module_env, imports, origin, @intCast(statement));
         try testing.expect(checkedArtifactKeyEql(testCheckedModuleKey(owner_view_index), found.artifact));
