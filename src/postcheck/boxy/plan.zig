@@ -25,7 +25,7 @@ const procedureTemplateRef = test_fixtures.procedureTemplateRef;
 const procedureValueRef = test_fixtures.procedureValueRef;
 const checkedTemplate = test_fixtures.checkedTemplate;
 const testIntNumeral = test_fixtures.testIntNumeral;
-const minimalCheckedArtifact = test_fixtures.minimalCheckedArtifact;
+const minimalCheckedModule = test_fixtures.minimalCheckedModule;
 
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
@@ -21986,7 +21986,7 @@ pub fn moduleViewFromImported(imported: checked.ImportedModuleView) ModuleView {
     };
 }
 
-/// The planner's view of a checked module artifact.
+/// The planner's view of a checked module.
 pub fn moduleViewFromCheckedModule(checked_module: *const checked.CheckedModuleArtifact) ModuleView {
     return .{
         .key = checked_module.key,
@@ -22521,12 +22521,12 @@ test "boxy planner walks callable eval finalized const function bodies" {
 test "boxy planner describes an imported hosted worker's type variables on the Roc side of its extern" {
     const gpa = std.testing.allocator;
 
-    var root_checked_module = minimalCheckedArtifact(gpa);
+    var root_checked_module = minimalCheckedModule(gpa);
     defer root_checked_module.canonical_names.deinit();
     defer root_checked_module.checked_types.deinit(gpa);
     defer root_checked_module.checked_bodies.deinit(gpa);
 
-    var import_checked_module = minimalCheckedArtifact(gpa);
+    var import_checked_module = minimalCheckedModule(gpa);
     import_checked_module.key = moduleKey(2);
     defer import_checked_module.canonical_names.deinit();
     defer import_checked_module.checked_types.deinit(gpa);
@@ -22747,12 +22747,12 @@ test "boxy planner describes an imported hosted worker's type variables on the R
 test "boxy planner records relation-owned source type for platform-required direct calls" {
     const gpa = std.testing.allocator;
 
-    var platform_checked_module = minimalCheckedArtifact(gpa);
+    var platform_checked_module = minimalCheckedModule(gpa);
     defer platform_checked_module.canonical_names.deinit();
     defer platform_checked_module.checked_types.deinit(gpa);
     defer platform_checked_module.checked_bodies.deinit(gpa);
 
-    var app_checked_module = minimalCheckedArtifact(gpa);
+    var app_checked_module = minimalCheckedModule(gpa);
     app_checked_module.key = moduleKey(3);
     defer app_checked_module.canonical_names.deinit();
     defer app_checked_module.checked_types.deinit(gpa);
@@ -24000,7 +24000,7 @@ test "boxy empty tag rows share their tail representation and descriptor" {
 
 test "boxy Bool retains its closed row for generic descriptor arguments" {
     const gpa = std.testing.allocator;
-    var module = minimalCheckedArtifact(gpa);
+    var module = minimalCheckedModule(gpa);
     defer module.canonical_names.deinit();
     defer module.checked_types.deinit(gpa);
     const bool_ty: checked.CheckedTypeId = @fromBackingInt(@intCast(fixtureTableIndex(0)));
@@ -24940,7 +24940,7 @@ fn expectCheckedExprWorkerBody(
 test "boxy planner resolves procedure-template workers to checked bodies" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -24964,7 +24964,7 @@ test "boxy planner resolves procedure-template workers to checked bodies" {
 test "boxy planner resolves top-level direct bindings to checked bodies" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -24999,7 +24999,7 @@ test "boxy planner resolves top-level direct bindings to checked bodies" {
 test "boxy planner resolves callable eval bindings to finalized const function expressions" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);

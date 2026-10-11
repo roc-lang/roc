@@ -4169,7 +4169,7 @@ pub fn build(b: *std.Build) void {
 
     // Add snapshot tool test
     {
-        const snapshot_test = roc_test_binaries.add("snapshot_tool_test", "src/snapshot_tool/main.zig", true);
+        const snapshot_test = roc_test_binaries.add(.{ .name = "snapshot_tool_test", .root = "src/snapshot_tool/main.zig", .links_llvm = true });
 
         // The install step is optional, so hoist the dep list into a local with
         // an explicit type: peer-type resolution on an inline
@@ -4192,7 +4192,7 @@ pub fn build(b: *std.Build) void {
     // `roc check`, and either runs as `roc test` (when the block is only
     // top-level expects) or evaluates.
     {
-        const builtin_doc_test = roc_test_binaries.add("builtin_doc_test", "src/eval/test/builtin_doc_tests.zig", true);
+        const builtin_doc_test = roc_test_binaries.add(.{ .name = "builtin_doc_test", .root = "src/eval/test/builtin_doc_tests.zig", .links_llvm = true });
         builtin_doc_test.root_module.addOptions("fixture_options", fixture_options);
 
         test_suites.register(.{
@@ -4203,7 +4203,7 @@ pub fn build(b: *std.Build) void {
         });
     }
 
-    const lir_inline_test = roc_test_binaries.add("lir_inline_test", "src/eval/test/lir_inline_test.zig", true);
+    const lir_inline_test = roc_test_binaries.add(.{ .name = "lir_inline_test", .root = "src/eval/test/lir_inline_test.zig", .links_llvm = true });
     lir_inline_test.stack_size = stack_budget.roc_stack_size;
 
     test_suites.register(.{
@@ -4212,14 +4212,14 @@ pub fn build(b: *std.Build) void {
         .compile = lir_inline_test,
     });
 
-    const boxy_abi_test = roc_test_binaries.add("boxy_abi_test", "src/eval/test/boxy_abi_test.zig", false);
+    const boxy_abi_test = roc_test_binaries.add(.{ .name = "boxy_abi_test", .root = "src/eval/test/boxy_abi_test.zig", .links_llvm = false });
     test_suites.register(.{
         .step_suffix = "boxy-abi",
         .description = "Run boxy C-ABI wrapper Zig tests",
         .compile = boxy_abi_test,
     });
 
-    const rc_conformance_test = roc_test_binaries.add("rc_conformance_test", "src/eval/test/rc_conformance_tests.zig", true);
+    const rc_conformance_test = roc_test_binaries.add(.{ .name = "rc_conformance_test", .root = "src/eval/test/rc_conformance_tests.zig", .links_llvm = true });
 
     test_suites.register(.{
         .step_suffix = "rc-conformance",
@@ -4227,7 +4227,7 @@ pub fn build(b: *std.Build) void {
         .compile = rc_conformance_test,
     });
 
-    const trmc_lir_test = roc_test_binaries.add("trmc_lir_test", "src/eval/test/trmc_lir_test.zig", true);
+    const trmc_lir_test = roc_test_binaries.add(.{ .name = "trmc_lir_test", .root = "src/eval/test/trmc_lir_test.zig", .links_llvm = true });
     // Drives the interpreter thousands of frames deep to prove the Debug
     // call-depth guard fires first, which needs the same native stack the other
     // interpreter-driving binaries get; otherwise the stack runs out before the
@@ -4257,7 +4257,7 @@ pub fn build(b: *std.Build) void {
 
     // Add CLI test
     {
-        const cli_test = roc_test_binaries.add("cli_test", "src/cli/main.zig", true);
+        const cli_test = roc_test_binaries.add(.{ .name = "cli_test", .root = "src/cli/main.zig", .links_llvm = true });
         cli_test.root_module.addImport("compiler_version", compiler_version_module);
         cli_test.root_module.addOptions("cli_test_helpers", cli_test_helpers);
         linkWatchPlatformLibs(cli_test, target);
@@ -6267,12 +6267,20 @@ const RocTestBinaries = struct {
     flag_enable_tracy: ?[]const u8,
     llvm_support: LlvmSupport,
 
-    fn add(self: RocTestBinaries, name: []const u8, root_source_file: []const u8, links_llvm: bool) *Step.Compile {
+    /// One Zig test binary: its name, its root source file, and whether it
+    /// links the embedded LLVM libraries.
+    const Spec = struct {
+        name: []const u8,
+        root: []const u8,
+        links_llvm: bool,
+    };
+
+    fn add(self: RocTestBinaries, spec: Spec) *Step.Compile {
         const b = self.b;
         const test_step = b.addTest(.{
-            .name = name,
+            .name = spec.name,
             .root_module = b.createModule(.{
-                .root_source_file = b.path(root_source_file),
+                .root_source_file = b.path(spec.root),
                 .target = self.target,
                 .optimize = self.optimize,
                 .link_libc = true,
@@ -6282,7 +6290,7 @@ const RocTestBinaries = struct {
         self.roc_modules.addAll(test_step);
         test_step.root_module.addImport("compiled_builtins", self.compiled_builtins_module);
         test_step.step.dependOn(&self.write_compiled_builtins.step);
-        if (links_llvm) self.llvm_support.add(test_step);
+        if (spec.links_llvm) self.llvm_support.add(test_step);
         add_tracy(b, self.roc_modules.build_options, test_step, self.target, true, self.flag_enable_tracy);
         return test_step;
     }

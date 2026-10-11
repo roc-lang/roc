@@ -29,7 +29,7 @@ const typeKey = test_fixtures.typeKey;
 const typeSchemeKey = test_fixtures.typeSchemeKey;
 const testIntNumeral = test_fixtures.testIntNumeral;
 const testSmallDecNumeral = test_fixtures.testSmallDecNumeral;
-const minimalCheckedArtifact = test_fixtures.minimalCheckedArtifact;
+const minimalCheckedModule = test_fixtures.minimalCheckedModule;
 const procedureTemplateRef = test_fixtures.procedureTemplateRef;
 const procedureValueRef = test_fixtures.procedureValueRef;
 const solved_lir_lower = @import("../solved_lir_lower.zig");
@@ -44304,7 +44304,7 @@ test "boxy lowerer returns an empty LIR program for an empty plan" {
 test "boxy lowerer emits private worker proc for zero-arg numeric lambda root" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -44414,7 +44414,7 @@ const ConstLookupStoredKind = enum {
 fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind, stored: ConstLookupStoredKind) (Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -44566,7 +44566,7 @@ fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind, stored: ConstLookupS
 test "boxy lowerer emits small decimal expressions as Dec literals" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -44644,7 +44644,7 @@ test "boxy lowerer emits small decimal expressions as Dec literals" {
 test "boxy lowerer emits direct calls to planned private workers" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -44847,12 +44847,12 @@ test "boxy lowerer emits direct calls to planned private workers" {
 test "boxy lowerer emits direct calls to planned imported workers" {
     const gpa = std.testing.allocator;
 
-    var root_checked_module = minimalCheckedArtifact(gpa);
+    var root_checked_module = minimalCheckedModule(gpa);
     defer root_checked_module.canonical_names.deinit();
     defer root_checked_module.checked_types.deinit(gpa);
     defer root_checked_module.checked_bodies.deinit(gpa);
 
-    var import_checked_module = minimalCheckedArtifact(gpa);
+    var import_checked_module = minimalCheckedModule(gpa);
     import_checked_module.key = moduleKey(2);
     defer import_checked_module.canonical_names.deinit();
     defer import_checked_module.checked_types.deinit(gpa);
@@ -45142,7 +45142,7 @@ test "boxy lowerer emits direct calls to planned imported workers" {
 test "boxy lowerer emits recursive direct calls to the current private worker" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -45281,7 +45281,7 @@ test "boxy lowerer emits recursive direct calls to the current private worker" {
 test "boxy lowerer emits checked crash as terminal LIR crash" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -45360,7 +45360,7 @@ test "boxy lowerer emits checked crash as terminal LIR crash" {
 test "boxy lowerer emits checked ellipsis as identity not-implemented crash" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -45436,7 +45436,7 @@ test "boxy lowerer emits checked ellipsis as identity not-implemented crash" {
 test "boxy lowerer emits checked return expressions as terminal ret" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -45524,7 +45524,7 @@ test "boxy lowerer emits checked return expressions as terminal ret" {
 test "boxy lowerer emits checked return statements as terminal ret" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -45627,7 +45627,7 @@ test "boxy lowerer emits checked return statements as terminal ret" {
 test "boxy lowerer emits checked runtime error expressions as the runtime error crash" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -45700,7 +45700,7 @@ test "boxy lowerer emits checked runtime error expressions as the runtime error 
 test "boxy lowerer emits checked runtime error statements as the runtime error crash" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -45789,7 +45789,7 @@ test "boxy lowerer emits checked runtime error statements as the runtime error c
 test "boxy lowerer emits checked while statements as join-backed loops" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -45923,7 +45923,7 @@ test "boxy lowerer emits checked while statements as join-backed loops" {
 test "boxy lowerer emits checked break as the active loop exit" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -46053,7 +46053,7 @@ test "boxy lowerer emits checked break as the active loop exit" {
 test "boxy lowerer emits checked if expressions with a shared continuation join" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -46188,7 +46188,7 @@ test "boxy lowerer emits checked if expressions with a shared continuation join"
 test "boxy lowerer emits checked tag matches as ordered discriminant tests" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -46351,7 +46351,7 @@ test "boxy lowerer emits checked tag matches as ordered discriminant tests" {
 test "boxy lowerer binds checked tag payload match patterns before branch bodies" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -46539,7 +46539,7 @@ test "boxy lowerer binds checked tag payload match patterns before branch bodies
 test "boxy lowerer emits checked list match patterns as length checks and element reads" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -46739,7 +46739,7 @@ test "boxy lowerer emits checked list match patterns as length checks and elemen
 test "boxy lowerer emits checked string interpolation match patterns" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -46896,7 +46896,7 @@ test "boxy lowerer emits checked string interpolation match patterns" {
 test "boxy lowerer maps checked alternative binders onto representative match locals" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -47087,7 +47087,7 @@ test "boxy lowerer maps checked alternative binders onto representative match lo
 test "boxy lowerer emits checked numeric literal match patterns as equality tests" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -47227,7 +47227,7 @@ test "boxy lowerer emits checked numeric literal match patterns as equality test
 test "boxy lowerer emits checked small decimal match patterns as Dec equality tests" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -47383,7 +47383,7 @@ test "boxy lowerer emits checked small decimal match patterns as Dec equality te
 test "boxy lowerer emits checked string literal match patterns as string equality tests" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -47518,7 +47518,7 @@ test "boxy lowerer emits checked string literal match patterns as string equalit
 test "boxy lowerer emits checked unary not as bool low-level call" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -47611,7 +47611,7 @@ test "boxy lowerer emits checked unary not as bool low-level call" {
 test "boxy lowerer emits short-circuit checked boolean and" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -47724,7 +47724,7 @@ test "boxy lowerer emits short-circuit checked boolean and" {
 test "boxy lowerer emits primitive structural equality as low-level equality" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -47832,7 +47832,7 @@ test "boxy lowerer emits primitive structural equality as low-level equality" {
 test "boxy lowerer emits tuple structural equality with field short-circuiting" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -47997,7 +47997,7 @@ test "boxy lowerer emits tuple structural equality with field short-circuiting" 
 test "boxy lowerer emits primitive structural hash as hasher low-level" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -48099,7 +48099,7 @@ test "boxy lowerer emits primitive structural hash as hasher low-level" {
 test "boxy lowerer emits tuple structural hash by threading hasher through fields" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -48231,7 +48231,7 @@ test "boxy lowerer emits tuple structural hash by threading hasher through field
 test "boxy lowerer emits checked string segment literals" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -48310,7 +48310,7 @@ test "boxy lowerer emits checked string segment literals" {
 test "boxy lowerer emits checked bytes literals as byte-backed LIR literals" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -48393,7 +48393,7 @@ test "boxy lowerer emits checked bytes literals as byte-backed LIR literals" {
 test "boxy lowerer emits checked string interpolation segments as concat chain" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -48525,7 +48525,7 @@ test "boxy lowerer emits checked string interpolation segments as concat chain" 
 test "boxy lowerer emits checked dbg expressions before unit result" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -48617,7 +48617,7 @@ test "boxy lowerer emits checked dbg expressions before unit result" {
 test "boxy lowerer emits checked expect expressions before unit result" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -48708,7 +48708,7 @@ test "boxy lowerer emits checked expect expressions before unit result" {
 test "boxy lowerer emits expect_err messages from inspected payloads" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -48836,7 +48836,7 @@ test "boxy lowerer emits expect_err messages from inspected payloads" {
 test "boxy lowerer emits checked dbg statements in block order" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -48944,7 +48944,7 @@ test "boxy lowerer emits checked dbg statements in block order" {
 test "boxy lowerer emits block declaration bindings with checked type layouts" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -49065,7 +49065,7 @@ test "boxy lowerer emits block declaration bindings with checked type layouts" {
 test "boxy lowerer emits uninitialized mutable block bindings" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -49173,7 +49173,7 @@ test "boxy lowerer emits uninitialized mutable block bindings" {
 test "boxy lowerer emits mutable reassignment as set_local replace" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -49321,7 +49321,7 @@ test "boxy lowerer emits mutable reassignment as set_local replace" {
 test "boxy lowerer destructures tuple declaration patterns" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -49508,7 +49508,7 @@ test "boxy lowerer destructures tuple declaration patterns" {
 test "boxy lowerer materializes record rest declaration patterns" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -49710,7 +49710,7 @@ test "boxy lowerer materializes record rest declaration patterns" {
 test "boxy lowerer binds irrefutable list rest declaration patterns" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -49869,7 +49869,7 @@ test "boxy lowerer binds irrefutable list rest declaration patterns" {
 test "boxy lowerer emits tuple construction in element order" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -49981,7 +49981,7 @@ test "boxy lowerer emits tuple construction in element order" {
 test "boxy lowerer emits tuple access as field_read" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -50093,7 +50093,7 @@ test "boxy lowerer emits tuple access as field_read" {
 test "boxy lowerer emits record construction in layout order after source-order evaluation" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -50213,7 +50213,7 @@ test "boxy lowerer emits record construction in layout order after source-order 
 test "boxy lowerer evaluates empty record extensions before explicit fields" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -50344,7 +50344,7 @@ test "boxy lowerer evaluates empty record extensions before explicit fields" {
 test "boxy lowerer emits record field access using layout field index" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -50473,7 +50473,7 @@ test "boxy lowerer emits record field access using layout field index" {
 test "boxy lowerer emits nominal construction for representation-equivalent backing" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -50622,7 +50622,7 @@ fn expectDeclaredNominalRecordBoundary(
 test "boxy lowerer emits nominal boundary before backing record pattern binding" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -50863,7 +50863,7 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
 test "boxy lowerer inspects declared-field nominals through backing field_read" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -51058,7 +51058,7 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
 test "boxy lowerer hashes declared-field nominals through backing field_read" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -51265,7 +51265,7 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
 test "boxy lowerer emits builtin Bool tags by checked Bool names" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -51347,7 +51347,7 @@ test "boxy lowerer emits builtin Bool tags by checked Bool names" {
 test "boxy lowerer emits payload tag construction using planned variant payload layout" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -51466,7 +51466,7 @@ test "boxy lowerer emits payload tag construction using planned variant payload 
 test "boxy lowerer emits list construction with committed element layout" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -51571,7 +51571,7 @@ test "boxy lowerer emits list construction with committed element layout" {
 test "boxy lowerer stores dynamic list elements with boxy storage layout" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -51740,7 +51740,7 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
 test "boxy lowerer inspects concrete lists with an index and string accumulator loop" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -51882,7 +51882,7 @@ test "boxy lowerer inspects concrete lists with an index and string accumulator 
 test "boxy lowerer emits empty list construction" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -51959,7 +51959,7 @@ test "boxy lowerer emits empty list construction" {
 test "boxy lowerer emits checked low-level calls after source-order argument lowering" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -52069,7 +52069,7 @@ test "boxy lowerer emits checked low-level calls after source-order argument low
 test "boxy lowerer boxes concrete values with ordinary box low-level" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -52165,7 +52165,7 @@ test "boxy lowerer boxes concrete values with ordinary box low-level" {
 test "boxy lowerer reuses dynamic boxes for Box(a)" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -52309,7 +52309,7 @@ test "boxy lowerer reuses dynamic boxes for Box(a)" {
 test "boxy lowerer unboxes concrete values with ordinary box low-level" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -52423,7 +52423,7 @@ test "boxy lowerer unboxes concrete values with ordinary box low-level" {
 test "boxy lowerer inspects concrete Box payloads" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -52614,7 +52614,7 @@ test "boxy lowerer disables in-place list map across distinct dynamic descriptor
 test "boxy lowerer emits checked integer division low-level calls" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -52713,7 +52713,7 @@ test "boxy lowerer emits checked integer division low-level calls" {
 test "boxy lowerer publishes host wrapper proc for exported roots" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -52832,7 +52832,7 @@ test "boxy lowerer publishes host wrapper proc for exported roots" {
 test "boxy lowerer emits requested layout metadata for layout-only plans" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
 
@@ -52868,7 +52868,7 @@ test "boxy lowerer emits requested layout metadata for layout-only plans" {
 test "boxy lowerer emits requested layout metadata for static data requests" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
 
@@ -52942,7 +52942,7 @@ test "boxy lowerer emits requested layout metadata for static data requests" {
 test "boxy lowerer emits const plans for zero-payload tag variants" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
 
@@ -53008,7 +53008,7 @@ fn lowerListMapCanReuseFixture(
     transform_ret: ListMapCanReuseTransformRet,
     options: Options,
 ) Allocator.Error!Output {
-    var checked_module = minimalCheckedArtifact(allocator);
+    var checked_module = minimalCheckedModule(allocator);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(allocator);
     defer checked_module.checked_bodies.deinit(allocator);

@@ -64,7 +64,7 @@ pub fn addBoolDeclaration(
     types.builtin_nominal_declarations[@backingInt(checked.CheckedBuiltinNominal.bool)] = declaration_index + 1;
 }
 
-/// The checked-source module env every fixture artifact and numeral literal
+/// The checked-source module env every fixture checked module and numeral literal
 /// shares; its CIR fields are initialized once.
 pub fn testModuleEnv() *can.ModuleEnv {
     const S = struct {
@@ -79,8 +79,8 @@ pub fn testModuleEnv() *can.ModuleEnv {
     return env;
 }
 
-/// An empty checked artifact for unit tests that build plans and lowerings by hand.
-pub fn minimalCheckedArtifact(allocator: Allocator) checked.CheckedModuleArtifact {
+/// An empty checked module for unit tests that build plans and lowerings by hand.
+pub fn minimalCheckedModule(allocator: Allocator) checked.CheckedModuleArtifact {
     return .{
         .key = moduleKey(1),
         .canonical_names = names.CanonicalNameStore.init(allocator),
@@ -107,7 +107,7 @@ pub fn minimalCheckedArtifact(allocator: Allocator) checked.CheckedModuleArtifac
     };
 }
 
-/// The module identity of the single module in `minimalCheckedArtifact`.
+/// The module identity of the single module in `minimalCheckedModule`.
 pub fn testModuleIdentity() checked.ModuleIdentity {
     return .{
         .module_idx = 0,
@@ -124,21 +124,21 @@ pub fn moduleKey(byte: u8) checked.ModuleId {
     return key;
 }
 
-/// A distinct canonical type key whose first byte is `byte`.
+/// A distinct checked type digest whose first byte is `byte`.
 pub fn typeKey(byte: u8) names.CanonicalTypeKey {
     var key = names.CanonicalTypeKey{};
     key.bytes[0] = byte;
     return key;
 }
 
-/// A distinct canonical type scheme key whose first byte is `byte`.
+/// A distinct checked type scheme digest whose first byte is `byte`.
 pub fn typeSchemeKey(byte: u8) names.CanonicalTypeSchemeKey {
     var key = names.CanonicalTypeSchemeKey{};
     key.bytes[0] = byte;
     return key;
 }
 
-/// A procedure template reference into `key`'s artifact.
+/// A procedure template reference into `key`'s checked module.
 pub fn procedureTemplateRef(key: checked.CheckedModuleArtifactKey, raw_template_id: u32) names.ProcedureTemplateRef {
     return .{
         .artifact = .{ .bytes = key.bytes },

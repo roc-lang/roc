@@ -313,22 +313,11 @@ pub fn roc_builtins_str_concat(out: *RocStr, a_bytes: ?[*]u8, a_len: usize, a_ca
     const roc_ops = in_process_host.ops();
     const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
     const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
-    if (builtin.mode == .debug) {
-        debugAssertValidStr("lhs", a);
-        debugAssertValidStr("rhs", b);
-    }
+    // A big string always carries a heap pointer; a null one means codegen
+    // passed the string's fields wrongly.
+    std.debug.assert(a.isSmallStr() or a.bytes != null);
+    std.debug.assert(b.isSmallStr() or b.bytes != null);
     out.* = strConcatC(a, b, update_mode, roc_ops);
-}
-
-/// Debug check that a big string reaching `roc_builtins_str_concat` carries a
-/// heap pointer; a null one means codegen passed the string's fields wrongly.
-fn debugAssertValidStr(label: []const u8, s: RocStr) void {
-    if (s.isSmallStr()) return;
-    if (s.bytes != null) return;
-    std.debug.panic(
-        "LIR/codegen invariant violated: roc_builtins_str_concat received invalid RocStr {s} (len={d}, cap=0x{x})",
-        .{ label, s.len(), s.capacity_or_alloc_ptr },
-    );
 }
 
 /// Wrapper: strContains(RocStr, RocStr) -> bool
