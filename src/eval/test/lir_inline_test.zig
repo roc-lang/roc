@@ -9749,18 +9749,15 @@ test "W6b widened closed where-method impl is reached through a generated adapte
         \\describe : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]
         \\describe = |x| x.status()
         \\
-        \\closed_value : [Ok(Str), Err(Str)]
-        \\closed_value = Ok("cv")
-        \\
-        \\Job := [Pending].{
+        \\Job := [Pending([Ok(Str), Err(Str)])].{
         \\    status : Job -> [Ok(Str), Err(Str)]
-        \\    status = |_| closed_value
+        \\    status = |job| match job { Pending(result) => result }
         \\}
         \\
         \\show : [Ok(Str), Err(Str), Extra] -> Str
         \\show = |v| match v { Ok(s) => "Ok(${s})", Err(e) => "Err(${e})", Extra => "Extra" }
         \\
-        \\expect show(describe(Job.Pending)) == "Ok(cv)"
+        \\expect show(describe(Job.Pending(Ok("cv")))) == "Ok(cv)"
         \\
         \\main = 0
     ;
@@ -9776,18 +9773,15 @@ test "W6b widened closed where-method impl is reached through a generated adapte
         \\describe : a -> [Ok(Str), Err(Str)] where [a.status : a -> [Ok(Str), Err(Str)]]
         \\describe = |x| x.status()
         \\
-        \\closed_value : [Ok(Str), Err(Str)]
-        \\closed_value = Ok("cv")
-        \\
-        \\Job := [Pending].{
+        \\Job := [Pending([Ok(Str), Err(Str)])].{
         \\    status : Job -> [Ok(Str), Err(Str)]
-        \\    status = |_| closed_value
+        \\    status = |job| match job { Pending(result) => result }
         \\}
         \\
         \\show : [Ok(Str), Err(Str)] -> Str
         \\show = |v| match v { Ok(s) => "Ok(${s})", Err(e) => "Err(${e})" }
         \\
-        \\expect show(describe(Job.Pending)) == "Ok(cv)"
+        \\expect show(describe(Job.Pending(Ok("cv")))) == "Ok(cv)"
         \\
         \\main = 0
     ;
@@ -9811,15 +9805,12 @@ test "W6b question-widened closed Try impl is reached through a generated adapte
         \\    Ok(s)
         \\}
         \\
-        \\closed_try : Try(Str, [NotFound])
-        \\closed_try = Ok("hit")
-        \\
-        \\Src := [S].{
+        \\Src := [S(Try(Str, [NotFound]))].{
         \\    fetch : Src -> Try(Str, [NotFound])
-        \\    fetch = |_| closed_try
+        \\    fetch = |src| match src { S(result) => result }
         \\}
         \\
-        \\expect match load(Src.S) { Ok(s) => s == "hit", Err(_) => False }
+        \\expect match load(Src.S(Ok("hit"))) { Ok(s) => s == "hit", Err(_) => False }
         \\
         \\main = 0
     ;
@@ -9842,15 +9833,9 @@ test "W6b closed impl reached through nested evidence is adapted" {
     // and only proves it computes the right answer; the adapter count is what
     // proves the mechanism.
     const source =
-        \\closed_ok : [Ok(Str), Err(Str)]
-        \\closed_ok = Ok("ok")
-        \\
-        \\closed_err : [Ok(Str), Err(Str)]
-        \\closed_err = Err("err")
-        \\
-        \\Wrap(a) := [W(a)].{
+        \\Wrap(a) := [W(a, [Ok(Str), Err(Str)], [Ok(Str), Err(Str)])].{
         \\    status : Wrap(a) -> [Ok(Str), Err(Str)] where [a.name : a -> Str]
-        \\    status = |w| match w { W(inner) => if inner.name() == "thing" closed_ok else closed_err }
+        \\    status = |w| match w { W(inner, if_thing, otherwise) => if inner.name() == "thing" if_thing else otherwise }
         \\}
         \\
         \\Thing := [T].{
@@ -9875,8 +9860,8 @@ test "W6b closed impl reached through nested evidence is adapted" {
         \\show : [Ok(Str), Err(Str), Extra] -> Str
         \\show = |v| match v { Ok(s) => "Ok(${s})", Err(e) => "Err(${e})", Extra => "Extra" }
         \\
-        \\expect show(describe(Wrap.W(Thing.T))) == "Ok(ok)"
-        \\expect show(describe(Wrap.W(Other.O))) == "Err(err)"
+        \\expect show(describe(Wrap.W(Thing.T, Ok("ok"), Err("err")))) == "Ok(ok)"
+        \\expect show(describe(Wrap.W(Other.O, Ok("ok"), Err("err")))) == "Err(err)"
         \\
         \\main = 0
     ;
@@ -9938,15 +9923,9 @@ test "W6b direct-result widening adapter re-tags into the requested row at run t
     // can catch. (`Err` maps 0 to 0 and proves nothing on its own; it is here
     // so both constructors travel through the adapter.)
     const source =
-        \\closed_ok : [Ok(Str), Err(Str)]
-        \\closed_ok = Ok("ok")
-        \\
-        \\closed_err : [Ok(Str), Err(Str)]
-        \\closed_err = Err("bad")
-        \\
-        \\Job := [Pending, Failed].{
+        \\Job := [Run([Ok(Str), Err(Str)])].{
         \\    status : Job -> [Ok(Str), Err(Str)]
-        \\    status = |job| match job { Pending => closed_ok, Failed => closed_err }
+        \\    status = |job| match job { Run(result) => result }
         \\}
         \\
         \\describe : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]
@@ -9957,8 +9936,8 @@ test "W6b direct-result widening adapter re-tags into the requested row at run t
         \\
         \\main : Bool
         \\main = {
-        \\    pending_ok = show(describe(Job.Pending)) == "Ok(ok)"
-        \\    failed_ok = show(describe(Job.Failed)) == "Err(bad)"
+        \\    pending_ok = show(describe(Job.Run(Ok("ok")))) == "Ok(ok)"
+        \\    failed_ok = show(describe(Job.Run(Err("bad")))) == "Err(bad)"
         \\    pending_ok and failed_ok
         \\}
     ;
@@ -9998,15 +9977,9 @@ test "W6b Try error-row widening adapter re-tags into the requested row at run t
     // row numbers `Gone` 0 and `NotFound` 1, and a missing or misordered
     // injection reports `Gone` where the callee returned `NotFound`.
     const source =
-        \\closed_hit : Try(Str, [NotFound])
-        \\closed_hit = Ok("hit")
-        \\
-        \\closed_miss : Try(Str, [NotFound])
-        \\closed_miss = Err(NotFound)
-        \\
-        \\Src := [Found, Missing].{
+        \\Src := [Load(Try(Str, [NotFound]))].{
         \\    fetch : Src -> Try(Str, [NotFound])
-        \\    fetch = |src| match src { Found => closed_hit, Missing => closed_miss }
+        \\    fetch = |src| match src { Load(result) => result }
         \\}
         \\
         \\load : a -> Try(Str, [Gone, NotFound]) where [a.fetch : a -> Try(Str, [NotFound])]
@@ -10020,8 +9993,8 @@ test "W6b Try error-row widening adapter re-tags into the requested row at run t
         \\
         \\main : Bool
         \\main = {
-        \\    found_ok = show(load(Src.Found)) == "Ok(hit)"
-        \\    missing_ok = show(load(Src.Missing)) == "NotFound"
+        \\    found_ok = show(load(Src.Load(Ok("hit")))) == "Ok(hit)"
+        \\    missing_ok = show(load(Src.Load(Err(NotFound)))) == "NotFound"
         \\    found_ok and missing_ok
         \\}
     ;
@@ -10067,15 +10040,9 @@ test "W6b alias-wrapped closed Try error row is adapted and re-tagged at run tim
     const source =
         \\IoResult(a) : Try(a, [NotFound])
         \\
-        \\closed_hit : IoResult(Str)
-        \\closed_hit = Ok("hit")
-        \\
-        \\closed_miss : IoResult(Str)
-        \\closed_miss = Err(NotFound)
-        \\
-        \\Src := [Found, Missing].{
+        \\Src := [Load(IoResult(Str))].{
         \\    fetch : Src -> IoResult(Str)
-        \\    fetch = |src| match src { Found => closed_hit, Missing => closed_miss }
+        \\    fetch = |src| match src { Load(result) => result }
         \\}
         \\
         \\load : a -> Try(Str, [Gone, NotFound]) where [a.fetch : a -> IoResult(Str)]
@@ -10089,8 +10056,8 @@ test "W6b alias-wrapped closed Try error row is adapted and re-tagged at run tim
         \\
         \\main : Bool
         \\main = {
-        \\    found_ok = show(load(Src.Found)) == "Ok(hit)"
-        \\    missing_ok = show(load(Src.Missing)) == "NotFound"
+        \\    found_ok = show(load(Src.Load(Ok("hit")))) == "Ok(hit)"
+        \\    missing_ok = show(load(Src.Load(Err(NotFound)))) == "NotFound"
         \\    found_ok and missing_ok
         \\}
     ;
