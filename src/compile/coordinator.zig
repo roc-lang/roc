@@ -2463,6 +2463,7 @@ pub const Coordinator = struct {
         };
     }
 
+
     pub fn checkedArtifactByKey(
         self: *Coordinator,
         key: check.CheckedArtifact.CheckedModuleArtifactKey,
@@ -5071,7 +5072,7 @@ pub const Coordinator = struct {
     ) Allocator.Error![]const check.CheckedArtifact.PublishImportArtifact {
         var imports = std.ArrayList(check.CheckedArtifact.PublishImportArtifact).empty;
         errdefer imports.deinit(allocator);
-        var added_module_indices = std.AutoHashMap(u32, void).init(allocator);
+        var added_module_indices = collections.DenseMap(u32, void).init(allocator);
         defer added_module_indices.deinit();
 
         // buildTypecheckImportedEnvs always installs the compiler-owned Builtin

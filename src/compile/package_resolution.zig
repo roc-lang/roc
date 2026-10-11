@@ -226,7 +226,7 @@ pub const Diagnostic = struct {
 /// with each package's shorthand aliases resolved to package indices.
 /// Owns all of its strings via an internal arena.
 pub const Resolved = struct {
-    arena: *std.heap.ArenaAllocator,
+    arena: *base.SingleThreadArena,
     /// Index 0 is always the root package.
     packages: []Package,
     /// The one platform selected by the complete dependency graph, or null
@@ -464,7 +464,7 @@ const WalkResult = struct {
 /// `resolve` once, read diagnostics if it failed, then deinit.
 pub const Resolver = struct {
     gpa: Allocator,
-    arena_state: std.heap.ArenaAllocator,
+    arena_state: base.SingleThreadArena,
     fetcher: Fetcher,
     config: Config,
 
@@ -506,7 +506,7 @@ pub const Resolver = struct {
     pub fn init(gpa: Allocator, fetcher: Fetcher, config: Config) Resolver {
         return .{
             .gpa = gpa,
-            .arena_state = std.heap.ArenaAllocator.init(gpa),
+            .arena_state = base.SingleThreadArena.init(gpa),
             .fetcher = fetcher,
             .config = config,
             .url_nodes = .{},
@@ -1159,7 +1159,7 @@ pub const Resolver = struct {
             fetcher: Fetcher,
             missing: Missing,
             max_expanded_bytes: ?u64,
-            task_arena: std.heap.ArenaAllocator,
+            task_arena: base.SingleThreadArena,
             result: FetchError!FetchedPackage,
 
             fn run(task: *@This()) void {
@@ -1180,7 +1180,7 @@ pub const Resolver = struct {
                 .fetcher = self.fetcher,
                 .missing = missing,
                 .max_expanded_bytes = if (missing.is_platform) self.config.max_platform_transitive_expanded_bytes else self.config.max_package_expanded_bytes,
-                .task_arena = std.heap.ArenaAllocator.init(self.gpa),
+                .task_arena = base.SingleThreadArena.init(self.gpa),
                 .result = error.DownloadFailed,
             };
         }
@@ -1493,8 +1493,8 @@ pub const Resolver = struct {
 
         // Build the Resolved structure with its own arena so it can outlive
         // the resolver.
-        const result_arena = try self.gpa.create(std.heap.ArenaAllocator);
-        result_arena.* = std.heap.ArenaAllocator.init(self.gpa);
+        const result_arena = try self.gpa.create(base.SingleThreadArena);
+        result_arena.* = base.SingleThreadArena.init(self.gpa);
         errdefer {
             result_arena.deinit();
             self.gpa.destroy(result_arena);
@@ -2434,7 +2434,7 @@ pub const CtxFetcher = struct {
 // --- Tests ---
 
 test "scanHeaderSource ignores tokenizer diagnostics after the header" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
 
@@ -2455,7 +2455,7 @@ test "scanHeaderSource ignores tokenizer diagnostics after the header" {
 }
 
 test "scanHeaderSource accepts compiler-owned glue platform" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
 
@@ -2474,7 +2474,7 @@ test "scanHeaderSource accepts compiler-owned glue platform" {
 }
 
 test "scanHeaderSource accepts a package platform dependency" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
 
@@ -2494,7 +2494,7 @@ test "scanHeaderSource accepts a package platform dependency" {
 }
 
 test "scanHeaderSource rejects multiple package platform dependencies" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
 
@@ -2510,7 +2510,7 @@ test "scanHeaderSource rejects multiple package platform dependencies" {
 }
 
 test "scanHeaderSource rejects malformed package headers" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
 
@@ -2522,7 +2522,7 @@ test "scanHeaderSource rejects malformed package headers" {
 }
 
 test "scanHeaderSource rejects tokenizer diagnostics inside the header" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
 
@@ -3739,7 +3739,7 @@ test "versionBumpNotes reports packages compiled against undeclared versions" {
 
     // The root declared a 1.2.3 but the build uses 1.3.1; b declared the
     // winner, so only the root gets a note.
-    var note_arena = std.heap.ArenaAllocator.init(gpa);
+    var note_arena = base.SingleThreadArena.init(gpa);
     defer note_arena.deinit();
     const identities = try note_arena.allocator().alloc([]const u8, resolved.packages.len);
     for (resolved.packages, identities) |package, *identity| identity.* = package.identity;
@@ -4536,7 +4536,7 @@ const StubDownload = struct {
 test "bundle links - rejected archives leave warm cache slots unchanged and no staging directories" {
     const unbundle = @import("unbundle");
     const test_support = unbundle.test_support;
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
     var harness = try CacheTestHarness.init(gpa);
@@ -4692,7 +4692,7 @@ const CacheTestHarness = struct {
 };
 
 test "a downloaded package is published under its hash" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
 
@@ -4712,7 +4712,7 @@ test "a downloaded package is published under its hash" {
 }
 
 test "a package directory does not appear until the download is complete" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
 
@@ -4733,7 +4733,7 @@ test "a package directory does not appear until the download is complete" {
 }
 
 test "a failed download leaves no package directory behind" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
 
@@ -4752,7 +4752,7 @@ test "a failed download leaves no package directory behind" {
 }
 
 test "a package another process published first is used as-is" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
 
@@ -4774,7 +4774,7 @@ test "a package another process published first is used as-is" {
 }
 
 test "a package directory with no entry point is replaced" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
 
@@ -4803,7 +4803,7 @@ test "a package directory with no entry point is replaced" {
 }
 
 test "a staging directory abandoned by a dead process is swept after a day" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
 
@@ -4824,7 +4824,7 @@ test "a staging directory abandoned by a dead process is swept after a day" {
 }
 
 test "a staging directory younger than a day is not swept" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
 

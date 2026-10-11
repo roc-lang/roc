@@ -307,6 +307,10 @@ stages it touches; the instruction-count effect is reported in "Results".
     scratch in one retained arena reset when the outermost hosted call
     returns.
 
+53. `src/compile`: package resolution's arenas are single-thread arenas (each
+    belongs to one task or result), and imported-artifact dedupe keys a
+    `DenseMap` by the dense resolved module index.
+
 ## Findings from profiling
 
 These were found by profiling the ReleaseFast compiler with
@@ -3070,13 +3074,13 @@ reading code, and were not in the audit above.
 - category B; runs per module type-check preparation; impact low; risk low
 - Finding: `buildTypecheckImportedArtifacts` dedupes `resolved_module_idx` (a dense u32 index into `imported_envs`) through `std.AutoHashMap(u32, void)`.
 - Fix: A `std.DynamicBitSetUnmanaged` sized by `imported_envs.len` (known from `buildTypecheckImportedEnvsForEnv`), or a `[]bool` on the scratch arena.
-- Status: open
+- Status: fixed (fix 53)
 
 ### src/compile/coordinator.zig:2466: checkedArtifactByKey falls back to a linear scan of retired artifacts
 - category E; runs per dependency key lookup when a key is not in the live index (after cache installs replace artifacts); impact low; risk low
 - Finding: On a miss in `checked_artifact_index`, the code scans `retired_checked_artifacts.items` comparing 32-byte keys; the retired list grows for the build's lifetime.
 - Fix: Insert retired artifacts into the same `checked_artifact_index` (value variant `.retired(index)`) or a second map; or drop retired entries once the frontend barrier passes (no worker can hold a view after that).
-- Status: open
+- Status: no change: only artifacts replaced by platform pairing or a cache install retire, a handful per build; an index would have to be kept exact through four retire paths, one of which recovers from allocation failure
 
 ### src/compile/coordinator.zig:2780: Checked-program preparation builds two [32]u8-keyed maps and sorts by package/module name
 - category E/A; runs once per program finalization (per `finishCheckedProgram`) and per LSP re-check; impact low (medium for LSP responsiveness); risk low
@@ -3086,7 +3090,7 @@ reading code, and were not in the audit above.
 
 ### src/compile/coordinator.zig:1411: (see eval section) ComptimeCoverage linear scan: listed there
 - 
-- Status: open
+- Status: no change: listed under the eval section
 
 ### src/compile/coordinator.zig:928: PackageState keeps four StringHashMaps on the thread-safe allocator
 - category B/C; runs per package (lookups per import); impact low; risk low
