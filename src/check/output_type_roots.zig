@@ -172,7 +172,7 @@ pub fn forEachLiteralDispatchTypeRoot(module_env: *const ModuleEnv, visitor: any
             },
         }
         try visitor.visit(@fromBackingInt(@intCast(plan.target_var)));
-        try visitor.visit(@fromBackingInt(@intCast(plan.fn_var)));
+        try visitor.visit(plan.fnVar().?);
         if (plan.patternContext(&module_env.store)) |context| {
             std.debug.assert(context.equality_fn_var_plus_one != 0);
             try visitor.visit(@fromBackingInt(@intCast(context.equality_fn_var_plus_one - 1)));
