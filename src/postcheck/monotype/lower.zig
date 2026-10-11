@@ -13130,14 +13130,6 @@ const Builder = struct {
         );
         defer commit_map.deinit(self.allocator);
         const body_ids = commit_map.ids;
-        try body_draft.commitRetainedTypeCells(
-            self.allocator,
-            committed_types,
-            body_ids,
-            commit_map.emit_fns,
-            commit_map.emit_defs,
-            commit_map.emit_nested_defs,
-        );
         const output_before = FinalBodyOutputCounts.fromProgram(self.program);
         try body_draft.sealCoreIntoProgramWithMap(
             self.program,
@@ -18240,57 +18232,6 @@ const BodyDraftStore = struct {
         for (self.static_data_requests.items) |request| {
             try tys.append(allocator, request.ty.committedSealed());
         }
-        allocator.free(try committed_types.commitTypes(allocator, tys.items));
-    }
-
-    /// Relocate every sealed type cell the core commit below will read, in
-    /// one import and interning transaction. The per-cell commits then reuse
-    /// that relocation instead of each opening its own transaction.
-    fn commitRetainedTypeCells(
-        self: *const BodyDraftStore,
-        allocator: Allocator,
-        committed_types: *CommittedGraphTypes,
-        ids: FinalIdOffsets,
-        emit_fns: ?[]const bool,
-        emit_defs: ?[]const bool,
-        emit_nested_defs: ?[]const bool,
-    ) Allocator.Error!void {
-        if (committed_types.destination == null) return;
-        var tys = std.ArrayList(Type.TypeId).empty;
-        defer tys.deinit(allocator);
-        for (self.locals.items, 0..) |local, index| {
-            if (ids.retained(.locals, index)) try tys.append(allocator, local.ty.committedSealed());
-        }
-        for (self.typed_locals.items, 0..) |typed, index| {
-            if (ids.retained(.typed_locals, index)) try tys.append(allocator, typed.ty.committedSealed());
-        }
-        for (self.pats.items, 0..) |pat, index| {
-            if (ids.retained(.pats, index)) try tys.append(allocator, pat.ty.committedSealed());
-        }
-        for (self.exprs.items, 0..) |expr, index| {
-            if (ids.retained(.exprs, index)) try tys.append(allocator, expr.ty.committedSealed());
-        }
-        for (self.fns.items, 0..) |fn_, index| {
-            if (emit_fns) |emit| if (!emit[index]) continue;
-            try tys.append(allocator, fn_.source.mono_fn_ty.committedSealed());
-        }
-        for (self.defs.items, 0..) |def, index| {
-            if (emit_defs) |emit| if (!emit[index]) continue;
-            if (def.fn_def) |template| try tys.append(allocator, template.mono_fn_ty.committedSealed());
-            try tys.append(allocator, def.ret.committedSealed());
-        }
-        for (self.nested_defs.items, 0..) |def, index| {
-            if (emit_nested_defs) |emit| if (!emit[index]) continue;
-            try tys.append(allocator, def.fn_def.mono_fn_ty.committedSealed());
-            try tys.append(allocator, def.ret.committedSealed());
-        }
-        for (self.layout_requests.items, 0..) |request, index| {
-            if (ids.retained(.layout_requests, index)) try tys.append(allocator, request.ty.committedSealed());
-        }
-        for (self.runtime_schema_requests.items, 0..) |request, index| {
-            if (ids.retained(.runtime_schema_requests, index)) try tys.append(allocator, request.ty.committedSealed());
-        }
-        if (tys.items.len == 0) return;
         allocator.free(try committed_types.commitTypes(allocator, tys.items));
     }
 
