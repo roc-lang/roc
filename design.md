@@ -1876,7 +1876,11 @@ shares them with evaluation.
 
 Monotype lowering, lifting, SpecConstr, lambda solving, and inline analysis
 run once for that evaluation over the union of its roots, and the frozen
-Solved program they produce is one immutable producer identity domain. An
+Solved program they produce is one immutable producer identity domain. When
+no LSS runtime consumer continues that program, as in `roc check`, the
+program roots in that union are discovery roots and only the bodies that can
+register a literal root are specialized (see "Demand-Driven Compile-Time
+Specialization" below). An
 LSS runtime consumer continues that program and borrows it: none copies it,
 none reruns any of those stages, and callable correspondence compares ids
 from one producer domain, never ids allocated by separate solver runs. A
@@ -1979,6 +1983,82 @@ Boxy runtime lowering is a distinct declared specialization strategy. Compile-
 time evaluation remains LSS, so that consumer's runtime roots are excluded from
 the LSS union and lowered by the separate Boxy pipeline after checking completes.
 This split follows the selected strategy, never a failed specialization attempt.
+
+#### Demand-Driven Compile-Time Specialization
+
+Compile-time evaluation runs the compile-time roots, and the literal roots
+that specializations register. Checking already gave every literal whose
+conversion is closed a compile-time root of its own, so a runtime body
+matters to compile-time evaluation only where specializing it registers a
+literal root: a conversion that depends on its instance, a custom
+interpolation, or a conversion root no evaluation requests. Specializing the
+rest of the runtime program, or lowering any of it for execution, is runtime
+work, and compile-time evaluation without an LSS runtime consumer to
+continue its program does none of it. Its program roots are *discovery
+roots*, specialized only to find those literal roots.
+
+Which bodies can register a literal root is decided from explicit checked
+data (`postcheck.LiteralDemand`). A *custom literal type* is a nominal with a
+`from_numeral` or `from_quote` method of its own. A checked module is a
+*source* when one of its checked expressions is a custom interpolation; or a
+literal whose conversion root no evaluation of this compilation requests and
+whose payload is not stored; or a numeral (quote) whose conversion depends on
+its instance, when the program has a custom numeral (quote) type. Every other
+literal is either served by its checked root or converts at a builtin type
+directly at every instance. A module *reaches* a literal root when it is a
+source or calls into a module that reaches one, through an import or through
+a platform requirement its app fills. A specialization of a procedure from a
+module that reaches no literal root, at types naming no nominal of a reaching
+module, with dispatch evidence selecting no procedure of a reaching module,
+cannot register a literal root: every body it would lower belongs to a
+non-reaching module, which has no literal that registers one at any
+instance, and the methods its types can select by structural derivation or
+synthesized evidence belong to non-reaching modules too. Dispatch evidence
+that selects a local procedure, or abstract scheme evidence, is never treated
+as non-reaching. The analysis over-approximates; it never consults procedure
+names, syntax, or emitted code.
+
+Discovery roots that cannot register a literal root are not specialized at
+all. Each Monotype body records the demand it is lowered for: `evaluation`
+for a compile-time root, a literal root, and everything they reach, and
+`discovery` for a discovery root and the bodies it requests. A discovery
+request whose specialization cannot register a literal root reserves the
+specialization's identity and signature but parks its body. The conversion
+call of a literal root is lowered as an evaluation request even inside a
+discovery body, since evaluation runs it. An evaluation request that reaches
+a parked or discovery specialization upgrades it, and transitively every
+specialization it requested for discovery, so no body evaluation can run
+calls a parked one. After every body has lowered, each still-parked
+specialization is completed as a `crash` at its requested signature. Only
+discovery bodies reference these, and the compile-time consumer's root
+manifest names no discovery root, so evaluation never runs one (a discovery
+procedure reaches that consumer's LIR only as a member of a callable set an
+evaluation never selects). A
+specialization's Monotype identity includes the method scope that requested
+it, but its procedure identity does not, and Direct LIR shares one
+procedure among specializations of equal procedure identity. So every
+procedure a discovery body commits, and every stub, is marked as discovery
+in its source template: the mark is part of its procedure identity and
+removes its object-cache key, so a discovery body, whose requests may name
+stubs, never stands in for the evaluation procedure of the same template and
+types. Commit can also merge a body lowered inside a draft into an equal
+committed specialization; that merge is a request like any other, upgrading
+the committed specialization when the draft evaluates and recorded as a
+discovery request otherwise.
+Literal roots registered in discovery bodies are evaluated exactly as before,
+so `roc check` reports every rejected or crashing conversion a build reports.
+
+An LSS runtime consumer needs every runtime body specialized anyway and
+continues the evaluation's program, so a build with one still names its
+program roots in full. Its compile-time consumer lowers and evaluates the
+same compile-time and literal roots, and closed specializations keep the
+same object-cache keys in either program, so compiled compile-time code
+serves both.
+
+`--timings` reports these decisions under "Demand-driven specialization":
+the program roots offered, the discovery roots kept, the analysis's source
+and reaching modules and custom literal types, and the discovery bodies,
+parked, unparked, and upgraded requests, and never-run stubs.
 
 Native compile-time instruction generation consumes an explicit, read-only LIR
 demand closure seeded by compile-time root procedures and materialized callable

@@ -109,10 +109,6 @@ pub const Options = struct {
     /// Borrow the coordinator's workers after all frontend tasks have finished.
     /// Standalone finalizers without a coordinator lower on their calling thread.
     post_check_executor: ?base.post_check_task_executor.Executor = null,
-    /// Check-only experiment: omit a runtime root only under a complete
-    /// producer-authored data-only subtree proof. Builds retain one broad
-    /// producer because their runtime continuation explicitly needs the bodies.
-    semantic_root_planning: bool = false,
     stderr: ?StderrWriter = null,
     event_callback: ?EventCallback = null,
     debug_events: ?*DebugEvents = null,
@@ -1209,57 +1205,53 @@ pub fn finalizeProgram(
         try source_modules.appendNTimes(allocator, entry.module.key, entry.module.root_requests.compile_time_requests.len);
     }
     const compile_time_root_count = requests.items.len;
-    if (program_roots.source_modules.len != 0 and program_roots.source_modules.len != program_roots.requests.len) {
+    if (program_roots.source_modules.len != 0 and program_roots.source_modules.len != program_roots.requests.len)
         finalizationInvariant("program roots omitted their checked owners");
-    }
-    var semantic_plan: ?lir.CheckedPipeline.SemanticRootDemand.Plan = if (runtime_target == null and options.semantic_root_planning and program_roots.requests.len != 0)
-        try lir.CheckedPipeline.SemanticRootDemand.Plan.init(allocator, .{
-            .root = lowering_modules.root,
-            .imports = lowering_modules.imports,
-        }, .{
-            .requests = program_roots.requests,
-            .source_modules = program_roots.source_modules,
-        })
-    else
-        null;
-    defer if (semantic_plan) |*plan| plan.deinit();
-    const program_root_positions = try allocator.alloc(?u32, program_roots.requests.len);
-    defer allocator.free(program_root_positions);
-    const demand_trace = builtin.link_libc and std.c.getenv("ROC_CTFE_DEMAND_TRACE") != null;
-    if (demand_trace) {
-        // Whole-root proof coverage is not complete per-template demand
-        // separation. Do not turn an absent body counter into an omitted body.
-        std.debug.print("CTFE_DEMAND_TRACE version=1 availability=incomplete scope=whole_runtime_root_proofs\n", .{});
-    }
-    var omitted_runtime_roots: usize = 0;
-    for (program_roots.requests, 0..) |request, index| {
-        const owner = if (program_roots.source_modules.len == 0)
-            lowering_modules.root.module.key
-        else
-            program_roots.source_modules[index];
-        const proof = if (semantic_plan) |*plan|
-            plan.rootProof(request, owner)
-        else
-            .type_callable_solution_required;
-        if (proof == .complete_data_only_subtree) {
-            program_root_positions[index] = null;
-            omitted_runtime_roots += 1;
-            continue;
-        }
-        program_root_positions[index] = @intCast(requests.items.len);
-        try requests.append(allocator, request);
-        try source_modules.append(allocator, owner);
-    }
-    if (demand_trace) {
-        std.debug.print("CTFE_DEMAND_ROOTS input={d} retained={d} proved_data_only={d} runtime_continuation={s}\n", .{
-            program_roots.requests.len,
-            program_roots.requests.len - omitted_runtime_roots,
-            omitted_runtime_roots,
-            if (runtime_target != null) "declared" else "none",
-        });
-    }
 
     const lss_runtime = if (runtime_target) |target| target.specialization_strategy == .lss else false;
+    // Without an LSS runtime consumer to continue this specialization, the
+    // program roots are discovery roots: compile-time evaluation specializes
+    // a runtime body only where it can register a literal root, and lowers
+    // none of them for execution (design.md "Demand-Driven Compile-Time
+    // Specialization").
+    var literal_demand: ?lir.CheckedPipeline.LiteralDemand.LiteralDemand = null;
+    defer if (literal_demand) |*demand| demand.deinit();
+    if (lss_runtime) {
+        try requests.appendSlice(allocator, program_roots.requests);
+        if (program_roots.source_modules.len == 0) {
+            try source_modules.appendNTimes(allocator, lowering_modules.root.module.key, program_roots.requests.len);
+        } else {
+            try source_modules.appendSlice(allocator, program_roots.source_modules);
+        }
+    } else if (program_roots.requests.len != 0) {
+        var declared = std.AutoHashMapUnmanaged(lir.CheckedPipeline.LiteralDemand.DeclaredRoot, void).empty;
+        defer declared.deinit(allocator);
+        for (modules) |entry| {
+            for (entry.module.root_requests.compile_time_requests) |request| {
+                try declared.put(allocator, .{ .module = entry.module.key, .root = compileTimeRootForRequest(entry.module, request) }, {});
+            }
+        }
+        const checked_modules: lir.CheckedPipeline.LiteralDemand.CheckedModules = .{ .root = lowering_modules.root, .imports = lowering_modules.imports };
+        literal_demand = try lir.CheckedPipeline.LiteralDemand.compute(allocator, checked_modules, &declared);
+        var selected = std.ArrayList(usize).empty;
+        defer selected.deinit(allocator);
+        try lir.CheckedPipeline.LiteralDemand.selectDiscoveryRoots(allocator, &literal_demand.?, checked_modules, program_roots.requests, program_roots.source_modules, &selected);
+        for (selected.items) |index| {
+            try requests.append(allocator, program_roots.requests[index]);
+            try source_modules.append(allocator, if (program_roots.source_modules.len == 0) lowering_modules.root.module.key else program_roots.source_modules[index]);
+        }
+        if (options.timing) |timing| {
+            const counters = literal_demand.?.counters;
+            timing.lowering.addDemand(.{
+                .program_roots = program_roots.requests.len,
+                .discovery_roots = selected.items.len,
+                .modules = counters.modules,
+                .source_modules = counters.source_modules,
+                .reaching_modules = counters.reaching_modules,
+                .custom_literal_types = counters.custom_literal_types,
+            });
+        }
+    }
     const runtime_positions = try runtimeRootPositions(allocator, program_roots, runtime_roots, compile_time_root_count, lss_runtime);
     var positions_owned = true;
     errdefer if (positions_owned) allocator.free(runtime_positions);
@@ -1279,14 +1271,21 @@ pub fn finalizeProgram(
         var union_roots = program_roots;
         union_roots.requests = requests.items;
         union_roots.source_modules = source_modules.items;
-        const union_test_metadata = try allocator.dupe(@typeInfo(@TypeOf(program_roots.test_plan_metadata)).pointer.child, program_roots.test_plan_metadata);
+        const union_test_metadata = try allocator.dupe(@typeInfo(@TypeOf(program_roots.test_plan_metadata)).pointer.child, if (lss_runtime) program_roots.test_plan_metadata else &.{});
         defer allocator.free(union_test_metadata);
-        for (union_test_metadata) |*metadata| {
-            if (metadata.request_index >= program_root_positions.len) finalizationInvariant("test plan named an absent program root");
-            metadata.request_index = program_root_positions[metadata.request_index] orelse
-                finalizationInvariant("semantic demand omitted a test observation root");
-        }
+        for (union_test_metadata) |*metadata| metadata.request_index += @intCast(compile_time_root_count);
         union_roots.test_plan_metadata = union_test_metadata;
+        if (!lss_runtime) {
+            // Discovery roots materialize nothing for a runtime consumer.
+            union_roots.include_provided_data_exports = false;
+            union_roots.include_internal_static_data = false;
+            union_roots.layout_requests = &.{};
+            union_roots.static_data_requests = &.{};
+            if (literal_demand) |*demand| {
+                union_roots.discovery_start = compile_time_root_count;
+                union_roots.literal_demand = demand;
+            }
+        }
         // An LSS runtime consumer continues this specialization, so it is
         // made under the runtime's Solved policy.
         const solved_policy = if (lss_runtime) lir.CheckedPipeline.SolvedPolicy.fromTarget(runtime_target.?) else check_solved_policy;

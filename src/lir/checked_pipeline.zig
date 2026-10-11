@@ -21,6 +21,8 @@ const SingleUseInline = @import("single_use_inline.zig");
 
 /// Completed compile-time scalar roots a forked continuation lowers as literals.
 pub const CompletedScalarValues = postcheck.ComptimeScalarValues.CompletedScalarValues;
+/// Which runtime specializations compile-time evaluation must lower.
+pub const LiteralDemand = postcheck.LiteralDemand;
 const TagReachability = @import("tag_reachability.zig");
 const ReachableProcs = @import("reachable_procs.zig");
 const DebugPrint = @import("debug_print.zig");
@@ -85,9 +87,6 @@ pub const CheckedModuleSet = struct {
     imports: []const checked.ImportedModuleView = &.{},
 };
 
-/// Producer-authored semantic proof selection, before executable preparation.
-pub const SemanticRootDemand = postcheck.SemanticRootDemand;
-
 /// Root requests that determine which checked definitions become LIR roots.
 pub const RootRequestSet = struct {
     requests: []const checked.RootRequest = &.{},
@@ -103,6 +102,10 @@ pub const RootRequestSet = struct {
     test_plan_metadata: []const postcheck.Common.RootTestPlanMetadata = &.{},
     cached_root_declarations: []const postcheck.Common.CheckedRootUse = &.{},
     cached_literal_declarations: []const LirProgram.CachedLiteralRecipe = &.{},
+    /// The requests from this position on are discovery roots; see
+    /// `postcheck.Common.RootRequests.discovery_start`.
+    discovery_start: ?usize = null,
+    literal_demand: ?*const postcheck.LiteralDemand.LiteralDemand = null,
 };
 
 /// Deterministic task counts for parallel solved-LIR body lowering.
@@ -265,9 +268,42 @@ pub const TargetConfig = struct {
     timing: ?*Timing = null,
 };
 
+/// Counts of the demand-driven compile-time specialization decisions
+/// (design.md "Demand-Driven Compile-Time Specialization").
+pub const DemandMetrics = struct {
+    /// Runtime roots of the program, offered to discovery.
+    program_roots: u64 = 0,
+    /// Runtime roots specialized for discovery.
+    discovery_roots: u64 = 0,
+    /// Checked modules the literal-demand analysis read.
+    modules: u64 = 0,
+    /// Modules whose own checked data can register a literal root.
+    source_modules: u64 = 0,
+    /// Modules that can reach a literal root.
+    reaching_modules: u64 = 0,
+    /// Nominal types with their own literal conversion.
+    custom_literal_types: u64 = 0,
+    /// Monotype counters; see `postcheck.Monotype.Lower.DemandCounters`.
+    monotype: postcheck.Monotype.Lower.DemandCounters = .{},
+
+    pub fn add(self: *DemandMetrics, other: DemandMetrics) void {
+        inline for (@typeInfo(DemandMetrics).@"struct".field_names) |name| {
+            if (comptime std.mem.eql(u8, name, "monotype")) {
+                inline for (@typeInfo(postcheck.Monotype.Lower.DemandCounters).@"struct".field_names) |inner| {
+                    @field(self.monotype, inner) += @field(other.monotype, inner);
+                }
+            } else {
+                @field(self, name) += @field(other, name);
+            }
+        }
+    }
+};
+
 /// Thread-safe timing totals for the checked-to-LIR pipeline.
 pub const Timing = struct {
     std_io: std.Io,
+    demand_mutex: std.Io.Mutex = .init,
+    demand: DemandMetrics = .{},
     detailed_monotype_body: bool = false,
     monotype_diagnostics_mutex: std.Io.Mutex = .init,
     monotype_diagnostics: postcheck.Monotype.Lower.Diagnostics = .{},
@@ -384,7 +420,21 @@ pub const Timing = struct {
             .spec_constr_parallel = self.specConstrParallelSnapshot(),
             .lir_pass_parallel = self.lirPassParallelSnapshot(),
             .arc_parallel = self.arcParallelSnapshot(),
+            .demand = self.demandSnapshot(),
         };
+    }
+
+    fn demandSnapshot(self: *const Timing) DemandMetrics {
+        const mutable = @constCast(self);
+        mutable.demand_mutex.lockUncancelable(self.std_io);
+        defer mutable.demand_mutex.unlock(self.std_io);
+        return self.demand;
+    }
+
+    pub fn addDemand(self: *Timing, metrics: DemandMetrics) void {
+        self.demand_mutex.lockUncancelable(self.std_io);
+        defer self.demand_mutex.unlock(self.std_io);
+        self.demand.add(metrics);
     }
 
     pub fn addSnapshot(self: *Timing, snapshot_value: TimingSnapshot) void {
@@ -413,6 +463,7 @@ pub const Timing = struct {
         self.addSpecConstrParallel(snapshot_value.spec_constr_parallel);
         self.addLirPassParallel(snapshot_value.lir_pass_parallel);
         self.addArcParallel(snapshot_value.arc_parallel);
+        self.addDemand(snapshot_value.demand);
         self.boxy_plan_ns.add(snapshot_value.boxy_plan_ns);
         self.boxy_lower_ns.add(snapshot_value.boxy_lower_ns);
         self.lift_ns.add(snapshot_value.lift_ns);
@@ -593,6 +644,7 @@ pub const TimingSnapshot = struct {
     lir_passes_ns: u64 = 0,
     arc_ns: u64 = 0,
     monotype_diagnostics: postcheck.Monotype.Lower.Diagnostics = .{},
+    demand: DemandMetrics = .{},
 };
 
 const TimingPhase = enum {
@@ -1379,11 +1431,13 @@ pub fn prepareCheckedModulesMonotype(
     if (monotype_timing) |*detail| {
         detail.body_work_timing_enabled = target.timing.?.detailed_monotype_body;
     }
+    var demand_counters: postcheck.Monotype.Lower.DemandCounters = .{};
     const mono = monotype: {
         defer if (target.timing) |timing| {
             timing.finish(monotype_started_ns, .monotype);
             if (monotype_timing) |*detail| timing.addMonotypeSnapshot(detail.snapshot());
             if (monotype_diagnostics) |diagnostics| timing.addMonotypeDiagnostics(diagnostics);
+            timing.addDemand(.{ .monotype = demand_counters });
         };
         if (target.work_metrics) |metrics| metrics.monotype_runs += 1;
         break :monotype try postcheck.Monotype.Lower.run(
@@ -1410,6 +1464,7 @@ pub fn prepareCheckedModulesMonotype(
                 },
                 .timing = if (monotype_timing) |*timing| timing else null,
                 .diagnostics = if (monotype_diagnostics) |*diagnostics| diagnostics else null,
+                .demand_counters_out = &demand_counters,
             },
         );
     };
@@ -2112,6 +2167,8 @@ fn rootRequests(
         .test_plan_metadata = roots.test_plan_metadata,
         .cached_root_declarations = roots.cached_root_declarations,
         .cached_literal_declarations = roots.cached_literal_declarations,
+        .discovery_start = roots.discovery_start,
+        .literal_demand = roots.literal_demand,
     };
 }
 
