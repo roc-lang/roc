@@ -289,6 +289,22 @@ pub const MonoTypeNode = union(enum(u8)) {
 /// Compatibility name for existing Monotype type-node content.
 pub const Content = MonoTypeNode;
 
+/// A type node as the store keeps it. A named payload and an erased digest
+/// are far larger than every other variant, so they live in side lists and
+/// the node holds their index; every node is then a few words.
+pub const StoredNode = union(enum(u8)) {
+    primitive: Primitive,
+    named: u32,
+    record: Span,
+    tuple: Span,
+    tag_union: Span,
+    list: TypeId,
+    box: TypeId,
+    func: @FieldType(MonoTypeNode, "func"),
+    erased: u32,
+    zst,
+};
+
 /// Payload stored by `MonoTypeNode.named`.
 pub const NamedContent = std.meta.fieldInfo(MonoTypeNode, .named).type;
 
@@ -297,7 +313,11 @@ pub const Store = struct {
     /// Scoped diagnostic sink; never copied into store epochs or serialized.
     digest_stats: ?*DigestStats = null,
     allocator: std.mem.Allocator,
-    types: StoreList(Content, "types"),
+    types: StoreList(StoredNode, "types"),
+    /// Payloads of the named nodes in `types`, by `StoredNode.named` index.
+    named_nodes: StoreList(NamedContent, "named_nodes"),
+    /// Digests of the erased nodes in `types`, by `StoredNode.erased` index.
+    erased_digests: StoreList(names.TypeDigest, "erased_digests"),
     type_digests: StoreList(?names.TypeDigest, "type_digests"),
     specialization_digests: StoreList(?names.TypeDigest, "specialization_digests"),
     equality_digests: StoreList(?names.TypeDigest, "equality_digests"),
@@ -390,6 +410,8 @@ pub const Store = struct {
         return .{
             .allocator = allocator,
             .types = .empty,
+            .named_nodes = .empty,
+            .erased_digests = .empty,
             .type_digests = .empty,
             .specialization_digests = .empty,
             .equality_digests = .empty,
@@ -424,7 +446,7 @@ pub const Store = struct {
         if (!self.frozen) Common.invariant("Monotype type cloning requires a frozen graph");
         var result = Store.init(allocator);
         errdefer result.deinit();
-        inline for (.{ "types", "type_digests", "specialization_digests", "equality_digests", "representation_digests", "constructing", "iterator_interface_cache", "generated_private_cache", "spans", "fields", "tags", "declared_fields" }) |field| {
+        inline for (.{ "types", "named_nodes", "erased_digests", "type_digests", "specialization_digests", "equality_digests", "representation_digests", "constructing", "iterator_interface_cache", "generated_private_cache", "spans", "fields", "tags", "declared_fields" }) |field| {
             try @field(result, field).appendSlice(allocator, @field(self, field).unsafeRawItemsForView());
         }
         // Traversal history is local, but every cloned type still needs a slot
@@ -534,6 +556,8 @@ pub const Store = struct {
         self.specialization_digests.deinit(self.allocator);
         self.type_digests.deinit(self.allocator);
         self.types.deinit(self.allocator);
+        self.named_nodes.deinit(self.allocator);
+        self.erased_digests.deinit(self.allocator);
     }
 
     /// The lowest type count a rollback has truncated to since the last
@@ -633,8 +657,16 @@ pub const Store = struct {
     pub fn add(self: *Store, content: Content) std.mem.Allocator.Error!TypeId {
         self.assertMutable();
         const index = self.types.len();
-        try self.types.append(self.allocator, content);
-        errdefer _ = self.types.pop();
+        try self.types.ensureUnusedCapacity(self.allocator, 1);
+        try self.ensureSideCapacity(content);
+        const named_nodes_len = self.named_nodes.len();
+        const erased_digests_len = self.erased_digests.len();
+        self.types.appendAssumeCapacity(self.encodeAssumeCapacity(content));
+        errdefer {
+            _ = self.types.pop();
+            self.named_nodes.restoreLen(named_nodes_len);
+            self.erased_digests.restoreLen(erased_digests_len);
+        }
         try self.type_digests.append(self.allocator, null);
         errdefer _ = self.type_digests.pop();
         try self.specialization_digests.append(self.allocator, null);
@@ -696,10 +728,46 @@ pub const Store = struct {
     }
 
     fn reserveSlot(self: *Store) std.mem.Allocator.Error!TypeId {
+        // Filling a slot cannot fail, so every unfinished slot keeps room for
+        // a side-list entry of its eventual content.
+        try self.named_nodes.ensureUnusedCapacity(self.allocator, self.unfinished_type_count + 1);
+        try self.erased_digests.ensureUnusedCapacity(self.allocator, self.unfinished_type_count + 1);
         const reserved = try self.add(.zst);
         self.constructing.set(@backingInt(reserved), true);
         self.unfinished_type_count += 1;
         return reserved;
+    }
+
+    /// Room in the side lists for `content` and for every unfinished slot.
+    fn ensureSideCapacity(self: *Store, content: Content) std.mem.Allocator.Error!void {
+        switch (content) {
+            .named => try self.named_nodes.ensureUnusedCapacity(self.allocator, self.unfinished_type_count + 1),
+            .erased => try self.erased_digests.ensureUnusedCapacity(self.allocator, self.unfinished_type_count + 1),
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .zst => {},
+        }
+    }
+
+    fn encodeAssumeCapacity(self: *Store, content: Content) StoredNode {
+        return switch (content) {
+            .primitive => |primitive| .{ .primitive = primitive },
+            .named => |named| blk: {
+                const index: u32 = @intCast(self.named_nodes.len());
+                self.named_nodes.appendAssumeCapacity(named);
+                break :blk .{ .named = index };
+            },
+            .record => |span_| .{ .record = span_ },
+            .tuple => |span_| .{ .tuple = span_ },
+            .tag_union => |span_| .{ .tag_union = span_ },
+            .list => |ty| .{ .list = ty },
+            .box => |ty| .{ .box = ty },
+            .func => |func| .{ .func = func },
+            .erased => |digest| blk: {
+                const index: u32 = @intCast(self.erased_digests.len());
+                self.erased_digests.appendAssumeCapacity(digest);
+                break :blk .{ .erased = index };
+            },
+            .zst => .zst,
+        };
     }
 
     fn fillReservedSlot(self: *Store, ty: TypeId, content: Content) void {
@@ -708,7 +776,7 @@ pub const Store = struct {
         if (!self.constructing.unsafeRawItemsForView()[index]) {
             Common.invariant("filled a Monotype type slot that was not under construction");
         }
-        self.types.set(index, content);
+        self.types.set(index, self.encodeAssumeCapacity(content));
         self.constructing.set(index, false);
         if (self.unfinished_type_count == 0) {
             Common.compilerBug("filled a Monotype slot without an unfinished construction");
@@ -719,7 +787,11 @@ pub const Store = struct {
     }
 
     pub fn get(self: *const Store, ty: TypeId) Content {
-        return self.types.unsafeRawItemsForView()[@backingInt(ty)];
+        return decodeNode(
+            self.types.unsafeRawItemsForView()[@backingInt(ty)],
+            self.named_nodes.unsafeRawItemsForView(),
+            self.erased_digests.unsafeRawItemsForView(),
+        );
     }
 
     /// Number of types this store holds. A structural walk that follows stored
@@ -936,11 +1008,9 @@ pub const Store = struct {
             end: EpochBoundary,
         ) std.mem.Allocator.Error!EpochDelta {
             requireEpochRange(source, begin, end);
-            const types = try allocator.dupe(
-                Content,
-                source.types.unsafeRawItemsForView()[begin.types..end.types],
-            );
+            const types = try allocator.alloc(Content, end.types - begin.types);
             errdefer allocator.free(types);
+            for (types, begin.types..) |*content, index| content.* = source.get(@fromBackingInt(@intCast(index)));
             const type_digests = try allocator.dupe(
                 ?names.TypeDigest,
                 source.type_digests.unsafeRawItemsForView()[begin.types..end.types],
@@ -1011,6 +1081,15 @@ pub const Store = struct {
                 self.end.declared_fields,
             );
             try destination.types.ensureTotalCapacity(destination.allocator, self.end.types);
+            var named_count: usize = 0;
+            var erased_count: usize = 0;
+            for (self.types) |content| switch (content) {
+                .named => named_count += 1,
+                .erased => erased_count += 1,
+                .primitive, .record, .tuple, .tag_union, .list, .box, .func, .zst => {},
+            };
+            try destination.named_nodes.ensureUnusedCapacity(destination.allocator, named_count + destination.unfinished_type_count + 1);
+            try destination.erased_digests.ensureUnusedCapacity(destination.allocator, erased_count + destination.unfinished_type_count + 1);
             try destination.type_digests.ensureTotalCapacity(destination.allocator, self.end.types);
             try destination.specialization_digests.ensureTotalCapacity(
                 destination.allocator,
@@ -1127,8 +1206,8 @@ pub const Store = struct {
         const field_limit = end.fields;
         const tag_limit = end.tags;
         const declared_limit = end.declared_fields;
-        for (self.types.unsafeRawItemsForView()[begin.types..end.types]) |content| {
-            switch (content) {
+        for (begin.types..end.types) |index| {
+            switch (self.get(@fromBackingInt(@intCast(index)))) {
                 .primitive, .erased, .zst => {},
                 .named => |named| {
                     requireEpochSpan(named.args, span_limit);
@@ -1174,6 +1253,8 @@ pub const Store = struct {
 
     const Mark = struct {
         types_len: usize,
+        named_nodes_len: usize,
+        erased_digests_len: usize,
         type_digests_len: usize,
         specialization_digests_len: usize,
         equality_digests_len: usize,
@@ -1192,6 +1273,8 @@ pub const Store = struct {
     fn mark(self: *const Store) Mark {
         return .{
             .types_len = self.types.len(),
+            .named_nodes_len = self.named_nodes.len(),
+            .erased_digests_len = self.erased_digests.len(),
             .type_digests_len = self.type_digests.len(),
             .specialization_digests_len = self.specialization_digests.len(),
             .equality_digests_len = self.equality_digests.len(),
@@ -1215,6 +1298,8 @@ pub const Store = struct {
         const floor = if (mark_.unfinished_type_count != 0) 0 else mark_.types_len;
         self.rollback_floor = @min(self.rollback_floor orelse floor, floor);
         self.types.restoreLen(mark_.types_len);
+        self.named_nodes.restoreLen(mark_.named_nodes_len);
+        self.erased_digests.restoreLen(mark_.erased_digests_len);
         self.type_digests.restoreLen(mark_.type_digests_len);
         self.specialization_digests.restoreLen(mark_.specialization_digests_len);
         self.equality_digests.restoreLen(mark_.equality_digests_len);
@@ -2299,7 +2384,9 @@ pub const Store = struct {
     };
 
     pub const View = struct {
-        types: []const Content,
+        types: []const StoredNode,
+        named_nodes: []const NamedContent,
+        erased_digests: []const names.TypeDigest,
         type_digests: []const ?names.TypeDigest,
         spans: []const TypeId,
         fields: []const Field,
@@ -2308,7 +2395,7 @@ pub const Store = struct {
         frozen: bool,
 
         pub fn get(self: View, ty: TypeId) Content {
-            return self.types[@backingInt(ty)];
+            return decodeNode(self.types[@backingInt(ty)], self.named_nodes, self.erased_digests);
         }
 
         pub fn span(self: View, span_: Span) []const TypeId {
@@ -2371,8 +2458,13 @@ pub const Store = struct {
                 }
             }
 
-            for (self.types) |content| {
-                switch (content) {
+            for (self.types, 0..) |node, index| {
+                switch (node) {
+                    .named => |named_index| if (named_index >= self.named_nodes.len) return .type_ref_out_of_bounds,
+                    .erased => |erased_index| if (erased_index >= self.erased_digests.len) return .type_ref_out_of_bounds,
+                    .primitive, .zst, .list, .box, .tuple, .record, .tag_union, .func => {},
+                }
+                switch (self.get(@fromBackingInt(@intCast(index)))) {
                     .primitive, .erased, .zst => {},
                     .list, .box => |ty| if (!self.typeRefInBounds(ty)) return .type_ref_out_of_bounds,
                     .tuple => |span_| if (self.verifyTypeSpan(span_)) |err| return err,
@@ -2463,6 +2555,8 @@ pub const Store = struct {
     pub fn view(self: *const Store) View {
         return .{
             .types = self.types.unsafeRawItemsForView(),
+            .named_nodes = self.named_nodes.unsafeRawItemsForView(),
+            .erased_digests = self.erased_digests.unsafeRawItemsForView(),
             .type_digests = self.type_digests.unsafeRawItemsForView(),
             .spans = self.spans.unsafeRawItemsForView(),
             .fields = self.fields.unsafeRawItemsForView(),
@@ -4226,6 +4320,21 @@ fn sliceOverlaps(comptime T: type, a: []const T, b: []const T) bool {
     const a_start = @intFromPtr(a.ptr);
     const b_start = @intFromPtr(b.ptr);
     return a_start < b_start + b.len * @sizeOf(T) and b_start < a_start + a.len * @sizeOf(T);
+}
+
+fn decodeNode(node: StoredNode, named_nodes: []const NamedContent, erased_digests: []const names.TypeDigest) Content {
+    return switch (node) {
+        .primitive => |primitive| .{ .primitive = primitive },
+        .named => |index| .{ .named = named_nodes[index] },
+        .record => |span_| .{ .record = span_ },
+        .tuple => |span_| .{ .tuple = span_ },
+        .tag_union => |span_| .{ .tag_union = span_ },
+        .list => |ty| .{ .list = ty },
+        .box => |ty| .{ .box = ty },
+        .func => |func| .{ .func = func },
+        .erased => |index| .{ .erased = erased_digests[index] },
+        .zst => .zst,
+    };
 }
 
 fn typeHashOf(bytes: []const u8) [32]u8 {

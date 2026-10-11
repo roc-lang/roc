@@ -3543,7 +3543,8 @@ fn computeReachabilityMasks(allocator: Allocator, types: anytype) Allocator.Erro
         }
     };
 
-    for (types.types) |content| {
+    for (0..types.types.len) |content_index| {
+        const content = types.get(@fromBackingInt(@intCast(content_index)));
         const Counter = struct {
             counts: []u32,
             fn child(self: @This(), ty: MonoType.TypeId) void {
@@ -3563,7 +3564,8 @@ fn computeReachabilityMasks(allocator: Allocator, types: anytype) Allocator.Erro
     defer allocator.free(parents);
     const parent_writes = try allocator.dupe(u32, parent_starts[0..count]);
     defer allocator.free(parent_writes);
-    for (types.types, 0..) |content, parent_index| {
+    for (0..types.types.len) |parent_index| {
+        const content = types.get(@fromBackingInt(@intCast(parent_index)));
         const Filler = struct {
             parents: []u32,
             writes: []u32,
@@ -3579,7 +3581,8 @@ fn computeReachabilityMasks(allocator: Allocator, types: anytype) Allocator.Erro
 
     var work = std.ArrayList(u32).empty;
     defer work.deinit(allocator);
-    for (types.types, 0..) |content, index| {
+    for (0..types.types.len) |index| {
+        const content = types.get(@fromBackingInt(@intCast(index)));
         const tag = std.meta.activeTag(content);
         if (tag == .func or tag == .erased) {
             flags[index] = true;
@@ -3593,7 +3596,8 @@ fn computeReachabilityMasks(allocator: Allocator, types: anytype) Allocator.Erro
             try work.append(allocator, parent);
         }
     }
-    for (types.types, 0..) |content, index| {
+    for (0..types.types.len) |index| {
+        const content = types.get(@fromBackingInt(@intCast(index)));
         if (std.meta.activeTag(content) == .named) {
             if (content.named.def.iterator_representation == .forced_dynamic) {
                 forced[index] = true;

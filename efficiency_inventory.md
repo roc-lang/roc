@@ -258,6 +258,13 @@ stages it touches; the instruction-count effect is reported in "Results".
     growing under it. `roc check` drops from 218.6 G to 216.9 G and the LLVM
     build from 345.5 G to 343.4 G; generated code is byte-identical.
 
+45. `src/postcheck/monotype/type.zig`: the type column stores a 16-byte
+    `StoredNode` per type; named payloads and erased digests live in side
+    lists that the node indexes, and `get` assembles the full content. Each
+    type was 168 bytes. Peak memory of `roc check` on roc-pg drops from
+    2.96 GB to 2.66 GB; instruction counts rise about 0.5% for the assembly
+    in `get`, and pinned cycle counts are unchanged within run-to-run noise.
+
 ## Findings from profiling
 
 These were found by profiling the ReleaseFast compiler with
@@ -1890,7 +1897,7 @@ reading code, and were not in the audit above.
 - category C; runs one `Content` per Monotype type (`types: StoreList(Content)`), copied by every `types.get(ty)` (returns by value), cloned by `cloneFrozen`, relocated per spec …; impact high (type store is read on every graph seal, digest, …; risk medium
 - Finding: `named` holds `NamedType {module: [32]u8, ty: u32}` (36 B), `TypeDef {module u32, type_name u32, source_decl ?u32 (8), generated ?TypeDigest (33), iterator_representation/kind/depth (3), iterator_topology ?IteratorTopology (37)}` (~92 B), `kind`, `builtin_owner ?BuiltinOwner`, `args Span (8)`, `backing ?NamedBacking (8)`, `declared_order Span (8)`: about 160 B. `erased: names.TypeDigest` is 32 B. Every other variant …
 - Fix: store the named payload out of line, as `InstGraph` already does with `named: *const InstNamed`: a `named_payloads: StoreList(NamedPayload)` column with `named: u32` index in the union, and move the rare `generated` digest and `iterator_topology` into optional side columns keyed by the payload index. The union drops to ~16 B (tag + `func`). `erased` becomes an index into a digest column. All consumers go through …
-- Status: open
+- Status: fixed (fix 45)
 
 ### src/postcheck/monotype/type.zig:300-304, 308-309: four `StoreList(?names.TypeDigest)` columns (33 B each) and two `StoreList(?bool)` columns per type
 - category C; runs one slot per type per column; `cloneFrozen` and spec-job relocation copy them all; impact medium; risk low

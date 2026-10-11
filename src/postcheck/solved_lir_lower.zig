@@ -15022,7 +15022,9 @@ fn cloneMonoTypeStore(allocator: std.mem.Allocator, source: *const MonoType.Stor
     var cloned = MonoType.Store.init(allocator);
     errdefer cloned.deinit();
 
-    cloned.types = @TypeOf(source.types).fromArrayList(try cloneSlice(MonoType.Content, allocator, view.types));
+    cloned.types = @TypeOf(source.types).fromArrayList(try cloneSlice(MonoType.StoredNode, allocator, view.types));
+    cloned.named_nodes = @TypeOf(source.named_nodes).fromArrayList(try cloneSlice(MonoType.NamedContent, allocator, view.named_nodes));
+    cloned.erased_digests = @TypeOf(source.erased_digests).fromArrayList(try cloneSlice(check.CheckedNames.TypeDigest, allocator, view.erased_digests));
     cloned.type_digests = @TypeOf(source.type_digests).fromArrayList(try cloneSlice(?check.CheckedNames.TypeDigest, allocator, view.type_digests));
     cloned.specialization_digests = @TypeOf(source.specialization_digests).fromArrayList(try cloneSlice(?check.CheckedNames.TypeDigest, allocator, source.specializationDigestsView()));
     cloned.equality_digests = @TypeOf(source.equality_digests).fromArrayList(try cloneSlice(?check.CheckedNames.TypeDigest, allocator, source.equality_digests.unsafeRawItemsForView()));
