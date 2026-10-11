@@ -657,6 +657,7 @@ const ComptimeDemandState = struct {
                 }
             },
             .typed_boundary => |boundary| try self.pushExpr(allocator, boundary.value),
+            .row_widen => |widen| try self.pushExpr(allocator, widen.value),
             .list, .tuple => |items| try self.pushExprs(allocator, view, items),
             .record => |fields| for (view.field_exprs[fields.start..][0..fields.len]) |field| try self.pushExpr(allocator, field.value),
             .record_update => |update| {
