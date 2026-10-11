@@ -429,6 +429,7 @@ const ComptimeDemandState = struct {
     walked_deferred_roots: usize = 0,
     walked_layout_requests: usize = 0,
     walked_literal_roots: usize = 0,
+    walked_validation_roots: usize = 0,
     /// Declared root per interned root id, and the declared roots demanded.
     declared_by_root: std.AutoHashMapUnmanaged(u32, std.ArrayList(u32)) = .empty,
     indexed_declared_roots: usize = 0,
@@ -895,6 +896,10 @@ const DeclaredRoot = struct {
     source_module: checked.ModuleId,
     def: Ast.DefId,
     fn_id: Ast.FnId,
+    /// A validation root (`hoisted_validation`): it produces no value for a
+    /// read to reach and runs for its effects, so the program demands it
+    /// outright.
+    validation: bool,
 };
 
 /// A committed expression that stands for a compile-time root's value
@@ -6038,7 +6043,13 @@ const Builder = struct {
                     Common.invariant("checked compile-time root reserved different functions for one declared root");
                 }
                 entry.value_ptr.* = fn_id;
-                try self.declared_roots.append(self.allocator, .{ .request = request, .source_module = source_module, .def = def, .fn_id = fn_id });
+                try self.declared_roots.append(self.allocator, .{
+                    .request = request,
+                    .source_module = source_module,
+                    .def = def,
+                    .fn_id = fn_id,
+                    .validation = source_view.compile_time_roots.root(root_id).kind == .hoisted_validation,
+                });
                 if (self.parked_root_job) |job| {
                     try self.parked_root_jobs.put(self.allocator, fn_id, job);
                     self.parked_root_job = null;
@@ -8044,10 +8055,20 @@ const Builder = struct {
         state.awaiting_bodies.clearRetainingCapacity();
         var newly_demanded = std.ArrayList(u32).empty;
         defer newly_demanded.deinit(self.allocator);
-        while (starts.items.len != 0) {
-            newly_demanded.clearRetainingCapacity();
-            try state.reach(self.allocator, self, view, starts.items, &newly_demanded);
-            starts.clearRetainingCapacity();
+        // A validation root has no value for a read to reach; it runs for its
+        // effects, so the program demands it outright.
+        while (state.walked_validation_roots < self.declared_roots.items.len) : (state.walked_validation_roots += 1) {
+            const declared: u32 = @intCast(state.walked_validation_roots);
+            if (!self.declared_roots.items[declared].validation or state.demanded.items[declared]) continue;
+            state.demanded.items[declared] = true;
+            try newly_demanded.append(self.allocator, declared);
+        }
+        while (starts.items.len != 0 or newly_demanded.items.len != 0) {
+            if (starts.items.len != 0) {
+                try state.reach(self.allocator, self, view, starts.items, &newly_demanded);
+                starts.clearRetainingCapacity();
+            }
+            defer newly_demanded.clearRetainingCapacity();
             for (newly_demanded.items) |declared| {
                 const root = self.declared_roots.items[declared];
                 if (self.parked_root_jobs.contains(root.fn_id)) {

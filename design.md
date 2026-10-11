@@ -1984,7 +1984,10 @@ A build evaluates only the compile-time roots its program demands. A root is
 demanded when code that runs regardless of compile-time demand reads it, or
 when the body of a demanded root reads it. The code that runs regardless is
 the program's runtime roots, its static-data requests (provided data exports),
-and every literal root the specialization registers. A read is a slot read of
+and every literal root the specialization registers. A validation root (a
+pattern's validation, or a binding whose right-hand side always crashes) is
+demanded outright: it produces no value for any read to reach, and it exists
+to run its `crash` and `dbg` behavior once in every lowering mode. A read is a slot read of
 a root this compilation evaluates, the restore of a value an earlier
 compilation stored, or one of the reads an object-cache entry records for the
 body it stands in for; each demands the root. The set is computed over the
