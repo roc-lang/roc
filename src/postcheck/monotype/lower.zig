@@ -12655,6 +12655,12 @@ const Builder = struct {
                 else
                     spec.lookup_request_fn_node orelse spec.request_fn_node,
             );
+            if (!spec.local_context_dependent) {
+                // Ordered commit keys this request by its specialization
+                // digest. Computing it here lets the commit's import carry it
+                // instead of hashing the relocated type again.
+                _ = graph.types.equalityDigestCached(graph.name_store, request_ty, null);
+            }
             if (spec.eager_resolution) |eager| {
                 const eager_ty = try sealer.sealType(eager.fn_ty);
                 const eager_request_ty = try sealer.sealNode(eager.request_fn_node);
@@ -12872,6 +12878,7 @@ const Builder = struct {
         var timing_scope = ProcedureTimingScope.begin(self.timing, .body_finalization);
         defer timing_scope.end();
 
+        try body_draft.commitIntentTypes(self.allocator, committed_types, root_ty);
         const sealed_root = try committed_types.commitType(root_ty);
         const sealed_roots = try self.allocator.alloc(Type.TypeId, 0);
         errdefer self.allocator.free(sealed_roots);
@@ -17958,6 +17965,42 @@ const BodyDraftStore = struct {
             null,
             null,
         );
+    }
+
+    /// Relocate the root type and every type a coordinator intent carries, in
+    /// one import and interning transaction, before specialization requests
+    /// and static data resolve against the relocated types one at a time.
+    fn commitIntentTypes(
+        self: *const BodyDraftStore,
+        allocator: Allocator,
+        committed_types: *CommittedGraphTypes,
+        root_ty: Type.TypeId,
+    ) Allocator.Error!void {
+        if (committed_types.destination == null) return;
+        var tys = std.ArrayList(Type.TypeId).empty;
+        defer tys.deinit(allocator);
+        try tys.append(allocator, root_ty);
+        for (self.sealed_template_specs.items) |spec| {
+            try tys.append(allocator, spec.request_fn_ty);
+            for (spec.subst) |slot| switch (slot) {
+                .checked_error => {},
+                .ty => |ty| try tys.append(allocator, ty),
+            };
+            if (spec.codec_contract) |contract| {
+                try tys.append(allocator, contract.constructor_ty);
+                try tys.append(allocator, contract.shape_ty);
+            }
+        }
+        for (self.sealed_nested_specs.items) |spec| {
+            if (spec.codec_contract) |contract| {
+                try tys.append(allocator, contract.constructor_ty);
+                try tys.append(allocator, contract.shape_ty);
+            }
+        }
+        for (self.static_data_requests.items) |request| {
+            try tys.append(allocator, request.ty.committedSealed());
+        }
+        allocator.free(try committed_types.commitTypes(allocator, tys.items));
     }
 
     /// Relocate every sealed type cell the core commit below will read, in
