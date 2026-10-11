@@ -5,6 +5,7 @@ const builtin = @import("builtin");
 const build_options = @import("build_options");
 const target = @import("roc_target");
 const modules = @import("modules.zig");
+const zig_test_suites = @import("zig_test_suites.zig");
 
 const out_dir = "zig-out/minici";
 const raw_dir = out_dir ++ "/raw";
@@ -201,6 +202,20 @@ const module_test_jobs = module_test_jobs: {
     break :module_test_jobs list[0..list.len].*;
 };
 
+/// The `run-test-zig-<suffix>` jobs for the suites `zig_test_suites.zig`
+/// covers in MiniCI, in its order, so a new suite reaches MiniCI without an
+/// edit here.
+const zig_test_suite_jobs = zig_test_suite_jobs: {
+    var list: []const Job = &.{};
+    for (zig_test_suites.suites) |suite| {
+        switch (suite.coverage) {
+            .minici => list = list ++ [_]Job{.{ .name = "run-test-zig-" ++ suite.suffix }},
+            .elsewhere => {},
+        }
+    }
+    break :zig_test_suite_jobs list[0..list.len].*;
+};
+
 /// The Windows lanes split right after the module tests.
 const last_module_test_job = module_test_jobs[module_test_jobs.len - 1].name;
 
@@ -245,18 +260,7 @@ const jobs = [_]Job{
         .build_args = &.{"-Doptimize=ReleaseSafe"},
     },
     .{ .name = "run-check-test-asset-coverage", .placement = .source },
-} ++ module_test_jobs ++ [_]Job{
-    .{ .name = "run-test-zig-snapshot-tool" },
-    .{ .name = "run-test-zig-builtin-doc" },
-    .{ .name = "run-test-zig-cli-main" },
-    .{ .name = "run-test-zig-machine-code-shim" },
-    .{ .name = "run-test-zig-watch-cli" },
-    .{ .name = "run-test-zig-minici" },
-    .{ .name = "run-test-zig-fx-platform" },
-    .{ .name = "run-test-zig-lir-inline" },
-    .{ .name = "run-test-zig-trmc-lir" },
-    .{ .name = "run-test-zig-build-helpers" },
-    .{ .name = "run-test-zig-backend-llvm" },
+} ++ module_test_jobs ++ zig_test_suite_jobs ++ [_]Job{
     .{
         .name = "run-test-eval",
         .kind = .harness,
@@ -2632,6 +2636,10 @@ pub fn main(init: std.process.Init) !void {
     for (results.items) |result| {
         if (result.cache_reuse_failure != null) std.process.exit(cache_reuse_exit_code);
     }
+}
+
+test "the suite inventory's own tests run with MiniCI's" {
+    _ = zig_test_suites;
 }
 
 test "appendProgressPrefix aligns current phase to total width" {

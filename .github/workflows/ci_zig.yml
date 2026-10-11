@@ -250,9 +250,8 @@ jobs:
   # Nightly-only work on every OS. MiniCI is not repeated here: PR CI runs it
   # on macos-15, ubuntu-24.04 and windows-2025, and `minici-other-hosts` runs it
   # on the other legs. This job keeps the ReleaseFast build and test run,
-  # snapshots in `--debug` mode, the Debug `-Dfuzz` `run-test-zig` aggregate
-  # (it includes suites that are not MiniCI jobs, e.g. rc-conformance and
-  # boxy-abi), static-link checks, and eval coverage.
+  # snapshots in `--debug` mode, the Debug `-Dfuzz` `run-test-zig` aggregate,
+  # static-link checks, and eval coverage.
   zig-tests:
     needs: check-once
     runs-on: ${{ matrix.os }}
