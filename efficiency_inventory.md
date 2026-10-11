@@ -272,6 +272,14 @@ stages it touches; the instruction-count effect is reported in "Results".
     digest is stored out of line in the graph arena, like a named node's
     payload, so every graph node is 32 bytes instead of 40.
 
+47. `src/layout/store.zig`: interned layout keys live back to back in one
+    byte buffer and the intern map holds spans of it, instead of one heap
+    string per layout; struct and tuple field scratch starts on the stack;
+    the structural field sort reads each field's layout once instead of per
+    comparison; `ensureZstLayout` returns the fixed zero-sized index instead
+    of scanning the layout table; and a canonical-root commit returns empty
+    slices without allocating.
+
 ## Findings from profiling
 
 These were found by profiling the ReleaseFast compiler with
@@ -1030,19 +1038,19 @@ reading code, and were not in the audit above.
 - category D, B; runs per distinct non-scalar layout inserted (`insertLayout`, `internStructShape`, `putTagUnion`, ...); lookups per `insertLayout` call hash the serialized key; impact low-medium; risk low
 - Finding: the intern key is built into `scratch_intern_key`, hashed for lookup, and on miss `dupe`d to the heap and stored as the map key; the layout's own columns (`layouts`, `struct_fields`, `tag_union_variants`) already contain everything the key encodes.
 - Fix: a hash map whose context hashes/compares the layout *by index* (reading the store's columns) with the scratch key compared against the candidate's rebuilt key, or store the key bytes in one shared `key_bytes` buffer keyed by `(offset,len)`; eliminates the per-layout `dupe` and `blob_index_keys`-style ownership.
-- Status: open
+- Status: fixed (fix 47)
 
 ### src/layout/store.zig:662-690, 710-720, 781: `putStructFields`/`putTuple`/`putNominalStructFields` copy fields into a fresh `ArrayList(StructField)` per call to sort them
 - category A; runs per record/tuple layout computed (per distinct record type reaching layout, plus every re-query that misses the intern cache); impact low-medium; risk low
 - Finding: `temp_fields` is allocated, `appendSlice`'d, sorted with a comparison sort that calls `getLayout(field.layout).sortKey()` per comparison, then freed.
 - Fix: a retained `scratch_fields: ArrayListUnmanaged(StructField)` on the store; precompute each field's `SortKey` once into a parallel scratch before sorting (keys are recomputed O(n log n) times now).
-- Status: open
+- Status: fixed (fix 47)
 
 ### src/layout/store.zig:1453-1460, 1603-1610: `commitGraph` with a `.canonical` root allocates two zero-length slices
 - category A; runs per graph commit whose root is already canonical (the cache-hit path of every LIR layout request: postcheck/solved_lir_lower.zig:13917, boxy/layouts.zig:383); impact low; risk low
 - Finding: `raw_layouts = try self.allocator.alloc(Idx, 0)` x2 so that `GraphCommit.deinit` can `free` unconditionally; these go through the allocator on the hot cache-hit path.
 - Fix: return `&.{}` and have `deinit` skip zero-length frees (or make the slices optional).
-- Status: open
+- Status: fixed (fix 47)
 
 ### src/layout/store.zig:1603-1640, 2100-2160: `commitGraphUncached` allocates ~14 whole-graph columns + CSR parents + pending list per commit
 - category A; runs per uncached layout graph commit (per distinct recursive/compound type in LIR lowering); impact medium for programs with many distinct compound types; risk low
@@ -1536,19 +1544,19 @@ reading code, and were not in the audit above.
 - category A/F; runs per distinct non-scalar layout (every `insertLayout`/`internStructShape`/`internTagUnionShape` miss) plus one key hash per lookup; impact low-medium; risk low
 - Finding: `rememberScratchInternKey` does `allocator.dupe(u8, scratch_intern_key.items)` per new layout (line 400) and `interned_layouts` is a `std.StringHashMap(Idx)`, so each layout costs an individual heap string, and `deinit` walks every key to free it (363-366). Lookups hash the whole key with Wyhash each time (`lookupInternedScratchKey`), including the per-element `appendInternKeyValue` byte appends that build it (each …
 - Fix: store all keys contiguously in one `ArrayList(u8)` and key the map by `(start: u32, len: u32)` with a context that hashes/compares the slice (one allocation for all keys, no per-key free); build keys with `ensureUnusedCapacity` + `appendSliceAssumeCapacity`.
-- Status: open
+- Status: fixed (fix 47)
 
 ### src/layout/store.zig:2787-2801: `ensureZstLayout` scans the layout table for a sentinel that has a fixed index
 - category E; runs every empty struct / zero-sized tag union commit (`putStructFields`, `putTagUnion`, `putNominalStructFields`, `getEmptyStructLayout`); impact low; risk low
 - Finding: loops over `layouts` from index 0 comparing tags until it finds `.zst`; the zst primitive is pre-populated at a fixed sentinel index (`Idx.zst`, inserted in `init` lines 308-312) and `insertLayout` already returns `.zst` directly (line 3016).
 - Fix: `return .zst;` (assert in debug that `getLayout(.zst).tag == .zst`).
-- Status: open
+- Status: fixed (fix 47)
 
 ### src/layout/store.zig:725-747,2902-2909,2854-2867: Struct sort recomputes `getLayout(..).sortKey()` per comparison and sizes walk fields twice
 - category E; runs per struct commit; impact low; risk low
 - Finding: `sortStructFields` compares with `ctx.store.getLayout(field.layout).sortKey()` on both sides of every comparison (O(n log n) layout fetches), `structFieldsSortKey` walks the fields again, and `structSizes` walks them twice (`.u32` and `.u64`) each calling `getLayout` and `sizeAt`/`alignment` per field; `appendStructFieldPlacement` walks a fourth time with `layoutSizeAlignAt`.
 - Fix: compute `(sort_key, size32, align32, size64, align64)` per field once into a small scratch array, then sort/size from it.
-- Status: open
+- Status: partly fixed (fix 47): the sort reads each field's layout once; sizing still walks the fields per width
 
 ### src/layout/store.zig:114,500,3032: `resolved_list_layouts` is an `ArrayList(?Idx)` (8 bytes/layout) recomputed on every reserve/update
 - category C/E; runs per layout reserve and per `updateLayout`; impact low; risk low
@@ -1910,7 +1918,7 @@ reading code, and were not in the audit above.
 - category C; runs one slot per type per column; `cloneFrozen` and spec-job relocation copy them all; impact medium; risk low
 - Finding: `type_digests`, `specialization_digests`, `equality_digests`, `representation_digests` are each `?[32]u8` = 33 bytes per type, 132 B/type of mostly-null memo; `iterator_interface_cache`/`generated_private_cache: StoreList(?bool)` are 2 B each where 2 bits suffice.
 - Fix: a presence bitset per digest kind plus a dense `DenseMap(TypeId, TypeDigest)` (only types whose digest was requested occupy a slot), or a single `digests: StoreList(TypeDigest)` with a `u32` index column per kind; the `?bool` caches become a 2-bit packed column. Same answers.
-- Status: open
+- Status: no change: the optional costs one byte per 32-byte digest; a separate presence column would split every cache read across two columns to save 3% of them
 
 ### src/postcheck/monotype/type.zig:3519-3535 (`resolveSccs`), 3637-3775 (SCC labelling): per-digest-request allocation of `visit_index`, `low_link`, `on_stack`, `scc_stack`, `frames`, `scc_members`, and (for cyclic types) `labels`, `next_labels`, `distinct_labels` map, `sorted_labels`, `rank_of_member`, `block_rep`, `block_digest`, `unfoldings`
 - category A; runs per uncached digest computation (per type x digest kind; specialization keys, equality digests, representation digests are all requested per specialization …; impact medium; risk low

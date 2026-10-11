@@ -126,7 +126,10 @@ pub const Store = struct {
 
     // Structural interning cache for non-scalar layouts. Keys are canonical
     // binary encodings of layout shape.
-    interned_layouts: std.StringHashMap(Idx),
+    interned_layouts: InternedLayouts,
+    /// Every interned layout's key bytes, one after another; the intern map
+    /// holds each key as a span of this buffer.
+    interned_key_bytes: std.ArrayList(u8),
     scratch_intern_key: std.ArrayList(u8),
 
     // Recursive layout graphs need a representation-complete key because their
@@ -179,7 +182,8 @@ pub const Store = struct {
             .struct_data = .{},
             .tag_union_variants = .{},
             .tag_union_data = .{},
-            .interned_layouts = std.StringHashMap(Idx).init(allocator),
+            .interned_layouts = .empty,
+            .interned_key_bytes = .empty,
             .scratch_intern_key = .empty,
             .interned_recursive_graphs = RecursiveGraphMap.init(allocator),
             .recursive_unfoldings = .empty,
@@ -360,11 +364,8 @@ pub const Store = struct {
         self.struct_data.deinit(self.allocator);
         self.tag_union_variants.deinit(self.allocator);
         self.tag_union_data.deinit(self.allocator);
-        var interned_keys = self.interned_layouts.keyIterator();
-        while (interned_keys.next()) |key_ptr| {
-            self.allocator.free(key_ptr.*);
-        }
-        self.interned_layouts.deinit();
+        self.interned_layouts.deinit(self.allocator);
+        self.interned_key_bytes.deinit(self.allocator);
         self.scratch_intern_key.deinit(self.allocator);
         self.interned_recursive_graphs.deinit();
         self.recursive_unfoldings.deinit(self.allocator);
@@ -392,19 +393,68 @@ pub const Store = struct {
         try self.appendInternKeyValue(raw_tag);
     }
 
+    /// An interned layout key: a span of `interned_key_bytes`.
+    pub const InternKey = struct { start: u32, len: u32 };
+
+    /// Interned layouts by key, hashed and compared by their key bytes.
+    pub const InternedLayouts = std.HashMapUnmanaged(InternKey, Idx, InternKeyContext, std.hash_map.default_max_load_percentage);
+
+    /// Hashes and compares stored keys by the bytes they span.
+    pub const InternKeyContext = struct {
+        bytes: []const u8,
+
+        pub fn hash(ctx: InternKeyContext, key: InternKey) u64 {
+            return std.hash.Wyhash.hash(0, ctx.bytes[key.start..][0..key.len]);
+        }
+
+        pub fn eql(ctx: InternKeyContext, a: InternKey, b: InternKey) bool {
+            return keyBytesEqual(ctx.bytes[a.start..][0..a.len], ctx.bytes[b.start..][0..b.len]);
+        }
+    };
+
+    /// Looks a stored key up by bytes not yet stored.
+    const InternKeyAdapter = struct {
+        bytes: []const u8,
+
+        pub fn hash(_: InternKeyAdapter, key: []const u8) u64 {
+            return std.hash.Wyhash.hash(0, key);
+        }
+
+        pub fn eql(ctx: InternKeyAdapter, key: []const u8, stored: InternKey) bool {
+            return keyBytesEqual(key, ctx.bytes[stored.start..][0..stored.len]);
+        }
+    };
+
+    /// Intern keys are encoded layout fields, compared byte for byte.
+    fn keyBytesEqual(a: []const u8, b: []const u8) bool {
+        if (a.len != b.len) return false;
+        for (a, b) |left, right| if (left != right) return false;
+        return true;
+    }
+
+    fn internKeyContext(self: *const Self) InternKeyContext {
+        return .{ .bytes = self.interned_key_bytes.items };
+    }
+
+    fn internedLayout(self: *const Self, key: []const u8) ?Idx {
+        return self.interned_layouts.getAdapted(key, InternKeyAdapter{ .bytes = self.interned_key_bytes.items });
+    }
+
     fn lookupInternedScratchKey(self: *Self) ?Idx {
-        return self.interned_layouts.get(self.scratch_intern_key.items);
+        return self.internedLayout(self.scratch_intern_key.items);
     }
 
     fn rememberScratchInternKey(self: *Self, idx: Idx) std.mem.Allocator.Error!void {
-        const owned_key = try self.allocator.dupe(u8, self.scratch_intern_key.items);
-        errdefer self.allocator.free(owned_key);
-        try self.interned_layouts.put(owned_key, idx);
+        const start = self.interned_key_bytes.items.len;
+        try self.interned_key_bytes.appendSlice(self.allocator, self.scratch_intern_key.items);
+        errdefer self.interned_key_bytes.shrinkRetainingCapacity(start);
+        const key = InternKey{ .start = @intCast(start), .len = @intCast(self.scratch_intern_key.items.len) };
+        try self.interned_layouts.putContext(self.allocator, key, idx, self.internKeyContext());
     }
 
     fn publishExistingLayoutInternKey(self: *Self, idx: Idx) std.mem.Allocator.Error!void {
         try self.buildExistingLayoutInternKey(self.getLayout(idx));
-        if (self.interned_layouts.getPtr(self.scratch_intern_key.items)) |existing| {
+        if (self.interned_layouts.getPtrAdapted(@as([]const u8, self.scratch_intern_key.items), InternKeyAdapter{ .bytes = self.interned_key_bytes.items })) |existing| {
             existing.* = idx;
             return;
         }
@@ -612,7 +662,7 @@ pub const Store = struct {
         key[0] = @intCast(@backingInt(LayoutTag.ptr));
         const raw_idx: u32 = @intCast(@backingInt(elem_idx));
         @memcpy(key[1..], std.mem.asBytes(&raw_idx));
-        return self.interned_layouts.get(&key);
+        return self.internedLayout(&key);
     }
 
     test "getPtr reads prepared layouts without changing intern scratch" {
@@ -667,10 +717,14 @@ pub const Store = struct {
             return self.getEmptyStructLayout();
         }
 
+        // Most records have a handful of fields; those stay on the stack.
+        var temp_buffer: [16 * @sizeOf(StructField)]u8 align(@alignOf(StructField)) = undefined;
+        var temp_storage = std.heap.BufferFirstAllocator.init(&temp_buffer, self.allocator);
+        const temp_allocator = temp_storage.allocator();
         var temp_fields = std.ArrayList(StructField).empty;
-        defer temp_fields.deinit(self.allocator);
-        try temp_fields.appendSlice(self.allocator, fields);
-        self.sortStructFields(temp_fields.items);
+        defer temp_fields.deinit(temp_allocator);
+        try temp_fields.appendSlice(temp_allocator, fields);
+        try self.sortStructFields(temp_fields.items);
 
         const sizes = self.structSizes(temp_fields.items);
         if (sizes.get(.u64) == 0) {
@@ -708,12 +762,16 @@ pub const Store = struct {
     /// Insert a tuple layout from concrete element layouts. The shared layout
     /// commit sorts by descending sort key, then original tuple index.
     pub fn putTuple(self: *Self, element_layouts: []const Layout) std.mem.Allocator.Error!Idx {
+        // Most records have a handful of fields; those stay on the stack.
+        var temp_buffer: [16 * @sizeOf(StructField)]u8 align(@alignOf(StructField)) = undefined;
+        var temp_storage = std.heap.BufferFirstAllocator.init(&temp_buffer, self.allocator);
+        const temp_allocator = temp_storage.allocator();
         var temp_fields = std.ArrayList(StructField).empty;
-        defer temp_fields.deinit(self.allocator);
+        defer temp_fields.deinit(temp_allocator);
 
         for (element_layouts, 0..) |elem_layout, i| {
             const elem_idx = try self.insertLayout(elem_layout);
-            try temp_fields.append(self.allocator, .{ .index = @intCast(i), .layout = elem_idx });
+            try temp_fields.append(temp_allocator, .{ .index = @intCast(i), .layout = elem_idx });
         }
 
         return self.putStructFields(temp_fields.items);
@@ -722,28 +780,29 @@ pub const Store = struct {
     /// Sort structural-record / tuple fields by the total canonical key:
     /// descending target-independent sort key, then ascending semantic index.
     /// This is independent of the order in which callers present the fields.
-    fn sortStructFields(self: *Self, fields: []StructField) void {
+    fn sortStructFields(self: *Self, fields: []StructField) std.mem.Allocator.Error!void {
         if (fields.len <= 1) return;
 
-        const SortContext = struct {
-            store: *const Self,
-
-            fn key(ctx: @This(), field: StructField) field_order.StructuralField {
-                return .{
-                    .sort_key = if (field.is_padding)
-                        .align_1
-                    else
-                        ctx.store.getLayout(field.layout).sortKey(),
-                    .semantic_index = field.index,
-                };
-            }
-
-            fn lessThan(ctx: @This(), a: StructField, b: StructField) bool {
-                return field_order.comesBefore(ctx.key(a), ctx.key(b));
-            }
+        // Each field's key reads its layout once, not once per comparison.
+        const Keyed = struct { key: field_order.StructuralField, field: StructField };
+        var keyed_buffer: [16 * @sizeOf(Keyed)]u8 align(@alignOf(Keyed)) = undefined;
+        var keyed_storage = std.heap.BufferFirstAllocator.init(&keyed_buffer, self.allocator);
+        const keyed_allocator = keyed_storage.allocator();
+        const keyed = try keyed_allocator.alloc(Keyed, fields.len);
+        defer keyed_allocator.free(keyed);
+        for (fields, keyed) |field, *entry| entry.* = .{
+            .key = .{
+                .sort_key = if (field.is_padding) .align_1 else self.getLayout(field.layout).sortKey(),
+                .semantic_index = field.index,
+            },
+            .field = field,
         };
-
-        std.sort.pdq(StructField, fields, SortContext{ .store = self }, SortContext.lessThan);
+        std.sort.pdq(Keyed, keyed, {}, struct {
+            fn lessThan(_: void, a: Keyed, b: Keyed) bool {
+                return field_order.comesBefore(a.key, b.key);
+            }
+        }.lessThan);
+        for (keyed, fields) |entry, *field| field.* = entry.field;
     }
 
     /// Create a tag union layout from pre-computed variant payload layouts.
@@ -778,10 +837,14 @@ pub const Store = struct {
     ) std.mem.Allocator.Error!Layout {
         std.debug.assert(input_fields.len >= 1);
 
+        // Most records have a handful of fields; those stay on the stack.
+        var temp_buffer: [16 * @sizeOf(StructField)]u8 align(@alignOf(StructField)) = undefined;
+        var temp_storage = std.heap.BufferFirstAllocator.init(&temp_buffer, self.allocator);
+        const temp_allocator = temp_storage.allocator();
         var temp_fields = std.ArrayList(StructField).empty;
-        defer temp_fields.deinit(self.allocator);
-        try temp_fields.appendSlice(self.allocator, input_fields);
-        if (order == .structural) self.sortStructFields(temp_fields.items);
+        defer temp_fields.deinit(temp_allocator);
+        try temp_fields.appendSlice(temp_allocator, input_fields);
+        if (order == .structural) try self.sortStructFields(temp_fields.items);
 
         const sizes = self.structSizes(temp_fields.items);
         if (sizes.get(.u64) == 0) {
@@ -1454,8 +1517,8 @@ pub const Store = struct {
         switch (root) {
             .canonical => |layout_idx| return .{
                 .root_idx = layout_idx,
-                .raw_layouts = try self.allocator.alloc(Idx, 0),
-                .value_layouts = try self.allocator.alloc(Idx, 0),
+                .raw_layouts = &.{},
+                .value_layouts = &.{},
             },
             .local => {},
         }
@@ -1604,8 +1667,8 @@ pub const Store = struct {
         switch (root) {
             .canonical => |layout_idx| return .{
                 .root_idx = layout_idx,
-                .raw_layouts = try self.allocator.alloc(Idx, 0),
-                .value_layouts = try self.allocator.alloc(Idx, 0),
+                .raw_layouts = &.{},
+                .value_layouts = &.{},
             },
             .local => {},
         }
@@ -2783,21 +2846,11 @@ pub const Store = struct {
         return self.ensureZstLayout();
     }
 
-    /// Get or create a zero-sized type layout
+    /// The zero-sized type layout, which every store holds at a fixed index.
     pub fn ensureZstLayout(self: *Self) Allocator.Error!Idx {
-        // Check if we already have a ZST layout
-        const len: u32 = @intCast(self.layouts.len());
-        for (0..len) |i| {
-            const idx: Idx = @fromBackingInt(@intCast(i));
-            const layout = self.getLayout(idx);
-            if (layout.tag == .zst) {
-                return idx;
-            }
-        }
-
-        // Create new ZST layout
-        const zst_layout = Layout.zst();
-        return try self.insertLayout(zst_layout);
+        // The store is created holding the zero-sized layout at its fixed index.
+        std.debug.assert(self.getLayout(.zst).tag == .zst);
+        return .zst;
     }
 
     /// Get both the size and alignment of a layout in a single call.

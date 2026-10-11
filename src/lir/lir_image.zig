@@ -442,7 +442,8 @@ pub const LayoutStoreImage = extern struct {
             .struct_data = try safeListFromRef(layout_mod.StructData, base_ptr, image_size, self.struct_data),
             .tag_union_variants = tag_union_variants,
             .tag_union_data = try safeListFromRef(layout_mod.TagUnionData, base_ptr, image_size, self.tag_union_data),
-            .interned_layouts = std.StringHashMap(layout_mod.Idx).init(allocator),
+            .interned_layouts = .empty,
+            .interned_key_bytes = .empty,
             .scratch_intern_key = .empty,
             .interned_recursive_graphs = layout_mod.Store.RecursiveGraphMap.init(allocator),
             .recursive_unfoldings = .empty,
@@ -876,7 +877,8 @@ fn serializeSidecarInto(
         .struct_data = try cloneSafeList(layout_mod.StructData, gpa, lowered.layouts.struct_data),
         .tag_union_variants = try cloneTagUnionVariants(gpa, &lowered.layouts.tag_union_variants),
         .tag_union_data = try cloneSafeList(layout_mod.TagUnionData, gpa, lowered.layouts.tag_union_data),
-        .interned_layouts = std.StringHashMap(layout_mod.Idx).init(gpa),
+        .interned_layouts = .empty,
+        .interned_key_bytes = .empty,
         .scratch_intern_key = .empty,
         .interned_recursive_graphs = layout_mod.Store.RecursiveGraphMap.init(gpa),
         .recursive_unfoldings = .empty,
@@ -970,7 +972,7 @@ comptime {
     // null or empty in views. The layout store's `digest_cache` is a memo
     // each view starts empty.
     std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 37);
-    std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 16);
+    std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 17);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".field_names.len == 1);
 
     // The header is authored field by field in image storage and is part of a
@@ -1187,7 +1189,8 @@ pub fn viewMappedImageWithAllocator(
 fn deinitViewedLayouts(layouts: *layout_mod.Store, allocator: std.mem.Allocator) void {
     layouts.struct_fields.deinit(allocator);
     layouts.tag_union_variants.deinit(allocator);
-    layouts.interned_layouts.deinit();
+    layouts.interned_layouts.deinit(allocator);
+    layouts.interned_key_bytes.deinit(allocator);
     layouts.digest_cache.destroy(allocator);
 }
 
@@ -1879,6 +1882,7 @@ test "LIR image copies and round-trips every populated store field" {
         .tag_union_variants = try h.multiList(layout_mod.TagUnionVariant, source_allocator, 8, 0x88),
         .tag_union_data = try h.safeList(layout_mod.TagUnionData, source_allocator, 9, 0xa0),
         .interned_layouts = undefined,
+        .interned_key_bytes = undefined,
         .scratch_intern_key = undefined,
         .interned_recursive_graphs = undefined,
         .recursive_unfoldings = undefined,
