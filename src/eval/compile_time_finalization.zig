@@ -2031,7 +2031,8 @@ fn evalInterpreterProgramRoots(
             program.refreshCallableMetadata();
         }
 
-        if (try reportCompileTimeExpectFailures(problem_store,
+        if (try reportCompileTimeExpectFailures(
+            problem_store,
             module,
             compile_time_root,
             &lowered.lir_result.store,
@@ -3858,7 +3859,8 @@ fn evalDevProgramRoots(
             .pending => finalizationInvariant("dev backend compile-time root was not evaluated"),
             .host_oom => return error.OutOfMemory,
             .host_error => return job.host.operational_error orelse finalizationInvariant("native host error omitted its operational cause"),
-            .comptime_exhaustiveness => try devComptimeExhaustivenessRootPayload(problem_store,
+            .comptime_exhaustiveness => try devComptimeExhaustivenessRootPayload(
+                problem_store,
                 owners,
                 job.root.owner,
                 module,
@@ -3869,7 +3871,8 @@ fn evalDevProgramRoots(
                 job.root.request,
                 &had_problem,
             ),
-            .crashed => try devCrashedRootPayload(problem_store,
+            .crashed => try devCrashedRootPayload(
+                problem_store,
                 module,
                 job.compile_time_root,
                 job.root.request,
@@ -4562,7 +4565,8 @@ fn reportCompileTimeCrash(
     lir_result: *const lir.Program.Result,
     message: []const u8,
 ) FinalizeError!checked.CompileTimeRootPayload {
-    switch (try reportEmbeddedFailure(maybe_problem_store,
+    switch (try reportEmbeddedFailure(
+        maybe_problem_store,
         module,
         module.checked_bodies.expr(root.expr).source_region,
         owners,

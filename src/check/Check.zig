@@ -13678,7 +13678,24 @@ fn markRetiredPatternBindersErroneous(self: *Self, pattern_idx: CIR.Pattern.Idx)
     const source = self.cir.store.getSourcePattern(pattern_idx);
     switch (source) {
         .assign, .var_assign, .as => try self.markErroneousValuePattern(pattern_idx),
-        else => {},
+        .applied_tag,
+        .nominal,
+        .nominal_external,
+        .deferred_import_ref,
+        .record_destructure,
+        .list,
+        .tuple,
+        .num_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .num_from_numeral_literal,
+        .str_literal,
+        .str_interpolation,
+        .underscore,
+        .runtime_error,
+        => {},
     }
     try self.pushCirPatternChildren(&pending, source);
     while (pending.pop()) |child| {
@@ -13687,7 +13704,24 @@ fn markRetiredPatternBindersErroneous(self: *Self, pattern_idx: CIR.Pattern.Idx)
                 try self.markErroneousValuePattern(child);
                 try self.markErroneous(ModuleEnv.varFrom(child));
             },
-            else => {},
+            .applied_tag,
+            .nominal,
+            .nominal_external,
+            .deferred_import_ref,
+            .record_destructure,
+            .list,
+            .tuple,
+            .num_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .num_from_numeral_literal,
+            .str_literal,
+            .str_interpolation,
+            .underscore,
+            .runtime_error,
+            => {},
         }
         try self.pushCirSubpatterns(&pending, child);
     }

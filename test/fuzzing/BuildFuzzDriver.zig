@@ -76,7 +76,13 @@ pub fn run(buf: [*]u8, len: isize, debug: bool, mode: Mode) void {
         for (type_error_sites) |site| {
             switch (site.err) {
                 .wrong_type => |wrong| std.debug.print("Wrote a {s} construct where {s} is required", .{ @tagName(wrong.written), @tagName(wrong.expected) }),
-                else => std.debug.print("Wrote a rejected construct: {s}", .{@tagName(site.err)}),
+                .optional_access_of_required_field,
+                .required_access_of_optional_field,
+                .unset_of_required_field,
+                .effectful_top_level_value,
+                .self_import,
+                .import_cycle,
+                => std.debug.print("Wrote a rejected construct: {s}", .{@tagName(site.err)}),
             }
             std.debug.print(", at {s} byte {d}\n", .{ module_generator.moduleFileName(site.module), site.output_offset });
         }

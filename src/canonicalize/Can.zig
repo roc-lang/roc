@@ -15480,7 +15480,17 @@ fn localNominalTypePathTarget(
 fn notCanonicalized(kind: ModuleEnv.DeferredRefKind, region: Region) Diagnostic {
     return switch (kind) {
         .pattern_nominal => Diagnostic{ .pattern_not_canonicalized = .{ .region = region } },
-        else => Diagnostic{ .expr_not_canonicalized = .{ .region = region } },
+        .expr_value,
+        .expr_nominal,
+        .type_anno_lookup,
+        .type_anno_apply,
+        .numeric_suffix,
+        .receiver_method_owner,
+        .import_statement,
+        .exposed_item,
+        .hosted_entry,
+        .file_import,
+        => Diagnostic{ .expr_not_canonicalized = .{ .region = region } },
     };
 }
 
