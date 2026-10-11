@@ -729,6 +729,7 @@ const Lifter = struct {
             .static_data_candidate => |candidate| try children.child(candidate.runtime_expr),
             .comptime_value => |candidate| try children.child(candidate.initializer),
             .typed_boundary => |boundary| try children.child(boundary.value),
+            .row_widen => |widen| try children.child(widen.value),
             .nominal,
             .dbg,
             .expect,
@@ -1354,6 +1355,7 @@ fn pushExprChildren(input: *const Ast.Program, expr_id: Mono.ExprId, children: a
         .static_data_candidate => |candidate| try children.child(candidate.runtime_expr),
         .comptime_value => |candidate| try children.child(candidate.initializer),
         .typed_boundary => |boundary| try children.child(boundary.value),
+        .row_widen => |widen| try children.child(widen.value),
         .nominal,
         .dbg,
         .expect,
@@ -2874,8 +2876,8 @@ test "pre-lift closure operands name target slots independently of supplied loca
     const ty = try program.types.add(.zst);
     const first_key = checked.CaptureId.fromBinder(@fromBackingInt(@intCast(1)));
     const second_key = checked.CaptureId.fromBinder(@fromBackingInt(@intCast(2)));
-    const first = try program.addLocalWithCaptureIdentity(@fromBackingInt(@intCast(1)), ty, @fromBackingInt(@intCast(1)), program.nextLiftCaptureId(), first_key);
-    const second = try program.addLocalWithCaptureIdentity(@fromBackingInt(@intCast(2)), ty, @fromBackingInt(@intCast(2)), program.nextLiftCaptureId(), second_key);
+    const first = try program.addLocalWithCaptureIdentity(@fromBackingInt(@intCast(1)), ty, @fromBackingInt(@intCast(1)), program.nextLiftCaptureId(), first_key, .lexical);
+    const second = try program.addLocalWithCaptureIdentity(@fromBackingInt(@intCast(2)), ty, @fromBackingInt(@intCast(2)), program.nextLiftCaptureId(), second_key, .lexical);
     const first_value = try program.addExpr(.{ .ty = ty, .data = .{ .local = first } });
     const second_value = try program.addExpr(.{ .ty = ty, .data = .{ .local = second } });
     const supplied = try program.addFnDefCaptureSpan(&.{
@@ -2902,6 +2904,7 @@ test "lift boundary normalizes checked capture identity" {
         binder,
         rewritten_id,
         checked_id,
+        .lexical,
     );
 
     const supplied_value = try program.addExpr(.{ .ty = ty, .data = .unit });
@@ -2934,6 +2937,7 @@ test "lift boundary preserves an already-lifted capture identity" {
         binder,
         lifted_id,
         checked_id,
+        .lexical,
     );
 
     const supplied_value = try program.addExpr(.{ .ty = ty, .data = .unit });

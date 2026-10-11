@@ -298,11 +298,15 @@ pub const Constants = struct {
     /// 138: Hosted Try errors no longer widen implicitly at question operators.
     /// 139: Literal dispatch plans store an optional conversion function, absent
     ///      for a proved concrete builtin numeral.
-    /// 140: Canonical node payloads are encoded from their payload field types.
-    /// 141: Low-level op numbering covers only ops that lowering produces.
-    /// 142: A stored checked runtime error keeps its evaluated operands in a
+    /// 140: Stored closure captures record whether each is a lexical capture
+    ///      or a top-level compile-time root's recursive binding.
+    /// 141: Checked bodies gain the `row_coerce` expression form (design.md
+    ///      "Row Coercion Primitive").
+    /// 142: Canonical node payloads are encoded from their payload field types.
+    /// 143: Low-level op numbering covers only ops that lowering produces.
+    /// 144: A stored checked runtime error keeps its evaluated operands in a
     ///      field of their own.
-    pub const CACHE_VERSION = 142;
+    pub const CACHE_VERSION = 144;
 };
 
 /// Configuration for the Roc cache system.
