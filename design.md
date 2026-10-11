@@ -1787,7 +1787,7 @@ evidence) select, and the types of its signature, references, and plans. A
 type reaches its component types and the nominals it names. A nominal, and
 the builtin types, reach the procedures of their methods whose names
 dispatch can select by type rather than by an explicit plan: names of
-where-clause obligations, evidence-dependent and structural plans, generated
+where-clause requirements, evidence-dependent and structural plans, generated
 codec calls, and iterator loops, and `to_inspect`. Every other method is
 reached only through a plan that selects it. A node's reach flags are its
 own and those of every node it reaches.
