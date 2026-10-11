@@ -1153,6 +1153,16 @@ pub const TypedBoundary = struct {
     value: ExprId,
 };
 
+/// A checked row coercion (design.md "Row Coercion Primitive"): the child is a
+/// value at its own closed tag row, and this expression's `ty` is the wider row
+/// it is used at. A `Return` without control flow: Lambda Solved relates the
+/// child to the target through the directed return relation rather than
+/// unifying the two rows, and LIR lowering re-tags the value. Nothing in the
+/// checker emits it yet.
+pub const RowWiden = struct {
+    value: ExprId,
+};
+
 /// A checked early return plus the explicit target lambda return type.
 pub const Return = struct {
     value: ExprId,
@@ -1176,6 +1186,7 @@ pub const ExprData = union(enum(u8)) {
     static_data_candidate: StaticDataCandidate,
     comptime_value: ComptimeValue,
     typed_boundary: TypedBoundary,
+    row_widen: RowWiden,
     list: Span(ExprId),
     tuple: Span(ExprId),
     record: Span(FieldExpr),

@@ -812,7 +812,7 @@ const Solver = struct {
                 const stmt = self.lifted.stmts[@backingInt(stmt_id)];
                 if (frame.cursor != 0) {
                     if (stmt == .let_) try self.bindPattern(stmt.let_.pat, self.inferredExpr(stmt.let_.value));
-                    if (stmt == .return_) try self.relateReturnedExpr(stmt.return_.value, try self.returnTargetTy(stmt.return_.target));
+                    if (stmt == .return_) try self.relateReturnedExpr(stmt.return_.value, try self.returnTargetTy(stmt.return_.target), .try_return);
                     return null;
                 }
                 frame.cursor = 1;
@@ -863,7 +863,7 @@ const Solver = struct {
                 }
                 return null;
             },
-            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .typed_boundary, .list, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect, .expect_err, .literal_rejected, .comptime_branch_taken => {},
+            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .typed_boundary, .row_widen, .list, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect, .expect_err, .literal_rejected, .comptime_branch_taken => {},
         };
 
         switch (expr.data) {
@@ -879,6 +879,13 @@ const Solver = struct {
             .typed_boundary => |boundary| {
                 if (cursor == 0) return .{ .expr = .{ .id = boundary.value } };
                 try self.unify(expected, self.inferredExpr(boundary.value));
+            },
+            // A row coercion is a return boundary without control flow: the
+            // value's row and the wider destination row stay distinct, and
+            // only matching payloads flow (design.md "Row Coercion Primitive").
+            .row_widen => |widen| {
+                if (cursor == 0) return .{ .expr = .{ .id = widen.value } };
+                try self.relateReturnedExpr(widen.value, expected, .row_widen);
             },
             .list => |items| {
                 const children = self.lifted.exprSpan(items);
@@ -1126,7 +1133,7 @@ const Solver = struct {
             },
             .return_ => |ret| {
                 if (cursor == 0) return .{ .expr = .{ .id = ret.value } };
-                try self.relateReturnedExpr(ret.value, try self.returnTargetTy(ret.target));
+                try self.relateReturnedExpr(ret.value, try self.returnTargetTy(ret.target), .try_return);
             },
             .dbg, .expect => |child| {
                 if (cursor == 0) return .{ .expr = .{ .id = child } };
@@ -1148,18 +1155,29 @@ const Solver = struct {
     /// but produce no value that can flow into a return destination. That
     /// includes a block SpecConstr terminated: its final `unreachable` follows
     /// a statement that never completes.
-    fn relateReturnedExpr(self: *Solver, value: Lifted.ExprId, target: Type.TypeVarId) Allocator.Error!void {
+    fn relateReturnedExpr(self: *Solver, value: Lifted.ExprId, target: Type.TypeVarId, mode: ReturnRelationMode) Allocator.Error!void {
         const data = self.lifted.exprs[@backingInt(value)].data;
         const tag = std.meta.activeTag(data);
         if (tag == .crash or tag == .checked_error or tag == .comptime_exhaustiveness_failed or tag == .@"unreachable") return;
         if (tag == .block and self.lifted.exprs[@backingInt(data.block.final_expr)].data == .@"unreachable") return;
-        try self.relateReturn(self.inferredExpr(value), target);
+        try self.relateReturn(self.inferredExpr(value), target, mode);
     }
+
+    /// Which boundary a directed return relation serves.
+    const ReturnRelationMode = enum {
+        /// An explicit or `?` return into the enclosing function result.
+        try_return,
+        /// A checked row coercion (design.md "Row Coercion Primitive"). Its
+        /// reach is the root row, rows that are tag payloads of a reached
+        /// row, and rows behind a named type's backing; any other pair must
+        /// already hold identical rows.
+        row_widen,
+    };
 
     /// A checked return boundary carries a value from its source row into
     /// the enclosing result row. Relate payload flow without identifying the
     /// rows: a shared callee must retain its own result on every return path.
-    fn relateReturn(self: *Solver, source: Type.TypeVarId, target: Type.TypeVarId) Allocator.Error!void {
+    fn relateReturn(self: *Solver, source: Type.TypeVarId, target: Type.TypeVarId, mode: ReturnRelationMode) Allocator.Error!void {
         var work = std.ArrayList(UnifyPair).empty;
         defer work.deinit(self.allocator);
         var visited = UnifyPairSet.init(self.allocator);
@@ -1174,6 +1192,10 @@ const Solver = struct {
             if (entry.found_existing) continue;
             const source_content = try self.shapeContent(src);
             if (source_content != .tag_union) {
+                // Outside the coercion's reach the two sides must already
+                // agree on every row: unifying differing rows would merge the
+                // narrower one into the wider one for the whole specialization.
+                if (mode == .row_widen) try self.assertNoDifferingRows(src, dst);
                 try self.unify(src, dst);
                 continue;
             }
@@ -1196,6 +1218,81 @@ const Solver = struct {
                     });
                 }
             }
+        }
+    }
+
+    /// Walk a pair outside a row coercion's reach and require every tag row
+    /// the two sides hold at the same position to list the same tags with the
+    /// same arities (design.md "Row Coercion Primitive"). Unresolved variables
+    /// and lambda sets carry no row and are left to unification.
+    fn assertNoDifferingRows(self: *Solver, source: Type.TypeVarId, target: Type.TypeVarId) Allocator.Error!void {
+        var work = std.ArrayList(UnifyPair).empty;
+        defer work.deinit(self.allocator);
+        var visited = std.AutoHashMap(UnifyPair, void).init(self.allocator);
+        defer visited.deinit();
+        try work.append(self.allocator, .{ .first = source, .second = target });
+        while (work.pop()) |pair| {
+            const src = self.program.types.rootCompressed(pair.first);
+            const dst = self.program.types.rootCompressed(pair.second);
+            if (src == dst) continue;
+            const entry = try visited.getOrPut(.{ .first = src, .second = dst });
+            if (entry.found_existing) continue;
+            const source_content = try self.resolvedContentAt(src);
+            const target_content = try self.resolvedContentAt(dst);
+            if (std.meta.activeTag(source_content) != std.meta.activeTag(target_content)) continue;
+            switch (source_content) {
+                .tag_union => |source_tags| {
+                    const target_tags = target_content.tag_union;
+                    if (source_tags.count() != target_tags.count()) {
+                        Common.invariant("row coercion reached differing tag rows outside tag payloads and named backings");
+                    }
+                    const target_index = try self.tagRowIndex(target_tags);
+                    for (0..source_tags.count()) |source_index| {
+                        const source_tag = self.program.types.tagItem(source_tags, source_index);
+                        const target_position = target_index.by_name.get(source_tag.name) orelse
+                            Common.invariant("row coercion reached differing tag rows outside tag payloads and named backings");
+                        const target_payloads = self.program.types.tagItem(target_tags, target_position).payloads;
+                        if (source_tag.payloads.count() != target_payloads.count()) {
+                            Common.invariant("row coercion reached differing tag payload arities outside tag payloads and named backings");
+                        }
+                        for (0..source_tag.payloads.count()) |payload_index| {
+                            try work.append(self.allocator, .{
+                                .first = self.program.types.spanItem(source_tag.payloads, payload_index),
+                                .second = self.program.types.spanItem(target_payloads, payload_index),
+                            });
+                        }
+                    }
+                },
+                .record => |source_fields| {
+                    const target_fields = target_content.record;
+                    if (source_fields.count() != target_fields.count()) continue;
+                    for (0..source_fields.count()) |index| {
+                        try work.append(self.allocator, .{
+                            .first = self.program.types.fieldItem(source_fields, index).ty,
+                            .second = self.program.types.fieldItem(target_fields, index).ty,
+                        });
+                    }
+                },
+                .tuple => |source_items| try self.appendSpanPairs(&work, source_items, target_content.tuple),
+                .list => |source_elem| try work.append(self.allocator, .{ .first = source_elem, .second = target_content.list }),
+                .box => |source_elem| try work.append(self.allocator, .{ .first = source_elem, .second = target_content.box }),
+                .func => |source_fn| {
+                    try self.appendSpanPairs(&work, source_fn.args, target_content.func.args);
+                    try work.append(self.allocator, .{ .first = source_fn.ret, .second = target_content.func.ret });
+                },
+                .named => |source_named| try self.appendSpanPairs(&work, source_named.args, target_content.named.args),
+                .link, .unbound, .forall, .primitive, .lambda_set, .erased, .zst, .mono => {},
+            }
+        }
+    }
+
+    fn appendSpanPairs(self: *Solver, work: *std.ArrayList(UnifyPair), source: Type.Span, target: Type.Span) Allocator.Error!void {
+        if (source.count() != target.count()) return;
+        for (0..source.count()) |index| {
+            try work.append(self.allocator, .{
+                .first = self.program.types.spanItem(source, index),
+                .second = self.program.types.spanItem(target, index),
+            });
         }
     }
 
@@ -5003,15 +5100,15 @@ test "lambda solved return boundaries preserve rows and propagate callable paylo
             .{ .name = ok_name, .checked_name = ok_name, .payloads = try program.types.addSpan(&.{target_fn}) },
             .{ .name = err_name, .checked_name = err_name, .payloads = try program.types.addSpan(&.{err_row}) },
         }) });
-        try solver.relateReturn(source, target);
+        try solver.relateReturn(source, target, .try_return);
         try std.testing.expectEqual(program.types.rootCompressed(source_callable), program.types.rootCompressed(target_callable));
         try std.testing.expect(program.types.rootCompressed(source) != program.types.rootCompressed(target));
         try std.testing.expectEqual(@as(usize, 0), (try solver.shapeContent(empty)).tag_union.count());
         try std.testing.expectEqual(@as(usize, 1), (try solver.shapeContent(err_row)).tag_union.count());
     }
 
-    try solver.relateReturn(empty, str);
-    try solver.relateReturn(empty, u64_ty);
+    try solver.relateReturn(empty, str, .try_return);
+    try solver.relateReturn(empty, u64_ty, .try_return);
     try std.testing.expectEqual(@as(usize, 0), (try solver.shapeContent(empty)).tag_union.count());
 
     // A recursive payload follows the same directed pair only once.
@@ -5024,7 +5121,60 @@ test "lambda solved return boundaries preserve rows and propagate callable paylo
         .{ .name = ok_name, .checked_name = ok_name, .payloads = try program.types.addSpan(&.{target_cycle}) },
         .{ .name = err_name, .checked_name = err_name, .payloads = .empty() },
     }) });
-    try solver.relateReturn(source_cycle, target_cycle);
+    try solver.relateReturn(source_cycle, target_cycle, .try_return);
     try std.testing.expectEqual(@as(usize, 1), (try solver.shapeContent(source_cycle)).tag_union.count());
     try std.testing.expectEqual(@as(usize, 2), (try solver.shapeContent(target_cycle)).tag_union.count());
+}
+
+test "lambda solved row coercion re-tags payload rows and unifies identical rows outside its reach" {
+    // design.md "Row Coercion Primitive": a row directly in a tag payload is
+    // inside the reach and keeps its own tags; a row inside a record payload
+    // is outside it, so the two sides must hold the same row and unify. A
+    // differing row outside the reach is an invariant violation (a panic in
+    // `Common.invariant`), so only the accepted side is unit-testable here.
+    const allocator = std.testing.allocator;
+    var lifted = emptyLiftedProgramForTest(allocator);
+    const ok_name = try lifted.names.internTagLabel("Ok");
+    const err_name = try lifted.names.internTagLabel("Err");
+    const a_name = try lifted.names.internTagLabel("A");
+    const b_name = try lifted.names.internTagLabel("B");
+    const x_name = try lifted.names.internRecordFieldLabel("x");
+    var program = Ast.Program.init(allocator, lifted);
+    defer program.deinit();
+    var solver = try Solver.init(allocator, &program);
+    defer solver.deinit();
+
+    const source_inner = try program.types.add(.{ .tag_union = try program.types.addTags(&.{
+        .{ .name = a_name, .checked_name = a_name, .payloads = .empty() },
+    }) });
+    const target_inner = try program.types.add(.{ .tag_union = try program.types.addTags(&.{
+        .{ .name = a_name, .checked_name = a_name, .payloads = .empty() },
+        .{ .name = b_name, .checked_name = b_name, .payloads = .empty() },
+    }) });
+    const source_record_row = try program.types.add(.{ .tag_union = try program.types.addTags(&.{
+        .{ .name = a_name, .checked_name = a_name, .payloads = .empty() },
+    }) });
+    const target_record_row = try program.types.add(.{ .tag_union = try program.types.addTags(&.{
+        .{ .name = a_name, .checked_name = a_name, .payloads = .empty() },
+    }) });
+    const source_record = try program.types.add(.{ .record = try program.types.addFields(&.{
+        .{ .name = x_name, .ty = source_record_row, .default = null },
+    }) });
+    const target_record = try program.types.add(.{ .record = try program.types.addFields(&.{
+        .{ .name = x_name, .ty = target_record_row, .default = null },
+    }) });
+    const source = try program.types.add(.{ .tag_union = try program.types.addTags(&.{
+        .{ .name = ok_name, .checked_name = ok_name, .payloads = try program.types.addSpan(&.{ source_inner, source_record }) },
+    }) });
+    const target = try program.types.add(.{ .tag_union = try program.types.addTags(&.{
+        .{ .name = ok_name, .checked_name = ok_name, .payloads = try program.types.addSpan(&.{ target_inner, target_record }) },
+        .{ .name = err_name, .checked_name = err_name, .payloads = .empty() },
+    }) });
+
+    try solver.relateReturn(source, target, .row_widen);
+    try std.testing.expect(program.types.rootCompressed(source) != program.types.rootCompressed(target));
+    try std.testing.expect(program.types.rootCompressed(source_inner) != program.types.rootCompressed(target_inner));
+    try std.testing.expectEqual(@as(usize, 1), (try solver.shapeContent(source_inner)).tag_union.count());
+    try std.testing.expectEqual(@as(usize, 2), (try solver.shapeContent(target_inner)).tag_union.count());
+    try std.testing.expectEqual(program.types.rootCompressed(source_record_row), program.types.rootCompressed(target_record_row));
 }

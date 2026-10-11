@@ -300,7 +300,9 @@ pub const Constants = struct {
     ///      for a proved concrete builtin numeral.
     /// 140: Stored closure captures record whether each is a lexical capture
     ///      or a top-level compile-time root's recursive binding.
-    pub const CACHE_VERSION = 140;
+    /// 141: Checked bodies gain the `row_coerce` expression form (design.md
+    ///      "Row Coercion Primitive").
+    pub const CACHE_VERSION = 141;
 };
 
 /// Configuration for the Roc cache system.

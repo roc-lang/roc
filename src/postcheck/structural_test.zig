@@ -225,6 +225,7 @@ test "post-check expression forms do not reintroduce checked-only syntax" {
         "method_eq",
         "anno_only",
         "for_",
+        "row_coerce",
     };
 
     inline for (checked_only) |name| {
@@ -232,6 +233,19 @@ test "post-check expression forms do not reintroduce checked-only syntax" {
         try std.testing.expect(!@hasField(Lifted.ExprData, name));
         try std.testing.expect(!@hasField(LambdaMono.ExprData, name));
     }
+}
+
+test "a checked row coercion has one post-check form at every stage" {
+    // design.md "Row Coercion Primitive": the checked `row_coerce` becomes the
+    // Monotype `row_widen`, which every later stage keeps as a value-only
+    // boundary. Neither form is a return: `row_widen` has no target field,
+    // because this expression's own type is the destination row.
+    try std.testing.expect(@hasField(check.CheckedArtifact.CheckedExprData, "row_coerce"));
+    try std.testing.expect(@hasField(Mono.ExprData, "row_widen"));
+    try std.testing.expect(@hasField(Lifted.ExprData, "row_widen"));
+    try std.testing.expect(@hasField(LambdaMono.ExprData, "row_widen"));
+    try std.testing.expect(!@hasField(Mono.RowWiden, "target"));
+    try std.testing.expect(@typeInfo(Mono.RowWiden).@"struct".field_names.len == 1);
 }
 
 test "stage expression forms only shrink checked syntax or add runtime encoding forms" {
