@@ -1,6 +1,5 @@
 //! Regression tests for issue 12128.
 
-const std = @import("std");
 const TestEnv = @import("./TestEnv.zig");
 
 // https://github.com/roc-lang/roc/issues/12128
