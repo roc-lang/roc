@@ -735,7 +735,9 @@ widened_use_tags: std.ArrayListUnmanaged(types_mod.Tag) = .empty,
 /// copies once constraints settle.
 widened_use_rows: std.ArrayListUnmanaged(WidenedUseRow) = .empty,
 /// Every call recorded as a row-coerced callee, with the range of
-/// `widened_use_rows` its copy re-opened (`settleUnwidenedCallees`).
+/// `widened_use_rows` its copy re-opened (`settleUnwidenedCallees`). Judged
+/// once constraints settle: until then a copied row can still gain tags
+/// (late codec finalize adds them), so whether a call widened is not known.
 widened_callees: std.ArrayListUnmanaged(WidenedCallee) = .empty,
 /// The annotation whose definition's body check is about to generate it; its
 /// implicitly opened rows are bounded for the rest of that body check
@@ -1407,6 +1409,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .coercion_outside_stack = .scratch,
     .coercion_outside_seen = .scratch,
     .widened_use_copies = .scratch,
+    .widen_closed_rows_only = .lexical,
     .widened_use_tags = .scratch,
     .occurs_scratch = .scratch,
     .seen_annos = .scratch,
@@ -1440,6 +1443,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .literal_field_kinds = .settled,
     .record_constructions = .settled,
     .widened_use_rows = .settled,
+    .widened_callees = .settled,
     .literal_field_kind_watermark = .keyed,
     .pending_record_updates = .boundary,
     .pending_record_destructs = .boundary,
@@ -20752,8 +20756,9 @@ fn widenedFunctionResultUseVar(self: *Self, fn_var: Var, env: *Env, region: Regi
     };
     try self.computeCoercionReach(func.ret);
     self.widened_use_copies.clearRetainingCapacity();
+    const saved_closed_rows_only = self.widen_closed_rows_only;
     self.widen_closed_rows_only = true;
-    defer self.widen_closed_rows_only = false;
+    defer self.widen_closed_rows_only = saved_closed_rows_only;
     const ret_copy = try self.widenedReachCopy(func.ret, env, region);
     if (ret_copy == self.types.resolveVar(func.ret).var_) return null;
     var widened = func;
