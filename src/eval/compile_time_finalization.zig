@@ -751,6 +751,27 @@ test "CTFE serial executor retains a specialized local literal conversion produc
     , 3);
 }
 
+test "CTFE serial executor evaluates a specialized custom interpolation as a literal root" {
+    try testSerialExecutorSource(
+        \\Wrapped := [Wrapped(Str)].{
+        \\    from_interpolation : List(Str) -> Try((List(Str) -> Wrapped), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |segments| Str.from_interpolation(segments).map_ok(|assemble| |values| Wrapped.Wrapped(assemble(values)))
+        \\}
+        \\
+        \\describe = |x| "value=${x}"
+        \\
+        \\greeting : Wrapped
+        \\greeting = describe("x")
+        \\
+        \\size : U64
+        \\size = match greeting {
+        \\    Wrapped(text) => text.count_utf8_bytes()
+        \\}
+        \\
+        \\main = || size
+    , 7);
+}
+
 test "literal type-only projection consumes producer representation without bodies" {
     const allocator = std.testing.allocator;
     const helpers = @import("inspected.zig");
