@@ -18,7 +18,7 @@
 //!   types of its signature, references, and plans;
 //! - a type reaches its component types and the nominals it names;
 //! - a nominal, and the builtin types, reach the procedures of their methods
-//!   whose names dispatch can select by type (a where-clause obligation, an
+//!   whose names dispatch can select by type (a where-clause requirement, an
 //!   evidence-dependent or structural plan, a generated codec, an iterator
 //!   loop, or inspection); every other method is reached only through a plan
 //!   that selects it.
@@ -286,7 +286,7 @@ const Builder = struct {
     /// Edges, from a node to a node it reaches.
     edges: std.ArrayListUnmanaged([2]NodeId) = .empty,
     /// The method names a dispatch can select without an explicit direct
-    /// call naming the procedure: names a where-clause obligation, an
+    /// call naming the procedure: names a where-clause requirement, an
     /// evidence-dependent or structural plan, a generated codec, or an
     /// iterator loop dispatches by, and `to_inspect`, which inspection
     /// selects by type.
