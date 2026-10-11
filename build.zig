@@ -1315,6 +1315,7 @@ const TestPlatformSteps = struct {
 const fixture_target_aliases = [_]TestFixturePlan.Alias{
     .{ .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/static-lib-platform/targets" },
     .{ .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/field_default_root_order/platform/targets" },
+    .{ .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/target_config_not_constant/platform/targets" },
     .{ .source = "test/fx/platform/targets", .destination = "test/hosted_nominal_return/platform/targets" },
     .{ .has_checked_in_inputs = false, .source = "test/dylib/platform/targets", .destination = "test/missing-host-symbol/platform/targets" },
     .{ .source = "test/fx/platform/targets", .destination = "test/cli/issue_9864_static_dispatch_package_nominal/platform/targets" },
@@ -2429,7 +2430,8 @@ pub fn build(b: *std.Build) void {
     // all of that on every launch—~540M instructions before main() runs
     // (#10992). Every install of the roc CLI for a macOS target goes through
     // this tool, which removes the export trie and weak-bind info and
-    // rewrites the ad-hoc code signature.
+    // rewrites the ad-hoc code signature. src/cli/macho/DyldExportStrip.zig
+    // describes what removing this step would take.
     const dyld_export_strip_module = b.createModule(.{
         .root_source_file = b.path("src/cli/macho/DyldExportStrip.zig"),
         .imports = &.{
