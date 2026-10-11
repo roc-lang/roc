@@ -1,10 +1,9 @@
-//! Stable producer-owned semantic context for CTFE machine-code artifacts.
-//! Dense LIR IDs are binding inputs, never persisted semantic identities.
+//! Producer-owned source-event descriptors for ordinary native artifacts.
+//! Checked identities remain explicit across emission and cache publication.
 
 const std = @import("std");
 const base = @import("base");
 
-pub const Domain = enum(u8) { runtime, ctfe };
 pub const SourceDescriptor = struct {
     checked_module: [32]u8,
     source_identity: [32]u8,
@@ -48,27 +47,18 @@ pub const FailureDescriptor = struct {
 pub const SiteDescriptor = struct {
     checked_module: [32]u8,
     checked_site: ?u32,
+    checked_origin: ?@import("lir").LIR.CheckedSiteOrigin = null,
     procedure_identity: [32]u8,
     kind: enum(u8) { match, destructure, if_ },
     region: base.Region,
     branch_regions: []const base.Region,
 };
+/// Semantic keys used by the normal source-event observer's prebound tables.
 pub const Binding = union(enum(u8)) {
     source_file: SourceDescriptor,
     failure: FailureDescriptor,
     site: SiteDescriptor,
     static_root: RootDescriptor,
-
-    pub fn clone(self: Binding, allocator: std.mem.Allocator) std.mem.Allocator.Error!Binding {
-        return switch (self) {
-            .site => |site| blk: {
-                var copy = site;
-                copy.branch_regions = try allocator.dupe(base.Region, site.branch_regions);
-                break :blk .{ .site = copy };
-            },
-            else => self,
-        };
-    }
 };
 
 /// Earlier producers fill these tables before code emission/body retirement.
@@ -111,7 +101,7 @@ pub const Catalog = struct {
     }
 };
 
-test "CTFE context catalog selects one immutable producer without row fallback" {
+test "source-event catalog selects one immutable producer without row fallback" {
     const descriptor: SourceDescriptor = .{
         .checked_module = [_]u8{41} ** 32,
         .source_identity = [_]u8{42} ** 32,

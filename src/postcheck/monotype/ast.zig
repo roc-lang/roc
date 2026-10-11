@@ -224,11 +224,10 @@ pub const FnTemplate = struct {
     /// never lowered, and Direct LIR emits an external procedure that the
     /// object writer fills from the cache entry.
     cached: ?Common.SpecCacheHit = null,
-    /// Source observation requirements recorded before expect omission.
-    observations: @import("lir_core").Program.ProducerObservations = .unknown,
     /// Storage demand is producer data even when a non-native consumer retains
     /// this body; native late splicing still needs the same root declarations.
     cached_root_uses: []const Common.CheckedRootUse = &.{},
+    cached_demand: ?@import("lir_core").Program.CachedCtfeDemand = null,
     /// Set for a closed specialization of a Builtin template whose checked
     /// provided low-level operation is on `LowLevel.procedureKeyedByLayout`'s
     /// allow list. Direct LIR identifies the plain procedure of such a
@@ -1050,6 +1049,7 @@ pub const ComptimeSite = struct {
     owner: Common.LoweringModuleId,
     region: base.Region,
     checked_site: ?checked.CheckedExhaustivenessSiteId = null,
+    checked_origin: ?@import("lir_core").LIR.CheckedSiteOrigin = null,
     branch_regions: []const base.Region = &.{},
 };
 
@@ -1071,6 +1071,9 @@ pub const Expr = struct {
 pub const ComptimeValue = struct {
     root: Common.ComptimeValueRootId,
     initializer: ExprId,
+    /// Completed storage's exact definition, consumed by Lift to produce
+    /// a proof call whose return follows specialization of that definition.
+    storage_producer: ?DefId = null,
 };
 
 /// A restored compile-time value that may lower to static data once the final
@@ -1415,6 +1418,73 @@ pub const LiteralRoot = struct {
     /// Checked module that owns the literal.
     module: checked.ModuleId,
     site: Common.LiteralRejectionSite,
+    recipe: ?LiteralRecipe = null,
+    declaration_pending: bool = false,
+};
+
+/// Exact declaration context recorded when the conversion producer is built.
+/// Evidence spans share the same durable pools as ordinary specializations.
+pub const LiteralRecipe = struct {
+    producer_key: names.TypeDigest,
+    required_native_identity: ?[32]u8 = null,
+    owner_template: names.ProcTemplate,
+    owner_context_fn_key: names.TypeDigest,
+    current_fn_key: names.TypeDigest,
+    method_scope: checked.ModuleId,
+    in_default_expr: bool = false,
+    checked_callable_ty: checked.CheckedTypeId,
+    callable_ty: Type.TypeId,
+    const_evidence: Span(check.ConstStore.ConstFnEvidence),
+    const_evidence_frames: Span(check.ConstStore.ConstFnEvidenceFrame),
+    const_evidence_frame_head: ?u32,
+    local_contexts: []const LiteralLocalContext = &.{},
+
+    pub fn clone(self: LiteralRecipe, allocator: std.mem.Allocator) std.mem.Allocator.Error!LiteralRecipe {
+        var result = self;
+        result.local_contexts = &.{};
+        const contexts = try allocator.alloc(LiteralLocalContext, self.local_contexts.len);
+        var initialized: usize = 0;
+        errdefer {
+            for (contexts[0..initialized]) |context| allocator.free(context.bindings);
+            allocator.free(contexts);
+        }
+        for (self.local_contexts, contexts) |context, *out| {
+            out.* = context;
+            out.bindings = try allocator.dupe(LiteralBinding, context.bindings);
+            initialized += 1;
+        }
+        result.local_contexts = contexts;
+        return result;
+    }
+
+    pub fn deinit(self: LiteralRecipe, allocator: std.mem.Allocator) void {
+        for (self.local_contexts) |context| allocator.free(context.bindings);
+        allocator.free(self.local_contexts);
+    }
+};
+
+pub const LiteralBinding = struct {
+    kind: u8,
+    binder: u32,
+    type_digest: names.TypeDigest,
+    value_required: bool,
+    ty: Type.TypeId,
+    source: @import("lir_core").Program.LiteralBindingSource,
+};
+
+pub const LiteralLocalContext = struct {
+    module: checked.ModuleId,
+    binder: checked.PatternBinderId,
+    expr: checked.CheckedExprId,
+    context_anchor: ?checked.CheckedStatementId,
+    owner_template: names.ProcTemplate,
+    base_key: names.TypeDigest,
+    specialization_key: names.TypeDigest,
+    restored_specialization_key: ?names.TypeDigest = null,
+    bindings: []const LiteralBinding,
+    const_evidence: Span(check.ConstStore.ConstFnEvidence),
+    const_evidence_frames: Span(check.ConstStore.ConstFnEvidenceFrame),
+    const_evidence_frame_head: ?u32,
 };
 
 /// Runtime layout requested for a checked data value.
@@ -1425,6 +1495,7 @@ pub const LayoutRequest = struct {
     const_locator: ?checked.ConstLocator = null,
     /// A cached procedure's explicit typed storage demand, not an initializer.
     comptime_root: ?Common.ComptimeValueRoot = null,
+    literal_materialization: ?Common.LiteralMaterializationDeclaration = null,
 };
 
 /// Runtime schema requested for a named runtime value shape.
@@ -1781,8 +1852,16 @@ pub const ProgramBuilder = struct {
         result.names = try self.names.clone(allocator);
         result.types = try self.types.cloneFrozen(allocator);
         try result.comptime_value_roots.appendSlice(allocator, self.comptime_value_roots.unsafeRawItemsForView());
-        inline for (.{ "specs", "fns", "const_fn_evidence", "const_fn_evidence_frames", "defs", "nested_defs", "exprs", "pats", "stmts", "locals", "expr_ids", "pat_ids", "typed_locals", "stmt_ids", "field_exprs", "field_access_segments", "fn_def_captures", "capture_operands", "record_destructs", "str_pattern_steps", "branches", "if_branches", "roots", "literal_roots", "layout_requests", "comptime_value_reads", "runtime_schema_requests", "static_data_values", "lowering_modules", "expr_locs", "expr_regions", "stmt_locs", "stmt_regions" }) |field| {
+        inline for (.{ "specs", "fns", "const_fn_evidence", "const_fn_evidence_frames", "defs", "nested_defs", "exprs", "pats", "stmts", "locals", "expr_ids", "pat_ids", "typed_locals", "stmt_ids", "field_exprs", "field_access_segments", "fn_def_captures", "capture_operands", "record_destructs", "str_pattern_steps", "branches", "if_branches", "roots", "layout_requests", "comptime_value_reads", "runtime_schema_requests", "static_data_values", "lowering_modules", "expr_locs", "expr_regions", "stmt_locs", "stmt_regions" }) |field| {
             try @field(result, field).appendSlice(allocator, @field(self, field).unsafeRawItemsForView());
+        }
+        for (self.literal_roots.unsafeRawItemsForView()) |root| {
+            var copied = root;
+            copied.recipe = if (root.recipe) |recipe| try recipe.clone(allocator) else null;
+            result.literal_roots.append(allocator, copied) catch |err| {
+                if (copied.recipe) |recipe| recipe.deinit(allocator);
+                return err;
+            };
         }
         try result.proc_debug_names.items.appendSlice(allocator, self.proc_debug_names.view());
         for (self.string_literals.unsafeRawItemsForView()) |literal| {
@@ -1851,6 +1930,7 @@ pub const ProgramBuilder = struct {
         self.comptime_value_reads.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
+        for (self.literal_roots.unsafeRawItemsForView()) |root| if (root.recipe) |recipe| recipe.deinit(self.allocator);
         self.literal_roots.deinit(self.allocator);
         self.literal_root_by_identity.deinit(self.allocator);
         self.proc_debug_names.deinit();

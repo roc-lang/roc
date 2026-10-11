@@ -95,7 +95,7 @@ pub fn transcodeValueSlot(allocator: Allocator, source_program: *const Program.R
     const target = target_program.static_data_values.items[@intFromEnum(target_slot)];
     const source_identity = source_slot.compile_time_root orelse invariant("source slot lacks compile-time producer authority");
     const target_identity = target.compile_time_root orelse invariant("target slot lacks compile-time producer authority");
-    if (!std.meta.eql(source_identity.module, target_identity.module) or !source_identity.root.eql(target_identity.root) or std.meta.activeTag(source_identity.role) != std.meta.activeTag(target_identity.role)) invariant("paired slots do not name the same producer role");
+    if (!source_identity.module.eql(target_identity.module) or !source_identity.root.eql(target_identity.root) or std.meta.activeTag(source_identity.role) != std.meta.activeTag(target_identity.role)) invariant("paired slots do not name the same producer role");
     return transcodePlans(allocator, source_program, .{ .plan = source_slot.compile_time_root.?.role.value.plan, .layout_idx = source_slot.layout_idx }, source_exports, source_symbol, target_program, .{ .plan = target.compile_time_root.?.role.value.plan, .layout_idx = target.layout_idx }, target_slot);
 }
 
@@ -103,7 +103,7 @@ fn transcodePlans(allocator: Allocator, source_program: *const Program.Result, s
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     var builder = Builder{ .allocator = arena.allocator(), .source_program = source_program, .program = target_program, .source_exports = source_exports, .slot = target_slot };
-    const symbol = try builder.addNode(try Program.staticDataSymbolName(builder.allocator, target_slot), builder.size(target_root.layout_idx), builder.alignment(target_root.layout_idx));
+    const symbol = try builder.addNode(try target_program.staticDataSymbolName(builder.allocator, target_slot), builder.size(target_root.layout_idx), builder.alignment(target_root.layout_idx));
     try builder.enqueue(source_root.plan, source_root.layout_idx, target_root.plan, target_root.layout_idx, .{ .symbol = source_symbol, .offset = source_exports[@intFromEnum(source_symbol)].symbol_offset }, .{ .symbol = symbol }, .value, .value);
     var index: usize = 0;
     while (index < builder.jobs.items.len) : (index += 1) try builder.visit(builder.jobs.items[index]);
@@ -115,13 +115,13 @@ pub fn transcodeFailure(allocator: Allocator, source_program: *const Program.Res
     const target = target_program.static_data_values.items[@intFromEnum(target_slot)];
     const source_identity = source_slot.compile_time_root orelse invariant("source slot lacks compile-time producer authority");
     const target_identity = target.compile_time_root orelse invariant("target slot lacks compile-time producer authority");
-    if (!std.meta.eql(source_identity.module, target_identity.module) or !source_identity.root.eql(target_identity.root) or std.meta.activeTag(source_identity.role) != std.meta.activeTag(target_identity.role)) invariant("paired slots do not name the same producer role");
+    if (!source_identity.module.eql(target_identity.module) or !source_identity.root.eql(target_identity.root) or std.meta.activeTag(source_identity.role) != std.meta.activeTag(target_identity.role)) invariant("paired slots do not name the same producer role");
     const source_fields = source_slot.compile_time_root.?.role.failure_message;
     const target_fields = target.compile_time_root.?.role.failure_message;
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     var builder = Builder{ .allocator = arena.allocator(), .source_program = source_program, .program = target_program, .source_exports = source_exports, .slot = target_slot };
-    const symbol = try builder.addNode(try Program.staticDataSymbolName(builder.allocator, target_slot), builder.size(target.layout_idx), builder.alignment(target.layout_idx));
+    const symbol = try builder.addNode(try target_program.staticDataSymbolName(builder.allocator, target_slot), builder.size(target.layout_idx), builder.alignment(target.layout_idx));
     builder.bytes(.{ .symbol = symbol, .offset = target_fields.failed_offset }, 1)[0] = builder.sourceBytes(.{ .symbol = source_symbol, .offset = source_exports[@intFromEnum(source_symbol)].symbol_offset + source_fields.failed_offset }, 1)[0];
     try builder.stringValue(.{ .symbol = source_symbol, .offset = source_exports[@intFromEnum(source_symbol)].symbol_offset + source_fields.message_offset }, .{ .symbol = symbol, .offset = target_fields.message_offset });
     return builder.finish(allocator);
@@ -254,12 +254,19 @@ const Builder = struct {
         const physical = self.program.layouts.getLayout(job.layout_idx);
         const source_plan = self.source_program.const_plans.items[@intFromEnum(job.source_plan)];
         const plan = self.program.const_plans.items[@intFromEnum(job.plan)];
-        if (std.meta.activeTag(source_plan) != std.meta.activeTag(plan)) invariant("paired canonical const plan shapes differ");
         // An explicit `Box` is part of the value; any other box breaks a
         // recursive type's cycle in that program's layout.
         const source_boxed = job.source_storage == .recursive_box or (source_physical.tag == .box and source_plan != .box);
         const target_boxed = job.storage == .recursive_box or (physical.tag == .box and plan != .box);
         if (try self.recursionBoxed(job, source_boxed, if (source_physical.tag == .box) source_physical.getIdx() else job.source_layout, target_boxed, if (physical.tag == .box) physical.getIdx() else job.layout_idx)) return;
+        // A stored callable can use an erased carrier while a continuing
+        // consumer commits a finite one, or vice versa. Both plans already
+        // declare the callable member and capture representation.
+        if (source_plan == .erased_fn and plan == .fn_value)
+            return self.erasedToFinite(job, source_plan.erased_fn, plan.fn_value);
+        if (source_plan == .fn_value and plan == .erased_fn)
+            return self.finiteToErased(job, source_plan.fn_value, plan.erased_fn);
+        if (std.meta.activeTag(source_plan) != std.meta.activeTag(plan)) invariant("paired canonical const plan shapes differ");
         switch (plan) {
             .pending, .layout_only => invariant("incomplete paired const plan"),
             .zst => {},
@@ -450,8 +457,14 @@ const Builder = struct {
         return dest;
     }
 
-    fn erased(self: *Builder, job: Job, source_set: Program.ErasedFnsId, target_set: Program.ErasedFnsId) Allocator.Error!void {
-        const src = self.pointer(job.source);
+    const ErasedSource = struct {
+        allocation: Destination,
+        code: static_data.StaticDataRelocation,
+        entry: Program.ErasedFn,
+    };
+
+    fn erasedSource(self: *Builder, source: Destination, source_set: Program.ErasedFnsId) ErasedSource {
+        const src = self.pointer(source);
         const code = self.sourceRelocation(src) orelse invariant("erased code lacked relocation");
         const source_proc = code.procedure orelse invariant("erased code lacked procedure identity");
         const source_entries = self.source_program.erased_fns.items[@intFromEnum(source_set)].entries;
@@ -459,6 +472,70 @@ const Builder = struct {
             if (entry.entry == source_proc) break entry;
         } else invariant("erased procedure absent from source plan");
         if (source_entry.entry != source_proc) invariant("frozen recipe disagreed with its procedure");
+        return .{ .allocation = src, .code = code, .entry = source_entry };
+    }
+
+    fn erasedToFinite(self: *Builder, job: Job, source_set: Program.ErasedFnsId, target_set: Program.FnSetId) Allocator.Error!void {
+        const source = self.erasedSource(job.source, source_set);
+        if (source.entry.boxy != null) invariant("Boxy callable has no finite LSS carrier");
+        const template = source.entry.template orelse invariant("erased callable lacked its producer template");
+        const variants = self.program.fn_sets.items[@intFromEnum(target_set)].variants;
+        var count: usize = 0;
+        for (variants) |variant| count += @intFromBool(sameFrozenCallable(template, variant.template));
+        if (count != 1) invariant("frozen callable lacks unique finite target identity");
+        for (variants) |variant| {
+            if (!sameFrozenCallable(template, variant.template)) continue;
+            self.writeDiscriminant(job.layout_idx, job.dest, variant.discriminant);
+            const offset = source.code.callable_capture_offset orelse invariant("erased source lacked capture offset");
+            return self.captures(source.entry.captures, source.entry.capture_layout, variant.captures, variant.payload_layout, source.allocation.offsetBy(offset), job.dest);
+        }
+        unreachable;
+    }
+
+    fn finiteToErased(self: *Builder, job: Job, source_set: Program.FnSetId, target_set: Program.ErasedFnsId) Allocator.Error!void {
+        const disc = self.discriminant(job.source_layout, job.source);
+        const variants = self.source_program.fn_sets.items[@intFromEnum(source_set)].variants;
+        const source = for (variants) |variant| {
+            if (variant.discriminant == disc) break variant;
+        } else invariant("source callable variant absent");
+        const entries = self.program.erased_fns.items[@intFromEnum(target_set)].entries;
+        var count: usize = 0;
+        for (entries) |entry| {
+            if (entry.boxy == null and sameFrozenCallable(source.template, entry.template.?)) count += 1;
+        }
+        if (count != 1) invariant("frozen callable lacks unique erased target identity");
+        for (entries, 0..) |entry, index| {
+            if (entry.boxy != null or !sameFrozenCallable(source.template, entry.template.?)) continue;
+            const result = try self.erasedAllocation(job, job.source, entry, index);
+            if (!result.fresh) return;
+            return self.captures(source.captures, source.payload_layout, entry.captures, entry.capture_layout, job.source, result.dest.offsetBy(erasedCaptureOffset(self.word())));
+        }
+        unreachable;
+    }
+
+    fn erasedCaptureOffset(word_size: usize) usize {
+        return std.mem.alignForward(usize, 2 * word_size, builtins.erased_callable.payload_alignment);
+    }
+
+    fn erasedAllocation(self: *Builder, job: Job, source: Destination, entry: Program.ErasedFn, recipe_index: usize) Allocator.Error!struct { dest: Destination, fresh: bool } {
+        const capture_offset = erasedCaptureOffset(self.word());
+        const result = try self.reserveAllocation(.{ .source = source, .plan = job.plan, .layout_idx = job.layout_idx, .count = 1, .kind = .erased }, capture_offset + (if (entry.boxy != null) std.mem.alignForward(usize, self.size(entry.capture_layout), self.word()) + self.word() else self.size(entry.capture_layout)), builtins.erased_callable.payload_alignment, builtins.erased_callable.allocation_has_refcounted_children, null);
+        try self.relocate(job.dest, result.dest);
+        if (!result.fresh) return .{ .dest = result.dest, .fresh = false };
+        try self.node(result.dest).relocations.append(self.allocator, .{ .offset = result.dest.offset, .target_symbol_name = try static_data.procSymbolName(self.allocator, self.program.store.getProcSpec(entry.entry).identity), .kind = .function_pointer, .callable_capture_offset = @intCast(capture_offset), .procedure = entry.entry, .boxy_recipe = if (entry.boxy != null) @intCast(recipe_index) else null });
+        switch (entry.on_drop) {
+            .none => {},
+            .rc_helper => |helper| try self.node(result.dest).relocations.append(self.allocator, .{ .offset = result.dest.offset + self.word(), .target_symbol_name = try static_data.atomicRcHelperSymbolName(self.allocator, &self.program.layouts, helper), .kind = .function_pointer, .rc_helper = helper }),
+            .boxy_capture, .interpreter_context_drop => invariant("frozen callable target lacks durable drop authority"),
+        }
+        return .{ .dest = result.dest, .fresh = true };
+    }
+
+    fn erased(self: *Builder, job: Job, source_set: Program.ErasedFnsId, target_set: Program.ErasedFnsId) Allocator.Error!void {
+        const source = self.erasedSource(job.source, source_set);
+        const src = source.allocation;
+        const code = source.code;
+        const source_entry = source.entry;
         var count: usize = 0;
         for (self.program.erased_fns.items[@intFromEnum(target_set)].entries) |entry| {
             if (sameErasedFunction(source_entry, entry)) count += 1;
@@ -466,16 +543,9 @@ const Builder = struct {
         if (count != 1) invariant("frozen erased callable lacks unique target identity");
         for (self.program.erased_fns.items[@intFromEnum(target_set)].entries, 0..) |entry, recipe_index| {
             if (!sameErasedFunction(source_entry, entry)) continue;
-            const capture_offset = std.mem.alignForward(usize, 2 * self.word(), builtins.erased_callable.payload_alignment);
-            const result = try self.reserveAllocation(.{ .source = src, .plan = job.plan, .layout_idx = job.layout_idx, .count = 1, .kind = .erased }, capture_offset + (if (entry.boxy != null) std.mem.alignForward(usize, self.size(entry.capture_layout), self.word()) + self.word() else self.size(entry.capture_layout)), builtins.erased_callable.payload_alignment, builtins.erased_callable.allocation_has_refcounted_children, null);
-            try self.relocate(job.dest, result.dest);
+            const capture_offset = erasedCaptureOffset(self.word());
+            const result = try self.erasedAllocation(job, src, entry, recipe_index);
             if (!result.fresh) return;
-            try self.node(result.dest).relocations.append(self.allocator, .{ .offset = result.dest.offset, .target_symbol_name = try static_data.procSymbolName(self.allocator, self.program.store.getProcSpec(entry.entry).identity), .kind = .function_pointer, .callable_capture_offset = @intCast(capture_offset), .procedure = entry.entry, .boxy_recipe = if (entry.boxy != null) @intCast(recipe_index) else null });
-            switch (entry.on_drop) {
-                .none => {},
-                .rc_helper => |helper| try self.node(result.dest).relocations.append(self.allocator, .{ .offset = result.dest.offset + self.word(), .target_symbol_name = try static_data.atomicRcHelperSymbolName(self.allocator, &self.program.layouts, helper), .kind = .function_pointer, .rc_helper = helper }),
-                .boxy_capture, .interpreter_context_drop => invariant("frozen callable target lacks durable drop authority"),
-            }
 
             if (entry.boxy) |boxy| {
                 const source_boxy = source_entry.boxy.?;
@@ -525,6 +595,7 @@ const Builder = struct {
             dest.* = .{
                 .symbol_name = name,
                 .value_id = if (index == 0) self.slot else null,
+                .symbol_identity = if (index == 0) self.program.static_data_values.items[@intFromEnum(self.slot)].symbol_identity else null,
                 .bytes = owned_bytes,
                 .alignment = source.alignment,
                 .is_global = false,
@@ -564,7 +635,21 @@ fn sameErasedFunction(source: Program.ErasedFn, target: Program.ErasedFn) bool {
 }
 
 fn sameFrozenFunction(source: Program.FnTemplate, target: Program.FnTemplate) bool {
-    return (source.frozen_fn orelse invariant("source callable lacks frozen owner identity")) == (target.frozen_fn orelse invariant("target callable lacks frozen owner identity")) and std.meta.eql(source.frozen_worker, target.frozen_worker) and std.meta.eql(source.frozen_context orelse invariant("source callable lacks solved member identity"), target.frozen_context orelse invariant("target callable lacks solved member identity"));
+    const source_context = source.frozen_context orelse invariant("source callable lacks solved member identity");
+    const target_context = target.frozen_context orelse invariant("target callable lacks solved member identity");
+    return source_context.abi == target_context.abi and sameFrozenCallable(source, target);
+}
+
+/// Carrier ABI is a consumer representation choice, not callable meaning.
+/// Keep the producer, worker, solved function type and exact capture member.
+fn sameFrozenCallable(source: Program.FnTemplate, target: Program.FnTemplate) bool {
+    const source_context = source.frozen_context orelse invariant("source callable lacks solved member identity");
+    const target_context = target.frozen_context orelse invariant("target callable lacks solved member identity");
+    return (source.frozen_fn orelse invariant("source callable lacks frozen owner identity")) == (target.frozen_fn orelse invariant("target callable lacks frozen owner identity")) and
+        std.meta.eql(source.frozen_worker, target.frozen_worker) and
+        source_context.source == target_context.source and
+        source_context.fn_type == target_context.fn_type and
+        std.meta.eql(source_context.captures, target_context.captures);
 }
 
 fn testSlot(program: *Program.Result, idx: layout.Idx) Allocator.Error!lir.LIR.StaticDataId {
@@ -763,6 +848,76 @@ test "frozen root transcode maps erased worker and drop identities across target
     const capture_offset: usize = @intCast(root_pointer.addend + 16);
     try std.testing.expectEqualStrings("capture", payload.bytes[capture_offset..][0..7]);
     try std.testing.expectEqual(@as(u8, 0x87), payload.bytes[capture_offset + 11]);
+}
+
+test "frozen root transcode changes callable carrier using producer member and capture authority" {
+    const allocator = std.testing.allocator;
+    var erased = try Program.Result.init(allocator, @import("base").target.TargetUsize.native);
+    defer erased.deinit();
+    var finite = try Program.Result.init(allocator, .u32);
+    defer finite.deinit();
+    const proc = try erased.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(42), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .zst }, .none);
+    const erased_layout = try erased.layouts.insertErasedCallable();
+    const finite_layout = try finite.layouts.putTagUnion(&.{ .zst, .str });
+    for ([_]*Program.Result{ &erased, &finite }) |program| try program.const_plans.append(allocator, .str);
+    const str_plan: Program.ConstPlanId = @enumFromInt(0);
+    const callable_plan: Program.ConstPlanId = @enumFromInt(1);
+    try erased.const_plans.append(allocator, .{ .erased_fn = @enumFromInt(0) });
+    try finite.const_plans.append(allocator, .{ .fn_value = @enumFromInt(0) });
+    const template = Program.FnTemplate{
+        .frozen_fn = 12,
+        .frozen_worker = @as([96]u8, @splat(1)),
+        .frozen_context = .{ .abi = .erased, .source = 12, .fn_type = 1, .captures = .{ .own = 1 } },
+        .fn_def = undefined,
+        .source_fn_ty = undefined,
+        .source_fn_key = undefined,
+    };
+    var finite_template = template;
+    finite_template.frozen_context.?.abi = .finite;
+    var other_template = finite_template;
+    other_template.frozen_fn = 13;
+    other_template.frozen_context.?.source = 13;
+    const capture = Program.CaptureSlot{ .id = @enumFromInt(5), .slot = 0, .ty = undefined, .plan = str_plan, .storage = .value };
+    const drop = lir.LIR.ErasedCallableOnDrop{ .rc_helper = .{ .op = .host_drop, .layout_idx = .str } };
+    const erased_captures = try allocator.dupe(Program.CaptureSlot, &.{capture});
+    const erased_entries = try allocator.dupe(Program.ErasedFn, &.{.{ .entry = proc, .capture_layout = .str, .template = template, .captures = erased_captures, .on_drop = drop }});
+    try erased.erased_fns.append(allocator, .{ .layout = erased_layout, .entries = erased_entries });
+    const finite_captures = try allocator.dupe(Program.CaptureSlot, &.{capture});
+    const variants = try allocator.dupe(Program.FnVariant, &.{
+        .{ .id = @enumFromInt(0), .discriminant = 0, .variant_index = 0, .payload_layout = .zst, .template = other_template, .captures = &.{} },
+        .{ .id = @enumFromInt(1), .discriminant = 1, .variant_index = 1, .payload_layout = .str, .template = finite_template, .captures = finite_captures },
+    });
+    try finite.fn_sets.append(allocator, .{ .layout = finite_layout, .variants = variants });
+    var string = builtins.str.RocStr.fromSliceSmall("capture");
+    var pointer = @intFromPtr(&string);
+    const Resolver = struct {
+        fn resolve(context: ?*anyopaque, data: [*]u8) error{RuntimeError}!@import("native_root_export.zig").CallableResolution {
+            const entry: *const lir.LIR.LirProcSpecId = @ptrCast(@alignCast(context.?));
+            return .{ .proc = entry.*, .capture_ptr = data };
+        }
+    };
+    var resolver_proc = proc;
+    const native = try @import("native_root_export.zig").freezeRoot(allocator, &erased, try testSlot(&erased, erased_layout), testRoot(callable_plan, erased_layout), .{ .ptr = @ptrCast(&pointer) }, .{ .context = &resolver_proc, .resolve = Resolver.resolve });
+    defer static_data.deinitStaticData(allocator, native);
+    const converted = try transcodeRoot(allocator, &erased, testRoot(callable_plan, erased_layout), native, testRootSymbol(native), &finite, testRoot(callable_plan, finite_layout), try testSlot(&finite, finite_layout));
+    defer static_data.deinitStaticData(allocator, converted);
+    try std.testing.expectEqual(@as(u32, 1), finite.layouts.getTagUnionData(finite.layouts.getLayout(finite_layout).getTagUnion().idx).readDiscriminant(converted[0].bytes.ptr, .u32));
+    try std.testing.expectEqualStrings("capture", converted[0].bytes[0..7]);
+    try std.testing.expectEqual(@as(u8, 0x87), converted[0].bytes[11]);
+    const roundtrip = try transcodeRoot(allocator, &finite, testRoot(callable_plan, finite_layout), converted, testRootSymbol(converted), &erased, testRoot(callable_plan, erased_layout), try testSlot(&erased, erased_layout));
+    defer static_data.deinitStaticData(allocator, roundtrip);
+    const root_pointer = roundtrip[0].relocations[0];
+    const payload = roundtrip[@intFromEnum(root_pointer.target.data_symbol)];
+    try std.testing.expectEqual(proc, payload.relocations[0].procedure.?);
+    try std.testing.expectEqualDeep(drop.rc_helper, payload.relocations[1].rc_helper.?);
+    const offset: usize = @intCast(root_pointer.addend + payload.relocations[0].callable_capture_offset.?);
+    try std.testing.expectEqualStrings("capture", payload.bytes[offset..][0..7]);
+    // A different worker is not the same value merely because it has the same
+    // capture layout, and carrier changes do not weaken same-carrier matching.
+    try std.testing.expect(!sameFrozenFunction(template, finite_template));
+    try std.testing.expect(sameFrozenCallable(template, finite_template));
+    finite_template.frozen_worker = @as([96]u8, @splat(2));
+    try std.testing.expect(!sameFrozenCallable(template, finite_template));
 }
 
 fn failureSlot(allocator: Allocator, program: *Program.Result, root: @import("check").CheckedArtifact.ComptimeRootId) Allocator.Error!lir.LIR.StaticDataId {

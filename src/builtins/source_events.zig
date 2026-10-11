@@ -164,6 +164,12 @@ threadlocal var current_observer: ?Observer = null;
 // programs with no observer must return before native TLS is accessed at all.
 var active_observers: std.atomic.Value(usize) = .init(0);
 
+/// Number of threads currently owning an active observer, including nested
+/// disable/restore transitions. This is capability state, not TLS readiness.
+pub fn activeObserverCount() usize {
+    return active_observers.load(.acquire);
+}
+
 /// Live registration state, not persistent metadata. A Saved value must be
 /// restored on its originating thread, in nesting order, without modification.
 /// Pointer widths follow the target C ABI; inactive records have null pointers.
@@ -347,6 +353,27 @@ pub fn validate(header: *const Header) Invalid!Event {
     return .{ .kind = kind, .descriptor = descriptor, .branches = branches };
 }
 
+/// Decode the borrowed view of immutable storage already accepted by `validate`.
+/// Observer.on_event supplies this capability: the runtime validated the entire
+/// descriptor first. Other callers must use `validate`; mutation invalidates
+/// the capability. No bounds, tags, or semantic fields are checked again here.
+pub fn decodeValidated(header: *const Header) Event {
+    const kind: Kind = @enumFromInt(header.kind);
+    const descriptor: *const Descriptor = @ptrCast(header);
+    var branches: []align(1) const Region = &.{};
+    switch (kind) {
+        .branch_taken, .exhaustiveness_failed => {
+            if (descriptor.site.branch_count != 0) {
+                const bytes: [*]const u8 = @ptrCast(header);
+                const records: [*]align(1) const Region = @ptrCast(bytes + descriptor.site.branches_offset);
+                branches = records[0..descriptor.site.branch_count];
+            }
+        },
+        .failure, .call_enter, .call_exit => {},
+    }
+    return .{ .kind = kind, .descriptor = descriptor, .branches = branches };
+}
+
 const Recorder = struct {
     count: usize = 0,
     invalid_count: usize = 0,
@@ -359,7 +386,7 @@ const Recorder = struct {
 
     fn record(context: ?*anyopaque, header: *const Header) callconv(.c) void {
         const self: *Recorder = @ptrCast(@alignCast(context.?));
-        const event = validate(header) catch unreachable;
+        const event = decodeValidated(header);
         self.count += 1;
         self.last_kind = event.kind;
     }
@@ -491,6 +518,10 @@ test "source events semantic site tail and branch bounds" {
         .branches = .{ .{ .start = 1, .end = 2 }, .{ .start = 3, .end = 4 } },
     };
     const event = try validate(&record.descriptor.header);
+    const decoded = decodeValidated(&record.descriptor.header);
+    try std.testing.expectEqual(event.kind, decoded.kind);
+    try std.testing.expectEqual(event.descriptor, decoded.descriptor);
+    try std.testing.expectEqualDeep(event.branches, decoded.branches);
     try std.testing.expectEqual(@as(u32, 42), event.descriptor.site.checked_site);
     try std.testing.expectEqual(@as(u32, 3), event.branches[1].start);
     record.descriptor.branch_index = 2;
@@ -634,6 +665,10 @@ test "source events preserve failure literal guard and original source identitie
         },
     };
     const event = try validate(&descriptor.header);
+    const decoded = decodeValidated(&descriptor.header);
+    try std.testing.expectEqual(event.kind, decoded.kind);
+    try std.testing.expectEqual(event.descriptor, decoded.descriptor);
+    try std.testing.expectEqual(@as(usize, 0), decoded.branches.len);
     try std.testing.expectEqual(&descriptor, event.descriptor);
     try std.testing.expectEqualDeep(descriptor.source, event.descriptor.source);
     try std.testing.expectEqualDeep(descriptor.failure, event.descriptor.failure);

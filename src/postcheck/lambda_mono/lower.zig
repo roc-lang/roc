@@ -158,6 +158,7 @@ fn movedSolvedView(source: *const Solved.Program, moved: *const Ast.Program) Sol
         .fn_tys = source.fn_tys.items,
         .layout_requests = source.layout_requests.items,
         .runtime_schema_requests = source.runtime_schema_requests.items,
+        .ctfe_demand = source.ctfe_demand.view(),
     };
 }
 
@@ -2063,6 +2064,7 @@ const Lowerer = struct {
 
         const source = self.solved.lifted.comptimeSite(site);
         const lowered = try self.program.addComptimeSite(source.kind, source.owner, source.region, source.checked_site, source.branch_regions);
+        self.program.comptime_sites.getPtrImmediate(@intFromEnum(lowered)).checked_origin = source.checked_origin;
         self.comptime_site_map[index] = lowered;
         return lowered;
     }

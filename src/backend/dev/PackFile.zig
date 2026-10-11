@@ -14,14 +14,12 @@ const std = @import("std");
 const lir = @import("lir");
 const ProcArtifact = @import("ProcArtifact.zig");
 const RelocationMod = @import("Relocation.zig");
-const CtfeContext = @import("CtfeContext.zig");
-const ContextImmediate = @import("ContextImmediate.zig");
 
 const Allocator = std.mem.Allocator;
 
 const magic = "RPCK";
 /// Format version; bump whenever the encoding or artifact contents change.
-pub const format_version: u32 = 12;
+pub const format_version: u32 = 18;
 
 /// One specialization the pack can serve: its reservation-time key, the
 /// artifact holding its procedure, and the ownership signature and
@@ -32,7 +30,7 @@ pub const SpecEntry = struct {
     artifact: u32,
     /// Null is an authoritative independent summary, not missing metadata.
     platform_requirement_relation: ?[32]u8 = null,
-    observations: lir.Program.ProducerObservations = .unknown,
+    demand: ?lir.Program.CachedCtfeDemand = null,
     rc_borrowed_params: u64,
     rc_ret_borrowed: bool,
     rc_ret_lenders: u64,
@@ -59,7 +57,7 @@ pub const ReadError = Allocator.Error || error{
     UnsupportedPackVersion,
 };
 
-pub const WriteError = Allocator.Error || ContextImmediate.Error || error{InvalidCodeTarget};
+pub const WriteError = Allocator.Error || error{ InvalidCodeTarget, InvalidSourceEventCertificate, InvalidLiteralRecipe, InvalidRootMaterializationDependency };
 
 /// Native-image offsets have no persistent representation.
 const PersistentCodeTarget = union(enum) {
@@ -77,8 +75,6 @@ test "pack preserves physical callable targets and observation facts but rejects
         .refs = &.{},
         .relocations = &.{},
         .data = &.{},
-        .source_observations = .absent,
-        .requires_ctfe_observations = true,
     };
     var relocation = [_]ProcArtifact.DataRelocation{.{
         .offset = 0,
@@ -120,6 +116,30 @@ test "pack preserves physical callable targets and observation facts but rejects
 /// context immediates are stored as zero: their descriptors, not the producer's
 /// dense IDs, decide the persistent bytes.
 pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const SpecEntry) WriteError![]u8 {
+    for (specs) |spec| {
+        if (spec.artifact >= set.artifacts.len or set.artifacts[spec.artifact].root_materialization != null)
+            return error.InvalidRootMaterializationDependency;
+    }
+    for (specs) |spec| if (spec.demand) |demand| {
+        for (demand.literal_reads) |literal| if (!literal.recipe.valid()) return error.InvalidLiteralRecipe;
+    };
+    for (set.artifacts) |artifact| {
+        try ProcArtifact.validateRootMaterializations(allocator, artifact);
+        if (artifact.root_materialization == null) {
+            for (artifact.refs) |reference| {
+                if (reference.target < set.artifacts.len and set.artifacts[reference.target].root_materialization != null)
+                    return error.InvalidRootMaterializationDependency;
+            }
+        }
+        if (artifact.source_events.len != 0) {
+            const contract = artifact.context_contract orelse return error.InvalidSourceEventCertificate;
+            try ProcArtifact.validateSourceEventCertificates(allocator, artifact, contract.target.toCpuArch().endian());
+        } else {
+            for (artifact.relocations) |relocation| {
+                if (relocation.kind == .function and std.mem.eql(u8, relocation.name, @import("builtins").source_events.symbol_name)) return error.InvalidSourceEventCertificate;
+            }
+        }
+    }
     for (set.artifacts) |artifact| for (artifact.data) |item| for (item.relocations) |relocation| {
         if (relocation.code_target) |target| {
             if (!relocation.function or target == .image_offset) return error.InvalidCodeTarget;
@@ -138,15 +158,26 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
     try writer.word(@intCast(specs.len));
 
     for (set.artifacts) |artifact| {
-        try writer.context(artifact.domain);
         try writer.context(artifact.context_contract);
         try writer.context(artifact.context_dependencies);
         try writer.context(artifact.context_complete);
-        try writer.context(artifact.context_bindings);
-        try writer.context(artifact.context_relocations);
         try writer.context(artifact.callable_contract);
-        try writer.context(artifact.source_observations);
-        try writer.context(artifact.requires_ctfe_observations);
+        try writer.context(artifact.root_materialization);
+        try writer.word(@intCast(artifact.materializations.len));
+        for (artifact.materializations) |dependency| {
+            try writer.str(names.of(dependency.binding_name));
+            try writer.str(names.of(dependency.header_name));
+            try writer.context(dependency.materialization);
+        }
+        try writer.word(@intCast(artifact.source_events.len));
+        for (artifact.source_events) |certificate| {
+            try writer.str(names.of(certificate.data_name));
+            // context encodes each declared integer/array/struct field, not
+            // native extern-struct padding or process memory.
+            try writer.context(certificate.descriptor);
+            try writer.context(certificate.branch_regions);
+            try writer.context(certificate.site_origin);
+        }
         switch (artifact.kind) {
             .proc => |identity| {
                 try writer.byte(0);
@@ -176,12 +207,7 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
         } else {
             try writer.byte(0);
         }
-        const code_offset = bytes.items.len + @sizeOf(u32);
         try writer.str(artifact.code);
-        const stored_code = bytes.items[code_offset..][0..artifact.code.len];
-        for (artifact.context_relocations) |relocation| {
-            try ContextImmediate.patch(stored_code, relocation, 0);
-        }
         try writer.word(@intCast(artifact.refs.len));
         for (artifact.refs) |ref| {
             try writer.word(ref.site);
@@ -272,7 +298,7 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
         try writer.word(spec.artifact);
         try writer.byte(@intFromBool(spec.platform_requirement_relation != null));
         if (spec.platform_requirement_relation) |relation| try writer.raw(&relation);
-        try writer.byte(@intFromEnum(spec.observations));
+        try writer.context(spec.demand);
         try writer.wide(spec.rc_borrowed_params);
         try writer.byte(@intFromBool(spec.rc_ret_borrowed));
         try writer.wide(spec.rc_ret_lenders);
@@ -301,18 +327,28 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
 
     const artifacts = try arena_allocator.alloc(ProcArtifact.Artifact, artifact_count);
     for (artifacts) |*artifact| {
-        const domain = try reader.context(CtfeContext.Domain, arena_allocator);
         const context_contract = try reader.context(?@import("LirCodeGen.zig").FragmentContract, arena_allocator);
         const context_dependencies = try reader.context(?@import("LirCodeGen.zig").FragmentContextDependencies, arena_allocator);
         const context_complete = try reader.context(bool, arena_allocator);
-        const context_bindings = try reader.context([]const CtfeContext.Binding, arena_allocator);
-        const context_relocations = try reader.context([]const ContextImmediate.Relocation, arena_allocator);
         const callable_contract = try reader.context(?[32]u8, arena_allocator);
-        const source_observations = try reader.context(lir.Program.ProducerObservations, arena_allocator);
-        const requires_ctfe_observations = try reader.context(?bool, arena_allocator);
-        if (domain == .runtime and (context_bindings.len != 0 or context_relocations.len != 0)) return error.MalformedPack;
-        if (domain == .runtime and context_dependencies != null and context_dependencies.?.comptime_hooks) return error.MalformedPack;
-        if (domain == .ctfe and (!context_complete or context_contract == null or context_dependencies == null or !context_contract.?.hooks_enabled or !context_dependencies.?.comptime_hooks)) return error.MalformedPack;
+        const root_materialization = try reader.context(?lir.Program.RootMaterialization, arena_allocator);
+        const materializations = try arena_allocator.alloc(ProcArtifact.RootMaterializationDependency, try reader.word());
+        for (materializations) |*dependency| {
+            dependency.* = .{
+                .binding_name = try reader.strOwned(arena_allocator),
+                .header_name = try reader.strOwned(arena_allocator),
+                .materialization = try reader.context(lir.Program.RootMaterialization, arena_allocator),
+            };
+        }
+        const source_events = try arena_allocator.alloc(ProcArtifact.SourceEventCertificate, try reader.word());
+        for (source_events) |*certificate| {
+            certificate.* = .{
+                .data_name = try reader.strOwned(arena_allocator),
+                .descriptor = try reader.context(@import("builtins").source_events.Descriptor, arena_allocator),
+                .branch_regions = try reader.context([]const @import("base").Region, arena_allocator),
+                .site_origin = try reader.context(?lir.LIR.CheckedSiteOrigin, arena_allocator),
+            };
+        }
         const kind: ProcArtifact.Kind = switch (try reader.byte()) {
             0 => .{ .proc = .{ .bytes = (try reader.raw(32))[0..32].* } },
             1 => .{ .rc_helper = try reader.strOwned(arena_allocator) },
@@ -453,8 +489,9 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
         }
         artifact.* = .{
             .kind = kind,
-            .source_observations = source_observations,
-            .requires_ctfe_observations = requires_ctfe_observations,
+            .source_events = source_events,
+            .root_materialization = root_materialization,
+            .materializations = materializations,
             .code = code,
             .entry = entry,
             .frame = frame,
@@ -463,20 +500,38 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
             .lines = lines,
             .relocations = relocations,
             .data = data,
-            .domain = domain,
             .context_contract = context_contract,
             .context_dependencies = context_dependencies,
             .context_complete = context_complete,
-            .context_bindings = context_bindings,
-            .context_relocations = context_relocations,
             .callable_contract = callable_contract,
+        };
+        ProcArtifact.validateCodePatches(artifact.*) catch return error.MalformedPack;
+        ProcArtifact.validateRootMaterializations(allocator, artifact.*) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidRootMaterializationDependency => return error.MalformedPack,
         };
         for (refs) |ref| {
             if (ref.target >= artifact_count) return error.MalformedPack;
         }
-        ProcArtifact.validateContextPatches(artifact.*) catch return error.MalformedPack;
+        if (artifact.source_events.len != 0) {
+            const contract = artifact.context_contract orelse return error.MalformedPack;
+            ProcArtifact.validateSourceEventCertificates(allocator, artifact.*, contract.target.toCpuArch().endian()) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.InvalidSourceEventCertificate => return error.MalformedPack,
+            };
+        } else {
+            for (artifact.relocations) |relocation| {
+                if (relocation.kind == .function and std.mem.eql(u8, relocation.name, @import("builtins").source_events.symbol_name)) return error.MalformedPack;
+            }
+        }
     }
 
+    for (artifacts) |artifact| {
+        if (artifact.root_materialization != null) continue;
+        for (artifact.refs) |reference| {
+            if (artifacts[reference.target].root_materialization != null) return error.MalformedPack;
+        }
+    }
     const specs = try arena_allocator.alloc(SpecEntry, spec_count);
     for (specs) |*spec| {
         spec.* = .{
@@ -487,14 +542,7 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
                 1 => (try reader.raw(32))[0..32].*,
                 else => return error.MalformedPack,
             },
-            .observations = switch (try reader.byte()) {
-                0 => .unknown,
-                1 => .absent,
-                2 => .omitted,
-                3 => .runtime,
-                4 => .shared,
-                else => return error.MalformedPack,
-            },
+            .demand = try reader.context(?lir.Program.CachedCtfeDemand, arena_allocator),
             .rc_borrowed_params = try reader.wide(),
             .rc_ret_borrowed = switch (try reader.byte()) {
                 0 => false,
@@ -515,6 +563,10 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
         for (conditions) |*condition| condition.* = try reader.word();
         spec.rc_ret_conditions = conditions;
         if (spec.artifact >= artifact_count) return error.MalformedPack;
+        if (artifacts[spec.artifact].root_materialization != null) return error.MalformedPack;
+        if (spec.demand) |demand| {
+            for (demand.literal_reads) |literal| if (!literal.recipe.valid()) return error.MalformedPack;
+        }
     }
     if (reader.offset != bytes.len) return error.MalformedPack;
 
@@ -668,24 +720,10 @@ test "pack ownership survives input destruction and allocation failure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, testOwnedPack, .{});
 }
 
-test "pack CTFE context clone serialization and corrupt binding rejection" {
+test "pack ordinary code patches validate producer-declared spans" {
     const allocator = std.testing.allocator;
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-    const source: CtfeContext.SourceDescriptor = .{
-        .checked_module = [_]u8{1} ** 32,
-        .source_identity = [_]u8{2} ** 32,
-        .region = .{ .start = .{ .offset = 12 }, .end = .{ .offset = 24 } },
-        .line = 3,
-        .column = 7,
-        .has_location = true,
-    };
-    const failure: CtfeContext.FailureDescriptor = .{
-        .source = source,
-        .checked_error = true,
-        .literal_rejection = .{ .checked_module = [_]u8{3} ** 32, .checked_expr = 19, .kind = .numeral },
-        .guard_root = null,
-    };
     const code = [_]u8{ 0x48, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0 } ++ [_]u8{0} ** 32;
     var artifacts = [_]ProcArtifact.Artifact{.{
         .kind = .entrypoint,
@@ -695,20 +733,13 @@ test "pack CTFE context clone serialization and corrupt binding rejection" {
         .refs = &.{},
         .relocations = &.{},
         .data = &.{},
-        .domain = .ctfe,
-        .context_dependencies = .{ .comptime_hooks = true },
+        .context_dependencies = .{},
         .context_contract = .{
             .target = .x64glibc,
             .cpu_level = .default,
             .hot_reload = false,
             .default_platform_runtime = false,
-            .dict_seed_mode = .comptime_zero,
-            .hooks_enabled = true,
-            .initialize_boxy_runtime = false,
-            .static_data_readonly = false,
         },
-        .context_bindings = &.{.{ .failure = failure }},
-        .context_relocations = &.{.{ .offset = 0, .binding = 0, .encoding = .x86_movabs }},
     }};
     var input = ProcArtifact.Set{ .arena = arena, .artifacts = &artifacts };
     var cloned = try ProcArtifact.combine(allocator, &.{&input});
@@ -718,74 +749,27 @@ test "pack CTFE context clone serialization and corrupt binding rejection" {
     var decoded = try read(allocator, bytes);
     defer decoded.set.deinit();
     try std.testing.expectEqualDeep(cloned.artifacts[0], decoded.set.artifacts[0]);
-    const Resolver = struct {
-        fn resolve(context: *anyopaque, binding: CtfeContext.Binding) ?u64 {
-            const id: *u64 = @ptrCast(@alignCast(context));
-            return switch (binding) {
-                .failure => id.*,
-                else => null,
-            };
-        }
-    };
-    var first_id: u64 = 41;
-    var second_id: u64 = 97;
-    var first = try ProcArtifact.bindContextClone(allocator, &decoded.set, .{ .context = &first_id, .resolve = Resolver.resolve });
-    defer first.deinit();
-    var second = try ProcArtifact.bindContextClone(allocator, &decoded.set, .{ .context = &second_id, .resolve = Resolver.resolve });
-    defer second.deinit();
-    try std.testing.expectEqual(@as(u64, 41), std.mem.readInt(u64, first.artifacts[0].code[2..10], .little));
-    try std.testing.expectEqual(@as(u64, 97), std.mem.readInt(u64, second.artifacts[0].code[2..10], .little));
-    try std.testing.expectEqual(@as(u64, 0), std.mem.readInt(u64, decoded.set.artifacts[0].code[2..10], .little));
-    const first_bytes = try write(allocator, &first, &.{});
-    defer allocator.free(first_bytes);
-    const second_bytes = try write(allocator, &second, &.{});
-    defer allocator.free(second_bytes);
-    try std.testing.expectEqualSlices(u8, bytes, first_bytes);
-    try std.testing.expectEqualSlices(u8, bytes, second_bytes);
-    try std.testing.expectEqual(@as(u64, 41), std.mem.readInt(u64, first.artifacts[0].code[2..10], .little));
-    try std.testing.expectEqual(@as(u64, 97), std.mem.readInt(u64, second.artifacts[0].code[2..10], .little));
-    artifacts[0].domain = .runtime;
-    const wrong_domain = try write(allocator, &input, &.{});
-    defer allocator.free(wrong_domain);
-    try std.testing.expectError(error.MalformedPack, read(allocator, wrong_domain));
-    artifacts[0].domain = .ctfe;
-    artifacts[0].context_relocations = &.{.{ .offset = 0, .binding = 1, .encoding = .x86_movabs }};
-    const missing = try write(allocator, &input, &.{});
-    defer allocator.free(missing);
-    try std.testing.expectError(error.MalformedPack, read(allocator, missing));
-    artifacts[0].context_relocations = &.{};
-    const removed = try write(allocator, &input, &.{});
-    defer allocator.free(removed);
-    try std.testing.expectError(error.MalformedPack, read(allocator, removed));
-    try std.testing.expectError(error.MissingContextBinding, ProcArtifact.bindContextClone(allocator, &input, .{ .context = &first_id, .resolve = Resolver.resolve }));
-    try std.testing.expectEqualSlices(u8, &code, input.artifacts[0].code);
-    artifacts[0].context_relocations = &.{.{ .offset = 0, .binding = 0, .encoding = .x86_movabs }};
-
-    artifacts[0].relocations = &.{.{ .offset = 2, .name = "ordinary", .scope = .shared, .kind = .{ .data = .abs64 } }};
+    artifacts[0].relocations = &.{.{ .offset = 40, .name = "ordinary", .scope = .shared, .kind = .{ .data = .abs64 } }};
     const overlap = try write(allocator, &input, &.{});
     defer allocator.free(overlap);
     try std.testing.expectError(error.MalformedPack, read(allocator, overlap));
-    try std.testing.expectError(error.InvalidContextRelocation, ProcArtifact.bindContextClone(allocator, &input, .{ .context = &first_id, .resolve = Resolver.resolve }));
     try std.testing.expectEqualSlices(u8, &code, input.artifacts[0].code);
-    artifacts[0].relocations = &.{.{ .offset = 6, .name = "ordinary", .scope = .shared, .kind = .function }};
+    artifacts[0].relocations = &.{.{ .offset = 40, .name = "ordinary", .scope = .shared, .kind = .function }};
     const function_overlap = try write(allocator, &input, &.{});
     defer allocator.free(function_overlap);
     try std.testing.expectError(error.MalformedPack, read(allocator, function_overlap));
-    try std.testing.expectError(error.InvalidContextRelocation, ProcArtifact.bindContextClone(allocator, &input, .{ .context = &first_id, .resolve = Resolver.resolve }));
     artifacts[0].relocations = &.{};
-    artifacts[0].refs = &.{.{ .site = 0, .form = .addr, .target = 0, .delta = 0 }};
+    artifacts[0].refs = &.{.{ .site = 40, .form = .addr, .target = 0, .delta = 0 }};
     const ref_overlap = try write(allocator, &input, &.{});
     defer allocator.free(ref_overlap);
     try std.testing.expectError(error.MalformedPack, read(allocator, ref_overlap));
-    try std.testing.expectError(error.InvalidContextRelocation, ProcArtifact.bindContextClone(allocator, &input, .{ .context = &first_id, .resolve = Resolver.resolve }));
     artifacts[0].refs = &.{};
-    artifacts[0].symbolic_refs = &.{.{ .site = 0, .form = .call, .target = .{ .rc_helper = "ordinary" } }};
+    artifacts[0].symbolic_refs = &.{.{ .site = 40, .form = .call, .target = .{ .rc_helper = "ordinary" } }};
     const symbolic_overlap = try write(allocator, &input, &.{});
     defer allocator.free(symbolic_overlap);
     try std.testing.expectError(error.MalformedPack, read(allocator, symbolic_overlap));
     artifacts[0].symbolic_refs = &.{};
-    // Adjacent ordinary code patches and same-offset data-section patches
-    // have distinct owners and must remain valid.
+    // Code patches and same-offset data-section patches have distinct owners.
     artifacts[0].relocations = &.{.{ .offset = 10, .name = "ordinary", .scope = .shared, .kind = .{ .data = .abs64 } }};
     artifacts[0].refs = &.{.{ .site = 18, .form = .call, .target = 0, .delta = 0 }};
     artifacts[0].data = &.{.{
@@ -799,8 +783,6 @@ test "pack CTFE context clone serialization and corrupt binding rejection" {
     defer allocator.free(adjacent);
     var accepted = try read(allocator, adjacent);
     defer accepted.set.deinit();
-    var bound_adjacent = try ProcArtifact.bindContextClone(allocator, &input, .{ .context = &first_id, .resolve = Resolver.resolve });
-    defer bound_adjacent.deinit();
 
     var arm_code = [_]u8{0} ** 64;
     for (0..4) |i| {
@@ -810,26 +792,23 @@ test "pack CTFE context clone serialization and corrupt binding rejection" {
     }
     artifacts[0].code = &arm_code;
     artifacts[0].context_contract.?.target = .arm64glibc;
-    artifacts[0].context_relocations = &.{.{ .offset = 16, .binding = 0, .encoding = .arm_movwide }};
     artifacts[0].refs = &.{};
     for ([_]RelocationMod.DataRelocationKind{ .abs64, .rel32, .page21, .pageoff12 }) |kind| {
-        const ordinary = [_]ProcArtifact.NamedRelocation{.{ .offset = 28, .name = "ordinary", .scope = .shared, .kind = .{ .data = kind } }};
+        const ordinary = [_]ProcArtifact.NamedRelocation{.{ .offset = 62, .name = "ordinary", .scope = .shared, .kind = .{ .data = kind } }};
         artifacts[0].relocations = &ordinary;
         const arm_overlap = try write(allocator, &input, &.{});
         defer allocator.free(arm_overlap);
         try std.testing.expectError(error.MalformedPack, read(allocator, arm_overlap));
-        try std.testing.expectError(error.InvalidContextRelocation, ProcArtifact.bindContextClone(allocator, &input, .{ .context = &first_id, .resolve = Resolver.resolve }));
     }
     artifacts[0].relocations = &.{};
     for ([_]ProcArtifact.Form{ .addr, .inline_call }) |form| {
-        const references = [_]ProcArtifact.Reference{.{ .site = 4, .form = form, .target = 0, .delta = 0 }};
+        const references = [_]ProcArtifact.Reference{.{ .site = 52, .form = form, .target = 0, .delta = 0 }};
         artifacts[0].refs = &references;
         const arm_ref_overlap = try write(allocator, &input, &.{});
         defer allocator.free(arm_ref_overlap);
         try std.testing.expectError(error.MalformedPack, read(allocator, arm_ref_overlap));
-        try std.testing.expectError(error.InvalidContextRelocation, ProcArtifact.bindContextClone(allocator, &input, .{ .context = &first_id, .resolve = Resolver.resolve }));
     }
-    artifacts[0].refs = &.{.{ .site = 0, .form = .call, .target = 0, .delta = 0, .veneer = 4 }};
+    artifacts[0].refs = &.{.{ .site = 0, .form = .call, .target = 0, .delta = 0, .veneer = 52 }};
     const veneer_overlap = try write(allocator, &input, &.{});
     defer allocator.free(veneer_overlap);
     try std.testing.expectError(error.MalformedPack, read(allocator, veneer_overlap));
@@ -845,23 +824,7 @@ test "pack CTFE context clone serialization and corrupt binding rejection" {
     defer allocator.free(arm_adjacent);
     var arm_accepted = try read(allocator, arm_adjacent);
     defer arm_accepted.set.deinit();
-    first_id = 0;
-    var arm_zero = try ProcArtifact.bindContextClone(allocator, &input, .{ .context = &first_id, .resolve = Resolver.resolve });
-    defer arm_zero.deinit();
-    for (0..4) |i| {
-        const word = std.mem.readInt(u32, arm_zero.artifacts[0].code[16 + i * 4 ..][0..4], .little);
-        try std.testing.expectEqual(@as(u32, 0), (word >> 5) & 0xffff);
-    }
     try std.testing.expectEqualSlices(u8, &arm_code, input.artifacts[0].code);
-    first_id = 73;
-    var arm_displaced = try ProcArtifact.bindContextClone(allocator, &input, .{ .context = &first_id, .resolve = Resolver.resolve });
-    defer arm_displaced.deinit();
-    const arm_zero_bytes = try write(allocator, &arm_zero, &.{});
-    defer allocator.free(arm_zero_bytes);
-    const arm_displaced_bytes = try write(allocator, &arm_displaced, &.{});
-    defer allocator.free(arm_displaced_bytes);
-    try std.testing.expectEqualSlices(u8, arm_zero_bytes, arm_displaced_bytes);
-    try std.testing.expectEqual(@as(u32, 73), (std.mem.readInt(u32, arm_displaced.artifacts[0].code[16..20], .little) >> 5) & 0xffff);
 }
 
 fn testOwnedPack(allocator: Allocator) (ReadError || WriteError || error{TestExpectedEqual})!void {
@@ -870,7 +833,13 @@ fn testOwnedPack(allocator: Allocator) (ReadError || WriteError || error{TestExp
         .artifacts = &.{.{
             .kind = .{ .rc_helper = "helper" },
             .callable_contract = [_]u8{17} ** 32,
-            .code = "code",
+            .context_contract = .{
+                .target = .arm64glibc,
+                .cpu_level = .default,
+                .hot_reload = false,
+                .default_platform_runtime = false,
+            },
+            .code = "\x00" ** 32,
             .entry = 0,
             .frame = null,
             .refs = &.{.{ .site = 0, .form = .call, .target = 0, .delta = 0, .veneer = 3 }},
@@ -896,6 +865,138 @@ fn testOwnedPack(allocator: Allocator) (ReadError || WriteError || error{TestExp
     try std.testing.expectEqualDeep(set.artifacts, pack.set.artifacts);
 }
 
+test "literal producer representation survives namespace translation" {
+    const allocator = std.testing.allocator;
+    const Representation = lir.Program.LiteralRepresentation;
+    const Names = @FieldType(Representation.Materialized, "names");
+    const Store = @FieldType(@FieldType(Representation.Materialized, "store"), "type_store");
+    var names = Names.init(allocator);
+    defer names.deinit();
+    _ = try names.internRecordFieldLabel("unrelated");
+    const name = try names.internRecordFieldLabel("value");
+    var store = Store.init(allocator);
+    defer store.deinit();
+    _ = try store.append(.{ .primitive = .u8 });
+    const number = try store.append(.{ .primitive = .u64 });
+    const record = try store.append(.{ .record = try store.appendFieldSpan(&.{.{ .name = name, .ty = number, .default = null }}) });
+    const recipe = try Representation.capture(allocator, &store, &names, record);
+    defer recipe.deinit(allocator);
+    try std.testing.expect(recipe.valid());
+    try std.testing.expectEqual(@as(usize, 2), recipe.types.len);
+    try std.testing.expectEqual(@as(usize, 1), recipe.field_names.len);
+    var restored = try recipe.materialize(allocator);
+    defer restored.deinit();
+    const field = restored.store.type_store.fieldSpan(restored.store.type_store.get(recipe.root).record)[0];
+    try std.testing.expectEqualStrings("value", restored.names.recordFieldLabelText(field.name));
+    try std.testing.expectEqualDeep(store.get(number), restored.store.type_store.get(field.ty));
+}
+
+test "pack literal producer declaration roundtrip and malformed recipe rejection" {
+    const allocator = std.testing.allocator;
+    const artifacts = [_]ProcArtifact.Artifact{.{
+        .kind = .{ .proc = lir.ProcIdentity.forTest(991) },
+        .code = "\xc3",
+        .entry = 0,
+        .frame = null,
+        .refs = &.{},
+        .relocations = &.{},
+        .data = &.{},
+    }};
+    const set: ProcArtifact.Set = .{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &artifacts };
+    const owner = [_]u8{73} ** 32;
+    const ConstType = @typeInfo(@FieldType(lir.Program.LiteralRepresentation, "types")).pointer.child;
+    const result_types = [_]ConstType{.{ .primitive = .u64 }};
+    const callable_types = result_types ++ [_]ConstType{.{ .func = .{
+        .args = .{ .start = 0, .len = 0 },
+        .ret = @enumFromInt(0),
+    } }};
+    var bindings = [_]lir.Program.CachedLiteralBinding{
+        .{
+            .kind = 0,
+            .binder = 3,
+            .type_digest = .{ .bytes = [_]u8{47} ** 32 },
+            .value_required = false,
+            .ty = .{ .root = @enumFromInt(0), .types = &result_types },
+            .source = .runtime,
+        },
+        .{
+            .kind = 1,
+            .binder = 4,
+            .type_digest = .{ .bytes = [_]u8{49} ** 32 },
+            .value_required = true,
+            .ty = .{ .root = @enumFromInt(0), .types = &result_types },
+            .source = .{ .checked_binding = .{ .module = owner, .value_expr = 23, .pattern = 29 } },
+        },
+    };
+    const contexts = [_]lir.Program.CachedLiteralLocalContext{.{
+        .module = owner,
+        .binder = 5,
+        .expr = 31,
+        .context_anchor = 37,
+        .owner_template = .{ .artifact = .{ .bytes = owner }, .proc_base = @enumFromInt(2), .template = @enumFromInt(3) },
+        .base_key = .{ .bytes = [_]u8{51} ** 32 },
+        .specialization_key = .{ .bytes = [_]u8{53} ** 32 },
+        .bindings = &bindings,
+        .evidence_frames = &.{.{ .scope_id = .root, .parent = null, .roots_start = 0, .roots_len = 0 }},
+        .evidence_frame_head = 0,
+    }};
+    var literals = [_]lir.Program.CachedLiteralRead{.{
+        .recipe = .{
+            .module = owner,
+            .checked_expr = 17,
+            .kind = .numeral,
+            .producer_key = [_]u8{39} ** 32,
+            .object_identity = lir.ProcIdentity.forTest(991).bytes,
+            .owner_template = .{ .artifact = .{ .bytes = owner }, .proc_base = @enumFromInt(2), .template = @enumFromInt(3) },
+            .owner_context_fn_key = .{ .bytes = [_]u8{41} ** 32 },
+            .current_fn_key = .{ .bytes = [_]u8{43} ** 32 },
+            .method_scope = owner,
+            .checked_callable_ty = @enumFromInt(8),
+            .callable = .{ .root = @enumFromInt(1), .types = &callable_types },
+            .result = .{ .root = @enumFromInt(0), .types = &result_types },
+            .evidence_frames = &.{.{ .scope_id = .root, .parent = null, .roots_start = 0, .roots_len = 0 }},
+            .evidence_frame_head = 0,
+            .local_contexts = &contexts,
+        },
+        .cause = .{ .module = owner, .region = .{ .start = .{ .offset = 19 }, .end = .{ .offset = 21 } }, .line = 2, .column = 7 },
+    }};
+    const specs = [_]SpecEntry{.{
+        .key = [_]u8{61} ** 32,
+        .artifact = 0,
+        .demand = .{ .complete = true, .literal_reads = &literals },
+        .rc_borrowed_params = 0,
+        .rc_ret_borrowed = false,
+        .rc_ret_lenders = 0,
+        .rc_read_only_params = 0,
+        .rc_ret_unique = false,
+        .rc_ret_unique_fields = 0,
+        .rc_ret_conditions = &.{},
+    }};
+    try std.testing.expect(specs[0].demand.?.permitsRetirement());
+    const bytes = try write(allocator, &set, &specs);
+    defer allocator.free(bytes);
+    const again = try write(allocator, &set, &specs);
+    defer allocator.free(again);
+    try std.testing.expectEqualSlices(u8, bytes, again);
+    var decoded = try read(allocator, bytes);
+    defer decoded.deinit();
+    try std.testing.expectEqualDeep(specs[0].demand.?, decoded.specs[0].demand.?);
+    try std.testing.expect(decoded.specs[0].demand.?.permitsRetirement());
+    const result = decoded.specs[0].demand.?.literal_reads[0].recipe.result;
+    var restored = try result.materialize(allocator);
+    defer restored.deinit();
+    try std.testing.expectEqualDeep(result_types[0], restored.store.type_store.get(result.root));
+    // Type-only lexical locals are portable; an actual runtime-only value
+    // capture cannot authorize retirement or become a fabricated zero.
+    bindings[0].value_required = true;
+    try std.testing.expect(!specs[0].demand.?.permitsRetirement());
+    try std.testing.expectError(error.InvalidLiteralRecipe, write(allocator, &set, &specs));
+    bindings[0].value_required = false;
+    literals[0].recipe.result.root = @enumFromInt(100);
+    try std.testing.expect(!specs[0].demand.?.permitsRetirement());
+    try std.testing.expectError(error.InvalidLiteralRecipe, write(allocator, &set, &specs));
+}
+
 test "pack bytes round-trip every artifact field and spec entry" {
     const testing = std.testing;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -911,7 +1012,13 @@ test "pack bytes round-trip every artifact field and spec entry" {
     const artifacts = try a.dupe(ProcArtifact.Artifact, &.{
         .{
             .kind = .{ .proc = lir.ProcIdentity.forTest(7) },
-            .code = try a.dupe(u8, &.{ 0x55, 0x48, 0x89, 0xe5, 0xc3 }),
+            .context_contract = .{
+                .target = .arm64glibc,
+                .cpu_level = .default,
+                .hot_reload = false,
+                .default_platform_runtime = false,
+            },
+            .code = try a.dupe(u8, "\x00" ** 32),
             .entry = 0,
             .frame = .{ .prologue_size = 4, .stack_alloc = 16, .frame_size = 16, .callee_saved_mask = 0x1000, .epilogue_offset = 4, .uses_frame_pointer = true },
             .refs = refs,
@@ -956,7 +1063,6 @@ test "pack bytes round-trip every artifact field and spec entry" {
         .{
             .key = [_]u8{0xab} ** 32,
             .artifact = 0,
-            .observations = .shared,
             .rc_borrowed_params = 0b101,
             .rc_ret_borrowed = true,
             .rc_ret_lenders = 1,
@@ -978,7 +1084,6 @@ test "pack bytes round-trip every artifact field and spec entry" {
     try testing.expectEqual(@as(usize, 3), pack.set.artifacts.len);
     try testing.expectEqual(@as(usize, 1), pack.specs.len);
     try testing.expectEqualSlices(u8, &specs[0].key, &pack.specs[0].key);
-    try testing.expectEqual(specs[0].observations, pack.specs[0].observations);
     try testing.expectEqual(specs[0].rc_borrowed_params, pack.specs[0].rc_borrowed_params);
     try testing.expect(pack.specs[0].rc_ret_borrowed);
     try testing.expectEqual(specs[0].rc_read_only_params, pack.specs[0].rc_read_only_params);
@@ -1022,9 +1127,9 @@ test "pack bytes round-trip every artifact field and spec entry" {
     try testing.expectError(error.MalformedPack, read(testing.allocator, bytes[0 .. bytes.len - 1]));
 }
 
-test "pack preserves producer observations and relation summaries and rejects old or invalid records" {
+test "pack preserves relation summaries and rejects old records" {
     const Attempt = struct {
-        fn run(allocator: Allocator, relation: ?[32]u8, observations: lir.Program.ProducerObservations) (ReadError || WriteError || error{ TestExpectedEqual, TestExpectedError, TestUnexpectedError })!void {
+        fn run(allocator: Allocator, relation: ?[32]u8) (ReadError || WriteError || error{ TestExpectedEqual, TestExpectedError, TestUnexpectedError })!void {
             const set = ProcArtifact.Set{
                 .arena = std.heap.ArenaAllocator.init(allocator),
                 .artifacts = &.{.{
@@ -1041,7 +1146,6 @@ test "pack preserves producer observations and relation summaries and rejects ol
                 .key = [_]u8{7} ** 32,
                 .artifact = 0,
                 .platform_requirement_relation = relation,
-                .observations = observations,
                 .rc_borrowed_params = 1,
                 .rc_ret_borrowed = true,
                 .rc_ret_lenders = 1,
@@ -1054,7 +1158,6 @@ test "pack preserves producer observations and relation summaries and rejects ol
             var pack = try read(allocator, bytes);
             defer pack.deinit();
             try std.testing.expectEqualDeep(relation, pack.specs[0].platform_requirement_relation);
-            try std.testing.expectEqual(observations, pack.specs[0].observations);
             const rewritten = try write(allocator, &pack.set, pack.specs);
             defer allocator.free(rewritten);
             try std.testing.expectEqualSlices(u8, bytes, rewritten);
@@ -1063,17 +1166,10 @@ test "pack preserves producer observations and relation summaries and rejects ol
             defer allocator.free(old);
             std.mem.writeInt(u32, old[4..8], format_version - 1, .little);
             try std.testing.expectError(error.UnsupportedPackVersion, read(allocator, old));
-            // The spec suffix after observations has fixed-width ownership
-            // fields, a condition count, and one four-byte condition.
-            std.mem.writeInt(u32, old[4..8], format_version, .little);
-            old[old.len - (1 + 8 + 1 + 8 + 8 + 1 + 8 + 4 + 4)] = 255;
-            try std.testing.expectError(error.MalformedPack, read(std.testing.allocator, old));
         }
     };
     for ([_]?[32]u8{ null, [_]u8{0} ** 32, [_]u8{9} ** 32 }) |relation| {
-        for (std.enums.values(lir.Program.ProducerObservations)) |observations| {
-            try std.testing.checkAllAllocationFailures(std.testing.allocator, Attempt.run, .{ relation, observations });
-        }
+        try std.testing.checkAllAllocationFailures(std.testing.allocator, Attempt.run, .{relation});
     }
 }
 

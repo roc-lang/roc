@@ -65,6 +65,7 @@ pub fn collectProcDemand(
     var pass = try Pass.init(result, &frozen);
     defer pass.deinit();
     for (roots) |root| try pass.markProc(root);
+    try pass.markCachedStorage();
     for (0..materialized.len) |index| try pass.markFrozenExport(@enumFromInt(index));
     try pass.markBoxyTableProcs();
     for (result.boxy_worker_procs.items) |proc| try pass.markProc(proc);
@@ -219,9 +220,7 @@ const Pass = struct {
             try self.markConstPlan(request.plan);
             if (request.initializer) |initializer| try self.markProc(initializer);
         }
-        for (self.result.static_data_values.items, 0..) |value, index| {
-            if (value.cached_demand) try self.markStaticData(@enumFromInt(index));
-        }
+        try self.markCachedStorage();
         if (self.frozen) |data| {
             for (data.exports, 0..) |item, index| {
                 if (item.is_exported) try self.markFrozenExport(@enumFromInt(index));
@@ -422,6 +421,14 @@ const Pass = struct {
         }
     }
 
+    /// Retired bodies retain their semantic storage edges explicitly. Both
+    /// compaction and native emission must retain the same materializers.
+    fn markCachedStorage(self: *Pass) Allocator.Error!void {
+        for (self.result.static_data_values.items, 0..) |value, index| {
+            if (value.cached_demand) try self.markStaticData(@enumFromInt(index));
+        }
+    }
+
     fn markStaticData(self: *Pass, root_id: LIR.StaticDataId) Allocator.Error!void {
         // A value slot reaches its failure slot, which is marked next.
         var next: ?LIR.StaticDataId = root_id;
@@ -439,6 +446,9 @@ const Pass = struct {
     }
 
     fn markStaticDataOwner(self: *Pass, index: usize) Allocator.Error!void {
+        // Cached ordinary callers retain this explicit provision even when
+        // their erased source body has no LIR call edge to the materializer.
+        if (self.result.static_data_values.items[index].accessor) |accessor| try self.markProc(accessor);
         if (self.static_data_exports[index]) |export_id| {
             try self.markFrozenExport(export_id);
         } else if (self.result.static_data_values.items[index].initializer) |initializer| {
@@ -768,10 +778,10 @@ const Pass = struct {
         for (data.exports, 0..) |item, index| {
             if (!self.reachable_exports[index]) continue;
             const value_id = if (item.value_id) |id| self.remapStaticData(id) else null;
-            const name = if (value_id) |id|
-                try LirProgram.staticDataSymbolName(data.allocator, id)
+            const name = if (item.value_id) |old_id| if (self.result.static_data_values.items[@intFromEnum(old_id)].symbol_identity != null)
+                try self.result.staticDataSymbolName(data.allocator, old_id)
             else
-                try data.allocator.dupe(u8, item.symbol_name);
+                try LirProgram.staticDataSymbolName(data.allocator, value_id.?) else try data.allocator.dupe(u8, item.symbol_name);
             errdefer data.allocator.free(name);
             const relocations = try data.allocator.alloc(LirProgram.StaticDataRelocation, item.relocations.len);
             errdefer data.allocator.free(relocations);
@@ -1197,6 +1207,41 @@ test "reachable proc pass compacts proc specs and remaps root ids" {
     const compact_root = result.store.getProcSpec(result.root_procs.items[0]);
     const call = result.store.getCFStmt(compact_root.body.?).assign_call;
     try std.testing.expectEqual(@as(u32, 0), @intFromEnum(call.proc));
+}
+
+test "native demand retains a materializer reached only by cached storage" {
+    const allocator = std.testing.allocator;
+    var result = try LirProgram.Result.init(allocator, base.target.TargetUsize.native);
+    defer result.deinit();
+    const value = try result.store.addLocal(.{ .layout_idx = .u64 });
+    const ret = try result.store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
+    const body = try result.store.addCFStmt(.{ .assign_literal = .{
+        .target = value,
+        .value = .{ .static_data = @enumFromInt(0) },
+        .next = ret,
+    } }, .test_fixture);
+    const accessor = try result.store.addProcSpec(.{
+        .name = result.store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(44),
+        .args = LIR.LocalSpan.empty(),
+        .body = body,
+        .ret_layout = .u64,
+    }, .none);
+    try result.static_data_values.append(allocator, .{
+        .initializer = null,
+        .layout_idx = .u64,
+        .accessor = accessor,
+        .cached_demand = true,
+    });
+    var exports = [_]LirProgram.StaticDataExport{.{
+        .symbol_name = "cached_value",
+        .value_id = @enumFromInt(0),
+        .bytes = &([_]u8{0} ** 8),
+        .alignment = 8,
+    }};
+    const demanded = try collectProcDemand(allocator, &result, &.{}, &exports);
+    defer allocator.free(demanded);
+    try std.testing.expectEqualSlices(LIR.LirProcSpecId, &.{accessor}, demanded);
 }
 
 test "cached storage demand retains and remaps only its value and failure roles" {

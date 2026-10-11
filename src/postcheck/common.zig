@@ -105,6 +105,16 @@ pub const RootRequests = struct {
     test_plan_metadata: []const RootTestPlanMetadata = &.{},
     /// Type-only declaration projection for cache admission, never source bodies.
     cached_root_declarations: []const CheckedRootUse = &.{},
+    /// Literal recipes whose noncallable storage is projected without bodies.
+    cached_literal_declarations: []const lir_core.Program.CachedLiteralRecipe = &.{},
+};
+
+/// Producer-recorded literal identity carried with its result layout request.
+pub const LiteralMaterializationDeclaration = struct {
+    module: [32]u8,
+    checked_expr: u32,
+    kind: LiteralRejectionKind,
+    conversion_identity: [32]u8,
 };
 
 /// Checked const data that must produce a runtime layout and callable entries.
@@ -362,7 +372,7 @@ pub const CheckedRootUse = struct {
 
 pub const SpecCacheHit = struct {
     identity: [32]u8,
-    observations: lir_core.Program.ProducerObservations = .unknown,
+    demand: ?lir_core.Program.CachedCtfeDemand = null,
     /// Complete serving-closure demand, borrowed from the immutable provider.
     /// Consumers declare these checked roots before retiring a source body.
     checked_root_uses: []const CheckedRootUse = &.{},
@@ -393,6 +403,18 @@ pub const SpecCacheLookup = struct {
     }
 
     pub fn lookup(self: SpecCacheLookup, key: [32]u8, current_relation: ?[32]u8) ?SpecCacheHit {
-        return self.find(self.context, key, current_relation);
+        const hit = self.find(self.context, key, current_relation) orelse return null;
+        const demand = hit.demand orelse return null;
+        if (!demand.permitsRetirement()) return null;
+        // Machine relocations to current literal headers do not imply that
+        // the executable producer itself is present. Its exact object is an
+        // additional semantic dependency supplied by the same provider.
+        for (demand.literal_reads) |read| {
+            const producer = self.find(self.context, read.recipe.producer_key, current_relation) orelse return null;
+            if (!std.mem.eql(u8, &producer.identity, &read.recipe.object_identity)) return null;
+            const producer_demand = producer.demand orelse return null;
+            if (!producer_demand.permitsRetirement()) return null;
+        }
+        return hit;
     }
 };

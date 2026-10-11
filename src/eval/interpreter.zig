@@ -369,9 +369,9 @@ pub const Interpreter = struct {
     static_strings: backend.StaticStringData.View,
     /// Resolved immutable values indexed directly by compact `StaticDataId`.
     static_data: []const usize,
-    /// Explicit compile-time slot readiness callback; ordinary runtime images
-    /// are already complete and leave this unset.
-    static_data_demand: ?StaticDataDemand = null,
+    /// Borrowed serial-scheduler readiness. No read can invoke a producer.
+    /// Ordinary runtime images are already complete and leave this empty.
+    static_data_ready: []const bool = &.{},
 
     /// Static erased callables use the ordinary target payload ABI. This table
     /// supplies the interpreter-only proc identity without rewriting that data.
@@ -428,11 +428,6 @@ pub const Interpreter = struct {
     retained_owner: ?*Retained = null,
 
     pub const Error = boxy_runtime.Error;
-
-    pub const StaticDataDemand = struct {
-        context: *anyopaque,
-        ensure: *const fn (*anyopaque, LIR.StaticDataId) Error!void,
-    };
 
     /// Explicit hosted-call data produced by LIR and the interpreter's ABI
     /// packing. Integrations consume this without reconstructing hosted
@@ -4257,7 +4252,9 @@ pub const Interpreter = struct {
                 .{index},
             );
         }
-        if (self.static_data_demand) |demand| try demand.ensure(demand.context, id);
+        if (self.static_data_ready.len != 0 and (index >= self.static_data_ready.len or !self.static_data_ready[index])) {
+            return self.invariantFailedError("CTFE read observed unfinished scheduled predecessor {d}", .{index});
+        }
         const result = try self.alloc(target_layout);
         const size = self.helper.sizeOf(target_layout);
         if (size != 0) {

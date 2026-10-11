@@ -68,6 +68,28 @@ test "cached specialization publication uses explicit checked template ownership
     try std.testing.expect(checkedSpecOwner(source) == null);
 }
 
+test "literal producer exports a concrete callable declaration before lambda solving" {
+    const allocator = std.testing.allocator;
+    var names_ = check.CheckedNames.NameStore.init(allocator);
+    defer names_.deinit();
+    var types = MonoType.Store.init(allocator);
+    defer types.deinit();
+    const number = try types.add(.{ .primitive = .u64 });
+    const capture = try types.add(.{ .tuple = try types.addSpan(&.{number}) });
+    const result_callable = try types.add(.{ .func = .{ .args = .empty(), .ret = capture } });
+    const conversion = try types.add(.{ .func = .{ .args = try types.addSpan(&.{number}), .ret = result_callable } });
+    const recipe = try @import("literal_recipe.zig").representation(allocator, types.view(), &names_, conversion);
+    defer recipe.deinit(allocator);
+    try std.testing.expect(recipe.valid());
+    var materialized = try recipe.materialize(allocator);
+    defer materialized.deinit();
+    const callable = materialized.store.type_store.get(recipe.root).func;
+    try std.testing.expectEqual(@as(u32, 1), callable.args.len);
+    const result = materialized.store.type_store.get(callable.ret).func;
+    try std.testing.expectEqual(@as(u32, 0), result.args.len);
+    try std.testing.expectEqual(@as(u32, 1), materialized.store.type_store.get(result.ret).tuple.len);
+}
+
 const PatternRefutability = can.PatternRefutability;
 
 /// Runtime field order for a named record field.
@@ -149,42 +171,6 @@ pub const Output = struct {
     }
 };
 
-/// Only fresh bodies may refine producer facts for the actual consumer mode.
-/// Cached bytes retain their original facts; an external body proves nothing.
-fn observationsForProc(
-    producer: LirProgram.ProducerObservations,
-    mode: InlineExpectMode,
-    cached: ?Common.SpecCacheHit,
-    external: bool,
-) LirProgram.ProducerObservations {
-    if (cached) |hit| return hit.observations;
-    if (external) return .unknown;
-    return switch (producer) {
-        .unknown, .absent, .omitted => producer,
-        .runtime, .shared => if (mode == .omit) .omitted else producer,
-    };
-}
-
-test "cached and external observations cannot manufacture fresh producer proof" {
-    try std.testing.expectEqual(LirProgram.ProducerObservations.unknown, observationsForProc(.shared, .run, null, true));
-    try std.testing.expectEqual(LirProgram.ProducerObservations.unknown, observationsForProc(.unknown, .run, null, false));
-    try std.testing.expectEqual(LirProgram.ProducerObservations.omitted, observationsForProc(.omitted, .run, null, false));
-    try std.testing.expectEqual(LirProgram.ProducerObservations.omitted, observationsForProc(.shared, .omit, null, false));
-    try std.testing.expectEqual(LirProgram.ProducerObservations.absent, observationsForProc(.absent, .omit, null, false));
-    const hit: Common.SpecCacheHit = .{
-        .identity = [_]u8{0} ** 32,
-        .observations = .runtime,
-        .rc_borrowed_params = 0,
-        .rc_ret_borrowed = false,
-        .rc_ret_lenders = 0,
-        .rc_read_only_params = 0,
-        .rc_ret_unique = false,
-        .rc_ret_unique_fields = 0,
-        .rc_ret_conditions = &.{},
-    };
-    try std.testing.expectEqual(LirProgram.ProducerObservations.runtime, observationsForProc(.shared, .run, hit, true));
-}
-
 /// Whether inline expects should materialize during lowering.
 pub const InlineExpectMode = enum {
     run,
@@ -253,7 +239,6 @@ pub const Options = struct {
     /// finalization and tests leave this enabled; optimized runtime builds omit
     /// inline expects before LIR reaches any backend.
     inline_expects: InlineExpectMode = .run,
-    producer_observations: LirProgram.ProducerObservations = .unknown,
     /// Allow `List.map` to reuse a unique input list's allocation for its
     /// output when the input and output element layouts are interchangeable.
     /// When disabled, `list_map_can_reuse` lowers to a constant 0 and the
@@ -520,7 +505,6 @@ const FnEntry = struct {
 };
 
 const LoweredFnBody = struct {
-    inlined_observations: LirProgram.ProducerObservations = .absent,
     body: LIR.CFStmtId,
     frame_locals: LIR.LocalSpan,
     stack_probe: LIR.StackProbe,
@@ -536,7 +520,6 @@ const WorkerBodyFeatures = struct {
 };
 
 const CompletedFnBodyShard = struct {
-    inlined_observations: LirProgram.ProducerObservations = .absent,
     allocator: std.mem.Allocator,
     worker_id: usize,
     fn_id: Type.FnId,
@@ -596,6 +579,7 @@ const LayoutRequest = struct {
     ty: Type.TypeId,
     initializer: ?Type.FnId,
     const_locator: ?check.CheckedModule.ConstLocator,
+    literal_materialization: ?Common.LiteralMaterializationDeclaration = null,
 };
 
 const StaticInitializerRequest = struct {
@@ -604,7 +588,7 @@ const StaticInitializerRequest = struct {
 };
 
 const ComptimeValueRequest = struct {
-    module: check.CheckedModule.ModuleId,
+    module: [32]u8,
     root: LIR.ComptimeProducer,
     ty: Type.TypeId,
     layout_idx: layout.Idx,
@@ -617,7 +601,7 @@ const ComptimeValueRequest = struct {
 /// same demand. The structural digest selects the candidate and exact
 /// representation equivalence confirms it.
 const ComptimeRootKey = struct {
-    module: check.CheckedModule.ModuleId,
+    module: [32]u8,
     root: LIR.ComptimeProducer,
     ty: check.CanonicalNames.TypeDigest,
 };
@@ -827,7 +811,6 @@ const Lowerer = struct {
     inline_plan: SolvedInline.Plan,
     inline_scope_rebases: std.AutoHashMap(InlineScopeRebaseKey, LIR.InlineScopeId),
     inline_expects: InlineExpectMode,
-    producer_observations: LirProgram.ProducerObservations,
     observe_expects: bool,
     list_in_place_map: bool,
     dict_seed_mode: DictSeedMode,
@@ -921,7 +904,6 @@ const Lowerer = struct {
     current_ret_ty: ?Type.TypeId = null,
     current_proc_locals: ?*ProcLocalSet = null,
     current_fn: ?Type.FnId = null,
-    inlined_observations: LirProgram.ProducerObservations = .absent,
     current_proc: ?LIR.LirProcSpecId = null,
     current_erased_reuse: ?LIR.LocalId = null,
     current_return_target: ?LIR.LocalId = null,
@@ -1124,7 +1106,6 @@ const Lowerer = struct {
             .inline_plan = options.inline_plan,
             .inline_scope_rebases = std.AutoHashMap(InlineScopeRebaseKey, LIR.InlineScopeId).init(allocator),
             .inline_expects = options.inline_expects,
-            .producer_observations = options.producer_observations,
             .observe_expects = options.test_plan_metadata.len != 0,
             .list_in_place_map = options.list_in_place_map,
             .dict_seed_mode = options.dict_seed_mode,
@@ -1335,9 +1316,11 @@ const Lowerer = struct {
         var kept: usize = 0;
         for (self.result.spec_procs.items) |spec_proc| {
             const proc = self.result.store.getProcSpec(spec_proc.proc);
-            if (proc.body == null and proc.hosted == null and !proc.external) continue;
+            if (proc.body == null and proc.hosted == null and !proc.external) {
+                if (spec_proc.demand) |demand| demand.deinit(self.allocator);
+                continue;
+            }
             self.result.spec_procs.items[kept] = spec_proc;
-            self.result.spec_procs.items[kept].observations = proc.source_observations;
             kept += 1;
         }
         self.result.spec_procs.shrinkRetainingCapacity(kept);
@@ -1458,6 +1441,14 @@ const Lowerer = struct {
             const ty = try self.lowerType(request.ty);
             const slot = try self.comptimeValueSlot(root, ty, try self.layoutOfType(ty));
             self.result.static_data_values.items[@intFromEnum(slot)].cached_demand = true;
+            // A type-only cached provision can reserve this slot before the
+            // completed checked producer declares its storage. Completion is
+            // that producer's authority for both the value and its guard.
+            if (root.completion != .pending) {
+                const value = &self.result.static_data_values.items[@intFromEnum(slot)].compile_time_root.?;
+                value.completion = root.completion;
+                self.result.static_data_values.items[@intFromEnum(value.role.value.failure_slot)].compile_time_root.?.completion = root.completion;
+            }
             if (request.fn_id) |fn_id| {
                 const own_fn = try self.ensureOwnFnSpec(fn_id, .finite);
                 const initializer = try self.markReachableFn(own_fn);
@@ -1502,6 +1493,22 @@ const Lowerer = struct {
                     .site = root.site,
                 });
             }
+        }
+        // Cached body retirement preserves typed root provisions even though
+        // the ordinary caller's statements are no longer present.
+        for (self.solved.layout_requests.items) |request| {
+            const root = request.comptime_root orelse continue;
+            if (self.root_manifest) |manifest| if (!manifest.cached_root_demands) continue;
+            const ty = try self.lowerType(request.ty);
+            const root_layout = try self.layoutOfType(ty);
+            const slot = try self.comptimeValueSlot(root, ty, root_layout);
+            _ = try self.comptimeRootAccessor(.{
+                .loc = .none,
+                .region = .zero(),
+                .inline_scope = .none,
+                .outer = .none,
+                .mode = .derived,
+            }, slot, root, ty, root_layout);
         }
         // The compile-time roots' closure lowers first, so that a procedure
         // the evaluator runs is known as such when the object cache is
@@ -1551,6 +1558,7 @@ const Lowerer = struct {
                 .ty = try self.lowerType(request.ty),
                 .initializer = if (request.fn_id) |fn_id| try self.ensureOwnFnSpec(fn_id, .finite) else null,
                 .const_locator = request.const_locator,
+                .literal_materialization = request.literal_materialization,
             });
         }
     }
@@ -1875,7 +1883,6 @@ const Lowerer = struct {
             .stack_probe = body.stack_probe,
             .tail_calls = body.tail_calls,
             .shapes = body.shapes,
-            .inlined_observations = body.inlined_observations,
             .join_point_count = worker.next_join_point,
             .features = worker.worker_features,
             .discovered_fns = discovered_fns,
@@ -2545,7 +2552,6 @@ const Lowerer = struct {
         proc.frame_locals = appended.frame_locals;
         proc.stack_probe = shard.stack_probe;
         proc.shapes = shard.shapes;
-        proc.source_observations = proc.source_observations.join(shard.inlined_observations);
         proc.tail_calls = if (shard.tail_calls) |sites|
             appended.relocation.tailCalls(shard.prefix, sites)
         else
@@ -2718,9 +2724,6 @@ const Lowerer = struct {
                 self.current_proc_locals = &proc_locals;
                 self.current_ret_ty = entry.ret;
                 self.current_fn = fn_id;
-                const saved_observations = self.inlined_observations;
-                self.inlined_observations = .absent;
-                defer self.inlined_observations = saved_observations;
                 self.current_proc = proc_id;
                 self.current_erased_reuse = switch (spec.abi) {
                     .erased => if (try self.erasedResultDemand(entry.ret) == .single_slot)
@@ -2783,7 +2786,6 @@ const Lowerer = struct {
                     .stack_probe = self.stackProbeForProc(proc.args, frame_locals, proc.ret_layout),
                     .tail_calls = try tail_calls.finish(&self.result.store),
                     .shapes = self.result.store.shapes,
-                    .inlined_observations = self.inlined_observations,
                 };
                 if (!self.worker_callback) {
                     const proc_ptr = self.result.store.getProcSpecPtr(proc_id);
@@ -2792,7 +2794,6 @@ const Lowerer = struct {
                     proc_ptr.stack_probe = lowered_body.?.stack_probe;
                     proc_ptr.tail_calls = lowered_body.?.tail_calls;
                     proc_ptr.shapes = lowered_body.?.shapes;
-                    proc_ptr.source_observations = proc_ptr.source_observations.join(self.inlined_observations);
                 }
             },
             .hosted => {
@@ -2974,6 +2975,7 @@ const Lowerer = struct {
         const plain_spec = spec.abi == .finite and source_fn.spec_constr_pattern == null and self.captureSpan(spec.captures).len == 0 and !spec.return_reuse.enabled();
         const relation = if (self.solved.lifted.platform_requirement_filling) |filling| filling.relation else null;
         const dependency_relation = self.solved.lifted.fnPlatformRequirementRelation(spec.source);
+        const literal_producer = if (source_fn.source == null) self.literalProducer(spec.source) else null;
         var cached: ?Common.SpecCacheHit = null;
         // Monotype completed a cached template's record without a body. That
         // record is the cached procedure only for its own lifted function:
@@ -3008,11 +3010,21 @@ const Lowerer = struct {
                             if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} {s}\n", .{ key.bytes[0..8], if (cached != null) "hit" else "identity-mismatch" });
                         } else if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} miss\n", .{key.bytes[0..8]});
                     }
+                } else if (literal_producer) |root| {
+                    const recipe = root.recipe orelse Common.invariant("literal native producer has no declaration recipe");
+                    if (cache.lookup(recipe.producer_key.bytes, relation)) |hit| {
+                        if (std.mem.eql(u8, &hit.identity, &identity.bytes)) cached = hit;
+                    }
                 }
             }
         } else if (pack_trace_available and self.spec_cache != null and packTraceEnabled()) {
             if (source_fn.source) |template| if (template.spec_key) |key| std.debug.print("lookup direct-lir key={x} skipped comptime={} plain={} cached={}\n", .{ key.bytes[0..8], self.comptime_phase, plain_spec, cached != null });
         }
+        if (plain_spec) if (literal_producer) |root| if (root.recipe) |recipe| if (recipe.required_native_identity) |required| {
+            if (!std.mem.eql(u8, &required, &identity.bytes)) Common.invariant("declared literal producer's prepared object identity differed from its recipe");
+            const hit = cached orelse Common.invariant("retired literal-bearing consumer has no declared native producer object");
+            if (!std.mem.eql(u8, &hit.identity, &required)) Common.invariant("literal producer lookup returned a different object");
+        };
         if (self.procs_by_identity.get(identity)) |owner| {
             // Another specialization interned this procedure. Share its proc;
             // the owner's reach-queue entry lowers the body once, whether the
@@ -3027,9 +3039,10 @@ const Lowerer = struct {
                     .proc = existing,
                     .owner = checkedSpecOwner(template),
                     .platform_requirement_relation = dependency_relation,
-                    .observations = self.result.store.getProcSpec(existing).source_observations,
+                    .demand = try self.cachedDemand(spec.source),
                 });
             };
+            if (plain_spec) if (literal_producer) |root| try self.appendLiteralProducerSpec(root, spec.source, existing, dependency_relation);
             entry.proc = existing;
             entry.proc_owner = owner;
             self.fn_entries.items[index] = entry;
@@ -3084,15 +3097,6 @@ const Lowerer = struct {
         const proc = try self.result.store.addProcSpec(.{
             .name = lirSymbol(entry.symbol),
             .identity = identity,
-            .source_observations = if (entry.forwards_to != null)
-                .absent
-            else
-                observationsForProc(
-                    if (source_fn.source) |template| template.observations else .unknown,
-                    self.inline_expects,
-                    cached,
-                    source_fn.body == .hosted,
-                ),
             .args = args_span,
             .iterator_fusion_scope = source_fn.iterator_fusion_scope,
             .erased_reuse_arg = erased_reuse_arg,
@@ -3135,16 +3139,42 @@ const Lowerer = struct {
                         .proc = proc,
                         .owner = checkedSpecOwner(template),
                         .platform_requirement_relation = dependency_relation,
-                        .observations = observationsForProc(template.observations, self.inline_expects, cached, source_fn.body == .hosted),
+                        .demand = try self.cachedDemand(spec.source),
                     });
                     if (kept) try self.kept_spec_fns.append(self.allocator, fn_id);
                 }
             }
         }
+        if (plain_spec) if (literal_producer) |root| try self.appendLiteralProducerSpec(root, spec.source, proc, dependency_relation);
         entry.proc = proc;
         entry.proc_owner = fn_id;
         self.fn_entries.items[index] = entry;
         return proc;
+    }
+
+    /// This is the earlier producer table, not a search of a cached body.
+    fn literalProducer(self: *const Lowerer, source: Lifted.FnId) ?Lifted.LiteralRoot {
+        for (self.solved.lifted.literalRootsView()) |root| {
+            if (root.fn_id == source) return root;
+        }
+        return null;
+    }
+
+    fn appendLiteralProducerSpec(
+        self: *Lowerer,
+        root: Lifted.LiteralRoot,
+        source: Lifted.FnId,
+        proc: LIR.LirProcSpecId,
+        relation: ?[32]u8,
+    ) Common.LowerError!void {
+        const recipe = root.recipe orelse Common.invariant("literal native publication has no declaration recipe");
+        try self.result.spec_procs.append(self.allocator, .{
+            .key = recipe.producer_key.bytes,
+            .proc = proc,
+            .owner = root.module,
+            .platform_requirement_relation = relation,
+            .demand = try self.cachedDemand(source),
+        });
     }
 
     fn appendErasedArgumentLayouts(self: *Lowerer, args: []const LIR.LocalId) Common.LowerError!LIR.BoxySpan {
@@ -4492,6 +4522,7 @@ const Lowerer = struct {
             .destructure => .destructure,
             .if_ => .if_,
         }, source.owner, source.region, source.checked_site, proc, source.branch_regions);
+        self.result.comptime_sites.items[@intFromEnum(lowered)].checked_origin = source.checked_origin;
         self.comptime_site_map[index] = lowered;
         return lowered;
     }
@@ -4542,7 +4573,191 @@ const Lowerer = struct {
         return @intFromEnum(a) < @intFromEnum(b);
     }
 
+    fn demandSummary(self: *const Lowerer, source: Lifted.FnId) Allocator.Error!@import("ctfe_demand.zig").Graph.Summary {
+        const offset = self.solved.lifted.exprsView().len + self.solved.lifted.stmtsView().len;
+        return self.solved.ctfe_demand.summarize(self.allocator, @enumFromInt(offset + @intFromEnum(source)));
+    }
+
+    fn rootDemand(self: *const Lowerer, source: Lifted.FnId) Allocator.Error!LirProgram.CtfeDemandFacts {
+        var summary = try self.demandSummary(source);
+        defer summary.deinit(self.allocator);
+        const reads = try self.allocator.alloc(LirProgram.CtfeDemandRead, summary.reads.len);
+        errdefer self.allocator.free(reads);
+        for (summary.reads, reads) |index, *out| {
+            const read = self.solved.ctfe_demand.reads.items[index];
+            out.* = .{ .module = read.root.module, .producer = read.root.root, .region = read.region, .loc = read.loc, .completed = read.root.completion != .pending };
+        }
+        const captures = try self.allocator.alloc(u32, summary.address_captures.len);
+        errdefer self.allocator.free(captures);
+        for (summary.address_captures, captures) |index, *out| out.* = @intFromEnum(self.solved.ctfe_demand.edges.items[index].to);
+        var cached_captures = std.ArrayList([32]u8).empty;
+        errdefer cached_captures.deinit(self.allocator);
+        for (summary.cached_contracts) |index| {
+            try cached_captures.appendSlice(self.allocator, self.solved.ctfe_demand.contracts.items[index].demand.address_captures);
+        }
+        return .{
+            .reads = reads,
+            .address_captures = captures,
+            .cached_address_captures = try cached_captures.toOwnedSlice(self.allocator),
+            .complete = summary.complete,
+            .origin_region = switch (self.solved.lifted.getFn(source).body) {
+                .roc => |body| self.solved.lifted.exprRegion(body),
+                .hosted => null,
+            },
+            .origin_loc = switch (self.solved.lifted.getFn(source).body) {
+                .roc => |body| self.solved.lifted.exprLoc(body),
+                .hosted => null,
+            },
+        };
+    }
+
+    fn cachedDemand(self: *Lowerer, source: Lifted.FnId) Common.LowerError!LirProgram.CachedCtfeDemand {
+        var summary = try self.demandSummary(source);
+        defer summary.deinit(self.allocator);
+        var reads = std.ArrayList(LirProgram.CachedCtfeRead).empty;
+        errdefer reads.deinit(self.allocator);
+        var literal_reads = std.ArrayList(LirProgram.CachedLiteralRead).empty;
+        errdefer {
+            for (literal_reads.items) |read| read.recipe.deinit(self.allocator);
+            literal_reads.deinit(self.allocator);
+        }
+        var captures = std.ArrayList([32]u8).empty;
+        errdefer captures.deinit(self.allocator);
+        var complete = summary.complete;
+        for (summary.reads) |index| {
+            const read = self.solved.ctfe_demand.reads.items[index];
+            const cause_module = if (read.loc.hasLocation())
+                self.solved.lifted.sourceFiles()[read.loc.file].checked_module_key
+            else
+                null;
+            if (read.loc.hasLocation() and cause_module == null) complete = false;
+            const cause: LirProgram.CtfeDemandCause = .{ .module = cause_module, .region = read.region, .line = read.loc.line, .column = read.loc.column };
+            const root_id = switch (read.root.root) {
+                .checked => |id| @intFromEnum(id),
+                .literal => |id| {
+                    const root = self.solved.lifted.literalRootsView()[@intFromEnum(id)];
+                    const declaration = root.recipe orelse Common.invariant("literal demand has no earlier producer declaration recipe");
+                    const producer_fn = try self.ensureOwnFnSpec(root.fn_id, .finite);
+                    const producer_entry = self.fn_entries.items[@intFromEnum(producer_fn)];
+                    const object_identity = try self.procIdentity(producer_entry.spec, producer_entry);
+                    const export_ = @import("literal_recipe.zig");
+                    const callable = try export_.representation(self.allocator, self.solved.lifted.types.view(), &self.solved.lifted.names, declaration.callable_ty);
+                    errdefer callable.deinit(self.allocator);
+                    const result = try export_.representation(self.allocator, self.solved.lifted.types.view(), &self.solved.lifted.names, self.solved.lifted.getFn(root.fn_id).ret);
+                    errdefer result.deinit(self.allocator);
+                    const evidence = try self.allocator.dupe(const_store.ConstFnEvidence, self.solved.lifted.const_fn_evidence.unsafeRawItemsForView()[declaration.const_evidence.start..][0..declaration.const_evidence.len]);
+                    errdefer self.allocator.free(evidence);
+                    const frames = try self.allocator.dupe(const_store.ConstFnEvidenceFrame, self.solved.lifted.const_fn_evidence_frames.unsafeRawItemsForView()[declaration.const_evidence_frames.start..][0..declaration.const_evidence_frames.len]);
+                    errdefer self.allocator.free(frames);
+                    const local_contexts = try self.cachedLiteralLocalContexts(declaration);
+                    errdefer {
+                        for (local_contexts) |context| context.deinit(self.allocator);
+                        self.allocator.free(local_contexts);
+                    }
+                    try literal_reads.append(self.allocator, .{
+                        .recipe = .{
+                            .module = root.module.bytes,
+                            .checked_expr = root.site.checked_expr,
+                            .kind = root.site.kind,
+                            .producer_key = declaration.producer_key.bytes,
+                            .object_identity = object_identity.bytes,
+                            .owner_template = declaration.owner_template,
+                            .owner_context_fn_key = declaration.owner_context_fn_key,
+                            .current_fn_key = declaration.current_fn_key,
+                            .method_scope = declaration.method_scope.bytes,
+                            .in_default_expr = declaration.in_default_expr,
+                            .checked_callable_ty = declaration.checked_callable_ty,
+                            .callable = callable,
+                            .result = result,
+                            .evidence = evidence,
+                            .evidence_frames = frames,
+                            .evidence_frame_head = declaration.const_evidence_frame_head,
+                            .local_contexts = local_contexts,
+                        },
+                        .cause = cause,
+                    });
+                    continue;
+                },
+            };
+            try reads.append(self.allocator, .{
+                .module = read.root.module.bytes,
+                .root = root_id,
+                .cause = cause,
+            });
+        }
+        const fn_offset = self.solved.lifted.exprsView().len + self.solved.lifted.stmtsView().len;
+        for (summary.address_captures) |index| {
+            const target = @intFromEnum(self.solved.ctfe_demand.edges.items[index].to);
+            if (target < fn_offset) Common.invariant("CTFE address capture did not name a callable producer");
+            const fn_ = self.solved.lifted.getFn(@enumFromInt(target - fn_offset));
+            const key = if (fn_.source) |template| template.spec_key else fn_.root_identity;
+            if (key) |identity| {
+                try captures.append(self.allocator, identity.bytes);
+            } else complete = false;
+        }
+        for (summary.cached_contracts) |index| {
+            try captures.appendSlice(self.allocator, self.solved.ctfe_demand.contracts.items[index].demand.address_captures);
+        }
+        const owned_reads = try reads.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(owned_reads);
+        const owned_literals = try literal_reads.toOwnedSlice(self.allocator);
+        errdefer {
+            for (owned_literals) |read| read.recipe.deinit(self.allocator);
+            self.allocator.free(owned_literals);
+        }
+        return .{ .complete = complete, .eager_reads = owned_reads, .literal_reads = owned_literals, .address_captures = try captures.toOwnedSlice(self.allocator) };
+    }
+
+    fn cachedLiteralLocalContexts(self: *const Lowerer, declaration: Mono.LiteralRecipe) Allocator.Error![]const LirProgram.CachedLiteralLocalContext {
+        const contexts = try self.allocator.alloc(LirProgram.CachedLiteralLocalContext, declaration.local_contexts.len);
+        var initialized: usize = 0;
+        errdefer {
+            for (contexts[0..initialized]) |context| context.deinit(self.allocator);
+            self.allocator.free(contexts);
+        }
+        for (declaration.local_contexts, contexts) |source, *out| {
+            const bindings = try self.allocator.alloc(LirProgram.CachedLiteralBinding, source.bindings.len);
+            var initialized_bindings: usize = 0;
+            errdefer {
+                for (bindings[0..initialized_bindings]) |binding| binding.deinit(self.allocator);
+                self.allocator.free(bindings);
+            }
+            for (source.bindings, bindings) |binding, *target| {
+                target.* = .{
+                    .kind = binding.kind,
+                    .binder = binding.binder,
+                    .type_digest = binding.type_digest,
+                    .value_required = binding.value_required,
+                    .ty = try @import("literal_recipe.zig").representation(self.allocator, self.solved.lifted.types.view(), &self.solved.lifted.names, binding.ty),
+                    .source = binding.source,
+                };
+                initialized_bindings += 1;
+            }
+            const evidence = try self.allocator.dupe(const_store.ConstFnEvidence, self.solved.lifted.const_fn_evidence.unsafeRawItemsForView()[source.const_evidence.start..][0..source.const_evidence.len]);
+            errdefer self.allocator.free(evidence);
+            const frames = try self.allocator.dupe(const_store.ConstFnEvidenceFrame, self.solved.lifted.const_fn_evidence_frames.unsafeRawItemsForView()[source.const_evidence_frames.start..][0..source.const_evidence_frames.len]);
+            out.* = .{
+                .module = source.module.bytes,
+                .binder = @intFromEnum(source.binder),
+                .expr = @intFromEnum(source.expr),
+                .context_anchor = if (source.context_anchor) |anchor| @intFromEnum(anchor) else null,
+                .owner_template = source.owner_template,
+                .base_key = source.base_key,
+                .specialization_key = source.specialization_key,
+                .restored_specialization_key = source.restored_specialization_key,
+                .bindings = bindings,
+                .evidence = evidence,
+                .evidence_frames = frames,
+                .evidence_frame_head = source.const_evidence_frame_head,
+            };
+            initialized += 1;
+        }
+        return contexts;
+    }
+
     fn bindRoots(self: *Lowerer) Common.LowerError!void {
+        try self.result.const_roots.ensureUnusedCapacity(self.allocator, self.roots.items.len);
+        try self.result.literal_roots.ensureUnusedCapacity(self.allocator, self.literal_roots.items.len);
         var completed_values = std.AutoHashMap(u32, Common.ComptimeValueRoot).init(self.allocator);
         defer completed_values.deinit();
         if (self.root_manifest) |manifest| {
@@ -4574,6 +4789,7 @@ const Lowerer = struct {
                         try self.comptimeValueSlot(value_root, entry.ret, ret_layout)
                     else
                         null,
+                    .demand = try self.rootDemand(self.fn_specs.items[@intFromEnum(root.fn_id)].source),
                 });
             }
         }
@@ -4592,6 +4808,7 @@ const Lowerer = struct {
                 .ret_layout = ret_layout,
                 .plan = try self.constPlanOfType(entry.ret),
                 .value_slot = try self.comptimeValueSlot(.{ .module = root.module, .root = .{ .literal = id }, .const_locator = null }, entry.ret, ret_layout),
+                .demand = try self.rootDemand(self.fn_specs.items[@intFromEnum(root.fn_id)].source),
             });
         }
 
@@ -4601,11 +4818,28 @@ const Lowerer = struct {
                 self.result.store.getProcSpecPtr(proc).is_static_initializer = true;
                 break :blk proc;
             } else null;
+            const layout_idx = try self.layoutOfType(request.ty);
+            const materialization: ?LirProgram.RootMaterialization = if (request.literal_materialization) |declaration| blk: {
+                const representation = try self.types.contentDigest(&self.solved.lifted.names, request.ty, .{ .context = self, .identity = callableTargetIdentity });
+                const layout_digest = try self.result.layouts.contentDigest(layout_idx);
+                const producer: @FieldType(LirProgram.RootMaterialization, "producer") = .{ .literal = .{
+                    .checked_expr = declaration.checked_expr,
+                    .kind = declaration.kind,
+                    .conversion_identity = declaration.conversion_identity,
+                } };
+                break :blk .{
+                    .module = declaration.module,
+                    .producer = producer,
+                    .representation_digest = representation.bytes,
+                    .layout_digest = layout_digest,
+                    .wrapper_identity = LirProgram.rootMaterializationIdentity(declaration.module, producer, representation.bytes, layout_digest).bytes,
+                };
+            } else null;
             try self.result.requested_layouts.append(self.allocator, .{
                 .ty = try self.types.typeDigest(&self.solved.lifted.names, request.ty),
                 .checked_type = request.checked_type,
                 .const_locator = request.const_locator,
-                .layout_idx = try self.layoutOfType(request.ty),
+                .layout_idx = layout_idx,
                 .plan = if (initializer != null)
                     try self.layoutOnlyConstPlan()
                 else if (self.layout_request_const_plans)
@@ -4613,6 +4847,7 @@ const Lowerer = struct {
                 else
                     try self.layoutOnlyConstPlan(),
                 .initializer = initializer,
+                .materialization = materialization,
             });
         }
     }
@@ -5377,6 +5612,7 @@ const Lowerer = struct {
         try self.result.static_data_values.append(self.allocator, .{
             .initializer = proc,
             .layout_idx = layout_idx,
+            .symbol_identity = try self.staticValueIdentity(candidate, ty, layout_idx),
         });
         try self.static_initializer_queue.append(self.allocator, .{
             .expr = candidate.runtime_expr,
@@ -5752,7 +5988,7 @@ const Lowerer = struct {
         layout_idx: layout.Idx,
     ) Common.LowerError!LIR.StaticDataId {
         const request = ComptimeValueRequest{
-            .module = value_root.module,
+            .module = value_root.module.bytes,
             .root = value_root.root,
             .ty = ty,
             .layout_idx = layout_idx,
@@ -5760,7 +5996,7 @@ const Lowerer = struct {
         if (self.comptime_value_map.get(request)) |existing| return existing;
         if (self.worker_callback) self.missingWorkerPreparation("Solved-LIR worker referenced an unprepared compile-time value");
         const key = ComptimeRootKey{
-            .module = value_root.module,
+            .module = value_root.module.bytes,
             .root = value_root.root,
             .ty = try self.types.typeDigest(&self.solved.lifted.names, ty),
         };
@@ -5787,6 +6023,7 @@ const Lowerer = struct {
         try self.result.static_data_values.append(self.allocator, .{
             .initializer = null,
             .layout_idx = layout_idx,
+            .symbol_identity = try self.comptimeValueIdentity(value_root, layout_idx, ty),
             .compile_time_root = .{
                 .module = value_root.module,
                 .root = value_root.root,
@@ -5800,10 +6037,66 @@ const Lowerer = struct {
         return id;
     }
 
-    const ComptimeFailureKey = struct { module: check.CheckedModule.ModuleId, root: Common.ComptimeProducer };
+    fn identityWord(hasher: *base.TypeDigestHasher, value: u32) void {
+        var bytes: [4]u8 = undefined;
+        std.mem.writeInt(u32, &bytes, value, .little);
+        hasher.update(&bytes);
+    }
+
+    fn staticValueIdentity(self: *Lowerer, candidate: Mono.StaticDataCandidate, ty: Type.TypeId, layout_idx: layout.Idx) Allocator.Error![32]u8 {
+        const declaration = self.solved.lifted.view().static_data_values[@intFromEnum(candidate.static_data)];
+        const locator = declaration.const_locator;
+        var hasher = base.TypeDigestHasher.init();
+        hasher.update("roc.static-value.checked-constant.v1");
+        hasher.update(&locator.artifact.bytes);
+        hasher.update(&locator.source_scheme.bytes);
+        identityWord(&hasher, @intFromEnum(locator.template));
+        switch (locator.owner) {
+            .top_level_binding => |owner| {
+                hasher.update("binding");
+                identityWord(&hasher, owner.module_idx);
+                identityWord(&hasher, @intFromEnum(owner.pattern));
+            },
+            .hoisted_expr => |owner| {
+                hasher.update("hoisted");
+                identityWord(&hasher, owner.module_idx);
+                identityWord(&hasher, @intFromEnum(owner.expr));
+            },
+        }
+        hasher.update(&(try self.types.typeDigest(&self.solved.lifted.names, ty)).bytes);
+        hasher.update(&try self.layoutDigest(layout_idx));
+        return hasher.finalResult();
+    }
+
+    fn comptimeValueIdentity(self: *Lowerer, root: Common.ComptimeValueRoot, layout_idx: layout.Idx, value_type: ?Type.TypeId) Allocator.Error![32]u8 {
+        var hasher = base.TypeDigestHasher.init();
+        hasher.update("roc.static-value.ctfe.v1");
+        hasher.update(&root.module.bytes);
+        switch (root.root) {
+            .checked => |id| {
+                hasher.update("checked");
+                identityWord(&hasher, @intFromEnum(id));
+            },
+            .literal => |id| {
+                hasher.update("literal");
+                const declaration = self.solved.lifted.literalRootsView()[@intFromEnum(id)];
+                const producer = self.solved.lifted.getFn(declaration.fn_id);
+                const identity = producer.root_identity orelse Common.invariant("literal slot has no producer conversion identity");
+                hasher.update(&identity.bytes);
+            },
+        }
+        hasher.update(&try self.layoutDigest(layout_idx));
+        if (value_type) |ty| {
+            hasher.update("value");
+            hasher.update(&(try self.types.typeDigest(&self.solved.lifted.names, ty)).bytes);
+        } else hasher.update("failure");
+        return hasher.finalResult();
+    }
+
+    const ComptimeFailureKey = struct { module: [32]u8, root: Common.ComptimeProducer };
 
     fn createComptimeFailureMessageSlot(self: *Lowerer, root: Common.ComptimeValueRoot) Common.LowerError!LIR.StaticDataId {
-        const key = ComptimeFailureKey{ .module = root.module, .root = root.root };
+        const key = ComptimeFailureKey{ .module = root.module.bytes, .root = root.root };
         if (self.comptime_failure_slots.get(key)) |slot| return slot;
         const layout_idx = try self.result.layouts.putStructFields(&.{
             .{ .index = 0, .layout = .u8 },
@@ -5815,6 +6108,7 @@ const Lowerer = struct {
         try self.result.static_data_values.append(self.allocator, .{
             .initializer = null,
             .layout_idx = layout_idx,
+            .symbol_identity = try self.comptimeValueIdentity(root, layout_idx, null),
             .compile_time_root = .{
                 .module = root.module,
                 .root = root.root,
@@ -5894,18 +6188,11 @@ const Lowerer = struct {
         }
         const proc_id = self.current_proc orelse Common.invariant("compile-time value lowering ran without a current procedure");
         const is_static_initializer = self.result.store.getProcSpec(proc_id).is_static_initializer;
-        const runtime_values = if (is_static_initializer) null else self.completed_scalar_values;
-        if (runtime_values) |values| {
-            if (values.constructionFor(root.module, root.root, layout_idx)) |construction| {
-                if (try self.lowerConstructionInto(where, target, construction, next)) |built| return built;
-            }
-        }
         const id = try self.comptimeValueSlot(root, ty, layout_idx);
-        // A program lowered before its roots are evaluated reads each root
-        // through an accessor, so the slot has one guarded read however many
-        // places read it, and the evaluation's slot demand is raised from one
-        // place. A program lowered after evaluation reads its slots directly.
-        if (!is_static_initializer and self.completed_scalar_values == null) {
+        // Ordinary code always calls the same declared materialization
+        // provision. Root completion shapes only that consumer-owned wrapper,
+        // never the ordinary caller's body or physical object identity.
+        if (!is_static_initializer) {
             const accessor = try self.comptimeRootAccessor(where, id, root, ty, layout_idx);
             return try self.result.store.addCFStmt(.{ .assign_call = .{
                 .target = target,
@@ -5914,15 +6201,9 @@ const Lowerer = struct {
                 .next = next,
             } }, where.source());
         }
-        // A list of copies keeps its slot and also names its fresh form.
-        const fresh_alternative = if (runtime_values) |values| blk: {
-            const uniform = values.uniformListFor(root.module, root.root) orelse break :blk null;
-            break :blk try self.uniformListConstructor(where, id, uniform, layout_idx);
-        } else null;
         return try self.result.store.addCFStmt(.{ .assign_literal = .{
             .target = target,
             .value = .{ .static_data = id },
-            .fresh_alternative = fresh_alternative,
             .next = next,
         } }, where.source());
     }
@@ -5951,8 +6232,6 @@ const Lowerer = struct {
         const proc = try store.addProcSpec(.{
             .name = lirSymbol(self.symbols.fresh()),
             .identity = try self.uniformListConstructorIdentity(id, layout_idx),
-            // This producer emits only value-construction scaffolding.
-            .source_observations = .absent,
             .args = LIR.LocalSpan.empty(),
             .frame_locals = try store.addLocalSpan(new_locals.items),
             .join_points = LIR.JoinPointSpan.empty(),
@@ -5970,7 +6249,7 @@ const Lowerer = struct {
         new_locals: *std.ArrayList(LIR.LocalId),
 
         pub fn addLocal(self: UniformConstructorEmitContext, layout_idx: layout.Idx) Common.LowerError!LIR.LocalId {
-            const local = try self.lowerer.addLocalForLayout(layout_idx);
+            const local = try self.lowerer.addDetachedLocalForLayout(layout_idx);
             try self.new_locals.append(self.lowerer.allocator, local);
             return local;
         }
@@ -5995,7 +6274,8 @@ const Lowerer = struct {
     fn comptimeRootAccessor(self: *Lowerer, where: LowerSite, id: LIR.StaticDataId, root: Common.ComptimeValueRoot, ty: Type.TypeId, layout_idx: layout.Idx) Common.LowerError!LIR.LirProcSpecId {
         if (self.result.static_data_values.items[@intFromEnum(id)].accessor) |accessor| return accessor;
         const store = &self.result.store;
-        const value = try self.addLocalForLayout(layout_idx);
+        // These locals belong only to the materializer's own frame.
+        const value = try self.addDetachedLocalForLayout(layout_idx);
         // The accessor is its own procedure: it carries the location of the
         // read that requested it, outside that read's inline scopes.
         const origin = LIR.StmtOrigin{
@@ -6011,11 +6291,33 @@ const Lowerer = struct {
             .next = ret,
         } }, origin);
         const frame_locals = try store.addLocalSpan(&[_]LIR.LocalId{value});
+        const representation = try self.types.contentDigest(&self.solved.lifted.names, ty, .{ .context = self, .identity = callableTargetIdentity });
+        const producer: @FieldType(LirProgram.RootMaterialization, "producer") = switch (root.root) {
+            .checked => |checked_root| .{ .checked = @intFromEnum(checked_root) },
+            .literal => |literal| blk: {
+                const declaration = self.solved.lifted.literalRootsView()[@intFromEnum(literal)];
+                const source = self.solved.lifted.getFn(declaration.fn_id);
+                const conversion = source.root_identity orelse Common.invariant("literal materializer has no producer conversion identity");
+                break :blk .{ .literal = .{
+                    .checked_expr = declaration.site.checked_expr,
+                    .kind = declaration.site.kind,
+                    .conversion_identity = conversion.bytes,
+                } };
+            },
+        };
+        const layout_digest = try self.result.layouts.contentDigest(layout_idx);
+        const identity = LirProgram.rootMaterializationIdentity(root.module.bytes, producer, representation.bytes, layout_digest);
+        const materialization: LirProgram.RootMaterialization = .{
+            .module = root.module.bytes,
+            .producer = producer,
+            .representation_digest = representation.bytes,
+            .layout_digest = layout_digest,
+            .wrapper_identity = identity.bytes,
+        };
         const accessor = try store.addProcSpec(.{
             .name = lirSymbol(self.symbols.fresh()),
-            .identity = try self.comptimeRootAccessorIdentity(root, ty, layout_idx),
-            // This producer emits only an access to completed storage.
-            .source_observations = .absent,
+            .identity = identity,
+            .root_materialization = materialization,
             .args = LIR.LocalSpan.empty(),
             .frame_locals = frame_locals,
             .body = read,
@@ -6024,30 +6326,25 @@ const Lowerer = struct {
         }, where.loc);
         if (store.procNeedsStackProbe(&self.result.layouts, store.getProcSpec(accessor))) store.getProcSpecPtr(accessor).stack_probe = .required;
         self.result.static_data_values.items[@intFromEnum(id)].accessor = accessor;
+        if (self.completed_scalar_values) |values| {
+            if (values.constructionFor(root.module, root.root, layout_idx)) |construction| {
+                if (!postcheck_values.requiresOwnedCapacity(construction)) return accessor;
+                var new_locals: std.ArrayList(LIR.LocalId) = .empty;
+                defer new_locals.deinit(self.allocator);
+                try new_locals.append(self.allocator, value);
+                const context = UniformConstructorEmitContext{ .lowerer = self, .new_locals = &new_locals };
+                const body = try postcheck_values.emit(context, store, &self.result.layouts, origin, value, construction, ret) orelse
+                    Common.invariant("decoded root construction has no explicit LIR materialization");
+                const locals = try store.addLocalSpan(new_locals.items);
+                const proc = store.getProcSpecPtr(accessor);
+                proc.body = body;
+                proc.shapes = proc.shapes.merged(store.shapes);
+                proc.frame_locals = locals;
+                if (store.procNeedsStackProbe(&self.result.layouts, proc.*)) proc.stack_probe = .required;
+                self.result.static_data_values.items[@intFromEnum(id)].accessor_rebuilt = true;
+            }
+        }
         return accessor;
-    }
-
-    /// An accessor is emitted and carried in object-cache packs like any
-    /// procedure, and a spliced procedure takes the place of the program's
-    /// own procedure with its identity, so the identity names what the
-    /// accessor returns in every program: the root's module by content key,
-    /// the root within that module, and the representation the slot commits,
-    /// by a digest no program's numbering enters.
-    fn comptimeRootAccessorIdentity(self: *Lowerer, root: Common.ComptimeValueRoot, ty: Type.TypeId, layout_idx: layout.Idx) std.mem.Allocator.Error!LIR.ProcIdentity {
-        const representation = try self.types.contentDigest(&self.solved.lifted.names, ty, .{ .context = self, .identity = callableTargetIdentity });
-        var hasher = base.TypeDigestHasher.init();
-        hasher.update("roc.proc.comptime-root-accessor.v2");
-        hasher.update(&root.module.bytes);
-        // A literal root's id is program-local; the literal's checked
-        // expression names it within its module.
-        const tag: u8, const index: u32 = switch (root.root) {
-            .checked => |checked_root| .{ 0, @intFromEnum(checked_root) },
-            .literal => |literal| .{ 1, self.literal_roots.items[@intFromEnum(literal)].site.checked_expr },
-        };
-        hasher.update(&[_]u8{ tag, @truncate(index), @truncate(index >> 8), @truncate(index >> 16), @truncate(index >> 24) });
-        hasher.update(&representation.bytes);
-        hasher.update(&try self.result.layouts.contentDigest(layout_idx));
-        return .{ .bytes = hasher.finalResult() };
     }
 
     /// The content identity of the specialization a callable variant targets.
@@ -9735,13 +10032,6 @@ const Lowerer = struct {
         if (spec.abi != .finite) Common.invariant("inline plan selected a non-finite function spec");
         if (spec.capture_ty != null) Common.invariant("inline plan selected a capturing function spec");
 
-        if (self.current_fn != null) {
-            const source_fn = self.solved.lifted.getFn(spec.source);
-            const observations = if (source_fn.source) |source| source.observations else .unknown;
-            self.inlined_observations = self.inlined_observations.join(
-                observationsForProc(observations, self.inline_expects, null, source_fn.body == .hosted),
-            );
-        }
         return body_expr;
     }
 
@@ -11978,12 +12268,19 @@ const Lowerer = struct {
     }
 
     fn addLocalForLayout(self: *Lowerer, layout_idx: layout.Idx) Common.LowerError!LIR.LocalId {
+        const local = try self.addDetachedLocalForLayout(layout_idx);
+        try self.noteLocal(local);
+        return local;
+    }
+
+    /// Generated procedures own their frame inventory, but every local still
+    /// needs an aligned provenance entry in the shared LIR local table.
+    fn addDetachedLocalForLayout(self: *Lowerer, layout_idx: layout.Idx) Common.LowerError!LIR.LocalId {
         const local = try self.result.store.addLocal(.{ .layout_idx = layout_idx });
         if (@intFromEnum(local) != self.erasedOwnerStateCount()) {
             Common.invariant("erased-owner provenance table diverged from the LIR local table");
         }
         try self.erased_owner_states.append(self.allocator, .pending);
-        try self.noteLocal(local);
         return local;
     }
 
@@ -14909,6 +15206,8 @@ pub fn cloneSolvedProgram(allocator: std.mem.Allocator, solved: *const Solved.Pr
     errdefer layout_requests.deinit(allocator);
     var runtime_schema_requests = try cloneArrayList(Solved.RuntimeSchemaRequest, allocator, &solved.runtime_schema_requests);
     errdefer runtime_schema_requests.deinit(allocator);
+    var ctfe_demand = try solved.ctfe_demand.clone(allocator);
+    errdefer ctfe_demand.deinit();
 
     return .{
         .allocator = allocator,
@@ -14921,6 +15220,7 @@ pub fn cloneSolvedProgram(allocator: std.mem.Allocator, solved: *const Solved.Pr
         .fn_tys = fn_tys,
         .layout_requests = layout_requests,
         .runtime_schema_requests = runtime_schema_requests,
+        .ctfe_demand = ctfe_demand,
     };
 }
 
@@ -15001,6 +15301,13 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
     errdefer roots.deinit(allocator);
     var literal_roots = try clonedLiftedProgramList(Lifted.LiteralRoot, "literal_roots", allocator, view.literal_roots);
     errdefer literal_roots.deinit(allocator);
+    var cloned_literal_recipes: usize = 0;
+    errdefer for (literal_roots.unsafeRawItemsForView()[0..cloned_literal_recipes]) |root| if (root.recipe) |recipe| recipe.deinit(allocator);
+    for (view.literal_roots, 0..) |root, index| {
+        const recipe = if (root.recipe) |value| try value.clone(allocator) else null;
+        literal_roots.getPtrImmediate(index).recipe = recipe;
+        cloned_literal_recipes += 1;
+    }
     var layout_requests = try clonedLiftedProgramList(Lifted.LayoutRequest, "layout_requests", allocator, view.layout_requests);
     errdefer layout_requests.deinit(allocator);
     var comptime_value_reads = try clonedLiftedProgramList(Common.ComptimeValueRoot, "comptime_value_reads", allocator, view.comptime_value_reads);
@@ -15122,6 +15429,7 @@ fn cloneComptimeSites(allocator: std.mem.Allocator, source: []const Lifted.Compt
             .owner = site.owner,
             .region = site.region,
             .checked_site = site.checked_site,
+            .checked_origin = site.checked_origin,
             .branch_regions = try allocator.dupe(base.Region, site.branch_regions),
         });
     }
@@ -15498,6 +15806,41 @@ test "frozen solved clone preserves producer IDs and releases partial allocation
         }
     };
     try std.testing.checkAllAllocationFailures(allocator, Attempt.run, .{&source});
+}
+
+test "cached and live checked module identities share compile-time value and failure slots" {
+    const allocator = std.testing.allocator;
+    var solved = emptySolvedProgramForTest(allocator);
+    defer solved.deinit();
+    var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
+    defer lowerer.deinit();
+    const ty = try lowerer.types.add(.{ .primitive = .u8 });
+    const cached: Common.ComptimeValueRoot = .{
+        .module = .{ .bytes = @splat(71) },
+        .root = .{ .checked = @enumFromInt(9) },
+        .const_locator = null,
+        .completion = .value,
+    };
+    var live = cached;
+    live.module.source_hash = @splat(1);
+    live.module.compiler_artifact_hash = @splat(2);
+    live.module.module_identity_hash = @splat(3);
+    live.module.checking_context_identity_hash = @splat(4);
+    live.module.direct_import_artifact_keys_hash = @splat(5);
+    try std.testing.expect(cached.module.eql(live.module));
+    const cached_slot = try lowerer.comptimeValueSlot(cached, ty, .u8);
+    const live_slot = try lowerer.comptimeValueSlot(live, ty, .u8);
+    try std.testing.expectEqual(cached_slot, live_slot);
+    const cached_failure = try lowerer.createComptimeFailureMessageSlot(cached);
+    const live_failure = try lowerer.createComptimeFailureMessageSlot(live);
+    try std.testing.expectEqual(cached_failure, live_failure);
+    try std.testing.expectEqual(@as(usize, 2), lowerer.result.static_data_values.items.len);
+    var different_root = live;
+    different_root.root = .{ .checked = @enumFromInt(10) };
+    try std.testing.expect(cached_slot != try lowerer.comptimeValueSlot(different_root, ty, .u8));
+    var different_module = live;
+    different_module.module.bytes = @splat(72);
+    try std.testing.expect(cached_slot != try lowerer.comptimeValueSlot(different_module, ty, .u8));
 }
 
 test "compact comptime root descriptors survive solved teardown and direct LIR lowering" {

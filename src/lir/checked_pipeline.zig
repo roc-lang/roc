@@ -101,6 +101,7 @@ pub const RootRequestSet = struct {
     include_internal_static_data: bool = false,
     test_plan_metadata: []const postcheck.Common.RootTestPlanMetadata = &.{},
     cached_root_declarations: []const postcheck.Common.CheckedRootUse = &.{},
+    cached_literal_declarations: []const LirProgram.CachedLiteralRecipe = &.{},
 };
 
 /// Deterministic task counts for parallel solved-LIR body lowering.
@@ -124,8 +125,33 @@ pub const WorkMetrics = struct {
     lir_continuations: u32 = 0,
 };
 
+/// Diagnostic labels for cache evidence do not change the body-policy namespace.
+fn packTraceEnabled() bool {
+    if (builtin.os.tag == .freestanding) return false;
+    return std.c.getenv("ROC_PACK_TRACE") != null;
+}
+
 /// Target settings and checked module state for the checked-to-LIR pipeline.
 pub const TargetConfig = struct {
+    /// Authoritative ordinary native-dev body policy. Checking and linked
+    /// native dev output start here; root manifests and provider pointers
+    /// are separate from the code policy.
+    pub fn ordinaryDev() TargetConfig {
+        return .{
+            .inline_mode = .wrappers_and_source_single_use,
+            .spec_constr_clone_inlining = .iterator_fusion,
+            .consume_dead_boxes = true,
+            .inline_expects = .run,
+            .list_in_place_map = false,
+            .tag_reachability = false,
+            .prove_ranges = false,
+            .scalarize_joins = false,
+            .reuse_boxes = false,
+            .thread_confined_rc = false,
+            .proc_debug_names = false,
+        };
+    }
+
     work_metrics: ?*WorkMetrics = null,
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
     specialization_strategy: SpecializationStrategy = .lss,
@@ -146,8 +172,6 @@ pub const TargetConfig = struct {
     /// SpecConstr itself.
     spec_constr_clone_inlining: SpecConstrCloneInlining = .all_calls,
     inline_expects: InlineExpectMode = .run,
-    /// Authoritative producer policy; source requirements are per template.
-    producer_observations: @import("lir_core").Program.ProducerObservations = .unknown,
     /// Whether ARC may consume a dead Box lender while unboxing.
     consume_dead_boxes: bool = false,
     /// Allow `List.map` and `List.update` to reuse a unique input list's
@@ -927,9 +951,6 @@ pub const CodeProvision = enum {
     source_bodies,
     /// Native dev emission with a splice source for CTFE's exact host domain.
     host_dev_objects,
-    /// Host-native evaluator objects with bound observation context. They do not
-    /// provide runtime code, even when their CPU and procedure identity match.
-    host_ctfe_objects,
     /// Native dev emission with its own target-specific splice source.
     target_dev_objects,
 
@@ -1161,8 +1182,8 @@ pub fn adoptReachableCompletedComptimeValues(lowered: *LoweredProgram) Allocator
 /// The completed frozen bytes are now each compile-time value's definition, so
 /// the slot keeps no initializer and no compile-time root identity, and the
 /// program's procedures are compacted against the frozen graph's own
-/// references. Completion has already rewritten successful failure guards;
-/// remaining guard CFG belongs to failed roots and remains ordinary runtime LIR.
+/// references. Ordinary failure guards remain unchanged for every outcome;
+/// completed failure records select their success or failure edge at runtime.
 fn completeComptimeValueSlots(lowered: *LoweredProgram) Allocator.Error!void {
     const result = &lowered.lir_result;
     result.comptime_value_guards.clearRetainingCapacity();
@@ -1328,12 +1349,6 @@ pub fn prepareCheckedModulesMonotype(
     // it discovers which procedures the evaluator reaches.
     var prepared_target = target;
     prepared_target.comptime_closure_hits = comptimeClosureHitsAllowed(modules);
-    prepared_target.producer_observations = if (target.comptime_value_reads)
-        .shared
-    else if (target.inline_expects == .run)
-        .runtime
-    else
-        .omitted;
 
     const layout_requests = try collectLayoutRequests(allocator, modules.root.module, roots.layout_requests, roots.include_provided_data_exports);
     defer allocator.free(layout_requests);
@@ -1371,7 +1386,7 @@ pub fn prepareCheckedModulesMonotype(
             checkedModules(modules),
             rootRequests(roots, layout_requests, static_data_requests),
             .{
-                .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
+                .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled() or packTraceEnabled(),
                 .spec_cache = if (monotypeCacheHitsAllowed(
                     target.checked_module_state,
                     prepared_target.comptime_closure_hits,
@@ -1686,13 +1701,12 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
         .keep_specialization_procs = target.keep_specialization_procs,
         .post_check_executor = target.post_check_executor,
         .inline_expects = target.inline_expects,
-        .producer_observations = target.producer_observations,
         .list_in_place_map = target.list_in_place_map,
         .dict_seed_mode = if (target.comptime_value_reads) .runtime else switch (target.checked_module_state) {
             .complete => .runtime,
             .checking_finalization => .comptime_zero,
         },
-        .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
+        .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled() or packTraceEnabled(),
         .layout_request_const_plans = target.layout_request_const_plans,
         .test_plan_metadata = prepared.test_plan_metadata,
         .debug_materialized_out = target.debug_materialized_out,
@@ -2085,6 +2099,7 @@ fn rootRequests(
         .static_data_requests = static_data_requests,
         .test_plan_metadata = roots.test_plan_metadata,
         .cached_root_declarations = roots.cached_root_declarations,
+        .cached_literal_declarations = roots.cached_literal_declarations,
     };
 }
 

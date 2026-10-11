@@ -1,4 +1,4 @@
-//! Final post-ARC guards borrow the immutable compile-time failure image.
+//! Ordinary post-ARC value guards borrow stable failure headers across publication.
 const std = @import("std");
 const core = @import("lir_core");
 const DenseMap = @import("collections").DenseMap;
@@ -11,10 +11,9 @@ const Use = struct { proc: LIR.LirProcSpecId, stmt: LIR.CFStmtId, slot: LIR.Stat
 const Guard = struct { locals: [3]LIR.LocalId, success: LIR.CFStmtId, crash: LIR.CFStmtId, checked_crash: LIR.CFStmtId };
 
 /// Insert explicit failure checks before each compile-time value slot read.
-/// A program lowered after its compile-time roots completed passes their
-/// frozen image, which records each value's outcome: only reads of a value
-/// that failed are guarded, and every other read stays as lowered.
-pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed: ?*const Program.FrozenStaticData) std.mem.Allocator.Error!void {
+/// Completion changes the failure records, never ordinary procedure bodies.
+/// The same guards therefore serve pending evaluation and completed images.
+pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, _: ?*const Program.FrozenStaticData) std.mem.Allocator.Error!void {
     std.debug.assert(program.comptime_value_guards.items.len == 0);
     const has_value_slots = for (program.static_data_values.items) |slot| {
         if (slot.compile_time_root) |root| {
@@ -22,8 +21,6 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
         }
     } else false;
     if (!has_value_slots) return;
-    const completed_exports: []?u32 = if (completed) |frozen| try exportsBySlot(allocator, program, frozen) else &.{};
-    defer allocator.free(completed_exports);
     var uses: std.ArrayList(Use) = .empty;
     defer uses.deinit(allocator);
     var work: std.ArrayList(LIR.CFStmtId) = .empty;
@@ -57,9 +54,6 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
             };
             const root = program.static_data_values.items[@intFromEnum(slot)].compile_time_root orelse continue;
             if (root.role != .value) continue;
-            if (completed) |frozen| {
-                if (!completedValueFailed(program, frozen, completed_exports, root.role.value.failure_slot)) continue;
-            }
             try uses.append(allocator, .{ .proc = proc_id, .stmt = stmt_id, .slot = slot });
         }
     }
@@ -78,8 +72,7 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
         const message = try store.addLocal(.{ .layout_idx = .str });
         // The success path is a copy of the guarded use and keeps its origin;
         // the guard glue carries the use's location with the guard kind. The
-        // entry statement becomes guard glue; `completeSuccessfulSlot` later
-        // restores the use there with the success copy's (the use's) origin.
+        // entry statement remains guard glue for the procedure's lifetime.
         const use_origin = store.stmtOrigin(use.stmt);
         var guard_origin = use_origin;
         guard_origin.kind = .comptime_value_guard;
@@ -159,42 +152,8 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
     }
 }
 
-/// The frozen export holding each static data slot's completed bytes.
-fn exportsBySlot(allocator: std.mem.Allocator, program: *const Program.Result, frozen: *const Program.FrozenStaticData) std.mem.Allocator.Error![]?u32 {
-    const exports = try allocator.alloc(?u32, program.static_data_values.items.len);
-    @memset(exports, null);
-    for (frozen.exports, 0..) |item, index| {
-        const slot = item.value_id orelse continue;
-        exports[@intFromEnum(slot)] = @intCast(index);
-    }
-    return exports;
-}
-
-/// Whether the completed value owning `failure_slot` failed, read from the
-/// `failed` flag of its failure record in the frozen image.
-fn completedValueFailed(program: *const Program.Result, frozen: *const Program.FrozenStaticData, exports: []const ?u32, failure_slot: LIR.StaticDataId) bool {
-    const fields = program.static_data_values.items[@intFromEnum(failure_slot)].compile_time_root.?.role.failure_message;
-    const index = exports[@intFromEnum(failure_slot)] orelse @panic("completed program omitted a compile-time value's failure record");
-    const record = frozen.exports[index];
-    return record.bytes[record.symbol_offset + fields.failed_offset] != 0;
-}
-
 fn localLessThan(_: void, a: LIR.LocalId, b: LIR.LocalId) bool {
     return @intFromEnum(a) < @intFromEnum(b);
-}
-
-/// Caller has explicit successful evaluation evidence for this root's slot.
-pub fn completeSuccessfulSlot(program: *Program.Result, slot: LIR.StaticDataId) std.mem.Allocator.Error!void {
-    var next = program.static_data_values.items[@intFromEnum(slot)].first_comptime_guard;
-    while (next) |index| {
-        const guard = &program.comptime_value_guards.items[index];
-        next = guard.next_for_slot;
-        std.debug.assert(guard.value_slot == slot);
-        if (guard.completed) continue;
-        try program.store.replaceCFStmt(guard.entry, program.store.getCFStmt(guard.success), program.store.stmtOrigin(guard.success));
-        program.store.getProcSpecPtr(guard.owner).native_code_revision += 1;
-        guard.completed = true;
-    }
 }
 
 test "shared compile-time failure guards preserve exact success and shared frame inventory" {
@@ -260,26 +219,24 @@ fn testSharedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error || er
         try std.testing.expectEqual(@as(usize, 4), locals.len);
         for (1..locals.len) |j| try std.testing.expect(localLessThan({}, GuardedList.at(locals, j - 1), GuardedList.at(locals, j)));
     }
-    // Completion restores the producer-recorded edge, including its original
-    // target and suffix, without examining the emitted guard's shape.
-    try completeSuccessfulSlot(&program, slot);
-    const restored = program.store.getCFStmt(load).assign_literal;
+    // Publication only updates data. The success edge retains the exact read
+    // and both ordinary owners retain their original identity and revision.
+    const restored = program.store.getCFStmt(guard.success).assign_literal;
     try std.testing.expectEqual(target, restored.target);
     try std.testing.expectEqual(slot, restored.value.static_data);
     try std.testing.expectEqual(ret, restored.next);
-    try completeSuccessfulSlot(&program, slot);
     for (owners) |owner| {
         const proc = program.store.getProcSpec(owner);
-        try std.testing.expectEqual(@as(u64, 1), proc.native_code_revision);
+        try std.testing.expectEqual(@as(u64, 0), proc.native_code_revision);
         try std.testing.expectEqual(LIR.ProcIdentity.forTest(1), proc.identity);
     }
     try std.testing.expectEqual(@as(u64, 0), program.store.getProcSpec(unrelated).native_code_revision);
     var clone = try program.store.cloneForProcRewrite(allocator, owners[0]);
     defer clone.deinit();
-    try std.testing.expectEqual(@as(u64, 1), clone.getProcSpec(owners[0]).native_code_revision);
+    try std.testing.expectEqual(@as(u64, 0), clone.getProcSpec(owners[0]).native_code_revision);
 }
 
-test "completed compile-time values guard only the reads of failed values" {
+test "completed compile-time values retain ordinary guards for every outcome" {
     try testCompletedGuards(std.testing.allocator);
 }
 
@@ -350,16 +307,16 @@ fn testCompletedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error ||
     const frozen = Program.FrozenStaticData{ .allocator = allocator, .exports = &exports };
     try insert(allocator, &program, &frozen);
 
-    try std.testing.expectEqual(@as(usize, 1), program.comptime_value_guards.items.len);
-    const guard = program.comptime_value_guards.items[0];
+    try std.testing.expectEqual(@as(usize, 2), program.comptime_value_guards.items.len);
+    const guard = program.comptime_value_guards.items[1];
     try std.testing.expectEqual(owners[1], guard.owner);
     try std.testing.expectEqual(value_slots[1], guard.value_slot);
     try std.testing.expect(program.store.getCFStmt(loads[1]).assign_literal.value.static_data != value_slots[1]);
     try std.testing.expectEqual(@as(usize, 4), program.store.getLocalSpan(program.store.getProcSpec(owners[1]).frame_locals).len);
 
-    // The successful read is left exactly as lowered.
-    const kept = program.store.getCFStmt(loads[0]).assign_literal;
+    // Successful completed images use the same guard and success edge.
+    const kept = program.store.getCFStmt(program.comptime_value_guards.items[0].success).assign_literal;
     try std.testing.expectEqual(value_slots[0], kept.value.static_data);
-    try std.testing.expectEqual(@as(usize, 1), program.store.getLocalSpan(program.store.getProcSpec(owners[0]).frame_locals).len);
+    try std.testing.expectEqual(@as(usize, 4), program.store.getLocalSpan(program.store.getProcSpec(owners[0]).frame_locals).len);
     try std.testing.expectEqual(@as(u64, 0), program.store.getProcSpec(owners[0]).native_code_revision);
 }

@@ -1,4 +1,4 @@
-//! Closed native artifact graphs shared by pack publication and CTFE binding.
+//! Closed native artifact graphs shared by pack publication and native placement.
 //!
 //! A serving entry owns its transitive code/data closure; unrelated offers must
 //! not add source-context requirements or claim complete-module availability.
@@ -25,6 +25,9 @@ ambiguous_definitions: std.AutoHashMap(u32, void),
 seen: std.AutoHashMap(u32, void),
 order: std.ArrayList(u32) = .empty,
 complete: bool = true,
+/// Content identity of this exact producer graph, excluding execution-phase
+/// labels, session LIR ordinals, and source-file debug numbering.
+physical_namespace: [32]u8 = undefined,
 
 pub fn init(allocator: Allocator, set: *const ProcArtifact.Set) Allocator.Error!Self {
     var self = Self{
@@ -37,6 +40,19 @@ pub fn init(allocator: Allocator, set: *const ProcArtifact.Set) Allocator.Error!
         .seen = std.AutoHashMap(u32, void).init(allocator),
     };
     errdefer self.deinit();
+    var physical = std.crypto.hash.Blake3.init(.{});
+    physical.update("roc.native.physical.provision.v1");
+    for (set.artifacts) |artifact| {
+        std.hash.autoHashStrat(&physical, .{
+            artifact.kind,          artifact.code,              artifact.entry,       artifact.frame,
+            artifact.refs,          artifact.symbolic_refs,     artifact.relocations, artifact.data,
+            artifact.source_events, artifact.callable_contract,
+        }, .Deep);
+        if (artifact.context_contract) |contract| {
+            std.hash.autoHash(&physical, .{ contract.target, contract.cpu_level, contract.hot_reload, contract.default_platform_runtime });
+        }
+    }
+    physical.final(&self.physical_namespace);
     for (set.artifacts, 0..) |artifact, index| {
         switch (artifact.kind) {
             .proc => |identity| try self.indexDefinition(&self.procs, identity, @intCast(index)),
@@ -272,192 +288,6 @@ pub fn components(self: *const Self) Allocator.Error!Components {
     return .{ .arena = arena, .nodes = nodes, .callees = output };
 }
 
-pub const ContextRequirements = struct {
-    dependencies: @import("LirCodeGen.zig").FragmentContextDependencies = .{},
-    /// Unknown producer facts or unresolved edges are never a neutral context.
-    complete: bool = true,
-
-    fn merge(self: *ContextRequirements, other: ContextRequirements) void {
-        self.dependencies.merge(other.dependencies);
-        self.complete = self.complete and other.complete;
-    }
-};
-
-/// Expect preservation and emitted observation obligations are independent of
-/// machine-context bindability. Absence must be produced, never inferred from
-/// a fragment lacking hooks.
-pub const ObservationRequirements = struct {
-    source: lir.Program.ProducerObservations = .absent,
-    requires_hooks: bool = false,
-    complete: bool = true,
-
-    fn merge(self: *ObservationRequirements, other: ObservationRequirements) void {
-        self.source = self.source.join(other.source);
-        self.requires_hooks = self.requires_hooks or other.requires_hooks;
-        self.complete = self.complete and other.complete;
-    }
-};
-
-pub fn observationRequirements(self: *const Self, groups: *const Components) Allocator.Error![]ObservationRequirements {
-    const a = self.allocator;
-    const summaries = try a.alloc(ObservationRequirements, groups.callees.len);
-    defer a.free(summaries);
-    @memset(summaries, .{});
-    for (self.set.artifacts, groups.nodes, 0..) |artifact, component, node| {
-        var direct = ObservationRequirements{
-            .source = artifact.source_observations,
-            .requires_hooks = artifact.requires_ctfe_observations orelse false,
-            .complete = artifact.requires_ctfe_observations != null and
-                artifact.source_observations != .unknown and artifact.source_observations != .omitted,
-        };
-        for (self.symbolicTargets(@intCast(node))) |target| if (target == null) {
-            direct.complete = false;
-        };
-        for (self.dataTargets(@intCast(node))) |target| if (target == null) {
-            direct.complete = false;
-        };
-        summaries[component].merge(direct);
-    }
-    var cursor = summaries.len;
-    while (cursor != 0) {
-        cursor -= 1;
-        for (groups.callees[cursor]) |callee| summaries[cursor].merge(summaries[callee]);
-    }
-    const output = try a.alloc(ObservationRequirements, groups.nodes.len);
-    for (groups.nodes, output) |component, *summary| summary.* = summaries[component];
-    return output;
-}
-
-/// Producer emission facts flow from callees to callers. Unrelated siblings
-/// cannot add requirements to a serving offer. The returned array is owned by
-/// the graph allocator; it is session data, not a reconstructed pack contract.
-pub fn contextRequirements(self: *const Self, groups: *const Components) Allocator.Error![]ContextRequirements {
-    const a = self.allocator;
-    const summaries = try a.alloc(ContextRequirements, groups.callees.len);
-    defer a.free(summaries);
-    @memset(summaries, .{});
-    for (self.set.artifacts, groups.nodes, 0..) |artifact, component, node| {
-        var direct = ContextRequirements{
-            .dependencies = artifact.context_dependencies orelse .{},
-            .complete = artifact.context_complete and artifact.context_dependencies != null and artifact.context_contract != null,
-        };
-        for (self.symbolicTargets(@intCast(node))) |target| {
-            if (target == null) direct.complete = false;
-        }
-        for (self.dataTargets(@intCast(node))) |target| {
-            if (target == null) direct.complete = false;
-        }
-        for (artifact.data) |item| for (item.relocations) |relocation| {
-            if (relocation.function and !relocation.external and relocation.code_target == null) direct.complete = false;
-        };
-        summaries[component].merge(direct);
-    }
-    var cursor = summaries.len;
-    while (cursor != 0) {
-        cursor -= 1;
-        for (groups.callees[cursor]) |callee| summaries[cursor].merge(summaries[callee]);
-    }
-    const output = try a.alloc(ContextRequirements, groups.nodes.len);
-    for (groups.nodes, output) |component, *summary| summary.* = summaries[component];
-    return output;
-}
-
-test "artifact context requirements combine recursion and flow only to callers" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, testContextRequirements, .{});
-}
-
-test "artifact observation requirements preserve recursive obligations and reject only unknown ancestors" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, testObservationRequirements, .{});
-}
-
-fn testObservationRequirements(allocator: Allocator) !void {
-    var artifacts: [6]ProcArtifact.Artifact = undefined;
-    for (&artifacts, 0..) |*artifact, index| artifact.* = .{
-        .kind = .{ .proc = lir.ProcIdentity.forTest(@intCast(index)) },
-        .code = "",
-        .entry = 0,
-        .frame = null,
-        .refs = &.{},
-        .relocations = &.{},
-        .data = &.{},
-        .source_observations = .absent,
-        .requires_ctfe_observations = false,
-    };
-    artifacts[0].refs = &.{.{ .site = 0, .form = .call, .target = 1, .delta = 0 }};
-    artifacts[1].refs = &.{.{ .site = 0, .form = .call, .target = 0, .delta = 0 }};
-    artifacts[1].source_observations = .shared;
-    artifacts[1].requires_ctfe_observations = true;
-    artifacts[2].source_observations = .omitted;
-    artifacts[3].refs = &.{.{ .site = 0, .form = .call, .target = 2, .delta = 0 }};
-    artifacts[4].requires_ctfe_observations = null;
-    const set = ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &artifacts };
-    var graph = try Self.init(allocator, &set);
-    defer graph.deinit();
-    var groups = try graph.components();
-    defer groups.deinit();
-    const summaries = try graph.observationRequirements(&groups);
-    defer allocator.free(summaries);
-    try std.testing.expectEqualDeep(summaries[0], summaries[1]);
-    try std.testing.expectEqual(lir.Program.ProducerObservations.shared, summaries[0].source);
-    try std.testing.expect(summaries[0].complete and summaries[0].requires_hooks);
-    try std.testing.expect(!summaries[2].complete and !summaries[3].complete and !summaries[4].complete);
-    try std.testing.expect(summaries[5].complete and !summaries[5].requires_hooks);
-    try std.testing.expectEqual(lir.Program.ProducerObservations.absent, summaries[5].source);
-}
-
-fn testContextRequirements(allocator: Allocator) !void {
-    var artifacts: [6]ProcArtifact.Artifact = undefined;
-    for (&artifacts, 0..) |*artifact, index| artifact.* = .{
-        .kind = .{ .proc = lir.ProcIdentity.forTest(@intCast(index)) },
-        .code = "",
-        .entry = 0,
-        .frame = null,
-        .refs = &.{},
-        .relocations = &.{},
-        .data = &.{},
-        .context_contract = .{
-            .target = .x64musl,
-            .cpu_level = .default,
-            .hot_reload = false,
-            .default_platform_runtime = false,
-            .dict_seed_mode = .comptime_zero,
-            .hooks_enabled = true,
-            .initialize_boxy_runtime = false,
-            .static_data_readonly = false,
-        },
-        .context_dependencies = .{},
-    };
-    artifacts[0].refs = &.{.{ .site = 0, .form = .call, .target = 1, .delta = 0 }};
-    artifacts[0].context_dependencies = .{ .dict_seed = true };
-    artifacts[1].refs = &.{
-        .{ .site = 0, .form = .call, .target = 0, .delta = 0 },
-        .{ .site = 0, .form = .call, .target = 2, .delta = 0 },
-    };
-    artifacts[2].context_dependencies = .{ .comptime_hooks = true };
-    artifacts[3].context_dependencies = .{ .boxy_runtime = true };
-    artifacts[4].context_dependencies = null;
-    artifacts[5].refs = &.{.{ .site = 0, .form = .call, .target = 4, .delta = 0 }};
-    const set = ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &artifacts };
-    var graph = try Self.init(allocator, &set);
-    defer graph.deinit();
-    var groups = try graph.components();
-    defer groups.deinit();
-    const summaries = try graph.contextRequirements(&groups);
-    defer allocator.free(summaries);
-    try std.testing.expectEqual(groups.nodes[0], groups.nodes[1]);
-    try std.testing.expectEqualDeep(summaries[0], summaries[1]);
-    try std.testing.expect(summaries[0].dependencies.dict_seed);
-    try std.testing.expect(summaries[0].dependencies.comptime_hooks);
-    try std.testing.expect(!summaries[0].dependencies.boxy_runtime);
-    try std.testing.expect(summaries[0].complete);
-    try std.testing.expect(!summaries[2].dependencies.dict_seed);
-    try std.testing.expect(summaries[2].dependencies.comptime_hooks);
-    try std.testing.expect(summaries[3].dependencies.boxy_runtime);
-    try std.testing.expect(!summaries[3].dependencies.comptime_hooks);
-    try std.testing.expect(!summaries[4].complete);
-    try std.testing.expect(!summaries[5].complete);
-}
-
 /// Admit all roots in graph-proportional work. Invalid node facts propagate
 /// backwards through exact dependencies; recursive closed graphs need no
 /// provisional "hit" or repeated transitive walk.
@@ -569,27 +399,17 @@ fn sameValue(comptime T: type, left: T, right: T) bool {
     };
 }
 
-/// Only a CTFE image may select an instrumented definition. Hooks are additive
-/// observations there; ownership/ABI and every context-dependent emission
-/// choice remain exact. Two instrumented providers must retain the same facts.
+/// Selection preserves the exact callable contract and real native codegen
+/// policy. Execution consumers bind the same symbolic body to their own data
+/// images and optional source observers; execution phase is not a variant.
 pub fn compatibleDefinition(original: ProcArtifact.Artifact, selected: ProcArtifact.Artifact) bool {
     const left = original.callable_contract orelse return false;
     const right = selected.callable_contract orelse return false;
     if (!std.mem.eql(u8, &left, &right)) return false;
     const a = original.context_contract orelse return false;
     const b = selected.context_contract orelse return false;
-    const da = original.context_dependencies orelse return false;
-    const db = selected.context_dependencies orelse return false;
     if (a.target != b.target or a.cpu_level != b.cpu_level or a.hot_reload != b.hot_reload) return false;
-    if ((da.dict_seed or db.dict_seed) and a.dict_seed_mode != b.dict_seed_mode) return false;
-    if ((da.static_data or db.static_data) and a.static_data_readonly != b.static_data_readonly) return false;
-    if ((da.static_data or db.static_data) and da.static_data_access != db.static_data_access) return false;
-    if ((da.boxy_runtime or db.boxy_runtime or da.boxy_runtime_entry or db.boxy_runtime_entry) and
-        (a.default_platform_runtime != b.default_platform_runtime or a.initialize_boxy_runtime != b.initialize_boxy_runtime)) return false;
-    if (original.domain == .ctfe) {
-        if (selected.domain != .ctfe) return false;
-        if (!sameValue([]const @import("CtfeContext.zig").Binding, original.context_bindings, selected.context_bindings)) return false;
-    }
+    if (a.default_platform_runtime != b.default_platform_runtime) return false;
     return true;
 }
 
@@ -601,9 +421,6 @@ pub const Variants = struct {
     old_to_new: []const ?u32,
     /// Physical source-set provenance of each actually selected definition.
     new_to_source: []const u32,
-    /// Transitive producer context facts for each physical serving definition.
-    requirements: []const ContextRequirements,
-    observations: []const ObservationRequirements,
 
     pub fn deinit(self: *Variants) void {
         self.set.deinit();
@@ -642,7 +459,7 @@ pub fn prepareVariants(
     const offsets = try a.alloc(u32, sources.len + 1);
     offsets[0] = 0;
     // Resolve within each original namespace before sources are combined.
-    // Otherwise a symbolic CTFE edge could acquire a runtime sibling's ABI.
+    // Otherwise an edge could acquire another physical source's ABI.
     for (sources, 0..) |source, source_index| {
         offsets[source_index + 1] = offsets[source_index] + @as(u32, @intCast(source.artifacts.len));
         var local = try Self.init(allocator, source);
@@ -706,29 +523,19 @@ pub fn prepareVariants(
             if (selected.old_to_new[original]) |index| provenance[index] = @intCast(source);
         }
     }
-    var selected_graph = try Self.init(allocator, &selected.set);
-    defer selected_graph.deinit();
-    var groups = try selected_graph.components();
-    defer groups.deinit();
-    const requirements = try selected_graph.contextRequirements(&groups);
-    defer allocator.free(requirements);
-    const observations = try selected_graph.observationRequirements(&groups);
-    defer allocator.free(observations);
     return .{
         .set = selected.set,
         .source_offsets = owned_offsets,
         .old_to_new = mapping,
         .new_to_source = provenance,
-        .requirements = try owned.dupe(ContextRequirements, requirements),
-        .observations = try owned.dupe(ObservationRequirements, observations),
     };
 }
 
-test "canonical CTFE closure preserves typed hooks in both source and splice orders" {
+test "physical closure preserves distinct bodies in both source and splice orders" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, testCanonicalMixed, .{false});
 }
 
-test "canonical CTFE closure owns an empty cold provider plan" {
+test "physical closure owns an empty cold provider plan" {
     const Attempt = struct {
         fn accepts(_: *anyopaque, _: ProcArtifact.Artifact) bool {
             unreachable;
@@ -744,7 +551,7 @@ test "canonical CTFE closure owns an empty cold provider plan" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, Attempt.run, .{});
 }
 
-test "consumer preference preserves mixed static and neutral-seed serving closures" {
+test "physical selection preserves static and seed serving closures" {
     const allocator = std.testing.allocator;
     for ([_]bool{ false, true }) |symbolic| {
         for ([_]bool{ false, true }) |reverse| {
@@ -763,15 +570,11 @@ test "consumer preference preserves mixed static and neutral-seed serving closur
                     .cpu_level = .default,
                     .hot_reload = false,
                     .default_platform_runtime = false,
-                    .dict_seed_mode = .runtime,
-                    .hooks_enabled = false,
-                    .initialize_boxy_runtime = false,
-                    .static_data_readonly = true,
                 },
                 .context_dependencies = .{},
             };
             runtime[1].context_dependencies = .{ .dict_seed = true };
-            runtime[2].context_dependencies = .{ .static_data = true, .static_data_access = .readonly_symbols };
+            runtime[2].context_dependencies = .{ .static_data = true };
             if (symbolic) {
                 runtime[0].symbolic_refs = &.{.{ .site = 0, .form = .call, .target = .{ .proc = lir.ProcIdentity.forTest(2) } }};
                 runtime[1].symbolic_refs = &.{.{ .site = 0, .form = .call, .target = .{ .proc = lir.ProcIdentity.forTest(3) } }};
@@ -783,16 +586,9 @@ test "consumer preference preserves mixed static and neutral-seed serving closur
             }
             var ctfe = runtime;
             for (&ctfe) |*artifact| {
-                artifact.context_contract.?.hooks_enabled = true;
-                artifact.context_contract.?.static_data_readonly = false;
-                artifact.context_contract.?.dict_seed_mode = .comptime_zero;
+                artifact.context_contract.?.default_platform_runtime = true;
             }
-            ctfe[0].domain = .ctfe;
-            ctfe[0].context_dependencies = .{ .comptime_hooks = true };
-            // This neutral definition must retain its CTFE namespace: its
-            // seed and static callee are not interchangeable with runtime.
-            ctfe[2].domain = .ctfe;
-            ctfe[2].context_dependencies = .{ .comptime_hooks = true, .static_data = true, .static_data_access = .current_context };
+            // Exact physical edges retain their original codegen policy.
             try std.testing.expect(!compatibleDefinition(runtime[2], ctfe[2]));
             try std.testing.expect(!compatibleDefinition(ctfe[1], runtime[1]));
             const rt = ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &runtime };
@@ -824,10 +620,8 @@ test "variant graph preserves independently valid conflicting ARC and emitter cl
 }
 
 fn testCanonicalMixed(allocator: Allocator, conflict: bool) !void {
-    const Context = @import("CtfeContext.zig");
     const CG = @import("LirCodeGen.zig").LirCodeGen(@import("roc_target").RocTarget.x64linux);
     const b_identity = lir.ProcIdentity.forTest(2);
-    var branches = [_]@import("base").Region{.from_raw_offsets(4, 8)};
     var runtime = [_]ProcArtifact.Artifact{
         .{
             .kind = .{ .proc = lir.ProcIdentity.forTest(1) },
@@ -855,50 +649,12 @@ fn testCanonicalMixed(allocator: Allocator, conflict: bool) !void {
             .cpu_level = .default,
             .hot_reload = false,
             .default_platform_runtime = false,
-            .dict_seed_mode = .runtime,
-            .hooks_enabled = false,
-            .initialize_boxy_runtime = false,
-            .static_data_readonly = true,
         };
         artifact.context_dependencies = .{};
     }
     var ctfe = runtime;
     ctfe[0].kind = .{ .proc = lir.ProcIdentity.forTest(3) };
-    ctfe[1].domain = .ctfe;
     ctfe[1].code = "\x48\xb8" ++ "\x00" ** 8 ++ "\x48\xb8" ++ "\x00" ** 8 ++ "\xc3";
-    ctfe[1].context_dependencies = .{ .comptime_hooks = true };
-    ctfe[1].context_bindings = &.{
-        Context.Binding{ .failure = .{
-            .source = .{
-                .checked_module = [_]u8{2} ** 32,
-                .source_identity = [_]u8{3} ** 32,
-                .region = .from_raw_offsets(1, 3),
-                .line = 1,
-                .column = 2,
-                .has_location = true,
-            },
-            .checked_error = true,
-            .literal_rejection = null,
-            .guard_root = null,
-        } },
-        Context.Binding{ .site = .{
-            .checked_module = [_]u8{2} ** 32,
-            .checked_site = 7,
-            .procedure_identity = b_identity.bytes,
-            .kind = .match,
-            .region = .from_raw_offsets(4, 8),
-            .branch_regions = &branches,
-        } },
-    };
-    ctfe[1].context_relocations = &.{
-        .{ .offset = 0, .binding = 0, .encoding = .x86_movabs },
-        .{ .offset = 10, .binding = 1, .encoding = .x86_movabs },
-    };
-    for (&ctfe) |*artifact| {
-        artifact.context_contract.?.hooks_enabled = true;
-        artifact.context_contract.?.dict_seed_mode = .comptime_zero;
-        artifact.context_contract.?.static_data_readonly = false;
-    }
     if (conflict) runtime[1].callable_contract = [_]u8{9} ** 32;
     var runtime_set = ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &runtime };
     defer runtime_set.deinit();
@@ -923,16 +679,9 @@ fn testCanonicalMixed(allocator: Allocator, conflict: bool) !void {
         const runtime_b = canonical.set.artifacts[a.?].refs[0].target;
         try std.testing.expect(b != runtime_b);
         try std.testing.expectEqualDeep(runtime[1], canonical.set.artifacts[runtime_b]);
-        try std.testing.expectEqual(Context.Domain.ctfe, canonical.set.artifacts[b].domain);
-        try std.testing.expectEqual(@as(usize, 2), canonical.set.artifacts[b].context_bindings.len);
-        try std.testing.expect(canonical.set.artifacts[b].context_bindings[0].failure.checked_error);
-        try std.testing.expectEqual(@as(?u32, 7), canonical.set.artifacts[b].context_bindings[1].site.checked_site);
+        try std.testing.expectEqualDeep(ctfe[1], canonical.set.artifacts[b]);
         try std.testing.expectEqual(@as(u32, 1), runtime[0].refs[0].target);
         try std.testing.expectEqual(@as(u32, 1), ctfe[0].refs[0].target);
-        // Binding graphs are deep-owned, including branch-region slices.
-        branches[0] = .from_raw_offsets(20, 30);
-        try std.testing.expectEqual(@as(u32, 4), canonical.set.artifacts[b].context_bindings[1].site.branch_regions[0].start.offset);
-        branches[0] = .from_raw_offsets(4, 8);
         inline for (.{ false, true }) |reverse_roots| {
             var store = lir.LirStore.init(allocator);
             defer store.deinit();
@@ -951,33 +700,31 @@ fn testCanonicalMixed(allocator: Allocator, conflict: bool) !void {
             const roots = if (reverse_roots) [_]u32{ c, a.? } else [_]u32{ a.?, c };
             for (roots) |root| try ProcArtifact.spliceIndexed(CG, allocator, &receiver, &graph, &.{root}, &procs, &placed, &data);
             try std.testing.expectEqual(@as(usize, 4), placed.count());
-            try std.testing.expectEqual(@as(usize, 2), receiver.context_bindings.items.len);
-            try std.testing.expect(receiver.context_bindings.items[0].failure.checked_error);
-            try std.testing.expectEqual(@as(?u32, 7), receiver.context_bindings.items[1].site.checked_site);
             try receiver.finishImage();
             var recaptured = try ProcArtifact.extract(CG, allocator, &receiver, store.getProcSpecs(), &layouts, &.{}, &.{}, &.{});
             defer recaptured.deinit();
-            var found_hook_definition = false;
+            var found_physical_definition = false;
             for (recaptured.artifacts) |artifact| {
-                if (artifact.kind != .proc or !std.meta.eql(artifact.kind.proc, b_identity) or artifact.domain != .ctfe) continue;
+                if (artifact.kind != .proc or !std.meta.eql(artifact.kind.proc, b_identity) or
+                    !std.mem.eql(u8, artifact.code, ctfe[1].code)) continue;
                 try std.testing.expectEqualDeep(canonical.set.artifacts[b], artifact);
-                found_hook_definition = true;
+                found_physical_definition = true;
             }
-            try std.testing.expect(found_hook_definition);
+            try std.testing.expect(found_physical_definition);
         }
     }
-    // A seed-dependent mismatch is independently incompatible, even with the
-    // same ARC/ABI stamp. Unrelated definitions are not blanket-declined.
+    // A real codegen policy mismatch remains incompatible, even with the
+    // same ARC/ABI stamp. Execution phase and seed binding are not policies.
     runtime[1].callable_contract = ctfe[1].callable_contract;
     runtime[1].context_dependencies.?.dict_seed = true;
+    try std.testing.expect(compatibleDefinition(runtime[1], ctfe[1]));
+    runtime[1].context_contract.?.default_platform_runtime = true;
     try std.testing.expect(!compatibleDefinition(runtime[1], ctfe[1]));
+    runtime[1].context_contract.?.default_platform_runtime = false;
     // Both consumers retain their own seed contracts in either physical load
     // order. No callee substitution is needed to serve either root.
-    ctfe[1].domain = .runtime;
     ctfe[1].code = "\xc3";
     ctfe[1].context_dependencies = .{ .dict_seed = true };
-    ctfe[1].context_bindings = &.{};
-    ctfe[1].context_relocations = &.{};
     for ([_]bool{ false, true }) |seed_dependent| {
         runtime[1].context_dependencies.?.dict_seed = seed_dependent;
         ctfe[1].context_dependencies.?.dict_seed = seed_dependent;
@@ -995,7 +742,6 @@ fn testCanonicalMixed(allocator: Allocator, conflict: bool) !void {
             try std.testing.expect(b != other);
             try std.testing.expectEqual(@as(u32, @intCast(ctfe_source)), canonical.new_to_source[other]);
             try std.testing.expectEqual(@as(u32, @intCast(runtime_source)), canonical.new_to_source[b]);
-            try std.testing.expect(canonical.set.artifacts[b].context_contract.?.static_data_readonly);
         }
     }
 }
@@ -1114,22 +860,13 @@ test "symbolic index declines ambiguous same-identity contracts in either defini
             .cpu_level = .default,
             .hot_reload = false,
             .default_platform_runtime = false,
-            .dict_seed_mode = .runtime,
-            .hooks_enabled = false,
-            .initialize_boxy_runtime = false,
-            .static_data_readonly = true,
         },
     };
-    const Variant = enum { identical, instrumented, conflicting, unsupported };
-    for ([_]Variant{ .identical, .instrumented, .conflicting, .unsupported }) |variant| {
+    const Variant = enum { identical, different_code, conflicting, unsupported };
+    for ([_]Variant{ .identical, .different_code, .conflicting, .unsupported }) |variant| {
         const conflict = variant != .identical;
         var ctfe = runtime;
-        if (variant != .identical) {
-            ctfe.domain = .ctfe;
-            ctfe.context_contract.?.hooks_enabled = true;
-            ctfe.context_contract.?.static_data_readonly = false;
-            ctfe.context_dependencies = .{ .comptime_hooks = true };
-        }
+        if (variant == .different_code) ctfe.code = "\x90\xc3";
         if (variant == .conflicting) ctfe.callable_contract = [_]u8{9} ** 32;
         if (variant == .unsupported) ctfe.callable_contract = null;
         for ([_]bool{ false, true }) |reverse| {
@@ -1149,7 +886,7 @@ test "symbolic index declines ambiguous same-identity contracts in either defini
             try std.testing.expectEqual(!conflict, graph.complete);
             if (!conflict) {
                 const target = graph.symbolicTargets(0)[0].?;
-                try std.testing.expectEqual(@import("CtfeContext.zig").Domain.runtime, artifacts[target].domain);
+                try std.testing.expectEqualDeep(runtime, artifacts[target]);
             }
             _ = try graph.of(3);
             try std.testing.expect(graph.complete);
@@ -1211,10 +948,6 @@ test "artifact closure selection owns context graphs and rebases cyclic referenc
 }
 
 fn testSelection(allocator: Allocator) !void {
-    var branches = [_]@import("base").Region{
-        .from_raw_offsets(1, 2),
-        .from_raw_offsets(3, 4),
-    };
     const helper = lir.ProcIdentity.forTest(3);
     const artifacts = [_]ProcArtifact.Artifact{
         .{
@@ -1234,6 +967,13 @@ fn testSelection(allocator: Allocator) !void {
             .refs = &.{.{ .site = 0, .form = .call, .target = 2, .delta = 0 }},
             .relocations = &.{},
             .data = &.{},
+            .context_contract = .{
+                .target = .x64musl,
+                .cpu_level = .default,
+                .hot_reload = false,
+                .default_platform_runtime = false,
+            },
+            .context_dependencies = .{},
         },
         .{
             .kind = .{ .proc = helper },
@@ -1243,27 +983,13 @@ fn testSelection(allocator: Allocator) !void {
             .refs = &.{.{ .site = 10, .form = .call, .target = 2, .delta = 0 }},
             .relocations = &.{},
             .data = &.{},
-            .domain = .ctfe,
             .context_contract = .{
                 .target = .x64musl,
                 .cpu_level = .default,
                 .hot_reload = false,
                 .default_platform_runtime = false,
-                .dict_seed_mode = .comptime_zero,
-                .hooks_enabled = true,
-                .initialize_boxy_runtime = false,
-                .static_data_readonly = false,
             },
-            .context_dependencies = .{ .comptime_hooks = true },
-            .context_bindings = &.{.{ .site = .{
-                .checked_module = @splat(7),
-                .checked_site = null,
-                .procedure_identity = helper.bytes,
-                .kind = .if_,
-                .region = .from_raw_offsets(1, 4),
-                .branch_regions = &branches,
-            } }},
-            .context_relocations = &.{.{ .offset = 0, .binding = 0, .encoding = .x86_movabs }},
+            .context_dependencies = .{},
         },
     };
     const source = ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &artifacts };
@@ -1286,8 +1012,6 @@ fn testSelection(allocator: Allocator) !void {
     try std.testing.expectEqualSlices(bool, &.{ false, true, true }, valid);
     var selected = try selectMarked(allocator, &source, &.{ false, true, true });
     defer selected.deinit();
-    branches[0] = .from_raw_offsets(99, 100);
-    try std.testing.expectEqual(@as(u32, 1), selected.set.artifacts[1].context_bindings[0].site.branch_regions[0].start.offset);
     try std.testing.expectEqual(@as(u32, 1), selected.set.artifacts[0].refs[0].target);
     try std.testing.expectEqual(@as(u32, 1), selected.set.artifacts[1].refs[0].target);
     const PackFile = @import("PackFile.zig");

@@ -74,7 +74,7 @@ pub fn freezeRootIntoSlot(
         .callables = callables,
     };
     const root_symbol = try builder.addNode(
-        try Program.staticDataSymbolName(builder.allocator, slot),
+        try program.staticDataSymbolName(builder.allocator, slot),
         builder.size(slot_layout),
         builder.alignment(slot_layout),
     );
@@ -528,6 +528,7 @@ const Builder = struct {
             dest.* = .{
                 .symbol_name = name,
                 .value_id = if (index == 0) self.slot else null,
+                .symbol_identity = if (index == 0) self.program.static_data_values.items[@intFromEnum(self.slot)].symbol_identity else null,
                 .bytes = owned_bytes,
                 .alignment = source.alignment,
                 .is_global = false,

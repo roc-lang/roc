@@ -245,7 +245,7 @@ pub const Evaluator = struct {
 
     fn readComptimeValue(self: *Evaluator, root: Common.ComptimeValueRoot) EvalError!Value {
         for (self.inputs.comptime_producers) |producer| {
-            if (!producer.root.root.eql(root.root) or !std.meta.eql(producer.root.module, root.module)) continue;
+            if (!producer.root.root.eql(root.root) or !producer.root.module.eql(root.module)) continue;
             const outcome = try self.runProducer(producer.root_index);
             return switch (outcome) {
                 .value => |value| value,

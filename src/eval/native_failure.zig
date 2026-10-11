@@ -86,7 +86,12 @@ pub const Registry = struct {
 
     pub fn get(self: *const Registry, id: u32) Observation {
         if (id >= self.prefix) return self.bound.items[id - self.prefix];
-        const statement: lir.LIR.CFStmtId = @enumFromInt(id);
+        return self.sourceStatement(@enumFromInt(id));
+    }
+
+    /// Producer statement IDs and consumer failure rows are distinct domains.
+    /// Materialization may append source LIR after the runtime prefix is fixed.
+    pub fn sourceStatement(self: *const Registry, statement: lir.LIR.CFStmtId) Observation {
         const data = self.result.store.getCFStmt(statement);
         var observation = Observation{
             .checked_error = data == .crash and data.crash.checked_error,

@@ -190,6 +190,7 @@ pub const LiteralRoot = struct {
     fn_id: FnId,
     module: check.CheckedModule.ModuleId,
     site: Common.LiteralRejectionSite,
+    recipe: ?Mono.LiteralRecipe = null,
 };
 
 /// Runtime layout requested for a checked data value.
@@ -199,6 +200,7 @@ pub const LayoutRequest = struct {
     fn_id: ?FnId = null,
     const_locator: ?check.CheckedModule.ConstLocator = null,
     comptime_root: ?Common.ComptimeValueRoot = null,
+    literal_materialization: ?Common.LiteralMaterializationDeclaration = null,
 };
 
 /// Runtime schema requested for a named runtime value shape.
@@ -792,6 +794,7 @@ pub const Program = struct {
         self.comptime_value_reads.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
+        for (self.literal_roots.unsafeRawItemsForView()) |root| if (root.recipe) |recipe| recipe.deinit(self.allocator);
         self.literal_roots.deinit(self.allocator);
         self.proc_debug_names.deinit();
         for (self.string_literals.unsafeRawItemsForView()) |literal| literal.deinit(self.allocator);

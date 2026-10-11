@@ -6,6 +6,8 @@ const std = @import("std");
 pub const Common = @import("common.zig");
 /// Independent semantic, compile-time execution, and runtime demand closure.
 pub const EvaluationDemand = @import("evaluation_demand.zig");
+/// Exact execution, callable-address and representation relations from producers.
+pub const CtfeDemand = @import("ctfe_demand.zig");
 /// Producer-proof runtime-root selection before executable Monotype emission.
 pub const SemanticRootDemand = @import("semantic_root_demand.zig");
 /// Closed source-shape IR after checking has removed dispatch syntax.
@@ -52,6 +54,7 @@ test "postcheck declarations are referenced" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(@import("common.zig"));
     std.testing.refAllDecls(@import("evaluation_demand.zig"));
+    std.testing.refAllDecls(@import("ctfe_demand.zig"));
     std.testing.refAllDecls(@import("semantic_root_demand.zig"));
     std.testing.refAllDecls(@import("monotype/ast.zig"));
     std.testing.refAllDecls(@import("monotype/type.zig"));

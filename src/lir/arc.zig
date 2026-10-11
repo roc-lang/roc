@@ -1225,7 +1225,6 @@ const VariantTable = struct {
         const variant = try store.addProcSpec(.{
             .name = store.freshSyntheticSymbol(),
             .identity = try variantIdentity(store.allocator, self.sig_table, source_spec.identity, request.demanded),
-            .source_observations = source_spec.source_observations,
             .args = source_spec.args,
             .erased_reuse_arg = source_spec.erased_reuse_arg,
             .erased_call_args = source_spec.erased_call_args,
@@ -1241,6 +1240,7 @@ const VariantTable = struct {
             .abi = source_spec.abi,
             .boxy_runtime_entry = source_spec.boxy_runtime_entry,
             .is_static_initializer = source_spec.is_static_initializer,
+            .root_materialization = source_spec.root_materialization,
             .hosted = source_spec.hosted,
             .tail_transform = source_spec.tail_transform,
             .stack_probe = source_spec.stack_probe,
@@ -16841,42 +16841,6 @@ test "RC field-take demand crosses complete tag payload and wrapper calls" {
     try testing.expectEqual(base_proc_count + 2, f.store.procSpecCount());
     try testing.expectEqual(@as(usize, 1), f.countRc(leaf_field, .incref));
     try f.expectRc(tag, 0, 0, 0);
-}
-
-test "RC specialization: variants preserve producer observations even after expect omission" {
-    const Observations = @import("lir_core").Program.ProducerObservations;
-    for (std.enums.values(Observations)) |observations| {
-        var f = try ArcTest.init(testing.allocator);
-        defer f.deinit();
-
-        const param = try f.local(.str);
-        const callee_ret = try f.ret(param);
-        const callee = try f.addProc(&.{param}, callee_ret, .str);
-        // Omitted expects need not survive in the body. ARC inherits the
-        // producer's fact rather than reinterpreting that empty body.
-        f.store.getProcSpecPtr(callee).source_observations = observations;
-
-        const source = try f.local(.str);
-        const result = try f.local(.str);
-        const done = try f.local(.i64);
-        const caller_ret = try f.ret(done);
-        const done_assign = try f.assignI64(done, 1, caller_ret);
-        const call = try f.store.addCFStmt(.{ .assign_call = .{
-            .target = result,
-            .proc = callee,
-            .args = try f.span(&.{source}),
-            .next = done_assign,
-        } }, .test_fixture);
-        const caller_body = try f.assignStr(source, "arg", call);
-        _ = try f.addProc(&.{}, caller_body, .i64);
-
-        const base_proc_count = f.store.procSpecCount();
-        try insert(&f.store, &f.layouts, .{ .specialize = true });
-        try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
-        const variant: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(base_proc_count)));
-        try testing.expectEqual(observations, f.store.getProcSpec(variant).source_observations);
-        try testing.expectEqual(observations, f.store.getProcSpec(callee).source_observations);
-    }
 }
 
 test "RC specialization: caller body survives variant proc append" {

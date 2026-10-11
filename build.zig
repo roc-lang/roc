@@ -3568,6 +3568,38 @@ pub fn build(b: *std.Build) void {
     });
     b.step("test-source-events", "Test the standalone source-event ABI and observer")
         .dependOn(&b.addRunArtifact(source_events_tests).step);
+    const compile_time_host_static_tests = b.addTest(.{
+        .name = "compile-time-host-static-tests",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/eval/compile_time_host.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+            .link_libc = true,
+            .imports = &.{
+                .{ .name = "base", .module = roc_modules.base },
+                .{ .name = "builtins", .module = roc_modules.builtins },
+                .{ .name = "lir", .module = roc_modules.lir },
+                .{ .name = "check", .module = roc_modules.check },
+                .{ .name = "sljmp", .module = roc_modules.sljmp },
+            },
+        }),
+        .filters = &.{"ready static storage returns published addresses"},
+    });
+    configureBackend(compile_time_host_static_tests, b.graph.host);
+    b.step("test-compile-time-host-static", "Test native reads of scheduler-published compile-time storage")
+        .dependOn(&b.addRunArtifact(compile_time_host_static_tests).step);
+    const compile_time_host_source_tests = b.addTest(.{
+        .name = "compile-time-host-source-event-tests",
+        .root_module = compile_time_host_static_tests.root_module,
+        .filters = &.{
+            "source event adapter",
+            "cached guard failure uses current slot publication origin and producer",
+            "native expect consumes both live and bound pending failure context",
+        },
+    });
+    configureBackend(compile_time_host_source_tests, b.graph.host);
+    b.step("test-compile-time-host-source-events", "Test semantic source event observation and crash-boundary restoration")
+        .dependOn(&b.addRunArtifact(compile_time_host_source_tests).step);
     const source_events_object = buildSourceEventRuntimeObject(b, target, "roc_source_events");
     const install_source_events = b.addInstallFileWithDir(
         sourceEventRuntimeArtifact(b, source_events_object, target),
@@ -6486,6 +6518,7 @@ pub fn build(b: *std.Build) void {
         }
         add_tracy(b, roc_modules.build_options, cli_test, target, true, flag_enable_tracy);
         cli_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
+        cli_test.root_module.addImport("source_event_runtime_objects", source_event_runtime_objects);
         cli_test.step.dependOn(&write_compiled_builtins.step);
 
         test_suites.register(.{
@@ -7614,7 +7647,7 @@ fn testSourceEventRuntimeObject(b: *std.Build) void {
         \\    }
         \\    fn record(context: ?*anyopaque, header: *const events.Header) callconv(.c) void {
         \\        const self: *Recorder = @ptrCast(@alignCast(context.?));
-        \\        const event = events.validate(header) catch unreachable;
+        \\        const event = events.decodeValidated(header);
         \\        self.count += 1;
         \\        self.line = event.descriptor.source.line;
         \\        self.identity = event.descriptor.source.source_identity[0];

@@ -123,7 +123,7 @@ test "source-only queued specializations retain native cache root demand without
             return null;
         }
 
-        fn retain(raw: *anyopaque, _: *const CheckedArtifact.CheckedModuleArtifact, lowered: *const lir.CheckedPipeline.LoweredProgram, _: *const @import("backend").dev.NativeProcCompiler.Retained, _: []const @import("backend").dev.LocatedArtifact) Allocator.Error!void {
+        fn retain(raw: *anyopaque, _: lir.CheckedPipeline.CheckedModuleSet, lowered: *const lir.CheckedPipeline.LoweredProgram, _: *const @import("backend").dev.NativeProcCompiler.Retained, _: []const @import("backend").dev.LocatedArtifact) Allocator.Error!void {
             const self: *@This() = @ptrCast(@alignCast(raw));
             for (lowered.lir_result.static_data_values.items) |slot| self.retained = self.retained or slot.cached_demand;
             for (lowered.lir_result.store.getProcSpecs()) |proc| std.debug.assert(!proc.external);

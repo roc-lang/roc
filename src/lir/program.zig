@@ -23,6 +23,9 @@ pub const StaticDataSymbolId = enum(u32) { _ };
 pub const StaticDataExport = struct {
     /// Linker-visible symbol name, for example `roc__answer`.
     symbol_name: []const u8,
+    /// Exact producer certificate for ordinary object references. A name is
+    /// display/linkage data and cannot attest semantic storage by itself.
+    symbol_identity: ?[32]u8 = null,
     /// LIR static root represented by this export, when it is an internal value.
     value_id: ?LIR.StaticDataId = null,
     /// Fully materialized Roc ABI bytes for the constant.
@@ -118,6 +121,8 @@ pub const RequestedLayout = struct {
     /// Closed LIR procedure that constructs the exact target representation for
     /// a provided static data export. Plain layout-only requests leave this null.
     initializer: ?LIR.LirProcSpecId = null,
+    /// Producer-certified type-only literal provision; no procedure was compiled.
+    materialization: ?RootMaterialization = null,
 };
 
 /// Identifier for a finite callable set in the LIR program.
@@ -495,6 +500,211 @@ pub const ConstPlan = union(enum) {
     erased_fn: ErasedFnsId,
 };
 
+/// Source-owned reads survive retirement of the executable body.
+pub const CtfeDemandRead = struct {
+    module: checked.ModuleId,
+    producer: LIR.ComptimeProducer,
+    region: base.Region,
+    loc: base.SourceLoc,
+    completed: bool = false,
+};
+
+/// Address captures name callable producers but never schedule their bodies.
+pub const CtfeDemandFacts = struct {
+    reads: []const CtfeDemandRead = &.{},
+    address_captures: []const u32 = &.{},
+    cached_address_captures: []const [32]u8 = &.{},
+    complete: bool = false,
+    origin_region: ?base.Region = null,
+    origin_loc: ?base.SourceLoc = null,
+
+    pub fn deinit(self: CtfeDemandFacts, allocator: Allocator) void {
+        allocator.free(self.reads);
+        allocator.free(self.address_captures);
+        allocator.free(self.cached_address_captures);
+    }
+};
+
+/// Stable source causes are independent of the receiving image's file table.
+pub const CtfeDemandCause = struct {
+    module: ?[32]u8 = null,
+    region: base.Region,
+    line: u32,
+    column: u32,
+};
+
+pub const CachedCtfeRead = struct {
+    module: [32]u8,
+    root: u32,
+    cause: CtfeDemandCause,
+};
+
+pub const LiteralRepresentation = @import("literal_recipe.zig").Representation;
+
+/// Binding authority is stamped when the binding is produced. Runtime locals
+/// explicitly have no compile-time value provider; their ordinals never persist.
+pub const LiteralBindingSource = union(enum(u8)) {
+    runtime,
+    checked_binding: struct {
+        module: [32]u8,
+        value_expr: u32,
+        pattern: u32,
+    },
+    constant: check.CheckedModule.ConstLocator,
+};
+
+pub const CachedLiteralBinding = struct {
+    kind: u8,
+    binder: u32,
+    type_digest: check.CheckedNames.TypeDigest,
+    value_required: bool,
+    ty: LiteralRepresentation,
+    source: LiteralBindingSource,
+
+    pub fn deinit(self: CachedLiteralBinding, allocator: Allocator) void {
+        self.ty.deinit(allocator);
+    }
+};
+
+pub const CachedLiteralLocalContext = struct {
+    module: [32]u8,
+    binder: u32,
+    expr: u32,
+    context_anchor: ?u32,
+    owner_template: check.CheckedNames.ProcTemplate,
+    base_key: check.CheckedNames.TypeDigest,
+    specialization_key: check.CheckedNames.TypeDigest,
+    restored_specialization_key: ?check.CheckedNames.TypeDigest = null,
+    bindings: []const CachedLiteralBinding = &.{},
+    evidence: []const const_store.ConstFnEvidence = &.{},
+    evidence_frames: []const const_store.ConstFnEvidenceFrame = &.{},
+    evidence_frame_head: ?u32,
+
+    pub fn deinit(self: CachedLiteralLocalContext, allocator: Allocator) void {
+        for (self.bindings) |binding| binding.deinit(allocator);
+        allocator.free(self.bindings);
+        allocator.free(self.evidence);
+        allocator.free(self.evidence_frames);
+    }
+};
+
+/// Declaration of an earlier literal producer, not a saved result or a local
+/// literal ordinal. The concrete checked callable and lexical evidence prepare
+/// only this conversion; lambda solving derives its actual callable layout.
+pub const CachedLiteralRecipe = struct {
+    module: [32]u8,
+    checked_expr: u32,
+    kind: LIR.LiteralRejectionKind,
+    producer_key: [32]u8,
+    object_identity: [32]u8,
+    owner_template: check.CheckedNames.ProcTemplate,
+    owner_context_fn_key: check.CheckedNames.TypeDigest,
+    current_fn_key: check.CheckedNames.TypeDigest,
+    method_scope: [32]u8,
+    in_default_expr: bool = false,
+    checked_callable_ty: check.CheckedModule.CheckedTypeId,
+    callable: LiteralRepresentation,
+    result: LiteralRepresentation,
+    evidence: []const const_store.ConstFnEvidence = &.{},
+    evidence_frames: []const const_store.ConstFnEvidenceFrame = &.{},
+    evidence_frame_head: ?u32 = null,
+    local_contexts: []const CachedLiteralLocalContext = &.{},
+
+    pub fn valid(self: CachedLiteralRecipe) bool {
+        if (!self.callable.valid() or !self.result.valid()) return false;
+        if (self.callable.types[@intFromEnum(self.callable.root)] != .func) return false;
+        if (!validEvidence(self.evidence, self.evidence_frames, self.evidence_frame_head)) return false;
+        for (self.local_contexts) |context| {
+            if (!validEvidence(context.evidence, context.evidence_frames, context.evidence_frame_head)) return false;
+            for (context.bindings) |binding| {
+                if (binding.kind > 1 or !binding.ty.valid()) return false;
+                if (binding.value_required and binding.source == .runtime) return false;
+            }
+        }
+        return true;
+    }
+
+    fn validEvidence(nodes: []const const_store.ConstFnEvidence, frames: []const const_store.ConstFnEvidenceFrame, maybe_head: ?u32) bool {
+        const head = maybe_head orelse return false;
+        if (frames.len == 0 or head != frames.len - 1) return false;
+        var cursor: usize = 0;
+        for (frames, 0..) |frame, index| {
+            if (index == 0) {
+                if (frame.scope_id != .root or frame.parent != null) return false;
+            } else if (frame.scope_id == .root or frame.parent == null or frame.parent.? != index - 1) return false;
+            if (frame.roots_start != cursor) return false;
+            cursor = evidenceVectorEnd(nodes, cursor, frame.roots_len) orelse return false;
+        }
+        if (cursor != nodes.len) return false;
+        for (nodes, 0..) |node, index| if (node == .target and node.target.nested == .resolved) {
+            const nested = node.target.nested.resolved;
+            const end = evidenceVectorEnd(nodes, index + 1, nested.count) orelse return false;
+            if (end - (index + 1) != nested.subtree_len) return false;
+        };
+        return true;
+    }
+
+    fn evidenceVectorEnd(nodes: []const const_store.ConstFnEvidence, start: usize, count: u32) ?usize {
+        var pending: u64 = count;
+        var cursor = start;
+        while (pending != 0) {
+            if (cursor >= nodes.len) return null;
+            const node = nodes[cursor];
+            cursor += 1;
+            pending -= 1;
+            pending += switch (node) {
+                .target => |target| @as(u64, target.callable_contracts) + switch (target.nested) {
+                    .resolved => |nested| @as(u64, nested.count),
+                    .from_callable => @as(u64, 0),
+                },
+                .structural => |structural| @as(u64, structural.callable_contracts),
+                .from_callable => |use| @as(u64, use.callable_contracts),
+                .from_scheme, .unreachable_value, .checked_error => @as(u64, 0),
+            };
+            if (pending > nodes.len - cursor) return null;
+        }
+        return cursor;
+    }
+
+    pub fn deinit(self: CachedLiteralRecipe, allocator: Allocator) void {
+        self.callable.deinit(allocator);
+        self.result.deinit(allocator);
+        allocator.free(self.evidence);
+        allocator.free(self.evidence_frames);
+        for (self.local_contexts) |context| context.deinit(allocator);
+        allocator.free(self.local_contexts);
+    }
+};
+
+pub const CachedLiteralRead = struct {
+    recipe: CachedLiteralRecipe,
+    cause: CtfeDemandCause,
+};
+
+/// A missing contract is not an empty proof. Complete contracts are emitted
+/// by the producer before any cache consumer can retire its source body.
+pub const CachedCtfeDemand = struct {
+    pub const current_version: u32 = 2;
+    version: u32 = current_version,
+    complete: bool,
+    eager_reads: []const CachedCtfeRead = &.{},
+    literal_reads: []const CachedLiteralRead = &.{},
+    address_captures: []const [32]u8 = &.{},
+
+    pub fn permitsRetirement(self: CachedCtfeDemand) bool {
+        if (self.version != current_version or !self.complete) return false;
+        for (self.literal_reads) |read| if (!read.recipe.valid()) return false;
+        return true;
+    }
+
+    pub fn deinit(self: CachedCtfeDemand, allocator: Allocator) void {
+        allocator.free(self.eager_reads);
+        for (self.literal_reads) |read| read.recipe.deinit(allocator);
+        allocator.free(self.literal_reads);
+        allocator.free(self.address_captures);
+    }
+};
+
 /// Constant root metadata needed after LIR interpretation finishes.
 pub const ConstRootPlan = struct {
     root_order: u32,
@@ -514,6 +724,7 @@ pub const ConstRootPlan = struct {
     /// for one. Other reads may declare additional representation-specific
     /// slots; this field is not the complete publication inventory.
     value_slot: ?LIR.StaticDataId = null,
+    demand: CtfeDemandFacts = .{},
 
     pub fn shape(self: ConstRootPlan) RootShape {
         return .{ .ret_layout = self.ret_layout, .plan = self.plan };
@@ -525,6 +736,73 @@ pub const RootShape = struct {
     ret_layout: layout.Idx,
     plan: ConstPlanId,
 };
+
+/// A consumer-owned root materializer, not an ordinary function artifact.
+/// Ordinary callers depend on this semantic provision so completing a root
+/// cannot pin them to a pre-completion reconstruction body.
+pub const RootMaterialization = struct {
+    module: [32]u8,
+    producer: union(enum(u8)) {
+        checked: u32,
+        literal: struct {
+            checked_expr: u32,
+            kind: LIR.LiteralRejectionKind,
+            conversion_identity: [32]u8,
+        },
+    },
+    representation_digest: [32]u8,
+    layout_digest: [32]u8,
+    wrapper_identity: [32]u8,
+    /// Zero arguments, with an owned value returned through the Roc ABI.
+    abi: enum(u8) { owned_roc_value } = .owned_roc_value,
+};
+
+/// Names a producer-certified materialization independently of its body.
+/// Type-only projections and emitted accessors must use the same identity rule;
+/// this helper hashes authority supplied by the producer, not cache claims.
+pub fn rootMaterializationIdentity(module: [32]u8, producer: @FieldType(RootMaterialization, "producer"), representation_digest: [32]u8, layout_digest: [32]u8) LIR.ProcIdentity {
+    var hasher = base.TypeDigestHasher.init();
+    hasher.update("roc.proc.comptime-root-accessor.v3");
+    hasher.update(&module);
+    const tag: u8, const index: u32 = switch (producer) {
+        .checked => |id| .{ 0, id },
+        .literal => |literal| .{ 1, literal.checked_expr },
+    };
+    hasher.update(&[_]u8{ tag, @truncate(index), @truncate(index >> 8), @truncate(index >> 16), @truncate(index >> 24) });
+    if (producer == .literal) {
+        const literal = producer.literal;
+        hasher.update(&literal.conversion_identity);
+        hasher.update(&.{@intFromEnum(literal.kind)});
+    }
+    hasher.update("owned-roc-value");
+    hasher.update(&representation_digest);
+    hasher.update(&layout_digest);
+    return .{ .bytes = hasher.finalResult() };
+}
+
+test "literal materialization identity retains conversion and representation authority" {
+    const module = [_]u8{1} ** 32;
+    const representation = [_]u8{2} ** 32;
+    const layout_digest = [_]u8{3} ** 32;
+    var producer: @FieldType(RootMaterialization, "producer") = .{ .literal = .{
+        .checked_expr = 17,
+        .kind = .numeral,
+        .conversion_identity = [_]u8{4} ** 32,
+    } };
+    const original = rootMaterializationIdentity(module, producer, representation, layout_digest);
+    try std.testing.expectEqual(original, rootMaterializationIdentity(module, producer, representation, layout_digest));
+    producer.literal.conversion_identity[0] = 5;
+    try std.testing.expect(!std.mem.eql(u8, &original.bytes, &rootMaterializationIdentity(module, producer, representation, layout_digest).bytes));
+    producer.literal.conversion_identity[0] = 4;
+    try std.testing.expect(!std.mem.eql(u8, &original.bytes, &rootMaterializationIdentity(module, producer, [_]u8{6} ** 32, layout_digest).bytes));
+    try std.testing.expect(!std.mem.eql(u8, &original.bytes, &rootMaterializationIdentity(module, producer, representation, [_]u8{7} ** 32).bytes));
+}
+
+/// Semantic pointer header supplied by the current materialization consumer.
+pub fn rootMaterializationHeaderName(allocator: Allocator, materialization: RootMaterialization) Allocator.Error![]u8 {
+    const hex = std.fmt.bytesToHex(materialization.wrapper_identity, .lower);
+    return std.fmt.allocPrint(allocator, "roc__materialize_{s}", .{hex});
+}
 
 /// One literal root: a custom literal's conversion, at the concrete type one
 /// specialization gives it, evaluated at compile time. Its procedure returns
@@ -540,6 +818,7 @@ pub const LiteralRootPlan = struct {
     plan: ConstPlanId,
     /// Every consumer that reads a literal root reads it from this slot.
     value_slot: LIR.StaticDataId,
+    demand: CtfeDemandFacts = .{},
 
     pub fn shape(self: LiteralRootPlan) RootShape {
         return .{ .ret_layout = self.ret_layout, .plan = self.plan };
@@ -548,6 +827,9 @@ pub const LiteralRootPlan = struct {
 
 /// One exact LIR value construction that is frozen as readonly target data.
 pub const StaticDataValue = struct {
+    /// Null explicitly declares session-only storage. A persistent ordinary
+    /// object may reference only a producer-stamped semantic symbol.
+    symbol_identity: ?[32]u8 = null,
     /// Post-ARC guards reading this slot; threaded through ComptimeValueGuard.
     first_comptime_guard: ?u32 = null,
     /// Null when completed frozen data supplies this slot directly.
@@ -596,12 +878,11 @@ pub const ComptimeFailureKind = enum(u8) {
     checked_error = 2,
 };
 
-/// Exact post-ARC guard identity consumed by successful-root completion.
+/// Exact post-ARC guard identity used to bind failure provenance.
 pub const ComptimeValueGuard = struct {
     next_for_slot: ?u32 = null,
     /// Shared statements have one record per owning procedure.
     owner: LIR.LirProcSpecId,
-    completed: bool = false,
     crash: LIR.CFStmtId,
     /// The failure path for a value whose evaluation reached code checking
     /// rejected.
@@ -631,60 +912,6 @@ pub fn staticDataNodeSymbolName(allocator: Allocator, owner: u32, index: u32) Al
     return try std.fmt.allocPrint(allocator, "roc__d{d}_{d}", .{ owner, index });
 }
 
-/// Authoritative inline-expect production facts. `absent` proves absence in
-/// a fresh source body; inline transforms join the obligations they compose.
-/// Out-of-line serving dependencies require a separate directional closure.
-/// This is not an absence-of-hooks claim.
-/// Runtime preservation alone does not prove CTFE diagnostic provenance.
-pub const ProducerObservations = enum(u8) {
-    unknown = 0,
-    absent = 1,
-    omitted = 2,
-    runtime = 3,
-    shared = 4,
-
-    /// Join obligations of bodies actually composed by an inline transform.
-    /// This is not a serving-closure certificate or diagnostic provenance.
-    pub fn join(a: ProducerObservations, b: ProducerObservations) ProducerObservations {
-        if (a == .unknown or b == .unknown) return .unknown;
-        if (a == .absent) return b;
-        if (b == .absent) return a;
-        if (a == .omitted or b == .omitted) return .omitted;
-        if (a == .runtime or b == .runtime) return .runtime;
-        return .shared;
-    }
-
-    pub fn forFreshProducer(has_expects: bool, shared: bool, run: bool) ProducerObservations {
-        if (!has_expects) return .absent;
-        if (!run) return .omitted;
-        return if (shared) .shared else .runtime;
-    }
-};
-
-test "producer observations distinguish omission preservation and source absence" {
-    try std.testing.expectEqual(ProducerObservations.omitted, ProducerObservations.forFreshProducer(true, false, false));
-    try std.testing.expectEqual(ProducerObservations.runtime, ProducerObservations.forFreshProducer(true, false, true));
-    try std.testing.expectEqual(ProducerObservations.shared, ProducerObservations.forFreshProducer(true, true, true));
-    try std.testing.expectEqual(ProducerObservations.omitted, ProducerObservations.forFreshProducer(true, true, false));
-    try std.testing.expectEqual(ProducerObservations.absent, ProducerObservations.forFreshProducer(false, false, false));
-}
-
-test "producer observation join preserves inlined and recursive obligations" {
-    for (std.enums.values(ProducerObservations)) |a| {
-        try std.testing.expectEqual(a, a.join(.absent));
-        try std.testing.expectEqual(a, a.join(a));
-        for (std.enums.values(ProducerObservations)) |b| {
-            try std.testing.expectEqual(a.join(b), b.join(a));
-            for (std.enums.values(ProducerObservations)) |c| {
-                try std.testing.expectEqual(a.join(b).join(c), a.join(b.join(c)));
-            }
-        }
-    }
-    try std.testing.expectEqual(ProducerObservations.omitted, ProducerObservations.absent.join(.omitted));
-    try std.testing.expectEqual(ProducerObservations.runtime, ProducerObservations.shared.join(.runtime));
-    try std.testing.expectEqual(ProducerObservations.unknown, ProducerObservations.shared.join(.unknown));
-}
-
 /// Complete LIR program and side data consumed by ARC, backends, and eval.
 /// A template specialization's content key and the procedure lowered for it.
 pub const SpecProc = struct {
@@ -696,7 +923,7 @@ pub const SpecProc = struct {
     /// Producer-established app filling on which this procedure depends;
     /// absent for code reusable independently of any platform requirement.
     platform_requirement_relation: ?[32]u8 = null,
-    observations: ProducerObservations = .unknown,
+    demand: ?CachedCtfeDemand = null,
 };
 
 /// Everything one lowering produced: the procedure store, its layouts, the
@@ -808,6 +1035,8 @@ pub const Result = struct {
         self.static_data_values.deinit(allocator);
         self.comptime_value_guards.deinit(allocator);
         deinitConstPlans(allocator, self.const_plans.items);
+        for (self.const_roots.items) |plan| plan.demand.deinit(allocator);
+        for (self.literal_roots.items) |plan| plan.demand.deinit(allocator);
         self.const_roots.deinit(allocator);
         self.literal_roots.deinit(allocator);
         self.const_plans.deinit(allocator);
@@ -839,9 +1068,16 @@ pub const Result = struct {
         self.requested_layouts.deinit(allocator);
         self.root_metadata.deinit(allocator);
         self.root_procs.deinit(allocator);
+        for (self.spec_procs.items) |spec| if (spec.demand) |demand| demand.deinit(allocator);
         self.spec_procs.deinit(allocator);
         self.layouts.deinit();
         self.store.deinit();
+    }
+
+    pub fn staticDataSymbolName(self: *const Result, allocator: Allocator, id: LIR.StaticDataId) Allocator.Error![]u8 {
+        const value = self.static_data_values.items[@intFromEnum(id)];
+        if (value.symbol_identity) |identity| return std.fmt.allocPrint(allocator, "roc__sv{x}", .{&identity});
+        return std.fmt.allocPrint(allocator, "roc__d{d}", .{@intFromEnum(id)});
     }
 
     pub fn requestedLayoutForType(self: *const Result, ty: names.TypeDigest) ?layout.Idx {

@@ -8,6 +8,7 @@ const base = @import("base");
 const backend = @import("backend");
 const lir = @import("lir");
 const layout = @import("layout");
+const Events = @import("builtins").source_events;
 const Context = backend.dev.CtfeContext;
 const Failure = @import("native_failure.zig");
 pub const FailureRegistry = Failure.Registry;
@@ -83,7 +84,9 @@ pub const Catalog = struct {
 
     fn provideSource(context: *const anyopaque, statement_raw: u32) ?Context.SourceDescriptor {
         const self: *const Catalog = @ptrCast(@alignCast(context));
-        if (statement_raw >= self.registry.prefix) return null;
+        // Materializers append producer statements after consumer failure IDs
+        // reserve their prefix. That prefix does not bound the producer domain.
+        if (statement_raw >= self.result.store.cfStmtCount()) return null;
         const statement: lir.LIR.CFStmtId = @enumFromInt(statement_raw);
         return sourceDescriptor(&self.result.store, self.result.store.stmtRegion(statement), self.result.store.stmtLoc(statement));
     }
@@ -91,7 +94,7 @@ pub const Catalog = struct {
     fn provideFailure(context: *const anyopaque, statement: u32) ?Context.FailureDescriptor {
         const self: *const Catalog = @ptrCast(@alignCast(context));
         const provenance = provideSource(context, statement) orelse return null;
-        const observation = self.registry.get(statement);
+        const observation = self.registry.sourceStatement(@enumFromInt(statement));
         const guard = if (self.registry.guards.get(@enumFromInt(statement))) |slot|
             self.roots[@intFromEnum(slot)] orelse return null
         else
@@ -119,6 +122,7 @@ pub const Catalog = struct {
             },
             .region = original.region,
             .branch_regions = original.branch_regions,
+            .checked_origin = original.checked_origin,
         };
     }
 
@@ -129,8 +133,116 @@ pub const Catalog = struct {
     }
 };
 
+test "native producer catalog owns appended materializer call and failure records for object emission" {
+    const allocator = std.testing.allocator;
+    var result = try lir.Program.Result.init(allocator, base.target.TargetUsize.native);
+    defer result.deinit();
+    try result.store.setSourceFiles(&.{.{
+        .name = "Clean",
+        .qualified_name = "app.Clean",
+        .module_identity = @splat(41),
+        .checked_module_key = @splat(42),
+    }});
+    const registry = try Failure.Registry.create(allocator, &result);
+    defer registry.deinit();
+    const catalog = try Catalog.init(allocator, &result, registry);
+    defer catalog.deinit();
+
+    // Consumer failure IDs have already been allocated when reconstruction
+    // appends producer LIR. Equal integers must not alias those two domains.
+    const bound = try registry.append(.{ .checked_error = false });
+    const origin: lir.LIR.StmtOrigin = .{
+        .loc = .{ .file = 0, .line = 2, .column = 3 },
+        .region = .from_raw_offsets(10, 20),
+        .inline_scope = .none,
+        .kind = .lowering_glue,
+    };
+    const crash = try result.store.addCFStmt(.{ .crash = .{
+        .msg = .{ .literal = try result.store.insertString("materializer failed") },
+        .checked_error = true,
+    } }, origin);
+    try std.testing.expectEqual(bound, @intFromEnum(crash));
+    try std.testing.expect(!registry.get(bound).checked_error);
+    const callee = try result.store.addProcSpec(.{
+        .name = result.store.freshSyntheticSymbol(),
+        .identity = lir.ProcIdentity.forTest(41),
+        .args = .empty(),
+        .body = crash,
+        .ret_layout = .i64,
+    }, .none);
+    const local = try result.store.addLocal(.{ .layout_idx = .i64 });
+    const ret = try result.store.addCFStmt(.{ .ret = .{ .value = local } }, origin);
+    const call = try result.store.addCFStmt(.{ .assign_call = .{
+        .target = local,
+        .proc = callee,
+        .args = .empty(),
+        .next = ret,
+    } }, origin);
+    _ = try result.store.addProcSpec(.{
+        .name = result.store.freshSyntheticSymbol(),
+        .identity = lir.ProcIdentity.forTest(42),
+        .args = .empty(),
+        .body = call,
+        .ret_layout = .i64,
+    }, .none);
+
+    const source = catalog.view.source(@intFromEnum(call)).?;
+    try std.testing.expectEqual(@as([32]u8, @splat(42)), source.checked_module);
+    try std.testing.expectEqual(@as([32]u8, @splat(41)), source.source_identity);
+    try std.testing.expectEqualDeep(origin.region, source.region);
+    const failure = catalog.view.failure(@intFromEnum(crash)).?;
+    try std.testing.expectEqualDeep(source, failure.source);
+    try std.testing.expect(failure.checked_error);
+    const absent: u32 = @intCast(result.store.cfStmtCount());
+    try std.testing.expect(catalog.view.source(absent) == null);
+    try std.testing.expect(catalog.view.failure(absent) == null);
+
+    // Exercise the complete object consumer, including its native worker lanes,
+    // with the real producer catalog rather than a synthetic test provider.
+    var compiler = backend.ObjectFileCompiler.initForPack(allocator);
+    compiler.source_catalog = catalog.view;
+    var object = try compiler.compileToObjectFile(
+        &result.store,
+        &result.layouts,
+        &.{},
+        &.{},
+        result.store.getProcSpecs(),
+        &.{},
+        &.{},
+        &.{},
+        .x64linux,
+    );
+    defer object.deinit();
+    var calls: usize = 0;
+    var failures: usize = 0;
+    for (object.artifacts.?.artifacts) |artifact| {
+        try backend.dev.ProcArtifact.validateSourceEventCertificates(allocator, artifact, .little);
+        for (artifact.source_events) |certificate| {
+            try std.testing.expectEqual(source.checked_module, certificate.descriptor.source.checked_module);
+            try std.testing.expectEqual(source.source_identity, certificate.descriptor.source.source_identity);
+            switch (@as(Events.Kind, @enumFromInt(certificate.descriptor.header.kind))) {
+                .call_enter, .call_exit => calls += 1,
+                .failure => {
+                    failures += 1;
+                    try std.testing.expectEqual(@as(u32, 1), certificate.descriptor.failure.checked_error);
+                },
+                else => return error.TestUnexpectedResult,
+            }
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 2), calls);
+    try std.testing.expectEqual(@as(usize, 1), failures);
+}
+
 pub fn sourceDescriptor(store: *const lir.LirStore, region: base.Region, loc: base.SourceLoc) ?Context.SourceDescriptor {
-    if (!loc.hasLocation()) return null;
+    if (!loc.hasLocation()) return .{
+        .checked_module = @splat(0),
+        .source_identity = @splat(0),
+        .region = region,
+        .line = 0,
+        .column = 0,
+        .has_location = false,
+    };
     const owner = store.sourceFileCheckedModule(loc.file) orelse return null;
     return .{
         .checked_module = owner,
@@ -276,6 +388,7 @@ pub const BindingPlan = struct {
     files: std.AutoHashMap(SourceKey, u32),
     modules: std.AutoHashMap([32]u8, lir.LIR.LoweringModuleId),
     values: std.HashMap(Context.Binding, u64, BindingHash, 80),
+    event_sites: std.AutoHashMap([32]u8, lir.LIR.ComptimeSiteId),
     roots: RootIndex,
     owned_sets: std.ArrayList(*backend.dev.ProcArtifact.Set) = .empty,
     cached_roots: []const backend.dev.LocatedArtifact = &.{},
@@ -293,6 +406,7 @@ pub const BindingPlan = struct {
             .files = std.AutoHashMap(SourceKey, u32).init(allocator),
             .modules = std.AutoHashMap([32]u8, lir.LIR.LoweringModuleId).init(allocator),
             .values = std.HashMap(Context.Binding, u64, BindingHash, 80).init(allocator),
+            .event_sites = std.AutoHashMap([32]u8, lir.LIR.ComptimeSiteId).init(allocator),
             .roots = try RootIndex.init(allocator, catalog.roots),
         };
         errdefer plan.deinit();
@@ -305,7 +419,13 @@ pub const BindingPlan = struct {
             try plan.modules.put(module.bytes, @enumFromInt(index));
         }
         for (0..result.comptime_sites.items.len) |index| {
-            if (catalog.view.site(@intCast(index))) |descriptor| try plan.values.put(.{ .site = descriptor }, index);
+            if (catalog.view.site(@intCast(index))) |descriptor| {
+                try plan.values.put(.{ .site = descriptor }, index);
+                try plan.event_sites.put(siteKey(base.Region, descriptor, descriptor.branch_regions), @enumFromInt(index));
+            }
+        }
+        for (0..failures.prefix) |statement| {
+            if (catalog.view.failure(@intCast(statement))) |descriptor| try plan.bind(.{ .failure = descriptor });
         }
         return plan;
     }
@@ -314,6 +434,7 @@ pub const BindingPlan = struct {
         for (self.owned_sets.items) |set| set.deinit();
         self.owned_sets.deinit(self.allocator);
         self.values.deinit();
+        self.event_sites.deinit();
         self.roots.deinit();
         self.modules.deinit();
         self.files.deinit();
@@ -357,11 +478,149 @@ pub const BindingPlan = struct {
                     .region = site.region,
                     .branch_regions = try self.catalog.arena.allocator().dupe(base.Region, site.branch_regions),
                 });
+                try self.event_sites.put(siteKey(base.Region, site, site.branch_regions), @enumFromInt(index));
                 break :blk index;
             },
             .static_root => |root| self.roots.resolve(root) orelse unreachable,
         };
         try self.values.put(binding, value);
+    }
+
+    pub fn resolveEventSourceFile(raw: *const anyopaque, source: *const Events.Source) u32 {
+        const self: *const BindingPlan = @ptrCast(@alignCast(raw));
+        std.debug.assert(source.has_location == 1);
+        return self.files.get(.{ .checked = source.checked_module, .content = source.source_identity }) orelse
+            @panic("source event location has no exact declared source binding");
+    }
+
+    pub fn resolveEventSite(raw: *const anyopaque, site: *const Events.Site, branches: []align(1) const Events.Region) lir.LIR.ComptimeSiteId {
+        const self: *const BindingPlan = @ptrCast(@alignCast(raw));
+        const descriptor: Context.SiteDescriptor = .{
+            .checked_module = site.checked_module,
+            .checked_site = if (site.has_checked_site == 1) site.checked_site else null,
+            .procedure_identity = site.procedure_identity,
+            .kind = switch (@as(Events.SiteKind, @enumFromInt(site.kind))) {
+                .match => .match,
+                .destructure => .destructure,
+                .if_ => .if_,
+            },
+            .region = eventRegion(site.region),
+            .branch_regions = &.{},
+        };
+        return self.event_sites.get(siteKey(Events.Region, descriptor, branches)) orelse
+            @panic("source event site has no exact prebound producer certificate");
+    }
+
+    pub fn resolveEventFailure(raw: *const anyopaque, descriptor: *const Events.Descriptor) Failure.Observation {
+        const self: *const BindingPlan = @ptrCast(@alignCast(raw));
+        const id = self.values.get(.{ .failure = eventFailureDescriptor(descriptor) }) orelse
+            @panic("source event failure has no exact prebound producer certificate");
+        return self.failures.get(@intCast(id));
+    }
+
+    fn eventFailureDescriptor(descriptor: *const Events.Descriptor) Context.FailureDescriptor {
+        const source = descriptor.source;
+        const failure = descriptor.failure;
+        return .{
+            .source = .{
+                .checked_module = source.checked_module,
+                .source_identity = source.source_identity,
+                .region = eventRegion(source.region),
+                .line = source.line,
+                .column = source.column,
+                .has_location = source.has_location == 1,
+            },
+            .checked_error = failure.checked_error == 1,
+            .literal_rejection = if (failure.has_literal_rejection == 1) eventLiteral(failure.literal_rejection) else null,
+            .guard_root = if (failure.has_guard_root == 1) eventRoot(failure.guard_root) else null,
+        };
+    }
+
+    pub fn bindSourceEvent(self: *BindingPlan, certificate: backend.dev.ProcArtifact.SourceEventCertificate) std.mem.Allocator.Error!void {
+        const descriptor = certificate.descriptor;
+        if (descriptor.source.has_location == 1) {
+            _ = resolveEventSourceFile(self, &descriptor.source);
+        }
+        switch (@as(Events.Kind, @enumFromInt(descriptor.header.kind))) {
+            .call_enter, .call_exit => {},
+            .failure => try self.bind(.{ .failure = eventFailureDescriptor(&descriptor) }),
+            .branch_taken, .exhaustiveness_failed => {
+                const site = descriptor.site;
+                try self.bind(.{ .site = .{
+                    .checked_module = site.checked_module,
+                    .checked_site = if (site.has_checked_site == 1) site.checked_site else null,
+                    .procedure_identity = site.procedure_identity,
+                    .kind = switch (@as(Events.SiteKind, @enumFromInt(site.kind))) {
+                        .match => .match,
+                        .destructure => .destructure,
+                        .if_ => .if_,
+                    },
+                    .region = eventRegion(site.region),
+                    .branch_regions = certificate.branch_regions,
+                } });
+            },
+        }
+    }
+
+    fn eventRegion(region: Events.Region) base.Region {
+        return base.Region.from_raw_offsets(region.start, region.end);
+    }
+
+    fn eventLiteral(literal: Events.Literal) Context.LiteralDescriptor {
+        return .{
+            .checked_module = literal.checked_module,
+            .checked_expr = literal.checked_expr,
+            .kind = switch (@as(Events.LiteralKind, @enumFromInt(literal.kind))) {
+                .numeral => .numeral,
+                .quote => .quote,
+            },
+        };
+    }
+
+    fn eventRoot(root: Events.Root) Context.RootDescriptor {
+        return .{
+            .module = root.module,
+            .producer = switch (@as(Events.ProducerKind, @enumFromInt(root.producer_kind))) {
+                .checked => .{ .checked = root.checked_expr },
+                .literal => .{ .literal = .{ .literal = eventLiteral(root.literal), .procedure_identity = root.procedure_identity } },
+            },
+            .layout_digest = root.layout_digest,
+            .role = switch (@as(Events.RootRole, @enumFromInt(root.role))) {
+                .value => .value,
+                .failure_message => .{ .failure_message = .{
+                    .failed_field = root.failed_field,
+                    .message_field = root.message_field,
+                    .failed_offset = root.failed_offset,
+                    .message_offset = root.message_offset,
+                } },
+            },
+        };
+    }
+
+    fn siteWord(hasher: *base.Sha256, value: u32) void {
+        var bytes: [4]u8 = undefined;
+        std.mem.writeInt(u32, &bytes, value, .little);
+        hasher.update(&bytes);
+    }
+
+    fn siteKey(comptime Region: type, site: Context.SiteDescriptor, branches: []align(1) const Region) [32]u8 {
+        var hasher = base.Sha256.init(.{});
+        hasher.update("roc.source-event.site.v1");
+        hasher.update(&site.checked_module);
+        hasher.update(&site.procedure_identity);
+        siteWord(&hasher, @intFromEnum(site.kind));
+        siteWord(&hasher, @intFromBool(site.checked_site != null));
+        siteWord(&hasher, site.checked_site orelse 0);
+        siteWord(&hasher, site.region.start.offset);
+        siteWord(&hasher, site.region.end.offset);
+        siteWord(&hasher, @intCast(branches.len));
+        for (branches) |branch| {
+            siteWord(&hasher, if (Region == base.Region) branch.start.offset else branch.start);
+            siteWord(&hasher, if (Region == base.Region) branch.end.offset else branch.end);
+        }
+        var digest: [32]u8 = undefined;
+        hasher.final(&digest);
+        return digest;
     }
 
     fn resolve(context: *anyopaque, binding: Context.Binding) ?u64 {
@@ -393,9 +652,6 @@ pub const BindingPlan = struct {
             try groups.items[entry.value_ptr.*].roots.append(a, artifact.index);
         }
         for (groups.items) |*group| {
-            var contextual = false;
-            for (group.source.artifacts) |artifact| contextual = contextual or artifact.domain == .ctfe;
-            if (!contextual) continue;
             var closure = try backend.dev.ArtifactClosure.init(self.allocator, group.source);
             defer closure.deinit();
             const placed = try closure.ofMany(group.roots.items);
@@ -404,23 +660,8 @@ pub const BindingPlan = struct {
             @memset(marked, false);
             for (placed) |index| {
                 marked[index] = true;
-                for (group.source.artifacts[index].context_bindings) |binding| try self.bind(binding);
+                for (group.source.artifacts[index].source_events) |certificate| try self.bindSourceEvent(certificate);
             }
-            var selected = try backend.dev.ArtifactClosure.selectMarked(self.allocator, group.source, marked);
-            defer selected.deinit();
-            const set = try a.create(backend.dev.ProcArtifact.Set);
-            backend.dev.ProcArtifact.bindContextOwned(&selected.set, .{
-                .context = self,
-                .resolve = resolve,
-            }) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.IncompleteContext, error.InvalidContextDomain, error.MissingContextBinding, error.InvalidContextRelocation => unreachable,
-            };
-            group.remap = try a.dupe(?u32, selected.old_to_new);
-            try self.owned_sets.append(self.allocator, set);
-            set.* = selected.set;
-            selected.set.arena = std.heap.ArenaAllocator.init(self.allocator);
-            group.bound = set;
         }
         const prepared = try a.alloc(backend.dev.LocatedArtifact, located.len);
         for (located, prepared) |artifact, *bound| {

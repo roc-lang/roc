@@ -16,6 +16,8 @@ pub const RootMetadata = core.RootMetadata;
 pub const Hosted = core.Hosted;
 /// LIR program result shared by post-check lowering and consumers.
 pub const Program = core.Program;
+/// Sealed producer-demand SCC schedule for serial compile-time roots.
+pub const CtfeSchedule = core.CtfeSchedule;
 /// Public checked-module-to-LIR lowering entrypoint.
 pub const CheckedPipeline = @import("checked_pipeline.zig");
 /// One module's closed exports lowered as a program of their own.
@@ -75,7 +77,7 @@ test "LIR image tests" {
 }
 
 pub const ImmortalLocals = @import("immortal_locals.zig");
-/// Final immutable failure-image guards and explicit completion.
+/// Ordinary value-read guards, invariant across failure-image publication.
 pub const ComptimeValueGuards = @import("comptime_value_guards.zig");
 pub const ComptimeRootAccessors = @import("comptime_root_accessors.zig");
 

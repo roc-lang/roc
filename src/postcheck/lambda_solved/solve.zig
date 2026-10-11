@@ -1,6 +1,7 @@
 //! Lambda solving over lifted Monotype IR.
 
 const std = @import("std");
+const SourceLoc = @import("base").SourceLoc;
 const TypeDigestHasher = @import("base").TypeDigestHasher;
 const collections = @import("collections");
 const can = @import("can");
@@ -12,6 +13,7 @@ const MonoType = @import("../monotype/type.zig");
 const Lifted = @import("../monotype_lifted/ast.zig");
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
+const CtfeDemand = @import("../ctfe_demand.zig");
 
 const Allocator = std.mem.Allocator;
 const static_dispatch = check.StaticDispatchRegistry;
@@ -397,6 +399,37 @@ const Solver = struct {
     }
 
     fn solve(self: *Solver) Allocator.Error!void {
+        const RootKey = struct { module: [32]u8, root: u32 };
+        var cached_roots = std.AutoHashMap(RootKey, Common.ComptimeValueRoot).init(self.allocator);
+        defer cached_roots.deinit();
+        var cached_literals = std.AutoHashMap([32]u8, Common.ComptimeValueRoot).init(self.allocator);
+        defer cached_literals.deinit();
+        for (self.lifted.literal_roots, 0..) |root, index| {
+            const recipe = root.recipe orelse continue;
+            const entry = try cached_literals.getOrPut(recipe.producer_key.bytes);
+            if (entry.found_existing) Common.invariant("two literal declarations shared a producer identity");
+            entry.value_ptr.* = .{
+                .module = root.module,
+                .root = .{ .literal = @enumFromInt(index) },
+                .const_locator = null,
+            };
+        }
+        for (self.lifted.layout_requests) |request| {
+            const root = request.comptime_root orelse continue;
+            const id = switch (root.root) {
+                .checked => |id| @intFromEnum(id),
+                .literal => continue,
+            };
+            try cached_roots.put(.{ .module = root.module.bytes, .root = id }, root);
+        }
+        for (self.lifted.comptime_value_roots) |root| {
+            const id = switch (root.root) {
+                .checked => |id| @intFromEnum(id),
+                .literal => continue,
+            };
+            const entry = try cached_roots.getOrPut(.{ .module = root.module.bytes, .root = id });
+            if (!entry.found_existing) entry.value_ptr.* = root;
+        }
         for (self.lifted.locals, 0..) |local, index| {
             self.local_tys[index] = try self.lowerTypeFresh(local.ty);
         }
@@ -419,6 +452,34 @@ const Solver = struct {
 
         for (self.lifted.fns, 0..) |fn_, index| {
             const fn_id: Lifted.FnId = @enumFromInt(@as(u32, @intCast(index)));
+            if (fn_.body == .roc) {
+                try self.program.ctfe_demand.addEdge(self.demandFn(fn_id), self.demandExpr(fn_.body.roc), .evaluation);
+            } else if (fn_.source) |source| {
+                if (source.cached) |cached| {
+                    if (cached.demand) |demand| {
+                        if (!demand.permitsRetirement()) Common.invariant("cached callable retired without complete CTFE demand");
+                        try self.program.ctfe_demand.addContract(.{ .node = self.demandFn(fn_id), .demand = demand });
+                        for (demand.eager_reads) |read| {
+                            try self.program.ctfe_demand.addRead(.{
+                                .node = self.demandFn(fn_id),
+                                .root = cached_roots.get(.{ .module = read.module, .root = read.root }) orelse Common.invariant("cached demand root has no producer-authored storage declaration"),
+                                .region = read.cause.region,
+                                .loc = self.cachedDemandLoc(read.cause),
+                            });
+                        }
+                        for (demand.literal_reads) |read| {
+                            const root = cached_literals.get(read.recipe.producer_key) orelse Common.invariant("cached literal demand has no earlier producer declaration");
+                            if (!std.mem.eql(u8, &root.module.bytes, &read.recipe.module)) Common.invariant("cached literal producer module disagreed with its declaration");
+                            try self.program.ctfe_demand.addRead(.{
+                                .node = self.demandFn(fn_id),
+                                .root = root,
+                                .region = read.cause.region,
+                                .loc = self.cachedDemandLoc(read.cause),
+                            });
+                        }
+                    } else try self.program.ctfe_demand.addUnavailable(self.demandFn(fn_id));
+                }
+            }
             try self.solveFn(fn_id, fn_);
         }
 
@@ -437,6 +498,7 @@ const Solver = struct {
                 .fn_id = request.fn_id,
                 .const_locator = request.const_locator,
                 .comptime_root = request.comptime_root,
+                .literal_materialization = request.literal_materialization,
             });
         }
 
@@ -481,6 +543,42 @@ const Solver = struct {
         // After finalization so the materialized clones' callable slots close
         // exactly as their eager counterparts always did.
         try self.closeUnfilledCallableSlots();
+        try self.resolveDemandApplications();
+        try self.program.ctfe_demand.seal();
+    }
+
+    fn cachedDemandLoc(self: *const Solver, cause: @import("lir_core").Program.CtfeDemandCause) SourceLoc {
+        const module = cause.module orelse return SourceLoc.none;
+        for (self.lifted.source_files, 0..) |file, file_index| {
+            if (file.checked_module_key) |key| {
+                if (std.mem.eql(u8, &key, &module)) return .{ .file = @intCast(file_index), .line = cause.line, .column = cause.column };
+            }
+        }
+        Common.invariant("cached CTFE demand cause has no declared source file");
+    }
+
+    fn resolveDemandApplications(self: *Solver) Allocator.Error!void {
+        var functions = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(self.allocator);
+        defer functions.deinit();
+        for (self.lifted.fns, 0..) |fn_, index| {
+            try functions.put(fn_.symbol, @enumFromInt(@as(u32, @intCast(index))));
+        }
+        for (self.program.ctfe_demand.late_applications.items) |application| {
+            const operand_ty = self.program.expr_tys.items[application.callee_expr];
+            const ty = if (application.boxed) try self.boxElem(operand_ty) else operand_ty;
+            const shape = try self.functionShape(ty);
+            const callable = self.program.types.rootContentCompressed(shape.callable);
+            const members = switch (callable) {
+                .lambda_set => |span| span,
+                .erased => |erased| erased.members,
+                else => Common.invariant("solved CTFE application has no concrete callable members"),
+            };
+            for (0..members.count()) |index| {
+                const member = self.program.types.memberItem(members, index);
+                const fn_id = functions.get(member.lambda) orelse Common.invariant("CTFE application named an unpublished callable");
+                try self.program.ctfe_demand.addEdge(application.node, self.demandFn(fn_id), .application);
+            }
+        }
     }
 
     fn functionType(self: *Solver, fn_: Lifted.Fn) Allocator.Error!Type.TypeVarId {
@@ -762,6 +860,7 @@ const Solver = struct {
                     return null;
                 }
                 self.expr_done[index] = true;
+                try self.publishExprDemand(expr.id);
                 return .{ .node = .{ .expr = expr.id }, .ty = ty, .finish_slot = slot, .generated_backing = expr.generated_backing };
             },
         }
@@ -778,6 +877,21 @@ const Solver = struct {
         var frame = (try self.beginExpr(.{ .expr = .{ .id = expr_id } })) orelse return self.inferredExpr(expr_id);
         while (true) {
             if (try self.stepExpr(&frame)) |request| {
+                const from = switch (frame.node) {
+                    .expr => |id| self.demandExpr(id),
+                    .stmt => |id| self.demandStmt(id),
+                };
+                const to = switch (request) {
+                    .expr => |expr| self.demandExpr(expr.id),
+                    .stmt => |id| self.demandStmt(id),
+                };
+                // A root's initializer participates in type/lambda evidence,
+                // never in the execution of a completed-value read.
+                const relation: CtfeDemand.Relation = switch (frame.node) {
+                    .expr => |id| if (self.lifted.exprs[@intFromEnum(id)].data == .comptime_value) .representation else .evaluation,
+                    .stmt => .evaluation,
+                };
+                try self.program.ctfe_demand.addEdge(from, to, relation);
                 if (try self.beginExpr(request)) |child| {
                     try self.expr_stack.append(self.allocator, frame);
                     frame = child;
@@ -788,6 +902,53 @@ const Solver = struct {
             }
         }
         return self.inferredExpr(expr_id);
+    }
+
+    fn demandExpr(_: *const Solver, id: Lifted.ExprId) CtfeDemand.NodeId {
+        return @enumFromInt(@intFromEnum(id));
+    }
+
+    fn demandStmt(self: *const Solver, id: Lifted.StmtId) CtfeDemand.NodeId {
+        return @enumFromInt(@as(u32, @intCast(self.lifted.exprs.len)) + @intFromEnum(id));
+    }
+
+    fn demandFn(self: *const Solver, id: Lifted.FnId) CtfeDemand.NodeId {
+        return @enumFromInt(@as(u32, @intCast(self.lifted.exprs.len + self.lifted.stmts.len)) + @intFromEnum(id));
+    }
+
+    /// Publish the expression's own relations while solving visits it.
+    /// Child relations are emitted by the same continuation that solves them;
+    /// no later consumer walks the executable expression to recover demand.
+    fn publishExprDemand(self: *Solver, id: Lifted.ExprId) Allocator.Error!void {
+        const node = self.demandExpr(id);
+        switch (self.lifted.exprs[@intFromEnum(id)].data) {
+            .comptime_value => |value| try self.program.ctfe_demand.addRead(.{
+                .node = node,
+                .root = self.lifted.comptime_value_roots[@intFromEnum(value.root)],
+                .region = self.lifted.exprRegion(id),
+                .loc = self.lifted.exprLoc(id),
+            }),
+            .call_proc => |call| switch (Lifted.directCallee(call)) {
+                .local => |fn_id| try self.program.ctfe_demand.addEdge(node, self.demandFn(fn_id), .application),
+            },
+            .call_value => |call| try self.program.ctfe_demand.addLateApplication(.{
+                .node = node,
+                .callee_expr = @intFromEnum(call.callee),
+            }),
+            .fn_ref => |ref| try self.program.ctfe_demand.addEdge(node, self.demandFn(ref.fn_id), .address_capture),
+            .low_level => |call| {
+                if (call.op == .list_sort_with) {
+                    const args = self.lifted.exprSpan(call.args);
+                    if (args.len != 2) Common.invariant("sort demand requires list and boxed comparator");
+                    try self.program.ctfe_demand.addLateApplication(.{
+                        .node = node,
+                        .callee_expr = @intFromEnum(args[1]),
+                        .boxed = true,
+                    });
+                }
+            },
+            else => {},
+        }
     }
 
     /// Resume at the next source-ordered child, after all constraints from the
@@ -4554,6 +4715,196 @@ fn emptyLiftedProgramForTest(allocator: Allocator) Lifted.Program {
         .empty, // comptime_sites
         0, // next_symbol
     );
+}
+
+test "CTFE demand publishes per-owner reads and separates initializer proof from application" {
+    const allocator = std.testing.allocator;
+    var lifted = emptyLiftedProgramForTest(allocator);
+    var lifted_owned = true;
+    errdefer if (lifted_owned) lifted.deinit();
+    const unit_ty = try lifted.types.add(.zst);
+    const unit = try lifted.addExpr(.{ .ty = unit_ty, .data = .unit });
+    const producer = try lifted.addFn(.{
+        .symbol = @enumFromInt(0),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = unit },
+        .ret = unit_ty,
+    });
+    const initializer = try lifted.addExpr(.{
+        .ty = unit_ty,
+        .data = .{ .call_proc = .{ .callee = .{ .lifted = producer }, .args = .empty() } },
+    });
+    const root = try lifted.addComptimeValueRoot(.{
+        .module = .{ .bytes = [_]u8{7} ** 32 },
+        .root = .{ .checked = @enumFromInt(3) },
+        .const_locator = null,
+    });
+    const read = try lifted.addExpr(.{
+        .ty = unit_ty,
+        .data = .{ .comptime_value = .{ .root = root, .initializer = initializer } },
+    });
+    const reader = try lifted.addFn(.{
+        .symbol = @enumFromInt(1),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = read },
+        .ret = unit_ty,
+    });
+    const call = try lifted.addExpr(.{
+        .ty = unit_ty,
+        .data = .{ .call_proc = .{ .callee = .{ .lifted = reader }, .args = .empty() } },
+    });
+    _ = try lifted.addFn(.{
+        .symbol = @enumFromInt(2),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = call },
+        .ret = unit_ty,
+    });
+    const callable_ty = try lifted.types.add(.{ .func = .{ .args = .empty(), .ret = unit_ty } });
+    const address = try lifted.addExpr(.{
+        .ty = callable_ty,
+        .data = .{ .fn_ref = .{ .fn_id = reader } },
+    });
+    const address_owner = try lifted.addFn(.{
+        .symbol = @enumFromInt(3),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = address },
+        .ret = callable_ty,
+    });
+    const late_call = try lifted.addExpr(.{
+        .ty = unit_ty,
+        .data = .{ .call_value = .{ .callee = address, .args = .empty() } },
+    });
+    const late_owner = try lifted.addFn(.{
+        .symbol = @enumFromInt(4),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = late_call },
+        .ret = unit_ty,
+    });
+    lifted_owned = false;
+    var program = try run(allocator, lifted);
+    defer program.deinit();
+    var solver = try Solver.init(allocator, &program);
+    defer solver.deinit();
+    const graph = program.ctfe_demand.view();
+    try std.testing.expectEqual(@as(usize, 1), graph.reads.len);
+    try std.testing.expectEqual(solver.demandExpr(read), graph.reads[0].node);
+    var proof_found = false;
+    var application_found = false;
+    var owner_found = false;
+    for (graph.edges) |edge| {
+        if (edge.from == solver.demandExpr(read) and edge.to == solver.demandExpr(initializer)) {
+            try std.testing.expectEqual(CtfeDemand.Relation.representation, edge.relation);
+            proof_found = true;
+        }
+        if (edge.from == solver.demandExpr(call) and edge.to == solver.demandFn(reader)) {
+            try std.testing.expectEqual(CtfeDemand.Relation.application, edge.relation);
+            application_found = true;
+        }
+        if (edge.from == solver.demandFn(reader) and edge.to == solver.demandExpr(read)) {
+            try std.testing.expectEqual(CtfeDemand.Relation.evaluation, edge.relation);
+            owner_found = true;
+        }
+    }
+    try std.testing.expect(proof_found and application_found and owner_found);
+    var producer_summary = try program.ctfe_demand.summarize(allocator, solver.demandFn(producer));
+    defer producer_summary.deinit(allocator);
+    try std.testing.expect(producer_summary.complete);
+    try std.testing.expectEqual(@as(usize, 0), producer_summary.reads.len);
+    var reader_summary = try program.ctfe_demand.summarize(allocator, solver.demandFn(reader));
+    defer reader_summary.deinit(allocator);
+    try std.testing.expect(reader_summary.complete);
+    try std.testing.expectEqualSlices(u32, &.{0}, reader_summary.reads);
+    var address_summary = try program.ctfe_demand.summarize(allocator, solver.demandFn(address_owner));
+    defer address_summary.deinit(allocator);
+    try std.testing.expect(address_summary.complete);
+    try std.testing.expectEqual(@as(usize, 0), address_summary.reads.len);
+    var late_summary = try program.ctfe_demand.summarize(allocator, solver.demandFn(late_owner));
+    defer late_summary.deinit(allocator);
+    try std.testing.expect(late_summary.complete);
+    try std.testing.expectEqualSlices(u32, &.{0}, late_summary.reads);
+    var cloned = try program.ctfe_demand.clone(allocator);
+    defer cloned.deinit();
+    try std.testing.expectEqualDeep(graph, cloned.view());
+    try std.testing.expect(graph.edges.ptr != cloned.edges.items.ptr);
+}
+
+test "CTFE demand sort invokes boxed comparator without eagerly invoking box construction" {
+    const allocator = std.testing.allocator;
+    var lifted = emptyLiftedProgramForTest(allocator);
+    var lifted_owned = true;
+    errdefer if (lifted_owned) lifted.deinit();
+    const byte_ty = try lifted.types.add(.{ .primitive = .u8 });
+    const byte = try lifted.addExpr(.{ .ty = byte_ty, .data = .{ .int_lit = .{
+        .bytes = @bitCast(@as(i128, 7)),
+        .kind = .i128,
+    } } });
+    const root = try lifted.addComptimeValueRoot(.{
+        .module = .{ .bytes = [_]u8{9} ** 32 },
+        .root = .{ .checked = @enumFromInt(0) },
+        .const_locator = null,
+    });
+    const read = try lifted.addExpr(.{ .ty = byte_ty, .data = .{ .comptime_value = .{
+        .root = root,
+        .initializer = byte,
+    } } });
+    const left = try lifted.addLocal(@enumFromInt(0), byte_ty);
+    const right = try lifted.addLocal(@enumFromInt(1), byte_ty);
+    const comparator = try lifted.addFn(.{
+        .symbol = @enumFromInt(0),
+        .args = try lifted.addTypedLocalSpan(&.{
+            .{ .local = left, .ty = byte_ty },
+            .{ .local = right, .ty = byte_ty },
+        }),
+        .captures = .empty(),
+        .body = .{ .roc = read },
+        .ret = byte_ty,
+    });
+    const args_ty = try lifted.types.addSpan(&.{ byte_ty, byte_ty });
+    const callable_ty = try lifted.types.add(.{ .func = .{ .args = args_ty, .ret = byte_ty } });
+    const address = try lifted.addExpr(.{ .ty = callable_ty, .data = .{ .fn_ref = .{ .fn_id = comparator } } });
+    const box_ty = try lifted.types.add(.{ .box = callable_ty });
+    const box = try lifted.addExpr(.{ .ty = box_ty, .data = .{ .low_level = .{
+        .op = .box_box,
+        .args = try lifted.addExprSpan(&.{address}),
+    } } });
+    const box_owner = try lifted.addFn(.{
+        .symbol = @enumFromInt(1),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = box },
+        .ret = box_ty,
+    });
+    const list_ty = try lifted.types.add(.{ .list = byte_ty });
+    const list = try lifted.addExpr(.{ .ty = list_ty, .data = .{ .list = try lifted.addExprSpan(&.{ byte, byte }) } });
+    const sort = try lifted.addExpr(.{ .ty = list_ty, .data = .{ .low_level = .{
+        .op = .list_sort_with,
+        .args = try lifted.addExprSpan(&.{ list, box }),
+    } } });
+    const sort_owner = try lifted.addFn(.{
+        .symbol = @enumFromInt(2),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = sort },
+        .ret = list_ty,
+    });
+    lifted_owned = false;
+    var program = try run(allocator, lifted);
+    defer program.deinit();
+    var solver = try Solver.init(allocator, &program);
+    defer solver.deinit();
+    var sort_summary = try program.ctfe_demand.summarize(allocator, solver.demandFn(sort_owner));
+    defer sort_summary.deinit(allocator);
+    try std.testing.expect(sort_summary.complete);
+    try std.testing.expectEqualSlices(u32, &.{0}, sort_summary.reads);
+    var box_summary = try program.ctfe_demand.summarize(allocator, solver.demandFn(box_owner));
+    defer box_summary.deinit(allocator);
+    try std.testing.expect(box_summary.complete);
+    try std.testing.expectEqual(@as(usize, 0), box_summary.reads.len);
 }
 
 test "lambda solved traverses deep sequential and nested expressions without native recursion" {

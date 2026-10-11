@@ -141,21 +141,15 @@ fn invariant(err: (Artifact.ExtractError || Artifact.AssembleError)) Allocator.E
     };
 }
 
-fn reusable(source: Emitter.FragmentContract, target: Emitter.FragmentContract, deps: Emitter.FragmentContextDependencies, metrics: *Metrics) bool {
+fn reusable(source: Emitter.FragmentContract, target: Emitter.FragmentContract, metrics: *Metrics) bool {
     if (source.target != target.target or source.cpu_level != target.cpu_level) {
         metrics.rejected_target +|= 1;
         return false;
     }
-    // Static-data ordinals are rebound by runtime compaction. String symbols
-    // are relocatable and deliberately do not count as static-data dependencies.
-    const hook_transition = source.hooks_enabled and !target.hooks_enabled and !deps.comptime_hooks;
+    // Ordinary bodies retain symbolic code and data references in every
+    // consumer. Linking chooses their addresses, never a second body policy.
     if (source.hot_reload != target.hot_reload or
-        source.default_platform_runtime != target.default_platform_runtime or
-        (source.static_data_readonly != target.static_data_readonly and deps.static_data) or
-        (source.hooks_enabled != target.hooks_enabled and !hook_transition) or
-        deps.comptime_hooks or deps.static_data or
-        (source.dict_seed_mode != target.dict_seed_mode and deps.dict_seed) or
-        (source.initialize_boxy_runtime != target.initialize_boxy_runtime and deps.boxy_runtime_entry))
+        source.default_platform_runtime != target.default_platform_runtime)
     {
         metrics.rejected_context +|= 1;
         return false;
@@ -197,10 +191,8 @@ fn Job(comptime CG: type) type {
             );
             defer cg.deinit();
             cg.generation_mode = source.generation_mode;
-            cg.dict_seed_mode = source.dict_seed_mode;
             cg.enable_hot_reload = source.enable_hot_reload;
             cg.enable_default_platform_runtime = source.enable_default_platform_runtime;
-            cg.comptime_hooks = source.comptime_hooks;
             cg.setContextCatalog(source.context_catalog);
             cg.borrowStaticDataSymbolsFrom(source);
             self.fragment = if (self.proc) |id|
@@ -300,7 +292,6 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
     errdefer retained.deinit();
     // Index immutable backing once; workers capture only reached data. Execution
     // callers leave mutable static roots external, never copied placeholder values.
-    std.debug.assert(contract.static_data_readonly or options.constant_exports.len == 0);
     var data = Artifact.PreparedData.init(allocator, destination.store.getProcSpecs(), destination.static_strings.exports, options.constant_exports, &.{}) catch |err| return invariant(err);
     defer data.deinit();
     const specs = destination.store.getProcSpecs();
@@ -352,7 +343,7 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
             if (cached_procs.get(spec.identity)) |cached| {
                 if (cached.revision != spec.native_code_revision) {
                     metrics.rejected_revision +|= 1;
-                } else if (reusable(options.reuse_same_program.?.contract, contract, cached.fragment.context_dependencies, &metrics)) {
+                } else if (reusable(options.reuse_same_program.?.contract, contract, &metrics)) {
                     job.fragment = try cached.fragment.clone(allocator);
                     job.reused = true;
                 }
@@ -380,7 +371,7 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
         var job = Job(CG){ .source = destination, .data = &data, .helper = key };
         defer if (job.fragment) |*fragment| fragment.deinit();
         if (cached_helpers.get(key)) |cached| {
-            if (reusable(options.reuse_same_program.?.contract, contract, cached.fragment.context_dependencies, &metrics)) {
+            if (reusable(options.reuse_same_program.?.contract, contract, &metrics)) {
                 job.fragment = try cached.fragment.clone(allocator);
                 job.reused = true;
             }
@@ -562,33 +553,29 @@ test "native driver drains submission output and scratch OOM before cleanup" {
     }
 }
 
-test "native driver reuse contract is directional and dependency sensitive" {
+test "native driver reuse requires matching target and native emitter options" {
     const source = Emitter.FragmentContract{
         .target = .x64linux,
         .cpu_level = .default,
         .hot_reload = false,
         .default_platform_runtime = false,
-        .dict_seed_mode = .comptime_zero,
-        .hooks_enabled = true,
-        .initialize_boxy_runtime = false,
-        .static_data_readonly = false,
     };
-    var runtime = source;
-    runtime.hooks_enabled = false;
-    runtime.dict_seed_mode = .runtime;
+    var target = source;
     var metrics: Metrics = .{};
-    try std.testing.expect(reusable(source, runtime, .{}, &metrics));
-    try std.testing.expect(!reusable(runtime, source, .{}, &metrics));
-    try std.testing.expect(!reusable(source, runtime, .{ .comptime_hooks = true }, &metrics));
-    try std.testing.expect(!reusable(source, runtime, .{ .dict_seed = true }, &metrics));
-    try std.testing.expect(!reusable(source, source, .{ .static_data = true }, &metrics));
-    try std.testing.expect(reusable(source, runtime, .{ .boxy_runtime = true }, &metrics));
-    runtime.target = .arm64linux;
-    try std.testing.expect(!reusable(source, runtime, .{}, &metrics));
-    runtime.target = source.target;
-    runtime.cpu_level = .v1;
-    try std.testing.expect(!reusable(source, runtime, .{}, &metrics));
+    try std.testing.expect(reusable(source, target, &metrics));
+    target.hot_reload = true;
+    try std.testing.expect(!reusable(source, target, &metrics));
+    target.hot_reload = source.hot_reload;
+    target.default_platform_runtime = true;
+    try std.testing.expect(!reusable(source, target, &metrics));
+    target.default_platform_runtime = source.default_platform_runtime;
+    target.target = .arm64linux;
+    try std.testing.expect(!reusable(source, target, &metrics));
+    target.target = source.target;
+    target.cpu_level = .v1;
+    try std.testing.expect(!reusable(source, target, &metrics));
     try std.testing.expectEqual(@as(u64, 2), metrics.rejected_target);
+    try std.testing.expectEqual(@as(u64, 2), metrics.rejected_context);
     var totals = Metrics{ .tasks_submitted = std.math.maxInt(u64), .peak_inflight_fragments = 4 };
     totals.add(.{ .tasks_submitted = 1, .peak_inflight_fragments = 2 });
     try std.testing.expectEqual(std.math.maxInt(u64), totals.tasks_submitted);
@@ -806,6 +793,7 @@ test "native driver shared literal data outlives source and reused fragment owne
         defer strings.deinit();
         var cg = try CG.init(a, &store, &layouts, strings.view(), &.{}, .default);
         defer cg.deinit();
+        cg.setContextCatalog(Emitter.testSourceCatalog());
         var executor = TestExecutor{ .allocator = a, .lane = tasks.LaneState.init(a), .lanes = 2 };
         defer executor.lane.deinit();
         break :blk try run(CG, a, &cg, &demand, .{
@@ -817,6 +805,7 @@ test "native driver shared literal data outlives source and reused fragment owne
     defer if (cache_live) cache.deinit();
     var cg = try CG.init(a, &store, &layouts, .{}, &.{}, .default);
     defer cg.deinit();
+    cg.setContextCatalog(Emitter.testSourceCatalog());
     var metrics: Metrics = .{};
     var retained = try run(CG, a, &cg, &demand, .{
         .target = cg.getFragmentContract().target,
@@ -830,7 +819,24 @@ test "native driver shared literal data outlives source and reused fragment owne
     try std.testing.expectEqual(@as(u64, 0), metrics.tasks_submitted);
     const items = try retained.dataItems(a);
     defer a.free(items);
-    try std.testing.expectEqual(@as(usize, 1), items.len);
-    const offset = items[0].symbol_offset;
-    try std.testing.expectEqualStrings(text, items[0].bytes[offset..][0..text.len]);
+    var certificates = std.StringHashMap(void).init(a);
+    defer certificates.deinit();
+    for (retained.procedures.items) |procedure| {
+        for (procedure.fragment.set.artifacts) |artifact| {
+            try Artifact.validateSourceEventCertificates(a, artifact, @import("builtin").cpu.arch.endian());
+            for (artifact.source_events) |certificate| {
+                try certificates.put(certificate.data_name, {});
+                try std.testing.expectEqualSlices(u8, &procedure.identity.bytes, &certificate.descriptor.procedure_identity);
+            }
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 2), certificates.count());
+    try std.testing.expectEqual(1 + certificates.count(), items.len);
+    var literals: usize = 0;
+    for (items) |item| {
+        if (certificates.contains(item.name)) continue;
+        literals += 1;
+        try std.testing.expectEqualStrings(text, item.bytes[item.symbol_offset..][0..text.len]);
+    }
+    try std.testing.expectEqual(@as(usize, 1), literals);
 }

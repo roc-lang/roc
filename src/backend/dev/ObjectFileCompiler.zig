@@ -28,6 +28,48 @@ const ObjectWriter = @import("ObjectWriter.zig");
 const LirCodeGenMod = @import("LirCodeGen.zig");
 const ProcArtifact = @import("ProcArtifact.zig");
 const NativeProcCompiler = @import("NativeProcCompiler.zig");
+
+/// Linked output supplies immutable pointer headers for its own typed wrapper
+/// implementations. Persistent callers carry only the semantic dependency.
+fn defineMaterializationHeaders(comptime CG: type, allocator: Allocator, scratch: Allocator, codegen: *CG, specs: []const LirProcSpec, data: *std.ArrayList(ProcArtifact.DataItem)) Allocator.Error!void {
+    var producers = std.AutoHashMap(lir.ProcIdentity, lir.LIR.LirProcSpecId).init(scratch);
+    defer producers.deinit();
+    for (specs, 0..) |proc, index| {
+        if (proc.root_materialization) |declaration| {
+            if (!std.mem.eql(u8, &proc.identity.bytes, &declaration.wrapper_identity))
+                @panic("materialization wrapper did not retain its declared semantic identity");
+            const entry = try producers.getOrPut(proc.identity);
+            if (entry.found_existing) @panic("duplicate semantic materialization producer");
+            entry.value_ptr.* = @enumFromInt(@as(u32, @intCast(index)));
+        }
+    }
+    for (codegen.bindingDataCells()) |binding| {
+        const declaration = binding.root_materialization orelse continue;
+        const proc = producers.get(.{ .bytes = declaration.wrapper_identity }) orelse
+            @panic("linked output omitted a declared materialization wrapper");
+        if (!std.meta.eql(specs[@intFromEnum(proc)].root_materialization.?, declaration))
+            @panic("linked output changed a typed materialization provision");
+        const implementation = codegen.compiledProcSymbol(proc) orelse
+            @panic("linked output did not compile its materialization wrapper");
+        const symbol = try codegen.internRegionCodeSymbol(implementation.code_start, 0);
+        const relocation = try scratch.alloc(ProcArtifact.DataRelocation, 1);
+        relocation[0] = .{
+            .offset = 0,
+            .name = codegen.symbolName(symbol),
+            .addend = 0,
+            .function = true,
+            .code_target = .{ .image_offset = implementation.code_start },
+        };
+        try data.append(allocator, .{
+            .name = binding.target_name,
+            .bytes = try scratch.dupe(u8, &([_]u8{0} ** 8)),
+            .alignment = 8,
+            .symbol_offset = 0,
+            .relocations = relocation,
+        });
+    }
+}
+
 const Executor = @import("base").post_check_task_executor.Executor;
 const static_data_export = @import("StaticDataExport.zig");
 const collections = @import("collections");
@@ -89,6 +131,8 @@ pub const ObjectFileCompiler = struct {
     post_check_executor: ?Executor = null,
     /// Borrowed artifacts from this exact LIR program, never an executable image.
     reuse_same_program: ?*const NativeProcCompiler.Retained = null,
+    /// Explicit stable source certificates for ordinary function emission.
+    source_catalog: @import("CtfeContext.zig").Catalog = .{},
     /// Emit every procedure as a global symbol and emit the object even
     /// without host entrypoints: the object is a module pack, not an app.
     pack_mode: bool = false,
@@ -184,7 +228,7 @@ pub const ObjectFileCompiler = struct {
         boxy_worker_procs: []const lir.LIR.LirProcSpecId,
         target: RocTarget,
     ) CompilationError!CompilationResult {
-        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, erased_arg_desc_offsets, erased_arg_desc_params, boxy_worker_procs, target, self.enable_default_platform_runtime, self.timing, self.pack_mode, self.splice_source, self.capture_artifacts, self.post_check_executor, self.reuse_same_program);
+        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, erased_arg_desc_offsets, erased_arg_desc_params, boxy_worker_procs, target, self.enable_default_platform_runtime, self.timing, self.pack_mode, self.splice_source, self.capture_artifacts, self.post_check_executor, self.reuse_same_program, self.source_catalog);
     }
 
     /// Compile to an object file and write it to a path. Returns whether the
@@ -305,6 +349,7 @@ fn compileWithCodeGen(
     capture_artifacts: bool,
     executor: ?Executor,
     reuse_same_program: ?*const NativeProcCompiler.Retained,
+    source_catalog: @import("CtfeContext.zig").Catalog,
 ) CompilationError!CompilationResult {
     if (!pack_mode and entrypoints.len == 0 and static_data_exports.len == 0) {
         return CompilationError.NoEntrypoints;
@@ -331,6 +376,7 @@ fn compileWithCodeGen(
 
     // Set object file mode to generate relocatable symbol references instead of direct pointers
     codegen.generation_mode = .object_file;
+    codegen.setContextCatalog(source_catalog);
     codegen.setStaticDataSymbols(static_data_exports) catch return CompilationError.OutOfMemory;
     codegen.enable_default_platform_runtime = enable_default_platform_runtime;
 
@@ -374,6 +420,9 @@ fn compileWithCodeGen(
     const native_data = retained.dataItems(allocator) catch return CompilationError.OutOfMemory;
     defer allocator.free(native_data);
     spliced_data.appendSlice(allocator, native_data) catch return CompilationError.OutOfMemory;
+    var materialization_data = std.heap.ArenaAllocator.init(allocator);
+    defer materialization_data.deinit();
+    defineMaterializationHeaders(CodeGen, allocator, materialization_data.allocator(), &codegen, proc_specs, &spliced_data) catch return CompilationError.OutOfMemory;
     if (timing) |timings| timings.snapshot_value.native_emission.add(native_metrics);
     if (timing) |timings| timings.finish(procedure_instructions_started_ns, .procedure_instructions);
 
@@ -1164,6 +1213,7 @@ fn crossCompileDispatch(
     capture_artifacts: bool,
     executor: ?Executor,
     reuse_same_program: ?*const NativeProcCompiler.Retained,
+    source_catalog: @import("CtfeContext.zig").Catalog,
 ) CompilationError!CompilationResult {
     const enum_info = @typeInfo(RocTarget).@"enum";
     const default_target = target.defaultCpuTarget();
@@ -1192,6 +1242,7 @@ fn crossCompileDispatch(
                     capture_artifacts,
                     executor,
                     reuse_same_program,
+                    source_catalog,
                 );
             } else {
                 return CompilationError.UnsupportedTarget;
@@ -1268,7 +1319,7 @@ test "ObjectFileCompiler native emission skips static initializers and captures 
     try std.testing.expectEqual(@as(u64, 0), snapshot.rc_helper_instructions_ns);
 }
 
-test "ObjectFileCompiler runtime static-root pack owns only reachable canonical data" {
+test "ObjectFileCompiler ordinary static-root pack binds consumer storage without carrying producer headers" {
     const allocator = std.testing.allocator;
     const PackFile = @import("PackFile.zig");
     const text = "immutable runtime data survives its producer";
@@ -1309,12 +1360,13 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
             const relocation = try a.alloc(StaticDataRelocation, 1);
             relocation[0] = .{
                 .offset = 0,
-                .target_symbol_name = try a.dupe(u8, "roc__d7_1"),
+                .target_symbol_name = try a.dupe(u8, "fixture_semantic_backing"),
                 .target = .{ .data_symbol = @enumFromInt(1) },
                 .addend = 8,
             };
             exports[0] = .{
-                .symbol_name = try a.dupe(u8, "roc__d7"),
+                .symbol_name = try a.dupe(u8, "fixture_semantic_root"),
+                .symbol_identity = @splat(7),
                 .value_id = @enumFromInt(7),
                 .bytes = descriptor,
                 .alignment = 8,
@@ -1322,7 +1374,7 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
                 .relocations = relocation,
             };
             exports[1] = .{
-                .symbol_name = try a.dupe(u8, "roc__d7_1"),
+                .symbol_name = try a.dupe(u8, "fixture_semantic_backing"),
                 .bytes = backing,
                 .symbol_offset = 8,
                 .alignment = 8,
@@ -1335,6 +1387,7 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
                 .is_exported = false,
             };
             var compiler = ObjectFileCompiler.initForPack(allocator);
+            compiler.source_catalog = LirCodeGenMod.testSourceCatalog();
             break :producer try compiler.compileToObjectFile(&store, &layouts, &.{}, exports, store.getProcSpecs(), &.{}, &.{}, &.{}, target);
         };
         // No source descriptor, backing, symbol names, LIR or layout owners remain.
@@ -1347,21 +1400,28 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
         defer pack.deinit();
         try std.testing.expectEqual(@as(usize, 1), pack.set.artifacts.len);
         const artifact = pack.set.artifacts[0];
-        try std.testing.expectEqual(@as(usize, 2), artifact.data.len);
+        try ProcArtifact.validateSourceEventCertificates(allocator, artifact, target.toCpuArch().endian());
+        try std.testing.expectEqual(1 + artifact.source_events.len, artifact.data.len);
+        var cells: usize = 0;
         for (artifact.data) |item| {
-            try std.testing.expect(std.mem.startsWith(u8, item.name, ProcArtifact.content_data_prefix));
-            try std.testing.expect(!std.mem.eql(u8, item.name, "roc__d7"));
-            try std.testing.expect(!std.mem.eql(u8, item.name, "roc__d7_1"));
-            for (item.relocations) |relocation| {
-                try std.testing.expect(!relocation.external);
-                try std.testing.expect(std.mem.startsWith(u8, relocation.name, ProcArtifact.content_data_prefix));
+            var event_data = false;
+            for (artifact.source_events) |certificate| {
+                if (std.mem.eql(u8, certificate.data_name, item.name)) event_data = true;
             }
+            if (event_data) continue;
+            cells += 1;
+            try std.testing.expectEqualStrings("fixture_semantic_root__address", item.name);
+            try std.testing.expectEqualSlices(u8, &(@as([8]u8, @splat(0))), item.bytes);
+            try std.testing.expectEqual(@as(usize, 1), item.relocations.len);
+            try std.testing.expect(item.relocations[0].external);
+            try std.testing.expectEqualStrings("fixture_semantic_root", item.relocations[0].name);
         }
+        try std.testing.expectEqual(@as(usize, 1), cells);
         var data_references: usize = 0;
         for (artifact.relocations) |relocation| {
             if (relocation.kind != .data) continue;
             data_references += 1;
-            try std.testing.expect(std.mem.startsWith(u8, relocation.name, ProcArtifact.content_data_prefix));
+            try std.testing.expect(!std.mem.eql(u8, relocation.name, "fixture_semantic_backing"));
         }
         try std.testing.expect(data_references > 0);
         // A different consumer has neither the procedure ordinal nor any static table.
@@ -1384,6 +1444,18 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
             var splice = @import("HostSplice.zig").HostSplice.init(allocator);
             defer splice.deinit();
             try splice.addDataItems(data.items);
+            var current_descriptor: [24]u8 = @splat(0);
+            std.mem.writeInt(u64, current_descriptor[8..16], text.len << 1, .little);
+            std.mem.writeInt(u64, current_descriptor[16..24], text.len, .little);
+            var current_backing: [16 + text.len]u8 = @splat(0);
+            @memcpy(current_backing[16..], text);
+            const current_exports = [_]StaticDataExport{
+                .{ .symbol_name = "fixture_semantic_root", .symbol_identity = @splat(7), .bytes = &current_descriptor, .alignment = 8, .relocations = &.{.{ .offset = 0, .target_symbol_name = "fixture_semantic_backing", .target = .{ .data_symbol = @enumFromInt(1) }, .addend = 8 }} },
+                .{ .symbol_name = "fixture_semantic_backing", .bytes = &current_backing, .symbol_offset = 8, .alignment = 8 },
+            };
+            var current_slots = try @import("StaticDataImage.zig").StaticDataImage.init(allocator, &current_exports);
+            defer current_slots.deinit();
+            try splice.bindStaticDataSymbols(&current_exports, &current_slots);
             var table: LirCodeGenMod.BoxyNativeFnTable = undefined;
             @memset(&table, 0);
             var executable = try splice.link(&receiver, &table);

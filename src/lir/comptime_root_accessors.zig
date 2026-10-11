@@ -36,39 +36,73 @@ pub fn rebuild(allocator: Allocator, result: *Program.Result, frozen: *const Pro
     var values = try scalar_values.CompletedScalarValues.init(allocator, result, frozen);
     defer values.deinit(allocator);
     if (values.entries.count() == 0) return;
-    const store = &result.store;
-    var new_locals: std.ArrayList(LIR.LocalId) = .empty;
-    defer new_locals.deinit(allocator);
-    for (result.static_data_values.items) |*entry| {
+    for (result.static_data_values.items, 0..) |*entry, index| {
         if (entry.accessor_rebuilt) continue;
         const accessor = entry.accessor orelse continue;
         const root = entry.compile_time_root orelse continue;
         if (root.role != .value) continue;
         const construction = values.constructionFor(root.module, root.root, entry.layout_idx) orelse continue;
-        new_locals.clearRetainingCapacity();
-        const context = EmitContext{ .store = store, .new_locals = &new_locals };
-        // The rebuilt body is compile-time constant reconstruction: it keeps
-        // the location of the accessor body it replaces, which names the read
-        // that requested the accessor.
-        const replaced = store.stmtOrigin(store.getProcSpec(accessor).body.?);
-        const origin = LIR.StmtOrigin{
-            .loc = replaced.loc,
-            .region = replaced.region,
-            .inline_scope = replaced.inline_scope,
-            .kind = .scaffold,
-        };
-        const value = try context.addLocal(entry.layout_idx);
-        const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, origin);
-        const body = try scalar_values.emit(context, store, &result.layouts, origin, value, construction, ret) orelse continue;
-        const locals = try store.addLocalSpan(new_locals.items);
-        const proc = store.getProcSpecPtr(accessor);
-        proc.body = body;
-        proc.shapes = proc.shapes.merged(store.shapes);
-        proc.frame_locals = locals;
-        if (store.procNeedsStackProbe(&result.layouts, proc.*)) proc.stack_probe = .required;
-        proc.native_code_revision += 1;
-        entry.accessor_rebuilt = true;
+        if (!scalar_values.requiresOwnedCapacity(construction)) continue;
+        try rebuildConstruction(allocator, result, @enumFromInt(index), accessor, construction);
     }
+}
+
+/// Successful publication reconstructs only its declared materializer before
+/// dependent ordinary code executes. It never revisits the whole slot table.
+pub fn rebuildPublishedSlot(allocator: Allocator, result: *Program.Result, slot: LIR.StaticDataId, exports: []Program.StaticDataExport) Allocator.Error!void {
+    const entry = result.static_data_values.items[@intFromEnum(slot)];
+    if (entry.accessor_rebuilt) return;
+    const accessor = entry.accessor orelse return;
+    if (result.store.getProcSpec(accessor).root_materialization == null)
+        @panic("published root accessor has no materialization producer declaration");
+    var decoded = try scalar_values.constructionForPublishedValue(allocator, result, slot, exports);
+    defer decoded.deinit();
+    const construction = decoded.construction orelse return;
+    if (!scalar_values.requiresOwnedCapacity(construction)) return;
+    try rebuildConstruction(allocator, result, slot, accessor, construction);
+}
+
+/// A completed checked value uses the producer's indexed export and graph,
+/// rather than searching unrelated slots or rebuilding its initializer.
+pub fn rebuildExportedSlot(allocator: Allocator, result: *Program.Result, slot: LIR.StaticDataId, exported: Program.StaticDataExport, frozen: *const Program.FrozenStaticData) Allocator.Error!void {
+    const entry = result.static_data_values.items[@intFromEnum(slot)];
+    if (entry.accessor_rebuilt) return;
+    const accessor = entry.accessor orelse return;
+    if (result.store.getProcSpec(accessor).root_materialization == null)
+        @panic("exported root accessor has no materialization producer declaration");
+    var decoded = try scalar_values.constructionForExportedValue(allocator, result, slot, exported, frozen);
+    defer decoded.deinit();
+    const construction = decoded.construction orelse return;
+    if (!scalar_values.requiresOwnedCapacity(construction)) return;
+    try rebuildConstruction(allocator, result, slot, accessor, construction);
+}
+
+fn rebuildConstruction(allocator: Allocator, result: *Program.Result, slot: LIR.StaticDataId, accessor: LIR.LirProcSpecId, construction: scalar_values.Construction) Allocator.Error!void {
+    const store = &result.store;
+    const entry = &result.static_data_values.items[@intFromEnum(slot)];
+    var new_locals: std.ArrayList(LIR.LocalId) = .empty;
+    defer new_locals.deinit(allocator);
+    const context = EmitContext{ .store = store, .new_locals = &new_locals };
+    // The wrapper keeps its producer-recorded read provenance.
+    const replaced = store.stmtOrigin(store.getProcSpec(accessor).body.?);
+    const origin = LIR.StmtOrigin{
+        .loc = replaced.loc,
+        .region = replaced.region,
+        .inline_scope = replaced.inline_scope,
+        .kind = .scaffold,
+    };
+    const value = try context.addLocal(entry.layout_idx);
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, origin);
+    const body = try scalar_values.emit(context, store, &result.layouts, origin, value, construction, ret) orelse
+        @panic("decoded root construction has no explicit LIR materialization");
+    const locals = try store.addLocalSpan(new_locals.items);
+    const proc = store.getProcSpecPtr(accessor);
+    proc.body = body;
+    proc.shapes = proc.shapes.merged(store.shapes);
+    proc.frame_locals = locals;
+    if (store.procNeedsStackProbe(&result.layouts, proc.*)) proc.stack_probe = .required;
+    proc.native_code_revision += 1;
+    entry.accessor_rebuilt = true;
 }
 
 test "comptime root accessors declarations are referenced" {
@@ -142,7 +176,6 @@ fn testRebuild(allocator: Allocator) (Allocator.Error || error{ TestExpectedEqua
     try rebuild(allocator, &program, &frozen);
     try std.testing.expectEqual(body, program.store.getProcSpec(accessor).body.?);
     try std.testing.expectEqual(@as(u64, 0), program.store.getProcSpec(accessor).native_code_revision);
-    try std.testing.expect(!program.comptime_value_guards.items[0].completed);
     try std.testing.expectEqual(failure_slot, program.store.getCFStmt(body).assign_literal.value.static_data);
     failure_record[failed_offset] = 0;
     try rebuild(allocator, &program, &frozen);

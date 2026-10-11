@@ -14,6 +14,7 @@ const Allocator = std.mem.Allocator;
 const PackFile = backend.dev.PackFile;
 const Common = postcheck.Common;
 const CoreCtx = ctx_mod.CoreCtx;
+const SourceEvents = @import("builtins").source_events;
 
 /// The pack files of one compiler build, target, and optimization level,
 /// under the cache root: `objects-v<format>/<target>-<opt>/<local|pkg>/<module
@@ -255,11 +256,14 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
             .refs = &.{},
             .relocations = &.{},
             .data = &.{},
+            .callable_contract = [_]u8{1} ** 32,
         }},
     };
     const bytes = try PackFile.write(allocator, &set, &.{.{
         .key = key,
         .artifact = 0,
+        // This test producer is a return instruction with no storage reads.
+        .demand = .{ .complete = true },
         .rc_borrowed_params = 1,
         .rc_ret_borrowed = false,
         .rc_ret_lenders = 0,
@@ -353,12 +357,14 @@ test "object cache semantic offers select compatible relations in either order" 
                         .refs = &.{},
                         .relocations = &.{},
                         .data = &.{},
+                        .callable_contract = [_]u8{1} ** 32,
                     }},
                 };
                 const spec: PackFile.SpecEntry = .{
                     .key = if (relation == null) independent_key else key,
                     .artifact = 0,
                     .platform_requirement_relation = relation,
+                    .demand = .{ .complete = true },
                     .rc_borrowed_params = 1,
                     .rc_ret_borrowed = false,
                     .rc_ret_lenders = 0,
@@ -400,6 +406,349 @@ test "object cache semantic offers select compatible relations in either order" 
     for ([_]bool{ false, true }) |reverse| {
         try std.testing.checkAllAllocationFailures(std.testing.allocator, Attempt.run, .{reverse});
     }
+}
+
+test "normal native offers attest one exact physical definition and fixed metadata" {
+    const allocator = std.testing.allocator;
+    const identity = lir.ProcIdentity.forTest(71);
+    const first_key = [_]u8{72} ** 32;
+    const second_key = [_]u8{73} ** 32;
+    const Producer = struct {
+        fn bytes(a: Allocator, proc_identity: lir.ProcIdentity, key: [32]u8, code: []const u8, borrowed: u64) PackFile.WriteError![]u8 {
+            const set = backend.dev.ProcArtifact.Set{
+                .arena = std.heap.ArenaAllocator.init(a),
+                .artifacts = &.{.{
+                    .kind = .{ .proc = proc_identity },
+                    .code = code,
+                    .entry = 0,
+                    .frame = null,
+                    .refs = &.{},
+                    .relocations = &.{},
+                    .data = &.{},
+                    .callable_contract = [_]u8{1} ** 32,
+                }},
+            };
+            return PackFile.write(a, &set, &.{.{
+                .key = key,
+                .artifact = 0,
+                .demand = .{ .complete = true },
+                .rc_borrowed_params = borrowed,
+                .rc_ret_borrowed = false,
+                .rc_ret_lenders = 0,
+                .rc_read_only_params = 0,
+                .rc_ret_unique = false,
+                .rc_ret_unique_fields = 0,
+                .rc_ret_conditions = &.{},
+            }});
+        }
+    };
+    const first_bytes = try Producer.bytes(allocator, identity, first_key, "\xc3", 0);
+    defer allocator.free(first_bytes);
+    for ([_]struct { code: []const u8, borrowed: u64, accepted: bool }{
+        .{ .code = "\xc3", .borrowed = 0, .accepted = true },
+        .{ .code = "\x90\xc3", .borrowed = 0, .accepted = false },
+        .{ .code = "\xc3", .borrowed = 1, .accepted = false },
+    }) |candidate| {
+        var packs = LoadedPacks.init(allocator);
+        defer packs.deinit();
+        try packs.retain(first_bytes);
+        const splice = packs.spliceSource();
+        const first = splice.find(splice.context, identity).?;
+        const next = try Producer.bytes(allocator, identity, second_key, candidate.code, candidate.borrowed);
+        defer allocator.free(next);
+        try packs.retain(next);
+        try std.testing.expectEqual(candidate.accepted, packs.specCacheLookup().lookup(second_key, null) != null);
+        const selected = splice.find(splice.context, identity).?;
+        try std.testing.expect(first.set == selected.set);
+        try std.testing.expectEqual(first.index, selected.index);
+        try std.testing.expectEqualStrings("\xc3", selected.set.artifacts[selected.index].code);
+        try std.testing.expectEqual(@as(u64, 0), packs.specCacheLookup().lookup(first_key, null).?.rc_borrowed_params);
+    }
+}
+
+test "normal native retained objects keep borrowed exact graphs stable while the universe grows" {
+    const allocator = std.testing.allocator;
+    var packs = LoadedPacks.init(allocator);
+    defer packs.deinit();
+    var first: ?backend.dev.LocatedArtifact = null;
+    for (0..32) |index| {
+        const identity = lir.ProcIdentity.forTest(@intCast(index + 1));
+        var artifacts = [_]backend.dev.ProcArtifact.Artifact{ .{
+            .kind = .{ .proc = identity },
+            .code = "\xc3",
+            .entry = 0,
+            .frame = null,
+            .refs = &.{},
+            .relocations = &.{},
+            .data = &.{},
+            .callable_contract = [_]u8{1} ** 32,
+        }, .{
+            .kind = .{ .proc = lir.ProcIdentity.forTest(100) },
+            .code = "\xc3",
+            .entry = 0,
+            .frame = null,
+            .refs = &.{},
+            .relocations = &.{},
+            .data = &.{},
+        } };
+        if (index == 0) {
+            artifacts[0].code = "\xe8\x00\x00\x00\x00\xc3";
+            artifacts[0].refs = &.{.{ .site = 0, .form = .call, .target = 1, .delta = 0 }};
+        }
+        const set = backend.dev.ProcArtifact.Set{
+            .arena = std.heap.ArenaAllocator.init(allocator),
+            .artifacts = if (index == 0) &artifacts else artifacts[0..1],
+        };
+        const bytes = try PackFile.write(allocator, &set, &.{.{
+            .key = [_]u8{@intCast(index + 1)} ** 32,
+            .artifact = 0,
+            .demand = .{ .complete = true },
+            .rc_borrowed_params = 0,
+            .rc_ret_borrowed = false,
+            .rc_ret_lenders = 0,
+            .rc_read_only_params = 0,
+            .rc_ret_unique = false,
+            .rc_ret_unique_fields = 0,
+            .rc_ret_conditions = &.{},
+        }});
+        defer allocator.free(bytes);
+        try packs.retain(bytes);
+        const splice = packs.spliceSource();
+        const retained = splice.find(splice.context, identity).?;
+        if (index == 0) first = retained;
+        const original = splice.find(splice.context, lir.ProcIdentity.forTest(1)).?;
+        try std.testing.expect(original.set == first.?.set);
+        try std.testing.expectEqual(first.?.index, original.index);
+        const caller = first.?.set.artifacts[first.?.index];
+        try std.testing.expectEqualStrings("\xe8\x00\x00\x00\x00\xc3", caller.code);
+        const callee = first.?.set.artifacts[caller.refs[0].target];
+        try std.testing.expectEqualDeep(lir.ProcIdentity.forTest(100), callee.kind.proc);
+        try std.testing.expectEqualStrings("\xc3", callee.code);
+    }
+    try std.testing.expectEqual(@as(usize, 32), packs.indexed_count);
+    try std.testing.expectEqual(@as(u32, 32), packs.specs.count());
+}
+
+test "normal native source certificates reload only against current checked authority" {
+    const allocator = std.testing.allocator;
+    var env = try @import("can").ModuleEnv.init(allocator, "hello");
+    defer env.deinit();
+    // This validator consumes checked source authority, not typed bodies.
+    var owner: check.CheckedArtifact.CheckedModuleArtifact = undefined;
+    owner.key = .{ .bytes = @splat(31), .module_identity_hash = @splat(32) };
+    owner.module_env = .{ .checked_source = &env };
+    const identity = lir.ProcIdentity.forTest(33);
+    const descriptor = SourceEvents.Descriptor{
+        .header = .{ .kind = @intFromEnum(SourceEvents.Kind.call_enter) },
+        .source = .{
+            .checked_module = owner.key.bytes,
+            .source_identity = owner.key.module_identity_hash,
+            .region = .{ .start = 0, .end = 5 },
+            .line = 1,
+            .column = 1,
+            .has_location = 1,
+        },
+        .procedure_identity = identity.bytes,
+    };
+    var event_data = [_]u8{0} ** @sizeOf(SourceEvents.Descriptor);
+    backend.dev.LirCodeGenMod.encodeSourceEventField(SourceEvents.Descriptor, descriptor, &event_data, .little);
+    const set = backend.dev.ProcArtifact.Set{
+        .arena = std.heap.ArenaAllocator.init(allocator),
+        .artifacts = &.{.{
+            .kind = .{ .proc = identity },
+            .code = "\xc3",
+            .entry = 0,
+            .frame = null,
+            .refs = &.{},
+            .relocations = &.{},
+            .data = &.{.{
+                .name = "event",
+                .bytes = &event_data,
+                .alignment = @alignOf(SourceEvents.Descriptor),
+                .symbol_offset = 0,
+                .relocations = &.{},
+            }},
+            .callable_contract = [_]u8{34} ** 32,
+            .context_contract = .{
+                .target = .x64linux,
+                .cpu_level = .default,
+                .hot_reload = false,
+                .default_platform_runtime = false,
+                .dict_seed_mode = .runtime,
+                .hooks_enabled = false,
+                .initialize_boxy_runtime = false,
+                .static_data_readonly = false,
+            },
+            .source_events = &.{.{
+                .data_name = "event",
+                .descriptor = descriptor,
+                .branch_regions = &.{},
+            }},
+        }},
+    };
+    const key = [_]u8{35} ** 32;
+    const bytes = try PackFile.write(allocator, &set, &.{.{
+        .key = key,
+        .artifact = 0,
+        .demand = .{ .complete = true },
+        .rc_borrowed_params = 0,
+        .rc_ret_borrowed = false,
+        .rc_ret_lenders = 0,
+        .rc_read_only_params = 0,
+        .rc_ret_unique = false,
+        .rc_ret_unique_fields = 0,
+        .rc_ret_conditions = &.{},
+    }});
+    defer allocator.free(bytes);
+    for ([_]bool{ false, true }) |stale| {
+        var packs = LoadedPacks.init(allocator);
+        defer packs.deinit();
+        owner.key.module_identity_hash = if (stale) @splat(36) else @splat(32);
+        packs.checked_root = &owner;
+        try packs.appendPack(bytes);
+        try packs.indexPacks();
+        try std.testing.expectEqual(!stale, packs.specCacheLookup().lookup(key, null) != null);
+        const splice = packs.spliceSource();
+        const object = splice.find(splice.context, identity);
+        try std.testing.expectEqual(!stale, object != null);
+        if (object) |located| {
+            try std.testing.expectEqualStrings("\xc3", located.set.artifacts[located.index].code);
+            try std.testing.expectEqualDeep(descriptor, located.set.artifacts[located.index].source_events[0].descriptor);
+            // Retiring the declaration cannot invalidate already-pinned facts.
+            packs.checked_root = null;
+            owner.module_env = undefined;
+            try packs.retain(bytes);
+            const again = splice.find(splice.context, identity).?;
+            try std.testing.expect(located.set == again.set);
+            owner.module_env = .{ .checked_source = &env };
+        }
+    }
+}
+
+test "normal native site and literal certificates attest exact checked semantic records" {
+    const allocator = std.testing.allocator;
+    const Checked = check.CheckedArtifact;
+    const Region = @import("base").Region;
+    var env = try @import("can").ModuleEnv.init(allocator, "hello");
+    defer env.deinit();
+    var owner: Checked.CheckedModuleArtifact = undefined;
+    owner.key = .{ .bytes = @splat(81), .module_identity_hash = @splat(82) };
+    owner.module_env = .{ .checked_source = &env };
+    owner.checked_bodies = .{};
+    defer owner.checked_bodies.deinit(allocator);
+    try owner.checked_bodies.stored_patterns.append(allocator, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(0),
+        .source_region = Region.from_raw_offsets(1, 2),
+        .data = .underscore,
+    });
+    for (0..2) |index| try owner.checked_bodies.stored_exprs.append(allocator, .{
+        .id = @enumFromInt(index),
+        .ty = @enumFromInt(0),
+        .source_region = Region.from_raw_offsets(@intCast(index + 1), @intCast(index + 2)),
+        .data = .{ .str_from_quote = .{ .literal = @enumFromInt(0), .plan = @enumFromInt(0) } },
+    });
+    try owner.checked_bodies.if_branch_pool.append(allocator, .{ .cond = @enumFromInt(0), .body = @enumFromInt(1) });
+    try owner.checked_bodies.stored_exprs.append(allocator, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(0),
+        .source_region = Region.from_raw_offsets(0, 5),
+        .data = .{ .if_ = .{
+            .branches = .{ .start = 0, .len = 1 },
+            .final_else = @enumFromInt(1),
+            .warn_unused_branches = true,
+        } },
+    });
+    var sites = [_]Checked.CheckedExhaustivenessSite{.{
+        .id = @enumFromInt(0),
+        .kind = .destructure,
+        .region = Region.from_raw_offsets(0, 5),
+        .checked_pattern = @enumFromInt(0),
+        .policy = .not_pending,
+    }};
+    owner.exhaustiveness_sites = .{ .sites = &sites };
+    var packs = LoadedPacks.init(allocator);
+    defer packs.deinit();
+    packs.checked_root = &owner;
+    var certificate = backend.dev.ProcArtifact.SourceEventCertificate{
+        .data_name = "site",
+        .site_origin = .{ .checked_pattern = 0 },
+        .descriptor = .{
+            .header = .{
+                .kind = @intFromEnum(SourceEvents.Kind.branch_taken),
+                .byte_size = @sizeOf(SourceEvents.Descriptor) + @sizeOf(SourceEvents.Region),
+            },
+            .site = .{
+                .checked_module = owner.key.bytes,
+                .procedure_identity = lir.ProcIdentity.forTest(83).bytes,
+                .checked_site = 0,
+                .has_checked_site = 1,
+                .kind = @intFromEnum(SourceEvents.SiteKind.destructure),
+                .region = .{ .start = 0, .end = 5 },
+                .branches_offset = @sizeOf(SourceEvents.Descriptor),
+                .branch_count = 1,
+            },
+        },
+        .branch_regions = &.{Region.from_raw_offsets(1, 2)},
+    };
+    const artifact = backend.dev.ProcArtifact.Artifact{
+        .kind = .{ .proc = lir.ProcIdentity.forTest(83) },
+        .code = "\xc3",
+        .entry = 0,
+        .frame = null,
+        .refs = &.{},
+        .relocations = &.{},
+        .data = &.{},
+        .source_events = (&certificate)[0..1],
+    };
+    try packs.pinAuthority(certificate);
+    try std.testing.expect(LoadedPacks.normalNode(&packs, artifact));
+    certificate.descriptor.site.kind = @intFromEnum(SourceEvents.SiteKind.match);
+    try std.testing.expect(!LoadedPacks.normalNode(&packs, artifact));
+    certificate.descriptor.site.kind = @intFromEnum(SourceEvents.SiteKind.destructure);
+    certificate.branch_regions = &.{Region.from_raw_offsets(2, 3)};
+    try std.testing.expect(!LoadedPacks.normalNode(&packs, artifact));
+    certificate.branch_regions = &.{Region.from_raw_offsets(1, 2)};
+    certificate.descriptor.site.region.start = 1;
+    try std.testing.expect(!LoadedPacks.normalNode(&packs, artifact));
+    certificate.descriptor.site.region.start = 0;
+    certificate.descriptor.site.has_checked_site = 0;
+    certificate.descriptor.site.kind = @intFromEnum(SourceEvents.SiteKind.if_);
+    certificate.descriptor.site.branch_count = 2;
+    certificate.descriptor.header.byte_size = @sizeOf(SourceEvents.Descriptor) + 2 * @sizeOf(SourceEvents.Region);
+    certificate.site_origin = .{ .checked_expr = 2 };
+    certificate.branch_regions = &.{ Region.from_raw_offsets(1, 2), Region.from_raw_offsets(2, 3) };
+    try packs.pinAuthority(certificate);
+    try std.testing.expect(LoadedPacks.normalNode(&packs, artifact));
+    certificate.site_origin = .{ .checked_expr = 1 };
+    try packs.pinAuthority(certificate);
+    try std.testing.expect(!LoadedPacks.normalNode(&packs, artifact));
+    certificate.descriptor = .{
+        .header = .{ .kind = @intFromEnum(SourceEvents.Kind.failure) },
+        .source = .{
+            .checked_module = owner.key.bytes,
+            .source_identity = owner.key.module_identity_hash,
+            .has_location = 1,
+            .region = .{ .start = 1, .end = 2 },
+            .line = 1,
+            .column = 2,
+        },
+        .failure = .{
+            .has_literal_rejection = 1,
+            .literal_rejection = .{ .checked_module = owner.key.bytes, .checked_expr = 0, .kind = @intFromEnum(SourceEvents.LiteralKind.quote) },
+        },
+    };
+    certificate.site_origin = null;
+    certificate.branch_regions = &.{};
+    try packs.pinAuthority(certificate);
+    try std.testing.expect(LoadedPacks.normalNode(&packs, artifact));
+    certificate.descriptor.failure.literal_rejection.checked_expr = 1;
+    try packs.pinAuthority(certificate);
+    try std.testing.expect(!LoadedPacks.normalNode(&packs, artifact));
+    certificate.descriptor.failure.literal_rejection.checked_expr = 0;
+    packs.checked_root = null;
+    owner.checked_bodies.stored_exprs.items[0].source_region = Region.from_raw_offsets(3, 4);
+    try std.testing.expect(LoadedPacks.normalNode(&packs, artifact));
 }
 
 test "object cache write failures preserve quiet behavior and report verbose causes" {
@@ -487,19 +836,296 @@ pub const Pending = struct {
     build_env: *compile.BuildEnv,
 };
 
-/// Every pack in a directory, indexed by specialization key and by procedure
-/// identity. Files load in name order so the indexes are deterministic when
-/// two packs carry the same entry.
+test "Pack18 checked materializer projection uses actual pending inputs and survives source retirement" {
+    const allocator = std.testing.allocator;
+    const eval = @import("eval");
+    var packs = LoadedPacks.init(allocator);
+    defer packs.deinit();
+    const declaration = authority: {
+        var builtin_modules = try eval.BuiltinModules.init(allocator);
+        defer builtin_modules.deinit();
+        var resources = try eval.Inspected.parseAndCanonicalizeProgramWithBuiltin(allocator, .module,
+            \\Test := [].{
+            \\    value : U64
+            \\    value = 7.U64
+            \\}
+            \\main = || Test.value
+            \\expect Test.value == 7.U64
+        , &.{}, .{
+            .env = builtin_modules.builtin_module.env,
+            .indices = builtin_modules.builtin_indices,
+            .artifact = &builtin_modules.checked_artifact,
+        });
+        defer eval.Inspected.cleanupParseAndCanonical(allocator, resources);
+        var uses = std.ArrayList(Common.CheckedRootUse).empty;
+        defer uses.deinit(allocator);
+        for (resources.checked_artifact.root_requests.compile_time_requests) |request| {
+            const root = request.compile_time_root orelse continue;
+            try uses.append(allocator, .{ .module = resources.checked_artifact.key.bytes, .root = @intFromEnum(root) });
+        }
+        try std.testing.expect(uses.items.len != 0);
+        try packs.projectCheckedMaterializers(.{
+            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .imports = &.{check.CheckedArtifact.importedView(&builtin_modules.checked_artifact)},
+        }, uses.items, lir.CheckedPipeline.TargetConfig.ordinaryDev());
+        try std.testing.expect(packs.materializers.count() != 0);
+        var declarations = packs.materializers.valueIterator();
+        const expected = declarations.next().?.*;
+        // The producer is not in Builtin's visibility and has no published
+        // BuildEnv entry. Only the caller's actual prepared input contains it.
+        for ([_]bool{ false, true }) |as_relation| {
+            var projected = LoadedPacks.init(allocator);
+            defer projected.deinit();
+            const producer_views = [_]check.CheckedModule.ImportedModuleView{
+                check.CheckedArtifact.importedView(&resources.checked_artifact),
+            };
+            projected.projection_target = lir.CheckedPipeline.TargetConfig.ordinaryDev();
+            projected.projection_modules = .{
+                .root = check.CheckedArtifact.loweringViewWithRelations(
+                    &builtin_modules.checked_artifact,
+                    if (as_relation) &producer_views else &.{},
+                ),
+                .imports = if (as_relation) &.{} else &producer_views,
+            };
+            defer projected.projection_modules = null;
+            const dependency = backend.dev.ProcArtifact.RootMaterializationDependency{
+                .binding_name = "binding",
+                .header_name = "header",
+                .materialization = expected,
+            };
+            var pending_pack = PackFile.Pack{
+                .set = .{
+                    .arena = std.heap.ArenaAllocator.init(allocator),
+                    .artifacts = &.{.{
+                        .kind = .{ .proc = lir.ProcIdentity.forTest(105) },
+                        .code = "\xc3",
+                        .entry = 0,
+                        .frame = null,
+                        .refs = &.{},
+                        .relocations = &.{},
+                        .data = &.{},
+                        .materializations = &.{dependency},
+                    }},
+                },
+                .specs = &.{},
+            };
+            defer pending_pack.deinit();
+            try projected.projectPendingMaterializers(&pending_pack, &.{.{
+                .checked_roots = uses.items,
+                .literal_reads = &.{},
+                .complete = true,
+            }});
+            try std.testing.expectEqualDeep(expected, projected.materializers.get(expected.wrapper_identity).?);
+        }
+        break :authority expected;
+    };
+    // Every checked and type/layout owner above has now been destroyed.
+    const header = try lir.Program.rootMaterializationHeaderName(allocator, declaration);
+    defer allocator.free(header);
+    const binding = try std.fmt.allocPrint(allocator, "{s}__address", .{header});
+    defer allocator.free(binding);
+    const dependency = backend.dev.ProcArtifact.RootMaterializationDependency{
+        .binding_name = binding,
+        .header_name = header,
+        .materialization = declaration,
+    };
+    const artifact = backend.dev.ProcArtifact.Artifact{
+        .kind = .{ .proc = lir.ProcIdentity.forTest(101) },
+        .code = "\xc3",
+        .entry = 0,
+        .frame = null,
+        .refs = &.{},
+        .relocations = &.{},
+        .data = &.{.{
+            .name = binding,
+            .bytes = &([_]u8{0} ** 8),
+            .alignment = 8,
+            .symbol_offset = 0,
+            .relocations = &.{.{ .offset = 0, .name = header, .addend = 0, .function = false, .external = true }},
+        }},
+        .materializations = (&dependency)[0..1],
+    };
+    try backend.dev.ProcArtifact.validateRootMaterializations(allocator, artifact);
+    try std.testing.expect(LoadedPacks.normalNode(&packs, artifact));
+}
+
+test "Pack18 checked materializer demand is shared across recursive callers and rejects only its closure" {
+    const allocator = std.testing.allocator;
+    var packs = LoadedPacks.init(allocator);
+    defer packs.deinit();
+    const declaration = lir.Program.RootMaterialization{
+        .module = @splat(1),
+        .producer = .{ .checked = 2 },
+        .representation_digest = @splat(3),
+        .layout_digest = @splat(4),
+        .wrapper_identity = @splat(5),
+    };
+    const dependency = backend.dev.ProcArtifact.RootMaterializationDependency{
+        .binding_name = "binding",
+        .header_name = "header",
+        .materialization = declaration,
+    };
+    var artifacts = [_]backend.dev.ProcArtifact.Artifact{
+        .{ .kind = .{ .proc = lir.ProcIdentity.forTest(102) }, .code = "\xc3", .entry = 0, .frame = null, .refs = &.{.{ .site = 0, .form = .call, .target = 1, .delta = 0 }}, .relocations = &.{}, .data = &.{} },
+        .{ .kind = .{ .proc = lir.ProcIdentity.forTest(103) }, .code = "\xc3", .entry = 0, .frame = null, .refs = &.{.{ .site = 0, .form = .call, .target = 0, .delta = 0 }}, .relocations = &.{}, .data = &.{}, .materializations = &.{dependency} },
+        .{ .kind = .{ .proc = lir.ProcIdentity.forTest(104) }, .code = "\xc3", .entry = 0, .frame = null, .refs = &.{}, .relocations = &.{}, .data = &.{} },
+    };
+    var set = backend.dev.ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &artifacts };
+    defer set.deinit();
+    var closure = try backend.dev.ArtifactClosure.init(allocator, &set);
+    defer closure.deinit();
+    const summaries = try packs.servingDemandSummaries(&closure, &.{});
+    defer allocator.free(summaries);
+    try std.testing.expect(summaries[0].checked_roots.ptr == summaries[1].checked_roots.ptr);
+    try std.testing.expectEqual(@as(usize, 1), summaries[0].checked_roots.len);
+    try std.testing.expectEqual(@as(usize, 0), summaries[2].checked_roots.len);
+    const rejected = try closure.admit(&packs, LoadedPacks.normalNode);
+    defer allocator.free(rejected);
+    try std.testing.expectEqualSlices(bool, &.{ false, false, true }, rejected);
+    try packs.pinMaterializer(declaration);
+    const accepted = try closure.admit(&packs, LoadedPacks.normalNode);
+    defer allocator.free(accepted);
+    try std.testing.expectEqualSlices(bool, &.{ true, true, true }, accepted);
+}
+
+test "Pack18 literal projection retains producer declarations after source retirement" {
+    const allocator = std.testing.allocator;
+    const eval = @import("eval");
+    const checked = check.CheckedArtifact;
+    var packs = LoadedPacks.init(allocator);
+    defer packs.deinit();
+    const declaration = authority: {
+        var builtin_modules = try eval.BuiltinModules.init(allocator);
+        defer builtin_modules.deinit();
+        var resources = try eval.Inspected.parseAndCanonicalizeProgramWithBuiltin(allocator, .module,
+            \\main = || Test.value
+            \\Test := [].{
+            \\    value : U64
+            \\    value = Test.helper(0.U64)
+            \\    helper : a -> U64
+            \\    helper = |_unused| {
+            \\        captured = 3.U64
+            \\        Local(t) := [Local(U64)].{
+            \\            from_numeral : Numeral -> Try(Local(t), [InvalidNumeral(Str)])
+            \\            from_numeral = |_| Ok(Local(captured))
+            \\        }
+            \\        literal : Local(a)
+            \\        literal = 42
+            \\        match literal { Local(n) => n }
+            \\    }
+            \\}
+            \\expect Test.value == 3.U64
+        , &.{}, .{
+            .env = builtin_modules.builtin_module.env,
+            .indices = builtin_modules.builtin_indices,
+            .artifact = &builtin_modules.checked_artifact,
+        });
+        defer eval.Inspected.cleanupParseAndCanonical(allocator, resources);
+        const source_modules = [_]check.TypedCIR.Modules.SourceModule{
+            .{ .precompiled = resources.module_env },
+            .{ .precompiled = @constCast(builtin_modules.builtin_module.env) },
+        };
+        var typed_modules = try check.TypedCIR.Modules.init(allocator, &source_modules);
+        defer typed_modules.deinit();
+        const builtin_view = checked.importedView(&builtin_modules.checked_artifact);
+        var pending = try checked.publishFromTypedModule(allocator, &typed_modules, 0, .{
+            .module_env_storage = .{ .checked_source = resources.module_env },
+            .imports = &.{.{ .module_idx = 1, .key = builtin_modules.checked_artifact.key, .view = builtin_view }},
+            .available_artifacts = &.{builtin_view},
+            .hoisted_roots = resources.checker.selectedHoistedRoots(),
+            .promoted_local_procedures = resources.checker.promotedLocalProcedures(),
+            .compile_time_finalizer = eval.CompileTimeFinalization.finalizer(),
+            .evaluation_phase = .post_frontend,
+            .problem_store = &resources.checker.problems,
+        });
+        defer pending.deinitRetainingModuleEnv(allocator);
+        const modules = lir.CheckedPipeline.CheckedModuleSet{ .root = checked.loweringView(&pending), .imports = &.{builtin_view} };
+        var policy = lir.CheckedPipeline.TargetConfig.ordinaryDev();
+        policy.checked_module_state = .checking_finalization;
+        policy.comptime_value_reads = true;
+        policy.literal_roots = true;
+        policy.keep_specialization_procs = true;
+        var cold = try lir.CheckedPipeline.lowerCheckedModulesToLir(allocator, modules, .{
+            .requests = pending.root_requests.compile_time_requests,
+        }, policy);
+        defer cold.deinit();
+        var selected: ?lir.Program.CachedLiteralRecipe = null;
+        for (cold.lir_result.spec_procs.items) |spec| {
+            const demand = spec.demand orelse continue;
+            for (demand.literal_reads) |read| if (std.mem.eql(u8, &read.recipe.module, &pending.key.bytes)) {
+                selected = read.recipe;
+                break;
+            };
+            if (selected != null) break;
+        }
+        const recipe = selected orelse return error.TestUnexpectedResult;
+        var expected: ?lir.Program.RootMaterialization = null;
+        for (cold.lir_result.store.getProcSpecs()) |proc| {
+            const materialization = proc.root_materialization orelse continue;
+            if (LoadedPacks.literalRecipeMatchesMaterializer(materialization, recipe)) {
+                expected = materialization;
+                break;
+            }
+        }
+        try std.testing.expect(expected != null);
+        try packs.projectMaterializers(modules, &.{}, &.{recipe}, policy);
+        try std.testing.expectEqualDeep(expected.?, packs.materializers.get(expected.?.wrapper_identity).?);
+        break :authority expected.?;
+    };
+    // The checked source, cold producer, and all recipe/type owners are gone.
+    const dependency = backend.dev.ProcArtifact.RootMaterializationDependency{
+        .binding_name = "binding",
+        .header_name = "header",
+        .materialization = declaration,
+    };
+    const artifact = backend.dev.ProcArtifact.Artifact{
+        .kind = .{ .proc = lir.ProcIdentity.forTest(151) },
+        .code = "\xc3",
+        .entry = 0,
+        .frame = null,
+        .refs = &.{},
+        .relocations = &.{},
+        .data = &.{},
+        .materializations = &.{dependency},
+    };
+    try std.testing.expect(LoadedPacks.normalNode(&packs, artifact));
+}
+
+/// One universe of normal objects, indexed by specialization key and procedure
+/// identity. Stable decoded owners allow new demanded objects to join the
+/// universe without invalidating any already-borrowed physical graph.
 pub const LoadedPacks = struct {
+    const AuthorityKey = struct { module: [32]u8, id: u32 };
+    const SiteKey = struct {
+        module: [32]u8,
+        origin: lir.LIR.CheckedSiteOrigin,
+        checked_site: ?u32,
+    };
+    const SourceAuthority = struct { identity: [32]u8, length: usize };
+    const SiteAuthority = struct {
+        kind: u32,
+        region: SourceEvents.Region,
+        branches: []const SourceEvents.Region,
+    };
+    const LiteralAuthority = struct { kind: u32, region: SourceEvents.Region };
+    const SelectedProcedure = struct {
+        artifact: backend.dev.LocatedArtifact,
+        physical: backend.dev.LirCodeGenMod.PhysicalProvision,
+        metadata: [32]u8,
+    };
     const OfferKey = struct {
         key: [32]u8,
         platform_requirement_relation: ?[32]u8,
     };
 
     allocator: Allocator,
-    packs: std.ArrayList(PackFile.Pack),
+    packs: std.ArrayList(*PackFile.Pack),
+    indexed_count: usize = 0,
+    /// A rejected checking session can never serve or extend its objects again.
+    revoked: bool = false,
     specs: std.AutoHashMap(OfferKey, Common.SpecCacheHit),
-    artifacts: std.AutoHashMap(lir.ProcIdentity, backend.dev.LocatedArtifact),
+    semantic_valid: std.AutoHashMap(OfferKey, bool),
+    artifacts: std.AutoHashMap(lir.ProcIdentity, SelectedProcedure),
     /// Specializations served so far.
     hits: u64 = 0,
     /// Artifacts handed to a splice so far.
@@ -507,15 +1133,20 @@ pub const LoadedPacks = struct {
     /// Set until `indexPacks` runs; lookups before that load the pending
     /// store's packs for the modules in view first.
     pending: ?Pending = null,
-    /// Immutable consumer capability. Validate the entire serving closure before
-    /// any specialization or artifact index can expose it to body elision.
-    admission: ?struct {
-        context: *anyopaque,
-        /// Certify raw decoded declarations before any eligibility is memoized
-        /// or specialization/artifact index can become visible.
-        prepare: ?*const fn (*anyopaque, []const *const backend.dev.ProcArtifact.Set) Allocator.Error!void = null,
-        accept: *const fn (*anyopaque, *const backend.dev.ProcArtifact.Set, u32) Allocator.Error!bool,
-    } = null,
+    /// Current checked declaration authority, including the unpublished root.
+    checked_root: ?*const check.CheckedArtifact.CheckedModuleArtifact = null,
+    /// Owned projections of immutable checked producer records. Previously
+    /// admitted objects never borrow authority from a retiring BuildEnv entry.
+    authority_arena: std.heap.ArenaAllocator,
+    sources: std.AutoHashMap([32]u8, SourceAuthority),
+    sites: std.AutoHashMap(SiteKey, SiteAuthority),
+    literals: std.AutoHashMap(AuthorityKey, LiteralAuthority),
+    /// Exact type-only producer projections, copied before checked owners retire.
+    materializers: std.AutoHashMap([32]u8, lir.Program.RootMaterialization),
+    projection_target: ?lir.CheckedPipeline.TargetConfig = null,
+    /// Borrowed only during provider preparation or capture. Pending modules
+    /// belong to that caller's input, not the root's published visibility.
+    projection_modules: ?lir.CheckedPipeline.CheckedModuleSet = null,
     /// Neither lookup may expose a partial index or retry a failed collection.
     state: enum { pending, ready, unavailable } = .pending,
     failure: ?LoadError = null,
@@ -532,8 +1163,14 @@ pub const LoadedPacks = struct {
         return .{
             .allocator = allocator,
             .packs = .empty,
+            .authority_arena = std.heap.ArenaAllocator.init(allocator),
+            .sources = std.AutoHashMap([32]u8, SourceAuthority).init(allocator),
+            .sites = std.AutoHashMap(SiteKey, SiteAuthority).init(allocator),
+            .literals = std.AutoHashMap(AuthorityKey, LiteralAuthority).init(allocator),
+            .materializers = std.AutoHashMap([32]u8, lir.Program.RootMaterialization).init(allocator),
             .specs = std.AutoHashMap(OfferKey, Common.SpecCacheHit).init(allocator),
-            .artifacts = std.AutoHashMap(lir.ProcIdentity, backend.dev.LocatedArtifact).init(allocator),
+            .semantic_valid = std.AutoHashMap(OfferKey, bool).init(allocator),
+            .artifacts = std.AutoHashMap(lir.ProcIdentity, SelectedProcedure).init(allocator),
         };
     }
 
@@ -597,61 +1234,69 @@ pub const LoadedPacks = struct {
     fn appendPack(self: *LoadedPacks, bytes: []const u8) LoadError!void {
         var pack = try PackFile.read(self.allocator, bytes);
         errdefer pack.deinit();
+        const owner = try self.allocator.create(PackFile.Pack);
+        errdefer self.allocator.destroy(owner);
+        owner.* = pack;
         // After this succeeds, only LoadedPacks owns the decoded arena,
         // including errors in subsequent files or indexing.
-        try self.packs.append(self.allocator, pack);
+        try self.packs.append(self.allocator, owner);
     }
 
-    /// Index every loaded pack. The artifact index points into the packs
-    /// list, which must not grow afterwards.
-    pub fn indexPacks(self: *LoadedPacks) LoadError!void {
+    /// Retain newly produced normal objects in the same serving universe.
+    /// Disk publication remains a separate accepted-checking transaction.
+    pub fn retain(self: *LoadedPacks, bytes: []const u8) LoadError!void {
+        std.debug.assert(!self.revoked);
         if (self.state == .unavailable) return self.failure.?;
-        std.debug.assert(self.state == .pending);
-        if (self.admission) |admission| if (admission.prepare) |prepare| {
-            const sources = try self.allocator.alloc(*const backend.dev.ProcArtifact.Set, self.packs.items.len);
-            defer self.allocator.free(sources);
-            for (self.packs.items, sources) |*pack, *source| source.* = &pack.set;
-            try prepare(admission.context, sources);
-        };
         errdefer |err| {
             self.state = .unavailable;
             self.failure = err;
         }
-        for (self.packs.items) |*pack| {
-            var runtime_admission: ?[]bool = null;
-            defer if (runtime_admission) |valid| self.allocator.free(valid);
-            if (self.admission == null) {
-                var closure = try backend.dev.ArtifactClosure.init(self.allocator, &pack.set);
-                defer closure.deinit();
-                runtime_admission = try closure.admit(self, runtimeNode);
+        try self.appendPack(bytes);
+        try self.indexPacks();
+    }
+
+    /// Index new decoded owners. Existing physical graph addresses stay fixed.
+    pub fn indexPacks(self: *LoadedPacks) LoadError!void {
+        if (self.state == .unavailable) return self.failure.?;
+        errdefer |err| {
+            self.state = .unavailable;
+            self.failure = err;
+        }
+        for (self.packs.items[self.indexed_count..]) |pack| {
+            for (pack.set.artifacts) |artifact| {
+                backend.dev.ProcArtifact.validateSourceEventCertificates(self.allocator, artifact, @import("builtin").cpu.arch.endian()) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.InvalidSourceEventCertificate => return error.MalformedPack,
+                };
+                for (artifact.source_events) |certificate| try self.pinAuthority(certificate);
             }
+            var closure = try backend.dev.ArtifactClosure.init(self.allocator, &pack.set);
+            defer closure.deinit();
+            const summaries = try self.servingDemandSummaries(&closure, pack.specs);
+            defer self.allocator.free(summaries);
+            try self.projectPendingMaterializers(pack, summaries);
+            const closed = try closure.admit(self, normalNode);
+            defer self.allocator.free(closed);
+            for (pack.set.artifacts, summaries, closed) |artifact, summary, *admitted| {
+                admitted.* = admitted.* and summary.complete and literalMaterializersDeclared(artifact, summary.literal_reads);
+            }
+            try closure.propagateInvalid(closed);
             for (pack.specs) |spec| {
                 const root = pack.set.artifacts[spec.artifact];
                 const identity = switch (root.kind) {
                     .proc => |identity| identity,
                     .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => return error.MalformedPack,
                 };
-                if (self.admission) |admission| {
-                    if (!try admission.accept(admission.context, &pack.set, spec.artifact)) continue;
-                    // A source-retiring consumer needs the offer's source
-                    // facts to agree with its exact physical definition.
-                    // Declining this offer never changes complete runtime
-                    // indexing or another independently valid candidate.
-                    if (spec.observations == .unknown or spec.observations == .omitted or
-                        spec.observations != root.source_observations) continue;
-                } else if (!runtime_admission.?[spec.artifact]) {
-                    continue;
-                }
-                const artifact_entry = try self.artifacts.getOrPut(identity);
-                if (!artifact_entry.found_existing) artifact_entry.value_ptr.* = .{ .set = &pack.set, .index = spec.artifact };
-                const gop = try self.specs.getOrPut(.{
-                    .key = spec.key,
-                    .platform_requirement_relation = spec.platform_requirement_relation,
-                });
-                if (!gop.found_existing) gop.value_ptr.* = .{
+                var demand = spec.demand orelse continue;
+                if (!demand.permitsRetirement()) continue;
+                if (!closed[spec.artifact]) continue;
+                if (root.callable_contract == null) continue;
+                demand.literal_reads = summaries[spec.artifact].literal_reads;
+                const hit: Common.SpecCacheHit = .{
                     .identity = identity.bytes,
+                    .demand = demand,
+                    .checked_root_uses = summaries[spec.artifact].checked_roots,
                     .platform_requirement_relation = spec.platform_requirement_relation,
-                    .observations = spec.observations,
                     .rc_borrowed_params = spec.rc_borrowed_params,
                     .rc_ret_borrowed = spec.rc_ret_borrowed,
                     .rc_ret_lenders = spec.rc_ret_lenders,
@@ -660,25 +1305,504 @@ pub const LoadedPacks = struct {
                     .rc_ret_unique_fields = spec.rc_ret_unique_fields,
                     .rc_ret_conditions = spec.rc_ret_conditions,
                 };
+                const physical: backend.dev.LirCodeGenMod.PhysicalProvision = .{
+                    .graph = closure.physical_namespace,
+                    .definition = spec.artifact,
+                };
+                var hash = std.crypto.hash.Blake3.init(.{});
+                std.hash.autoHashStrat(&hash, hit, .Deep);
+                var metadata: [32]u8 = undefined;
+                hash.final(&metadata);
+                const artifact_entry = try self.artifacts.getOrPut(identity);
+                if (artifact_entry.found_existing) {
+                    // Logical identity cannot redirect a hit to a physical
+                    // sibling, nor attach that sibling's ARC/demand contract.
+                    if (!std.meta.eql(artifact_entry.value_ptr.physical, physical) or
+                        !std.mem.eql(u8, &artifact_entry.value_ptr.metadata, &metadata)) continue;
+                } else {
+                    artifact_entry.value_ptr.* = .{
+                        .artifact = .{ .set = &pack.set, .index = spec.artifact },
+                        .physical = physical,
+                        .metadata = metadata,
+                    };
+                }
+                const gop = try self.specs.getOrPut(.{
+                    .key = spec.key,
+                    .platform_requirement_relation = spec.platform_requirement_relation,
+                });
+                if (!gop.found_existing) gop.value_ptr.* = hit;
             }
         }
+        self.indexed_count = self.packs.items.len;
+        try self.certifyLiteralOffers();
         self.state = .ready;
     }
 
-    fn runtimeNode(_: *anyopaque, artifact: backend.dev.ProcArtifact.Artifact) bool {
-        if (artifact.domain != .runtime or !artifact.context_complete or
-            artifact.context_bindings.len != 0 or artifact.context_relocations.len != 0) return false;
-        if (artifact.context_dependencies) |dependencies| {
-            if (dependencies.comptime_hooks) return false;
-            const contract = artifact.context_contract orelse return false;
-            if (dependencies.static_data and !contract.static_data_readonly) return false;
-            if (dependencies.dict_seed and contract.dict_seed_mode != .runtime) return false;
-            if (dependencies.boxy_runtime_entry and !contract.initialize_boxy_runtime) return false;
+    /// Semantic producer edges are additional to machine references. Propagate
+    /// missing exact offers backwards once; recursive groups remain closed when
+    /// all their declarations and physical definitions are present.
+    fn certifyLiteralOffers(self: *LoadedPacks) Allocator.Error!void {
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        const keys = try a.alloc(OfferKey, self.specs.count());
+        const hits = try a.alloc(Common.SpecCacheHit, keys.len);
+        var index = std.AutoHashMap(OfferKey, u32).init(a);
+        var entries = self.specs.iterator();
+        for (keys, hits, 0..) |*key, *hit, id| {
+            const entry = entries.next().?;
+            key.* = entry.key_ptr.*;
+            hit.* = entry.value_ptr.*;
+            try index.put(key.*, @intCast(id));
         }
-        for (artifact.relocations) |relocation| {
-            if (backend.dev.HostSplice.isComptimeHookSymbol(relocation.name)) return false;
+        const callers = try a.alloc(std.ArrayList(u32), keys.len);
+        @memset(callers, .empty);
+        const valid = try a.alloc(bool, keys.len);
+        @memset(valid, true);
+        var invalid = std.ArrayList(u32).empty;
+        for (keys, hits, 0..) |key, hit, id| {
+            const demand = hit.demand orelse unreachable;
+            for (demand.literal_reads) |read| {
+                const dependency = index.get(.{
+                    .key = read.recipe.producer_key,
+                    .platform_requirement_relation = key.platform_requirement_relation,
+                }) orelse index.get(.{
+                    .key = read.recipe.producer_key,
+                    .platform_requirement_relation = null,
+                });
+                if (dependency) |callee| {
+                    if (!std.mem.eql(u8, &hits[callee].identity, &read.recipe.object_identity)) {
+                        valid[id] = false;
+                        continue;
+                    }
+                    try callers[callee].append(a, @intCast(id));
+                } else valid[id] = false;
+            }
+            if (!valid[id]) try invalid.append(a, @intCast(id));
+        }
+        var cursor: usize = 0;
+        while (cursor < invalid.items.len) : (cursor += 1) {
+            for (callers[invalid.items[cursor]].items) |caller| {
+                if (!valid[caller]) continue;
+                valid[caller] = false;
+                try invalid.append(a, caller);
+            }
+        }
+        self.semantic_valid.clearRetainingCapacity();
+        for (keys, valid) |key, admitted| try self.semantic_valid.put(key, admitted);
+    }
+
+    fn normalNode(context: *anyopaque, artifact: backend.dev.ProcArtifact.Artifact) bool {
+        const self: *LoadedPacks = @ptrCast(@alignCast(context));
+        // Physical code policy belongs to the store namespace. A serving graph
+        // is not classified by which consumer first demanded its procedures.
+        if (artifact.root_materialization != null) return false;
+        for (artifact.materializations) |dependency| {
+            if (!self.materializers.contains(dependency.materialization.wrapper_identity)) return false;
+        }
+        for (artifact.source_events) |certificate| {
+            const descriptor = certificate.descriptor;
+            if (descriptor.source.has_location != 0) {
+                const authority = self.sources.get(descriptor.source.checked_module) orelse return false;
+                if (!std.mem.eql(u8, &authority.identity, &descriptor.source.source_identity) or
+                    !validRegion(descriptor.source.region, authority.length)) return false;
+            }
+            if (descriptor.header.kind == @intFromEnum(SourceEvents.Kind.branch_taken) or
+                descriptor.header.kind == @intFromEnum(SourceEvents.Kind.exhaustiveness_failed))
+            {
+                const key = siteKey(certificate) orelse return false;
+                const authority = self.sites.get(key) orelse return false;
+                if (descriptor.site.kind != authority.kind or !std.meta.eql(descriptor.site.region, authority.region) or
+                    certificate.branch_regions.len != authority.branches.len) return false;
+                for (certificate.branch_regions, authority.branches) |region, expected| {
+                    if (region.start.offset != expected.start or region.end.offset != expected.end) return false;
+                }
+            }
+            if (descriptor.failure.has_literal_rejection != 0) {
+                const literal = descriptor.failure.literal_rejection;
+                const authority = self.literals.get(.{ .module = literal.checked_module, .id = literal.checked_expr }) orelse return false;
+                if (literal.kind != authority.kind or descriptor.source.has_location == 0 or
+                    !std.mem.eql(u8, &descriptor.source.checked_module, &literal.checked_module) or
+                    !std.meta.eql(descriptor.source.region, authority.region)) return false;
+            }
         }
         return true;
+    }
+
+    /// Use only the declared root table and ordinary type/layout lowering.
+    /// No source procedure requests or cached layouts enter this projection.
+    pub fn projectCheckedMaterializers(
+        self: *LoadedPacks,
+        modules: lir.CheckedPipeline.CheckedModuleSet,
+        uses: []const Common.CheckedRootUse,
+        policy: lir.CheckedPipeline.TargetConfig,
+    ) lir.CheckedPipeline.LowerResourceError!void {
+        return self.projectMaterializers(modules, uses, &.{}, policy);
+    }
+
+    pub fn projectMaterializers(
+        self: *LoadedPacks,
+        modules: lir.CheckedPipeline.CheckedModuleSet,
+        uses: []const Common.CheckedRootUse,
+        recipes: []const lir.Program.CachedLiteralRecipe,
+        policy: lir.CheckedPipeline.TargetConfig,
+    ) lir.CheckedPipeline.LowerResourceError!void {
+        if (uses.len == 0 and recipes.len == 0) return;
+        var target = policy;
+        target.spec_cache = null;
+        target.root_use_cache = null;
+        target.code_provision = .source_bodies;
+        target.checked_module_state = .checking_finalization;
+        target.completed_scalar_values = null;
+        target.layout_request_const_plans = false;
+        const mono = try lir.CheckedPipeline.prepareCheckedModulesMonotype(self.allocator, modules, .{
+            .cached_root_declarations = uses,
+            .cached_literal_declarations = recipes,
+        }, target);
+        var solved = try lir.CheckedPipeline.prepareMonotypeToSolved(mono);
+        defer solved.deinit();
+        var projected = try @import("postcheck").SolvedLirLower.runBorrowed(self.allocator, target.target_usize, &solved.program, .{
+            .layout_request_const_plans = false,
+            .root_manifest = .{ .roots = &.{}, .literal_roots = false, .runtime_schema_requests = false },
+        });
+        defer projected.deinit();
+        for (projected.lir_result.store.getProcSpecs()) |proc| {
+            const declaration = proc.root_materialization orelse continue;
+            if (declaration.producer != .checked) continue;
+            try self.pinMaterializer(declaration);
+        }
+        for (projected.lir_result.requested_layouts.items) |request| {
+            if (request.materialization) |declaration| try self.pinMaterializer(declaration);
+        }
+    }
+
+    fn pinMaterializer(self: *LoadedPacks, declaration: lir.Program.RootMaterialization) Allocator.Error!void {
+        const entry = try self.materializers.getOrPut(declaration.wrapper_identity);
+        if (entry.found_existing) {
+            std.debug.assert(std.meta.eql(entry.value_ptr.*, declaration));
+            if (!std.meta.eql(entry.value_ptr.*, declaration)) unreachable;
+        } else entry.value_ptr.* = declaration;
+    }
+
+    fn projectPendingMaterializers(self: *LoadedPacks, pack: *const PackFile.Pack, summaries: []const ServingDemand) Allocator.Error!void {
+        const policy = self.projection_target orelse return;
+        const modules = self.projection_modules orelse return;
+        var unique = std.AutoHashMap(Common.CheckedRootUse, void).init(self.allocator);
+        defer unique.deinit();
+        var uses = std.ArrayList(Common.CheckedRootUse).empty;
+        defer uses.deinit(self.allocator);
+        var recipes = std.ArrayList(lir.Program.CachedLiteralRecipe).empty;
+        defer recipes.deinit(self.allocator);
+        var literal_keys = std.AutoHashMap(LiteralProducer, void).init(self.allocator);
+        defer literal_keys.deinit();
+        for (pack.set.artifacts, summaries) |artifact, summary| {
+            if (!summary.complete) continue;
+            for (artifact.materializations) |dependency| {
+                const declaration = dependency.materialization;
+                if (self.materializers.contains(declaration.wrapper_identity)) continue;
+                // Identity directories retain earlier module revisions. Those
+                // offers cannot demand storage from this compilation's inputs.
+                if (!moduleAvailable(modules, declaration.module)) continue;
+                if (declaration.producer == .literal) {
+                    for (summary.literal_reads) |read| {
+                        if (!literalRecipeMatchesMaterializer(declaration, read.recipe)) continue;
+                        if (!read.recipe.valid()) continue;
+                        const key = LiteralProducer{ .key = read.recipe.producer_key, .identity = read.recipe.object_identity };
+                        if ((try literal_keys.getOrPut(key)).found_existing) continue;
+                        try recipes.append(self.allocator, read.recipe);
+                    }
+                    continue;
+                }
+                const use = Common.CheckedRootUse{ .module = declaration.module, .root = declaration.producer.checked };
+                if ((try unique.getOrPut(use)).found_existing) continue;
+                try uses.append(self.allocator, use);
+            }
+        }
+        if (uses.items.len == 0 and recipes.items.len == 0) return;
+        self.projectMaterializers(modules, uses.items, recipes.items, policy) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            // Invalid checked input cannot certify its materializer. Ordinary
+            // siblings without that dependency still undergo normal admission.
+            error.HostedFunctionNotBound => return,
+        };
+    }
+
+    fn moduleAvailable(modules: lir.CheckedPipeline.CheckedModuleSet, identity: [32]u8) bool {
+        if (std.mem.eql(u8, &modules.root.module.key.bytes, &identity)) return true;
+        for (modules.imports) |view| if (std.mem.eql(u8, &view.key.bytes, &identity)) return true;
+        for (modules.root.relation_modules) |view| if (std.mem.eql(u8, &view.key.bytes, &identity)) return true;
+        return false;
+    }
+
+    const ServingDemand = struct {
+        checked_roots: []const Common.CheckedRootUse,
+        literal_reads: []const lir.Program.CachedLiteralRead,
+        complete: bool,
+    };
+
+    const LiteralProducer = struct {
+        key: [32]u8,
+        identity: [32]u8,
+    };
+
+    const LiteralReadKey = struct {
+        producer: LiteralProducer,
+        /// Keep distinct diagnostic causes without relying on pack-local order.
+        cause: [32]u8,
+    };
+
+    const LiteralRead = struct {
+        key: LiteralReadKey,
+        read: lir.Program.CachedLiteralRead,
+    };
+
+    fn literalMaterializersDeclared(artifact: backend.dev.ProcArtifact.Artifact, reads: []const lir.Program.CachedLiteralRead) bool {
+        for (artifact.materializations) |dependency| {
+            const declaration = dependency.materialization;
+            if (declaration.producer != .literal) continue;
+            var declared = false;
+            for (reads) |read| {
+                if (literalRecipeMatchesMaterializer(declaration, read.recipe)) {
+                    declared = true;
+                    break;
+                }
+            }
+            if (!declared) return false;
+        }
+        return true;
+    }
+
+    fn literalRecipeMatchesMaterializer(declaration: lir.Program.RootMaterialization, recipe: lir.Program.CachedLiteralRecipe) bool {
+        if (declaration.producer != .literal) return false;
+        const producer = declaration.producer.literal;
+        return recipe.checked_expr == producer.checked_expr and recipe.kind == producer.kind and
+            std.mem.eql(u8, &recipe.module, &declaration.module) and
+            std.mem.eql(u8, &recipe.producer_key, &producer.conversion_identity);
+    }
+
+    fn servingDemandSummaries(self: *LoadedPacks, closure: *backend.dev.ArtifactClosure, specs: []const PackFile.SpecEntry) Allocator.Error![]const ServingDemand {
+        var components = try closure.components();
+        defer components.deinit();
+        const sets = try self.allocator.alloc(std.AutoHashMap(Common.CheckedRootUse, void), components.callees.len);
+        defer self.allocator.free(sets);
+        for (sets) |*set| set.* = std.AutoHashMap(Common.CheckedRootUse, void).init(self.allocator);
+        defer for (sets) |*set| set.deinit();
+        const literals = try self.allocator.alloc(std.AutoHashMap(LiteralReadKey, lir.Program.CachedLiteralRead), sets.len);
+        defer self.allocator.free(literals);
+        for (literals) |*set| set.* = std.AutoHashMap(LiteralReadKey, lir.Program.CachedLiteralRead).init(self.allocator);
+        defer for (literals) |*set| set.deinit();
+        const recipes = try self.allocator.alloc(std.AutoHashMap(LiteralProducer, [32]u8), sets.len);
+        defer self.allocator.free(recipes);
+        for (recipes) |*set| set.* = std.AutoHashMap(LiteralProducer, [32]u8).init(self.allocator);
+        defer for (recipes) |*set| set.deinit();
+        const complete = try self.allocator.alloc(bool, sets.len);
+        defer self.allocator.free(complete);
+        @memset(complete, true);
+        for (specs) |spec| {
+            const component = components.nodes[spec.artifact];
+            const demand = spec.demand orelse {
+                complete[component] = false;
+                continue;
+            };
+            complete[component] = complete[component] and demand.permitsRetirement();
+            for (demand.literal_reads) |read| try addLiteralRead(&literals[component], &recipes[component], &complete[component], read);
+        }
+        for (closure.set.artifacts, components.nodes) |artifact, component| {
+            for (artifact.materializations) |dependency| {
+                const declaration = dependency.materialization;
+                if (declaration.producer != .checked) continue;
+                const use = Common.CheckedRootUse{ .module = declaration.module, .root = declaration.producer.checked };
+                try sets[component].put(use, {});
+            }
+        }
+        var component: usize = sets.len;
+        while (component != 0) {
+            component -= 1;
+            for (components.callees[component]) |callee| {
+                var keys = sets[callee].keyIterator();
+                while (keys.next()) |use| try sets[component].put(use.*, {});
+                complete[component] = complete[component] and complete[callee];
+                var reads = literals[callee].valueIterator();
+                while (reads.next()) |read| try addLiteralRead(&literals[component], &recipes[component], &complete[component], read.*);
+            }
+        }
+        const summaries = try self.allocator.alloc(ServingDemand, sets.len);
+        defer self.allocator.free(summaries);
+        const a = self.authority_arena.allocator();
+        for (sets, literals, complete, summaries) |*set, *literal_set, is_complete, *summary| {
+            const uses = try a.alloc(Common.CheckedRootUse, set.count());
+            var keys = set.keyIterator();
+            for (uses) |*use| use.* = keys.next().?.*;
+            std.mem.sort(Common.CheckedRootUse, uses, {}, struct {
+                fn lessThan(_: void, left: Common.CheckedRootUse, right: Common.CheckedRootUse) bool {
+                    const order = std.mem.order(u8, &left.module, &right.module);
+                    return if (order == .eq) left.root < right.root else order == .lt;
+                }
+            }.lessThan);
+            const ordered = try self.allocator.alloc(LiteralRead, literal_set.count());
+            defer self.allocator.free(ordered);
+            var reads = literal_set.iterator();
+            for (ordered) |*read| {
+                const entry = reads.next().?;
+                read.* = .{ .key = entry.key_ptr.*, .read = entry.value_ptr.* };
+            }
+            std.mem.sort(LiteralRead, ordered, {}, struct {
+                fn lessThan(_: void, left: LiteralRead, right: LiteralRead) bool {
+                    const key_order = std.mem.order(u8, &left.key.producer.key, &right.key.producer.key);
+                    if (key_order != .eq) return key_order == .lt;
+                    const identity_order = std.mem.order(u8, &left.key.producer.identity, &right.key.producer.identity);
+                    if (identity_order != .eq) return identity_order == .lt;
+                    return std.mem.order(u8, &left.key.cause, &right.key.cause) == .lt;
+                }
+            }.lessThan);
+            const literal_reads = try a.alloc(lir.Program.CachedLiteralRead, ordered.len);
+            for (ordered, literal_reads) |read, *out| out.* = read.read;
+            summary.* = .{ .checked_roots = uses, .literal_reads = literal_reads, .complete = is_complete };
+        }
+        const nodes = try self.allocator.alloc(ServingDemand, closure.set.artifacts.len);
+        for (components.nodes, nodes) |id, *summary| summary.* = summaries[id];
+        return nodes;
+    }
+
+    fn addLiteralRead(
+        reads: *std.AutoHashMap(LiteralReadKey, lir.Program.CachedLiteralRead),
+        recipes: *std.AutoHashMap(LiteralProducer, [32]u8),
+        complete: *bool,
+        read: lir.Program.CachedLiteralRead,
+    ) Allocator.Error!void {
+        const producer = LiteralProducer{ .key = read.recipe.producer_key, .identity = read.recipe.object_identity };
+        var recipe_hash = std.crypto.hash.Blake3.init(.{});
+        std.hash.autoHashStrat(&recipe_hash, read.recipe, .Deep);
+        var digest: [32]u8 = undefined;
+        recipe_hash.final(&digest);
+        const recipe = try recipes.getOrPut(producer);
+        if (recipe.found_existing) {
+            if (!std.mem.eql(u8, &recipe.value_ptr.*, &digest)) complete.* = false;
+        } else recipe.value_ptr.* = digest;
+        var cause_hash = std.crypto.hash.Blake3.init(.{});
+        std.hash.autoHashStrat(&cause_hash, read.cause, .Deep);
+        cause_hash.final(&digest);
+        try reads.put(.{ .producer = producer, .cause = digest }, read);
+    }
+
+    fn checkedArtifact(self: *const LoadedPacks, identity: [32]u8) ?*const check.CheckedArtifact.CheckedModuleArtifact {
+        if (self.checked_root) |root| if (std.mem.eql(u8, &root.key.bytes, &identity)) return root;
+        const pending = self.pending orelse return null;
+        return pending.build_env.activeArtifactByIdentity(identity);
+    }
+
+    fn validRegion(region: SourceEvents.Region, source_len: usize) bool {
+        return region.start <= region.end and region.end <= source_len;
+    }
+
+    fn sourceRegion(region: @import("base").Region) SourceEvents.Region {
+        return .{ .start = region.start.offset, .end = region.end.offset };
+    }
+
+    fn pinSource(self: *LoadedPacks, module: [32]u8) Allocator.Error!void {
+        if (self.sources.contains(module)) return;
+        const owner = self.checkedArtifact(module) orelse return;
+        try self.sources.put(module, .{
+            .identity = owner.key.module_identity_hash,
+            .length = owner.moduleEnvConst().getSourceAll().len,
+        });
+    }
+
+    fn siteKey(certificate: backend.dev.ProcArtifact.SourceEventCertificate) ?SiteKey {
+        const site = certificate.descriptor.site;
+        return .{
+            .module = site.checked_module,
+            .origin = certificate.site_origin orelse return null,
+            .checked_site = if (site.has_checked_site != 0) site.checked_site else null,
+        };
+    }
+
+    fn pinAuthority(self: *LoadedPacks, certificate: backend.dev.ProcArtifact.SourceEventCertificate) Allocator.Error!void {
+        const descriptor = certificate.descriptor;
+        if (descriptor.source.has_location != 0) try self.pinSource(descriptor.source.checked_module);
+        if (siteKey(certificate)) |key| try self.pinSite(key);
+        if (descriptor.failure.has_literal_rejection != 0) {
+            const literal = descriptor.failure.literal_rejection;
+            const key = AuthorityKey{ .module = literal.checked_module, .id = literal.checked_expr };
+            if (self.literals.contains(key)) return;
+            const owner = self.checkedArtifact(key.module) orelse return;
+            if (key.id >= owner.checked_bodies.exprCount()) return;
+            const expr = owner.checked_bodies.expr(@enumFromInt(key.id));
+            const kind: SourceEvents.LiteralKind = switch (expr.data) {
+                .numeral => |numeral| if (numeral.plan != null) .numeral else return,
+                .str_from_quote => |quote| if (quote.plan != null) .quote else return,
+                else => return,
+            };
+            try self.literals.put(key, .{ .kind = @intFromEnum(kind), .region = sourceRegion(expr.source_region) });
+        }
+    }
+
+    fn pinSite(self: *LoadedPacks, key: SiteKey) Allocator.Error!void {
+        if (self.sites.contains(key)) return;
+        const owner = self.checkedArtifact(key.module) orelse return;
+        const bodies = &owner.checked_bodies;
+        const a = self.authority_arena.allocator();
+        var branches = std.ArrayList(SourceEvents.Region).empty;
+        var kind: SourceEvents.SiteKind = undefined;
+        var region: SourceEvents.Region = undefined;
+        var destructure_pattern: ?check.CheckedArtifact.CheckedPatternId = null;
+        switch (key.origin) {
+            .checked_expr => |raw| {
+                if (raw >= bodies.exprCount()) return;
+                const expr = bodies.expr(@enumFromInt(raw));
+                region = sourceRegion(expr.source_region);
+                switch (expr.data) {
+                    .match_ => |match| {
+                        kind = switch (match.comptime_site_kind) {
+                            .match => .match,
+                            .destructure => .destructure,
+                        };
+                        for (match.branches) |branch| {
+                            for (branch.patternsSlice(bodies)) |pattern| {
+                                try branches.append(a, sourceRegion(bodies.pattern(pattern.pattern).source_region));
+                            }
+                        }
+                        if (kind == .destructure and match.branches.len == 1) {
+                            const patterns = match.branches[0].patternsSlice(bodies);
+                            if (patterns.len == 1) destructure_pattern = patterns[0].pattern;
+                        }
+                    },
+                    .if_ => |if_expr| {
+                        kind = .if_;
+                        for (if_expr.branches) |branch| {
+                            try branches.append(a, sourceRegion(bodies.expr(branch.cond).source_region));
+                        }
+                        try branches.append(a, sourceRegion(bodies.expr(if_expr.final_else).source_region));
+                    },
+                    else => return,
+                }
+            },
+            .checked_pattern => |raw| {
+                if (raw >= bodies.patternCount()) return;
+                const id: check.CheckedArtifact.CheckedPatternId = @enumFromInt(raw);
+                kind = .destructure;
+                region = sourceRegion(bodies.pattern(id).source_region);
+                destructure_pattern = id;
+                try branches.append(a, region);
+            },
+        }
+        if (key.checked_site) |raw| {
+            if (raw >= owner.exhaustiveness_sites.sites.len) return;
+            const checked_site = owner.exhaustiveness_sites.sites[raw];
+            const checked_kind: SourceEvents.SiteKind = switch (checked_site.kind) {
+                .match => .match,
+                .destructure => .destructure,
+            };
+            if (kind != checked_kind) return;
+            if (kind == .destructure) {
+                if (destructure_pattern == null or checked_site.checked_pattern != destructure_pattern) return;
+                if (key.origin == .checked_pattern) region = sourceRegion(checked_site.region);
+            } else {
+                if (key.origin != .checked_expr or checked_site.checked_expr == null or
+                    @intFromEnum(checked_site.checked_expr.?) != key.origin.checked_expr) return;
+            }
+        }
+        try self.sites.put(key, .{ .kind = @intFromEnum(kind), .region = region, .branches = branches.items });
     }
 
     /// Load the pending store's packs for the root module and every module
@@ -701,6 +1825,7 @@ pub const LoadedPacks = struct {
     pub fn ensureLoadedFor(self: *LoadedPacks, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) void {
         if (self.state != .pending) return;
         const pending = self.pending orelse return;
+        self.checked_root = root_artifact;
         self.loadPending(pending, root_artifact) catch |err| {
             self.unavailable(err);
             return;
@@ -729,9 +1854,18 @@ pub const LoadedPacks = struct {
     }
 
     pub fn deinit(self: *LoadedPacks) void {
+        self.sources.deinit();
+        self.sites.deinit();
+        self.literals.deinit();
+        self.materializers.deinit();
+        self.authority_arena.deinit();
         self.artifacts.deinit();
         self.specs.deinit();
-        for (self.packs.items) |*pack| pack.deinit();
+        self.semantic_valid.deinit();
+        for (self.packs.items) |pack| {
+            pack.deinit();
+            self.allocator.destroy(pack);
+        }
         self.packs.deinit(self.allocator);
     }
 
@@ -747,25 +1881,245 @@ pub const LoadedPacks = struct {
 
     fn findSpec(context: *anyopaque, key: [32]u8, current_relation: ?[32]u8) ?Common.SpecCacheHit {
         const self: *LoadedPacks = @ptrCast(@alignCast(context));
+        if (self.revoked) return null;
         self.ensureLoaded();
         if (self.state != .ready) return null;
         // Retain each relation's offer separately: an incompatible earlier
         // pack must not hide a compatible later pack for the reservation.
-        const hit = self.specs.get(.{ .key = key, .platform_requirement_relation = current_relation }) orelse
-            self.specs.get(.{ .key = key, .platform_requirement_relation = null }) orelse return null;
+        const related = OfferKey{ .key = key, .platform_requirement_relation = current_relation };
+        const independent = OfferKey{ .key = key, .platform_requirement_relation = null };
+        const selected = if (self.specs.contains(related)) related else independent;
+        const hit = self.specs.get(selected) orelse return null;
+        if (hit.demand) |demand| if (demand.literal_reads.len != 0) {
+            if (!(self.semantic_valid.get(selected) orelse false)) return null;
+        };
         self.hits += 1;
         return hit;
     }
 
     fn findArtifact(context: *anyopaque, identity: lir.ProcIdentity) ?backend.dev.LocatedArtifact {
         const self: *LoadedPacks = @ptrCast(@alignCast(context));
+        if (self.revoked) return null;
         self.ensureLoaded();
         if (self.state != .ready) return null;
-        const located = self.artifacts.get(identity) orelse return null;
+        const selected = self.artifacts.get(identity) orelse return null;
         self.artifacts_served += 1;
-        return located;
+        return selected.artifact;
     }
 };
+
+test "Pack18 literal offers require the full transitive exact producer closure" {
+    const allocator = std.testing.allocator;
+    var packs = LoadedPacks.init(allocator);
+    defer packs.deinit();
+    const Fixture = struct {
+        fn read(key: [32]u8, identity: [32]u8) lir.Program.CachedLiteralRead {
+            return testLiteralRead(key, identity);
+        }
+
+        fn hit(identity: [32]u8, reads: []const lir.Program.CachedLiteralRead) Common.SpecCacheHit {
+            return .{
+                .identity = identity,
+                .demand = .{ .complete = true, .literal_reads = reads },
+                .rc_borrowed_params = 0,
+                .rc_ret_borrowed = false,
+                .rc_ret_lenders = 0,
+                .rc_read_only_params = 0,
+                .rc_ret_unique = false,
+                .rc_ret_unique_fields = 0,
+                .rc_ret_conditions = &.{},
+            };
+        }
+    };
+    const first = [_]lir.Program.CachedLiteralRead{Fixture.read(@splat(2), @splat(12))};
+    const second = [_]lir.Program.CachedLiteralRead{Fixture.read(@splat(3), @splat(13))};
+    try std.testing.expect(first[0].recipe.valid());
+    try packs.specs.put(.{ .key = @splat(1), .platform_requirement_relation = null }, Fixture.hit(@splat(11), &first));
+    try packs.specs.put(.{ .key = @splat(2), .platform_requirement_relation = null }, Fixture.hit(@splat(12), &second));
+    try packs.specs.put(.{ .key = @splat(4), .platform_requirement_relation = null }, Fixture.hit(@splat(14), &.{}));
+    packs.state = .ready;
+    try packs.certifyLiteralOffers();
+    try std.testing.expect(LoadedPacks.findSpec(&packs, @splat(1), null) == null);
+    try std.testing.expect(LoadedPacks.findSpec(&packs, @splat(2), null) == null);
+    try std.testing.expect(LoadedPacks.findSpec(&packs, @splat(4), null) != null);
+    // A logical key with the wrong physical object identity is not the producer.
+    try packs.specs.put(.{ .key = @splat(3), .platform_requirement_relation = null }, Fixture.hit(@splat(99), &.{}));
+    try packs.certifyLiteralOffers();
+    try std.testing.expect(LoadedPacks.findSpec(&packs, @splat(1), null) == null);
+    try packs.specs.put(.{ .key = @splat(3), .platform_requirement_relation = null }, Fixture.hit(@splat(13), &.{}));
+    try packs.certifyLiteralOffers();
+    try std.testing.expect(LoadedPacks.findSpec(&packs, @splat(1), null) != null);
+    const recursive = [_]lir.Program.CachedLiteralRead{Fixture.read(@splat(1), @splat(11))};
+    try packs.specs.put(.{ .key = @splat(3), .platform_requirement_relation = null }, Fixture.hit(@splat(13), &recursive));
+    try packs.certifyLiteralOffers();
+    try std.testing.expect(LoadedPacks.findSpec(&packs, @splat(1), null) != null);
+}
+
+fn testLiteralRead(key: [32]u8, identity: [32]u8) lir.Program.CachedLiteralRead {
+    return .{
+        .recipe = .{
+            .module = @splat(7),
+            .checked_expr = 0,
+            .kind = .numeral,
+            .producer_key = key,
+            .object_identity = identity,
+            .owner_template = .{ .artifact = .{ .bytes = @splat(7) }, .proc_base = @enumFromInt(0), .template = @enumFromInt(0) },
+            .owner_context_fn_key = .{ .bytes = @splat(8) },
+            .current_fn_key = .{ .bytes = @splat(9) },
+            .method_scope = @splat(7),
+            .checked_callable_ty = @enumFromInt(0),
+            .callable = .{ .root = @enumFromInt(1), .types = &.{ .{ .primitive = .u64 }, .{ .func = .{ .args = .{ .start = 0, .len = 0 }, .ret = @enumFromInt(0) } } } },
+            .result = .{ .root = @enumFromInt(0), .types = &.{.{ .primitive = .u64 }} },
+            .evidence_frames = &.{.{ .scope_id = .root, .parent = null, .roots_start = 0, .roots_len = 0 }},
+            .evidence_frame_head = 0,
+        },
+        .cause = .{ .module = @splat(7), .region = .zero(), .line = 1, .column = 1 },
+    };
+}
+
+test "Pack18 machine callee literals close empty caller demand and recursive SCCs" {
+    const allocator = std.testing.allocator;
+    const literal = testLiteralRead(@splat(31), lir.ProcIdentity.forTest(131).bytes);
+    const Fixture = struct {
+        fn artifact(id: u32, refs: []const backend.dev.ProcArtifact.Reference) backend.dev.ProcArtifact.Artifact {
+            return .{
+                .kind = .{ .proc = lir.ProcIdentity.forTest(id) },
+                .code = "\xe8\x00\x00\x00\x00\xc3",
+                .entry = 0,
+                .frame = null,
+                .refs = refs,
+                .relocations = &.{},
+                .data = &.{},
+                .callable_contract = @splat(1),
+                .context_contract = .{
+                    .target = .x64linux,
+                    .cpu_level = .default,
+                    .hot_reload = false,
+                    .default_platform_runtime = false,
+                },
+            };
+        }
+
+        fn spec(key: [32]u8, artifact_index: u32, reads: []const lir.Program.CachedLiteralRead) PackFile.SpecEntry {
+            return .{
+                .key = key,
+                .artifact = artifact_index,
+                .demand = .{ .complete = true, .literal_reads = reads },
+                .rc_borrowed_params = 0,
+                .rc_ret_borrowed = false,
+                .rc_ret_lenders = 0,
+                .rc_read_only_params = 0,
+                .rc_ret_unique = false,
+                .rc_ret_unique_fields = 0,
+                .rc_ret_conditions = &.{},
+            };
+        }
+    };
+    for ([_]bool{ false, true }) |recursive| {
+        for (0..3) |mode| {
+            var artifacts = [_]backend.dev.ProcArtifact.Artifact{
+                Fixture.artifact(132, &.{.{ .site = 0, .form = .call, .target = 1, .delta = 0 }}),
+                Fixture.artifact(133, if (recursive) &.{.{ .site = 0, .form = .call, .target = 0, .delta = 0 }} else &.{}),
+                Fixture.artifact(134, &.{}),
+                Fixture.artifact(if (mode == 1) 999 else 131, &.{}),
+            };
+            var set = backend.dev.ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &artifacts };
+            defer set.deinit();
+            const specs = [_]PackFile.SpecEntry{
+                Fixture.spec(@splat(32), 0, &.{}),
+                Fixture.spec(@splat(33), 1, &.{literal}),
+                Fixture.spec(@splat(34), 2, &.{}),
+                Fixture.spec(@splat(31), 3, &.{}),
+            };
+            const bytes = try PackFile.write(allocator, &set, specs[0..if (mode == 0) 3 else 4]);
+            defer allocator.free(bytes);
+            var packs = LoadedPacks.init(allocator);
+            defer packs.deinit();
+            try packs.retain(bytes);
+            const caller_key = LoadedPacks.OfferKey{ .key = @splat(32), .platform_requirement_relation = null };
+            const callee_key = LoadedPacks.OfferKey{ .key = @splat(33), .platform_requirement_relation = null };
+            const caller = packs.specs.get(caller_key).?;
+            const callee = packs.specs.get(callee_key).?;
+            try std.testing.expectEqual(@as(usize, 1), caller.demand.?.literal_reads.len);
+            try std.testing.expectEqualDeep(literal, caller.demand.?.literal_reads[0]);
+            if (recursive) try std.testing.expectEqual(true, caller.demand.?.literal_reads.ptr == callee.demand.?.literal_reads.ptr);
+            const matched = mode == 2;
+            try std.testing.expectEqual(matched, packs.specCacheLookup().lookup(@splat(32), null) != null);
+            try std.testing.expectEqual(matched, packs.specCacheLookup().lookup(@splat(33), null) != null);
+            try std.testing.expectEqual(true, packs.specCacheLookup().lookup(@splat(34), null) != null);
+            if (matched) {
+                // Declaration recipes borrow only retained decoded owners,
+                // never the caller's source body or this encoded byte buffer.
+                const hit = packs.specCacheLookup().lookup(@splat(32), null).?;
+                try std.testing.expectEqualDeep(literal, hit.demand.?.literal_reads[0]);
+            }
+        }
+    }
+}
+
+test "Pack18 literal materializers require a recipe in their own serving closure" {
+    const allocator = std.testing.allocator;
+    var packs = LoadedPacks.init(allocator);
+    defer packs.deinit();
+    const read = testLiteralRead(@splat(41), lir.ProcIdentity.forTest(141).bytes);
+    var other_cause = read;
+    other_cause.cause.line = 2;
+    const declaration = lir.Program.RootMaterialization{
+        .module = read.recipe.module,
+        .producer = .{ .literal = .{
+            .checked_expr = read.recipe.checked_expr,
+            .kind = read.recipe.kind,
+            .conversion_identity = read.recipe.producer_key,
+        } },
+        .representation_digest = @splat(42),
+        .layout_digest = @splat(43),
+        .wrapper_identity = @splat(44),
+    };
+    const dependency = backend.dev.ProcArtifact.RootMaterializationDependency{
+        .binding_name = "binding",
+        .header_name = "header",
+        .materialization = declaration,
+    };
+    var artifacts = [_]backend.dev.ProcArtifact.Artifact{
+        .{ .kind = .{ .proc = lir.ProcIdentity.forTest(142) }, .code = "\xe8\x00\x00\x00\x00\xc3", .entry = 0, .frame = null, .refs = &.{.{ .site = 0, .form = .call, .target = 1, .delta = 0 }}, .relocations = &.{}, .data = &.{} },
+        .{ .kind = .{ .proc = lir.ProcIdentity.forTest(143) }, .code = "\xc3", .entry = 0, .frame = null, .refs = &.{}, .relocations = &.{}, .data = &.{}, .materializations = &.{dependency} },
+        .{ .kind = .{ .proc = lir.ProcIdentity.forTest(144) }, .code = "\xc3", .entry = 0, .frame = null, .refs = &.{}, .relocations = &.{}, .data = &.{} },
+    };
+    var set = backend.dev.ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &artifacts };
+    defer set.deinit();
+    var closure = try backend.dev.ArtifactClosure.init(allocator, &set);
+    defer closure.deinit();
+    var spec = PackFile.SpecEntry{
+        .key = @splat(45),
+        .artifact = 2,
+        .demand = .{ .complete = true, .literal_reads = &.{read} },
+        .rc_borrowed_params = 0,
+        .rc_ret_borrowed = false,
+        .rc_ret_lenders = 0,
+        .rc_read_only_params = 0,
+        .rc_ret_unique = false,
+        .rc_ret_unique_fields = 0,
+        .rc_ret_conditions = &.{},
+    };
+    const unrelated = try packs.servingDemandSummaries(&closure, (&spec)[0..1]);
+    defer allocator.free(unrelated);
+    try std.testing.expect(!LoadedPacks.literalMaterializersDeclared(artifacts[1], unrelated[1].literal_reads));
+    spec.artifact = 1;
+    spec.demand.?.literal_reads = &.{ read, read, other_cause };
+    const matched = try packs.servingDemandSummaries(&closure, (&spec)[0..1]);
+    defer allocator.free(matched);
+    try std.testing.expect(LoadedPacks.literalMaterializersDeclared(artifacts[1], matched[1].literal_reads));
+    try std.testing.expectEqual(@as(usize, 2), matched[0].literal_reads.len);
+    try std.testing.expect(matched[0].complete);
+    var conflicting = read;
+    conflicting.recipe.current_fn_key.bytes[0] ^= 1;
+    spec.demand.?.literal_reads = &.{ read, conflicting };
+    const rejected = try packs.servingDemandSummaries(&closure, (&spec)[0..1]);
+    defer allocator.free(rejected);
+    try std.testing.expect(!rejected[0].complete);
+    try std.testing.expect(!rejected[1].complete);
+    try std.testing.expect(rejected[2].complete);
+}
 
 fn nameLessThan(_: void, lhs: []u8, rhs: []u8) bool {
     return std.mem.order(u8, lhs, rhs) == .lt;

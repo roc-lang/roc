@@ -490,14 +490,18 @@ const Lifter = struct {
 
         // Literal roots keep their positions, which are their ids.
         for (self.source.literal_roots) |root| {
+            if (root.declaration_pending) Common.invariant("literal producer declaration was not completed before lifting");
             const raw = @intFromEnum(root.def);
             if (raw >= self.def_map.len) Common.invariant("Monotype literal root references a missing definition");
             const fn_id = self.def_map[raw] orelse
                 Common.invariant("Monotype literal root definition was not lifted");
+            const recipe = if (root.recipe) |value| try value.clone(self.allocator) else null;
+            errdefer if (recipe) |value| value.deinit(self.allocator);
             try self.output.addLiteralRoot(.{
                 .fn_id = fn_id,
                 .module = root.module,
                 .site = root.site,
+                .recipe = recipe,
             });
         }
 
@@ -514,6 +518,7 @@ const Lifter = struct {
                 .fn_id = fn_id,
                 .const_locator = request.const_locator,
                 .comptime_root = request.comptime_root,
+                .literal_materialization = request.literal_materialization,
             });
         }
 
@@ -727,7 +732,25 @@ const Lifter = struct {
             },
             .tag => |tag| try children.span(tag.payloads),
             .static_data_candidate => |candidate| try children.child(candidate.runtime_expr),
-            .comptime_value => |candidate| try children.child(candidate.initializer),
+            .comptime_value => |candidate| {
+                if (candidate.storage_producer) |def| {
+                    const raw = @intFromEnum(def);
+                    if (raw >= self.def_map.len) Common.invariant("completed storage producer was outside the definition table");
+                    const fn_id = self.def_map[raw] orelse
+                        Common.invariant("completed storage producer was not registered before its read");
+                    const initializer = try output.addExpr(.{
+                        .ty = self.source.defs[raw].ret,
+                        .data = .{ .call_proc = .{
+                            .callee = .{ .lifted = fn_id },
+                            .args = .empty(),
+                        } },
+                    });
+                    output.setExprData(expr_id, .{ .comptime_value = .{
+                        .root = candidate.root,
+                        .initializer = initializer,
+                    } });
+                } else try children.child(candidate.initializer);
+            },
             .typed_boundary => |boundary| try children.child(boundary.value),
             .nominal,
             .dbg,
@@ -2684,6 +2707,51 @@ test "lift transfers compile-time descriptors without changing their domain" {
     try std.testing.expectEqual(rows, lifted.view().comptime_value_roots.ptr);
     try std.testing.expectEqual(root, lifted.getExpr(value).data.comptime_value.root);
     try std.testing.expectEqualDeep(descriptor, lifted.getComptimeValueRoot(root));
+}
+
+test "completed root witness names its storage definition rather than its original body" {
+    const allocator = std.testing.allocator;
+    var mono = Mono.Program.init(allocator);
+    var mono_owned = true;
+    defer if (mono_owned) mono.deinit();
+    const ty = try mono.types.add(.zst);
+    const body = try mono.addExpr(.{ .ty = ty, .data = .unit });
+    const storage = try mono.addDef(.{
+        .symbol = @enumFromInt(0),
+        .root_identity = .{ .bytes = @splat(1) },
+        .args = .empty(),
+        .body = .{ .roc = body },
+        .ret = ty,
+    });
+    const root = try mono.addComptimeValueRoot(.{
+        .module = .{},
+        .root = .{ .checked = @enumFromInt(0) },
+        .const_locator = null,
+        .completion = .value,
+    });
+    const read = try mono.addExpr(.{ .ty = ty, .data = .{ .comptime_value = .{
+        .root = root,
+        .initializer = body,
+        .storage_producer = storage,
+    } } });
+    _ = try mono.addDef(.{
+        .symbol = @enumFromInt(1),
+        .root_identity = .{ .bytes = @splat(2) },
+        .args = .empty(),
+        .body = .{ .roc = read },
+        .ret = ty,
+    });
+    mono.freeze();
+    mono_owned = false;
+    var lifted = try run(allocator, mono);
+    defer lifted.deinit();
+    const witness = lifted.getExpr(read).data.comptime_value;
+    try std.testing.expectEqual(root, witness.root);
+    try std.testing.expect(witness.storage_producer == null);
+    try std.testing.expect(witness.initializer != body);
+    const call = lifted.getExpr(witness.initializer).data.call_proc;
+    try std.testing.expectEqual(@as(Ast.FnId, @enumFromInt(0)), call.callee.lifted);
+    try std.testing.expectEqual(@as(u32, 0), call.args.len);
 }
 
 fn initCaptureTestProgram(allocator: Allocator) Ast.Program {

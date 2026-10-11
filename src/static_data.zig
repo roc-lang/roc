@@ -1542,7 +1542,7 @@ const StaticDataBuilder = struct {
         for (0..self.lowered.lir_result.static_data_values.items.len) |index| {
             if (self.initializer_machine.frozen_roots[index] != null) continue;
             const static_data_id: lir.LIR.StaticDataId = @enumFromInt(@as(u32, @intCast(index)));
-            const symbol_name = try lir.Program.staticDataSymbolName(self.allocator, static_data_id);
+            const symbol_name = try self.lowered.lir_result.staticDataSymbolName(self.allocator, static_data_id);
             errdefer self.allocator.free(symbol_name);
 
             const entry = self.lowered.lir_result.static_data_values.items[index];
@@ -1555,6 +1555,7 @@ const StaticDataBuilder = struct {
                 try self.nodes.append(self.allocator, .{
                     .symbol_name = symbol_name,
                     .value_id = static_data_id,
+                    .symbol_identity = entry.symbol_identity,
                     .bytes = bytes,
                     .alignment = @intCast(size_align.alignment.toByteUnits()),
                     .is_global = true,
@@ -1571,6 +1572,7 @@ const StaticDataBuilder = struct {
             try self.nodes.append(self.allocator, .{
                 .symbol_name = symbol_name,
                 .value_id = static_data_id,
+                .symbol_identity = entry.symbol_identity,
                 .bytes = materialized.bytes,
                 .alignment = materialized.alignment,
                 .is_global = true,

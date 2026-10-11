@@ -213,6 +213,7 @@ pub const ComptimeSite = struct {
     owner: Common.LoweringModuleId,
     region: base.Region,
     checked_site: ?checked.CheckedExhaustivenessSiteId = null,
+    checked_origin: ?@import("lir_core").LIR.CheckedSiteOrigin = null,
     branch_regions: []const base.Region = &.{},
 };
 

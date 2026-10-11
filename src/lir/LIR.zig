@@ -502,6 +502,13 @@ pub const ComptimeSiteKind = enum {
     if_,
 };
 
+/// Exact checked producer of an observed control-flow site, independent of
+/// optional exhaustiveness diagnostic indexes and consumer-local site IDs.
+pub const CheckedSiteOrigin = union(enum(u8)) {
+    checked_expr: u32,
+    checked_pattern: u32,
+};
+
 /// Metadata for one compile-time-observed control-flow site.
 pub const ComptimeSite = struct {
     kind: ComptimeSiteKind,
@@ -512,6 +519,7 @@ pub const ComptimeSite = struct {
     owner: LoweringModuleId,
     region: base.Region,
     checked_site: ?CheckedExhaustivenessSiteId = null,
+    checked_origin: ?CheckedSiteOrigin = null,
     proc: LirProcSpecId,
     branch_regions: []const base.Region = &.{},
 };
@@ -1577,10 +1585,6 @@ pub const LirProcSpec = struct {
     name: Symbol,
     /// Content identity; every symbol emitted for this procedure derives from it.
     identity: ProcIdentity,
-    /// Producer-authored inline-expect obligations of this emitted body.
-    /// Out-of-line dependency closure and diagnostic/dbg/failure provenance
-    /// are separate contracts; no-hooks code cannot synthesize this fact.
-    source_observations: @import("program.zig").ProducerObservations = .unknown,
     /// Session-local code-generation provenance, not semantic identity.
     /// Compare only inside the same LIR producer domain, with matching target
     /// and emission policy; equal revisions across separate lowers prove nothing.
@@ -1632,6 +1636,9 @@ pub const LirProcSpec = struct {
     /// execute its exact post-layout construction. Runtime backends register
     /// and emit only ordinary procedures.
     is_static_initializer: bool = false,
+    /// Explicit consumer-owned materialization provision. This procedure is
+    /// not a persistent ordinary callee; callers reference its semantic cell.
+    root_materialization: ?@import("program.zig").RootMaterialization = null,
     /// Hosted call ABI metadata, when this proc is provided by the platform.
     hosted: ?HostedProc = null,
     /// Set when the object cache provides this proc's code: the proc has no

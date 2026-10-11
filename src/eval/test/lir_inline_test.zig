@@ -8940,7 +8940,7 @@ test "literal conversion ownership includes nested codec evidence" {
     }
 }
 
-test "omitted block expects retain ordinary procedure producer facts" {
+test "omitted block expects are absent from Monotype and LIR" {
     const allocator = std.testing.allocator;
     const source =
         \\main : U64 -> U64
@@ -8952,79 +8952,12 @@ test "omitted block expects retain ordinary procedure producer facts" {
     var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{ .inline_expects = .omit });
     defer lowered.deinit(allocator);
     const program = lowered.mono.view();
-    var omitted: usize = 0;
-    for (program.fns) |fn_| {
-        if (fn_.source.observations == .omitted) omitted += 1;
-    }
-    try std.testing.expect(omitted != 0);
     for (program.exprs) |expr| try std.testing.expect(expr.data != .expect);
     for (program.stmts) |stmt| try std.testing.expect(stmt != .expect);
     var emitted = try lowerModuleWithOptions(allocator, source, .none, .{ .inline_expects = .omit });
     defer emitted.deinit(allocator);
     const store = &emitted.lowered.lir_result.store;
-    try std.testing.expectEqual(lir.Program.ProducerObservations.omitted, store.getProcSpec(emitted.lowered.main_proc.?).source_observations);
     for (store.getCFStmts()) |stmt| try std.testing.expect(stmt != .expect);
-}
-
-test "generated codec and field-name callbacks publish producer facts" {
-    const allocator = std.testing.allocator;
-    for ([_]StructuralJsonOperation{ .parse, .encode }) |operation| {
-        const source = try structuralJsonSource(allocator, 2, "Str", operation);
-        defer allocator.free(source);
-        var lowered = try lowerMonotypeModule(allocator, source);
-        defer lowered.deinit(allocator);
-        var generated: usize = 0;
-        for (lowered.mono.view().fns) |fn_| {
-            switch (fn_.source.fn_def) {
-                .parser_runtime, .encoder_for_runtime, .checked_generated => {},
-                else => continue,
-            }
-            generated += 1;
-            try std.testing.expect(fn_.source.observations != .unknown);
-        }
-        try std.testing.expect(generated != 0);
-    }
-}
-
-test "generated interpolation callback facts are independent from enclosing expects" {
-    const allocator = std.testing.allocator;
-    const source =
-        \\Rendered := [Rendered(Str)].{
-        \\    from_interpolation : Str, Iter((Str, Str)) -> Rendered
-        \\    from_interpolation = |first, rest|
-        \\        Rendered(rest.fold(first, |acc, (part, segment)| acc.concat(part).concat(segment)))
-        \\}
-        \\
-        \\main : Str -> Rendered
-        \\main = |name| {
-        \\    expect name != ""
-        \\    "hello ${name} ${name}!"
-        \\}
-    ;
-    for ([_]MonoLower.InlineExpectMode{ .run, .shared, .omit }) |mode| {
-        var lowered_source = try lowerMonotypeModuleWithOptions(allocator, source, .{
-            .inline_expects = mode,
-        });
-        defer lowered_source.deinit(allocator);
-        const expected: lir.Program.ProducerObservations = switch (mode) {
-            .run => .runtime,
-            .shared => .shared,
-            .omit => .omitted,
-        };
-        const program = lowered_source.mono.view();
-        var observed: usize = 0;
-        var absent: usize = 0;
-        // Generated steps must not inherit the enclosing body's expect, even
-        // when that expect is omitted before its condition is lowered.
-        for (program.fns) |fn_| {
-            if (fn_.source.observations == expected) observed += 1;
-            if (fn_.source.fn_def != .checked_generated) continue;
-            try std.testing.expectEqual(lir.Program.ProducerObservations.absent, fn_.source.observations);
-            if (fn_.source.observations == .absent) absent += 1;
-        }
-        try std.testing.expect(observed != 0);
-        try std.testing.expect(absent != 0);
-    }
 }
 
 test "literal conversion root rejection retains its declared source location" {
