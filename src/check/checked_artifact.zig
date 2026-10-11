@@ -10478,8 +10478,9 @@ test "imported origin resolution visits each import view and owner declaration o
             .id = @fromBackingInt(@intCast(index)),
             .nominal = .{ .module = owner_identity_id, .type_name = type_name.*, .source_decl = @intCast(index) },
             .source_statement = @intCast(index),
-            .declaration_root = @fromBackingInt(0),
-            .backing = @fromBackingInt(0),
+            // Origin resolution reads only the id, nominal key and statement.
+            .declaration_root = undefined,
+            .backing = undefined,
         };
     }
 
