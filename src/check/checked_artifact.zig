@@ -40536,11 +40536,11 @@ test "compile-time root read table keeps earlier rows beside newly evaluated roo
         .{ .root = @fromBackingInt(1), .reads = &first_reads },
     });
     defer first.deinit(allocator);
-    try std.testing.expectEqual(@as(usize, 0), first.readsOf(@fromBackingInt(0)).len);
+    try std.testing.expectEqual(@as(usize, 0), first.readsOf(testIndexId(ComptimeRootId, 0)).len);
     try std.testing.expectEqualSlices(Ref, &first_reads, first.readsOf(@fromBackingInt(1)));
 
     const later_reads = [_]Ref{
-        .{ .module = @as([32]u8, @splat(2)), .root = @fromBackingInt(0) },
+        .{ .module = @as([32]u8, @splat(2)), .root = testIndexId(ComptimeRootId, 0) },
         .{ .module = @as([32]u8, @splat(1)), .root = @fromBackingInt(4) },
     };
     var later = try CompileTimeRootReadTable.merge(allocator, first, 3, &.{
@@ -40549,7 +40549,7 @@ test "compile-time root read table keeps earlier rows beside newly evaluated roo
     defer later.deinit(allocator);
     try std.testing.expectEqualSlices(Ref, &first_reads, later.readsOf(@fromBackingInt(1)));
     try std.testing.expectEqualSlices(Ref, &later_reads, later.readsOf(@fromBackingInt(2)));
-    try std.testing.expectEqual(@as(usize, 0), later.readsOf(@fromBackingInt(0)).len);
+    try std.testing.expectEqual(@as(usize, 0), later.readsOf(testIndexId(ComptimeRootId, 0)).len);
     try later.validate(3);
     try std.testing.expectError(error.CorruptArtifact, later.validate(4));
 }
