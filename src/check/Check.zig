@@ -48651,7 +48651,8 @@ fn literalTargetIsBuiltinDirect(
 /// have selected the same method. Such a relation's dispatch shares that
 /// relation's instantiation, and checked publication keys it by these exact
 /// raw vars rather than by union-find roots, which unrelated dispatches can
-/// come to share.
+/// come to share. A relation folded into a rejected relation is rejected
+/// instead of published.
 fn publishDispatchRelationMerges(self: *Self) Allocator.Error!void {
     const merges = self.types.static_dispatch_relation_merges.items;
     if (merges.len == 0) return;
@@ -48727,6 +48728,12 @@ fn publishDispatchRelationMerges(self: *Self) Allocator.Error!void {
         }
 
         const retained = selected orelse continue;
+        // A relation folded into a rejected relation shares its rejection:
+        // the method it would dispatch through failed to relate to it.
+        if (self.types.varStaticDispatchRejected(retained)) {
+            try self.markStaticDispatchFnRejected(dropped);
+            continue;
+        }
         self.cir.dispatch_relation_merges.items.appendAssumeCapacity(.{
             .dropped_fn_var = @backingInt(dropped),
             .retained_fn_var = @backingInt(retained),
