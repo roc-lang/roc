@@ -347,9 +347,12 @@ test "native inspected image returns through shared ordinary code and readonly h
     defer store.deinit();
     var layouts = try LayoutStore.init(allocator, base.target.TargetUsize.native);
     defer layouts.deinit();
+    // The header is the program's only static data value.
+    const static_data_value_count = 1;
+    const header_value: lir.LIR.StaticDataId = @fromBackingInt(@intCast(static_data_value_count - 1));
     const value = try store.addLocal(.{ .layout_idx = .str });
     const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
-    const load = try store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = @fromBackingInt(@intCast(0)) }, .next = ret } }, .test_fixture);
+    const load = try store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = header_value }, .next = ret } }, .test_fixture);
     const root = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = lir.ProcIdentity.forTest(741), .args = .empty(), .body = load, .ret_layout = .str }, .none);
     var header: [24]u8 = @splat(0);
     std.mem.writeInt(u64, header[8..16], text.len << 1, .little);
@@ -357,7 +360,7 @@ test "native inspected image returns through shared ordinary code and readonly h
     var backing: [16 + text.len]u8 = @splat(0);
     @memcpy(backing[16..], text);
     const exports = [_]backend.StaticDataExport{
-        .{ .symbol_name = "inspected_semantic_header", .symbol_identity = @splat(74), .value_id = @fromBackingInt(@intCast(0)), .bytes = &header, .alignment = 8, .relocations = &.{.{ .offset = 0, .target_symbol_name = "inspected_semantic_backing", .target = .{ .data_symbol = @fromBackingInt(@intCast(1)) }, .addend = 8 }} },
+        .{ .symbol_name = "inspected_semantic_header", .symbol_identity = @splat(74), .value_id = header_value, .bytes = &header, .alignment = 8, .relocations = &.{.{ .offset = 0, .target_symbol_name = "inspected_semantic_backing", .target = .{ .data_symbol = @fromBackingInt(@intCast(1)) }, .addend = 8 }} },
         .{ .symbol_name = "inspected_semantic_backing", .bytes = &backing, .symbol_offset = 8, .alignment = 8 },
     };
     const result = try run(allocator, .dev, .{
@@ -365,7 +368,7 @@ test "native inspected image returns through shared ordinary code and readonly h
         .layouts = &layouts,
         .main_proc = root,
         .static_data = &exports,
-        .static_data_value_count = 1,
+        .static_data_value_count = static_data_value_count,
         .source_catalog = backend.dev.LirCodeGenMod.testSourceCatalog(),
     }, {});
     defer result.deinit(allocator);
@@ -380,8 +383,17 @@ test "native inspected exhaustion uses common crash semantics and restores the o
     defer store.deinit();
     var layouts = try LayoutStore.init(allocator, base.target.TargetUsize.native);
     defer layouts.deinit();
-    const failed = try store.addCFStmt(.{ .comptime_exhaustiveness_failed = .{ .site = @fromBackingInt(@intCast(0)) } }, .test_fixture);
     const identity = lir.ProcIdentity.forTest(742);
+    const sites = [_]?backend.dev.CtfeContext.SiteDescriptor{.{
+        .checked_module = @splat(74),
+        .checked_site = 7,
+        .procedure_identity = identity.bytes,
+        .kind = .match,
+        .region = .from_raw_offsets(10, 20),
+        .branch_regions = &.{.from_raw_offsets(12, 18)},
+    }};
+    const site: lir.LIR.ComptimeSiteId = @fromBackingInt(@intCast(sites.len - 1));
+    const failed = try store.addCFStmt(.{ .comptime_exhaustiveness_failed = .{ .site = site } }, .test_fixture);
     const root = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = identity, .args = .empty(), .body = failed, .ret_layout = .str }, .none);
     const Recorder = struct {
         count: u32 = 0,
@@ -400,14 +412,7 @@ test "native inspected exhaustion uses common crash semantics and restores the o
         .store = &store,
         .layouts = &layouts,
         .main_proc = root,
-        .source_catalog = .{ .sites = &.{.{
-            .checked_module = @splat(74),
-            .checked_site = 7,
-            .procedure_identity = identity.bytes,
-            .kind = .match,
-            .region = .from_raw_offsets(10, 20),
-            .branch_regions = &.{.from_raw_offsets(12, 18)},
-        }} },
+        .source_catalog = .{ .sites = &sites },
     }, {});
     defer result.deinit(allocator);
     try std.testing.expectEqualStrings("compile-time exhaustiveness failure reached runtime code", result.outcome.crashed);

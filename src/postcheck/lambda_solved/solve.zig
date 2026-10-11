@@ -5167,7 +5167,7 @@ test "CTFE demand publishes per-owner reads and separates initializer proof from
     const unit_ty = try lifted.types.add(.zst);
     const unit = try lifted.addExpr(.{ .ty = unit_ty, .data = .unit });
     const producer = try lifted.addFn(.{
-        .symbol = @fromBackingInt(@intCast(0)),
+        .symbol = @fromBackingInt(@intCast(5)),
         .args = .empty(),
         .captures = .empty(),
         .body = .{ .roc = unit },
@@ -5287,17 +5287,17 @@ test "CTFE demand sort invokes boxed comparator without eagerly invoking box con
     } } });
     const root = try lifted.addComptimeValueRoot(.{
         .module = .{ .bytes = @as([32]u8, @splat(9)) },
-        .root = .{ .checked = @fromBackingInt(@intCast(0)) },
+        .root = .{ .checked = @fromBackingInt(@intCast(4)) },
         .const_locator = null,
     });
     const read = try lifted.addExpr(.{ .ty = byte_ty, .data = .{ .comptime_value = .{
         .root = root,
         .initializer = byte,
     } } });
-    const left = try lifted.addLocal(@fromBackingInt(@intCast(0)), byte_ty);
+    const left = try lifted.addLocal(@fromBackingInt(@intCast(3)), byte_ty);
     const right = try lifted.addLocal(@fromBackingInt(@intCast(1)), byte_ty);
     const comparator = try lifted.addFn(.{
-        .symbol = @fromBackingInt(@intCast(0)),
+        .symbol = @fromBackingInt(@intCast(3)),
         .args = try lifted.addTypedLocalSpan(&.{
             .{ .local = left, .ty = byte_ty },
             .{ .local = right, .ty = byte_ty },

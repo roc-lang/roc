@@ -2082,7 +2082,7 @@ test "produced references bind selected declarations without rebinding cached si
     };
     var artifacts = [_]Artifact{ leaf, leaf, leaf, leaf };
     artifacts[0].kind = .{ .proc = lir.ProcIdentity.forTest(90) };
-    artifacts[0].producer_proc = @fromBackingInt(@intCast(0));
+    artifacts[0].producer_proc = @fromBackingInt(@intCast(2));
     artifacts[0].symbolic_refs = &.{
         .{ .site = 0, .form = .call, .target = .{ .proc = identity } },
         .{ .site = 1, .form = .call, .target = .{ .rc_helper = "helper" } },

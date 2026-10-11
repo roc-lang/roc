@@ -2784,21 +2784,24 @@ test "native inspected boolean roots share normal call objects and current heade
     defer store.deinit();
     var layouts = try LayoutStore.init(allocator, base.target.TargetUsize.native);
     defer layouts.deinit();
+    // The header is the module's only static data value.
+    const static_data_value_count = 1;
+    const header_value: lir.LIR.StaticDataId = @fromBackingInt(@intCast(static_data_value_count - 1));
     const value = try store.addLocal(.{ .layout_idx = .bool });
     const leaf_return = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
-    const load = try store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = @fromBackingInt(@intCast(0)) }, .next = leaf_return } }, .test_fixture);
+    const load = try store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = header_value }, .next = leaf_return } }, .test_fixture);
     const leaf = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = lir.ProcIdentity.forTest(751), .args = .empty(), .body = load, .ret_layout = .bool }, .none);
     const result = try store.addLocal(.{ .layout_idx = .bool });
     const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const call = try store.addCFStmt(.{ .assign_call = .{ .target = result, .proc = leaf, .args = .empty(), .next = ret } }, .test_fixture);
     const root = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = lir.ProcIdentity.forTest(752), .args = .empty(), .body = call, .ret_layout = .bool }, .none);
-    const exports = [_]backend.StaticDataExport{.{ .symbol_name = "inspected_bool_header", .symbol_identity = @splat(75), .value_id = @fromBackingInt(@intCast(0)), .bytes = &.{1}, .alignment = 1 }};
+    const exports = [_]backend.StaticDataExport{.{ .symbol_name = "inspected_bool_header", .symbol_identity = @splat(75), .value_id = header_value, .bytes = &.{1}, .alignment = 1 }};
     var batch = try devEvalBoolRootModule(allocator, .{
         .store = &store,
         .layouts = &layouts,
         .tables = .{},
         .roots = &.{.{ .symbol_name = "inspected_bool_main", .proc = root, .arg_layouts = &.{}, .ret_layout = .bool }},
-        .static_data = .{ .exports = &exports, .value_count = 1 },
+        .static_data = .{ .exports = &exports, .value_count = static_data_value_count },
         .source_catalog = backend.dev.LirCodeGenMod.testSourceCatalog(),
     }, null, 1);
     defer batch.deinit(allocator);

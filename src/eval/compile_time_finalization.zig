@@ -3836,12 +3836,13 @@ test "completed-success imported failure storage freezes a canonical empty strin
     });
     const structure = lowered.lir_result.layouts.getLayout(fields).getStruct().idx;
     const message_offset = lowered.lir_result.layouts.getStructFieldOffsetByOriginalIndex(structure, 1);
+    const slot: lir.LIR.StaticDataId = @fromBackingInt(@intCast(lowered.lir_result.static_data_values.items.len));
     try lowered.lir_result.static_data_values.append(allocator, .{
         .initializer = null,
         .layout_idx = fields,
         .compile_time_root = .{
             .module = module,
-            .root = .{ .checked = @fromBackingInt(@intCast(0)) },
+            .root = .{ .checked = @fromBackingInt(@intCast(4)) },
             .const_locator = null,
             .completion = .value,
             .role = .{ .failure_message = .{
@@ -3855,8 +3856,8 @@ test "completed-success imported failure storage freezes a canonical empty strin
     const size_align = lowered.lir_result.layouts.layoutSizeAlign(lowered.lir_result.layouts.getLayout(fields));
     const initial = try allocator.alloc(static_data_exports.StaticDataExport, 1);
     initial[0] = .{
-        .symbol_name = try LirProgram.staticDataSymbolName(allocator, @fromBackingInt(@intCast(0))),
-        .value_id = @fromBackingInt(@intCast(0)),
+        .symbol_name = try LirProgram.staticDataSymbolName(allocator, slot),
+        .value_id = slot,
         .bytes = try allocator.alloc(u8, size_align.size),
         .alignment = @intCast(size_align.alignment.toByteUnits()),
         .is_exported = false,
@@ -3882,7 +3883,10 @@ test "completed-success imported failure storage freezes a canonical empty strin
     defer frozen.deinit();
     const message = frozen.exports[0].bytes[message_offset..][0..@sizeOf(builtins.str.RocStr)];
     try std.testing.expect(message[message.len - 1] & builtins.str.RocStr.small_str_flag != 0);
-    const transcoded = try FrozenRootTranscode.transcodeFailure(allocator, &lowered.lir_result, lowered.lir_result.static_data_values.items[0], frozen.exports, @fromBackingInt(@intCast(0)), &lowered.lir_result, @fromBackingInt(@intCast(0)));
+    const slot_symbol = for (frozen.exports, 0..) |item, index| {
+        if (item.value_id) |value_id| if (value_id == slot) break index;
+    } else return error.TestUnexpectedResult;
+    const transcoded = try FrozenRootTranscode.transcodeFailure(allocator, &lowered.lir_result, lowered.lir_result.static_data_values.items[@backingInt(slot)], frozen.exports, @fromBackingInt(@intCast(slot_symbol)), &lowered.lir_result, slot);
     defer static_data_exports.deinitStaticData(allocator, transcoded);
     try std.testing.expectEqualSlices(u8, frozen.exports[0].bytes, transcoded[0].bytes);
 }

@@ -52,19 +52,19 @@ fn checkedSpecOwner(template: Mono.FnTemplate) ?check.CheckedModule.ModuleId {
 test "cached specialization publication uses explicit checked template ownership" {
     const owner: check.CheckedNames.ProcTemplate = .{
         .artifact = .{ .bytes = @as([32]u8, @splat(19)) },
-        .proc_base = @fromBackingInt(@intCast(0)),
-        .template = @fromBackingInt(@intCast(0)),
+        .proc_base = @fromBackingInt(@intCast(2)),
+        .template = @fromBackingInt(@intCast(3)),
     };
     var source: Mono.FnTemplate = .{
         .fn_def = .{ .local_template = owner },
-        .source_fn_ty = @fromBackingInt(@intCast(0)),
+        .source_fn_ty = @fromBackingInt(@intCast(4)),
         .source_fn_key = .{},
-        .mono_fn_ty = @fromBackingInt(@intCast(0)),
+        .mono_fn_ty = @fromBackingInt(@intCast(5)),
     };
     try std.testing.expectEqualDeep(@as(?check.CheckedModule.ModuleId, .{ .bytes = owner.artifact.bytes }), checkedSpecOwner(source));
     source.fn_def = .{ .imported_template = owner };
     try std.testing.expectEqualDeep(@as(?check.CheckedModule.ModuleId, .{ .bytes = owner.artifact.bytes }), checkedSpecOwner(source));
-    source.fn_def = .{ .nested = .{ .owner = owner, .site = @fromBackingInt(@intCast(0)), .context_fn_key = .{}, .default_root = .{ .bytes = @as([32]u8, @splat(23)) } } };
+    source.fn_def = .{ .nested = .{ .owner = owner, .site = @fromBackingInt(@intCast(6)), .context_fn_key = .{}, .default_root = .{ .bytes = @as([32]u8, @splat(23)) } } };
     try std.testing.expect(checkedSpecOwner(source) == null);
 }
 

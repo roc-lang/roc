@@ -28928,7 +28928,7 @@ test "ordinary function objects share direct calls static cells and source event
         const result = try addLocal(&store, .i64);
         const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
         const call = try store.addCFStmt(.{ .assign_call = .{ .target = result, .proc = callee, .args = .empty(), .next = ret } }, .test_fixture);
-        const branch = try store.addCFStmt(.{ .comptime_branch_taken = .{ .site = @fromBackingInt(@intCast(0)), .branch_index = 0, .next = call } }, .test_fixture);
+        const branch = try store.addCFStmt(.{ .comptime_branch_taken = .{ .site = @fromBackingInt(@intCast(3)), .branch_index = 0, .next = call } }, .test_fixture);
         const caller = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(99), .args = .empty(), .body = branch, .ret_layout = .i64 }, .none);
         for ([_]LIR.LirProcSpecId{ caller, callee }) |proc| {
             var first: ?Artifact.Fragment = null;
@@ -29012,6 +29012,12 @@ test "common native source events preserve producer certificates and identical c
             .role = .{ .failure_message = .{ .failed_field = 1, .message_field = 2, .failed_offset = 8, .message_offset = 16 } },
         },
     };
+    // One statement publishes both the source and the failure descriptor.
+    const sources = [_]?CtfeContext.SourceDescriptor{source};
+    const failures = [_]?CtfeContext.FailureDescriptor{failure};
+    const sites = [_]?CtfeContext.SiteDescriptor{site};
+    const statement: LIR.CFStmtId = @fromBackingInt(@intCast(sources.len - 1));
+    const site_id: LIR.ComptimeSiteId = @fromBackingInt(@intCast(sites.len - 1));
     inline for (.{ RocTarget.x64linux, RocTarget.arm64linux }) |target| {
         const CG = LirCodeGen(target);
         var store = LirStore.init(allocator);
@@ -29024,11 +29030,11 @@ test "common native source events preserve producer certificates and identical c
             var cg = try CG.init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
             defer cg.deinit();
             cg.generation_mode = consumer;
-            cg.current_stmt_id = @fromBackingInt(@intCast(0));
+            cg.current_stmt_id = statement;
             cg.current_proc_identity = .{ .bytes = @splat(32) };
-            cg.setContextCatalog(.{ .sources = &.{source}, .failures = &.{failure}, .sites = &.{site} });
-            try cg.emitSourceSite(.branch_taken, @fromBackingInt(@intCast(0)), 1);
-            try cg.emitSourceSite(.exhaustiveness_failed, @fromBackingInt(@intCast(0)), 0);
+            cg.setContextCatalog(.{ .sources = &sources, .failures = &failures, .sites = &sites });
+            try cg.emitSourceSite(.branch_taken, site_id, 1);
+            try cg.emitSourceSite(.exhaustiveness_failed, site_id, 0);
             try cg.emitSourceFailure();
             try std.testing.expect(try cg.emitSourceCall(.call_enter));
             try std.testing.expect(try cg.emitSourceCall(.call_exit));

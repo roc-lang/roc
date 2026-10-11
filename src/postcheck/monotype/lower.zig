@@ -4157,7 +4157,7 @@ test "checked root declaration and completed producer maps ignore artifact prove
         .checking_context_identity_hash = @as([32]u8, @splat(5)),
         .direct_import_artifact_keys_hash = @as([32]u8, @splat(6)),
     };
-    const full = EntryRoot{ .module = full_module, .root = @fromBackingInt(@intCast(0)) };
+    const full = EntryRoot{ .module = full_module, .root = @fromBackingInt(@intCast(2)) };
     const cached = EntryRoot{ .module = .{ .bytes = full_module.bytes }, .root = full.root };
     const other_module = EntryRoot{ .module = .{ .bytes = @as([32]u8, @splat(7)) }, .root = full.root };
     const other_root = EntryRoot{ .module = full_module, .root = @fromBackingInt(@intCast(1)) };
@@ -65493,15 +65493,15 @@ test "stable root manifest declares omitted producers without lowering unused bo
     const wrapper_fn = try artifact.checked_types.appendSyntheticFunctionRoot(allocator, .pure, &.{}, unit);
     const producer: names.ProcTemplate = .{
         .artifact = .{ .bytes = artifact.key.bytes },
-        .proc_base = @fromBackingInt(@intCast(0)),
-        .template = @fromBackingInt(@intCast(0)),
+        .proc_base = @fromBackingInt(@intCast(3)),
+        .template = @fromBackingInt(@intCast(artifact.checked_procedure_templates.templates.items.len)),
     };
     try artifact.checked_procedure_templates.templates.append(allocator, .{
         .proc_base = producer.proc_base,
         .template_id = producer.template,
         // No body is published: declaration and a symbolic read must not
         // touch it. The real coordinator seals and requests it on demand.
-        .body = .{ .checked_body = @fromBackingInt(@intCast(0)) },
+        .body = .{ .checked_body = @fromBackingInt(@intCast(5)) },
         .checked_fn_scheme = .{},
         .checked_fn_root = wrapper_fn,
         .static_dispatch_plans = .{},
@@ -65512,30 +65512,19 @@ test "stable root manifest declares omitted producers without lowering unused bo
         .nested_proc_sites = .{},
         .target = .roc,
     });
-    var manifest = [_]checked.RootRequest{.{
-        .order = 0,
-        .module_idx = 0,
-        .kind = .compile_time_constant,
-        .source = .{ .expr = @fromBackingInt(@intCast(0)) },
-        .compile_time_root = @fromBackingInt(@intCast(0)),
-        .checked_type = wrapper_fn,
-        .abi = .compile_time,
-        .exposure = .private,
-        .procedure_template = producer,
-    }};
-    artifact.root_requests.compile_time_requests = &manifest;
+    const numeral_expr: checked.CheckedExprId = @fromBackingInt(@intCast(2));
     var roots = [_]checked.CompileTimeRoot{ .{
-        .id = @fromBackingInt(@intCast(0)),
+        .id = undefined,
         .module_idx = 0,
         .kind = .numeral_conversion,
-        .source = .{ .expr = @fromBackingInt(@intCast(0)) },
+        .source = .{ .expr = @fromBackingInt(@intCast(2)) },
         .pattern = null,
-        .expr = @fromBackingInt(@intCast(0)),
+        .expr = numeral_expr,
         .checked_type = unit,
         .request_eligibility = .eligible,
         .payload = .pending,
     }, .{
-        .id = @fromBackingInt(@intCast(1)),
+        .id = undefined,
         .module_idx = 0,
         .kind = .callable_binding,
         .source = .{ .expr = @fromBackingInt(@intCast(1)) },
@@ -65545,7 +65534,22 @@ test "stable root manifest declares omitted producers without lowering unused bo
         .request_eligibility = .eligible,
         .payload = .pending,
     } };
+    for (&roots, 0..) |*root, index| root.id = @fromBackingInt(@intCast(index));
+    const numeral_root = roots[0].id;
+    const callable_root = roots[1].id;
     artifact.compile_time_roots.roots = &roots;
+    var manifest = [_]checked.RootRequest{.{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .compile_time_constant,
+        .source = .{ .expr = @fromBackingInt(@intCast(2)) },
+        .compile_time_root = numeral_root,
+        .checked_type = wrapper_fn,
+        .abi = .compile_time,
+        .exposure = .private,
+        .procedure_template = producer,
+    }};
+    artifact.root_requests.compile_time_requests = &manifest;
     var program = Ast.Program.init(allocator);
     defer program.deinit();
     var builder = Builder.init(allocator, .{ .root = checked.loweringView(&artifact), .imports = &.{} }, &program, .{});
@@ -65555,9 +65559,9 @@ test "stable root manifest declares omitted producers without lowering unused bo
     // the producer. In particular no template, definition, or job is reserved.
     try builder.lowerIsolatedRoots(&.{}, &.{}, null);
     const view = builder.rootModuleView();
-    try std.testing.expect(builder.comptimeValueReadDeclared(view, @fromBackingInt(@intCast(0))));
+    try std.testing.expect(builder.comptimeValueReadDeclared(view, numeral_root));
     // The checker-excluded callable alias is intentionally absent.
-    try std.testing.expect(!builder.comptimeValueReadDeclared(view, @fromBackingInt(@intCast(1))));
+    try std.testing.expect(!builder.comptimeValueReadDeclared(view, callable_root));
     try std.testing.expectEqual(@as(usize, 0), program.defs.len());
     try std.testing.expectEqual(@as(usize, 0), builder.pending_spec_jobs.len);
 
@@ -65580,10 +65584,10 @@ test "stable root manifest declares omitted producers without lowering unused bo
         builder.comptime_value_reads = case.flag;
         // Completion is execution state, not declaration authority.
         manifest[0].evaluation_complete = case.completed;
-        roots[0].payload = if (case.completed) .{ .const_node = @fromBackingInt(@intCast(0)) } else .pending;
-        // Neither source dispatch plans nor ConstStore node zero exist:
+        roots[0].payload = if (case.completed) .{ .const_node = @fromBackingInt(@intCast(9)) } else .pending;
+        // Neither source dispatch plans nor that ConstStore node exist:
         // ordinary reads must consume the declaration before either payload.
-        reads[index] = try ctx.lowerLiteralConversionAtNode(@fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(0)), try cell.toGraphNode(graph));
+        reads[index] = try ctx.lowerLiteralConversionAtNode(numeral_expr, numeral_root, try cell.toGraphNode(graph));
         try std.testing.expect(draft.exprs.items[@backingInt(reads[index])].data == .comptime_value);
     }
     const first = draft.exprs.items[@backingInt(reads[0])].data.comptime_value;
@@ -65604,26 +65608,28 @@ test "stable root manifest declares omitted producers without lowering unused bo
     try std.testing.expectEqual(@as(usize, 1), draft.template_specs.items.len);
     try std.testing.expect(draft.template_specs.items[0].state == .deferred);
     try std.testing.expectEqual(@as(usize, 0), program.defs.len());
-    ctx.current_entry_root = .{ .module = view.key, .root = @fromBackingInt(@intCast(0)) };
-    try std.testing.expect(!ctx.comptimeValueReadDeclared(view, @fromBackingInt(@intCast(0))));
+    ctx.current_entry_root = .{ .module = view.key, .root = numeral_root };
+    try std.testing.expect(!ctx.comptimeValueReadDeclared(view, numeral_root));
     ctx.in_deferred_body = true;
-    try std.testing.expect(ctx.comptimeValueReadDeclared(view, @fromBackingInt(@intCast(0))));
+    try std.testing.expect(ctx.comptimeValueReadDeclared(view, numeral_root));
 }
 
 test "stable root manifest includes all module views and workers borrow immutable authority" {
     const allocator = std.testing.allocator;
     const producer: names.ProcTemplate = .{
         .artifact = .{ .bytes = @splat(1) },
-        .proc_base = @fromBackingInt(@intCast(0)),
-        .template = @fromBackingInt(@intCast(0)),
+        .proc_base = @fromBackingInt(@intCast(3)),
+        .template = @fromBackingInt(@intCast(5)),
     };
+    const declared_root: checked.ComptimeRootId = @fromBackingInt(@intCast(4));
+    const undeclared_root: checked.ComptimeRootId = @fromBackingInt(@intCast(1));
     const request: checked.RootRequest = .{
         .order = 0,
         .module_idx = 0,
         .kind = .compile_time_constant,
-        .source = .{ .expr = @fromBackingInt(@intCast(0)) },
-        .compile_time_root = @fromBackingInt(@intCast(0)),
-        .checked_type = @fromBackingInt(@intCast(0)),
+        .source = .{ .expr = @fromBackingInt(@intCast(2)) },
+        .compile_time_root = declared_root,
+        .checked_type = @fromBackingInt(@intCast(6)),
         .abi = .compile_time,
         .exposure = .private,
         .procedure_template = producer,
@@ -65648,9 +65654,9 @@ test "stable root manifest includes all module views and workers borrow immutabl
     worker.borrowed_comptime_root_declarations = &coordinator.comptime_root_declarations;
     // The worker never reads its own map or phase flag.
     for (&views) |*view| {
-        try std.testing.expect(worker.comptimeValueReadDeclared(view, @fromBackingInt(@intCast(0))));
-        try std.testing.expect(!worker.comptimeValueReadDeclared(view, @fromBackingInt(@intCast(1))));
-        const declared = worker.borrowed_comptime_root_declarations.?.get(.{ .module = view.key, .root = @fromBackingInt(@intCast(0)) }).?;
+        try std.testing.expect(worker.comptimeValueReadDeclared(view, declared_root));
+        try std.testing.expect(!worker.comptimeValueReadDeclared(view, undeclared_root));
+        const declared = worker.borrowed_comptime_root_declarations.?.get(.{ .module = view.key, .root = declared_root }).?;
         try std.testing.expectEqualSlices(u8, &view.key.bytes, &declared.procedure_template.?.artifact.bytes);
     }
 }
@@ -65664,17 +65670,17 @@ test "an omitted expect in a constant expansion emits unit" {
     const unit = try checked_types.reserveSyntheticTypeRoot(allocator, .{}, false);
     try checked_types.fillSyntheticTypeRoot(allocator, unit, .empty_record);
     const wrapper_fn = try checked_types.appendSyntheticFunctionRoot(allocator, .pure, &.{}, unit);
-    const owner: names.ProcTemplate = .{
-        .artifact = .{ .bytes = @as([32]u8, @splat(19)) },
-        .proc_base = @fromBackingInt(@intCast(0)),
-        .template = @fromBackingInt(@intCast(0)),
-    };
     var templates: checked.CheckedProcedureTemplateTable = .{};
     defer templates.deinit(allocator);
+    const owner: names.ProcTemplate = .{
+        .artifact = .{ .bytes = @as([32]u8, @splat(19)) },
+        .proc_base = @fromBackingInt(@intCast(3)),
+        .template = @fromBackingInt(@intCast(templates.templates.items.len)),
+    };
     const template: checked.CheckedProcedureTemplate = .{
-        .proc_base = @fromBackingInt(@intCast(0)),
-        .template_id = @fromBackingInt(@intCast(0)),
-        .body = .{ .checked_body = @fromBackingInt(@intCast(0)) },
+        .proc_base = owner.proc_base,
+        .template_id = owner.template,
+        .body = .{ .checked_body = @fromBackingInt(@intCast(5)) },
         .checked_fn_scheme = .{},
         .checked_fn_root = wrapper_fn,
         .static_dispatch_plans = .{},
@@ -65686,20 +65692,22 @@ test "an omitted expect in a constant expansion emits unit" {
         .target = .roc,
     };
     try templates.templates.append(allocator, template);
-    var const_bodies = [_]checked.CheckedConstBody{.{
-        .id = @fromBackingInt(@intCast(0)),
-        .root = @fromBackingInt(@intCast(0)),
-        .body_expr = @fromBackingInt(@intCast(0)),
-        .checked_type = unit,
-    }};
-    const const_body_table: checked.CheckedConstBodyTable = .{ .bodies = &const_bodies };
-    const exprs = [_]checked.StoredCheckedExpr{.{
-        .id = @fromBackingInt(@intCast(0)),
+    var exprs = [_]checked.StoredCheckedExpr{.{
+        .id = undefined,
         .ty = unit,
         .source_region = std.mem.zeroes(base.Region),
         // The condition is deliberately unreachable when expects are omitted.
-        .data = .{ .expect = @fromBackingInt(@intCast(0)) },
+        .data = .{ .expect = @fromBackingInt(@intCast(7)) },
     }};
+    for (&exprs, 0..) |*expr, index| expr.id = @fromBackingInt(@intCast(index));
+    var const_bodies = [_]checked.CheckedConstBody{.{
+        .id = undefined,
+        .root = @fromBackingInt(@intCast(4)),
+        .body_expr = exprs[0].id,
+        .checked_type = unit,
+    }};
+    for (&const_bodies, 0..) |*body, index| body.id = @fromBackingInt(@intCast(index));
+    const const_body_table: checked.CheckedConstBodyTable = .{ .bodies = &const_bodies };
     var view_data: ModuleViewData = undefined;
     view_data.key = .{ .bytes = owner.artifact.bytes };
     view_data.types = checked_types.view();
@@ -65738,11 +65746,11 @@ test "an omitted expect in a constant expansion emits unit" {
     const request = try ctx.instNode(unit);
     const expanded = try ctx.lowerConstEvalTemplateUseAtNode(
         &view_data,
-        .{ .body = @fromBackingInt(@intCast(0)), .entry_template = owner, .source_scheme = .{} },
+        .{ .body = const_bodies[0].id, .entry_template = owner, .source_scheme = .{} },
         .{
             .artifact = .{ .bytes = owner.artifact.bytes },
             .owner = .{ .hoisted_expr = std.mem.zeroes(checked.ConstHoistedOwner) },
-            .template = @fromBackingInt(@intCast(0)),
+            .template = @fromBackingInt(@intCast(6)),
             .source_scheme = .{},
         },
         request,

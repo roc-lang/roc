@@ -905,23 +905,26 @@ test "pack literal producer declaration roundtrip and malformed recipe rejection
     const set: ProcArtifact.Set = .{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &artifacts };
     const owner = @as([32]u8, @splat(73));
     const ConstType = @typeInfo(@FieldType(lir.Program.LiteralRepresentation, "types")).pointer.child;
+    const ConstTypeId = @FieldType(lir.Program.LiteralRepresentation, "root");
     const result_types = [_]ConstType{.{ .primitive = .u64 }};
+    const number: ConstTypeId = @fromBackingInt(@intCast(result_types.len - 1));
     const callable_types = result_types ++ [_]ConstType{.{ .func = .{
         .args = .{ .start = 0, .len = 0 },
-        .ret = @fromBackingInt(@intCast(0)),
+        .ret = number,
     } }};
+    const callable: ConstTypeId = @fromBackingInt(@intCast(callable_types.len - 1));
     const bindings = [_]lir.Program.CachedLiteralBinding{
         .{
             .kind = 0,
             .binder = 3,
             .type_digest = .{ .bytes = @as([32]u8, @splat(47)) },
-            .ty = .{ .root = @fromBackingInt(@intCast(0)), .types = &result_types },
+            .ty = .{ .root = number, .types = &result_types },
         },
         .{
             .kind = 1,
             .binder = 4,
             .type_digest = .{ .bytes = @as([32]u8, @splat(49)) },
-            .ty = .{ .root = @fromBackingInt(@intCast(0)), .types = &result_types },
+            .ty = .{ .root = number, .types = &result_types },
         },
     };
     const contexts = [_]lir.Program.CachedLiteralLocalContext{.{
@@ -948,8 +951,8 @@ test "pack literal producer declaration roundtrip and malformed recipe rejection
             .current_fn_key = .{ .bytes = @as([32]u8, @splat(43)) },
             .method_scope = owner,
             .checked_callable_ty = @fromBackingInt(@intCast(8)),
-            .callable = .{ .root = @fromBackingInt(@intCast(1)), .types = &callable_types },
-            .result = .{ .root = @fromBackingInt(@intCast(0)), .types = &result_types },
+            .callable = .{ .root = callable, .types = &callable_types },
+            .result = .{ .root = number, .types = &result_types },
             .evidence_frames = &.{.{ .scope_id = .root, .parent = null, .roots_start = 0, .roots_len = 0 }},
             .evidence_frame_head = 0,
             .local_contexts = &contexts,

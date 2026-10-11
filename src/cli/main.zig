@@ -9436,6 +9436,17 @@ const PackOfferGraph = struct {
     }
 };
 
+/// The literal representations of a `{} -> U64` producer and its `U64` result.
+const test_literal_representations = struct {
+    const ConstType = check.ConstStore.ConstType;
+    const result_types = [_]ConstType{.{ .primitive = .u64 }};
+    const number: check.ConstStore.ConstTypeId = @fromBackingInt(@intCast(result_types.len - 1));
+    const callable_types = result_types ++ [_]ConstType{.{ .func = .{ .args = .{ .start = 0, .len = 0 }, .ret = number } }};
+    const callable_root: check.ConstStore.ConstTypeId = @fromBackingInt(@intCast(callable_types.len - 1));
+    const callable: lir.Program.LiteralRepresentation = .{ .root = callable_root, .types = &callable_types };
+    const result: lir.Program.LiteralRepresentation = .{ .root = number, .types = &result_types };
+};
+
 test "pack publication selects exact semantic literal producers without fixed wrapper edges" {
     const allocator = std.testing.allocator;
     const read = lir.Program.CachedLiteralRead{
@@ -9445,13 +9456,13 @@ test "pack publication selects exact semantic literal producers without fixed wr
             .kind = .numeral,
             .producer_key = @splat(2),
             .object_identity = lir.ProcIdentity.forTest(12).bytes,
-            .owner_template = .{ .artifact = .{ .bytes = @splat(7) }, .proc_base = @fromBackingInt(@intCast(0)), .template = @fromBackingInt(@intCast(0)) },
+            .owner_template = .{ .artifact = .{ .bytes = @splat(7) }, .proc_base = @fromBackingInt(@intCast(2)), .template = @fromBackingInt(@intCast(3)) },
             .owner_context_fn_key = .{ .bytes = @splat(8) },
             .current_fn_key = .{ .bytes = @splat(9) },
             .method_scope = @splat(7),
-            .checked_callable_ty = @fromBackingInt(@intCast(0)),
-            .callable = .{ .root = @fromBackingInt(@intCast(1)), .types = &.{ .{ .primitive = .u64 }, .{ .func = .{ .args = .{ .start = 0, .len = 0 }, .ret = @fromBackingInt(@intCast(0)) } } } },
-            .result = .{ .root = @fromBackingInt(@intCast(0)), .types = &.{.{ .primitive = .u64 }} },
+            .checked_callable_ty = @fromBackingInt(@intCast(4)),
+            .callable = test_literal_representations.callable,
+            .result = test_literal_representations.result,
             .evidence_frames = &.{.{ .scope_id = .root, .parent = null, .roots_start = 0, .roots_len = 0 }},
             .evidence_frame_head = 0,
         },

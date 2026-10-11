@@ -651,13 +651,23 @@ test "nonfragment ordinary code links shared static cells and common source even
     defer store.deinit();
     var layouts = try @import("layout").Store.init(allocator, @import("base").target.TargetUsize.native);
     defer layouts.deinit();
+    const identity = lir.ProcIdentity.forTest(812);
+    var exports = [_]StaticDataExport{.{ .symbol_name = "shared_current_root", .value_id = undefined, .bytes = &(@as([8]u8, @splat(0))), .alignment = 8 }};
+    for (&exports, 0..) |*data_export, index| data_export.value_id = @fromBackingInt(@intCast(index));
+    const sites = [_]?@import("CtfeContext.zig").SiteDescriptor{.{
+        .checked_module = @splat(81),
+        .checked_site = 82,
+        .procedure_identity = identity.bytes,
+        .kind = .if_,
+        .region = .from_raw_offsets(10, 20),
+        .branch_regions = &.{.from_raw_offsets(12, 18)},
+    }};
+    const site: lir.LIR.ComptimeSiteId = @fromBackingInt(@intCast(sites.len - 1));
     const value = try store.addLocal(.{ .layout_idx = .i64 });
     const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
-    const load = try store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = @fromBackingInt(@intCast(0)) }, .next = ret } }, .test_fixture);
-    const branch = try store.addCFStmt(.{ .comptime_branch_taken = .{ .site = @fromBackingInt(@intCast(0)), .branch_index = 0, .next = load } }, .test_fixture);
-    const identity = lir.ProcIdentity.forTest(812);
+    const load = try store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = exports[0].value_id.? }, .next = ret } }, .test_fixture);
+    const branch = try store.addCFStmt(.{ .comptime_branch_taken = .{ .site = site, .branch_index = 0, .next = load } }, .test_fixture);
     const proc = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = identity, .args = .empty(), .body = branch, .ret_layout = .i64 }, .none);
-    const exports = [_]StaticDataExport{.{ .symbol_name = "shared_current_root", .value_id = @fromBackingInt(@intCast(0)), .bytes = &(@as([8]u8, @splat(0))), .alignment = 8 }};
     var slots = try StaticDataImage.init(allocator, &exports);
     defer slots.deinit();
     const address = slots.symbolAddress("shared_current_root").?;
@@ -666,14 +676,7 @@ test "nonfragment ordinary code links shared static cells and common source even
     var codegen = try HostLirCodeGen.init(allocator, &store, &layouts, .{}, &.{}, .default);
     defer codegen.deinit();
     try codegen.setStaticDataSymbols(&exports);
-    codegen.setContextCatalog(.{ .sites = &.{.{
-        .checked_module = @splat(81),
-        .checked_site = 82,
-        .procedure_identity = identity.bytes,
-        .kind = .if_,
-        .region = .from_raw_offsets(10, 20),
-        .branch_regions = &.{.from_raw_offsets(12, 18)},
-    }} });
+    codegen.setContextCatalog(.{ .sites = &sites });
     try codegen.compileSelectedProcSpecs(&.{proc});
     const wrapper = try codegen.generateEntrypointWrapper("shared_root_wrapper", proc, &.{}, .i64);
     var splice = HostSplice.init(allocator);

@@ -2720,8 +2720,9 @@ test "completed root witness names its storage definition rather than its origin
     defer if (mono_owned) mono.deinit();
     const ty = try mono.types.add(.zst);
     const body = try mono.addExpr(.{ .ty = ty, .data = .unit });
+    const storage_symbol: Common.Symbol = @fromBackingInt(@intCast(3));
     const storage = try mono.addDef(.{
-        .symbol = @fromBackingInt(@intCast(0)),
+        .symbol = storage_symbol,
         .root_identity = .{ .bytes = @splat(1) },
         .args = .empty(),
         .body = .{ .roc = body },
@@ -2729,7 +2730,7 @@ test "completed root witness names its storage definition rather than its origin
     });
     const root = try mono.addComptimeValueRoot(.{
         .module = .{},
-        .root = .{ .checked = @fromBackingInt(@intCast(0)) },
+        .root = .{ .checked = @fromBackingInt(@intCast(4)) },
         .const_locator = null,
         .completion = .value,
     });
@@ -2754,7 +2755,7 @@ test "completed root witness names its storage definition rather than its origin
     try std.testing.expect(witness.storage_producer == null);
     try std.testing.expect(witness.initializer != body);
     const call = lifted.getExpr(witness.initializer).data.call_proc;
-    try std.testing.expectEqual(@as(Ast.FnId, @fromBackingInt(@intCast(0))), call.callee.lifted);
+    try std.testing.expectEqual(storage_symbol, lifted.getFn(call.callee.lifted).symbol);
     try std.testing.expectEqual(@as(u32, 0), call.args.len);
 }
 

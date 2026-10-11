@@ -238,8 +238,8 @@ fn testRead(module: u8, producer: LIR.ComptimeProducer) Program.CtfeDemandRead {
 }
 
 test "CTFE schedule crosses modules and literal roots dependency first" {
-    const a: LIR.ComptimeProducer = .{ .checked = @fromBackingInt(@intCast(0)) };
-    const b: LIR.ComptimeProducer = .{ .literal = @fromBackingInt(@intCast(0)) };
+    const a: LIR.ComptimeProducer = .{ .checked = @fromBackingInt(@intCast(4)) };
+    const b: LIR.ComptimeProducer = .{ .literal = @fromBackingInt(@intCast(4)) };
     const nodes = [_]Node{
         testNode(1, a, &.{testRead(2, a)}),
         testNode(2, a, &.{testRead(2, b)}),
@@ -252,7 +252,7 @@ test "CTFE schedule crosses modules and literal roots dependency first" {
 }
 
 test "CTFE schedule classifies cycles before execution and ignores address captures" {
-    const a: LIR.ComptimeProducer = .{ .checked = @fromBackingInt(@intCast(0)) };
+    const a: LIR.ComptimeProducer = .{ .checked = @fromBackingInt(@intCast(2)) };
     const b: LIR.ComptimeProducer = .{ .checked = @fromBackingInt(@intCast(1)) };
     var nodes = [_]Node{
         testNode(1, a, &.{testRead(1, b)}),
@@ -268,7 +268,7 @@ test "CTFE schedule classifies cycles before execution and ignores address captu
 }
 
 test "CTFE schedule rejects missing proof and undeclared producers" {
-    const root: LIR.ComptimeProducer = .{ .checked = @fromBackingInt(@intCast(0)) };
+    const root: LIR.ComptimeProducer = .{ .checked = @fromBackingInt(@intCast(4)) };
     var node = testNode(1, root, &.{testRead(2, root)});
     try std.testing.expectError(error.MissingRootProducer, Schedule.build(std.testing.allocator, &.{node}, &.{}));
     var schedule = try Schedule.build(std.testing.allocator, &.{node}, &.{Key.init(@splat(2), root)});

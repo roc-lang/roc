@@ -411,50 +411,61 @@ pub const Graph = struct {
     }
 };
 
+/// The dense node ids of a test graph, in publication order.
+fn testNodes(comptime count: usize) [count]NodeId {
+    var nodes: [count]NodeId = undefined;
+    for (&nodes, 0..) |*node, index| node.* = @fromBackingInt(@intCast(index));
+    return nodes;
+}
+
 test "CTFE demand recursive applications exclude captured and representation-only bodies" {
     const allocator = std.testing.allocator;
-    var graph = Graph.init(allocator, 5);
+    const nodes = testNodes(5);
+    const owner, const callee, const captured, const representation, const evaluated = nodes;
+    var graph = Graph.init(allocator, nodes.len);
     defer graph.deinit();
-    try graph.addEdge(@fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(1)), .application);
-    try graph.addEdge(@fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(0)), .application);
-    try graph.addEdge(@fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(2)), .address_capture);
-    try graph.addEdge(@fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(3)), .representation);
-    try graph.addEdge(@fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(4)), .evaluation);
+    try graph.addEdge(owner, callee, .application);
+    try graph.addEdge(callee, owner, .application);
+    try graph.addEdge(owner, captured, .address_capture);
+    try graph.addEdge(callee, representation, .representation);
+    try graph.addEdge(callee, evaluated, .evaluation);
     const root: Common.ComptimeValueRoot = .{
         .module = .{ .bytes = @as([32]u8, @splat(5)) },
         .root = .{ .literal = @fromBackingInt(@intCast(2)) },
         .const_locator = null,
     };
-    for ([_]u32{ 2, 3, 4 }) |node| {
-        try graph.addRead(.{ .node = @fromBackingInt(@intCast(node)), .root = root, .region = .zero(), .loc = .none });
+    for ([_]NodeId{ captured, representation, evaluated }) |node| {
+        try graph.addRead(.{ .node = node, .root = root, .region = .zero(), .loc = .none });
     }
-    try graph.addUnavailable(@fromBackingInt(@intCast(2)));
+    try graph.addUnavailable(captured);
     try graph.seal();
-    var summary = try graph.summarize(allocator, @fromBackingInt(@intCast(0)));
+    var summary = try graph.summarize(allocator, owner);
     defer summary.deinit(allocator);
     try std.testing.expect(summary.complete);
     try std.testing.expectEqual(@as(usize, 1), summary.reads.len);
-    try std.testing.expectEqual(@as(u32, 4), @backingInt(graph.reads.items[summary.reads[0]].node));
-    var incomplete = try graph.summarize(allocator, @fromBackingInt(@intCast(2)));
+    try std.testing.expectEqual(evaluated, graph.reads.items[summary.reads[0]].node);
+    var incomplete = try graph.summarize(allocator, captured);
     defer incomplete.deinit(allocator);
     try std.testing.expect(!incomplete.complete);
 }
 
 test "CTFE demand retired comparator propagates incompleteness only through application" {
     const allocator = std.testing.allocator;
-    var graph = Graph.init(allocator, 4);
+    const nodes = testNodes(4);
+    const sort_owner, const box_owner, const dispatch_object, const comparator = nodes;
+    var graph = Graph.init(allocator, nodes.len);
     defer graph.deinit();
     // Both owners evaluate the same boxed dispatch object. Only sorting
     // invokes its comparator, whose retired body has no complete contract.
-    try graph.addEdge(@fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(2)), .evaluation);
-    try graph.addEdge(@fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(2)), .evaluation);
-    try graph.addEdge(@fromBackingInt(@intCast(2)), @fromBackingInt(@intCast(3)), .address_capture);
-    try graph.addEdge(@fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(3)), .application);
-    try graph.addUnavailable(@fromBackingInt(@intCast(3)));
+    try graph.addEdge(sort_owner, dispatch_object, .evaluation);
+    try graph.addEdge(box_owner, dispatch_object, .evaluation);
+    try graph.addEdge(dispatch_object, comparator, .address_capture);
+    try graph.addEdge(sort_owner, comparator, .application);
+    try graph.addUnavailable(comparator);
     try graph.seal();
-    var sort = try graph.summarize(allocator, @fromBackingInt(@intCast(0)));
+    var sort = try graph.summarize(allocator, sort_owner);
     defer sort.deinit(allocator);
-    var box = try graph.summarize(allocator, @fromBackingInt(@intCast(1)));
+    var box = try graph.summarize(allocator, box_owner);
     defer box.deinit(allocator);
     try std.testing.expect(!sort.complete);
     try std.testing.expect(box.complete);
@@ -474,7 +485,7 @@ test "CTFE demand shares component closure facts along long sorted chains" {
         .node = @fromBackingInt(@intCast(count - 1)),
         .root = .{
             .module = .{ .bytes = @as([32]u8, @splat(11)) },
-            .root = .{ .literal = @fromBackingInt(@intCast(0)) },
+            .root = .{ .literal = @fromBackingInt(@intCast(3)) },
             .const_locator = null,
         },
         .region = .zero(),
@@ -499,8 +510,9 @@ test "CTFE demand scratch work stays linear after fanout followed by isolated no
         const allocator = std.testing.allocator;
         var graph = Graph.init(allocator, 2 * width + 1);
         defer graph.deinit();
-        for (1..width + 1) |target| {
-            try graph.addEdge(@fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(target)), .application);
+        const hub, const first_target = testNodes(2);
+        for (0..width) |offset| {
+            try graph.addEdge(hub, @fromBackingInt(@intCast(@backingInt(first_target) + offset)), .application);
         }
         try graph.seal();
         // Four generation resets per component, domain initialization, and
@@ -510,26 +522,28 @@ test "CTFE demand scratch work stays linear after fanout followed by isolated no
 }
 
 fn exerciseDemandAllocations(allocator: std.mem.Allocator) std.mem.Allocator.Error!void {
-    var graph = Graph.init(allocator, 4);
+    const nodes = testNodes(4);
+    const owner, const callee, const evaluated, const captured = nodes;
+    var graph = Graph.init(allocator, nodes.len);
     defer graph.deinit();
-    try graph.addEdge(@fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(1)), .application);
-    try graph.addEdge(@fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(0)), .application);
-    try graph.addEdge(@fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(2)), .evaluation);
-    try graph.addEdge(@fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(3)), .address_capture);
+    try graph.addEdge(owner, callee, .application);
+    try graph.addEdge(callee, owner, .application);
+    try graph.addEdge(callee, evaluated, .evaluation);
+    try graph.addEdge(callee, captured, .address_capture);
     try graph.addRead(.{
-        .node = @fromBackingInt(@intCast(2)),
+        .node = evaluated,
         .root = .{
             .module = .{ .bytes = @as([32]u8, @splat(12)) },
-            .root = .{ .checked = @fromBackingInt(@intCast(0)) },
+            .root = .{ .checked = @fromBackingInt(@intCast(3)) },
             .const_locator = null,
         },
         .region = .zero(),
         .loc = .none,
     });
-    try graph.addUnavailable(@fromBackingInt(@intCast(2)));
+    try graph.addUnavailable(evaluated);
     try graph.seal();
     var copy = try graph.clone(allocator);
     defer copy.deinit();
-    var summary = try copy.summarize(allocator, @fromBackingInt(@intCast(0)));
+    var summary = try copy.summarize(allocator, owner);
     defer summary.deinit(allocator);
 }

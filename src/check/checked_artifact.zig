@@ -18477,21 +18477,21 @@ fn semanticSitePreparation(bodies: CheckedBodyStoreView, site: CheckedSemanticSi
 test "semantic demand producer proves data nodes but requires literal and unknown callable solution" {
     try std.testing.expectEqual(SemanticPreparation.complete_data_only, semanticExprPreparation(.empty_record));
     try std.testing.expectEqual(SemanticPreparation.complete_data_only, semanticExprPreparation(.{
-        .lambda = .{ .args = &.{}, .body = @fromBackingInt(@intCast(0)) },
+        .lambda = .{ .args = &.{}, .body = @fromBackingInt(@intCast(1)) },
     }));
     try std.testing.expectEqual(SemanticPreparation.type_callable_solution_required, semanticExprPreparation(.{
-        .str_from_quote = .{ .plan = @fromBackingInt(@intCast(0)), .literal = @fromBackingInt(@intCast(0)) },
+        .str_from_quote = .{ .plan = @fromBackingInt(@intCast(2)), .literal = @fromBackingInt(@intCast(3)) },
     }));
     const call: CheckedExprData = .{ .call = .{
-        .func = @fromBackingInt(@intCast(0)),
+        .func = @fromBackingInt(@intCast(4)),
         .args = &.{},
         .called_via = .apply,
-        .source_fn_ty_payload = @fromBackingInt(@intCast(0)),
+        .source_fn_ty_payload = @fromBackingInt(@intCast(5)),
         .direct_target = null,
     } };
     try std.testing.expectEqual(SemanticPreparation.type_callable_solution_required, semanticExprPreparation(call));
     var direct = call;
-    direct.call.direct_target = @fromBackingInt(@intCast(0));
+    direct.call.direct_target = @fromBackingInt(@intCast(6));
     try std.testing.expectEqual(SemanticPreparation.complete_data_only, semanticExprPreparation(direct));
     try std.testing.expectEqual(SemanticPreparation.type_callable_solution_required, semanticExprPreparation(.{
         .record = .{ .fields = &.{}, .unsets = &.{}, .ext = null },
@@ -28719,7 +28719,7 @@ test "guarded root failure metadata survives checked-cache relocation and change
     artifact_serialize.assertRelocatablePod(CompileTimeRootFailure);
     artifact_serialize.assertPortableSerialized(CompileTimeRootFailure);
     var roots = [_]CompileTimeRoot{.{
-        .id = @fromBackingInt(@intCast(0)),
+        .id = undefined,
         .module_idx = 2,
         .kind = .hoisted_constant,
         .source = .{ .expr = @fromBackingInt(@intCast(5)) },
@@ -28735,6 +28735,7 @@ test "guarded root failure metadata survives checked-cache relocation and change
             .location = .{ .module = .{ .bytes = @as([32]u8, @splat(31)) }, .line = 37, .column = 41 },
         },
     }};
+    for (&roots, 0..) |*root, index| root.id = @fromBackingInt(@intCast(index));
     const table = CompileTimeRootTable{ .roots = &roots };
     const round_trip = try artifact_serialize.roundTripForTest(std.testing.allocator, CompileTimeRootTable, &table);
     defer std.testing.allocator.free(round_trip.buffer);

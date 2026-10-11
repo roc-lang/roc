@@ -1188,9 +1188,10 @@ test "native demand retains a materializer reached only by cached storage" {
     defer result.deinit();
     const value = try result.store.addLocal(.{ .layout_idx = .u64 });
     const ret = try result.store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
+    const slot: LIR.StaticDataId = @fromBackingInt(@intCast(result.static_data_values.items.len));
     const body = try result.store.addCFStmt(.{ .assign_literal = .{
         .target = value,
-        .value = .{ .static_data = @fromBackingInt(@intCast(0)) },
+        .value = .{ .static_data = slot },
         .next = ret,
     } }, .test_fixture);
     const accessor = try result.store.addProcSpec(.{
@@ -1208,7 +1209,7 @@ test "native demand retains a materializer reached only by cached storage" {
     });
     var exports = [_]LirProgram.StaticDataExport{.{
         .symbol_name = "cached_value",
-        .value_id = @fromBackingInt(@intCast(0)),
+        .value_id = slot,
         .bytes = &(@as([8]u8, @splat(0))),
         .alignment = 8,
     }};
@@ -1223,19 +1224,22 @@ test "cached storage demand retains and remaps only its value and failure roles"
     defer result.deinit();
     const module = @import("check").CheckedModule.ModuleId{ .bytes = @as([32]u8, @splat(43)) };
     try result.lowering_modules.append(allocator, module);
+    const plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(result.const_plans.items.len));
     try result.const_plans.append(allocator, .layout_only);
+    const root: LIR.ComptimeProducer = .{ .checked = @fromBackingInt(@intCast(4)) };
     const failure_layout = try result.layouts.putStructFields(&.{
         .{ .index = 0, .layout = .u8 },
         .{ .index = 1, .layout = .str },
     });
     const structure = result.layouts.getLayout(failure_layout).getStruct().idx;
     try result.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = .u64 });
+    const failure_slot: LIR.StaticDataId = @fromBackingInt(@intCast(result.static_data_values.items.len));
     try result.static_data_values.append(allocator, .{
         .initializer = null,
         .layout_idx = failure_layout,
         .compile_time_root = .{
             .module = module,
-            .root = .{ .checked = @fromBackingInt(@intCast(0)) },
+            .root = root,
             .const_locator = null,
             .role = .{ .failure_message = .{
                 .failed_field = 0,
@@ -1251,9 +1255,9 @@ test "cached storage demand retains and remaps only its value and failure roles"
         .cached_demand = true,
         .compile_time_root = .{
             .module = module,
-            .root = .{ .checked = @fromBackingInt(@intCast(0)) },
+            .root = root,
             .const_locator = null,
-            .role = .{ .value = .{ .failure_slot = @fromBackingInt(@intCast(1)), .plan = @fromBackingInt(@intCast(0)) } },
+            .role = .{ .value = .{ .failure_slot = failure_slot, .plan = plan } },
         },
     });
     try run(&result);

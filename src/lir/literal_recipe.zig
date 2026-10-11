@@ -205,7 +205,7 @@ test "literal producer representation restores exact name and type closure" {
 
 test "literal producer representation rejects malformed references" {
     const types = [_]ConstStore.ConstType{.{ .list = @fromBackingInt(@intCast(1)) }};
-    const recipe: Representation = .{ .root = @fromBackingInt(@intCast(0)), .types = &types };
+    const recipe: Representation = .{ .root = @fromBackingInt(@intCast(types.len - 1)), .types = &types };
     try std.testing.expect(!recipe.valid());
     try std.testing.expectError(error.InvalidLiteralRecipe, recipe.materialize(std.testing.allocator));
 }

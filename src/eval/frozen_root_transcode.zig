@@ -31,23 +31,28 @@ test "reserved empty-list frozen metadata transcodes capacity backing alignment 
             const source_list = try source.layouts.insertList(element);
             const target_list = try target.layouts.insertList(element);
             const plan: Program.ConstPlan = if (element == .zst) .zst else if (element == .str) .str else .scalar;
-            try source.const_plans.append(allocator, plan);
-            try source.const_plans.append(allocator, .{ .list = @fromBackingInt(@intCast(0)) });
-            try target.const_plans.append(allocator, plan);
-            try target.const_plans.append(allocator, .{ .list = @fromBackingInt(@intCast(0)) });
+            // Both programs start without plans, so each plan has the same id in both.
+            const element_plan: Program.ConstPlanId = @fromBackingInt(@intCast(source.const_plans.items.len));
+            const list_plan: Program.ConstPlanId = @fromBackingInt(@intCast(source.const_plans.items.len + 1));
+            for ([_]*Program.Result{ &source, &target }) |program| {
+                try program.const_plans.append(allocator, plan);
+                try program.const_plans.append(allocator, .{ .list = element_plan });
+            }
             const slot = Program.StaticDataValue{
                 .initializer = null,
                 .layout_idx = source_list,
                 .compile_time_root = .{
                     .module = module,
-                    .root = .{ .checked = @fromBackingInt(@intCast(0)) },
+                    .root = .{ .checked = @fromBackingInt(@intCast(4)) },
                     .const_locator = null,
                     .completion = .value,
-                    .role = .{ .value = .{ .failure_slot = @fromBackingInt(@intCast(0)), .plan = @fromBackingInt(@intCast(1)) } },
+                    // Transcoding a value never reads its failure slot.
+                    .role = .{ .value = .{ .failure_slot = @fromBackingInt(@intCast(3)), .plan = list_plan } },
                 },
             };
             var destination = slot;
             destination.layout_idx = target_list;
+            const target_slot: lir.LIR.StaticDataId = @fromBackingInt(@intCast(target.static_data_values.items.len));
             try target.static_data_values.append(allocator, destination);
             var descriptor = @as([24]u8, @splat(0));
             var capacity = [_]static_data.EmptyListCapacity{.{ .offset = 0, .capacity = 17 }};
@@ -57,7 +62,8 @@ test "reserved empty-list frozen metadata transcodes capacity backing alignment 
                 .alignment = @intCast(source_width.size()),
                 .empty_list_capacities = &capacity,
             }};
-            const converted = try transcodeValueSlot(allocator, &source, slot, &exported, @fromBackingInt(@intCast(0)), &target, @fromBackingInt(@intCast(0)));
+            const empty_symbol: SymbolId = @fromBackingInt(@intCast(exported.len - 1));
+            const converted = try transcodeValueSlot(allocator, &source, slot, &exported, empty_symbol, &target, target_slot);
             defer static_data.deinitStaticData(allocator, converted);
             try std.testing.expectEqual(@as(u64, 17), converted[0].empty_list_capacities[0].capacity);
             const offset = 2 * target_width.size();
@@ -80,12 +86,12 @@ test "reserved empty-list frozen metadata transcodes capacity backing alignment 
                 }
             }
             capacity[0].capacity = std.math.maxInt(u64);
-            try std.testing.expectError(error.OutOfMemory, transcodeValueSlot(allocator, &source, slot, &exported, @fromBackingInt(@intCast(0)), &target, @fromBackingInt(@intCast(0))));
+            try std.testing.expectError(error.OutOfMemory, transcodeValueSlot(allocator, &source, slot, &exported, empty_symbol, &target, target_slot));
             if (target_width == .u64 and element == .u16) {
                 // Encoding and multiplication fit; only the header addition
                 // overflows. Decline before allocating a wrapped-size block.
                 capacity[0].capacity = std.math.maxInt(u64) >> 1;
-                try std.testing.expectError(error.OutOfMemory, transcodeValueSlot(allocator, &source, slot, &exported, @fromBackingInt(@intCast(0)), &target, @fromBackingInt(@intCast(0))));
+                try std.testing.expectError(error.OutOfMemory, transcodeValueSlot(allocator, &source, slot, &exported, empty_symbol, &target, target_slot));
             }
         }
     };
@@ -866,11 +872,12 @@ test "frozen root transcode changes callable carrier using producer member and c
     const proc = try erased.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(42), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .zst }, .none);
     const erased_layout = try erased.layouts.insertErasedCallable();
     const finite_layout = try finite.layouts.putTagUnion(&.{ .zst, .str });
+    // Both programs start without plans, so each plan has the same id in both.
+    const str_plan: Program.ConstPlanId = @fromBackingInt(@intCast(erased.const_plans.items.len));
+    const callable_plan: Program.ConstPlanId = @fromBackingInt(@intCast(erased.const_plans.items.len + 1));
     for ([_]*Program.Result{ &erased, &finite }) |program| try program.const_plans.append(allocator, .str);
-    const str_plan: Program.ConstPlanId = @fromBackingInt(@intCast(0));
-    const callable_plan: Program.ConstPlanId = @fromBackingInt(@intCast(1));
-    try erased.const_plans.append(allocator, .{ .erased_fn = @fromBackingInt(@intCast(0)) });
-    try finite.const_plans.append(allocator, .{ .fn_value = @fromBackingInt(@intCast(0)) });
+    try erased.const_plans.append(allocator, .{ .erased_fn = @fromBackingInt(@intCast(erased.erased_fns.items.len)) });
+    try finite.const_plans.append(allocator, .{ .fn_value = @fromBackingInt(@intCast(finite.fn_sets.items.len)) });
     const template = Program.FnTemplate{
         .frozen_fn = 12,
         .frozen_worker = @as([96]u8, @splat(1)),
@@ -891,9 +898,10 @@ test "frozen root transcode changes callable carrier using producer member and c
     try erased.erased_fns.append(allocator, .{ .layout = erased_layout, .entries = erased_entries });
     const finite_captures = try allocator.dupe(Program.CaptureSlot, &.{capture});
     const variants = try allocator.dupe(Program.FnVariant, &.{
-        .{ .id = @fromBackingInt(@intCast(0)), .discriminant = 0, .variant_index = 0, .payload_layout = .zst, .template = other_template, .captures = &.{} },
-        .{ .id = @fromBackingInt(@intCast(1)), .discriminant = 1, .variant_index = 1, .payload_layout = .str, .template = finite_template, .captures = finite_captures },
+        .{ .id = undefined, .discriminant = 0, .variant_index = 0, .payload_layout = .zst, .template = other_template, .captures = &.{} },
+        .{ .id = undefined, .discriminant = 1, .variant_index = 1, .payload_layout = .str, .template = finite_template, .captures = finite_captures },
     });
+    for (variants, 0..) |*variant, index| variant.id = @fromBackingInt(@intCast(index));
     try finite.fn_sets.append(allocator, .{ .layout = finite_layout, .variants = variants });
     var string = builtins.str.RocStr.fromSliceSmall("capture");
     var pointer = @intFromPtr(&string);

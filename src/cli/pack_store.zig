@@ -632,43 +632,52 @@ test "normal native site and literal certificates attest exact checked semantic 
     owner.module_env = .{ .checked_source = &env };
     owner.checked_bodies = .{};
     defer owner.checked_bodies.deinit(allocator);
+    // No checked type store backs these records; certification never reads their types.
+    const fixture_ty: Checked.CheckedTypeId = @fromBackingInt(@intCast(7));
+    const pattern: Checked.CheckedPatternId = @fromBackingInt(@intCast(owner.checked_bodies.stored_patterns.items.len));
     try owner.checked_bodies.stored_patterns.append(allocator, .{
-        .id = @fromBackingInt(@intCast(0)),
-        .ty = @fromBackingInt(@intCast(0)),
+        .id = pattern,
+        .ty = fixture_ty,
         .source_region = Region.from_raw_offsets(1, 2),
         .data = .underscore,
     });
-    for (0..2) |index| try owner.checked_bodies.stored_exprs.append(allocator, .{
-        .id = @fromBackingInt(@intCast(index)),
-        .ty = @fromBackingInt(@intCast(0)),
-        .source_region = Region.from_raw_offsets(@intCast(index + 1), @intCast(index + 2)),
-        .data = .{ .str_from_quote = .{ .literal = @fromBackingInt(@intCast(0)), .plan = @fromBackingInt(@intCast(0)) } },
-    });
-    try owner.checked_bodies.if_branch_pool.append(allocator, .{ .cond = @fromBackingInt(@intCast(0)), .body = @fromBackingInt(@intCast(1)) });
+    var quotes: [2]Checked.CheckedExprId = undefined;
+    for (&quotes, 0..) |*quote, index| {
+        quote.* = @fromBackingInt(@intCast(owner.checked_bodies.stored_exprs.items.len));
+        try owner.checked_bodies.stored_exprs.append(allocator, .{
+            .id = quote.*,
+            .ty = fixture_ty,
+            .source_region = Region.from_raw_offsets(@intCast(index + 1), @intCast(index + 2)),
+            .data = .{ .str_from_quote = .{ .literal = @fromBackingInt(@intCast(3)), .plan = @fromBackingInt(@intCast(4)) } },
+        });
+    }
+    try owner.checked_bodies.if_branch_pool.append(allocator, .{ .cond = quotes[0], .body = quotes[1] });
+    const if_expr: Checked.CheckedExprId = @fromBackingInt(@intCast(owner.checked_bodies.stored_exprs.items.len));
     try owner.checked_bodies.stored_exprs.append(allocator, .{
-        .id = @fromBackingInt(@intCast(2)),
-        .ty = @fromBackingInt(@intCast(0)),
+        .id = if_expr,
+        .ty = fixture_ty,
         .source_region = Region.from_raw_offsets(0, 5),
         .data = .{ .if_ = .{
             .branches = .{ .start = 0, .len = 1 },
-            .final_else = @fromBackingInt(@intCast(1)),
+            .final_else = quotes[1],
             .warn_unused_branches = true,
         } },
     });
     var sites = [_]Checked.CheckedExhaustivenessSite{.{
-        .id = @fromBackingInt(@intCast(0)),
+        .id = undefined,
         .kind = .destructure,
         .region = Region.from_raw_offsets(0, 5),
-        .checked_pattern = @fromBackingInt(@intCast(0)),
+        .checked_pattern = pattern,
         .policy = .not_pending,
     }};
+    for (&sites, 0..) |*site, index| site.id = @fromBackingInt(@intCast(index));
     owner.exhaustiveness_sites = .{ .sites = &sites };
     var packs = LoadedPacks.init(allocator);
     defer packs.deinit();
     packs.checked_root = &owner;
     var certificate = backend.dev.ProcArtifact.SourceEventCertificate{
         .data_name = "site",
-        .site_origin = .{ .checked_pattern = 0 },
+        .site_origin = .{ .checked_pattern = @backingInt(pattern) },
         .descriptor = .{
             .header = .{
                 .kind = @backingInt(SourceEvents.Kind.branch_taken),
@@ -677,7 +686,7 @@ test "normal native site and literal certificates attest exact checked semantic 
             .site = .{
                 .checked_module = owner.key.bytes,
                 .procedure_identity = lir.ProcIdentity.forTest(83).bytes,
-                .checked_site = 0,
+                .checked_site = @backingInt(sites[0].id),
                 .has_checked_site = 1,
                 .kind = @backingInt(SourceEvents.SiteKind.destructure),
                 .region = .{ .start = 0, .end = 5 },
@@ -712,11 +721,11 @@ test "normal native site and literal certificates attest exact checked semantic 
     certificate.descriptor.site.kind = @backingInt(SourceEvents.SiteKind.if_);
     certificate.descriptor.site.branch_count = 2;
     certificate.descriptor.header.byte_size = @sizeOf(SourceEvents.Descriptor) + 2 * @sizeOf(SourceEvents.Region);
-    certificate.site_origin = .{ .checked_expr = 2 };
+    certificate.site_origin = .{ .checked_expr = @backingInt(if_expr) };
     certificate.branch_regions = &.{ Region.from_raw_offsets(1, 2), Region.from_raw_offsets(2, 3) };
     try packs.pinAuthority(certificate);
     try std.testing.expect(LoadedPacks.normalNode(&packs, artifact));
-    certificate.site_origin = .{ .checked_expr = 1 };
+    certificate.site_origin = .{ .checked_expr = @backingInt(quotes[1]) };
     try packs.pinAuthority(certificate);
     try std.testing.expect(!LoadedPacks.normalNode(&packs, artifact));
     certificate.descriptor = .{
@@ -731,17 +740,17 @@ test "normal native site and literal certificates attest exact checked semantic 
         },
         .failure = .{
             .has_literal_rejection = 1,
-            .literal_rejection = .{ .checked_module = owner.key.bytes, .checked_expr = 0, .kind = @backingInt(SourceEvents.LiteralKind.quote) },
+            .literal_rejection = .{ .checked_module = owner.key.bytes, .checked_expr = @backingInt(quotes[0]), .kind = @backingInt(SourceEvents.LiteralKind.quote) },
         },
     };
     certificate.site_origin = null;
     certificate.branch_regions = &.{};
     try packs.pinAuthority(certificate);
     try std.testing.expect(LoadedPacks.normalNode(&packs, artifact));
-    certificate.descriptor.failure.literal_rejection.checked_expr = 1;
+    certificate.descriptor.failure.literal_rejection.checked_expr = @backingInt(quotes[1]);
     try packs.pinAuthority(certificate);
     try std.testing.expect(!LoadedPacks.normalNode(&packs, artifact));
-    certificate.descriptor.failure.literal_rejection.checked_expr = 0;
+    certificate.descriptor.failure.literal_rejection.checked_expr = @backingInt(quotes[0]);
     packs.checked_root = null;
     owner.checked_bodies.stored_exprs.items[0].source_region = Region.from_raw_offsets(3, 4);
     try std.testing.expect(LoadedPacks.normalNode(&packs, artifact));
@@ -1956,6 +1965,17 @@ test "pack literal offers require the full transitive exact producer closure" {
     try std.testing.expect(LoadedPacks.findSpec(&packs, @splat(1), null) != null);
 }
 
+/// The literal representations of a `{} -> U64` producer and its `U64` result.
+const test_literal_representations = struct {
+    const ConstType = check.ConstStore.ConstType;
+    const result_types = [_]ConstType{.{ .primitive = .u64 }};
+    const number: check.ConstStore.ConstTypeId = @fromBackingInt(@intCast(result_types.len - 1));
+    const callable_types = result_types ++ [_]ConstType{.{ .func = .{ .args = .{ .start = 0, .len = 0 }, .ret = number } }};
+    const callable_root: check.ConstStore.ConstTypeId = @fromBackingInt(@intCast(callable_types.len - 1));
+    const callable: lir.Program.LiteralRepresentation = .{ .root = callable_root, .types = &callable_types };
+    const result: lir.Program.LiteralRepresentation = .{ .root = number, .types = &result_types };
+};
+
 fn testLiteralRead(key: [32]u8, identity: [32]u8) lir.Program.CachedLiteralRead {
     return .{
         .recipe = .{
@@ -1964,13 +1984,13 @@ fn testLiteralRead(key: [32]u8, identity: [32]u8) lir.Program.CachedLiteralRead 
             .kind = .numeral,
             .producer_key = key,
             .object_identity = identity,
-            .owner_template = .{ .artifact = .{ .bytes = @splat(7) }, .proc_base = @fromBackingInt(@intCast(0)), .template = @fromBackingInt(@intCast(0)) },
+            .owner_template = .{ .artifact = .{ .bytes = @splat(7) }, .proc_base = @fromBackingInt(@intCast(2)), .template = @fromBackingInt(@intCast(3)) },
             .owner_context_fn_key = .{ .bytes = @splat(8) },
             .current_fn_key = .{ .bytes = @splat(9) },
             .method_scope = @splat(7),
-            .checked_callable_ty = @fromBackingInt(@intCast(0)),
-            .callable = .{ .root = @fromBackingInt(@intCast(1)), .types = &.{ .{ .primitive = .u64 }, .{ .func = .{ .args = .{ .start = 0, .len = 0 }, .ret = @fromBackingInt(@intCast(0)) } } } },
-            .result = .{ .root = @fromBackingInt(@intCast(0)), .types = &.{.{ .primitive = .u64 }} },
+            .checked_callable_ty = @fromBackingInt(@intCast(4)),
+            .callable = test_literal_representations.callable,
+            .result = test_literal_representations.result,
             .evidence_frames = &.{.{ .scope_id = .root, .parent = null, .roots_start = 0, .roots_len = 0 }},
             .evidence_frame_head = 0,
         },

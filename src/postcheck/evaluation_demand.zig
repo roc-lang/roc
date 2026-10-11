@@ -193,12 +193,20 @@ pub const Plan = struct {
     }
 };
 
+/// The instance ids of a test graph's summaries, in summary order.
+fn testInstances(comptime count: usize) [count]InstanceId {
+    var instances: [count]InstanceId = undefined;
+    for (&instances, 0..) |*instance, index| instance.* = @fromBackingInt(@intCast(index));
+    return instances;
+}
+
 test "evaluation demand discovers obligations without executing runtime procedures" {
-    const edge = [_]Dependency{.{ .instance = @fromBackingInt(@intCast(1)), .kind = .direct_call }};
+    const root, const callee, const executed, const unreached = testInstances(4);
+    const edge = [_]Dependency{.{ .instance = callee, .kind = .direct_call }};
     const obligations = [_]Obligation{.{
-        .id = @fromBackingInt(@intCast(0)),
+        .id = @fromBackingInt(@intCast(5)),
         .kind = .literal_conversion,
-        .execution = @fromBackingInt(@intCast(2)),
+        .execution = executed,
     }};
     const graph = [_]CompleteSummary{
         .{ .dependencies = &edge, .obligations = &.{} },
@@ -206,33 +214,36 @@ test "evaluation demand discovers obligations without executing runtime procedur
         .{ .dependencies = &.{}, .obligations = &.{} },
         .{ .dependencies = &.{}, .obligations = &.{} },
     };
-    var plan = try Plan.init(std.testing.allocator, .{ .instances = &graph }, &.{@fromBackingInt(@intCast(0))}, &.{});
+    var plan = try Plan.init(std.testing.allocator, .{ .instances = &graph }, &.{root}, &.{});
     defer plan.deinit();
-    try std.testing.expect(plan.demand(@fromBackingInt(@intCast(0))).semantic);
-    try std.testing.expect(!plan.demand(@fromBackingInt(@intCast(0))).evaluation);
-    try std.testing.expect(plan.demand(@fromBackingInt(@intCast(1))).semantic);
-    try std.testing.expect(!plan.demand(@fromBackingInt(@intCast(1))).evaluation);
-    try std.testing.expect(plan.demand(@fromBackingInt(@intCast(2))).evaluation);
-    try std.testing.expect(!plan.demand(@fromBackingInt(@intCast(3))).semantic);
+    try std.testing.expect(plan.demand(root).semantic);
+    try std.testing.expect(!plan.demand(root).evaluation);
+    try std.testing.expect(plan.demand(callee).semantic);
+    try std.testing.expect(!plan.demand(callee).evaluation);
+    try std.testing.expect(plan.demand(executed).evaluation);
+    try std.testing.expect(!plan.demand(unreached).semantic);
     try std.testing.expectEqual(@as(usize, 1), plan.obligations.items.len);
 }
 
 test "evaluation demand preserves every exact callable transfer and recursive obligation" {
     const kinds = std.enums.values(DependencyKind);
+    const instances = testInstances(kinds.len + 1);
     var dependencies: [kinds.len][1]Dependency = undefined;
-    var graph: [kinds.len + 1]CompleteSummary = undefined;
+    var graph: [instances.len]CompleteSummary = undefined;
     for (kinds, 0..) |kind, index| {
-        dependencies[index][0] = .{ .instance = @fromBackingInt(@intCast(index + 1)), .kind = kind };
+        dependencies[index][0] = .{ .instance = instances[index + 1], .kind = kind };
         graph[index] = .{ .dependencies = &dependencies[index], .obligations = &.{} };
     }
-    const recursion = [_]Dependency{.{ .instance = @fromBackingInt(@intCast(0)), .kind = .direct_call }};
+    const root = instances[0];
+    const recursive = instances[kinds.len];
+    const recursion = [_]Dependency{.{ .instance = root, .kind = .direct_call }};
     const obligations = [_]Obligation{.{
-        .id = @fromBackingInt(@intCast(0)),
+        .id = @fromBackingInt(@intCast(5)),
         .kind = .empirical_destructure,
-        .execution = @fromBackingInt(@intCast(kinds.len)),
+        .execution = recursive,
     }};
     graph[kinds.len] = .{ .dependencies = &recursion, .obligations = &obligations };
-    var plan = try Plan.init(std.testing.allocator, .{ .instances = &graph }, &.{@fromBackingInt(@intCast(0))}, &.{});
+    var plan = try Plan.init(std.testing.allocator, .{ .instances = &graph }, &.{root}, &.{});
     defer plan.deinit();
     try std.testing.expectEqual(graph.len, plan.metrics.semantic_instances);
     try std.testing.expectEqual(graph.len, plan.metrics.evaluation_instances);
@@ -240,21 +251,22 @@ test "evaluation demand preserves every exact callable transfer and recursive ob
 }
 
 test "evaluation demand runtime continuation does not repeat discovery" {
-    const edge = [_]Dependency{.{ .instance = @fromBackingInt(@intCast(1)), .kind = .capture }};
+    const root, const captured = testInstances(2);
+    const edge = [_]Dependency{.{ .instance = captured, .kind = .capture }};
     const obligations = [_]Obligation{.{
-        .id = @fromBackingInt(@intCast(0)),
+        .id = @fromBackingInt(@intCast(5)),
         .kind = .pairing,
-        .execution = @fromBackingInt(@intCast(1)),
+        .execution = captured,
     }};
     const graph = [_]CompleteSummary{
         .{ .dependencies = &edge, .obligations = &obligations },
         .{ .dependencies = &.{}, .obligations = &.{} },
     };
-    var plan = try Plan.init(std.testing.allocator, .{ .instances = &graph }, &.{@fromBackingInt(@intCast(0))}, &.{});
+    var plan = try Plan.init(std.testing.allocator, .{ .instances = &graph }, &.{root}, &.{});
     defer plan.deinit();
     const before = plan.metrics;
-    try plan.continueRuntime(&.{@fromBackingInt(@intCast(0))});
-    try plan.continueRuntime(&.{@fromBackingInt(@intCast(0))});
+    try plan.continueRuntime(&.{root});
+    try plan.continueRuntime(&.{root});
     try std.testing.expectEqual(before.semantic_instances, plan.metrics.semantic_instances);
     try std.testing.expectEqual(before.evaluation_instances, plan.metrics.evaluation_instances);
     try std.testing.expectEqual(before.obligation_instances, plan.metrics.obligation_instances);
@@ -264,19 +276,20 @@ test "evaluation demand runtime continuation does not repeat discovery" {
 test "evaluation demand releases every failed producer session" {
     const Case = struct {
         fn run(allocator: Allocator) !void {
-            const edge = [_]Dependency{.{ .instance = @fromBackingInt(@intCast(1)), .kind = .result }};
+            const root, const result = testInstances(2);
+            const edge = [_]Dependency{.{ .instance = result, .kind = .result }};
             const obligations = [_]Obligation{.{
-                .id = @fromBackingInt(@intCast(0)),
+                .id = @fromBackingInt(@intCast(5)),
                 .kind = .literal_conversion,
-                .execution = @fromBackingInt(@intCast(1)),
+                .execution = result,
             }};
             const graph = [_]CompleteSummary{
                 .{ .dependencies = &edge, .obligations = &obligations },
                 .{ .dependencies = &.{}, .obligations = &.{} },
             };
-            var plan = try Plan.init(allocator, .{ .instances = &graph }, &.{@fromBackingInt(@intCast(0))}, &.{});
+            var plan = try Plan.init(allocator, .{ .instances = &graph }, &.{root}, &.{});
             defer plan.deinit();
-            try plan.continueRuntime(&.{@fromBackingInt(@intCast(0))});
+            try plan.continueRuntime(&.{root});
             try std.testing.expectEqual(@as(usize, 2), plan.metrics.semantic_instances);
             try std.testing.expectEqual(@as(usize, 1), plan.metrics.evaluation_instances);
         }
