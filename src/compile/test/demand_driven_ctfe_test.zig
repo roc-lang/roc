@@ -261,6 +261,66 @@ test "checking reports a generic function's conversion rejected at its concrete 
     try checked.expectErrors(true);
 }
 
+/// A module with no literal of its own, whose type supplies a method a
+/// conversion dispatches through its where clause.
+const rules_module: SourceFile = .{ .path = "Rules.roc", .source =
+    \\Rules := [Strict].{
+    \\    limit : {} -> U64
+    \\    limit = |{}| List.fold([1, 1, 1], 0, |total, n| total + n)
+    \\}
+};
+
+/// A conversion parameterized by a rule type, reached from a runtime root
+/// through a generic function, so the root is lowered for discovery and the
+/// rule's method belongs to a module that registers no literal root.
+fn ruledLabelApp(comptime literal: []const u8) []const u8 {
+    return
+    \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+    \\import pf.Echo
+    \\import Rules
+    \\Word(rule) :: { text : Str }.{
+    \\    from_quote : Str -> Try(Word(rule), [BadQuotedBytes(Str)])
+    \\        where [rule.limit : {} -> U64]
+    \\    from_quote = |text| {
+    \\        Rule : rule
+    \\        if Str.count_utf8_bytes(text) > Rule.limit({}) Err(BadQuotedBytes("too long")) else Ok(Word.{ text })
+    \\    }
+    \\    show : Word(rule) -> Str
+    \\    show = |word| word.text
+    \\}
+    \\label : a -> a where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
+    \\label = |_| "
+    ++ literal ++
+        \\"
+        \\main! = |args| {
+        \\    seed : Word(Rules)
+        \\    seed = "x"
+        \\    word = label(seed)
+        \\    Echo.line!(Str.concat(word.show(), Str.inspect(List.len(args))))
+        \\    Ok({})
+        \\}
+    ;
+}
+
+test "a conversion registered in a discovery body evaluates the methods it dispatches" {
+    if (is_freestanding) return error.SkipZigTest;
+    var checked = try checkApp(std.testing.allocator, ruledLabelApp("ok"), &.{rules_module}, null);
+    defer checked.deinit();
+    try checked.expectErrors(false);
+    try std.testing.expect(checked.demand().discovery_roots != 0);
+}
+
+test "a conversion registered in a discovery body reports the rejection its dispatched method decides" {
+    if (is_freestanding) return error.SkipZigTest;
+    var checked = try checkApp(std.testing.allocator, ruledLabelApp("long"), &.{rules_module}, null);
+    defer checked.deinit();
+    try checked.expectErrors(true);
+    var reports = checked.coord.iterReports();
+    while (reports.next()) |entry| {
+        if (std.mem.eql(u8, entry.report.title, "Compile Time Crash")) return error.TestUnexpectedResult;
+    }
+}
+
 test "a build continues the evaluation's program with every runtime body" {
     if (is_freestanding) return error.SkipZigTest;
     const target: lir.CheckedPipeline.TargetConfig = .{

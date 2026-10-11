@@ -49657,6 +49657,10 @@ const BodyContext = struct {
     /// Only explicit value captures read current producers; lexical type entries
     /// never replay an initializer.
     fn lowerLiteralProducerBody(self: *BodyContext, expr_id: checked.CheckedExprId, value_node: NodeId, callable_node: NodeId, evidence: StoredConstFnEvidence, source: []const DraftLiteralLocalContext) Allocator.Error!DraftExprId {
+        // The producer runs during compile-time evaluation, so everything it
+        // requests is evaluation demand, including its capture reads.
+        self.draft.evaluation_depth += 1;
+        defer self.draft.evaluation_depth -= 1;
         const indices = try self.prepareLiteralProducerContext(expr_id, callable_node, evidence, source);
         defer self.allocator.free(indices);
         const Capture = struct { local: DraftLocalId, value: DraftExprId, ty: DraftTypeCell };
@@ -49915,7 +49919,7 @@ const BodyContext = struct {
         const plan = self.literalConversionPlan(expr_id);
         const try_ty = self.literalConversionTryType(plan);
         const try_node = try self.instNode(try_ty);
-        const value = try self.lowerDispatchExprAtType(try_ty, plan, DraftTypeCell.fromGraphNode(try_node));
+        const value = try self.lowerLiteralConversionDispatch(try_ty, plan, try_node);
         return try self.unwrapLiteralConversionAtNode(value, try_node, try ret_cell.toGraphNode(self.graph), self.literalRejectionSite(expr_id));
     }
 
