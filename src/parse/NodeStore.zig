@@ -1727,21 +1727,23 @@ pub fn addOrExtendFieldAccess(
     region: AST.TokenizedRegion,
 ) std.mem.Allocator.Error!AST.Expr.Idx {
     const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(receiver)));
-    var receiver_node = store.nodes.get(node_idx);
+    const node_index = @backingInt(node_idx);
 
-    if (receiver_node.tag == .field_access) {
-        const segment_start: usize = receiver_node.data.rhs;
-        const segment_len: usize = receiver_node.main_token;
+    if (store.nodes.fieldItem(.tag, node_idx) == .field_access) {
+        // Extending the open tail updates only the segment count and the end.
+        const main_tokens = store.nodes.field(.main_token);
+        const regions = store.nodes.field(.region);
+        const segment_start: usize = store.nodes.fieldItem(.data, node_idx).rhs;
+        const segment_len: usize = main_tokens[node_index];
         const path_is_open_tail = segment_len <= store.field_access_segments.items.len and
             segment_start == store.field_access_segments.items.len - segment_len and
-            receiver_node.region.start == region.start;
+            regions[node_index].start == region.start;
 
         if (path_is_open_tail) {
-            if (receiver_node.main_token == std.math.maxInt(u32)) return error.OutOfMemory;
+            if (main_tokens[node_index] == std.math.maxInt(u32)) return error.OutOfMemory;
             try store.field_access_segments.append(store.gpa, segment);
-            receiver_node.main_token += 1;
-            receiver_node.region.end = region.end;
-            store.nodes.set(node_idx, receiver_node);
+            main_tokens[node_index] += 1;
+            regions[node_index].end = region.end;
             return receiver;
         }
     }
@@ -2967,16 +2969,7 @@ pub fn addScratchExpr(store: *NodeStore, idx: AST.Expr.Idx) std.mem.Allocator.Er
 /// Creates a new span starting at start.  Moves the items from scratch
 /// to extra_data as appropriate.
 pub fn exprSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.Expr.Span {
-    const end = store.scratch_exprs.top();
-    defer store.scratch_exprs.clearFrom(start);
-    var i = @as(usize, @intCast(start));
-    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
-    std.debug.assert(end >= i);
-    while (i < end) {
-        try store.extra_data.append(store.gpa, @backingInt(store.scratch_exprs.items.items[i]));
-        i += 1;
-    }
-    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+    return .{ .span = try dataSpanFromScratch(store, &store.scratch_exprs, start) };
 }
 
 /// Clears any ExprIds added to scratch from start until the end.
@@ -3005,16 +2998,7 @@ pub fn addScratchStatement(store: *NodeStore, idx: AST.Statement.Idx) std.mem.Al
 /// Creates a new span starting at start.  Moves the items from scratch
 /// to extra_data as appropriate.
 pub fn statementSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.Statement.Span {
-    const end = store.scratch_statements.top();
-    defer store.scratch_statements.clearFrom(start);
-    var i = @as(usize, @intCast(start));
-    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
-    std.debug.assert(end >= i);
-    while (i < end) {
-        try store.extra_data.append(store.gpa, @backingInt(store.scratch_statements.items.items[i]));
-        i += 1;
-    }
-    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+    return .{ .span = try dataSpanFromScratch(store, &store.scratch_statements, start) };
 }
 
 /// Returns a new Statement slice so that the caller can iterate through
@@ -3036,16 +3020,7 @@ pub fn addScratchPattern(store: *NodeStore, idx: AST.Pattern.Idx) std.mem.Alloca
 /// Creates a new span starting at start.  Moves the items from scratch
 /// to extra_data as appropriate.
 pub fn patternSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.Pattern.Span {
-    const end = store.scratch_patterns.top();
-    defer store.scratch_patterns.clearFrom(start);
-    var i = @as(usize, @intCast(start));
-    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
-    std.debug.assert(end >= i);
-    while (i < end) {
-        try store.extra_data.append(store.gpa, @backingInt(store.scratch_patterns.items.items[i]));
-        i += 1;
-    }
-    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+    return .{ .span = try dataSpanFromScratch(store, &store.scratch_patterns, start) };
 }
 
 /// Clears any PatternIds added to scratch from start until the end.
@@ -3079,16 +3054,7 @@ pub fn addScratchPatternStringPart(store: *NodeStore, idx: AST.PatternStringPart
 
 /// Creates a pattern string part span from scratch.
 pub fn patternStringPartSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.PatternStringPart.Span {
-    const end = store.scratch_pattern_string_parts.top();
-    defer store.scratch_pattern_string_parts.clearFrom(start);
-    var i = @as(usize, @intCast(start));
-    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
-    std.debug.assert(end >= i);
-    while (i < end) {
-        try store.extra_data.append(store.gpa, @backingInt(store.scratch_pattern_string_parts.items.items[i]));
-        i += 1;
-    }
-    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+    return .{ .span = try dataSpanFromScratch(store, &store.scratch_pattern_string_parts, start) };
 }
 
 /// Clears pattern string part scratch entries from start.
@@ -3133,13 +3099,14 @@ pub fn addScratchPatternRecordField(store: *NodeStore, idx: AST.PatternRecordFie
 inline fn dataSpanFromScratch(store: *NodeStore, scratch: anytype, start: u32) std.mem.Allocator.Error!base.DataSpan {
     const end = scratch.top();
     defer scratch.clearFrom(start);
-    var i = @as(usize, @intCast(start));
+    std.debug.assert(end >= start);
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
-    while (i < end) {
-        try store.extra_data.append(store.gpa, @backingInt(scratch.items.items[i]));
-        i += 1;
+    const items = scratch.items.items[start..end];
+    try store.extra_data.ensureUnusedCapacity(store.gpa, items.len);
+    for (items) |item| {
+        store.extra_data.appendAssumeCapacity(if (@typeInfo(@TypeOf(item)) == .@"enum") @backingInt(item) else item);
     }
-    return .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start };
+    return .{ .start = ed_start, .len = @intCast(items.len) };
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
@@ -3276,15 +3243,7 @@ pub fn addScratchToken(store: *NodeStore, idx: Token.Idx) std.mem.Allocator.Erro
 /// Creates a new span starting at start.  Moves the items from scratch
 /// to extra_data as appropriate.
 pub fn tokenSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!Token.Span {
-    const end = store.scratch_tokens.top();
-    defer store.scratch_tokens.clearFrom(start);
-    var i = @as(usize, @intCast(start));
-    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
-    while (i < end) {
-        try store.extra_data.append(store.gpa, store.scratch_tokens.items.items[i]);
-        i += 1;
-    }
-    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+    return .{ .span = try dataSpanFromScratch(store, &store.scratch_tokens, start) };
 }
 
 const LiteralTypeSuffixKind = enum(u32) { path, deprecated_builtin };
@@ -3647,15 +3606,7 @@ pub fn clearScratchSymbolMapEntriesFrom(store: *NodeStore, start: u32) void {
 
 /// Creates a SymbolMapEntry span from scratch entries added since start.
 pub fn symbolMapEntrySpanFrom(store: *NodeStore, start: u32, region: AST.TokenizedRegion, layout: AST.CollectionLayout) std.mem.Allocator.Error!AST.SymbolMapEntry.Span {
-    const end = store.scratch_symbol_map_entries.top();
-    defer store.scratch_symbol_map_entries.clearFrom(start);
-    var i = @as(usize, @intCast(start));
-    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
-    while (i < end) {
-        try store.extra_data.append(store.gpa, @backingInt(store.scratch_symbol_map_entries.items.items[i]));
-        i += 1;
-    }
-    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start }, .region = region, .layout = layout };
+    return .{ .span = try dataSpanFromScratch(store, &store.scratch_symbol_map_entries, start), .region = region, .layout = layout };
 }
 
 /// Returns a SymbolMapEntry slice for iteration over a span.

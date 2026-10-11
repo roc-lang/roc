@@ -36,6 +36,10 @@ type_path_stack_visible_start: usize,
 collect_type_dependencies: bool,
 scratch_idents: base.Scratch(base.Ident.Idx),
 scratch_nodes: std.ArrayList(Node.Idx),
+/// Worklist of `recordDestructuredValueNames`, kept with its capacity.
+destructured_patterns: std.ArrayList(AST.Pattern.Idx),
+/// Text of the import path being interned, kept with its capacity.
+import_path: std.ArrayList(u8),
 diagnostics: std.ArrayList(AST.Diagnostic),
 cached_malformed_node: ?Node.Idx,
 expr_kernel_scratch: ParserKernelScratch,
@@ -131,6 +135,8 @@ pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.E
         .collect_type_dependencies = false,
         .scratch_idents = scratch_idents,
         .scratch_nodes = .empty,
+        .destructured_patterns = .empty,
+        .import_path = .empty,
         .diagnostics = .empty,
         .cached_malformed_node = null,
         .expr_kernel_scratch = .{},
@@ -142,6 +148,8 @@ pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.E
 pub fn deinit(parser: *Parser) void {
     parser.scratch_idents.deinit();
     parser.scratch_nodes.deinit(parser.gpa);
+    parser.destructured_patterns.deinit(parser.gpa);
+    parser.import_path.deinit(parser.gpa);
     parser.scope_pending_annos.deinit(parser.gpa);
     parser.type_path_stack.deinit(parser.gpa);
     parser.expr_kernel_scratch.deinit(parser.gpa);
@@ -689,8 +697,8 @@ fn recordDestructuredValueNames(
     decl_idx: DeclIndex.DeclIdx,
     root: AST.Pattern.Idx,
 ) std.mem.Allocator.Error!void {
-    var pending: std.ArrayList(AST.Pattern.Idx) = .empty;
-    defer pending.deinit(self.gpa);
+    const pending = &self.destructured_patterns;
+    pending.clearRetainingCapacity();
     try pending.append(self.gpa, root);
     while (pending.pop()) |pattern_idx| {
         switch (self.store.getPattern(pattern_idx)) {
@@ -778,8 +786,8 @@ fn tokenText(self: *const Parser, token: Token.Idx) []const u8 {
 /// explicit base spelling. Building from tokens keeps layout whitespace out of
 /// the stored path.
 fn importModulePathIdent(self: *Parser, target: AST.ImportTarget) std.mem.Allocator.Error!base.Ident.Idx {
-    var path = std.ArrayList(u8).empty;
-    defer path.deinit(self.gpa);
+    const path = &self.import_path;
+    path.clearRetainingCapacity();
 
     if (target.origin == .package) {
         try path.appendSlice(self.gpa, self.tokenText(target.qualifier_tok.?));
@@ -812,8 +820,8 @@ fn importModulePathIdent(self: *Parser, target: AST.ImportTarget) std.mem.Alloca
 
 fn nestedImportPathIdent(self: *Parser, target: AST.ImportTarget) std.mem.Allocator.Error!?base.Ident.Idx {
     const start = target.nested_start_tok orelse return null;
-    var path = std.ArrayList(u8).empty;
-    defer path.deinit(self.gpa);
+    const path = &self.import_path;
+    path.clearRetainingCapacity();
     for (0..target.nested_len) |offset| {
         if (offset != 0) try path.append(self.gpa, '.');
         const raw = self.tokenText(start + @as(Token.Idx, @intCast(offset)));

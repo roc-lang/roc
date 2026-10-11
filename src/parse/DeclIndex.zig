@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const collections = @import("collections");
 const Token = @import("tokenize.zig").Token;
 
 const DeclIndex = @This();
@@ -236,12 +237,12 @@ scopes: std.ArrayList(Scope),
 decls: std.ArrayList(Decl),
 scope_decl_ids: std.ArrayList(DeclIdx),
 scope_decl_builders: std.ArrayList(std.ArrayListUnmanaged(DeclIdx)),
-decl_by_statement: std.AutoHashMapUnmanaged(u32, DeclIdx),
+decl_by_statement: collections.DenseMap(u32, DeclIdx),
 type_dependencies: std.ArrayList(TypeDependency),
 type_dependency_segments: std.ArrayList(Ident.Idx),
 type_paths: std.ArrayList(TypePath),
 type_path_intern: std.AutoHashMapUnmanaged(TypePathKey, TypePathIdx),
-type_path_by_statement: std.AutoHashMapUnmanaged(u32, TypePathIdx),
+type_path_by_statement: collections.DenseMap(u32, TypePathIdx),
 type_decls_by_path: std.AutoHashMapUnmanaged(TypePathIdx, NameBucket),
 assoc_value_decls: std.AutoHashMapUnmanaged(AssocValue, NameBucket),
 assoc_owner_value_decls: std.AutoHashMapUnmanaged(TypePathIdx, NameBucket),
@@ -258,12 +259,12 @@ pub fn init(gpa: std.mem.Allocator) DeclIndex {
         .decls = .empty,
         .scope_decl_ids = .empty,
         .scope_decl_builders = .empty,
-        .decl_by_statement = .{},
+        .decl_by_statement = .init(gpa),
         .type_dependencies = .empty,
         .type_dependency_segments = .empty,
         .type_paths = .empty,
         .type_path_intern = .{},
-        .type_path_by_statement = .{},
+        .type_path_by_statement = .init(gpa),
         .type_decls_by_path = .{},
         .assoc_value_decls = .{},
         .assoc_owner_value_decls = .{},
@@ -290,12 +291,12 @@ pub fn deinit(self: *DeclIndex) void {
     self.scopes.deinit(self.gpa);
     self.decls.deinit(self.gpa);
     self.scope_decl_ids.deinit(self.gpa);
-    self.decl_by_statement.deinit(self.gpa);
+    self.decl_by_statement.deinit();
     self.type_dependencies.deinit(self.gpa);
     self.type_dependency_segments.deinit(self.gpa);
     self.type_paths.deinit(self.gpa);
     self.type_path_intern.deinit(self.gpa);
-    self.type_path_by_statement.deinit(self.gpa);
+    self.type_path_by_statement.deinit();
     deinitNameBuckets(TypePathIdx, self.gpa, &self.type_decls_by_path);
     self.package_header_modules.deinit(self.gpa);
     self.imports.deinit(self.gpa);
@@ -382,7 +383,7 @@ pub fn addDecl(self: *DeclIndex, decl: Decl) std.mem.Allocator.Error!DeclIdx {
     const idx: DeclIdx = @fromBackingInt(@intCast(self.decls.items.len));
     try self.decls.append(self.gpa, decl);
     try self.scope_decl_builders.items[@backingInt(decl.scope)].append(self.gpa, idx);
-    try self.decl_by_statement.put(self.gpa, decl.statement, idx);
+    try self.decl_by_statement.put(decl.statement, idx);
     if (decl.name_ident) |ident| {
         if (declKindMayBindValue(decl.kind)) {
             try addDeclToBucket(Ident.Idx, self.gpa, &self.scopes.items[@backingInt(decl.scope)].value_decls, ident, idx);
@@ -396,7 +397,7 @@ pub fn addDecl(self: *DeclIndex, decl: Decl) std.mem.Allocator.Error!DeclIdx {
         } else if (declKindMayBindType(decl.kind)) {
             try addDeclToBucket(Ident.Idx, self.gpa, &self.scopes.items[@backingInt(decl.scope)].type_decls, ident, idx);
             if (decl.type_path) |path| {
-                try self.type_path_by_statement.put(self.gpa, decl.statement, path);
+                try self.type_path_by_statement.put(decl.statement, path);
                 try addDeclToBucket(TypePathIdx, self.gpa, &self.type_decls_by_path, path, idx);
             }
         }

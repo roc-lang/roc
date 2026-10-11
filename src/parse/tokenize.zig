@@ -26,14 +26,7 @@ pub const Token = struct {
 
     pub const Extra = union {
         interned: base.Ident.Idx,
-        ident_with_flags: IdentWithFlags,
         none: u32,
-    };
-
-    pub const IdentWithFlags = struct {
-        ident: base.Ident.Idx,
-        starts_with_underscore: bool,
-        ends_with_underscore: bool,
     };
 
     pub const List = std.MultiArrayList(@This());
@@ -324,10 +317,6 @@ pub const Token = struct {
                 tok == .NoSpaceDotQuestionLowerIdent or
                 tok == .MalformedNoSpaceDotQuestionUnicodeIdent or
                 tok == .MalformedDotQuestionUnicodeIdent;
-        }
-
-        pub fn hasUnderscoreFlags(tok: Tag) bool {
-            return tok == .LowerIdent or tok == .NamedUnderscore;
         }
 
         /// Returns true if this token can end an expression, meaning a following
@@ -688,9 +677,7 @@ pub const TokenizedBuffer = struct {
     pub fn resolveIdentifier(self: *const TokenizedBuffer, token: Token.Idx) ?base.Ident.Idx {
         const tag = self.tokens.items(.tag)[@intCast(token)];
         const extra = self.tokens.items(.extra)[@intCast(token)];
-        if (tag.hasUnderscoreFlags()) {
-            return extra.ident_with_flags.ident;
-        } else if (tag.isInterned()) {
+        if (tag.isInterned()) {
             return extra.interned;
         } else {
             return null;
@@ -1315,29 +1302,12 @@ pub const Tokenizer = struct {
         const text = self.cursor.buf[text_offset..self.cursor.pos];
         const id = try self.env.insertIdent(gpa, base.Ident.for_text(text));
 
-        // Use underscore flags for type variable identifiers that benefit from fast checking
-        if (tag.hasUnderscoreFlags()) {
-            // Calculate underscore flags for identifier tokens
-            const starts_with_underscore = text.len > 0 and text[0] == '_';
-            const ends_with_underscore = text.len > 1 and text[text.len - 1] == '_';
-
-            try self.output.tokens.append(gpa, .{
-                .tag = tag,
-                .extra = .{ .ident_with_flags = .{
-                    .ident = id,
-                    .starts_with_underscore = starts_with_underscore,
-                    .ends_with_underscore = ends_with_underscore,
-                } },
-                .region = base.Region.from_raw_offsets(tok_offset, self.cursor.pos),
-            });
-        } else {
-            std.debug.assert(tag.isInterned());
-            try self.output.tokens.append(gpa, .{
-                .tag = tag,
-                .extra = .{ .interned = id },
-                .region = base.Region.from_raw_offsets(tok_offset, self.cursor.pos),
-            });
-        }
+        std.debug.assert(tag.isInterned());
+        try self.output.tokens.append(gpa, .{
+            .tag = tag,
+            .extra = .{ .interned = id },
+            .region = base.Region.from_raw_offsets(tok_offset, self.cursor.pos),
+        });
     }
 
     /// The main tokenize loop. This loops over the whole input buffer, tokenizing as it goes.

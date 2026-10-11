@@ -311,6 +311,15 @@ stages it touches; the instruction-count effect is reported in "Results".
     belongs to one task or result), and imported-artifact dedupe keys a
     `DenseMap` by the dense resolved module index.
 
+54. `src/parse`: scratch-to-span copies reserve once and append without
+    per-element checks through one helper (seven copies of the loop); a
+    field-access extension writes its two changed node columns instead of the
+    whole row; the token payload drops the identifier underscore flags no
+    consumer read, so every token's extra column is 4 bytes; the declaration
+    index keys its statement maps by `DenseMap`; destructuring and import
+    path scratch is parser-owned; and empty numeric digit runs are empty
+    slices instead of zero-length allocations.
+
 ## Findings from profiling
 
 These were found by profiling the ReleaseFast compiler with
@@ -972,37 +981,37 @@ reading code, and were not in the audit above.
 - category A; runs per import statement; impact low; risk low
 - Finding: fresh heap buffer per import to assemble the path text before interning.
 - Fix: reuse `self.store.scratch_bytes`-style buffer or `CommonEnv` string builder.
-- Status: open
+- Status: fixed (fix 54)
 
 ### src/parse/Parser.zig:692: `recordDestructuredValueNames` allocates a `pending` ArrayList per destructuring declaration
 - category A; runs per destructure pattern declaration; impact low; risk low
 - Finding: fresh worklist per call.
 - Fix: `self.scratch_nodes` or a retained pattern stack.
-- Status: open
+- Status: fixed (fix 54)
 
 ### src/parse/Parser.zig:2839-2892: `OpenSyntaxStack` holds ~55 separate `std.ArrayList` payload stacks
 - category H; runs per parse (stacks are reused within a file); impact low; risk, - Finding: one ArrayList per state kind means ~55 separate allocations that grow independently; the pattern is sound (typed stacks avoid a giant union) and capacity is retained for the file, so the cost is per-file allocations, not per-node. No change recommended beyond `deinit` cost.
-- Status: open
+- Status: no change: the finding recommends none; typed stacks retain capacity for the file
 
 ### src/parse/NodeStore.zig:3909: `collectRedundantReturns` allocates a `DynamicBitSet` over all nodes + a pending list per parse
 - category A; runs once per file; impact low; risk, - Finding: fine (one bitset per file); noted for completeness.
-- Status: open
+- Status: no change: one bitset per file
 
 ### src/parse/tokenize.zig:22-41: `Token` = tag(1) + region(8) + extra(4) in a `MultiArrayList`
 - category C (reviewed, good)
 - Finding: columns are split, so no padding is paid per token; `extra` is an untagged union over u32-sized members. Nothing to fix.
-- Status: open
+- Status: no change: the columns are split, so no padding is paid
 
 ### src/parse/Node.zig:9-14: parse `Node` = tag + data(8) + main_token(4) + region(8) + collection_layout(1) in `SafeMultiList`
 - category C (reviewed, good)
 - Finding: SoA via SafeMultiList, so the 1-byte fields do not pad the 8-byte ones. Nothing to fix.
-- Status: open
+- Status: no change: stored as a struct of arrays
 
 ### src/parse/NumericLiteral.zig:209-210, 391, 517-603: `allocator.alloc(u8, 0)` for empty digit slices
 - category A; runs per integer literal without a fractional part (the `after` slice is empty for every integer literal); impact low; risk low
 - Finding: zero-length allocations through the allocator for `before`/`after` digit slices; Zig allocators return a valid empty slice without touching the heap for len 0, but the call still goes through the allocator vtable; freeing them later also does. Also `bytes_le`/`limbs_le` ArrayLists per big-literal conversion.
 - Fix: use `&.{}` (an empty constant slice) for empty digit runs and skip the `free` when len == 0 (or give the owner a flag).
-- Status: open
+- Status: fixed (fix 54)
 
 ### src/base/Scratch.zig:55-83: `Scratch.SetView` builds an `AutoHashMapUnmanaged(T, void)` on demand
 - category B, A; runs per call site (Can.zig lambda/branch capture analysis; see the Can finding); impact medium (via its callers); risk low
@@ -1359,7 +1368,7 @@ reading code, and were not in the audit above.
 - category C/D; runs per identifier token (every `LowerIdent`/`NamedUnderscore`); impact low-medium (4 bytes × tokens, plus one fewer scan per ident …; risk low
 - Finding: `pushTokenInternedHere` calls `base.Ident.for_text(text)` (line 1316), which runs `Attributes.fromString` (`startsWith "_"` and `endsWith "!"`), then separately recomputes `starts_with_underscore = text[0] == '_'` (line 1321) and `ends_with_underscore` (line 1322) and stores both bools next to the `Ident.Idx` in `Token.Extra.ident_with_flags`. `starts_with_underscore` is exactly `id.attributes.ignored`, which is …
 - Fix: drop `starts_with_underscore` (read `idx.attributes.ignored` at the consumer), and store `ends_with_underscore` in the `reserved` bit of `Ident.Attributes` or recompute it at its single consumer from the ident text (it is only needed for type-variable `a_` checks). That shrinks `Token.Extra` to 4 bytes, i.e. 4 bytes per token across the whole token stream. Verify by grepping consumers of `ident_with_flags` (Parser …
-- Status: open
+- Status: fixed (fix 54): the flags are gone; nothing read them
 
 ### src/parse/tokenize.zig:967-975: Keyword recognition via `StaticStringMap.get` on every lowercase identifier
 - category E; runs per lowercase identifier token; impact low-medium (identifiers are the most common token class); risk low
@@ -1431,7 +1440,7 @@ reading code, and were not in the audit above.
 - category C/H; runs per identifier token (storage), every token (column width); impact medium (memory and cache footprint of the token stream, …; risk low
 - Finding: grep over `src/` for `ident_with_flags`, `starts_with_underscore`, `ends_with_underscore`, `IdentWithFlags` finds no consumer outside `tokenize.zig`; `TokenizedBuffer.resolveIdentifier` (line 688-698) only extracts `.ident` from it. So the tokenizer computes two bools per `LowerIdent`/`NamedUnderscore` (lines 1321-1322) and the `extra` union is widened from 4 to 8 bytes for every token in every module, purely for …
 - Fix: delete `IdentWithFlags`, `hasUnderscoreFlags`, and the branch at line 1319; make `Extra = union { interned: Ident.Idx, none: u32 }` (4 bytes). `HTML.zig:24` reads `items(.extra)` only via `resolveIdentifier`-style access, so it keeps working. Token column memory drops by 4 bytes/token (~20-25% of the token stream).
-- Status: open
+- Status: fixed (fix 54)
 
 ### src/parse/NumericLiteral.zig:202-234 + src/parse/NodeStore.zig:507-534: Every numeric literal makes 4-10 heap allocations that are copied and freed immediately
 - category A/D; runs per numeric literal token (expressions and patterns; `Parser.zig:3529,3566,6543,6588`); impact medium (literals are 3-8% of tokens in typical code; each …; risk low-medium
@@ -1449,7 +1458,7 @@ reading code, and were not in the audit above.
 - category G/D; runs per collection node (every call-argument list, list literal, tuple, block statement list, lambda args, match branches, record fields, type args, qualifier …; impact low-medium (these run for every multi-child node; the …; risk low
 - Finding: `exprSpanFrom`, `statementSpanFrom`, `patternSpanFrom`, `patternStringPartSpanFrom`, `dataSpanFromScratch`, `tokenSpanFrom` and `symbolMapEntrySpanFrom` all loop `while (i < end) try store.extra_data.append(gpa, scratch.items[i])`, paying a capacity check and a bounds-checked store per element. The scratch items are u32-backed enums, so the whole range is one contiguous `[]const u32`.
 - Fix: `try extra_data.ensureUnusedCapacity(gpa, end - start); extra_data.appendSliceAssumeCapacity(@ptrCast(scratch.items.items[start..end]));` in one shared helper (there are seven near-identical copies). Identical output.
-- Status: open
+- Status: fixed (fix 54)
 
 ### src/parse/NodeStore.zig:1169-1186,1258-1266,1619-1630: `lambda`, `apply`, `match`, `ty_fn` store one child index behind an extra_data indirection even though a node word is free
 - category C/E; runs per lambda / apply / match / function-type node (apply is one of the most common expression nodes), on every `getExpr` of those nodes; impact low-medium; risk low
@@ -1485,13 +1494,13 @@ reading code, and were not in the audit above.
 - category A/D; runs per import statement (also per `import` for `addExplicitUnqualifiedImport`, line 1352-1355); impact low; risk low
 - Finding: `importModulePathIdent` and `nestedImportPathIdent` allocate a fresh `std.ArrayList(u8)`, append the token texts with separators, and then `insertIdent` copies the bytes into the interner and frees the list. Fine per import, but imports run once per module and there is already a `scratch_idents`; a reusable byte scratch on the parser avoids the alloc/free pair.
 - Fix: keep one `std.ArrayList(u8)` scratch on `Parser` (clear per use).
-- Status: open
+- Status: fixed (fix 54)
 
 ### src/parse/Parser.zig:686-694: `recordDestructuredValueNames` allocates a worklist per destructuring declaration
 - category A; runs per module-scope destructuring declaration (rare); impact low; risk low
 - Finding: a fresh `std.ArrayList(AST.Pattern.Idx)` is created and freed per call (lines 692-693); the parser owns `scratch_nodes`/`scratch_idents` that could serve.
 - Fix: reuse a parser-owned scratch list.
-- Status: open
+- Status: fixed (fix 54)
 
 ### src/parse/Parser.zig:7255-7267: Type-dependency worklist uses a 4 KB stack buffer + fallback allocator per annotation
 - category A/H; runs per tag-union item and per type declaration annotation when `collect_type_dependencies` is on; impact low; risk low
@@ -1515,7 +1524,7 @@ reading code, and were not in the audit above.
 - category B; runs per declaration (`put`) and per canonicalized statement (`get`); impact low-medium; risk low
 - Finding: `decl_by_statement: AutoHashMapUnmanaged(u32, DeclIdx)` and `type_path_by_statement: AutoHashMapUnmanaged(u32, TypePathIdx)` are keyed by the statement's `Node.Idx` (a dense id into `NodeStore.nodes`). design.md "Dense IDs and structural keys" calls for a column or `DenseMap` here; the key is a `u32` so the lint does not catch it.
 - Fix: since every statement node can have at most one decl, store the `DeclIdx` in the statement node itself (the `statement` node kinds leave `main_token` free for `decl`/`expr`, or add a parallel `nodes` column) or use `collections.DenseMap(Node.Idx, DeclIdx)`.
-- Status: open
+- Status: fixed (fix 54)
 
 ### src/parse/DeclIndex.zig:215-232: `Decl` record is ~100 bytes because ten fields are `?u32`-shaped optionals
 - category C; runs per declaration (stored for the AST's lifetime); impact low (memory); risk low
@@ -1533,7 +1542,7 @@ reading code, and were not in the audit above.
 - category H; runs per `.field` segment after the first in a field-access chain; impact low; risk low
 - Finding: `store.nodes.get(node_idx)` copies all five columns into a `Node` and `store.nodes.set(node_idx, receiver_node)` writes all five back (lines 1730, 1744) to update `main_token += 1` and `region.end`.
 - Fix: write the two columns directly via `nodes.items.items(.main_token)[i] += 1` and `items(.region)[i].end = ...`.
-- Status: open
+- Status: fixed (fix 54)
 
 ### src/parse/Parser.zig:3528-3531,3565-3568: Number token text classified three times
 - category E; runs per numeric literal; impact low; risk low
