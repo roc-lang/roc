@@ -617,7 +617,9 @@ pub const Store = struct {
         }
         const normalized = try self.allocator.dupe(Field, values);
         defer self.allocator.free(normalized);
-        std.mem.sort(Field, normalized, name_store, recordFieldLessThan);
+        // Labels are unique within a row, so an unstable sort orders it the
+        // same way a stable one would.
+        std.sort.pdq(Field, normalized, name_store, recordFieldLessThan);
         assertNoDuplicateRecordFields(name_store, normalized);
         return try self.addFields(normalized);
     }
@@ -641,7 +643,9 @@ pub const Store = struct {
         }
         const normalized = try self.allocator.dupe(Tag, values);
         defer self.allocator.free(normalized);
-        std.mem.sort(Tag, normalized, name_store, tagLessThan);
+        // Labels are unique within a union, so an unstable sort orders it the
+        // same way a stable one would.
+        std.sort.pdq(Tag, normalized, name_store, tagLessThan);
         return try self.addSortedTagVariants(name_store, normalized);
     }
 

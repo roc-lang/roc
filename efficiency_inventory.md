@@ -30,9 +30,9 @@ measured with every fix below applied:
 
 | Workload | Baseline | This branch | Change |
 | --- | ---: | ---: | ---: |
-| `roc check -j1 package/main.roc` (roc-pg) | 266.28 G | 215.01 G | -19.3% |
-| `roc build --opt=dev examples/query.roc` | 244.83 G | 221.80 G | -9.4% |
-| `roc build examples/query.roc` (LLVM) | 524.75 G | 339.57 G | -35.3% |
+| `roc check -j1 package/main.roc` (roc-pg) | 266.28 G | 214.60 G | -19.4% |
+| `roc build --opt=dev examples/query.roc` | 244.83 G | 221.33 G | -9.6% |
+| `roc build examples/query.roc` (LLVM) | 524.75 G | 339.17 G | -35.4% |
 | `roc test test/fx/issue8826_full.roc` | 141.4 M | 139.9 M | -1.1% |
 
 Peak resident memory (`/usr/bin/time -f %M`) of `roc check -j1` on roc-pg:
@@ -440,6 +440,13 @@ stages it touches; the instruction-count effect is reported in "Results".
     `rowExtensionChainResolved` records a row only as it follows its
     extension. Generated code is byte-identical; `roc check` is 215.01 G
     (-0.55%), the dev build 221.8 G (-0.5%), the LLVM build 339.6 G.
+
+70. Profile-guided (Monotype types): rows that arrive out of label order are
+    normalized with `std.sort.pdq` instead of the stable block sort; labels
+    are unique within a row or union, so the order is the same. The block
+    sort was two thirds of `addRecordFields`. Generated code is
+    byte-identical; `roc check` is 214.60 G, the dev build 221.33 G, the
+    LLVM build 339.2 G.
 
 ## Findings from profiling
 
