@@ -55842,6 +55842,32 @@ test "closing a nested return frame drains only that frame's return-flow entries
     try std.testing.expect(checker.openFrameState() == null);
 }
 
+fn leaveReturnFrameOpen() !void {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.initExpr("ReturnFrames", "1.I64");
+    defer test_env.deinit();
+    const checker = &test_env.checker;
+    const lambda: CIR.Expr.Idx = @fromBackingInt(1);
+    try checker.pushReturnConstraintFrame(lambda, ModuleEnv.varFrom(lambda), null);
+    try checker.appendReturnConstraint(lambda, @fromBackingInt(2), .return_expr);
+    checker.debugAssertFramesBalanced();
+}
+
+test "a return frame left open fails the checker's frame-balance invariant" {
+    try base.death_test.expectPanic("frame-owned `return_constraints` still holds 1 entries after checking returned", leaveReturnFrameOpen, .{});
+}
+
+fn abortHoistFrameWithNoneOpen() !void {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.initExpr("HoistFrames", "1.I64");
+    defer test_env.deinit();
+    test_env.checker.abortHoistFrame(@fromBackingInt(5));
+}
+
+test "aborting a hoist frame that is not open fails its invariant" {
+    try base.death_test.expectPanic("aborting the hoist frame of expression 5 but no hoist frame is open", abortHoistFrameWithNoneOpen, .{});
+}
+
 test "closing a nested try-row fixpoint drops only that fixpoint's links" {
     const TestEnv = @import("test/TestEnv.zig");
     var test_env = try TestEnv.initExpr("TryRowFixpoints", "1.I64");

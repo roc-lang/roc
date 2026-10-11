@@ -22660,6 +22660,18 @@ test "a frame left open in canonicalizer state is named by the frame-balance che
     try std.testing.expect(can.openFrameState() == null);
 }
 
+fn leaveTypeVarScopeOpen() !void {
+    const CanTestEnv = @import("test/TestEnv.zig");
+    var test_env = try CanTestEnv.init("1");
+    defer test_env.deinit();
+    _ = test_env.can.type_var_scopes.enter();
+    test_env.can.debugAssertFramesBalanced();
+}
+
+test "a frame left open in canonicalizer state fails the frame-balance invariant" {
+    try base.death_test.expectPanic("frame-owned `type_var_scopes` still holds 1 entries after canonicalizing the file", leaveTypeVarScopeOpen, .{});
+}
+
 test "every canonicalizer frame stack is checked for balance" {
     const frame_owned = comptime state_discipline.fieldsWith(Self, state_inventory, &.{ .frame_stack, .frame_partitioned });
     inline for (.{ "decl_scope_stack", "type_var_scopes", "type_anno_owner_path_stack", "scratch_defining_bound_vars", "pattern_binders" }) |expected| {

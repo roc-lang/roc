@@ -170,6 +170,12 @@ user-facing failure (malformed source, a type error, a missing or unreadable
 file, allocation failure, a corrupt cache entry) is not a compiler invariant:
 it is reported or propagated as described for that failure, never asserted.
 
+A test pins that an invariant fires with `base.death_test.expectPanic`, which
+re-runs the calling test in a child copy of the test binary, calls the
+violating trigger there, and passes when the child panics with the expected
+message. Death tests skip in builds without runtime safety, where invariants
+are `unreachable`.
+
 Checked identity and runtime encoding are separate data. A stable id, checked
 id, symbol, type variable, procedure reference, callable member, or source row
 id may identify what a value means. It must not also be treated as the integer

@@ -34,6 +34,9 @@ pub const ConcurrentU64 = @import("ConcurrentU64.zig").ConcurrentU64;
 pub const SmallStringInterner = @import("SmallStringInterner.zig");
 
 pub const invariant = @import("invariant.zig").invariant;
+/// Tests that pin a compiler invariant firing, by running the violation in a
+/// child copy of the test binary.
+pub const death_test = @import("death_test.zig");
 /// Per-thread record of in-flight compiler work, printed when the compiler
 /// crashes.
 pub const ice_context = @import("ice_context.zig");
@@ -190,6 +193,7 @@ test "base tests" {
     std.testing.refAllDecls(@import("CommonEnv.zig"));
     std.testing.refAllDecls(@import("ConcurrentU64.zig"));
     std.testing.refAllDecls(@import("DataSpan.zig"));
+    std.testing.refAllDecls(@import("death_test.zig"));
     std.testing.refAllDecls(@import("Ident.zig"));
     std.testing.refAllDecls(@import("ice_context.zig"));
     std.testing.refAllDecls(@import("InternedBytes.zig"));

@@ -83,8 +83,7 @@ a local lowers to one Lambda Mono type (including the typed-local sequence
 path, which had reused the cached type instead of checking it), and it
 re-derives each replayed `List.map` fold through `FoldedMatch.isResolutionOf`
 instead of trusting the recorded body. The negative controls test that
-predicate directly, because invariants panic and the test suite has no
-harness for observing a panic.
+predicate directly.
 
 The empty-tag-union yield project has landed, by deletion rather than by
 carrying provenance. Sealing unresolved Monotype rows before publication had

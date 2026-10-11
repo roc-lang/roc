@@ -1,4 +1,6 @@
-//! Vendored Zig 0.17.0 test runner (MIT), with an explicit Roc summary output.
+//! Vendored Zig 0.17.0 test runner (MIT), with an explicit Roc summary output
+//! and Roc's death-test child mode (`--roc-death-test=<test name>`, see
+//! `src/base/death_test.zig`).
 //! Default test runner for unit tests.
 const builtin = @import("builtin");
 
@@ -22,8 +24,19 @@ var report_status: []u8 = &.{};
 var selected_tests: []usize = &.{};
 var selected_count: usize = 0;
 var filters: std.ArrayList([]const u8) = .empty;
+/// Set by `--roc-death-test=<test name>`: this process is a death-test child
+/// that runs exactly the named test.
+var death_test_name: ?[]const u8 = null;
+/// The name of the test function currently running.
+pub var current_test_name: []const u8 = "";
+
+/// Whether this process is a death-test child.
+pub fn isDeathTestChild() bool {
+    return death_test_name != null;
+}
 
 fn matchesFilter(name: []const u8) bool {
+    if (death_test_name) |death_test| return std.mem.eql(u8, name, death_test);
     if (filters.items.len == 0) return true;
     for (filters.items) |filter| {
         if (std.mem.find(u8, name, filter) != null) return true;
@@ -104,6 +117,8 @@ pub fn main(init: std.process.Init.Minimal) void {
             filters.append(std.heap.page_allocator, args[arg_index]) catch @panic("test filter allocation failed");
         } else if (std.mem.startsWith(u8, arg, "--test-filter=")) {
             filters.append(std.heap.page_allocator, arg["--test-filter=".len..]) catch @panic("test filter allocation failed");
+        } else if (std.mem.startsWith(u8, arg, "--roc-death-test=")) {
+            death_test_name = arg["--roc-death-test=".len..];
         } else if (std.mem.startsWith(u8, arg, "--roc-test-report=")) {
             report_path = arg["--roc-test-report=".len..];
         } else if (std.mem.startsWith(u8, arg, "--roc-test-report-dir=")) {
@@ -129,6 +144,10 @@ pub fn main(init: std.process.Init.Minimal) void {
         if (!matchesFilter(test_fn.name)) continue;
         selected_tests[selected_count] = index;
         selected_count += 1;
+    }
+    if (death_test_name) |name| {
+        if (selected_count != 1) panic("--roc-death-test names no test in this binary: {s}", .{name});
+        if (listen) @panic("--roc-death-test runs without --listen");
     }
 
     if (need_simple) {
@@ -211,6 +230,7 @@ fn mainServer(init: std.process.Init.Minimal) !void {
                 const index = selected_tests[requested_index];
                 const test_fn = builtin.test_functions[index];
                 is_fuzz_test = false;
+                current_test_name = test_fn.name;
 
                 // let the build server know we're starting the test now
                 try server.serveStringMessage(.test_started, &.{});
@@ -375,6 +395,7 @@ fn mainTerminal(init: std.process.Init.Minimal) void {
             std.debug.print("{d}/{d} {s}...", .{ i + 1, selected_count, test_fn.name });
         }
         is_fuzz_test = false;
+        current_test_name = test_fn.name;
         if (test_fn.func()) |_| {
             ok_count += 1;
             report_status[index] = 1;
@@ -479,6 +500,7 @@ pub fn mainSimple() anyerror!void {
             stdout.writeStreamingAll(runner_threaded_io, test_fn.name) catch {};
             stdout.writeStreamingAll(runner_threaded_io, "... ") catch {};
         }
+        current_test_name = test_fn.name;
         if (test_fn.func()) |_| {
             if (enable_write) stdout.writeStreamingAll(runner_threaded_io, "PASS\n") catch {};
         } else |err| {

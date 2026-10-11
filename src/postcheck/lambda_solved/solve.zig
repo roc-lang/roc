@@ -4988,6 +4988,49 @@ test "a merge of sets sharing a lambda keeps that lambda's one capture span" {
     try std.testing.expectEqual(shared_captures, members[1].captures);
 }
 
+fn unifyOneLambdaWithTwoCaptureSpans() !void {
+    const allocator = std.testing.allocator;
+    var program = Ast.Program.init(allocator, emptyLiftedProgramForTest(allocator));
+    defer program.deinit();
+
+    const lambda: Common.Symbol = @fromBackingInt(4);
+    const captured_ty = try program.types.add(.zst);
+    const left_captures = try program.types.addCaptures(&.{.{ .local = undefined, .symbol = undefined, .binder = null, .ty = captured_ty }});
+    const right_captures = try program.types.addCaptures(&.{.{ .local = undefined, .symbol = undefined, .binder = null, .ty = captured_ty }});
+    const left = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{ .lambda = lambda, .captures = left_captures }}) });
+    const right = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{ .lambda = lambda, .captures = right_captures }}) });
+
+    var solver = try Solver.init(allocator, &program);
+    defer solver.deinit();
+    try solver.unify(left, right);
+}
+
+test "unifying one lambda carrying two capture spans fails its invariant" {
+    try @import("base").death_test.expectPanic("one lambda reached Lambda Solved unification with two capture spans", unifyOneLambdaWithTwoCaptureSpans, .{});
+}
+
+fn canonicalizeLambdaSetWithRepeatedMember() !void {
+    const allocator = std.testing.allocator;
+    var program = Ast.Program.init(allocator, emptyLiftedProgramForTest(allocator));
+    defer program.deinit();
+
+    const repeated: Common.Symbol = @fromBackingInt(4);
+    const other: Common.Symbol = @fromBackingInt(2);
+    _ = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{
+        .{ .lambda = repeated, .captures = .empty() },
+        .{ .lambda = other, .captures = .empty() },
+        .{ .lambda = repeated, .captures = .empty() },
+    }) });
+
+    var solver = try Solver.init(allocator, &program);
+    defer solver.deinit();
+    try solver.canonicalizeCallableMemberOrder();
+}
+
+test "a lambda set that repeats a member fails canonicalization's invariant" {
+    try @import("base").death_test.expectPanic("lambda set repeated a member", canonicalizeLambdaSetWithRepeatedMember, .{});
+}
+
 test "uninhabited types unify structurally and join their callable slots" {
     const allocator = std.testing.allocator;
     var program = Ast.Program.init(allocator, emptyLiftedProgramForTest(allocator));
