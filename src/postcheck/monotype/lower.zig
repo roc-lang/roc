@@ -8224,8 +8224,8 @@ const Builder = struct {
             // interface identity for active recursive and partially overlapping
             // requests.
             if (resolved_request_ty) |request_fn_ty| {
-                const template_candidates = source_ctx.draft.template_specs_by_template.get(template_ref);
-                for (if (template_candidates) |list| list.items else &.{}) |raw_spec| {
+                var raw_spec: u32 = if (source_ctx.draft.template_specs_by_template.get(template_ref)) |chain| chain.head else TemplateSpecChain.end;
+                while (raw_spec != TemplateSpecChain.end) : (raw_spec = source_ctx.draft.template_specs.items[raw_spec].next_in_template) {
                     const spec = &source_ctx.draft.template_specs.items[raw_spec];
                     // The checked source root selects the template body, but it is
                     // not part of a resolved specialization's identity. Recursive
@@ -8374,9 +8374,13 @@ const Builder = struct {
             .fn_id = fn_id,
         });
         lexical_needs_cleanup = false;
-        const template_bucket = try source_ctx.draft.template_specs_by_template.getOrPut(template_ref);
-        if (!template_bucket.found_existing) template_bucket.value_ptr.* = .empty;
-        try template_bucket.value_ptr.append(self.allocator, @intCast(spec_index));
+        const template_chain = try source_ctx.draft.template_specs_by_template.getOrPut(template_ref);
+        if (template_chain.found_existing) {
+            source_ctx.draft.template_specs.items[template_chain.value_ptr.tail].next_in_template = @intCast(spec_index);
+            template_chain.value_ptr.tail = @intCast(spec_index);
+        } else {
+            template_chain.value_ptr.* = .{ .head = @intCast(spec_index), .tail = @intCast(spec_index) };
+        }
         try source_ctx.draft.template_spec_by_fn.put(fn_id, @intCast(spec_index));
         try updateTemplateSpecInterfaceLookups(
             source_ctx.draft,
@@ -15436,9 +15440,20 @@ const EagerTemplateResolution = struct {
     fn_ty: Type.TypeId,
 };
 
+/// The first and last draft specs of one template, linked oldest first
+/// through `DraftTemplateSpec.next_in_template`.
+const TemplateSpecChain = struct {
+    head: u32,
+    tail: u32,
+
+    const end = std.math.maxInt(u32);
+};
+
 const DraftTemplateSpec = struct {
     state: DraftSpecState,
     template_ref: names.ProcTemplate,
+    /// The next draft spec of the same template, or `TemplateSpecChain.end`.
+    next_in_template: u32 = TemplateSpecChain.end,
     /// Checked module whose ordered registry scope governs generated method
     /// dispatch embedded in this specialization's body.
     method_scope: checked.ModuleId,
@@ -16629,7 +16644,7 @@ const BodyDraftStore = struct {
     def_owners: std.ArrayList(DraftOwner),
     nested_defs: std.ArrayList(DraftNestedDef),
     template_specs: std.ArrayList(DraftTemplateSpec),
-    template_specs_by_template: std.AutoHashMap(names.ProcTemplate, std.ArrayList(u32)),
+    template_specs_by_template: std.AutoHashMap(names.ProcTemplate, TemplateSpecChain),
     sealed_template_specs: std.ArrayList(SealedTemplateSpec),
     template_spec_by_fn: collections.DenseMap(DraftFnId, u32),
     template_spec_lookup: DraftTemplateSpecLookup,
@@ -16754,7 +16769,7 @@ const BodyDraftStore = struct {
             .nested_defs = .empty,
             .template_specs = .empty,
             .sealed_template_specs = .empty,
-            .template_specs_by_template = std.AutoHashMap(names.ProcTemplate, std.ArrayList(u32)).init(allocator),
+            .template_specs_by_template = std.AutoHashMap(names.ProcTemplate, TemplateSpecChain).init(allocator),
             .template_spec_by_fn = collections.DenseMap(DraftFnId, u32).init(allocator),
             .template_spec_lookup = DraftTemplateSpecLookup.init(allocator),
             .closed_direct_specializations = std.AutoHashMap(ClosedDirectCallIdentity, ClosedDirectDraftSpecialization).init(allocator),
@@ -16964,8 +16979,6 @@ const BodyDraftStore = struct {
         self.local_proc_contexts.deinit(self.allocator);
         self.template_spec_lookup.deinit();
         self.closed_direct_specializations.deinit();
-        var template_lists = self.template_specs_by_template.valueIterator();
-        while (template_lists.next()) |list| list.deinit(self.allocator);
         self.template_specs_by_template.deinit();
         self.template_spec_by_fn.deinit();
         self.nested_spec_lookup.deinit();
@@ -17742,8 +17755,6 @@ const BodyDraftStore = struct {
         self.template_spec_lookup.clearRetainingCapacity();
         self.nested_spec_lookup.clearRetainingCapacity();
         self.nested_spec_families.clearRetainingCapacity();
-        var template_lists = self.template_specs_by_template.valueIterator();
-        while (template_lists.next()) |list| list.deinit(self.allocator);
         self.template_specs_by_template.clearRetainingCapacity();
         self.template_spec_by_fn.clearRetainingCapacity();
         self.closed_direct_specializations.clearRetainingCapacity();

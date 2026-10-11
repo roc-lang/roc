@@ -413,6 +413,14 @@ stages it touches; the instruction-count effect is reported in "Results".
     dense state map instead of two columns over the whole proof table.
     Generated code is byte-identical; `roc check` is 217.94 G.
 
+67. Monotype: a draft's specs of one template form a chain (head and tail in
+    the per-template map, `next_in_template` on each spec, oldest first)
+    instead of a separately allocated list per template. Generated code is
+    byte-identical; `roc check` is 217.93 G. (A compiler built with
+    `-Dstrip=false` emits a dev-backend `.text` 208 bytes larger than a
+    stripped one from the same source; the comparisons here use stripped
+    builds.)
+
 ## Findings from profiling
 
 These were found by profiling the ReleaseFast compiler with
@@ -1870,7 +1878,7 @@ X: widen the packed `Layout` so its indices are 32 bits (a 64-bit packed layout,
 - category F; runs per draft store; one heap ArrayList per template that has specs in the body; impact low; risk low
 - Finding: a map whose values are independently allocated `ArrayList(u32)`s. Each template gets its own growable buffer with its own allocator traffic and deinit loop.
 - Fix: replace with `AutoHashMap(ProcTemplate, u32 head)` + an intrusive `next: u32` column on `template_specs` (singly linked by index, newest first), or a `MultiArrayList` of `(template, spec_index)` sorted lazily. Verify the consumers only need membership/iteration over a template's specs (grep `template_specs_by_template`).
-- Status: open
+- Status: fixed (fix 67): head and tail indices per template, linked oldest first through each draft spec
 
 ### src/postcheck/monotype/lower.zig:24927, 24949, 25374, 25391, 50510, 50614, 50710, 1174, 4831: `std.heap.ArenaAllocator.init` per call
 - category A; runs `importInterfaceSummary`/`insertInterfaceSummary` run per interface-summary cache hit/insert (per template request); `valuePositionMask` (1174) runs per …; impact medium; risk low
