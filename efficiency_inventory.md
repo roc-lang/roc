@@ -476,6 +476,14 @@ stages it touches; the instruction-count effect is reported in "Results".
     (`DenseMap.clearRetainingAtMost`). Peak memory is 2.65 GB again, against
     3.09-3.15 GB on the baseline; `roc check` is 214.18 G (+0.2%).
 
+74. Tried and reverted: letting a `DenseMap` holding at most N entries find
+    keys by scanning its dense key column and allocate no page index until
+    it outgrows N. It cut peak memory by 3-6% (to 2.49-2.59 GB; the rest of
+    fix 57's +47 MB is small maps with far-apart ids paying a 256-byte page
+    each), but cost instructions at every N tried: N=4, 8, 16 gave `roc
+    check` +0.7%, +0.4%, +0.3% and the LLVM build +1.4%, +1.9%, +2.3%. A
+    vectorized `std.mem.findScalar` scan was worse still (+5%).
+
 ## Findings from profiling
 
 These were found by profiling the ReleaseFast compiler with
