@@ -364,6 +364,17 @@ stages it touches; the instruction-count effect is reported in "Results".
     and low-link columns, on-stack flags, stacks, SCC members) in the store's
     retained digest storage instead of allocating it per request.
 
+61. ARC: the liveness graph builds its successor and predecessor CSR once, in
+    `u32`, and the per-emission place-use and structured-liveness passes read
+    it instead of rebuilding it; the emission wave allocates its owner table
+    once; `computeSccs` reads the lifted call edges directly; jumps resolve
+    against a per-procedure dense join map; the outcome walk's maps and work
+    list are hoisted out of its loops; the uniqueness settlement republishes
+    its return-condition table only in the first wave and when a row
+    changed; and statement successors are read in place. Generated code is
+    byte-identical and instruction counts are flat (dev build 222.8 G, LLVM
+    build 344.8 G).
+
 ## Findings from profiling
 
 These were found by profiling the ReleaseFast compiler with
@@ -1159,6 +1170,11 @@ reading code, and were not in the audit above.
 - Finding: fresh `pending` lists per classification walk; the rest of `abi/call.zig` correctly allocates results in a caller-provided arena.
 - Fix: scratch on the classifier or use the caller's arena.
 - Status: open
+
+### src/layout/layout.zig:139: `Layout.Idx` is 28 bits, under the 32-bit width design.md requires for program-sized indices
+Status: open
+F: `Layout` packs a 4-bit tag with `layout_bit_size - 4 = 28` bits of data, so `Idx`, `LayoutData`, and the struct and tag-union `int_idx` fields (narrower still, by the sort-key width) cap the number of layouts and layout rows below 2^32. design.md says every index that grows with program size is at least 32 bits wide in every stage.
+X: widen the packed `Layout` so its indices are 32 bits (a 64-bit packed layout, or a tag column beside a `u32` index), keeping construction checked so a count past 32 bits returns `error.OutOfMemory`.
 
 ### src/layout/layout.zig:683: `Layout` is a packed struct (data + 4-bit tag)
 - category C (reviewed, good); impact, ; risk, - Finding: compact packed representation; `Idx` is `layout_bit_size - 4` bits wide (verify it is >= 32 bits per the representation-capacity rule: `@Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag))`: if `layout_bit_size` is 32 this makes `Idx` 28 bits, which would violate the "at least 32 bits for program-size-dependent indices" invariant; flagging for the owner to confirm `layout_bit_size`).
@@ -1960,7 +1976,7 @@ reading code, and were not in the audit above.
 - category B/A; runs `containsIterator` per open node renumbered in `equivalenceIdentityInto`; the type-uninhabited scan per finished-type inhabitation query; renumberer maps per …; impact low-medium; risk low
 - Finding: dense-id keyed hash sets built from `.empty` on each call (first `getOrPut` allocates), discarded at the end; the graph already has `type_set_pool`/`node_set_pool` (`DenseMapPool`) for pooled visited sets.
 - Fix: acquire from `type_set_pool`/`node_set_pool`; for `visiting: AutoHashMapUnmanaged(Type.TypeId, usize)` use `DenseMap(Type.TypeId, u32)` from the pool. Semantics unchanged.
-- Status: open
+- Status: no change: these walks run only while an interface summary is verified, over a per-call arena that frees them together; the uninhabited scan's map is a dense map (fix 57)
 
 ### src/postcheck/monotype/solve.zig:611-623 (`equivalenceIdentityInto`): per-call `std.heap.ArenaAllocator` + fresh `IdentityWriter` lists
 - category A; runs per interface equivalence identity (per replay verification / summary comparison); impact low; risk low
@@ -2371,7 +2387,7 @@ reading code, and were not in the audit above.
 - category D; runs once per `insert` call (per program), O(locals) x 28 bytes.; impact low (one-off, but 28 bytes x locals; on a large program …; risk low
 - Finding: allocates `[]?BoxyDescRef` (28 bytes each) for every local and copies `store.getLocal(id).boxy_desc` into it; `boxyDescForLocal` then reads it. `LirStore.locals` is already a dense column of `Local{layout_idx, boxy_desc}`; the copy only exists to avoid the `getLocal` three-way lookup.
 - Fix: read through `store.getLocal(local).boxy_desc` (or expose `store.getLocals()` which already exists as a raw slice for a coordinator) and drop the column; `BoxyDescUsers.init` can take the store.
-- Status: open
+- Status: no change: the column is the snapshot of locals that exist when ARC starts; emission appends locals the store would otherwise expose to classification
 
 ### src/lir/arc.zig:1854: `ArcPlanStep` is ~230 bytes per planned statement, mostly four embedded `ArrayList`s that are almost always empty
 - category C/F; runs per statement per emission (stored in `ArcPlan.steps: ArrayList(ArcPlanStep)` for every plan slot; a statement under several structured contexts has several …; impact medium-high; risk low
@@ -2395,7 +2411,7 @@ reading code, and were not in the audit above.
 - category A/G; runs per wave (program procedures / `emission_wave_size`), and per procedure for the scratch lists.; impact low-medium; risk low
 - Finding: `const owners = try store.allocator.alloc(EmissionOwner, options.emission_wave_size)` inside the wave loop; `owners[count] = .{ .inserter = inserter, ... }` copies the ~40-field `Inserter` per proc. `death_scratch`, `transfer_position_scratch`, `retain_arg_scratch`, `dismantle_temps`, `loop_liveness_caches` start `.empty` for each owner, so each procedure re-grows them from zero (allocating in the GPA, since they …
 - Fix: allocate `owners` once outside the wave loop (`emission_wave_size` is fixed) and reuse; move the scratch lists into lane-local state (the executor's `LaneState`) so they keep capacity across procedures on the same lane.
-- Status: open
+- Status: partly fixed (fix 61): `owners` is allocated once; the scratch lists stay per owner
 
 ### src/lir/arc.zig:1218: `computeEmissionContainsRefcounted` builds an `AutoHashMap(layout.Idx, void)` visited set and walks every statement of the program to find `erased_capture_load` ops
 - category B/E; runs once per `insert` (per program), O(statements) with a 144-byte copy per statement.; impact low; risk low
@@ -2413,25 +2429,25 @@ reading code, and were not in the audit above.
 - category D; runs per emitted procedure that synthesized dismantle temporaries.; impact low; risk low
 - Finding: `frame` ArrayList is filled from the old span and `dismantle_temps`, then `store.addLocalSpan(frame.items)` copies into `local_ids`. `addLocalSpan` could take two slices, or the store could expose `addLocalSpanConcat(old_span, extra)`.
 - Fix: `addLocalSpan2(existing: LocalSpan, extra: []const LocalId)` appending directly to `local_ids` with one reservation.
-- Status: open
+- Status: no change: one copy per emitted procedure that has dismantle temporaries, and the store's span borrow cannot be held across its own append
 
 ### src/lir/arc.zig:6335: `PlaceUseFacts` build allocates ~12 arrays + two sorted lists per emission, using `std.mem.sort` on `PlaceUser`/`SideEntry`
 - category A/E; runs per emission (per procedure per ownership variant); the sorted inputs are produced by walking the node list in index order, so `place_user_list` is already …; impact medium (this is per emission, and emissions = procedures x …; risk low
 - Finding: lines 6335-6470: `succ_starts`, `pred_starts`, `succs`, `preds` (the graph already has `successors`/`predecessor_starts`/`predecessors` in `ReadBeforeRebindGraph`: the succ/pred CSR is rebuilt here from the same data, and again at lines 7891-7905 in the loop-liveness builder), `rebinds`, `rebound_roots`, `every_place`, `place_user_list` + sort, `place_leaders`, `place_user_starts`, `place_users`, …
 - Fix: build the CSR successor/predecessor arrays once per source procedure in `prepareSourceLiveness` (they are a property of the source graph, not the variant) and share them from `SourceLiveness`; replace the two `std.mem.sort` calls with counting sorts keyed by leader/loop index (dense u32 keys); allocate the rest from `worker.scratch`.
-- Status: open
+- Status: partly fixed (fix 61): the successor and predecessor CSR is built once per source graph; the sorts remain
 
 ### src/lir/arc.zig:7614: `prepareSourceLiveness` computes predecessor CSR with `usize` arrays and keeps `predecessor_starts: []const usize`, `predecessors: []const usize`, `loop_edges: []const usize` in the durable source arena
 - category C; runs per source procedure, retained for the whole ARC run.; impact low-medium; risk low
 - Finding: node indices are bounded by `no_stmt_node_index = maxInt(u32)` (line 7244 check) yet the CSR arrays are `usize` (8 bytes per entry): `pred_counts`, `pred_starts`, `pred_writes`, `predecessors`, `loop_edges`, `loop_edge_nodes: ArrayList(usize)`; `ReadBeforeRebindNode.successor_start: usize`. The companion `succ_starts`/`succs` built later (line 6335, 7891) are u32.
 - Fix: switch to u32 (program-size counts must be >= 32 bits, which u32 satisfies); halves the retained predecessor storage and the per-node field.
-- Status: open
+- Status: fixed (fix 61)
 
 ### src/lir/arc.zig:7252: `edge_kills` merge allocates a new `merged` slice in the graph arena per kill append
 - category A/F; runs per string-match capture per source statement (rare).; impact low; risk low
 - Finding: `const merged = try graph.allocator.alloc(ReadBeforeRebindEdgeKill, existing.len + kills.items.len)` appends by reallocating the whole per-node slice in the durable arena; the old slice leaks in the arena. Pool `edge_kills` in one `ArrayList` and store a span per node.
 - Fix: shared pool + span.
-- Status: open
+- Status: no change: only string-match nodes with view captures merge kills, once per successor, over a handful of successors
 
 ### src/lir/arc.zig:8089: loop-liveness search allocates stamps, `carried`, `seeds`, and three sorted lists per loop-liveness solve; `std.mem.sort` on `seeds`, `loop_bits`, `node_bits`, and members
 - category A/E; runs per emission that reaches a loop edge (once per loop-keyed liveness cache), `std.mem.sort(u32, members, …)` per loop.; impact low-medium; risk low
@@ -2472,7 +2488,7 @@ reading code, and were not in the audit above.
 - category D; runs per statement (once per program, but inside the hottest single loop of the solver).; impact low-medium; risk low
 - Finding: `const stmt = solver.store.getCFStmt(current)` (line 2097), then `liftProcStmtFacts` does `switch (solver.store.getCFStmt(current))` (line 2117) and for `assign_call` also `getCFStmt(assign.next)` (line 2125), then `liftSharedStmtFacts(solver, current)` (line 2671) reads it again, then `appendStructuralSuccessors(.., stmt)`. Each is a 144-byte copy through the three-way store lookup.
 - Fix: read once (`*const CFStmt`) and pass the pointer/value to the three helpers.
-- Status: open
+- Status: fixed (fix 61)
 
 ### src/lir/arc_solve.zig:731: `Solver.proc_stmts / proc_returns / proc_join_bodies`, `UniquenessStructure.proc_stmts / returns / callers` and `UniquenessComponent` are arrays of `ArrayList`s (one heap block per procedure per table)
 - category F; runs per procedure, 3 + 3 lists plus 4 per component.; impact medium; risk low
@@ -2484,7 +2500,7 @@ reading code, and were not in the audit above.
 - category A/B; runs per procedure with a tag-union return and owned refcounted params x per such param: `AutoHashMap(u32, OutcomeBitAccum)` (line 1394), …; impact low-medium; risk low
 - Finding: `OutcomeWalkState{stmt, present, discriminant}` is a (dense stmt index, bool, u32) triple; the walk is over the proc's own statements, so a stamped column indexed by `statement_indices` (which the function already maintains as a `DenseMap`) with a small per-statement list of seen discriminants would avoid hashing. All of these are created and destroyed per iteration instead of hoisted out of the loops with …
 - Fix: hoist the maps/lists to function scope and clear per iteration (or use epoch-stamped arrays sized to `proc_stmts.len`); replace `seen: AutoHashMap(OutcomeWalkState)` with a per-statement stamp + discriminant pair (a statement is re-walked only when `(present, discriminant)` differs; a tiny inline array of 2 entries per statement covers the common case).
-- Status: open
+- Status: partly fixed (fix 61): the maps and work list are hoisted and cleared per iteration; `seen` is still hashed by walk state
 
 ### src/lir/arc_solve.zig:4874: `UniquenessComponentTask.execute` creates two `std.heap.ArenaAllocator`s per component from `worker.allocator` and never uses `worker.scratch`
 - category A; runs per ownership component per settlement wave (the structure's `result` is retained across waves of one settlement but destroyed between settlements, i.e. at …; impact medium; risk low-medium
@@ -2496,19 +2512,19 @@ reading code, and were not in the audit above.
 - category D; runs per wave (typically 2-5 per settlement).; impact low; risk low
 - Finding: `flat_rows` is rebuilt from `proc_rows` for every proc, then `allocator.dupe` into `solution.ret_conditions` and the old table freed, even when no row changed.
 - Fix: only rebuild when some `changed` fired; or keep `flat_rows` as the live table and swap.
-- Status: open
+- Status: fixed (fix 61)
 
 ### src/lir/arc_solve.zig:2213: `resolveJumpIndices` hashes `(proc, JoinPointId)` pairs to find a jump's join
 - category B; runs per join and per jump, once per program.; impact low; risk low
 - Finding: `AutoHashMapUnmanaged(JoinKey{proc: u32, id: JoinPointId}, JoinSlot)`; `JoinPointId` is a dense per-store id (the store allocates them from `firstFreshJoinPoint`), so a `DenseMap(JoinPointId, JoinSlot)` cleared per proc (joins are enumerated proc by proc in `proc_join_bodies`) suffices.
 - Fix: `DenseMap(JoinPointId, u32)` reused across procs with `clearRetainingCapacity`, resolving each proc's `pending_jumps` right after its joins are recorded (requires grouping pending jumps by proc, which the lift already does in order).
-- Status: open
+- Status: fixed (fix 61)
 
 ### src/lir/arc_solve.zig:6675: `computeSccs` copies `direct_calls` into an `edges: ArrayList([2]u32)` only to count and place them
 - category D; runs once per program, O(call sites).; impact low; risk low
 - Finding: `edges` duplicates `(caller, callee)` from `solver.direct_calls` before building the CSR; the two counting passes can read `direct_calls` directly.
 - Fix: iterate `solver.direct_calls.items` in both passes.
-- Status: open
+- Status: fixed (fix 61)
 
 ### src/lir/arc_solve.zig:4587: `UniquenessWorkspace.use_answers: AutoHashMap(UseQuery{stmt, local}, bool)` memo keyed by a dense id pair
 - category B; runs per ordered-use query (per consume of a refcounted local), persistent per component.; impact low; risk low

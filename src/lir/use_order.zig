@@ -694,7 +694,7 @@ pub const UseOrder = struct {
                 if (seen.contains(current)) continue;
                 try seen.put(current, {});
                 try list.append(allocator, current);
-                try appendStructuralSuccessors(allocator, store, &stack, store.getCFStmtImmediate(current).*);
+                try appendStructuralSuccessors(allocator, store, &stack, store.getCFStmtImmediate(current));
             }
             try lists.ensureUnusedCapacity(allocator, 1);
             lists.appendAssumeCapacity(try list.toOwnedSlice(allocator));
@@ -992,9 +992,9 @@ pub fn appendStructuralSuccessors(
     allocator: Allocator,
     store: *const LirStore,
     stack: *std.ArrayList(LIR.CFStmtId),
-    stmt: LIR.CFStmt,
+    stmt: *const LIR.CFStmt,
 ) Allocator.Error!void {
-    switch (stmt) {
+    switch (stmt.*) {
         .switch_stmt => |switch_stmt| {
             const branches = store.getCFSwitchBranches(switch_stmt.branches);
             for (0..GuardedList.borrowLen(branches)) |branch_index| {

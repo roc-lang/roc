@@ -656,9 +656,9 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     var variant_index: usize = 0;
     // The wave width is a storage bound independent of worker count. Identity
     // reservation and commit order are identical for inline and pooled runs.
+    const owners = try store.allocator.alloc(EmissionOwner, options.emission_wave_size);
+    defer store.allocator.free(owners);
     while (base_index < base_proc_count or variant_index < variants.queue.items.len) {
-        const owners = try store.allocator.alloc(EmissionOwner, options.emission_wave_size);
-        defer store.allocator.free(owners);
         var count: usize = 0;
         defer for (owners[0..count]) |*owner| owner.deinit();
         while (count < owners.len) {
@@ -6332,20 +6332,10 @@ const Inserter = struct {
         const allocator = self.emission_allocator;
         const graph = self.source_liveness.graphFor(self.current_sig);
         const node_count = graph.nodes.items.len;
-        const succ_starts = try allocator.alloc(u32, node_count + 1);
-        const pred_starts = try allocator.alloc(u32, node_count + 1);
-        succ_starts[0] = 0;
-        for (graph.nodes.items, 0..) |node, index| {
-            succ_starts[index + 1] = succ_starts[index] + node.successor_len;
-            pred_starts[index] = @intCast(graph.predecessor_starts[index]);
-        }
-        pred_starts[node_count] = @intCast(graph.predecessor_starts[node_count]);
-        const succs = try allocator.alloc(u32, succ_starts[node_count]);
-        for (graph.nodes.items, 0..) |node, index| {
-            @memcpy(succs[succ_starts[index]..succ_starts[index + 1]], graph.successors.items[node.successor_start..][0..node.successor_len]);
-        }
-        const preds = try allocator.alloc(u32, graph.predecessors.len);
-        for (graph.predecessors, preds) |predecessor, *out| out.* = @intCast(predecessor);
+        const succ_starts = graph.successor_starts;
+        const succs = graph.successor_targets;
+        const pred_starts = graph.predecessor_starts;
+        const preds = graph.predecessors;
         const forest = try LoopForest.build(allocator, succ_starts, succs, pred_starts, preds);
         const loop_count = forest.loops.len;
         const local_count = self.store.localCount();
@@ -7087,9 +7077,12 @@ const Inserter = struct {
         nodes: std.ArrayList(ReadBeforeRebindNode),
         /// Node indices, resolved exactly once while each edge is appended.
         successors: std.ArrayList(u32),
-        predecessor_starts: []const usize = &.{},
-        predecessors: []const usize = &.{},
-        loop_edges: []const usize = &.{},
+        /// Successor and predecessor CSR over node indices.
+        successor_starts: []const u32 = &.{},
+        successor_targets: []const u32 = &.{},
+        predecessor_starts: []const u32 = &.{},
+        predecessors: []const u32 = &.{},
+        loop_edges: []const u32 = &.{},
         /// Compact node bits whose forward paths can reach a loop boundary.
         reaches_loop_edge: std.bit_set.DynamicBitSetUnmanaged = .{},
 
@@ -7325,7 +7318,7 @@ const Inserter = struct {
         // Loop-edge nodes found by a keep-free build seed the backward
         // reachability sweep that decides which statements ever need
         // loop-keyed rows.
-        var loop_edge_nodes = std.ArrayList(usize).empty;
+        var loop_edge_nodes = std.ArrayList(u32).empty;
 
         // The source body is the complete ownership-neutral graph.
         _ = try self.ensureReadBeforeRebindNode(&graph, &work, self.current_proc_body);
@@ -7600,7 +7593,7 @@ const Inserter = struct {
                 },
                 .loop_continue,
                 .loop_break,
-                => try loop_edge_nodes.append(scratch_allocator, node_index),
+                => try loop_edge_nodes.append(scratch_allocator, @intCast(node_index)),
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
                 => {},
@@ -7611,37 +7604,38 @@ const Inserter = struct {
         }
 
         const node_count = graph.nodes.items.len;
-        var pred_counts = try scratch_allocator.alloc(usize, node_count);
-        @memset(pred_counts, 0);
-        for (graph.nodes.items) |node| {
-            const successor_start = node.successor_start;
-            const successor_end = successor_start + @as(usize, node.successor_len);
-            for (graph.successors.items[successor_start..successor_end]) |successor| {
-                const successor_index: usize = successor;
-                pred_counts[successor_index] += 1;
-            }
+        const succ_starts = try graph_allocator.alloc(u32, node_count + 1);
+        succ_starts[0] = 0;
+        for (graph.nodes.items, 0..) |node, index| {
+            succ_starts[index + 1] = succ_starts[index] + node.successor_len;
+        }
+        const succs = try graph_allocator.alloc(u32, succ_starts[node_count]);
+        for (graph.nodes.items, 0..) |node, index| {
+            @memcpy(succs[succ_starts[index]..succ_starts[index + 1]], graph.successors.items[node.successor_start..][0..node.successor_len]);
         }
 
-        var pred_starts = try graph_allocator.alloc(usize, node_count + 1);
+        var pred_counts = try scratch_allocator.alloc(u32, node_count);
+        @memset(pred_counts, 0);
+        for (succs) |successor| pred_counts[successor] += 1;
+
+        var pred_starts = try graph_allocator.alloc(u32, node_count + 1);
         pred_starts[0] = 0;
         for (pred_counts, 0..) |count, index| {
             pred_starts[index + 1] = pred_starts[index] + count;
         }
-        var pred_writes = try scratch_allocator.dupe(usize, pred_starts[0..node_count]);
-        const predecessors = try graph_allocator.alloc(usize, pred_starts[node_count]);
-        for (graph.nodes.items, 0..) |node, predecessor_index| {
-            const successor_start = node.successor_start;
-            const successor_end = successor_start + @as(usize, node.successor_len);
-            for (graph.successors.items[successor_start..successor_end]) |successor| {
-                const successor_index: usize = successor;
-                const write_index = pred_writes[successor_index];
-                predecessors[write_index] = predecessor_index;
-                pred_writes[successor_index] += 1;
+        var pred_writes = try scratch_allocator.dupe(u32, pred_starts[0..node_count]);
+        const predecessors = try graph_allocator.alloc(u32, pred_starts[node_count]);
+        for (0..node_count) |predecessor_index| {
+            for (succs[succ_starts[predecessor_index]..succ_starts[predecessor_index + 1]]) |successor| {
+                predecessors[pred_writes[successor]] = @intCast(predecessor_index);
+                pred_writes[successor] += 1;
             }
         }
+        graph.successor_starts = succ_starts;
+        graph.successor_targets = succs;
         graph.predecessor_starts = pred_starts;
         graph.predecessors = predecessors;
-        graph.loop_edges = try graph_allocator.dupe(usize, loop_edge_nodes.items);
+        graph.loop_edges = try graph_allocator.dupe(u32, loop_edge_nodes.items);
         graph.reaches_loop_edge = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph_allocator, node_count);
 
         if (loop_edge_nodes.items.len != 0) {
@@ -7888,20 +7882,10 @@ const Inserter = struct {
         const bit_len = self.domain().livenessBitLen();
         const no_loop = LoopForest.none;
 
-        const succ_starts = try allocator.alloc(u32, node_count + 1);
-        const pred_starts = try allocator.alloc(u32, node_count + 1);
-        succ_starts[0] = 0;
-        for (graph.nodes.items, 0..) |node, index| {
-            succ_starts[index + 1] = succ_starts[index] + node.successor_len;
-            pred_starts[index] = @intCast(graph.predecessor_starts[index]);
-        }
-        pred_starts[node_count] = @intCast(graph.predecessor_starts[node_count]);
-        const succs = try allocator.alloc(u32, succ_starts[node_count]);
-        for (graph.nodes.items, 0..) |node, index| {
-            @memcpy(succs[succ_starts[index]..succ_starts[index + 1]], graph.successors.items[node.successor_start..][0..node.successor_len]);
-        }
-        const preds = try allocator.alloc(u32, graph.predecessors.len);
-        for (graph.predecessors, preds) |predecessor, *out| out.* = @intCast(predecessor);
+        const succ_starts = graph.successor_starts;
+        const succs = graph.successor_targets;
+        const pred_starts = graph.predecessor_starts;
+        const preds = graph.predecessors;
         var forest = try LoopForest.build(kept_allocator, succ_starts, succs, pred_starts, preds);
         const loop_count = forest.loops.len;
 

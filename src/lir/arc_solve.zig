@@ -1313,6 +1313,16 @@ fn computeOutcomeRestitution(
     defer bit_discriminant_buffer.deinit(allocator);
     var bit_present_buffer = std.ArrayList(bool).empty;
     defer bit_present_buffer.deinit(allocator);
+    var joins = collections.DenseMap(LIR.JoinPointId, LIR.CFStmtId).init(allocator);
+    defer joins.deinit();
+    var accum = std.AutoHashMap(u32, OutcomeAccum).init(allocator);
+    defer accum.deinit();
+    var bit_accum = std.AutoHashMap(u32, OutcomeBitAccum).init(allocator);
+    defer bit_accum.deinit();
+    var stack = std.ArrayList(OutcomeWalkState).empty;
+    defer stack.deinit(allocator);
+    var seen = std.AutoHashMap(OutcomeWalkState, void).init(allocator);
+    defer seen.deinit();
     const ambiguous_discriminant = no_local - 1;
 
     for (0..store.procSpecCount()) |proc_index| {
@@ -1369,8 +1379,7 @@ fn computeOutcomeRestitution(
         @memset(escape_masks, 0);
         if (@import("builtin").mode == .debug) outcome_scratch_entries += proc_stmts.len + escape_discriminants.len + escape_masks.len;
 
-        var joins = collections.DenseMap(LIR.JoinPointId, LIR.CFStmtId).init(allocator);
-        defer joins.deinit();
+        joins.clearRetainingCapacity();
         for (proc_stmts) |stmt_id| {
             const stmt = store.getCFStmtImmediate(stmt_id);
             if (stmt.* != .join) continue;
@@ -1380,8 +1389,7 @@ fn computeOutcomeRestitution(
             entry.value_ptr.* = join_point.body;
         }
 
-        var accum = std.AutoHashMap(u32, OutcomeAccum).init(allocator);
-        defer accum.deinit();
+        accum.clearRetainingCapacity();
         var valid = true;
         var solved_param_count: usize = 0;
         for (0..GuardedList.borrowLen(params)) |param_position| {
@@ -1391,12 +1399,9 @@ fn computeOutcomeRestitution(
             @memset(bit_escape_discriminants, no_local);
             @memset(bit_escape_present, false);
             if (@import("builtin").mode == .debug) outcome_scratch_entries += bit_escape_discriminants.len + bit_escape_present.len;
-            var bit_accum = std.AutoHashMap(u32, OutcomeBitAccum).init(allocator);
-            defer bit_accum.deinit();
-            var stack = std.ArrayList(OutcomeWalkState).empty;
-            defer stack.deinit(allocator);
-            var seen = std.AutoHashMap(OutcomeWalkState, void).init(allocator);
-            defer seen.deinit();
+            bit_accum.clearRetainingCapacity();
+            stack.clearRetainingCapacity();
+            seen.clearRetainingCapacity();
             try stack.append(allocator, .{
                 .stmt = @backingInt(body),
                 .present = true,
@@ -2094,7 +2099,7 @@ fn liftReachableStatements(solver: *Solver) SolveError!void {
             if (seen.isSet(stmt_index)) continue;
             seen.set(stmt_index);
             try stmts.append(solver.allocator, current);
-            const stmt = solver.store.getCFStmt(current);
+            const stmt = solver.store.getCFStmtImmediate(current);
             try liftProcStmtFacts(solver, @intCast(proc_index), current);
             if (!facts_seen.isSet(stmt_index)) {
                 facts_seen.set(stmt_index);
@@ -2122,8 +2127,8 @@ fn liftProcStmtFacts(
             .args = assign.args,
             .target = assign.target,
             .tail = blk: {
-                const next = solver.store.getCFStmt(assign.next);
-                break :blk next == .ret and next.ret.value == assign.target;
+                const next = solver.store.getCFStmtImmediate(assign.next);
+                break :blk next.* == .ret and next.ret.value == assign.target;
             },
         }),
         .ret => |ret_stmt| try solver.proc_returns[proc_index].append(solver.allocator, @backingInt(ret_stmt.value)),
@@ -2209,39 +2214,44 @@ fn liftProcStmtFacts(
 fn resolveJumpIndices(solver: *Solver) Allocator.Error!void {
     // Each procedure's joins by id, so a jump finds its join without scanning
     // every join of its procedure. A repeated id is recorded, and is an
-    // invariant violation only for a jump that targets it.
-    const JoinKey = struct { proc: u32, id: LIR.JoinPointId };
+    // invariant violation only for a jump that targets it. The lift appends
+    // jumps procedure by procedure, so one map serves each procedure in turn.
     const JoinSlot = struct { index: u32, repeated: bool };
-    var join_slots: std.AutoHashMapUnmanaged(JoinKey, JoinSlot) = .empty;
-    defer join_slots.deinit(solver.allocator);
-    for (solver.proc_join_bodies, 0..) |joins, proc_index| {
+    var join_slots = collections.DenseMap(LIR.JoinPointId, JoinSlot).init(solver.allocator);
+    defer join_slots.deinit();
+    var pending_index: usize = 0;
+    for (solver.proc_join_bodies, 0..) |*joins, proc_index| {
+        join_slots.clearRetainingCapacity();
         for (joins.items, 0..) |join, join_index| {
-            const entry = try join_slots.getOrPut(solver.allocator, .{ .proc = @intCast(proc_index), .id = join.id });
+            const entry = try join_slots.getOrPut(join.id);
             if (entry.found_existing) {
                 entry.value_ptr.repeated = true;
             } else {
                 entry.value_ptr.* = .{ .index = @intCast(join_index), .repeated = false };
             }
         }
-    }
-    for (solver.pending_jumps.items) |pending| {
-        const joins = &solver.proc_join_bodies[pending.proc];
-        const slot = join_slots.get(.{ .proc = pending.proc, .id = pending.target }) orelse
-            solveInvariant("ARC jump targeted a join absent from its lifted procedure");
-        if (slot.repeated) solveInvariant("ARC lift found duplicate join ids in one procedure");
-        const join_index = slot.index;
-        const join = &joins.items[join_index];
-        const stmt_index = @backingInt(pending.stmt);
-        if (solver.jump_target_join_index_by_stmt[stmt_index] == no_local) {
-            solver.jump_target_join_index_by_stmt[stmt_index] = join_index;
-            solver.jump_site_index_by_stmt[stmt_index] = join.jump_count;
-        } else if (solver.jump_target_join_index_by_stmt[stmt_index] != join_index or
-            solver.jump_site_index_by_stmt[stmt_index] != join.jump_count)
+        while (pending_index < solver.pending_jumps.items.len and
+            solver.pending_jumps.items[pending_index].proc == proc_index) : (pending_index += 1)
         {
-            solveInvariant("shared ARC jump statement had different structural indices across proc specs");
+            const pending = solver.pending_jumps.items[pending_index];
+            const slot = join_slots.get(pending.target) orelse
+                solveInvariant("ARC jump targeted a join absent from its lifted procedure");
+            if (slot.repeated) solveInvariant("ARC lift found duplicate join ids in one procedure");
+            const join_index = slot.index;
+            const join = &joins.items[join_index];
+            const stmt_index = @backingInt(pending.stmt);
+            if (solver.jump_target_join_index_by_stmt[stmt_index] == no_local) {
+                solver.jump_target_join_index_by_stmt[stmt_index] = join_index;
+                solver.jump_site_index_by_stmt[stmt_index] = join.jump_count;
+            } else if (solver.jump_target_join_index_by_stmt[stmt_index] != join_index or
+                solver.jump_site_index_by_stmt[stmt_index] != join.jump_count)
+            {
+                solveInvariant("shared ARC jump statement had different structural indices across proc specs");
+            }
+            join.jump_count += 1;
         }
-        join.jump_count += 1;
     }
+    if (pending_index != solver.pending_jumps.items.len) solveInvariant("ARC lift appended jumps out of procedure order");
 }
 
 const appendStructuralSuccessors = @import("use_order.zig").appendStructuralSuccessors;
@@ -2270,7 +2280,7 @@ fn reachableStatementSet(
         const stmt_index = @backingInt(current);
         if (reachable.isSet(stmt_index)) continue;
         reachable.set(stmt_index);
-        try appendStructuralSuccessors(allocator, store, &stack, store.getCFStmt(current));
+        try appendStructuralSuccessors(allocator, store, &stack, store.getCFStmtImmediate(current));
     }
     return reachable;
 }
@@ -2295,7 +2305,7 @@ pub fn collectProcStatements(
         const entry = try visited.getOrPut(current);
         if (entry.found_existing) continue;
         try stmts.append(allocator, current);
-        try appendStructuralSuccessors(allocator, store, &stack, store.getCFStmt(current));
+        try appendStructuralSuccessors(allocator, store, &stack, store.getCFStmtImmediate(current));
     }
 }
 
@@ -5157,6 +5167,7 @@ pub fn settleUniquenessWithOptions(
     for (solution.sigs, proc_rows) |sig, *row| row.* = solution.sigTable().retConditionsOf(sig);
     var flat_rows = std.ArrayList(arc_sig.RetCondition).empty;
     defer flat_rows.deinit(allocator);
+    var table_published = false;
     while (dirty.count() != 0) {
         metrics.signature_waves += 1;
         if (builtin.is_test) uniqueness_analysis_rounds += 1;
@@ -5200,6 +5211,10 @@ pub fn settleUniquenessWithOptions(
             }
         }
         for (contexts[0..count]) |context| if (context.failed) return error.OutOfMemory;
+        // The first wave publishes the table in its flattened order; a later
+        // wave republishes it only when a row changed.
+        var rows_changed = !table_published;
+        table_published = true;
         for (contexts[0..count]) |context| {
             const result = context.component.result.?;
             if (options.executor != null) metrics.task_committed += 1;
@@ -5207,10 +5222,11 @@ pub fn settleUniquenessWithOptions(
                 const old = solution.sigs[proc];
                 // A caller's fresh-form decisions read the callee's seed
                 // mask, so a seed change re-analyzes callers too.
+                const row_changed = !sameRetConditions(solution.sigTable().retConditionsOf(old), update.rows);
+                rows_changed = rows_changed or row_changed;
                 const changed = old.read_only_params != update.sig.read_only_params or
                     old.ret_unique != update.sig.ret_unique or old.ret_unique_fields != update.sig.ret_unique_fields or
-                    solution.unique_seed_masks[proc] != update.seeds or
-                    !sameRetConditions(solution.sigTable().retConditionsOf(old), update.rows);
+                    solution.unique_seed_masks[proc] != update.seeds or row_changed;
                 solution.sigs[proc].read_only_params = update.sig.read_only_params;
                 solution.sigs[proc].ret_unique = update.sig.ret_unique;
                 solution.sigs[proc].ret_unique_fields = update.sig.ret_unique_fields;
@@ -5222,6 +5238,7 @@ pub fn settleUniquenessWithOptions(
                 }
             }
         }
+        if (!rows_changed) continue;
         flat_rows.clearRetainingCapacity();
         for (proc_rows, solution.sigs) |row, *sig| {
             sig.ret_conditions = .{ .start = @intCast(flat_rows.items.len), .len = @intCast(row.len) };
@@ -6670,18 +6687,11 @@ fn computeSccs(solver: *Solver) SolveError!void {
     const store = solver.store;
     const proc_count = store.procSpecCount();
 
-    // Project direct-call edges from the shared typed fact lift.
-    var edges = std.ArrayList([2]u32).empty;
-    defer edges.deinit(allocator);
-    for (solver.direct_calls.items) |call| {
-        try edges.append(allocator, .{ call.caller, @backingInt(call.callee) });
-    }
-
-    // Adjacency lists.
+    // Adjacency lists over the direct-call edges of the shared typed fact lift.
     const out_lens = try allocator.alloc(u32, proc_count);
     defer allocator.free(out_lens);
     @memset(out_lens, 0);
-    for (edges.items) |edge| out_lens[edge[0]] += 1;
+    for (solver.direct_calls.items) |call| out_lens[call.caller] += 1;
     const out_offsets = try allocator.alloc(u32, proc_count);
     defer allocator.free(out_offsets);
     var total: u32 = 0;
@@ -6694,9 +6704,9 @@ fn computeSccs(solver: *Solver) SolveError!void {
     const fill = try allocator.alloc(u32, proc_count);
     defer allocator.free(fill);
     @memset(fill, 0);
-    for (edges.items) |edge| {
-        out_edges[out_offsets[edge[0]] + fill[edge[0]]] = edge[1];
-        fill[edge[0]] += 1;
+    for (solver.direct_calls.items) |call| {
+        out_edges[out_offsets[call.caller] + fill[call.caller]] = @backingInt(call.callee);
+        fill[call.caller] += 1;
     }
 
     // Iterative Tarjan.
