@@ -448,6 +448,15 @@ stages it touches; the instruction-count effect is reported in "Results".
     byte-identical; `roc check` is 214.60 G, the dev build 221.33 G, the
     LLVM build 339.2 G.
 
+71. Test hygiene: `DeterministicAllocator` lives in `collections` (with
+    `base` re-exporting it), so collection tests can use it, and the
+    VersionedMap and inhabitedness-graph allocation-failure checks count
+    through it. Tried and reverted: keeping each `DenseMap`'s pages in one
+    contiguous growable array instead of one allocation per page. It moved
+    every workload the wrong way (`roc check` +1.7%, dev +1.4%, LLVM +1.3%,
+    peak memory 2.78 GB): page copies on regrowth and slack outweighed the
+    allocations it saved.
+
 ## Findings from profiling
 
 These were found by profiling the ReleaseFast compiler with

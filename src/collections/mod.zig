@@ -59,6 +59,10 @@ pub const validateSerializedRelocations = serde_validation.validateSerializedRel
 /// `std.heap.ArenaAllocator`.
 pub const SingleThreadArena = @import("SingleThreadArena.zig");
 
+/// Allocator that refuses in-place growth, so allocation-failure tests count
+/// the same allocations on every run.
+pub const DeterministicAllocator = @import("DeterministicAllocator.zig");
+
 /// Serialization format definitions for embedded module data.
 pub const serialization = @import("serialization.zig");
 pub const SerializedHeader = serialization.SerializedHeader;
@@ -95,6 +99,7 @@ test "collections tests" {
     std.testing.refAllDecls(@import("serialization.zig"));
     std.testing.refAllDecls(@import("SortedArrayBuilder.zig"));
     std.testing.refAllDecls(@import("SingleThreadArena.zig"));
+    std.testing.refAllDecls(@import("DeterministicAllocator.zig"));
     std.testing.refAllDecls(@import("DenseMap.zig"));
     std.testing.refAllDecls(@import("RingQueue.zig"));
     std.testing.refAllDecls(@import("any_all.zig"));

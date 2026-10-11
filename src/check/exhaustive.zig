@@ -4800,7 +4800,11 @@ test "nominal views shared row tails expand once in either traversal order" {
 }
 
 test "nominal views inhabitedness graph cleans up every allocation failure" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, inhabitedGraphAllocationCase, .{});
+    // The graph grows retained buffers, whose in-place growth under the
+    // testing allocator depends on the heap's layout, so the failure check
+    // runs over an allocator that refuses in-place growth.
+    var deterministic = base.DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), inhabitedGraphAllocationCase, .{});
 }
 
 /// Constructed Store regressions, not a claim that source checking preserves

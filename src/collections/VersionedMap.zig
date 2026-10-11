@@ -3,6 +3,7 @@
 //! A family is single-threaded and owns its storage until its last handle dies.
 const std = @import("std");
 const DenseMap = @import("DenseMap.zig").DenseMap;
+const DeterministicAllocator = @import("DeterministicAllocator.zig");
 const Allocator = std.mem.Allocator;
 
 /// Versioned bindings indexed directly by compiler-owned integer IDs.
@@ -445,6 +446,10 @@ test "versioned map allocation failures and reserved cleanup preserve snapshots"
             }
         };
         try Scenario.run(std.testing.allocator);
-        try std.testing.checkAllAllocationFailures(std.testing.allocator, Scenario.run, .{});
+        // Map storage grows retained buffers, whose in-place growth under the
+        // testing allocator depends on the heap's layout, so the failure check
+        // runs over an allocator that refuses in-place growth.
+        var deterministic = DeterministicAllocator.init(std.testing.allocator);
+        try std.testing.checkAllAllocationFailures(deterministic.allocator(), Scenario.run, .{});
     }
 }
