@@ -19122,11 +19122,22 @@ test "issue 12198: wasm list windows preserve unsigned U64 extremes" {
     try expectListWindowLength(.zst, std.math.maxInt(u64), 0, 3, .drop_at);
 }
 
-fn expectSublistWindowLength(element: layout.Idx, start: u64, len: u64, expected: i32) !void {
+/// Every way building, running and checking a list window fixture can fail.
+const ListWindowLengthError = Allocator.Error ||
+    WasmModule.EncodeError ||
+    @import("bytebox").MalformedError ||
+    @import("bytebox").ValidationError ||
+    @import("bytebox").UnlinkableError ||
+    @import("bytebox").UninstantiableError ||
+    @import("bytebox").ExportError ||
+    @import("bytebox").TrapError ||
+    error{TestExpectedEqual};
+
+fn expectSublistWindowLength(element: layout.Idx, start: u64, len: u64, expected: i32) ListWindowLengthError!void {
     try expectListWindowLength(element, start, len, expected, .sublist);
 }
 
-fn expectListWindowLength(element: layout.Idx, start: u64, len: u64, expected: i32, operation: enum { sublist, drop_at }) !void {
+fn expectListWindowLength(element: layout.Idx, start: u64, len: u64, expected: i32, operation: enum { sublist, drop_at }) ListWindowLengthError!void {
     const bytebox = @import("bytebox");
     const allocator = std.testing.allocator;
     var store = LirStore.init(allocator);
