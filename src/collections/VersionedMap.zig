@@ -158,6 +158,13 @@ fn VersionedMap(comptime K: type, comptime V: type, comptime Index: type) type {
             self.version = null;
         }
 
+        /// Whether no other handle shares this map's storage, so emptying it
+        /// with `clearRetainingCapacity` is allowed.
+        pub fn isSoleHandle(self: *const Self) bool {
+            const store = self.store orelse return true;
+            return store.refs == 1;
+        }
+
         /// Both handles remain independently mutable, including the parent.
         pub fn fork(self: *const Self) Self {
             if (self.store) |store| store.refs += 1;

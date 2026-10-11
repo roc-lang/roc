@@ -4134,6 +4134,12 @@ const Builder = struct {
     /// with their capacity kept for the next backing. Scope maps are never
     /// forked.
     decl_scope_pool: std.ArrayList(*InstantiatingNodeMap) = .empty,
+    /// Node maps of finished instantiation contexts that no fork shares,
+    /// emptied with their pages kept for the next context.
+    node_map_pool: std.ArrayList(InstantiatingNodeMap) = .empty,
+    /// Live contexts that will return a node map to `node_map_pool`; the pool
+    /// keeps capacity for each, so returning one never allocates.
+    node_map_pool_outstanding: usize = 0,
     /// The per-body memo maps of finished body contexts, emptied with their
     /// pages kept: a body's keys are scattered over a large graph, so a fresh
     /// map would open new pages for nearly every entry.
@@ -4620,6 +4626,8 @@ const Builder = struct {
             self.allocator.destroy(scope);
         }
         self.decl_scope_pool.deinit(self.allocator);
+        for (self.node_map_pool.items) |*node_map| node_map.deinit();
+        self.node_map_pool.deinit(self.allocator);
         for (self.body_memo_pool.items) |*memos| memos.deinit(self.allocator);
         self.body_memo_pool.deinit(self.allocator);
         for (self.field_kind_scope_pool.items) |scope| {
@@ -19302,6 +19310,11 @@ const InstantiatingNodeMap = struct {
         self.completed.deinit();
     }
 
+    /// Whether no fork shares this map's completed bindings.
+    fn isSoleHandle(self: *const InstantiatingNodeMap) bool {
+        return self.completed.isSoleHandle();
+    }
+
     /// Empty an unforked map, keeping its storage.
     fn clearRetainingCapacity(self: *InstantiatingNodeMap) void {
         self.building.clearRetainingCapacity();
@@ -19406,6 +19419,8 @@ const TypeInstantiationContext = struct {
     /// Closed checked types a `.measuring` context built, each with its node,
     /// in the order their builds finished.
     measured: std.ArrayList(solve.ClosedTypeBuild) = .empty,
+    /// The builder whose pool `node_map` returns to, when it is one.
+    node_map_pool_owner: ?*Builder = null,
 
     fn init(
         allocator: Allocator,
@@ -19424,12 +19439,44 @@ const TypeInstantiationContext = struct {
         };
     }
 
+    /// A context whose node map comes from, and returns to, `builder`'s pool.
+    fn initPooled(builder: *Builder, id: InstantiationScopeId, module_bytes: [32]u8) Allocator.Error!TypeInstantiationContext {
+        var context = init(builder.allocator, id, module_bytes);
+        if (builder.node_map_pool.pop()) |node_map| {
+            context.node_map.deinit();
+            context.node_map = node_map;
+        } else {
+            try builder.node_map_pool.ensureTotalCapacity(builder.allocator, builder.node_map_pool_outstanding + 1);
+        }
+        builder.node_map_pool_outstanding += 1;
+        context.node_map_pool_owner = builder;
+        return context;
+    }
+
+    /// Give up this context's node map: to the pool when no fork shares it,
+    /// in the capacity the pool kept for this context.
+    fn releaseNodeMap(self: *TypeInstantiationContext) void {
+        const builder = self.node_map_pool_owner orelse return self.node_map.deinit();
+        self.node_map_pool_owner = null;
+        builder.node_map_pool_outstanding -= 1;
+        if (!self.node_map.isSoleHandle()) return self.node_map.deinit();
+        self.node_map.clearRetainingCapacity();
+        builder.node_map_pool.appendAssumeCapacity(self.node_map);
+    }
+
+    /// Replace this context's node map with `node_map`, releasing the old one;
+    /// the replacement is the context's own to free.
+    fn replaceNodeMap(self: *TypeInstantiationContext, node_map: InstantiatingNodeMap) void {
+        self.releaseNodeMap();
+        self.node_map = node_map;
+    }
+
     fn deinit(self: *TypeInstantiationContext) void {
         self.pure_nodes.deinit();
         self.measured.deinit(self.allocator);
         self.decl_scopes.deinit(self.allocator);
         self.field_kind_decl_scopes.deinit(self.allocator);
-        self.node_map.deinit();
+        self.releaseNodeMap();
         self.field_kind_map.deinit();
         self.direct_call_requests.deinit();
         self.expr_type_reads.deinit();
@@ -20553,7 +20600,7 @@ const BodyContext = struct {
             .draft = draft,
             .evidence = rootEvidence(owner_template, &.{}),
             .restore_evidence = rootEvidence(owner_template, &.{}),
-            .instantiation = TypeInstantiationContext.init(allocator, builder.allocateInstantiationScope(), view.key.bytes),
+            .instantiation = try TypeInstantiationContext.initPooled(builder, builder.allocateInstantiationScope(), view.key.bytes),
             .loop_contexts = .empty,
             .pattern_literal_guards = .empty,
             .equality_expansion_stack = collections.DenseMap(Type.TypeId, void).init(allocator),
@@ -22292,8 +22339,7 @@ const BodyContext = struct {
         // The child starts from this context's binder relations, related
         // once for every nested context rather than once by each.
         const relation_base = try self.nestedRelationBase();
-        child.instantiation.node_map.deinit();
-        child.instantiation.node_map = relation_base.ctx.instantiation.node_map.forkCompleted();
+        child.instantiation.replaceNodeMap(relation_base.ctx.instantiation.node_map.forkCompleted());
         var kinds = relation_base.ctx.instantiation.field_kind_map.iterator();
         while (kinds.next()) |entry| try child.instantiation.field_kind_map.put(entry.key_ptr.*, entry.value_ptr.*);
         child.evidence = switch (evidence.origin) {
@@ -22432,8 +22478,7 @@ const BodyContext = struct {
         child.local_proc_contexts = self.local_proc_contexts.fork();
 
         if (copy_type_cells) {
-            child.instantiation.node_map.deinit();
-            child.instantiation.node_map = self.instantiation.node_map.forkCompleted();
+            child.instantiation.replaceNodeMap(self.instantiation.node_map.forkCompleted());
         }
 
         try child.loop_contexts.appendSlice(child.allocator, self.loop_contexts.items);
@@ -23837,7 +23882,7 @@ const BodyContext = struct {
     fn closedCheckedMono(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
         if (self.graph.closedCheckedMono(self.view.key.bytes, checked_ty)) |known| return known;
         const previous = self.instantiation;
-        self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope(), self.view.key.bytes);
+        self.instantiation = try TypeInstantiationContext.initPooled(self.builder, self.builder.allocateInstantiationScope(), self.view.key.bytes);
         defer {
             self.instantiation.deinit();
             self.instantiation = previous;
@@ -24388,7 +24433,7 @@ const BodyContext = struct {
         if (!moduleBytesEqual(view.key.bytes, self.view.key.bytes)) {
             task.outer = .{ .view = self.view, .instantiation = self.instantiation };
             self.view = view;
-            self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope(), view.key.bytes);
+            self.instantiation = try TypeInstantiationContext.initPooled(self.builder, self.builder.allocateInstantiationScope(), view.key.bytes);
         }
 
         const formal_args = declaration.formalArgs(self.view.types);
@@ -24458,7 +24503,7 @@ const BodyContext = struct {
         defer timing_scope.end();
         self.builder.countBodyDiagnostic("fresh_checked_node_requests");
         const previous = self.instantiation;
-        self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope(), self.view.key.bytes);
+        self.instantiation = try TypeInstantiationContext.initPooled(self.builder, self.builder.allocateInstantiationScope(), self.view.key.bytes);
         defer {
             self.instantiation.deinit();
             self.instantiation = previous;
@@ -35965,8 +36010,8 @@ const BodyContext = struct {
         const checked_next_state = checked_ok_items[1];
 
         const previous = self.instantiation;
-        self.instantiation = TypeInstantiationContext.init(
-            self.allocator,
+        self.instantiation = try TypeInstantiationContext.initPooled(
+            self.builder,
             self.builder.allocateInstantiationScope(),
             self.view.key.bytes,
         );
@@ -42365,7 +42410,7 @@ const BodyContext = struct {
         const scope = self.view.templates.dispatch_scopes[@backingInt(scope_id)];
         const previous_instantiation = self.instantiation;
         const previous_evidence = self.evidence;
-        self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope(), self.view.key.bytes);
+        self.instantiation = try TypeInstantiationContext.initPooled(self.builder, self.builder.allocateInstantiationScope(), self.view.key.bytes);
         self.evidence = evidence;
         defer {
             self.instantiation.deinit();
@@ -43304,7 +43349,7 @@ const BodyContext = struct {
         const saved = try self.allocator.create(SchemeAliasSavedScope);
         saved.* = .{ .instantiation = self.instantiation, .evidence = self.evidence };
         task.saved = saved;
-        self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope(), self.view.key.bytes);
+        self.instantiation = try TypeInstantiationContext.initPooled(self.builder, self.builder.allocateInstantiationScope(), self.view.key.bytes);
         self.evidence = evidence;
         try self.seedSubstitution(evidence.schema.?, edge.subst);
         try relateFunctionRequestInterface(self.graph, try self.instNode(scope.scheme_root), task.expected_node);
@@ -46607,7 +46652,7 @@ const BodyContext = struct {
             // caches by checked identity per context). Same mechanism as
             // the foreign branch below, minus the module swap.
             const previous_instantiation = self.instantiation;
-            self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope(), self.view.key.bytes);
+            self.instantiation = try TypeInstantiationContext.initPooled(self.builder, self.builder.allocateInstantiationScope(), self.view.key.bytes);
             const previous_in_default_expr = self.in_default_expr;
             self.in_default_expr = true;
             // The default is a closed expression: it binds nothing from the
@@ -46645,7 +46690,7 @@ const BodyContext = struct {
         // Checked-type lookups validate instantiation-context ownership, so
         // the foreign expression gets its own context, exactly like a
         // foreign nominal backing instantiation.
-        self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope(), declaring_view.key.bytes);
+        self.instantiation = try TypeInstantiationContext.initPooled(self.builder, self.builder.allocateInstantiationScope(), declaring_view.key.bytes);
         defer {
             self.instantiation.deinit();
             self.instantiation = previous_instantiation;
@@ -64978,6 +65023,13 @@ test "issue 11288: root substitutions share lexical cells and isolate separate i
     // Only type instantiation and lexical binding are exercised here.
     var builder: Builder = undefined;
     builder.next_instantiation_scope = 0;
+    builder.allocator = gpa;
+    builder.node_map_pool = .empty;
+    builder.node_map_pool_outstanding = 0;
+    defer {
+        for (builder.node_map_pool.items) |*node_map| node_map.deinit();
+        builder.node_map_pool.deinit(gpa);
+    }
     builder.timing = null;
     builder.diagnostics = null;
     builder.active_spec_job_diagnostics = null;
@@ -68750,6 +68802,13 @@ test "issue 11362: checked instantiation reserves only recursive node identities
 
     var builder: Builder = undefined;
     builder.next_instantiation_scope = 0;
+    builder.allocator = gpa;
+    builder.node_map_pool = .empty;
+    builder.node_map_pool_outstanding = 0;
+    defer {
+        for (builder.node_map_pool.items) |*node_map| node_map.deinit();
+        builder.node_map_pool.deinit(gpa);
+    }
     builder.timing = null;
     builder.diagnostics = &diagnostics;
     builder.active_spec_job_diagnostics = null;
@@ -68824,6 +68883,13 @@ test "issue 11362: allocation failure removes active checked instantiation marke
             try checked_types.fillSyntheticTypeRoot(gpa, recursive, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{recursive}) });
             var builder: Builder = undefined;
             builder.next_instantiation_scope = 0;
+            builder.allocator = gpa;
+            builder.node_map_pool = .empty;
+            builder.node_map_pool_outstanding = 0;
+            defer {
+                for (builder.node_map_pool.items) |*node_map| node_map.deinit();
+                builder.node_map_pool.deinit(gpa);
+            }
             builder.timing = null;
             builder.diagnostics = null;
             builder.active_spec_job_diagnostics = null;
@@ -68968,6 +69034,13 @@ fn testLazyCheckedInstantiationAliases(gpa: Allocator) (Allocator.Error || error
     } });
     var builder: Builder = undefined;
     builder.next_instantiation_scope = 0;
+    builder.allocator = gpa;
+    builder.node_map_pool = .empty;
+    builder.node_map_pool_outstanding = 0;
+    defer {
+        for (builder.node_map_pool.items) |*node_map| node_map.deinit();
+        builder.node_map_pool.deinit(gpa);
+    }
     builder.timing = null;
     builder.diagnostics = &diagnostics;
     builder.active_spec_job_diagnostics = null;
@@ -69056,6 +69129,13 @@ test "issue 11362: checked instantiation allocates placeholders only for recursi
 
     var builder: Builder = undefined;
     builder.next_instantiation_scope = 0;
+    builder.allocator = gpa;
+    builder.node_map_pool = .empty;
+    builder.node_map_pool_outstanding = 0;
+    defer {
+        for (builder.node_map_pool.items) |*node_map| node_map.deinit();
+        builder.node_map_pool.deinit(gpa);
+    }
     builder.timing = null;
     builder.diagnostics = null;
     builder.active_spec_job_diagnostics = null;
@@ -69115,6 +69195,13 @@ test "issue 11362: allocation failure removes checked instantiation markers" {
             defer graph.destroy();
             var builder: Builder = undefined;
             builder.next_instantiation_scope = 0;
+            builder.allocator = allocator;
+            builder.node_map_pool = .empty;
+            builder.node_map_pool_outstanding = 0;
+            defer {
+                for (builder.node_map_pool.items) |*node_map| node_map.deinit();
+                builder.node_map_pool.deinit(allocator);
+            }
             builder.timing = null;
             builder.diagnostics = null;
             builder.active_spec_job_diagnostics = null;
@@ -69168,6 +69255,13 @@ fn testLazyCheckedInstantiation(allocator: Allocator, recursive: bool) (Allocato
     graph.setDiagnostics(&diagnostics.graph);
     var builder: Builder = undefined;
     builder.next_instantiation_scope = 0;
+    builder.allocator = gpa;
+    builder.node_map_pool = .empty;
+    builder.node_map_pool_outstanding = 0;
+    defer {
+        for (builder.node_map_pool.items) |*node_map| node_map.deinit();
+        builder.node_map_pool.deinit(gpa);
+    }
     builder.timing = null;
     builder.diagnostics = &diagnostics;
     builder.active_spec_job_diagnostics = null;
@@ -69278,6 +69372,13 @@ test "lazy checked instantiation allocates only recursive placeholders and clear
 
             var builder: Builder = undefined;
             builder.next_instantiation_scope = 0;
+            builder.allocator = gpa;
+            builder.node_map_pool = .empty;
+            builder.node_map_pool_outstanding = 0;
+            defer {
+                for (builder.node_map_pool.items) |*node_map| node_map.deinit();
+                builder.node_map_pool.deinit(gpa);
+            }
             builder.timing = null;
             builder.diagnostics = null;
             builder.active_spec_job_diagnostics = null;
@@ -69340,6 +69441,13 @@ test "lazy checked placeholders obey closed and innermost declaration scopes" {
     // This test exercises only scope allocation and checked-node lookup.
     var builder: Builder = undefined;
     builder.next_instantiation_scope = 0;
+    builder.allocator = gpa;
+    builder.node_map_pool = .empty;
+    builder.node_map_pool_outstanding = 0;
+    defer {
+        for (builder.node_map_pool.items) |*node_map| node_map.deinit();
+        builder.node_map_pool.deinit(gpa);
+    }
     builder.diagnostics = null;
     builder.active_spec_job_diagnostics = null;
     var ctx: BodyContext = undefined;

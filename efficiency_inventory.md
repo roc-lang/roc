@@ -30,9 +30,9 @@ measured with every fix below applied:
 
 | Workload | Baseline | This branch | Change |
 | --- | ---: | ---: | ---: |
-| `roc check -j1 package/main.roc` (roc-pg) | 266.28 G | 214.60 G | -19.4% |
-| `roc build --opt=dev examples/query.roc` | 244.83 G | 221.33 G | -9.6% |
-| `roc build examples/query.roc` (LLVM) | 524.75 G | 339.17 G | -35.4% |
+| `roc check -j1 package/main.roc` (roc-pg) | 266.28 G | 213.75 G | -19.7% |
+| `roc build --opt=dev examples/query.roc` | 244.83 G | 220.49 G | -9.9% |
+| `roc build examples/query.roc` (LLVM) | 524.75 G | 337.97 G | -35.6% |
 | `roc test test/fx/issue8826_full.roc` | 141.4 M | 139.9 M | -1.1% |
 
 Peak resident memory (`/usr/bin/time -f %M`) of `roc check -j1` on roc-pg:
@@ -456,6 +456,14 @@ stages it touches; the instruction-count effect is reported in "Results".
     every workload the wrong way (`roc check` +1.7%, dev +1.4%, LLVM +1.3%,
     peak memory 2.78 GB): page copies on regrowth and slack outweighed the
     allocations it saved.
+
+72. Profile-guided (Monotype lowering): an instantiation context's node map
+    comes from a builder pool and returns to it emptied with its pages kept,
+    unless a fork still shares it. The pool keeps capacity for every live
+    pooled context, so returning a map never allocates. The node map's
+    page allocations were the largest allocator caller in the LLVM build.
+    Generated code is byte-identical; `roc check` is 213.75 G (-0.4%), the
+    dev build 220.49 G (-0.4%), the LLVM build 337.97 G (-0.35%).
 
 ## Findings from profiling
 
