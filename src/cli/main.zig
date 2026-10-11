@@ -6719,44 +6719,6 @@ fn publishLirImage(ctx: *CliCtx, lowered_result: *const LoweredCoordinatorResult
     );
 }
 
-/// Get the roc cache directory for downloaded packages, creating it if needed.
-/// Standard cache locations by platform:
-/// - Linux/macOS: ~/.cache/roc/packages/ (respects XDG_CACHE_HOME if set)
-/// - Windows: %LOCALAPPDATA%\roc\packages\
-fn getRocCacheDir(allocator: std.mem.Allocator) (Allocator.Error || error{NoCacheDir})![]const u8 {
-    // Check XDG_CACHE_HOME first (Linux/macOS)
-    if (try getEnvVar(allocator, "XDG_CACHE_HOME")) |xdg_cache| {
-        defer allocator.free(xdg_cache);
-        return std.fs.path.join(allocator, &.{ xdg_cache, "roc", "packages" });
-    }
-
-    // Fall back to %LOCALAPPDATA%\roc\packages (Windows)
-    if (comptime builtin.os.tag == .windows) {
-        if (try getEnvVar(allocator, "LOCALAPPDATA")) |local_app_data| {
-            defer allocator.free(local_app_data);
-            return std.fs.path.join(allocator, &.{ local_app_data, "roc", "packages" });
-        }
-    }
-
-    // Fall back to ~/.cache/roc/packages (Unix)
-    if (try getEnvVar(allocator, "HOME")) |home| {
-        defer allocator.free(home);
-        return std.fs.path.join(allocator, &.{ home, ".cache", "roc", "packages" });
-    }
-
-    return error.NoCacheDir;
-}
-
-/// Cross-platform helper to get environment variable.
-/// Returns null if the variable is not set. Caller must free the returned slice.
-fn getEnvVar(allocator: std.mem.Allocator, key: []const u8) std.mem.Allocator.Error!?[]const u8 {
-    const key_z = try allocator.dupeSentinel(u8, key, 0);
-    defer allocator.free(key_z);
-    const value = std.c.getenv(key_z) orelse return null;
-    const len = std.mem.len(value);
-    return try allocator.dupe(u8, value[0..len]);
-}
-
 /// Convert parsed CLI size-limit flags to a resolution config.
 fn resolutionConfigFromLimits(limits: cli_args.ResolveLimitArgs) compile.package_resolution.Config {
     var config = compile.package_resolution.Config{};
