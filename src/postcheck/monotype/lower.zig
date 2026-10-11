@@ -65665,7 +65665,7 @@ test "stable root manifest declares omitted producers without lowering unused bo
     try builder.seedProgramModuleTables();
     // Evaluation demand is empty, but the complete checked manifest declares
     // the producer. In particular no template, definition, or job is reserved.
-    try builder.lowerIsolatedRoots(&.{}, &.{});
+    try builder.lowerIsolatedRoots(&.{}, &.{}, null);
     const view = builder.rootModuleView();
     try std.testing.expect(builder.comptimeValueReadDeclared(view, @fromBackingInt(@intCast(0))));
     // The checker-excluded callable alias is intentionally absent.
