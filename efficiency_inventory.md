@@ -30,9 +30,9 @@ measured with every fix below applied:
 
 | Workload | Baseline | This branch | Change |
 | --- | ---: | ---: | ---: |
-| `roc check -j1 package/main.roc` (roc-pg) | 266.28 G | 221.39 G | -16.9% |
-| `roc build --opt=dev examples/query.roc` | 244.83 G | 224.41 G | -8.3% |
-| `roc build examples/query.roc` (LLVM) | 524.75 G | 352.30 G | -32.9% |
+| `roc check -j1 package/main.roc` (roc-pg) | 266.28 G | 220.38 G | -17.2% |
+| `roc build --opt=dev examples/query.roc` | 244.83 G | 223.30 G | -8.8% |
+| `roc build examples/query.roc` (LLVM) | 524.75 G | 351.18 G | -33.1% |
 | `roc test test/fx/issue8826_full.roc` | 141.4 M | 139.9 M | -1.1% |
 
 Validation: the module unit tests of every touched module, the lint gates,
@@ -224,6 +224,16 @@ stages it touches; the instruction-count effect is reported in "Results".
     branches without a worklist entry, so a plain expression allocates
     nothing; and a generalization boundary borrows its single root from the
     suspended kernel activity instead of allocating a one-element slice.
+
+41. `src/postcheck/monotype`: nominal-backing declaration scopes come from a
+    builder pool and are emptied with their storage kept (`VersionedMap`
+    gained a sole-owner `clearRetainingCapacity`); body-context scratch
+    arenas come from the graph's arena pool; evidence equality keeps its
+    worklist on the stack; a transaction seal keeps its working state in one
+    arena with digest groups chained through one offset column instead of a
+    list per digest; and record and tag rows already in label order are
+    appended without a sorting copy. Together with fixes 39 and 40 this is
+    about 1 G instructions on each roc-pg workload.
 
 ## Findings from profiling
 
@@ -1683,13 +1693,13 @@ reading code, and were not in the audit above.
 - category A; runs `importInterfaceSummary`/`insertInterfaceSummary` run per interface-summary cache hit/insert (per template request); `valuePositionMask` (1174) runs per …; impact medium; risk low
 - Finding: each site creates a fresh `std.heap.ArenaAllocator` (std's arena does atomic ops on each alloc and its first allocation always goes to the backing allocator) and `deinit`s it on exit, so every call pays at least one backing alloc + free even for tiny copies. `base.SingleThreadArena` exists for exactly this.
 - Fix: keep one `SingleThreadArena` scratch per `Builder`/`SpecJobWorkspace` (`scratch.reset(.retain_capacity)` at call entry), as 4831 already does inside its loop. Verify nothing stores a slice from the scratch past the call (the summary copies at 24940/24962 are passed to `insert`, which must copy again; check `InterfaceSummaryCache.insert` copies into its own `evidence_arena` - it has one at 19111).
-- Status: open
+- Status: partly fixed (fix 41): the seven body-context scratch arenas come from the graph's arena pool; the two builder-level arenas remain
 
 ### src/postcheck/monotype/lower.zig:2697-2711: `specEvidenceEql` allocates a worklist ArrayList for a one-pair comparison
 - category A; runs 13 call sites of `specEvidenceEql`, 10 of `specEvidenceVectorEql`; the hot ones are inside candidate scans: 49556-49558 (per cached vector x per element), 8203 …; impact medium; risk low
 - Finding: `specEvidenceEql(allocator, a, b)` wraps into `specEvidenceVectorEql(&.{a}, &.{b})`, which creates `var pending = std.ArrayList(SpecEvidencePair).empty` and `append`s every pair (heap allocation on the first append; `SpecEvidencePair` is two `SpecEvidence` unions, each roughly 80-100 bytes because `.structural` carries a `StructuralDerivation`, an optional `ModuleView`+`StructuralEvidence`, and a slice). For leaf …
 - Fix: compare the top-level pair shallowly first and only create the worklist when `specEvidenceShallowEql` queues a nested pair (pass a `?*ArrayList` and allocate lazily), or thread a `BodyContext`/`Builder`-owned scratch `ArrayListUnmanaged(SpecEvidencePair)` (clearRetainingCapacity per call). Identical results; only allocation behaviour changes.
-- Status: open
+- Status: fixed (fix 41)
 
 ### src/postcheck/monotype/lower.zig:8195-8213: linear scan over every draft spec of a template with per-candidate evidence/type equality
 - category E; runs per template request whose request type resolved (every direct call to a template inside a specialization body); impact medium; risk low

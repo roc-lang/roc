@@ -2703,11 +2703,15 @@ fn specEvidenceEql(allocator: Allocator, a: SpecEvidence, b: SpecEvidence) Alloc
 fn specEvidenceVectorEql(allocator: Allocator, a: []const SpecEvidence, b: []const SpecEvidence) Allocator.Error!bool {
     if (a.len != b.len) return false;
     if (a.ptr == b.ptr) return true;
+    // Most comparisons queue a few pairs; those stay on the stack.
+    var pending_buffer: [16 * @sizeOf(SpecEvidencePair)]u8 align(@alignOf(SpecEvidencePair)) = undefined;
+    var pending_storage = std.heap.BufferFirstAllocator.init(&pending_buffer, allocator);
+    const pending_allocator = pending_storage.allocator();
     var pending = std.ArrayList(SpecEvidencePair).empty;
-    defer pending.deinit(allocator);
-    for (a, b) |a_entry, b_entry| try pending.append(allocator, .{ .a = a_entry, .b = b_entry });
+    defer pending.deinit(pending_allocator);
+    for (a, b) |a_entry, b_entry| try pending.append(pending_allocator, .{ .a = a_entry, .b = b_entry });
     while (pending.pop()) |pair| {
-        if (!try specEvidenceShallowEql(allocator, pair.a, pair.b, &pending)) return false;
+        if (!try specEvidenceShallowEql(pending_allocator, pair.a, pair.b, &pending)) return false;
     }
     return true;
 }
@@ -4126,6 +4130,11 @@ const Builder = struct {
     /// run never moves the frame an outer step is still working on, and a
     /// body's lowering does not grow a stack from empty per nested run.
     lower_frame_pool: std.ArrayList(std.ArrayList(BodyContext.LowerFrame)) = .empty,
+    /// Declaration-backing scope maps of finished nominal backings, emptied
+    /// with their capacity kept for the next backing. Scope maps are never
+    /// forked.
+    decl_scope_pool: std.ArrayList(*InstantiatingNodeMap) = .empty,
+    field_kind_scope_pool: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind)) = .empty,
     /// The object cache consulted for closed specializations, if any.
     spec_cache: ?Common.SpecCacheLookup,
     counters: ?*SpecializationCounters,
@@ -4602,6 +4611,16 @@ const Builder = struct {
     fn deinit(self: *Builder) void {
         for (self.lower_frame_pool.items) |*frames| frames.deinit(self.allocator);
         self.lower_frame_pool.deinit(self.allocator);
+        for (self.decl_scope_pool.items) |scope| {
+            scope.deinit();
+            self.allocator.destroy(scope);
+        }
+        self.decl_scope_pool.deinit(self.allocator);
+        for (self.field_kind_scope_pool.items) |scope| {
+            scope.deinit();
+            self.allocator.destroy(scope);
+        }
+        self.field_kind_scope_pool.deinit(self.allocator);
         var parametric_masks = self.parametric_scheme_vars.valueIterator();
         while (parametric_masks.next()) |mask| self.allocator.free(mask.*);
         self.parametric_scheme_vars.deinit(self.allocator);
@@ -19234,6 +19253,12 @@ const InstantiatingNodeMap = struct {
         self.completed.deinit();
     }
 
+    /// Empty an unforked map, keeping its storage.
+    fn clearRetainingCapacity(self: *InstantiatingNodeMap) void {
+        self.building.clearRetainingCapacity();
+        self.completed.clearRetainingCapacity();
+    }
+
     fn forkCompleted(self: *const InstantiatingNodeMap) InstantiatingNodeMap {
         return .{
             .completed = self.completed.fork(),
@@ -24293,11 +24318,18 @@ const BodyContext = struct {
         if (formal_args.len != args.len) {
             Common.invariant("checked nominal declaration arity differed from nominal type use");
         }
-        const scope = try self.allocator.create(InstantiatingNodeMap);
-        scope.* = InstantiatingNodeMap.init(self.allocator);
+        const builder_allocator = self.builder.allocator;
+        const scope = self.builder.decl_scope_pool.pop() orelse blk: {
+            const created = try builder_allocator.create(InstantiatingNodeMap);
+            created.* = InstantiatingNodeMap.init(builder_allocator);
+            break :blk created;
+        };
         task.scope = scope;
-        const field_kind_scope = try self.allocator.create(collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind));
-        field_kind_scope.* = collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind).init(self.allocator);
+        const field_kind_scope = self.builder.field_kind_scope_pool.pop() orelse blk: {
+            const created = try builder_allocator.create(collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind));
+            created.* = collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind).init(builder_allocator);
+            break :blk created;
+        };
         task.field_kind_scope = field_kind_scope;
         for (formal_args, args) |formal, arg| {
             try scope.put(self.scopedCheckedType(formal), .{ .node = arg });
@@ -24319,14 +24351,21 @@ const BodyContext = struct {
             _ = self.instantiation.decl_scopes.pop();
             task.scope_pushed = false;
         }
+        const builder_allocator = self.builder.allocator;
         if (task.field_kind_scope) |field_kind_scope| {
-            field_kind_scope.deinit();
-            self.allocator.destroy(field_kind_scope);
+            field_kind_scope.clearRetainingCapacity();
+            self.builder.field_kind_scope_pool.append(builder_allocator, field_kind_scope) catch {
+                field_kind_scope.deinit();
+                builder_allocator.destroy(field_kind_scope);
+            };
             task.field_kind_scope = null;
         }
         if (task.scope) |scope| {
-            scope.deinit();
-            self.allocator.destroy(scope);
+            scope.clearRetainingCapacity();
+            self.builder.decl_scope_pool.append(builder_allocator, scope) catch {
+                scope.deinit();
+                builder_allocator.destroy(scope);
+            };
             task.scope = null;
         }
         if (task.outer) |outer| {
@@ -24908,8 +24947,8 @@ const BodyContext = struct {
             .destination_names = self.nameStoreMut(),
             .importing = self,
         };
-        var scratch = base.SingleThreadArena.init(self.allocator);
-        defer scratch.deinit();
+        var scratch = self.graph.acquireArena();
+        defer self.graph.releaseArena(scratch);
         const imported_request = try entry.request.copy(scratch.allocator(), relocation);
         if (!try imported_request.eql(request, self.typeStore(), self.nameStore())) return null;
         const summary = try entry.summary.copy(scratch.allocator(), relocation);
@@ -24930,8 +24969,8 @@ const BodyContext = struct {
             .destination_names = self.nameStoreMut(),
             .sealer = &sealer,
         };
-        var scratch = base.SingleThreadArena.init(self.allocator);
-        defer scratch.deinit();
+        var scratch = self.graph.acquireArena();
+        defer self.graph.releaseArena(scratch);
         return try binding.cache.insert(self.typeStore(), self.nameStore(), .{
             .address = entry.address,
             .evidence = entry.evidence,
@@ -25355,8 +25394,8 @@ const BodyContext = struct {
             const parametric_request = for (hole_classes) |hole_class| {
                 if (hole_class != null) break true;
             } else false;
-            var component_scratch = base.SingleThreadArena.init(self.allocator);
-            defer component_scratch.deinit();
+            var component_scratch = self.graph.acquireArena();
+            defer self.graph.releaseArena(component_scratch);
             const single_request_constraints: ?InterfaceConstraints = if (single_request_component and parametric_request)
                 try InterfaceConstraints.capture(self.graph, component_scratch.allocator(), roots)
             else
@@ -25372,8 +25411,8 @@ const BodyContext = struct {
                 // constraints. Store each interface only after this fixed point.
                 while (replay_state.stack.pop()) |index| {
                     const entry = &replay_state.entries.items[index];
-                    var scratch = base.SingleThreadArena.init(self.allocator);
-                    defer scratch.deinit();
+                    var scratch = self.graph.acquireArena();
+                    defer self.graph.releaseArena(scratch);
                     // Members of a larger component are captured after relating
                     // back to each other's requests, so their interfaces hold the
                     // settled types their holes stood for; only exact requests
@@ -50495,8 +50534,8 @@ const BodyContext = struct {
             Common.invariant("scheme requirements were not the checked requirement row they named");
         }
 
-        var scratch = base.SingleThreadArena.init(self.allocator);
-        defer scratch.deinit();
+        var scratch = self.graph.acquireArena();
+        defer self.graph.releaseArena(scratch);
         const input = try InterfaceConstraints.capture(self.graph, scratch.allocator(), roots.items);
         const shape = try input.identityInto(self.graph, scratch.allocator());
         const request_bytes = try scratch.allocator().alloc(u8, shape.bytes.len + subst.len);
@@ -50599,8 +50638,8 @@ const BodyContext = struct {
             }, local),
             .structural => unreachable,
         };
-        var scratch = base.SingleThreadArena.init(self.allocator);
-        defer scratch.deinit();
+        var scratch = self.graph.acquireArena();
+        defer self.graph.releaseArena(scratch);
         const input = try InterfaceConstraints.capture(self.graph, scratch.allocator(), &.{constraint_node});
         const request = try input.identityInto(self.graph, scratch.allocator());
         // This relation consumes only the selected checked signature, not its
@@ -50695,8 +50734,8 @@ const BodyContext = struct {
             break :blk try target_ctx.instNode(lookup.target.callable_ty);
         };
         if (cacheable) {
-            var scratch = base.SingleThreadArena.init(self.allocator);
-            defer scratch.deinit();
+            var scratch = self.graph.acquireArena();
+            defer self.graph.releaseArena(scratch);
             _ = try self.insertInterfaceSummary(.{
                 .address = address,
                 .evidence = evidence,

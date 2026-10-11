@@ -583,6 +583,14 @@ pub const Store = struct {
     pub fn addRecordFields(self: *Store, name_store: *const names.NameStore, values: []const Field) std.mem.Allocator.Error!Span {
         self.assertMutable();
         if (values.len == 0) return .empty();
+        // Producers usually hand over rows already in label order. Rows read
+        // from this store are copied first, since appending can move them.
+        if (!sliceOverlaps(Field, values, self.fields.unsafeRawItemsForView()) and
+            std.sort.isSorted(Field, values, name_store, recordFieldLessThan))
+        {
+            assertNoDuplicateRecordFields(name_store, values);
+            return try self.addFields(values);
+        }
         const normalized = try self.allocator.dupe(Field, values);
         defer self.allocator.free(normalized);
         std.mem.sort(Field, normalized, name_store, recordFieldLessThan);
@@ -602,6 +610,11 @@ pub const Store = struct {
     pub fn addTagVariants(self: *Store, name_store: *const names.NameStore, values: []const Tag) std.mem.Allocator.Error!Span {
         self.assertMutable();
         if (values.len == 0) return .empty();
+        if (!sliceOverlaps(Tag, values, self.tags.unsafeRawItemsForView()) and
+            std.sort.isSorted(Tag, values, name_store, tagLessThan))
+        {
+            return try self.addSortedTagVariants(name_store, values);
+        }
         const normalized = try self.allocator.dupe(Tag, values);
         defer self.allocator.free(normalized);
         std.mem.sort(Tag, normalized, name_store, tagLessThan);
@@ -1457,27 +1470,24 @@ pub const Store = struct {
             self.active_transaction = null;
         }
 
-        const interned_original = try self.allocator.alloc(TypeId, suffix_len);
-        defer self.allocator.free(interned_original);
-        const digests = try self.allocator.alloc(names.TypeDigest, suffix_len);
-        defer self.allocator.free(digests);
+        // The seal's own working state lives in one scratch arena.
+        var scratch = collections.SingleThreadArena.init(self.allocator);
+        defer scratch.deinit();
+        const temp = scratch.allocator();
+        const interned_original = try temp.alloc(TypeId, suffix_len);
+        const digests = try temp.alloc(names.TypeDigest, suffix_len);
         // Durable index of each speculative offset that survives as a
         // representative, relative to the transaction's first id. Recording it
         // during classification keeps remap construction linear.
-        const representative_of_offset = try self.allocator.alloc(u32, suffix_len);
-        defer self.allocator.free(representative_of_offset);
+        const representative_of_offset = try temp.alloc(u32, suffix_len);
         var representatives = std.ArrayList(TypeId).empty;
-        defer representatives.deinit(self.allocator);
 
-        // Speculative offsets grouped by digest. A candidate can only be equal
-        // to a digest-equal earlier candidate, so grouping replaces a scan of
-        // the whole suffix per node.
-        var suffix_by_digest = std.AutoHashMap(DigestBucketKey, std.ArrayList(u32)).init(self.allocator);
-        defer {
-            var groups = suffix_by_digest.valueIterator();
-            while (groups.next()) |group| group.deinit(self.allocator);
-            suffix_by_digest.deinit();
-        }
+        // Speculative offsets grouped by digest, each group chained from its
+        // first classified offset through `group_next` in classification
+        // order. A candidate can only be equal to a digest-equal earlier
+        // candidate, so grouping replaces a scan of the whole suffix per node.
+        var suffix_groups = std.AutoHashMap(DigestBucketKey, SuffixGroup).init(temp);
+        const group_next = try temp.alloc(u32, suffix_len);
 
         // Classify children before the parents that reach them, so comparing
         // a parent meets already-classified children through `classes` and
@@ -1486,8 +1496,7 @@ pub const Store = struct {
         defer self.allocator.free(order);
         // The class each classified offset joined: a durable id, or the
         // speculative id of the class's first classified member.
-        const classes = try self.allocator.alloc(?TypeId, suffix_len);
-        defer self.allocator.free(classes);
+        const classes = try temp.alloc(?TypeId, suffix_len);
         @memset(classes, null);
         const resolver = SuffixClasses{ .start = @intCast(mark_.types_len), .classes = classes };
 
@@ -1498,8 +1507,8 @@ pub const Store = struct {
             // so it must not become the digest path's panic.
             digests[offset] = try self.computeCommitDigest(name_store, candidate, .full);
             const key = DigestBucketKey.from(digests[offset]);
-            const group = try suffix_by_digest.getOrPut(key);
-            if (!group.found_existing) group.value_ptr.* = .empty;
+            const group = try suffix_groups.getOrPut(key);
+            const earlier_first: ?u32 = if (group.found_existing) group.value_ptr.first else null;
 
             var class: ?TypeId = null;
             if (self.full_digest_interned.get(key)) |bucket| {
@@ -1512,8 +1521,7 @@ pub const Store = struct {
             }
             if (class == null) {
                 // Digest-equal candidates are one type; see `bucketHit`.
-                if (group.value_ptr.items.len != 0) {
-                    const earlier = group.value_ptr.items[0];
+                if (earlier_first) |earlier| {
                     if (std.debug.runtime_safety) {
                         const earlier_ty: TypeId = @fromBackingInt(@intCast(@as(u32, @intCast(mark_.types_len + earlier))));
                         std.debug.assert(try typeViewEql(self.view(), self.allocator, name_store, earlier_ty, candidate, .exact, resolver));
@@ -1526,13 +1534,19 @@ pub const Store = struct {
             // inserts into this map today, but a future one would move it.
             // Every offset is grouped, not just representatives, so a later
             // candidate compares against every digest-equal classified node.
-            try suffix_by_digest.getPtr(key).?.append(self.allocator, @intCast(offset));
+            const grouped = suffix_groups.getPtr(key).?;
+            group_next[offset] = SuffixGroup.end;
+            if (earlier_first == null) {
+                grouped.* = .{ .first = @intCast(offset), .last = @intCast(offset) };
+            } else {
+                group_next[grouped.last] = @intCast(offset);
+                grouped.last = @intCast(offset);
+            }
         }
 
         // Each speculative class is represented by its lowest offset, and
         // representatives take durable ids in offset order.
-        var class_representatives = collections.DenseMap(TypeId, TypeId).init(self.allocator);
-        defer class_representatives.deinit();
+        var class_representatives = collections.DenseMap(TypeId, TypeId).init(temp);
         for (0..suffix_len) |offset| {
             const candidate: TypeId = @fromBackingInt(@intCast(@as(u32, @intCast(mark_.types_len + offset))));
             const class = classes[offset].?;
@@ -1548,7 +1562,7 @@ pub const Store = struct {
             entry.value_ptr.* = candidate;
             interned_original[offset] = candidate;
             representative_of_offset[offset] = @intCast(representatives.items.len);
-            try representatives.append(self.allocator, candidate);
+            try representatives.append(temp, candidate);
         }
 
         // Owned copies of just the representatives' rows. Construction reads
@@ -1582,7 +1596,7 @@ pub const Store = struct {
         // Preflight the durable index. Reserving the map slot and the bucket
         // room for every representative here -- while failing is still free --
         // is what lets the indexing step below run without a fallible call.
-        try self.reserveInternedCapacity(mark_, interned_original, &suffix_by_digest, representatives.items.len);
+        try self.reserveInternedCapacity(mark_, interned_original, &suffix_groups, group_next, representatives.items.len);
 
         self.restore(mark_);
 
@@ -2173,18 +2187,29 @@ pub const Store = struct {
         }
     }
 
+    /// One digest's speculative offsets during a seal: the first and last
+    /// classified, chained through the seal's `group_next`.
+    const SuffixGroup = struct {
+        first: u32,
+        last: u32,
+
+        const end = std.math.maxInt(u32);
+    };
+
     fn reserveInternedCapacity(
         self: *Store,
         mark_: Mark,
         interned_original: []const TypeId,
-        suffix_by_digest: *std.AutoHashMap(DigestBucketKey, std.ArrayList(u32)),
+        suffix_groups: *const std.AutoHashMap(DigestBucketKey, SuffixGroup),
+        group_next: []const u32,
         representative_count: usize,
     ) std.mem.Allocator.Error!void {
         try self.full_digest_interned.ensureUnusedCapacity(@intCast(representative_count));
-        var groups = suffix_by_digest.iterator();
+        var groups = suffix_groups.iterator();
         while (groups.next()) |entry| {
             var needed: usize = 0;
-            for (entry.value_ptr.items) |offset| {
+            var offset = entry.value_ptr.first;
+            while (offset != SuffixGroup.end) : (offset = group_next[offset]) {
                 const candidate: TypeId = @fromBackingInt(@intCast(@as(u32, @intCast(mark_.types_len + offset))));
                 if (interned_original[offset] == candidate) needed += 1;
             }
@@ -4196,6 +4221,12 @@ fn writeU32(hasher: *TypeDigestHasher, value: u32) void {
 // helpers reachable there.
 const hashBytes = writeBytes;
 const hashU32 = writeU32;
+
+fn sliceOverlaps(comptime T: type, a: []const T, b: []const T) bool {
+    const a_start = @intFromPtr(a.ptr);
+    const b_start = @intFromPtr(b.ptr);
+    return a_start < b_start + b.len * @sizeOf(T) and b_start < a_start + a.len * @sizeOf(T);
+}
 
 fn typeHashOf(bytes: []const u8) [32]u8 {
     var hasher = TypeDigestHasher.init();

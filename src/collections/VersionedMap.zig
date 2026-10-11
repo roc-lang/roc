@@ -144,6 +144,19 @@ fn VersionedMap(comptime K: type, comptime V: type, comptime Index: type) type {
             self.* = undefined;
         }
 
+        /// Empty a map no other handle shares, keeping its storage.
+        pub fn clearRetainingCapacity(self: *Self) void {
+            const store = self.store orelse return;
+            std.debug.assert(store.refs == 1);
+            store.index.clearRetainingCapacity();
+            store.slots.clearRetainingCapacity();
+            store.active.clearRetainingCapacity();
+            store.changes.clearRetainingCapacity();
+            store.current = null;
+            store.restore_credits = 0;
+            self.version = null;
+        }
+
         /// Both handles remain independently mutable, including the parent.
         pub fn fork(self: *const Self) Self {
             if (self.store) |store| store.refs += 1;
