@@ -20974,13 +20974,15 @@ const Builder = struct {
 
     /// The source and type a generated codec worker is shared under. The
     /// checker interns proof-equivalent contracts to one identity, so every
-    /// use of an equivalent contract selects the identity's worker. A
-    /// constructor worker is keyed by its contract's source shape and
-    /// constructor type (`structuralCodecWorkerSource`), so a constructor
-    /// shared under the identity takes the identity contract's shape and type
-    /// as well; an equivalent contract's own types can be distinct checked
-    /// types. A stored runtime keeps its own contract: its checked expression
-    /// names the value it captures.
+    /// use of an equivalent contract selects the identity's runtime worker.
+    /// A runtime is keyed by its contract's shape, runtime, and capture
+    /// types, and an equivalent contract's own types can be distinct checked
+    /// types, so a runtime shared under the identity takes the identity
+    /// contract's types as well. A constructor stays its own contract's: it
+    /// builds the runtime from that contract's own field names, so equivalent
+    /// contracts construct separately and share what they construct. A
+    /// stored runtime keeps its own contract: its checked expression names
+    /// the value it captures.
     fn generatedCodecAtIdentity(
         self: *Builder,
         codec: GeneratedCodecSource,
@@ -20999,12 +21001,14 @@ const Builder = struct {
         var shared = codec;
         shared.contract_derivation = identity;
         switch (codec.kind) {
-            .parser_constructor, .encoder_constructor => {
-                shared.shape = typeRef(view, identity_contract.source_shape_ty);
-                return .{ .source = .{ .generated_codec = shared }, .checked_type = typeRef(view, identity_contract.source_constructor_ty) };
+            .parser_constructor, .encoder_constructor => return unchanged,
+            .parser_runtime, .encoder_runtime => {
+                const runtime_type = typeRef(view, identity_contract.runtime_ty);
+                shared.shape = typeRef(view, identity_contract.shape_ty);
+                shared.runtime_type = runtime_type;
+                shared.capture_type = typeRef(view, identity_contract.encoding_ty);
+                return .{ .source = .{ .generated_codec = shared }, .checked_type = runtime_type };
             },
-            .parser_runtime,
-            .encoder_runtime,
             .encoder_record_fields,
             .encoder_dict_fields,
             .encoder_sequence_elements,
