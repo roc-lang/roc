@@ -942,9 +942,10 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) std.mem.Allocator.Err
             try store.extra_data.append(store.gpa, t.args.span.len);
             try store.extra_data.append(store.gpa, t.qualifiers.span.start);
             try store.extra_data.append(store.gpa, t.qualifiers.span.len);
-            try store.extra_data.append(store.gpa, @intFromBool(t.backing_value));
-            try store.extra_data.append(store.gpa, @intFromBool(t.has_args));
-            try store.extra_data.append(store.gpa, @intFromBool(t.record_shorthand));
+            // One word of flags: backing value, has args, record shorthand.
+            try store.extra_data.append(store.gpa, @as(u32, @intFromBool(t.backing_value)) |
+                (@as(u32, @intFromBool(t.has_args)) << 1) |
+                (@as(u32, @intFromBool(t.record_shorthand)) << 2));
 
             node.tag = .tag_patt;
             node.region = t.region;
@@ -1171,18 +1172,14 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.region = l.region;
             node.data.lhs = l.args.span.start;
             node.data.rhs = l.args.span.len;
-            const body_idx = store.extra_data.items.len;
-            try store.extra_data.append(store.gpa, @backingInt(l.body));
-            node.main_token = @as(u32, @intCast(body_idx));
+            node.main_token = @backingInt(l.body);
         },
         .apply => |app| {
             node.tag = .apply;
             node.region = app.region;
             node.data.lhs = app.args.span.start;
             node.data.rhs = app.args.span.len;
-            const fn_ed_idx = store.extra_data.items.len;
-            try store.extra_data.append(store.gpa, @backingInt(app.@"fn"));
-            node.main_token = @as(u32, @intCast(fn_ed_idx));
+            node.main_token = @backingInt(app.@"fn");
         },
         .record_updater => |updater| {
             node.tag = .record_update;
@@ -1260,9 +1257,7 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.region = m.region;
             node.data.lhs = m.branches.span.start;
             node.data.rhs = m.branches.span.len;
-            const expr_idx = store.extra_data.items.len;
-            try store.extra_data.append(store.gpa, @backingInt(m.expr));
-            node.main_token = @as(u32, @intCast(expr_idx));
+            node.main_token = @backingInt(m.expr);
         },
         .ident => |id| {
             node.tag = .ident;
@@ -2158,6 +2153,22 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
     }
 }
 
+/// The identifier token of an identifier pattern, or null for any other
+/// pattern, read without rebuilding the pattern.
+pub fn patternIdentToken(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) ?Token.Idx {
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(pattern_idx)));
+    if (store.nodes.fieldItem(.tag, node_idx) != .ident_patt) return null;
+    return store.nodes.fieldItem(.main_token, node_idx);
+}
+
+/// The argument count of a lambda expression, or null for any other
+/// expression, read without rebuilding the expression.
+pub fn exprLambdaArity(store: *const NodeStore, expr_idx: AST.Expr.Idx) ?u32 {
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
+    if (store.nodes.fieldItem(.tag, node_idx) != .lambda) return null;
+    return store.nodes.fieldItem(.data, node_idx).rhs;
+}
+
 /// Retrieves pattern data from a stored pattern node, reconstructing the appropriate pattern type.
 pub fn getPattern(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pattern {
     const node = store.nodes.get(@fromBackingInt(@intCast(@backingInt(pattern_idx))));
@@ -2183,9 +2194,10 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pat
             const args_len = store.extra_data.items[ed_start];
             const qualifiers_start = store.extra_data.items[ed_start + 1];
             const qualifiers_len = store.extra_data.items[ed_start + 2];
-            const backing_value = store.extra_data.items[ed_start + 3] != 0;
-            const has_args = store.extra_data.items[ed_start + 4] != 0;
-            const record_shorthand = store.extra_data.items[ed_start + 5] != 0;
+            const flags = store.extra_data.items[ed_start + 3];
+            const backing_value = flags & 1 != 0;
+            const has_args = flags & 2 != 0;
+            const record_shorthand = flags & 4 != 0;
 
             return .{ .tag = .{
                 .tag_tok = node.main_token,
@@ -2523,14 +2535,14 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
         },
         .lambda => {
             return .{ .lambda = .{
-                .body = @fromBackingInt(@intCast(store.extra_data.items[node.main_token])),
+                .body = @fromBackingInt(@intCast(node.main_token)),
                 .args = .{ .span = .{ .start = node.data.lhs, .len = node.data.rhs } },
                 .region = node.region,
             } };
         },
         .apply => {
             return .{ .apply = .{
-                .@"fn" = @fromBackingInt(@intCast(store.extra_data.items[node.main_token])),
+                .@"fn" = @fromBackingInt(@intCast(node.main_token)),
                 .args = .{ .span = base.DataSpan{
                     .start = node.data.lhs,
                     .len = node.data.rhs,
@@ -2567,7 +2579,7 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
         .match => {
             return .{ .match = .{
                 .region = node.region,
-                .expr = @fromBackingInt(@intCast(store.extra_data.items[node.main_token])),
+                .expr = @fromBackingInt(@intCast(node.main_token)),
                 .branches = .{ .span = .{
                     .start = node.data.lhs,
                     .len = node.data.rhs,
@@ -3860,10 +3872,9 @@ pub fn collectRedundantReturns(store: *const NodeStore) Allocator.Error!std.Dyna
     var pending: std.ArrayList(AST.Expr.Idx) = .empty;
     defer pending.deinit(store.gpa);
 
-    for (store.nodes.items.items(.tag), 0..) |tag, idx| {
-        if (tag == .lambda) {
-            try pending.append(store.gpa, store.getExpr(@fromBackingInt(@intCast(idx))).lambda.body);
-        }
+    // A lambda node keeps its body's index in `main_token`.
+    for (store.nodes.items.items(.tag), store.nodes.items.items(.main_token)) |tag, body| {
+        if (tag == .lambda) try pending.append(store.gpa, @fromBackingInt(body));
     }
     while (pending.pop()) |idx| {
         switch (store.getExpr(idx)) {

@@ -54,21 +54,18 @@ const no_bracket_match = std.math.maxInt(u32);
 const BracketMatches = struct {
     /// Every bracket kind counts toward one depth.
     any: []u32,
-    /// Only curly braces count.
-    curly: []u32,
-    /// Only round parentheses count.
-    round: []u32,
+    /// Only brackets of the opener's own kind count: curly braces for a curly
+    /// opener, round parentheses for a round one. A token opens at most one
+    /// kind, so the two kinds share this column.
+    same_kind: []u32,
 
     fn init(gpa: std.mem.Allocator, tags: []const Token.Tag) std.mem.Allocator.Error!BracketMatches {
         const any = try gpa.alloc(u32, tags.len);
         errdefer gpa.free(any);
-        const curly = try gpa.alloc(u32, tags.len);
-        errdefer gpa.free(curly);
-        const round = try gpa.alloc(u32, tags.len);
-        errdefer gpa.free(round);
+        const same_kind = try gpa.alloc(u32, tags.len);
+        errdefer gpa.free(same_kind);
         @memset(any, no_bracket_match);
-        @memset(curly, no_bracket_match);
-        @memset(round, no_bracket_match);
+        @memset(same_kind, no_bracket_match);
         var any_open: std.ArrayList(u32) = .empty;
         defer any_open.deinit(gpa);
         var curly_open: std.ArrayList(u32) = .empty;
@@ -89,25 +86,24 @@ const BracketMatches = struct {
                 },
                 .CloseRound => {
                     if (any_open.pop()) |open| any[open] = index;
-                    if (round_open.pop()) |open| round[open] = index;
+                    if (round_open.pop()) |open| same_kind[open] = index;
                 },
                 .CloseSquare => {
                     if (any_open.pop()) |open| any[open] = index;
                 },
                 .CloseCurly => {
                     if (any_open.pop()) |open| any[open] = index;
-                    if (curly_open.pop()) |open| curly[open] = index;
+                    if (curly_open.pop()) |open| same_kind[open] = index;
                 },
                 .EndOfFile, .Float, .StringStart, .StringEnd, .MultilineStringStart, .StringPart, .MalformedStringPart, .SingleQuote, .MalformedSingleQuote, .Int, .MalformedNumberBadSuffix, .MalformedNumberUnicodeSuffix, .MalformedNumberNoDigits, .MalformedNumberNoExponentDigits, .MalformedInvalidUnicodeEscapeSequence, .MalformedInvalidEscapeSequence, .UpperIdent, .LowerIdent, .MalformedUnicodeIdent, .Underscore, .DotInt, .NoSpaceDotInt, .DotLowerIdent, .NoSpaceDotLowerIdent, .DotQuestionLowerIdent, .NoSpaceDotQuestionLowerIdent, .DotUpperIdent, .NoSpaceDotUpperIdent, .MalformedDotUnicodeIdent, .MalformedNoSpaceDotUnicodeIdent, .MalformedDotQuestionUnicodeIdent, .MalformedNoSpaceDotQuestionUnicodeIdent, .NamedUnderscore, .MalformedNamedUnderscoreUnicode, .OpaqueName, .MalformedOpaqueNameUnicode, .MalformedOpaqueNameWithoutName, .OpenStringInterpolation, .CloseStringInterpolation, .OpPlus, .OpStar, .OpPizza, .OpAssign, .OpBinaryMinus, .OpUnaryMinus, .OpNotEquals, .OpBang, .OpAnd, .OpAmpersand, .OpQuestion, .OpDoubleQuestion, .OpOr, .OpBar, .OpDoubleSlash, .OpSlash, .OpPercent, .OpCaret, .OpGreaterThanOrEq, .OpGreaterThan, .OpLessThanOrEq, .OpBackArrow, .OpLessThan, .OpDoubleDotLessThan, .OpDoubleDotEquals, .OpEquals, .OpColonEqual, .OpDoubleColon, .NoSpaceOpQuestion, .Comma, .Dot, .DoubleDot, .TripleDot, .DotStar, .OpColon, .OpArrow, .OpFatArrow, .OpBackslash, .KwApp, .KwAs, .KwCrash, .KwDbg, .KwElse, .KwExpect, .KwExposes, .KwExposing, .KwFor, .KwForBang, .KwGenerates, .KwHas, .KwHosted, .KwIf, .KwImplements, .KwImport, .KwImports, .KwIn, .KwInterface, .KwMatch, .KwModule, .KwPackage, .KwPackages, .KwPlatform, .KwProvides, .KwRequires, .KwReturn, .KwTargets, .KwVar, .KwWhere, .KwWhile, .KwWith, .KwBreak, .MalformedUnknownToken => {},
             }
         }
-        return .{ .any = any, .curly = curly, .round = round };
+        return .{ .any = any, .same_kind = same_kind };
     }
 
     fn deinit(self: *BracketMatches, gpa: std.mem.Allocator) void {
         gpa.free(self.any);
-        gpa.free(self.curly);
-        gpa.free(self.round);
+        gpa.free(self.same_kind);
     }
 };
 
@@ -243,7 +239,7 @@ fn looksLikeTypeDecl(self: *Parser) bool {
     // Check for parenthesized type params: Name(a, b) :
     if (next_tok == .OpenRound or next_tok == .NoSpaceOpenRound) {
         // Skip to the matching close paren.
-        const close = self.bracket_matches.round[self.pos + lookahead];
+        const close = self.bracket_matches.same_kind[self.pos + lookahead];
         if (close == no_bracket_match) return false;
         lookahead = close - self.pos + 1;
     }
@@ -452,17 +448,9 @@ fn recordStatementDecl(
 
     var record = switch (statement) {
         .decl => |decl| blk: {
-            const pattern = self.store.getPattern(decl.pattern);
-            const name_tok: ?Token.Idx = if (pattern == .ident)
-                pattern.ident.ident_tok
-            else
-                null;
-            const body = self.store.getExpr(decl.body);
-            const value_form: DeclIndex.ValueDeclForm, const value_arity: u32 = if (std.meta.activeTag(body) == .lambda)
-                .{
-                    .lambda,
-                    @intCast(self.store.patternSlice(body.lambda.args).len),
-                }
+            const name_tok = self.store.patternIdentToken(decl.pattern);
+            const value_form: DeclIndex.ValueDeclForm, const value_arity: u32 = if (self.store.exprLambdaArity(decl.body)) |arity|
+                .{ .lambda, arity }
             else
                 .{ .none, 0 };
             break :blk DeclIndex.Decl{
@@ -637,17 +625,9 @@ fn recordValueDecl(
     const scope_idx = self.decl_index.currentScope() orelse return;
     const owner_type_path = self.currentAssociatedOwnerPath();
 
-    const pattern = self.store.getPattern(pattern_idx);
-    const name_tok: ?Token.Idx = if (pattern == .ident)
-        pattern.ident.ident_tok
-    else
-        null;
-    const body = self.store.getExpr(body_idx);
-    const value_form: DeclIndex.ValueDeclForm, const value_arity: u32 = if (std.meta.activeTag(body) == .lambda)
-        .{
-            .lambda,
-            @intCast(self.store.patternSlice(body.lambda.args).len),
-        }
+    const name_tok = self.store.patternIdentToken(pattern_idx);
+    const value_form: DeclIndex.ValueDeclForm, const value_arity: u32 = if (self.store.exprLambdaArity(body_idx)) |arity|
+        .{ .lambda, arity }
     else
         .{ .none, 0 };
 
@@ -3358,6 +3338,15 @@ fn braceHasFieldComma(self: *const Parser) bool {
     const tags = self.tok_buf.tokens.items(.tag);
     while (token < tags.len) : (token += 1) {
         const tag = tags[token];
+        if (depth == 0 and (tag == .OpenRound or tag == .NoSpaceOpenRound or tag == .OpenSquare or tag == .OpenCurly)) {
+            // Nothing inside a nested group decides the answer, so a matched
+            // group is skipped whole.
+            const close = self.bracket_matches.any[token];
+            if (close != no_bracket_match) {
+                token = close;
+                continue;
+            }
+        }
         if (tag == .OpenRound or tag == .NoSpaceOpenRound or tag == .OpenSquare or
             tag == .OpenCurly or tag == .OpenStringInterpolation or tag == .StringStart)
         {
@@ -6277,7 +6266,7 @@ fn runExprStatementKernel(
                 const isCurly = self.peek() == .OpenCurly;
                 const start = self.pos;
                 var is_destructure = false;
-                const close = if (isCurly) self.bracket_matches.curly[self.pos] else self.bracket_matches.round[self.pos];
+                const close = self.bracket_matches.same_kind[self.pos];
                 if (close != no_bracket_match) {
                     is_destructure = self.tok_buf.tokens.items(.tag)[close + 1] == .OpAssign;
                 }

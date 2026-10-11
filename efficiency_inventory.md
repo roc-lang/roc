@@ -504,6 +504,15 @@ stages it touches; the instruction-count effect is reported in "Results".
     into an arena first. Counts are flat (`roc check` 214.14 G); identity
     writing itself remains about 5% of `roc check`.
 
+78. Parser: declaration recording reads a pattern's identifier token and a
+    body's lambda arity straight from the node columns instead of rebuilding
+    the unions; lambda, apply, and match nodes keep their child index in
+    `main_token` instead of behind an `extra_data` word; a tag pattern's
+    three flags share one `extra_data` word; the curly and round bracket
+    tables share one same-kind column (a token opens at most one kind); and
+    `braceHasFieldComma` skips matched groups through the bracket table.
+    Snapshots are unchanged.
+
 ## Findings from profiling
 
 These were found by profiling the ReleaseFast compiler with
@@ -1164,7 +1173,7 @@ X: cache each nominal declaration's formal-dependency graph across views once it
 - category A, C; runs once per file; impact low; risk low
 - Finding: 12 bytes per token of bracket-match data (`any`, `curly`, `round`) memset and filled in one pass; the three open-bracket stacks are separate ArrayLists.
 - Fix: one `[]u32` match column (any bracket) plus a 2-bit kind derived from the token tag at use time, when `curly`/`round` are only used to skip to a matching bracket of that kind (verify usages); saves 8 bytes/token.
-- Status: open
+- Status: fixed (fix 78): the curly and round tables share one same-kind column
 
 ### src/parse/Parser.zig:781-830: `importModulePathIdent` / `nestedImportPathIdent` build the path in a fresh `ArrayList(u8)` per import
 - category A; runs per import statement; impact low; risk low
@@ -1658,31 +1667,31 @@ X: widen the packed `Layout` so its indices are 32 bits (a 64-bit packed layout,
 - category C/E; runs per lambda / apply / match / function-type node (apply is one of the most common expression nodes), on every `getExpr` of those nodes; impact low-medium; risk low
 - Finding: `addExpr(.apply)` writes `fn` into `extra_data` and stores the extra_data index in `node.main_token` (lines 1183-1185); `getExpr(.apply)` then does `store.extra_data.items[node.main_token]` (line 2531). Same for `lambda.body` (1174-1176 / 2524), `match.expr` (1263-1265 / 2568) and `ty_fn.ret` (1627-1629 / 2931). `main_token` is a plain `u32` that these node kinds do not use for a token, so the child index could live …
 - Fix: store `@backingInt(app.fn)` in `node.main_token` and read it back directly; update the S-expr/formatter consumers that go through `getExpr` (they do not touch `main_token` directly for these tags; verify with grep for `.apply` handling of `main_token` in `src/fmt` and `AST.zig`).
-- Status: open
+- Status: partly fixed (fix 78): lambda, apply, and match keep their child in `main_token`; `ty_fn` is unchanged
 
 ### src/parse/NodeStore.zig:939-954,2177-2203: Tag patterns spend 6 extra_data words, three of them for bools
 - category C; runs per tag pattern; impact low; risk low
 - Finding: `addPattern(.tag)` appends `args.len`, `qualifiers.start`, `qualifiers.len`, and three `@intFromBool` words (lines 942-947); `rhs` holds the extra_data start and `lhs` the args start. The three flags fit in 3 bits of any of these words.
 - Fix: pack `backing_value`/`has_args`/`record_shorthand` into the high bits of `args.len` (or into `rhs` alongside a 29-bit extra_data index, mirroring `ImportRhs`), dropping three extra_data words per tag pattern.
-- Status: open
+- Status: fixed (fix 78): the three flags share one word
 
 ### src/parse/Parser.zig:3345-3377: `braceHasFieldComma` rescans every token to the brace's close without using the bracket table
 - category E; runs every `{ ident = ...` block opening (lambda bodies and blocks whose first statement is a declaration: very common), plus the sibling lookahead at lines …; impact medium on deeply nested code, low otherwise; risk low
 - Finding: `braceHasFieldComma` walks forward token by token from `self.pos + 2`, maintaining its own depth counter over every nested group until it reaches the brace's close, and returns early only in the `record_comma and LowerIdent OpAssign` case. Inside nested groups only depth changes matter (all other branches require `depth == 0`), yet every nested token is still visited. For nested blocks each level rescans the whole …
 - Fix: on an opener in `.OpenRound/.NoSpaceOpenRound/.OpenSquare/.OpenCurly`, jump `token = bracket_matches.any[token] + 1` (treat `no_bracket_match` as "scan to EOF" exactly like the current depth logic does); keep the per-token walk only for `StringStart..StringEnd`/interpolation, which the bracket table does not track. Results are identical because no depth>0 token influences the return value.
-- Status: open
+- Status: fixed (fix 78)
 
 ### src/parse/Parser.zig:50-108: Three full-length bracket-match tables (12 bytes per token) built up front
 - category C/H; runs once per parse; proportional to token count; impact low-medium (memory bandwidth per parse); risk medium (unbalanced-input semantics)
 - Finding: `BracketMatches.init` allocates `any`, `curly`, `round` as `[]u32` of `tags.len` each, `@memset`s all three, and keeps three open-bracket ArrayLists while scanning. For a 200K-token module that is 2.4 MB of transient tables of which only the entries at opener positions (typically 10-15% of tokens) are ever meaningful; `curly`/`round` are consulted only at a handful of sites (`looksLikeTypeDecl`, …
 - Fix: keep `any` as is (it is used in hot lookaheads) and derive the `curly`/`round` answers on demand from `any` by walking only the opener's own match chain (the close of a `{` in `any` is already the matching `}` when brackets are balanced; the separate tables only differ on unbalanced input, which can be detected by checking the closer's tag), or store them as a single `u32` table plus a 2-bit kind. Must preserve …
-- Status: open
+- Status: fixed (fix 78): two columns instead of three
 
 ### src/parse/Parser.zig:435-601,622-679: Declaration recording reconstructs whole `Pattern`/`Expr` unions just to read a tag
 - category E; runs per declaration statement (every `x = ...` in every block); impact low; risk low
 - Finding: `recordStatementDecl` and `recordValueDecl` call `self.store.getPattern(decl.pattern)` and `self.store.getExpr(decl.body)` (lines 447-452, 632-637) only to test `pattern == .ident` and `activeTag(body) == .lambda`, then `patternSlice(body.lambda.args).len`. `getExpr` is a ~60-arm switch building a multi-word tagged union. The same pattern appears at `Parser.zig:3974` (`getExpr(...) == .tag`), `4165` (`== …
 - Fix: add `NodeStore.nodeTag(idx)` / `exprIsLambda`-style accessors that read `nodes.items(.tag)[idx]` (and `data.rhs` for the arg count), and use them at these sites.
-- Status: open
+- Status: fixed (fix 78)
 
 ### src/parse/Parser.zig:1300-1358,780-823: Import statements build the module path in a temporary ArrayList and intern it again from text
 - category A/D; runs per import statement (also per `import` for `addExplicitUnqualifiedImport`, line 1352-1355); impact low; risk low
@@ -1730,7 +1739,7 @@ X: widen the packed `Layout` so its indices are 32 bits (a 64-bit packed layout,
 - category A/E; runs once per parse (`mod.zig:82`), proportional to node count; impact low; risk low
 - Finding: scans every node tag, calls `getExpr` for each lambda to fetch `body` (line 3914), then processes with `getExpr`/`getStatement` union reconstruction per visited node, allocating a `DynamicBitSet` of `nodes.len()` bits and a `pending` ArrayList each call. The bit set is 1 bit/node (fine); the union reconstruction is the cost.
 - Fix: read `extra_data[main_token]` for lambda bodies directly (or, after the apply/lambda fix above, `main_token` itself) and switch on `nodes.items(.tag)` with direct column reads for `block`/`if`/`match`.
-- Status: open
+- Status: partly fixed (fix 78): lambda bodies are read from the node column directly
 
 ### src/parse/NodeStore.zig:1723-1758: `addOrExtendFieldAccess` reads and writes the whole node row to bump two fields
 - category H; runs per `.field` segment after the first in a field-access chain; impact low; risk low
@@ -3127,7 +3136,7 @@ X: widen the packed `Layout` so its indices are 32 bits (a 64-bit packed layout,
 - category F; runs per call (acquire/release); impact medium; risk low
 - Finding: `free_frame_slots: ArrayListUnmanaged(ArrayListUnmanaged([]LocalSlot))` keeps a separate pool per distinct frame size; `releaseFrameSlots` grows the outer list with `appendNTimes` to `slots.len + 1` entries on first sight of a large frame and each pool holds individually GPA-allocated slot arrays.
 - Fix: Since calls are strictly LIFO, replace the pool with a single contiguous slot stack (`ArrayListUnmanaged(LocalSlot)` + a `usize` top): `acquire` bumps the top by `len` (growing once), `release` pops. No per-size pools and no per-frame heap objects. Verify erased callables re-entering the interpreter from a host callback still nest LIFO (they do; `execution_depth` tracks nesting).
-- Status: open
+- Status: no change: frames keep their slot slices across nested calls, so a contiguous growable stack would move live frames' slots when it grows; the per-size pool keeps them in place
 
 ### src/eval/interpreter.zig:552: setjmp per builtin invocation
 - category H; runs per builtin call that can crash (~80 `enterCrashBoundary` sites, e.g. every list/str op); impact medium; risk medium
