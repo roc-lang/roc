@@ -30,9 +30,9 @@ measured with every fix below applied:
 
 | Workload | Baseline | This branch | Change |
 | --- | ---: | ---: | ---: |
-| `roc check -j1 package/main.roc` (roc-pg) | 266.28 G | 216.19 G | -18.8% |
-| `roc build --opt=dev examples/query.roc` | 244.83 G | 223.02 G | -8.9% |
-| `roc build examples/query.roc` (LLVM) | 524.75 G | 340.51 G | -35.1% |
+| `roc check -j1 package/main.roc` (roc-pg) | 266.28 G | 215.01 G | -19.3% |
+| `roc build --opt=dev examples/query.roc` | 244.83 G | 221.80 G | -9.4% |
+| `roc build examples/query.roc` (LLVM) | 524.75 G | 339.57 G | -35.3% |
 | `roc test test/fx/issue8826_full.roc` | 141.4 M | 139.9 M | -1.1% |
 
 Peak resident memory (`/usr/bin/time -f %M`) of `roc check -j1` on roc-pg:
@@ -429,6 +429,17 @@ stages it touches; the instruction-count effect is reported in "Results".
     sets; the solve's work list is kept between solves. The hash sets were
     2.9% of the LLVM build. Generated code is byte-identical; `roc check` is
     216.19 G (-0.8%), the LLVM build 340.5 G (-1.3%), the dev build flat.
+
+69. Profile-guided (Monotype solve): unification checks and records a
+    related pair with one `getOrPut` instead of `contains` then `put` (two
+    sites); interface capture claims a class id the same way;
+    `flattenRecordRow` returns before copying fields or acquiring its
+    visited set when the extension is already terminal, its usual case;
+    `typeIsResolvedInner` starts its worklist on the stack and checks a
+    class's resolved stamp before recording it; and
+    `rowExtensionChainResolved` records a row only as it follows its
+    extension. Generated code is byte-identical; `roc check` is 215.01 G
+    (-0.55%), the dev build 221.8 G (-0.5%), the LLVM build 339.6 G.
 
 ## Findings from profiling
 

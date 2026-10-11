@@ -1101,9 +1101,10 @@ pub const InterfaceConstraints = struct {
         /// captures its content when it is a new open node.
         fn beginNode(self: *Capture, raw: NodeId) Allocator.Error!?OpenStart {
             const root = self.graph.find(raw);
-            if (self.node_ids.contains(root)) return null;
             const id: NodeId = @fromBackingInt(@intCast(self.nodes.items.len));
-            try self.node_ids.put(root, id);
+            const entry = try self.node_ids.getOrPut(root);
+            if (entry.found_existing) return null;
+            entry.value_ptr.* = id;
             try self.nodes.append(self.graph.allocator, undefined);
             if (self.holeIndex(root)) |hole| {
                 if ((try self.graph.content(root)) != .unresolved and try self.holeIsRepresentationNeutral(raw)) {
@@ -4203,34 +4204,38 @@ pub const InstGraph = struct {
         allow_field_kind_defaults: bool,
     ) Allocator.Error!bool {
         if (self.rootStampedResolved(root)) return true;
+        // The worklist is usually short, so it starts on this frame.
+        var pending_buffer: [1024]u8 align(@alignOf(usize)) = undefined;
+        var pending_state = std.heap.BufferFirstAllocator.init(&pending_buffer, self.allocator);
+        const pending_allocator = pending_state.allocator();
         var pending = std.ArrayList(NodeId).empty;
-        defer pending.deinit(self.allocator);
+        defer pending.deinit(pending_allocator);
         var seen = self.node_set_pool.acquire();
         defer self.node_set_pool.release(&seen);
-        try pending.append(self.allocator, root);
+        try pending.append(pending_allocator, root);
         while (pending.pop()) |raw_node| {
             const node = self.find(raw_node);
-            const entry = try seen.getOrPut(node);
-            if (entry.found_existing) continue;
             // A stamped class is resolved throughout, so nothing below it can
             // change the answer.
             if (self.rootStampedResolved(node)) continue;
+            const entry = try seen.getOrPut(node);
+            if (entry.found_existing) continue;
             switch (self.nodes.items[@backingInt(node)]) {
                 .redirect => unreachable,
                 // A finished Monotype is resolved throughout.
                 .leaf => {},
                 .unresolved => return false,
                 .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
-                .list, .box => |child| try pending.append(self.allocator, child),
-                .tuple => |items| try pending.appendSlice(self.allocator, items),
+                .list, .box => |child| try pending.append(pending_allocator, child),
+                .tuple => |items| try pending.appendSlice(pending_allocator, items),
                 .func => |function| {
-                    try pending.appendSlice(self.allocator, function.args);
-                    try pending.append(self.allocator, function.ret);
+                    try pending.appendSlice(pending_allocator, function.args);
+                    try pending.append(pending_allocator, function.ret);
                 },
                 .tag_union => |row| {
                     if (!try self.rowExtensionChainResolved(node, .tag_union)) return false;
-                    for (row.tags) |tag| try pending.appendSlice(self.allocator, tag.payloads);
-                    try pending.append(self.allocator, row.ext);
+                    for (row.tags) |tag| try pending.appendSlice(pending_allocator, tag.payloads);
+                    try pending.append(pending_allocator, row.ext);
                 },
                 .record => |row| {
                     if (!try self.rowExtensionChainResolved(node, .record)) return false;
@@ -4238,23 +4243,23 @@ pub const InstGraph = struct {
                         if (field.kind == .undetermined and self.resolvedFieldKind(field.kind) == null) {
                             if (!allow_field_kind_defaults) return false;
                             try pending.append(
-                                self.allocator,
+                                pending_allocator,
                                 field.value_ty orelse
                                     Common.invariant("undetermined field kind carried no source value cell"),
                             );
                             continue;
                         }
-                        try pending.append(self.allocator, field.ty);
-                        if (field.value_ty) |value_ty| try pending.append(self.allocator, value_ty);
+                        try pending.append(pending_allocator, field.ty);
+                        if (field.value_ty) |value_ty| try pending.append(pending_allocator, value_ty);
                     }
-                    try pending.append(self.allocator, row.ext);
+                    try pending.append(pending_allocator, row.ext);
                 },
                 .named => |named| {
-                    try pending.appendSlice(self.allocator, named.args);
-                    if (named.backing) |backing| try pending.append(self.allocator, backing.node);
+                    try pending.appendSlice(pending_allocator, named.args);
+                    if (named.backing) |backing| try pending.append(pending_allocator, backing.node);
                     for (named.declared_order) |declared| switch (declared) {
                         .named => {},
-                        .padding => |padding| try pending.append(self.allocator, padding),
+                        .padding => |padding| try pending.append(pending_allocator, padding),
                     };
                 },
             }
@@ -4355,15 +4360,17 @@ pub const InstGraph = struct {
         defer self.node_set_pool.release(&seen);
         var current = self.find(raw_root);
         while (true) {
-            const entry = try seen.getOrPut(current);
-            if (entry.found_existing) return false;
+            // A row is recorded as it is left, so reaching one again is a
+            // cyclic chain.
             switch (try self.rootContent(current)) {
                 .tag_union => |row| {
                     if (kind != .tag_union) return false;
+                    if ((try seen.getOrPut(current)).found_existing) return false;
                     current = self.find(row.ext);
                 },
                 .record => |row| {
                     if (kind != .record) return false;
+                    if ((try seen.getOrPut(current)).found_existing) return false;
                     current = self.find(row.ext);
                 },
                 .empty_tag_union => return kind == .tag_union,
@@ -4773,8 +4780,7 @@ pub const InstGraph = struct {
             .right = private_node,
             .row_width = raw_pair.row_width,
         };
-        if (related.contains(pair)) return;
-        try related.put(pair, {});
+        if ((try related.getOrPut(pair)).found_existing) return;
 
         const public_content = try self.rootContent(public_node);
         const private_content = try self.rootContent(private_node);
@@ -6191,8 +6197,7 @@ pub const InstGraph = struct {
         const right = self.find(raw_right);
         if (left == right) return;
         const pair = NodePair{ .left = left, .right = right, .row_width = row_width };
-        if (related.contains(pair)) return;
-        try related.put(pair, {});
+        if ((try related.getOrPut(pair)).found_existing) return;
 
         var left_content = self.nodes.items[@backingInt(left)];
         var right_content = self.nodes.items[@backingInt(right)];
@@ -6938,6 +6943,16 @@ pub const InstGraph = struct {
         const root_content = try self.rootContent(root);
         if (root_content != .record) Common.invariant("instantiation flattened a non-record row");
         const row = root_content.record;
+        var ext = self.find(row.ext);
+        const ext_content = try self.rootContent(ext);
+        if (ext_content == .unresolved or ext_content == .empty_record) {
+            if (row.ext != ext) {
+                const flattened: InstNode = .{ .record = .{ .fields = row.fields, .ext = ext } };
+                _ = try self.replaceContentWithoutSnapshotInvalidation(root, flattened);
+            }
+            return .{ .fields = row.fields, .ext = ext };
+        }
+
         // The row lists below live only for this call and are usually short,
         // so they start in a buffer on this frame.
         var stack_first_buffer: [2048]u8 align(@alignOf(usize)) = undefined;
@@ -6950,16 +6965,6 @@ pub const InstGraph = struct {
         var seen = self.node_set_pool.acquire();
         defer self.node_set_pool.release(&seen);
         try seen.put(root, {});
-
-        var ext = self.find(row.ext);
-        const ext_content = try self.rootContent(ext);
-        if (ext_content == .unresolved or ext_content == .empty_record) {
-            if (row.ext != ext) {
-                const flattened: InstNode = .{ .record = .{ .fields = row.fields, .ext = ext } };
-                _ = try self.replaceContentWithoutSnapshotInvalidation(root, flattened);
-            }
-            return .{ .fields = row.fields, .ext = ext };
-        }
 
         while (true) {
             if (seen.contains(ext)) {
