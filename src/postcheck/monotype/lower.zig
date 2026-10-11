@@ -25556,7 +25556,7 @@ const BodyContext = struct {
                     }
                     const constraints = single_request_constraints orelse try InterfaceConstraints.capture(self.graph, scratch.allocator(), entry.roots);
                     const entry_input: InterfaceConstraints.Identity = .{ .bytes = entry.request.bytes[0..entry.input_len], .leaves = entry.request.leaves };
-                    const summary: InterfaceSummary = if (try (try constraints.identityInto(self.graph, scratch.allocator())).eql(entry_input, self.typeStore(), self.nameStore()))
+                    const summary: InterfaceSummary = if (try constraints.identityEql(self.graph, entry_input))
                         .unchanged
                     else
                         .{ .constraints = constraints };
@@ -50708,7 +50708,7 @@ const BodyContext = struct {
         };
         try self.relateEvidenceContractsAt(schema, detached_subst, contract);
         const constraints = try InterfaceConstraints.capture(self.graph, scratch.allocator(), detached);
-        const summary: InterfaceSummary = if (try (try constraints.identityInto(self.graph, scratch.allocator())).eql(shape, self.typeStore(), self.nameStore()))
+        const summary: InterfaceSummary = if (try constraints.identityEql(self.graph, shape))
             .unchanged
         else
             .{ .constraints = constraints };
@@ -50794,7 +50794,7 @@ const BodyContext = struct {
         try self.relateEvidenceTargetRootToRequest(root_view, root_fn_ty, target_node, detached, reachability);
         if (use_summaries) {
             const constraints = try InterfaceConstraints.capture(self.graph, scratch.allocator(), &.{detached});
-            const summary: InterfaceSummary = if (try (try constraints.identityInto(self.graph, scratch.allocator())).eql(request, self.typeStore(), self.nameStore()))
+            const summary: InterfaceSummary = if (try constraints.identityEql(self.graph, request))
                 .unchanged
             else
                 .{ .constraints = constraints };

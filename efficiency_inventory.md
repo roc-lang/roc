@@ -498,6 +498,12 @@ stages it touches; the instruction-count effect is reported in "Results".
     and the tag and field name maps are dense maps. Generated code and
     snapshots are unchanged; counts are flat.
 
+77. Monotype: comparing a captured interface against an existing identity
+    writes the identity into the graph's scratch buffers and compares it there
+    (`InterfaceConstraints.identityEql`) instead of copying bytes and leaves
+    into an arena first. Counts are flat (`roc check` 214.14 G); identity
+    writing itself remains about 5% of `roc check`.
+
 ## Findings from profiling
 
 These were found by profiling the ReleaseFast compiler with

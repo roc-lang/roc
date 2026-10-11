@@ -600,6 +600,25 @@ pub const InterfaceConstraints = struct {
         return self.identityInto(graph, graph.arena());
     }
 
+    /// Whether these constraints' identity equals `other`, compared in the
+    /// graph's identity scratch without copying it out.
+    pub fn identityEql(self: InterfaceConstraints, graph: *InstGraph, other: Identity) Allocator.Error!bool {
+        var writer = IdentityWriter{
+            .graph = graph,
+            .bytes = graph.identity_bytes_scratch,
+            .leaves = graph.identity_leaves_scratch,
+        };
+        defer {
+            writer.bytes.clearRetainingCapacity();
+            writer.leaves.clearRetainingCapacity();
+            graph.identity_bytes_scratch = writer.bytes;
+            graph.identity_leaves_scratch = writer.leaves;
+        }
+        try writer.write(InterfaceConstraints, self);
+        const mine: Identity = .{ .bytes = writer.bytes.items, .leaves = writer.leaves.items };
+        return mine.eql(other, graph.types, graph.name_store);
+    }
+
     pub fn identityInto(self: InterfaceConstraints, graph: *InstGraph, allocator: Allocator) Allocator.Error!Identity {
         var writer = IdentityWriter{
             .graph = graph,
