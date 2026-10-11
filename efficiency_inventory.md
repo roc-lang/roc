@@ -875,6 +875,11 @@ reading code, and were not in the audit above.
 - Finding: reviewed; the copy walk uses store appends and the caller's maps. No finding.
 - Status: open
 
+### src/check/Check.zig (`collectAbsentCtorPayloadBlockers`): every tag-constructing expression re-solves payload inhabitedness through freshly opened nominal views
+Status: open
+F: profile-guided (`roc check` on roc-pg, 5.4% inclusive): each call creates a `NominalOpenCache`, opens the target's nominal backings through a fresh `TypeView` (`openNominalBacking`, `type_view.dependencyNode`/`ensureDependencies` recomputing each declaration's formal-dependency graph), and runs `solveInhabitedGraph` per absent constructor's payload; the known-absent query skips the inhabitedness memo. The memo and views are scoped to one mutation-free read because the type store changes between calls.
+X: cache each nominal declaration's formal-dependency graph across views once its backing can no longer change (needs a checker-provided point after which declaration backings are final), and memoize known-absent answers within one read like the general query.
+
 ### src/check/exhaustive.zig:594-631: `NumeralKeyInterner` builds a `StringHashMapUnmanaged(u32)` with a heap `ArrayList(u8)` key per numeric literal pattern
 - category A, D; runs per numeric literal pattern in every `match` (per branch pattern); impact low-medium; risk low
 - Finding: for each literal pattern, allocates a key buffer (`ensureTotalCapacity` 4+before+after+5 bytes), fills it, and `getOrPut`s it into a string-keyed map (the arena keeps the bytes). The key is a serialization of `(before, after, scale, flags)` that the module env already identifies by `NumeralLiteral` index (`numeralLiteralForNode`).
