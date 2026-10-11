@@ -5213,11 +5213,14 @@ const Certifier = struct {
 
     /// A relevant value selected from a container borrows that container's
     /// storage, and a later take of the selection claims the container's unit
-    /// through the whole payload chain. A container on that chain whose only
+    /// through the whole payload chain. When that chain reaches a container a
+    /// relevant local carries, an intermediate container on the way whose only
     /// carrier is a local the join's body never reads is still part of the
     /// relevant state: dropping its carrier would cut the chain, so the
     /// selection could no longer reach the unit that pays for it. Each such
-    /// carrier joins the relevant bound positions for this summary.
+    /// carrier joins the relevant bound positions for this summary. A chain
+    /// that reaches no carried container gains no carriers: the selection
+    /// claims the stored unit before quotienting instead.
     fn addProvenanceCarriers(self: *Certifier, state: *const State) Allocator.Error!void {
         self.provenance_carrier_scratch.clearRetainingCapacity();
         self.repr_scratch.clearRetainingCapacity();
@@ -5229,14 +5232,21 @@ const Certifier = struct {
         const relevant_len = self.relevant_bound_scratch.items.len;
         var index: usize = 0;
         while (index < self.relevant_bound_scratch.items.len) : (index += 1) {
-            var link = self.values.items[state.valueAtDense(self.relevant_bound_scratch.items[index])].payload_source;
-            while (link != no_value) : (link = self.values.items[link].payload_source) {
-                if (self.carrier_scratch.contains(link)) break;
+            const value = state.valueAtDense(self.relevant_bound_scratch.items[index]);
+            const reaches_carried = reach: {
+                var link = self.values.items[value].payload_source;
+                while (link != no_value) : (link = self.values.items[link].payload_source) {
+                    if (self.carrier_scratch.contains(link)) break :reach true;
+                }
+                break :reach false;
+            };
+            if (!reaches_carried) continue;
+            var link = self.values.items[value].payload_source;
+            while (link != no_value and !self.carrier_scratch.contains(link)) : (link = self.values.items[link].payload_source) {
                 const carrier = self.repr_scratch.get(link) orelse continue;
                 try self.provenance_carrier_scratch.put(carrier, {});
                 try self.relevant_bound_scratch.append(self.allocator, carrier);
                 try self.carrier_scratch.put(link, carrier);
-                break;
             }
         }
         if (self.relevant_bound_scratch.items.len != relevant_len) {
