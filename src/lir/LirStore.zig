@@ -805,22 +805,20 @@ pub fn appendBodyShardWithJoinRelocation(
         self.string_builder.registerExistingAssumeCapacity(&self.strings, destination_id);
     }
     for (source.inline_scopes.unsafeRawItemsForView()[source_prefix.inline_scopes..]) |item| {
-        try self.inline_scopes.append(
-            self.allocator,
+        self.inline_scopes.appendAssumeCapacity(
             relocateBodyValue(InlineScope, item, prefix, bases),
         );
     }
     const local_ids = source.local_ids.unsafeRawItemsForView();
-    for (local_ids[source_prefix.local_ids..]) |item| try self.local_ids.append(self.allocator, relocateBodyValue(LocalId, item, prefix, bases));
-    try self.u64s.appendSlice(self.allocator, source.u64s.unsafeRawItemsForView()[source_prefix.u64s..]);
-    try self.u32s.appendSlice(self.allocator, source.u32s.unsafeRawItemsForView()[source_prefix.u32s..]);
-    for (source.erased_call_arg_plans.unsafeRawItemsForView()[source_prefix.erased_call_arg_plans..]) |item| try self.erased_call_arg_plans.append(self.allocator, relocateBodyValue(ErasedCallArgsPlan, item, prefix, bases));
-    for (source.pattern_ids.unsafeRawItemsForView()[source_prefix.pattern_ids..]) |item| try self.pattern_ids.append(self.allocator, relocateBodyValue(LirPatternId, item, prefix, bases));
-    for (source.patterns.unsafeRawItemsForView()[source_prefix.patterns..]) |item| try self.patterns.append(self.allocator, relocateBodyValue(LirPattern, item, prefix, bases));
-    for (source.locals.unsafeRawItemsForView()[source_prefix.locals..]) |item| try self.locals.append(self.allocator, relocateBodyValue(Local, item, prefix, bases));
+    for (local_ids[source_prefix.local_ids..]) |item| self.local_ids.appendAssumeCapacity(relocateBodyValue(LocalId, item, prefix, bases));
+    self.u64s.appendSliceAssumeCapacity(source.u64s.unsafeRawItemsForView()[source_prefix.u64s..]);
+    self.u32s.appendSliceAssumeCapacity(source.u32s.unsafeRawItemsForView()[source_prefix.u32s..]);
+    for (source.erased_call_arg_plans.unsafeRawItemsForView()[source_prefix.erased_call_arg_plans..]) |item| self.erased_call_arg_plans.appendAssumeCapacity(relocateBodyValue(ErasedCallArgsPlan, item, prefix, bases));
+    for (source.pattern_ids.unsafeRawItemsForView()[source_prefix.pattern_ids..]) |item| self.pattern_ids.appendAssumeCapacity(relocateBodyValue(LirPatternId, item, prefix, bases));
+    for (source.patterns.unsafeRawItemsForView()[source_prefix.patterns..]) |item| self.patterns.appendAssumeCapacity(relocateBodyValue(LirPattern, item, prefix, bases));
+    for (source.locals.unsafeRawItemsForView()[source_prefix.locals..]) |item| self.locals.appendAssumeCapacity(relocateBodyValue(Local, item, prefix, bases));
     for (source.local_names.unsafeRawItemsForView()[source_prefix.locals..]) |name| {
-        try self.local_names.append(
-            self.allocator,
+        self.local_names.appendAssumeCapacity(
             if (name == no_local_name)
                 no_local_name
             else
@@ -832,22 +830,20 @@ pub fn appendBodyShardWithJoinRelocation(
                 )),
         );
     }
-    for (source.cf_switch_branches.unsafeRawItemsForView()[source_prefix.cf_switch_branches..]) |item| try self.cf_switch_branches.append(self.allocator, relocateBodyValue(CFSwitchBranch, item, prefix, bases));
-    for (source.str_match_steps.unsafeRawItemsForView()[source_prefix.str_match_steps..]) |item| try self.str_match_steps.append(self.allocator, relocateBodyValue(StrMatchStep, item, prefix, bases));
-    for (source.str_match_arms.unsafeRawItemsForView()[source_prefix.str_match_arms..]) |item| try self.str_match_arms.append(self.allocator, relocateBodyValue(StrMatchArm, item, prefix, bases));
-    for (source.join_points.unsafeRawItemsForView()[source_prefix.join_points..]) |item| try self.join_points.append(self.allocator, relocateBodyValue(JoinPoint, item, prefix, bases));
-    for (source.cf_stmts.unsafeRawItemsForView()[source_prefix.cf_stmts..]) |item| try self.cf_stmts.append(self.allocator, relocateBodyValue(CFStmt, item, prefix, bases));
-    try self.cf_stmt_locs.appendSlice(self.allocator, source.cf_stmt_locs.unsafeRawItemsForView()[source_prefix.cf_stmts..]);
-    try self.cf_stmt_regions.appendSlice(self.allocator, source.cf_stmt_regions.unsafeRawItemsForView()[source_prefix.cf_stmts..]);
+    for (source.cf_switch_branches.unsafeRawItemsForView()[source_prefix.cf_switch_branches..]) |item| self.cf_switch_branches.appendAssumeCapacity(relocateBodyValue(CFSwitchBranch, item, prefix, bases));
+    for (source.str_match_steps.unsafeRawItemsForView()[source_prefix.str_match_steps..]) |item| self.str_match_steps.appendAssumeCapacity(relocateBodyValue(StrMatchStep, item, prefix, bases));
+    for (source.str_match_arms.unsafeRawItemsForView()[source_prefix.str_match_arms..]) |item| self.str_match_arms.appendAssumeCapacity(relocateBodyValue(StrMatchArm, item, prefix, bases));
+    for (source.join_points.unsafeRawItemsForView()[source_prefix.join_points..]) |item| self.join_points.appendAssumeCapacity(relocateBodyValue(JoinPoint, item, prefix, bases));
+    for (source.cf_stmts.unsafeRawItemsForView()[source_prefix.cf_stmts..]) |item| self.cf_stmts.appendAssumeCapacity(relocateBodyValue(CFStmt, item, prefix, bases));
+    self.cf_stmt_locs.appendSliceAssumeCapacity(source.cf_stmt_locs.unsafeRawItemsForView()[source_prefix.cf_stmts..]);
+    self.cf_stmt_regions.appendSliceAssumeCapacity(source.cf_stmt_regions.unsafeRawItemsForView()[source_prefix.cf_stmts..]);
     for (source.cf_stmt_inline_scopes.unsafeRawItemsForView()[source_prefix.cf_stmts..]) |scope| {
-        try self.cf_stmt_inline_scopes.append(
-            self.allocator,
+        self.cf_stmt_inline_scopes.appendAssumeCapacity(
             relocateBodyValue(InlineScopeId, scope, prefix, bases),
         );
     }
     for (source.cf_stmt_origin_kinds.unsafeRawItemsForView()[source_prefix.cf_stmts..]) |kind| {
-        try self.cf_stmt_origin_kinds.append(
-            self.allocator,
+        self.cf_stmt_origin_kinds.appendAssumeCapacity(
             relocateBodyValue(OriginKind, kind, prefix, bases),
         );
     }
@@ -1671,11 +1667,11 @@ pub fn addCFStmt(self: *Self, stmt: CFStmt, origin: StmtOrigin) Allocator.Error!
     try self.cf_stmt_regions.ensureUnusedCapacity(self.allocator, 1);
     try self.cf_stmt_inline_scopes.ensureUnusedCapacity(self.allocator, 1);
     try self.cf_stmt_origin_kinds.ensureUnusedCapacity(self.allocator, 1);
-    try self.cf_stmts.append(self.allocator, stmt);
-    try self.cf_stmt_locs.append(self.allocator, origin.loc);
-    try self.cf_stmt_regions.append(self.allocator, origin.region);
-    try self.cf_stmt_inline_scopes.append(self.allocator, origin.inline_scope);
-    try self.cf_stmt_origin_kinds.append(self.allocator, origin.kind);
+    self.cf_stmts.appendAssumeCapacity(stmt);
+    self.cf_stmt_locs.appendAssumeCapacity(origin.loc);
+    self.cf_stmt_regions.appendAssumeCapacity(origin.region);
+    self.cf_stmt_inline_scopes.appendAssumeCapacity(origin.inline_scope);
+    self.cf_stmt_origin_kinds.appendAssumeCapacity(origin.kind);
     self.noteStmtShapes(stmt);
     const id: CFStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(idx))));
     if (self.tail_call_builder) |builder| try builder.record(id, stmt);

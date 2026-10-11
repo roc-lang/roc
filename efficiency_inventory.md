@@ -284,6 +284,9 @@ stages it touches; the instruction-count effect is reported in "Results".
     procedure specification; the 244 reads that used one or two fields of a
     by-value `getProcSpec` copy go through it.
 
+49. `src/lir/LirStore.zig`: `addCFStmt` and `appendBodyShard` append into the
+    capacity they reserve up front without re-checking it per element.
+
 ## Findings from profiling
 
 These were found by profiling the ReleaseFast compiler with
@@ -2262,13 +2265,13 @@ reading code, and were not in the audit above.
 - category G/H; runs per statement/local/join of every emitted body (ARC emission of every procedure, and every proc-rewrite commit).; impact low-medium; risk low
 - Finding: After `ensureUnusedCapacity` for every column, the loops do `try self.cf_stmts.append(self.allocator, relocateBodyValue(CFStmt, item, ...))` per element (lines 806-840): each `append` re-checks capacity and goes through the `try` path. `relocateBodyValue(CFStmt, ...)` is a comptime-recursive field walk that rebuilds the 144-byte union by value (`@unionInit`) for every statement.
 - Fix: use `appendAssumeCapacity`/`addManyAsSliceAssumeCapacity` and relocate in place in the destination slice (`@memcpy` then patch id fields). Verify: identical results; error handling already guaranteed by the up-front reservation.
-- Status: open
+- Status: fixed (fix 49)
 
 ### src/lir/LirStore.zig:1648: `addCFStmt` calls `ensureUnusedCapacity(1)` on five columns then `append` on each, per statement
 - category G; runs per statement appended by every lowering and pass.; impact low; risk low
 - Finding: five `ensureUnusedCapacity(…, 1)` followed by five `try …append` (which re-checks capacity). `noteStmtShapes` also does `getLocal` (and for joins a span walk) per append. Minor per-call overhead on the hottest append path.
 - Fix: `ensureUnusedCapacity` then `appendAssumeCapacity` for the five columns; callers that know the statement count (`appendBodyShard`, body_clone) should reserve once.
-- Status: open
+- Status: fixed (fix 49)
 
 ### src/lir/LirStore.zig:474: `ownStringEntryCount`/`stringEntryCountFrom` iterate every interned string to count them
 - category E; runs per body shard append (`appendBodyShard` calls `stringEntryCountFrom`, line 749) and per `captureBodyShard` (`bodyOwnedStringCount`).; impact low; risk low
