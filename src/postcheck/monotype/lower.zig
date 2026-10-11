@@ -11387,7 +11387,7 @@ const Builder = struct {
         const restored_node = try restored_expr.ty.toGraphNode(graph);
         try relateRequestComponent(graph, boundary.witness_node, restored_node);
         try relateRequestComponent(graph, boundary.request_node, boundary.witness_node);
-        const restored_proof = body_draft.expr_impossibility_proofs.items[@backingInt(restored)];
+        const restored_proof = body_draft.expr_impossibility_proofs.get(@backingInt(restored));
         body_draft.impossibility_proofs.items[@backingInt(boundary.proof_reservation)] =
             if (restored_proof) |proof| .{ .forward = proof } else .never;
         body_draft.deferred_const_uses.items[boundary_index].restored_source = restored;
@@ -11427,7 +11427,7 @@ const Builder = struct {
             if (body_draft.exprs.items[reservation_index].data != .pending_deferred) {
                 Common.invariant("deferred const reservation was filled more than once");
             }
-            if (body_draft.expr_impossibility_proofs.items[reservation_index] != boundary.proof_reservation) {
+            if (body_draft.expr_impossibility_proofs.get(reservation_index) != boundary.proof_reservation) {
                 Common.invariant("deferred const reservation lost its stable impossibility proof");
             }
             if (sources[reservation_index] != null) {
@@ -11728,8 +11728,7 @@ const Builder = struct {
             }
             lowered_expr.ty = .{ .sealed = callable.ret };
             body_draft.exprs.items[@backingInt(boundary.expr)] = lowered_expr;
-            body_draft.expr_impossibility_proofs.items[@backingInt(boundary.expr)] =
-                body_draft.expr_impossibility_proofs.items[@backingInt(lowered)];
+            body_draft.expr_impossibility_proofs.set(@backingInt(boundary.expr), body_draft.expr_impossibility_proofs.get(@backingInt(lowered)));
         }
         for (body_draft.deferred_structural_serializations.items) |boundary| {
             if (body_draft.exprs.items[@backingInt(boundary.expr)].data == .pending_deferred) {
@@ -11802,8 +11801,7 @@ const Builder = struct {
             }
             lowered_expr.ty = .{ .sealed = reserved_ty };
             body_draft.exprs.items[@backingInt(boundary.expr)] = lowered_expr;
-            body_draft.expr_impossibility_proofs.items[@backingInt(boundary.expr)] =
-                body_draft.expr_impossibility_proofs.items[@backingInt(lowered)];
+            body_draft.expr_impossibility_proofs.set(@backingInt(boundary.expr), body_draft.expr_impossibility_proofs.get(@backingInt(lowered)));
         }
         for (body_draft.deferred_stored_codec_restores.items) |boundary| {
             if (body_draft.exprs.items[@backingInt(boundary.expr)].data == .pending_deferred) {
@@ -11866,8 +11864,7 @@ const Builder = struct {
             }
             lowered_expr.ty = .{ .sealed = reserved_ty };
             body_draft.exprs.items[@backingInt(boundary.expr)] = lowered_expr;
-            body_draft.expr_impossibility_proofs.items[@backingInt(boundary.expr)] =
-                body_draft.expr_impossibility_proofs.items[@backingInt(lowered)];
+            body_draft.expr_impossibility_proofs.set(@backingInt(boundary.expr), body_draft.expr_impossibility_proofs.get(@backingInt(lowered)));
         }
         for (body_draft.deferred_callsite_intrinsics.items) |boundary| {
             if (body_draft.exprs.items[@backingInt(boundary.expr)].data == .pending_deferred) {
@@ -16166,6 +16163,39 @@ const DraftPreparedInspectMethod = struct {
 
 const RuntimeImpossibilityProofId = enum(u32) { _ };
 
+/// A per-node column of optional proof ids, stored as `u32`s with
+/// `maxInt(u32)` for "no proof"; that value is never minted.
+const ImpossibilityProofColumn = struct {
+    items: std.ArrayList(u32) = .empty,
+
+    const none = std.math.maxInt(u32);
+
+    fn encode(proof: ?RuntimeImpossibilityProofId) u32 {
+        return if (proof) |id| @backingInt(id) else none;
+    }
+
+    fn get(self: *const ImpossibilityProofColumn, index: usize) ?RuntimeImpossibilityProofId {
+        const raw = self.items.items[index];
+        return if (raw == none) null else @fromBackingInt(raw);
+    }
+
+    fn set(self: *ImpossibilityProofColumn, index: usize, proof: ?RuntimeImpossibilityProofId) void {
+        self.items.items[index] = encode(proof);
+    }
+
+    fn append(self: *ImpossibilityProofColumn, allocator: Allocator, proof: ?RuntimeImpossibilityProofId) Allocator.Error!void {
+        try self.items.append(allocator, encode(proof));
+    }
+
+    fn clearRetainingCapacity(self: *ImpossibilityProofColumn) void {
+        self.items.clearRetainingCapacity();
+    }
+
+    fn deinit(self: *ImpossibilityProofColumn, allocator: Allocator) void {
+        self.items.deinit(allocator);
+    }
+};
+
 const RuntimeImpossibilityProof = union(enum) {
     node: NodeId,
     never,
@@ -16629,9 +16659,9 @@ const BodyDraftStore = struct {
     nested_spec_reuses: std.ArrayList(DraftSpecReuse),
     impossibility_proofs: std.ArrayList(RuntimeImpossibilityProof),
     impossibility_proof_ids: std.ArrayList(RuntimeImpossibilityProofId),
-    expr_impossibility_proofs: std.ArrayList(?RuntimeImpossibilityProofId),
-    pat_impossibility_proofs: std.ArrayList(?RuntimeImpossibilityProofId),
-    stmt_impossibility_proofs: std.ArrayList(?RuntimeImpossibilityProofId),
+    expr_impossibility_proofs: ImpossibilityProofColumn,
+    pat_impossibility_proofs: ImpossibilityProofColumn,
+    stmt_impossibility_proofs: ImpossibilityProofColumn,
     nested_specs: std.ArrayList(DraftNestedSpec),
     sealed_nested_specs: std.ArrayList(SealedNestedSpec),
     nested_spec_lookup: DraftNestedSpecLookup,
@@ -16751,9 +16781,9 @@ const BodyDraftStore = struct {
             .nested_spec_reuses = .empty,
             .impossibility_proofs = .empty,
             .impossibility_proof_ids = .empty,
-            .expr_impossibility_proofs = .empty,
-            .pat_impossibility_proofs = .empty,
-            .stmt_impossibility_proofs = .empty,
+            .expr_impossibility_proofs = .{},
+            .pat_impossibility_proofs = .{},
+            .stmt_impossibility_proofs = .{},
             .nested_specs = .empty,
             .sealed_nested_specs = .empty,
             .nested_spec_lookup = DraftNestedSpecLookup.init(allocator),
@@ -18903,7 +18933,9 @@ fn appendRuntimeImpossibilityProof(
     allocator: Allocator,
     proof: RuntimeImpossibilityProof,
 ) Allocator.Error!RuntimeImpossibilityProofId {
-    const id: RuntimeImpossibilityProofId = @fromBackingInt(@intCast(@as(u32, @intCast(draft.impossibility_proofs.items.len))));
+    const index = draft.impossibility_proofs.items.len;
+    if (index >= ImpossibilityProofColumn.none) return error.OutOfMemory;
+    const id: RuntimeImpossibilityProofId = @fromBackingInt(@intCast(index));
     try draft.impossibility_proofs.append(allocator, proof);
     return id;
 }
@@ -20668,11 +20700,11 @@ const BodyContext = struct {
     }
 
     fn exprImpossibilityProof(self: *BodyContext, expr: DraftExprId) ?RuntimeImpossibilityProofId {
-        return self.draft.expr_impossibility_proofs.items[@backingInt(expr)];
+        return self.draft.expr_impossibility_proofs.get(@backingInt(expr));
     }
 
     fn stmtImpossibilityProof(self: *BodyContext, stmt: DraftStmtId) ?RuntimeImpossibilityProofId {
-        return self.draft.stmt_impossibility_proofs.items[@backingInt(stmt)];
+        return self.draft.stmt_impossibility_proofs.get(@backingInt(stmt));
     }
 
     fn anyExprSpanImpossibilityProof(
@@ -20726,7 +20758,7 @@ const BodyContext = struct {
         self: *BodyContext,
         pat: DraftPatId,
     ) ?RuntimeImpossibilityProofId {
-        return self.draft.pat_impossibility_proofs.items[@backingInt(pat)];
+        return self.draft.pat_impossibility_proofs.get(@backingInt(pat));
     }
 
     /// Build a proof leaf without importing a sealed type back into the
@@ -20959,10 +20991,10 @@ const BodyContext = struct {
             self.builder.current_loc,
             self.builder.current_region,
         );
-        self.draft.expr_impossibility_proofs.items[@backingInt(id)] = try self.exprDataImpossibilityProof(
+        self.draft.expr_impossibility_proofs.set(@backingInt(id), try self.exprDataImpossibilityProof(
             self.draft.exprs.items[@backingInt(id)].ty,
             expr.data,
-        );
+        ));
         return id;
     }
 
@@ -20990,7 +21022,7 @@ const BodyContext = struct {
             self.builder.current_loc,
             self.builder.current_region,
         );
-        self.draft.expr_impossibility_proofs.items[@backingInt(id)] = try self.exprDataImpossibilityProof(ty, data);
+        self.draft.expr_impossibility_proofs.set(@backingInt(id), try self.exprDataImpossibilityProof(ty, data));
         return id;
     }
 
@@ -21216,7 +21248,7 @@ const BodyContext = struct {
         defer timing_scope.end();
         const ty = try self.draftTypeCell(pat.ty);
         const id = try self.draft.addPat(.{ .ty = ty, .data = pat.data });
-        self.draft.pat_impossibility_proofs.items[@backingInt(id)] = try self.patDataImpossibilityProof(ty, pat.data);
+        self.draft.pat_impossibility_proofs.set(@backingInt(id), try self.patDataImpossibilityProof(ty, pat.data));
         return id;
     }
 
@@ -21232,7 +21264,7 @@ const BodyContext = struct {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .draft_ir);
         defer timing_scope.end();
         const id = try self.draft.addPat(.{ .ty = ty, .data = data });
-        self.draft.pat_impossibility_proofs.items[@backingInt(id)] = try self.patDataImpossibilityProof(ty, data);
+        self.draft.pat_impossibility_proofs.set(@backingInt(id), try self.patDataImpossibilityProof(ty, data));
         return id;
     }
 
@@ -21370,7 +21402,7 @@ const BodyContext = struct {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .draft_ir);
         defer timing_scope.end();
         const id = try self.draft.addStmtWithSource(stmt, self.builder.current_loc, self.builder.current_region);
-        self.draft.stmt_impossibility_proofs.items[@backingInt(id)] = try self.stmtDataImpossibilityProof(stmt);
+        self.draft.stmt_impossibility_proofs.set(@backingInt(id), try self.stmtDataImpossibilityProof(stmt));
         return id;
     }
 
@@ -34001,13 +34033,9 @@ const BodyContext = struct {
         maybe_proof: ?RuntimeImpossibilityProofId,
     ) Allocator.Error!bool {
         const proof = maybe_proof orelse return false;
-        const memo = try self.allocator.alloc(?bool, self.draft.impossibility_proofs.items.len);
-        defer self.allocator.free(memo);
-        @memset(memo, null);
-        const active = try self.allocator.alloc(bool, self.draft.impossibility_proofs.items.len);
-        defer self.allocator.free(active);
-        @memset(active, false);
-        var scan = ImpossibilityProofScan{ .body = self, .memo = memo, .active = active };
+        var states = collections.DenseMap(RuntimeImpossibilityProofId, ImpossibilityProofScan.State).init(self.allocator);
+        defer states.deinit();
+        var scan = ImpossibilityProofScan{ .body = self, .states = &states };
         return try ImpossibilityProofScan.Evaluation.run(self.allocator, &scan, proof);
     }
 
@@ -41547,8 +41575,7 @@ const BodyContext = struct {
             .remainder = remainder,
         } };
         reserved.data = data;
-        self.draft.expr_impossibility_proofs.items[@backingInt(reservation)] =
-            try self.exprDataImpossibilityProof(reserved.ty, data);
+        self.draft.expr_impossibility_proofs.set(@backingInt(reservation), try self.exprDataImpossibilityProof(reserved.ty, data));
     }
 
     fn jumpToGeneratedJoin(
@@ -42905,7 +42932,7 @@ const BodyContext = struct {
         self.draft.exprs.items[reservation_index] = self.draft.exprs.items[source_index];
         self.draft.expr_locs.items[reservation_index] = self.draft.expr_locs.items[source_index];
         self.draft.expr_regions.items[reservation_index] = self.draft.expr_regions.items[source_index];
-        self.draft.expr_impossibility_proofs.items[reservation_index] = self.draft.expr_impossibility_proofs.items[source_index];
+        self.draft.expr_impossibility_proofs.set(reservation_index, self.draft.expr_impossibility_proofs.get(source_index));
     }
 
     fn finishActiveConstBinding(self: *BodyContext, active_id: ActiveConstBindingId, source: DraftExprId) Allocator.Error!DraftExprId {
@@ -42939,7 +42966,7 @@ const BodyContext = struct {
         self.copyActiveConstReservation(active.reservation, wrapped);
         self.draft.expr_locs.items[@backingInt(active.reservation)] = self.draft.expr_locs.items[@backingInt(source)];
         self.draft.expr_regions.items[@backingInt(active.reservation)] = self.draft.expr_regions.items[@backingInt(source)];
-        self.draft.expr_impossibility_proofs.items[@backingInt(active.reservation)] = self.draft.expr_impossibility_proofs.items[@backingInt(source)];
+        self.draft.expr_impossibility_proofs.set(@backingInt(active.reservation), self.draft.expr_impossibility_proofs.get(@backingInt(source)));
         self.draft.active_const_bindings.items[index].wrapped = true;
     }
 
@@ -43498,7 +43525,7 @@ const BodyContext = struct {
             .pending_deferred,
         );
         const proof_reservation = try self.addImpossibilityProof(.pending);
-        self.draft.expr_impossibility_proofs.items[@backingInt(expr)] = proof_reservation;
+        self.draft.expr_impossibility_proofs.set(@backingInt(expr), proof_reservation);
         const lexical = try self.captureCodecLexicalContext();
         errdefer {
             self.allocator.free(lexical.binders);
@@ -45716,8 +45743,7 @@ const BodyContext = struct {
         // carries the encoding operand's impossibility proof from deferral
         // until Phase B replaces it with the emitted body's. Without this the
         // boundary is proof-less for the whole of Phase A.
-        fn_ctx.draft.expr_impossibility_proofs.items[@backingInt(runtime_boundary)] =
-            fn_ctx.exprImpossibilityProof(encoding_expr);
+        fn_ctx.draft.expr_impossibility_proofs.set(@backingInt(runtime_boundary), fn_ctx.exprImpossibilityProof(encoding_expr));
 
         const boundary = DraftDeferredStoredCodecRestore{
             .view = fn_view,
@@ -45861,8 +45887,7 @@ const BodyContext = struct {
         // carries the encoding operand's impossibility proof from deferral
         // until Phase B replaces it with the emitted body's. Without this the
         // boundary is proof-less for the whole of Phase A.
-        fn_ctx.draft.expr_impossibility_proofs.items[@backingInt(runtime_boundary)] =
-            fn_ctx.exprImpossibilityProof(encoding_expr);
+        fn_ctx.draft.expr_impossibility_proofs.set(@backingInt(runtime_boundary), fn_ctx.exprImpossibilityProof(encoding_expr));
 
         var boundary = DraftDeferredStoredCodecRestore{
             .view = fn_view,
@@ -52342,7 +52367,7 @@ const BodyContext = struct {
         const encoding = self.preLoweredOperandAt(pre_lowered, 0) orelse
             Common.invariant("structural serialization encoding operand was not lowered before deferral");
         const expr = try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(callable.ret), .pending_deferred);
-        self.draft.expr_impossibility_proofs.items[@backingInt(expr)] = self.exprImpossibilityProof(encoding);
+        self.draft.expr_impossibility_proofs.set(@backingInt(expr), self.exprImpossibilityProof(encoding));
         const lexical = try self.captureCodecLexicalContext();
         var lexical_needs_cleanup = true;
         errdefer if (lexical_needs_cleanup) {
@@ -57974,10 +57999,10 @@ const BodyContext = struct {
         mode: DraftStructuralDerivationMode,
     ) Allocator.Error!DraftExprId {
         const expr = try self.addExprWithTypeCell(.{ .sealed = ret_ty }, .pending_deferred);
-        self.draft.expr_impossibility_proofs.items[@backingInt(expr)] = try self.anyImpossibilityProof(&.{
+        self.draft.expr_impossibility_proofs.set(@backingInt(expr), try self.anyImpossibilityProof(&.{
             self.exprImpossibilityProof(lhs),
             self.exprImpossibilityProof(rhs),
-        });
+        }));
         const lexical = try self.captureCodecLexicalContext();
         errdefer {
             self.allocator.free(lexical.binders);
@@ -66315,10 +66340,16 @@ const NodeUninhabitedScan = struct {
 /// proof node's result.
 const ImpossibilityProofScan = struct {
     body: *BodyContext,
-    memo: []?bool,
-    active: []bool,
+    /// Each proof node the scan reached: decided, or still being evaluated.
+    states: *collections.DenseMap(RuntimeImpossibilityProofId, State),
+
+    const State = enum(u8) { active, holds, fails };
 
     const Evaluation = AnyAll.Evaluation(RuntimeImpossibilityProofId, ImpossibilityProofScan);
+
+    fn decided(result: bool) State {
+        return if (result) .holds else .fails;
+    }
 
     pub fn enter(self: *ImpossibilityProofScan, items: Evaluation.Items, proof_id: RuntimeImpossibilityProofId) Allocator.Error!Evaluation.Expansion {
         const body = self.body;
@@ -66326,8 +66357,11 @@ const ImpossibilityProofScan = struct {
         if (index >= body.draft.impossibility_proofs.items.len) {
             Common.invariant("runtime impossibility proof referenced a missing active proof node");
         }
-        if (self.memo[index]) |result| return .{ .value = result };
-        if (self.active[index]) Common.invariant("active runtime impossibility proof graph contained a cycle");
+        if (self.states.get(proof_id)) |state| switch (state) {
+            .holds => return .{ .value = true },
+            .fails => return .{ .value = false },
+            .active => Common.invariant("active runtime impossibility proof graph contained a cycle"),
+        };
         const expansion: Evaluation.Expansion = switch (body.draft.impossibility_proofs.items[index]) {
             .node => |node| .{ .value = try body.nodeIsProvenUninhabited(node) },
             .never => .{ .value = false },
@@ -66346,17 +66380,19 @@ const ImpossibilityProofScan = struct {
                 break :blk .{ .group = .all };
             },
         };
-        switch (expansion) {
-            .value => |result| self.memo[index] = result,
-            .group => self.active[index] = true,
-        }
+        try self.states.put(proof_id, switch (expansion) {
+            .value => |result| decided(result),
+            .group => .active,
+        });
         return expansion;
     }
 
     pub fn exit(self: *ImpossibilityProofScan, proof_id: RuntimeImpossibilityProofId, result: ?bool) std.mem.Allocator.Error!void {
-        const index = @backingInt(proof_id);
-        self.active[index] = false;
-        if (result) |value| self.memo[index] = value;
+        if (result) |value| {
+            try self.states.put(proof_id, decided(value));
+        } else {
+            _ = self.states.remove(proof_id);
+        }
     }
 };
 

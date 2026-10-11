@@ -405,6 +405,14 @@ stages it touches; the instruction-count effect is reported in "Results".
     platform tests resolve prebuilt app paths against the build root (they
     run from a fixture directory, so a relative cache path missed them).
 
+66. Monotype: the expression, pattern, and statement impossibility-proof
+    columns store `u32` ids with a `maxInt(u32)` "no proof" sentinel (4
+    bytes per node instead of 8) behind `get`/`set`, and minting a proof id
+    past the 32-bit range returns `error.OutOfMemory` instead of narrowing
+    unchecked; the per-call proof scan records the proofs it reaches in one
+    dense state map instead of two columns over the whole proof table.
+    Generated code is byte-identical; `roc check` is 217.94 G.
+
 ## Findings from profiling
 
 These were found by profiling the ReleaseFast compiler with
@@ -1856,7 +1864,7 @@ X: widen the packed `Layout` so its indices are 32 bits (a 64-bit packed layout,
 - category C; runs one slot per draft expr/pat/stmt; impact low; risk low
 - Finding: `?enum(u32)` is 8 bytes; a sentinel `RuntimeImpossibilityProofId.none = maxInt(u32)` halves these three columns.
 - Fix: add a `none` sentinel to `RuntimeImpossibilityProofId` and compare against it. No semantic change.
-- Status: open
+- Status: fixed (fix 66)
 
 ### src/postcheck/monotype/lower.zig:16558: `template_specs_by_template: AutoHashMap(names.ProcTemplate, std.ArrayList(u32))`
 - category F; runs per draft store; one heap ArrayList per template that has specs in the body; impact low; risk low
@@ -1904,7 +1912,7 @@ X: widen the packed `Layout` so its indices are 32 bits (a 64-bit packed layout,
 - category E/A; runs `activeImpossibilityProofHolds` per deferred inspect with an uninhabited value node; `FrozenRuntimeImpossibilityProofEvaluator.init` per body seal (11870, …; impact low-medium; risk low
 - Finding: `memo = alloc(?bool, impossibility_proofs.len)` + `active = alloc(bool, len)` + two `@memset`s, sized by the whole draft's proof table, to evaluate one proof. `?bool` is 2 bytes; the pair could be a single `u8` state column, and it could be epoch-stamped and retained on the BodyContext.
 - Fix: keep one `ArrayListUnmanaged(u8)` scratch on the BodyContext/Builder grown to `proofs.len` lazily, with a `u32` epoch array or a touched-list to reset only visited entries; merge `memo`/`active` into one enum(u8) {unseen, active, proven, disproven}. Same answers.
-- Status: open
+- Status: fixed (fix 66): the per-call scan keeps one dense state map over the proofs it reaches; the per-seal evaluator's two columns stay, since it evaluates across the whole draft
 
 ### src/postcheck/monotype/lower.zig:33963: `inhabitation_entered.clearRetainingCapacity()` on an AutoHashMap per uninhabited scan
 - category E/B; runs per `nodeIsProvenUninhabited` call (13 callers of `typeIsProvenUninhabited`, plus per produced runtime value), i.e. per lowered expression whose type is …; impact low-medium; risk low
@@ -1922,7 +1930,7 @@ X: widen the packed `Layout` so its indices are 32 bits (a 64-bit packed layout,
 - category D; runs per match branch (pattern literal guards and optional destruct binds are drained for each branch body/guard); impact low; risk low
 - Finding: `drainPatternLiteralGuards` and `drainOptionalDestructBinds` `dupe` the tail of a BodyContext-owned list and shrink it, returning an owned slice the caller frees after wrapping the branch body. The tail is at a stable position until the next push.
 - Fix: return the slice `items[start..]` and have the caller (which lowers the guards before anything else pushes) call `shrinkRetainingCapacity(start)` after use; or pass a callback. Verify that the lowering of the drained guards (`lowerPatternLiteralEq`) cannot push more guards; if it can, keep a two-stack approach with a reusable swap buffer rather than a dupe.
-- Status: open
+- Status: no change: applying the drained entries lowers expressions, which can queue further entries on the same list, so the drained slice must not alias it
 
 ### src/postcheck/monotype/lower.zig:66535-66538 (CheckedTypeAddress), 4147 type_cache, 4197/4200 contains_error/representation_fixed, 3439 workspace checked_type_cache: 36-byte hashed keys for per-checked-type memos
 - category B; runs per checked-type instantiation (type_cache lookup on every `instNode` of a checked type), per `checkedTypeContainsError`/`checkedTypeRepresentationFixed` query; impact medium; risk low
