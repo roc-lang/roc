@@ -29402,8 +29402,6 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
                 return self.requestIfChild(state, branch.body, expected.forBranchBody(), is_call_arg, is_immediate_callee, true);
             },
             .after_remaining_body => {
-                const branch = self.cir.store.getIfBranch(branches[state.remaining_index]);
-                try self.markErroneous(ModuleEnv.varFrom(branch.body));
                 state.remaining_index += 1;
                 state.phase = if (state.remaining_index < branches.len)
                     .schedule_remaining_cond
@@ -29633,7 +29631,9 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
             const branch = self.cir.store.getMatchBranch(branch_idxs[branch_cur_index]);
 
             if (state.checking_other_branches) {
-                try self.markErroneous(ModuleEnv.varFrom(branch.value));
+                // The branch is not related to the others. Its value's class
+                // can be shared with a binder (a lookup), so it is left as
+                // its own checking solved it.
             } else if (branch_cur_index == 0) {
                 state.val_var = if (self.branchValueIsErroneous(branch.value))
                     try self.fresh(env, expr_region)
