@@ -123,9 +123,13 @@ pub fn classifyType(allocator: std.mem.Allocator, store: *const Store, start: Id
 /// are visited in order on an explicit stack, so aggregate nesting never
 /// becomes native call depth.
 fn countVectors(allocator: std.mem.Allocator, store: *const Store, idx: Idx, maybe_kind: *?layout.Vector) std.mem.Allocator.Error!u8 {
+    // Aggregates classify in a few members, so the worklist starts on the stack.
+    var pending_buffer: [256]u8 align(@alignOf(usize)) = undefined;
+    var pending_state = std.heap.BufferFirstAllocator.init(&pending_buffer, allocator);
+    const pending_allocator = pending_state.allocator();
     var pending: std.ArrayList(Idx) = .empty;
-    defer pending.deinit(allocator);
-    try pending.append(allocator, idx);
+    defer pending.deinit(pending_allocator);
+    try pending.append(pending_allocator, idx);
     var count: u8 = 0;
     while (pending.pop()) |current| {
         const lay = store.getLayout(current);
@@ -137,7 +141,7 @@ fn countVectors(allocator: std.mem.Allocator, store: *const Store, idx: Idx, may
                 var i: u32 = 0;
                 while (i < field_count) : (i += 1) {
                     if (store.getStructFieldIsPadding(struct_idx, i)) return invalid_float_count;
-                    try pending.append(allocator, store.getStructFieldLayout(struct_idx, i));
+                    try pending.append(pending_allocator, store.getStructFieldLayout(struct_idx, i));
                 }
                 std.mem.reverse(Idx, pending.items[start..]);
             },
@@ -151,7 +155,7 @@ fn countVectors(allocator: std.mem.Allocator, store: *const Store, idx: Idx, may
             .tag_union => {
                 const info = store.getTagUnionInfo(lay);
                 if (info.variants.len != 1 or info.data.discriminant_size != 0) return invalid_float_count;
-                try pending.append(allocator, info.variants.get(0).payload_layout);
+                try pending.append(pending_allocator, info.variants.get(0).payload_layout);
             },
             .box, .box_of_zst, .erased_box, .list, .list_of_zst, .closure, .erased_callable, .zst, .ptr => return invalid_float_count,
         }
@@ -176,9 +180,13 @@ const invalid_float_count = std.math.maxInt(u8);
 /// Members are visited in order on an explicit stack, so aggregate nesting never
 /// becomes native call depth.
 fn countFloats(allocator: std.mem.Allocator, store: *const Store, idx: Idx, maybe_float_bits: *?u16) std.mem.Allocator.Error!u8 {
+    // Aggregates classify in a few members, so the worklist starts on the stack.
+    var pending_buffer: [256]u8 align(@alignOf(usize)) = undefined;
+    var pending_state = std.heap.BufferFirstAllocator.init(&pending_buffer, allocator);
+    const pending_allocator = pending_state.allocator();
     var pending: std.ArrayList(Idx) = .empty;
-    defer pending.deinit(allocator);
-    try pending.append(allocator, idx);
+    defer pending.deinit(pending_allocator);
+    try pending.append(pending_allocator, idx);
     var count: u8 = 0;
     while (pending.pop()) |current| {
         const lay = store.getLayout(current);
@@ -193,7 +201,7 @@ fn countFloats(allocator: std.mem.Allocator, store: *const Store, idx: Idx, mayb
                     // member, so any padding makes the aggregate non-homogeneous (it
                     // falls back to size-based integer classification).
                     if (store.getStructFieldIsPadding(struct_idx, i)) return invalid_float_count;
-                    try pending.append(allocator, store.getStructFieldLayout(struct_idx, i));
+                    try pending.append(pending_allocator, store.getStructFieldLayout(struct_idx, i));
                 }
                 std.mem.reverse(Idx, pending.items[start..]);
             },
@@ -218,7 +226,7 @@ fn countFloats(allocator: std.mem.Allocator, store: *const Store, idx: Idx, mayb
             .tag_union => {
                 const info = store.getTagUnionInfo(lay);
                 if (info.variants.len != 1 or info.data.discriminant_size != 0) return invalid_float_count;
-                try pending.append(allocator, info.variants.get(0).payload_layout);
+                try pending.append(pending_allocator, info.variants.get(0).payload_layout);
             },
             // Anything else (pointer, list, box, non-transparent tag union, …)
             // makes the aggregate non-homogeneous.

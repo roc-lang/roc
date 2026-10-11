@@ -801,9 +801,13 @@ fn placementWasm(arena: std.mem.Allocator, store: *const Store, idx: Idx, ctx: C
 /// closures and transparent unions. Members are visited on an explicit
 /// stack, so aggregate nesting never becomes native call depth.
 fn findVectorKind(arena: std.mem.Allocator, store: *const Store, idx: Idx) std.mem.Allocator.Error!?layout.Vector {
+    // Aggregates classify in a few members, so the worklist starts on the stack.
+    var pending_buffer: [256]u8 align(@alignOf(usize)) = undefined;
+    var pending_state = std.heap.BufferFirstAllocator.init(&pending_buffer, arena);
+    const pending_allocator = pending_state.allocator();
     var pending: std.ArrayList(Idx) = .empty;
-    defer pending.deinit(arena);
-    try pending.append(arena, idx);
+    defer pending.deinit(pending_allocator);
+    try pending.append(pending_allocator, idx);
     while (pending.pop()) |current| {
         const lay = store.getLayout(current);
         switch (lay.tag) {
@@ -816,14 +820,14 @@ fn findVectorKind(arena: std.mem.Allocator, store: *const Store, idx: Idx) std.m
                 while (i > 0) {
                     i -= 1;
                     if (store.getStructFieldIsPadding(struct_idx, i)) continue;
-                    try pending.append(arena, store.getStructFieldLayout(struct_idx, i));
+                    try pending.append(pending_allocator, store.getStructFieldLayout(struct_idx, i));
                 }
             },
-            .closure => try pending.append(arena, lay.getClosure().captures_layout_idx),
+            .closure => try pending.append(pending_allocator, lay.getClosure().captures_layout_idx),
             .tag_union => {
                 const info = store.getTagUnionInfo(lay);
                 if (info.variants.len == 1 and info.data.discriminant_size == 0) {
-                    try pending.append(arena, info.variants.get(0).payload_layout);
+                    try pending.append(pending_allocator, info.variants.get(0).payload_layout);
                 }
             },
             .box, .box_of_zst, .erased_box, .list, .list_of_zst, .erased_callable, .zst, .ptr => {},

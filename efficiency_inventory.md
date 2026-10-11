@@ -387,6 +387,13 @@ stages it touches; the instruction-count effect is reported in "Results".
     `Idx.none` sentinel (4 bytes per layout instead of 8), and the LIR image
     format version moves to 44 for this column and fix 62's wider `Layout`.
 
+64. Layout: a graph commit takes its scratch columns, Tarjan stacks, and
+    pending list from one per-commit arena, and a cyclic component's
+    temporaries come from a per-component arena; the digest memo keeps its
+    work stack between queries; and the ABI classifiers start their member
+    worklists on the stack. Generated code is byte-identical and counts are
+    flat.
+
 ## Findings from profiling
 
 These were found by profiling the ReleaseFast compiler with
@@ -1163,7 +1170,7 @@ reading code, and were not in the audit above.
 - category A; runs per uncached layout graph commit (per distinct recursive/compound type in LIR lowering); impact medium for programs with many distinct compound types; risk low
 - Finding: `raw_layouts`, `value_layouts` (returned), `resolved`, `recursive_nodes`, `component_ids`, `visit_index`, `lowlink`, `on_stack`, `tarjan_stack`, `parent_starts`, `parents`, `parent_fill`, `pending`, `finalize_state`, `raw_used`: ~13 scratch allocations freed at return, each sized to the graph's node count; plus per-node `fields`/`variants` ArrayLists in `tryResolveNode` (2036, 2065) and `RecursiveGraphAnalysis` …
 - Fix: a `CommitScratch` struct retained on the store (cleared per commit) holding all of these as `ArrayListUnmanaged`s; the per-node `fields`/`variants` lists become spans into scratch.
-- Status: open
+- Status: fixed (fix 64): the scratch columns come from a per-commit arena
 
 ### src/layout/work.zig:46-52: `in_progress_vars: AutoArrayHashMap(ModuleVarKey, void)` / `in_progress_nominals: AutoArrayHashMap(NominalKey, ...)`
 - category B; runs per type var visited during layout computation; impact low-medium; risk low
@@ -1175,13 +1182,13 @@ reading code, and were not in the audit above.
 - category A; runs per `contentDigest` call (per layout digest request); impact low; risk low
 - Finding: a fresh worklist per digest computation; the cache box is once per store (fine).
 - Fix: retain the worklist on the `DigestCache`.
-- Status: open
+- Status: fixed (fix 64)
 
 ### src/layout/abi/x86_64.zig:169, aarch64.zig:126/179, abi/call.zig:803: `std.ArrayList` worklists per classification
 - category A; runs per call-ABI classification (per function signature lowered; results cached by callers); impact low; risk low
 - Finding: fresh `pending` lists per classification walk; the rest of `abi/call.zig` correctly allocates results in a caller-provided arena.
 - Fix: scratch on the classifier or use the caller's arena.
-- Status: open
+- Status: fixed (fix 64)
 
 ### src/layout/layout.zig:139: `Layout.Idx` is 28 bits, under the 32-bit width design.md requires for program-sized indices
 Status: open
@@ -1644,13 +1651,13 @@ X: widen the packed `Layout` so its indices are 32 bits (a 64-bit packed layout,
 - category A; runs per layout graph commit; impact medium (allocator traffic per type lowered); risk low
 - Finding: `commitGraph` allocates `mapping`, `pending_recursive` (AutoHashMap), `working` graph, `initialized`, `raw_layouts`, `value_layouts`, the duped `digests`; `RecursiveGraphAnalysis.init` allocates `keys`, `node_digests`, and the `Engine` allocates `digests`, `component`, `position`, `visit_index`, `low_link`, `on_stack` plus six ArrayLists, and each `strongConnect` call allocates `frames` and `walk_children`; …
 - Fix: a `CommitScratch` struct owned by the `Store` with `clearRetainingCapacity` columns sized by `graph.nodes.items.len` (one `MultiArrayList` of per-node scratch fields would replace ~12 of the slices), reused across commits. Semantics unchanged.
-- Status: open
+- Status: partly fixed (fix 64): `commitGraphUncached`'s scratch comes from one per-commit arena; `commitGraph`'s own mapping and working graph remain
 
 ### src/layout/store.zig:904-920 + 1845-1860: Tarjan's SCC is run twice per commit
 - category E; runs per graph commit; impact low-medium; risk medium (the second pass also decides …
 - Finding: `RecursiveGraphAnalysis.init` runs `Engine.strongConnect` over the original graph to assign recursive keys; `commitGraphUncached` then runs a second, independent Tarjan (`CycleFinder`) over the translated `working` graph to compute `recursive_nodes`/`component_ids`. The working graph is a node-subset renaming of the original (`mapping`), so the component ids from the first pass can be translated instead of …
 - Fix: carry `component`/`recursive` facts through `mapping` into `commitGraphUncached` (pass them as inputs), dropping `CycleFinder`.
-- Status: open
+- Status: no change: the commit's working graph merges nodes with equal recursive keys and drops interned ones, so its components are not the original graph's; the second pass computes them for the graph it commits
 
 ### src/layout/store.zig:129-130,399-403,3018-3023: Layout intern keys are heap-duplicated strings in a `StringHashMap`
 - category A/F; runs per distinct non-scalar layout (every `insertLayout`/`internStructShape`/`internTagUnionShape` miss) plus one key hash per lookup; impact low-medium; risk low
@@ -1686,7 +1693,7 @@ X: widen the packed `Layout` so its indices are 32 bits (a 64-bit packed layout,
 - category A; runs per recursive SCC per commit (rare relative to acyclic nodes); impact low; risk low
 - Finding: `resolveCyclicComponent` allocates `labels`, `next_labels`, `distinct_labels` (AutoHashMap of 32-byte keys), `sorted_labels`, `rank_of_member`, `block_rep`, `block_digest`.
 - Fix: engine-owned scratch lists cleared per component.
-- Status: open
+- Status: fixed (fix 64)
 
 ### src/builtins/utils.zig:364-366,569-571,625-627,750-752,788-792: Debug refcount tracker hooks are compiled into every release incref/decref/alloc/free
 - category H; runs every refcount operation and every refcounted allocation/free at program run time; impact medium (hot path of every Roc program; small per-op cost …; risk low

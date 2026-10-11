@@ -1391,6 +1391,10 @@ pub const Store = struct {
 
             fn resolveCyclicComponent(self_engine: *Engine, component_id: u32) Allocator.Error!void {
                 const allocator = self_engine.allocator;
+                // Temporaries of this component, freed together when it resolves.
+                var scratch_arena = collections.SingleThreadArena.init(allocator);
+                defer scratch_arena.deinit();
+                const scratch = scratch_arena.allocator();
                 const members = self_engine.members.items;
                 const member_count = members.len;
 
@@ -1402,12 +1406,9 @@ pub const Store = struct {
                 // member's unfolding, so bisimilar members carry equal labels
                 // and the labels are the same for bisimilar positions of any
                 // two graphs whatever their node counts or allocation order.
-                var labels = try allocator.alloc(RecursiveKey, member_count);
-                defer allocator.free(labels);
-                var next_labels = try allocator.alloc(RecursiveKey, member_count);
-                defer allocator.free(next_labels);
-                var distinct_labels = std.AutoHashMap(RecursiveKey, u32).init(allocator);
-                defer distinct_labels.deinit();
+                var labels = try scratch.alloc(RecursiveKey, member_count);
+                var next_labels = try scratch.alloc(RecursiveKey, member_count);
+                var distinct_labels = std.AutoHashMap(RecursiveKey, u32).init(scratch);
                 for (members, 0..) |member, pos| {
                     var hasher = TypeDigestHasher.init();
                     try encodeNode(self_engine.graph, member, LabelSink{
@@ -1442,8 +1443,7 @@ pub const Store = struct {
 
                 // Canonical order: the reduced positions sorted by label.
                 const block_count = label_count;
-                const sorted_labels = try allocator.alloc(RecursiveKey, block_count);
-                defer allocator.free(sorted_labels);
+                const sorted_labels = try scratch.alloc(RecursiveKey, block_count);
                 {
                     var it = distinct_labels.keyIterator();
                     var next: usize = 0;
@@ -1457,10 +1457,8 @@ pub const Store = struct {
                     const slot = distinct_labels.getPtr(label) orelse unreachable;
                     slot.* = @intCast(rank);
                 }
-                const rank_of_member = try allocator.alloc(u32, member_count);
-                defer allocator.free(rank_of_member);
-                const block_rep = try allocator.alloc(u32, block_count);
-                defer allocator.free(block_rep);
+                const rank_of_member = try scratch.alloc(u32, member_count);
+                const block_rep = try scratch.alloc(u32, block_count);
                 @memset(block_rep, no_component);
                 for (members, 0..) |member, pos| {
                     const rank = distinct_labels.get(labels[pos]) orelse unreachable;
@@ -1483,8 +1481,7 @@ pub const Store = struct {
                 var group_hasher = TypeDigestHasher.init();
                 group_hasher.update(self_engine.render_buf.items);
                 const group_digest = group_hasher.finalResult();
-                const block_digest = try allocator.alloc(RecursiveKey, block_count);
-                defer allocator.free(block_digest);
+                const block_digest = try scratch.alloc(RecursiveKey, block_count);
                 for (0..block_count) |rank| {
                     var hasher = TypeDigestHasher.init();
                     hasher.update("recursive-member");
@@ -1678,28 +1675,26 @@ pub const Store = struct {
         errdefer self.allocator.free(raw_layouts);
         const value_layouts = try self.allocator.alloc(Idx, graph.nodes.items.len);
         errdefer self.allocator.free(value_layouts);
-        const resolved = try self.allocator.alloc(bool, graph.nodes.items.len);
-        defer self.allocator.free(resolved);
-        const recursive_nodes = try self.allocator.alloc(bool, graph.nodes.items.len);
-        defer self.allocator.free(recursive_nodes);
-        const component_ids = try self.allocator.alloc(u32, graph.nodes.items.len);
-        defer self.allocator.free(component_ids);
+
+        // Scratch columns of this commit, freed together when it returns.
+        var scratch_arena = collections.SingleThreadArena.init(self.allocator);
+        defer scratch_arena.deinit();
+        const scratch = scratch_arena.allocator();
+        const resolved = try scratch.alloc(bool, graph.nodes.items.len);
+        const recursive_nodes = try scratch.alloc(bool, graph.nodes.items.len);
+        const component_ids = try scratch.alloc(u32, graph.nodes.items.len);
         @memset(resolved, false);
         @memset(recursive_nodes, false);
         @memset(component_ids, std.math.maxInt(u32));
 
-        const visit_index = try self.allocator.alloc(i32, graph.nodes.items.len);
-        defer self.allocator.free(visit_index);
-        const lowlink = try self.allocator.alloc(i32, graph.nodes.items.len);
-        defer self.allocator.free(lowlink);
-        const on_stack = try self.allocator.alloc(bool, graph.nodes.items.len);
-        defer self.allocator.free(on_stack);
+        const visit_index = try scratch.alloc(i32, graph.nodes.items.len);
+        const lowlink = try scratch.alloc(i32, graph.nodes.items.len);
+        const on_stack = try scratch.alloc(bool, graph.nodes.items.len);
         @memset(visit_index, -1);
         @memset(lowlink, 0);
         @memset(on_stack, false);
 
         var tarjan_stack = std.ArrayList(GraphNodeId).empty;
-        defer tarjan_stack.deinit(self.allocator);
 
         const CycleFinder = struct {
             allocator: std.mem.Allocator,
@@ -1907,7 +1902,7 @@ pub const Store = struct {
         };
 
         var cycle_finder = CycleFinder{
-            .allocator = self.allocator,
+            .allocator = scratch,
             .graph = graph,
             .visit_index = visit_index,
             .lowlink = lowlink,
@@ -2167,18 +2162,15 @@ pub const Store = struct {
         // tried once and then again only when one of its children resolves.
         // The parents of each node, as one flat list indexed by `parent_starts`.
         const node_count = graph.nodes.items.len;
-        const parent_starts = try self.allocator.alloc(u32, node_count + 1);
-        defer self.allocator.free(parent_starts);
+        const parent_starts = try scratch.alloc(u32, node_count + 1);
         @memset(parent_starts, 0);
         for (graph.nodes.items) |node| {
             var children = GraphChildren.init(graph, node);
             while (children.next()) |child| parent_starts[@backingInt(child) + 1] += 1;
         }
         for (1..parent_starts.len) |i| parent_starts[i] += parent_starts[i - 1];
-        const parents = try self.allocator.alloc(GraphNodeId, parent_starts[node_count]);
-        defer self.allocator.free(parents);
-        const parent_fill = try self.allocator.dupe(u32, parent_starts[0..node_count]);
-        defer self.allocator.free(parent_fill);
+        const parents = try scratch.alloc(GraphNodeId, parent_starts[node_count]);
+        const parent_fill = try scratch.dupe(u32, parent_starts[0..node_count]);
         for (graph.nodes.items, 0..) |node, i| {
             var children = GraphChildren.init(graph, node);
             while (children.next()) |child| {
@@ -2188,8 +2180,7 @@ pub const Store = struct {
             }
         }
 
-        var pending = try std.ArrayList(GraphNodeId).initCapacity(self.allocator, node_count);
-        defer pending.deinit(self.allocator);
+        var pending = try std.ArrayList(GraphNodeId).initCapacity(scratch, node_count);
         // Children are reserved after their parents, so trying the
         // highest ids first resolves most nodes on their first try.
         for (0..node_count) |i| pending.appendAssumeCapacity(@fromBackingInt(@intCast(i)));
@@ -2197,7 +2188,7 @@ pub const Store = struct {
             if (!try resolver.tryResolveNode(node_id)) continue;
             const index = @backingInt(node_id);
             for (parents[parent_starts[index]..parent_starts[index + 1]]) |parent| {
-                if (!resolved[@backingInt(parent)]) try pending.append(self.allocator, parent);
+                if (!resolved[@backingInt(parent)]) try pending.append(scratch, parent);
             }
         }
 
@@ -2211,11 +2202,9 @@ pub const Store = struct {
         }
 
         const FinalizeState = enum(u2) { unseen, active, done };
-        const finalize_state = try self.allocator.alloc(FinalizeState, graph.nodes.items.len);
-        defer self.allocator.free(finalize_state);
+        const finalize_state = try scratch.alloc(FinalizeState, graph.nodes.items.len);
         @memset(finalize_state, .unseen);
-        const raw_used = try self.allocator.alloc(bool, graph.nodes.items.len);
-        defer self.allocator.free(raw_used);
+        const raw_used = try scratch.alloc(bool, graph.nodes.items.len);
         @memset(raw_used, false);
 
         const Finalizer = struct {
