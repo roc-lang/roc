@@ -31,12 +31,13 @@ FallibleChannels := [].{
 		holder.result
 	}
 
-	# Channel: `?` into a closed row wider than the declared one. The Hosted
-	# Try Question Widening rule accepts this the same way it accepts an open
-	# enclosing row, and lowering bridges it with an adapter, so the boundary
-	# is still called at the declared row.
+	# Explicitly reconstruct the hosted error into a wider Roc-owned row.
 	via_question_closed_wider! : {} => Try(Str, [HostErr(Str), Widened(I32)])
-	via_question_closed_wider! = |{}| Ok(FallibleHost.str_ok!({})?)
+	via_question_closed_wider! = |{}|
+		match FallibleHost.str_ok!({}) {
+			Ok(value) => Ok(value)
+			Err(HostErr(message)) => Err(HostErr(message))
+		}
 
 	# A caller that wants a wider row re-tags the hosted error itself. That is
 	# the caller's own value, so the boundary keeps its declared row.

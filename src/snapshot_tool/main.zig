@@ -4718,7 +4718,6 @@ fn isTypeCheckError(err: SnapshotError) bool {
         error.VirtualAllocFailed,
         error.VirtualProtectFailed,
         error.WasmExecFailed,
-        error.WindowsSDKNotFound,
         error.WouldBlock,
         error.WriteFailed,
         => false,

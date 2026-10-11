@@ -1849,6 +1849,63 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "True" },
     },
+    // A capacity whose byte size overflows `usize` must crash, not wrap to a
+    // tiny allocation the next write overruns. `2^61 + 1` U64s overflow 64 bits.
+    .{
+        .name = "low_level - List.reserve rejects growth whose byte size overflows",
+        .source =
+        \\{
+        \\big : List(U64)
+        \\big = List.reserve([1, 2, 3], 2305843009213693953)
+        \\List.len(big)
+        \\}
+        ,
+        .expected = .{ .crash = {} },
+    },
+    .{
+        .name = "low_level - List.with_capacity rejects a capacity whose byte size overflows",
+        .source =
+        \\{
+        \\big : List(U64)
+        \\big = List.with_capacity(2305843009213693953)
+        \\List.len(big)
+        \\}
+        ,
+        .expected = .{ .crash = {} },
+    },
+    .{
+        .name = "low_level - List.repeat rejects a count whose byte size overflows",
+        .source = "List.len(List.repeat(0.U64, 2305843009213693953))",
+        .expected = .{ .crash = {} },
+    },
+    // wasm32-only boundaries: these fit a 64-bit address space, so native
+    // backends would really allocate them.
+    .{
+        // `2^29 + 1` U64s wrap i32 to an 8-byte allocation.
+        .name = "low_level - List.with_capacity rejects a byte size that overflows wasm32",
+        .source =
+        \\{
+        \\big : List(U64)
+        \\big = List.with_capacity(536870913)
+        \\List.len(List.append(big, 7))
+        \\}
+        ,
+        .expected = .{ .crash = {} },
+        .skip = .{ .interpreter = true, .dev = true, .llvm = true },
+    },
+    .{
+        .name = "low_level - Str.with_capacity rejects a capacity that overflows wasm32",
+        .source = "Str.with_capacity(4294967301)",
+        .expected = .{ .crash = {} },
+        .skip = .{ .interpreter = true, .dev = true, .llvm = true },
+    },
+    .{
+        // `2^32 + 1` once wrapped to a single repetition.
+        .name = "low_level - Str.repeat rejects a count that overflows wasm32",
+        .source = "Str.repeat(\"ab\", 4294967297)",
+        .expected = .{ .crash = {} },
+        .skip = .{ .interpreter = true, .dev = true, .llvm = true },
+    },
     .{
         .name = "low_level - List.capacity of zero-sized items stays zero on every backend",
         .source =
@@ -4550,6 +4607,17 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "\"\"" },
+    },
+    .{
+        // A wrapped `len + spare` would make the reserve a silent no-op.
+        .name = "low_level - Str.reserve rejects a spare that overflows its length",
+        .source =
+        \\{
+        \\big = Str.reserve("hello", 18446744073709551615)
+        \\big
+        \\}
+        ,
+        .expected = .{ .crash = {} },
     },
     .{
         .name = "low_level - Str.release_excess_capacity preserves content",
