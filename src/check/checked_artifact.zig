@@ -10488,13 +10488,10 @@ test "imported origin resolution visits each import view and owner declaration o
     const owner_identity_id = try owner_names.internModuleIdentity(&owner_hash);
 
     var declarations: [declaration_count]CheckedNominalDeclaration = undefined;
-    var type_names: [declaration_count]canonical.TypeNameId = undefined;
-    for (&declarations, &type_names, 0..) |*declaration, *type_name, index| {
-        var text_buf: [16]u8 = undefined;
-        type_name.* = try owner_names.internTypeName(try std.fmt.bufPrint(&text_buf, "T{d}", .{index}));
+    for (&declarations, 0..) |*declaration, index| {
         declaration.* = .{
             .id = @fromBackingInt(@intCast(index)),
-            .nominal = .{ .module = owner_identity_id, .type_name = type_name.*, .source_decl = @intCast(index) },
+            .nominal = .{ .module = owner_identity_id, .source_decl = @intCast(index) },
             .source_statement = @intCast(index),
             // Origin resolution reads only the id, nominal key and statement.
             .declaration_root = undefined,
@@ -10523,7 +10520,7 @@ test "imported origin resolution visits each import view and owner declaration o
 
     var index = ImportedOriginIndex.init(allocator);
     defer index.deinit();
-    for (0..type_names.len) |statement| {
+    for (0..declaration_count) |statement| {
         try testing.expect(checkedArtifactKeyEql(testCheckedModuleKey(owner_view_index), try index.owner(module_env, imports, origin)));
         const found = try index.nominalDeclaration(module_env, imports, origin, @intCast(statement));
         try testing.expect(checkedArtifactKeyEql(testCheckedModuleKey(owner_view_index), found.artifact));
