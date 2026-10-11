@@ -841,6 +841,23 @@ pub const RecordOmittedDefault = extern struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
+/// One use of a top-level value whose checked type is a widening copy of the
+/// value's own type: every tag union the row coercion reaches from the root
+/// has a fresh extension (design.md "Value Rows: Local Values Share, Top-Level
+/// Values Widen At Each Use"). Recorded by checking; checked-body construction
+/// lowers the use as a `row_coerce` whose child reads the value at
+/// `value_var`.
+pub const RowCoercedUse = extern struct {
+    /// The use's lookup expression node (`Node.Idx`).
+    node_idx: u32,
+    /// The value's own type in this module (`Var`): the definition's pattern
+    /// var, or the imported value's local copy.
+    value_var: u32,
+
+    /// The checked module's sorted table of row-coerced uses.
+    pub const SafeList = collections.SafeList(@This());
+};
+
 /// A source node whose checked value is a rank-1 polymorphic type scheme.
 ///
 /// Generalization records this explicitly because a partially generalized
@@ -904,6 +921,9 @@ top_level_value_defs: CIR.Def.Span,
 value_binding_defs: CIR.Def.Span,
 /// Exact definitions rewritten from annotation-only declarations to hosted lambdas.
 hosted_defs: CIR.Def.Span,
+/// Diagnostic-only host origins of callable results, indexed by definition node.
+/// Names are owned by this module; NONE means no established origin.
+diagnostic_hosted_returns: collections.SafeList(Ident.Idx),
 /// All the top-level statements in the module (populated by canonicalization)
 all_statements: CIR.Statement.Span,
 /// All canonical type-declaration statements in the module.
@@ -1035,6 +1055,12 @@ dispatch_relation_merges: DispatchRelationMerge.SafeList,
 /// Exact source bindings that checking generalized into rank-1 type schemes.
 /// Sorted by source node for allocation-free cross-module lookup.
 binding_schemes: BindingScheme.SafeList,
+/// Uses of top-level values that checking related to a widening copy of the
+/// value's type (design.md "Value Rows: Local Values Share, Top-Level Values
+/// Widen At Each Use"). Checked-body construction lowers each as a
+/// `row_coerce` of the value, read at the value's own type. Sorted by
+/// source node.
+row_coerced_uses: RowCoercedUse.SafeList,
 /// Generated-codec relations carried by those schemes. Sorted by source node;
 /// multiple requirements for one binding occupy one contiguous run.
 binding_scheme_codec_requirements: BindingSchemeCodecRequirement.SafeList,
@@ -1426,6 +1452,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .top_level_value_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .value_binding_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .hosted_defs = .{ .span = .{ .start = 0, .len = 0 } },
+        .diagnostic_hosted_returns = .{},
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .type_decls = .{ .span = .{ .start = 0, .len = 0 } },
         .forward_type_decls = .{ .span = .{ .start = 0, .len = 0 } },
@@ -1465,6 +1492,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .scheme_use_pairs = try SchemeUsePair.SafeList.initCapacity(gpa, 8),
         .dispatch_relation_merges = try DispatchRelationMerge.SafeList.initCapacity(gpa, 0),
         .binding_schemes = try BindingScheme.SafeList.initCapacity(gpa, 8),
+        .row_coerced_uses = try RowCoercedUse.SafeList.initCapacity(gpa, 8),
         .binding_scheme_codec_requirements = try BindingSchemeCodecRequirement.SafeList.initCapacity(gpa, 4),
         .generated_codec_derivations = try GeneratedCodecDerivation.SafeList.initCapacity(gpa, 4),
         .generated_codec_calls = try GeneratedCodecCall.SafeList.initCapacity(gpa, 16),
@@ -1485,6 +1513,7 @@ pub fn deinit(self: *Self) void {
     self.for_clause_aliases.deinit(self.gpa);
     self.provides_entries.deinit(self.gpa);
     self.hosted_entries.deinit(self.gpa);
+    self.diagnostic_hosted_returns.deinit(self.gpa);
     self.imports.deinit(self.gpa);
     self.file_dependencies.deinit(self.gpa);
     self.deferred_import_refs.deinit(self.gpa);
@@ -1501,6 +1530,7 @@ pub fn deinit(self: *Self) void {
     self.scheme_use_pairs.deinit(self.gpa);
     self.dispatch_relation_merges.deinit(self.gpa);
     self.binding_schemes.deinit(self.gpa);
+    self.row_coerced_uses.deinit(self.gpa);
     self.binding_scheme_codec_requirements.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
@@ -1607,6 +1637,7 @@ pub fn deinitCachedModule(self: *Self) void {
     self.scheme_use_pairs.deinit(self.gpa);
     self.dispatch_relation_merges.deinit(self.gpa);
     self.binding_schemes.deinit(self.gpa);
+    self.row_coerced_uses.deinit(self.gpa);
     self.binding_scheme_codec_requirements.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
@@ -3797,6 +3828,7 @@ pub const Serialized = extern struct {
     top_level_value_defs: CIR.Def.Span,
     value_binding_defs: CIR.Def.Span,
     hosted_defs: CIR.Def.Span,
+    diagnostic_hosted_returns: collections.SafeList(Ident.Idx).Serialized,
     all_statements: CIR.Statement.Span,
     type_decls: CIR.Statement.Span,
     forward_type_decls: CIR.Statement.Span,
@@ -3839,6 +3871,7 @@ pub const Serialized = extern struct {
     scheme_use_pairs: SchemeUsePair.SafeList.Serialized,
     dispatch_relation_merges: DispatchRelationMerge.SafeList.Serialized,
     binding_schemes: BindingScheme.SafeList.Serialized,
+    row_coerced_uses: RowCoercedUse.SafeList.Serialized,
     binding_scheme_codec_requirements: BindingSchemeCodecRequirement.SafeList.Serialized,
     generated_codec_derivations: GeneratedCodecDerivation.SafeList.Serialized,
     generated_codec_calls: GeneratedCodecCall.SafeList.Serialized,
@@ -3899,6 +3932,7 @@ pub const Serialized = extern struct {
         self.top_level_value_defs = env.top_level_value_defs;
         self.value_binding_defs = env.value_binding_defs;
         self.hosted_defs = env.hosted_defs;
+        try self.diagnostic_hosted_returns.serialize(&env.diagnostic_hosted_returns, allocator, writer);
         self.all_statements = env.all_statements;
         self.type_decls = env.type_decls;
         self.forward_type_decls = env.forward_type_decls;
@@ -3962,6 +3996,7 @@ pub const Serialized = extern struct {
         try self.scheme_use_pairs.serialize(&env.scheme_use_pairs, allocator, writer);
         try self.dispatch_relation_merges.serialize(&env.dispatch_relation_merges, allocator, writer);
         try self.binding_schemes.serialize(&env.binding_schemes, allocator, writer);
+        try self.row_coerced_uses.serialize(&env.row_coerced_uses, allocator, writer);
         try self.binding_scheme_codec_requirements.serialize(&env.binding_scheme_codec_requirements, allocator, writer);
         try self.generated_codec_derivations.serialize(&env.generated_codec_derivations, allocator, writer);
         try self.generated_codec_calls.serialize(&env.generated_codec_calls, allocator, writer);
@@ -3997,6 +4032,7 @@ pub const Serialized = extern struct {
             .top_level_value_defs = self.top_level_value_defs,
             .value_binding_defs = self.value_binding_defs,
             .hosted_defs = self.hosted_defs,
+            .diagnostic_hosted_returns = self.diagnostic_hosted_returns.deserializeInto(base_addr),
             .all_statements = self.all_statements,
             .type_decls = self.type_decls,
             .forward_type_decls = self.forward_type_decls,
@@ -4036,6 +4072,7 @@ pub const Serialized = extern struct {
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
             .dispatch_relation_merges = self.dispatch_relation_merges.deserializeInto(base_addr),
             .binding_schemes = self.binding_schemes.deserializeInto(base_addr),
+            .row_coerced_uses = self.row_coerced_uses.deserializeInto(base_addr),
             .binding_scheme_codec_requirements = self.binding_scheme_codec_requirements.deserializeInto(base_addr),
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
@@ -4075,6 +4112,7 @@ pub const Serialized = extern struct {
             .top_level_value_defs = self.top_level_value_defs,
             .value_binding_defs = self.value_binding_defs,
             .hosted_defs = self.hosted_defs,
+            .diagnostic_hosted_returns = self.diagnostic_hosted_returns.deserializeInto(base_addr),
             .all_statements = self.all_statements,
             .type_decls = self.type_decls,
             .forward_type_decls = self.forward_type_decls,
@@ -4116,6 +4154,7 @@ pub const Serialized = extern struct {
             .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
             .dispatch_relation_merges = try self.dispatch_relation_merges.deserializeWithCopy(base_addr, gpa),
             .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
+            .row_coerced_uses = try self.row_coerced_uses.deserializeWithCopy(base_addr, gpa),
             .binding_scheme_codec_requirements = try self.binding_scheme_codec_requirements.deserializeWithCopy(base_addr, gpa),
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
@@ -4169,6 +4208,7 @@ pub const Serialized = extern struct {
             .top_level_value_defs = self.top_level_value_defs,
             .value_binding_defs = self.value_binding_defs,
             .hosted_defs = self.hosted_defs,
+            .diagnostic_hosted_returns = try self.diagnostic_hosted_returns.deserializeWithCopy(base_addr, gpa),
             .all_statements = self.all_statements,
             .type_decls = self.type_decls,
             .forward_type_decls = self.forward_type_decls,
@@ -4208,6 +4248,7 @@ pub const Serialized = extern struct {
             .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
             .dispatch_relation_merges = try self.dispatch_relation_merges.deserializeWithCopy(base_addr, gpa),
             .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
+            .row_coerced_uses = try self.row_coerced_uses.deserializeWithCopy(base_addr, gpa),
             .binding_scheme_codec_requirements = try self.binding_scheme_codec_requirements.deserializeWithCopy(base_addr, gpa),
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
@@ -4414,6 +4455,28 @@ pub fn nodeIsBindingScheme(self: *const Self, node_idx: Node.Idx) bool {
         self.binding_schemes.items.items,
         @backingInt(node_idx),
     ) != null;
+}
+
+/// Record that the use at `node_idx` reads the value at `value_var` through a
+/// row coercion (`RowCoercedUse`). Checker-produced use metadata.
+pub fn recordRowCoercedUse(self: *Self, node_idx: Node.Idx, value_var: types_mod.Var) std.mem.Allocator.Error!void {
+    try upsertSortedByNode(
+        RowCoercedUse,
+        &self.row_coerced_uses,
+        self.gpa,
+        .{ .node_idx = @backingInt(node_idx), .value_var = @backingInt(value_var) },
+    );
+}
+
+/// The value's own type for a row-coerced use at `node_idx`, if checking
+/// recorded the use as one (`RowCoercedUse`).
+pub fn rowCoercedUseValueVar(self: *const Self, node_idx: Node.Idx) ?types_mod.Var {
+    const entry = findSortedByNode(
+        RowCoercedUse,
+        self.row_coerced_uses.items.items,
+        @backingInt(node_idx),
+    ) orelse return null;
+    return @fromBackingInt(entry.value_var);
 }
 
 /// Record one exact generated-codec relation owned by a source binding scheme.
@@ -5702,4 +5765,22 @@ test "NumeralLiteral: serialized bytes are a function of the recorded literals" 
         try std.testing.expectEqual(@as(u64, i), literal.after_decimal_digit_count);
         try std.testing.expect(literal.isMaterialized());
     }
+}
+
+/// Diagnostic origin summaries cross imports without requiring private modules
+/// to become visible to their callers.
+pub fn diagnosticHostedReturn(self: *const Self, def: CIR.Def.Idx) ?Ident.Idx {
+    const index = @backingInt(def);
+    if (index >= self.diagnostic_hosted_returns.len()) return null;
+    const origin = self.diagnostic_hosted_returns.items.items[index];
+    return if (origin.isNone()) null else origin;
+}
+
+/// Record the diagnostic-only hosted origin of an unchanged forwarded return.
+pub fn setDiagnosticHostedReturn(self: *Self, def: CIR.Def.Idx, origin: Ident.Idx) Allocator.Error!void {
+    const index = @backingInt(def);
+    while (self.diagnostic_hosted_returns.len() <= index) {
+        _ = try self.diagnostic_hosted_returns.append(self.gpa, Ident.Idx.NONE);
+    }
+    self.diagnostic_hosted_returns.items.items[index] = origin;
 }

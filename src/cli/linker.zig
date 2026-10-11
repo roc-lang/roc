@@ -289,8 +289,7 @@ pub const LinkError = error{
     OutOfMemory,
     InvalidArguments,
     LLVMNotAvailable,
-    WindowsSDKNotFound,
-} || std.zig.system.DetectError;
+};
 
 const PatchMachoStackSizeError = std.Io.File.OpenError || std.Io.File.ReadPositionalError || std.Io.File.WritePositionalError || error{
     NotMacho64,
@@ -561,36 +560,11 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
 
             switch (target_abi) {
                 .msvc => {
-                    const query = std.Target.Query{
-                        .cpu_arch = target_arch,
-                        .os_tag = .windows,
-                        .abi = .msvc,
-                        .ofmt = .coff,
-                    };
-
-                    const target = try std.zig.system.resolveTargetQuery(ctx.io.std_io, query);
-
-                    var environ_map = std.process.Environ.empty.createMap(ctx.arena) catch return error.WindowsSDKNotFound;
-                    defer environ_map.deinit();
-                    const native_libc = std.zig.LibCInstallation.findNative(ctx.arena, ctx.io.std_io, .{
-                        .target = &target,
-                        .environ_map = &environ_map,
-                    }) catch return error.WindowsSDKNotFound;
-
-                    if (native_libc.crt_dir) |lib_dir| {
-                        const lib_arg = try std.fmt.allocPrint(ctx.arena, "/libpath:{s}", .{lib_dir});
-                        try args.append(lib_arg);
-                    } else return error.WindowsSDKNotFound;
-
-                    if (native_libc.msvc_lib_dir) |lib_dir| {
-                        const lib_arg = try std.fmt.allocPrint(ctx.arena, "/libpath:{s}", .{lib_dir});
-                        try args.append(lib_arg);
-                    } else return error.WindowsSDKNotFound;
-
-                    if (native_libc.kernel32_lib_dir) |lib_dir| {
-                        const lib_arg = try std.fmt.allocPrint(ctx.arena, "/libpath:{s}", .{lib_dir});
-                        try args.append(lib_arg);
-                    } else return error.WindowsSDKNotFound;
+                    // The startup object, C runtime, and import libraries are
+                    // explicit platform inputs, exactly as on MinGW. Nothing is
+                    // discovered on the machine running the link, and
+                    // `/defaultlib` directives embedded in inputs are ignored.
+                    try args.append("/nodefaultlib");
                 },
                 .mingw => {
                     // MinGW mode changes LLD's archive and symbol semantics to
@@ -642,22 +616,9 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
                 try args.append("/stack:67108864");
             }
 
-            if (target_abi == .msvc) {
-                // These are part of the core Windows OS and are available on all Windows systems
-                try args.append("/defaultlib:kernel32");
-                try args.append("/defaultlib:ntdll");
-                try args.append("/defaultlib:msvcrt");
-                try args.append("/defaultlib:shell32");
-            }
-
             // Suppress warnings using Windows style
             try args.append("/ignore:4217"); // Ignore locally defined symbol imported warnings
             try args.append("/ignore:4049"); // Ignore locally defined symbol imported warnings
-
-            // Link C++ standard library if Tracy is enabled
-            if (build_options.enable_tracy and target_abi == .msvc) {
-                try args.append("/defaultlib:msvcprt");
-            }
 
             // Generate and link stack probe object for ___chkstk_ms
             // This is needed when linking Zig-compiled code (like platform hosts) that uses
@@ -884,13 +845,12 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
     // Add platform-provided files that come after object files
     // Also use --whole-archive in case there are static libs here too
     //
-    // Not on MinGW: a MinGW platform lists its C runtime and import libraries
-    // after `app`, and whole-archive loading would force every member of
-    // libmingw32 and of each import library, which define overlapping symbols
-    // (`__NULL_IMPORT_DESCRIPTOR`, the delay-load helpers, ...). Host archives
-    // that need full inclusion come before `app`.
-    const lazy_post = config.lazy_platform_archives or
-        (is_windows and (try windowsLinkAbi(config)) == .mingw);
+    // Not on Windows: a Windows platform lists its C runtime and import
+    // libraries after `app`, and whole-archive loading would force every member
+    // of the runtime and of each import library, which define overlapping
+    // symbols (`__NULL_IMPORT_DESCRIPTOR`, the delay-load helpers, ...). Host
+    // archives that need full inclusion come before `app`.
+    const lazy_post = config.lazy_platform_archives or is_windows;
     if (config.platform_files_post.len > 0) {
         if (!is_macos and !is_windows and !config.lazy_platform_archives) {
             try args.append("--whole-archive");
@@ -1294,6 +1254,81 @@ test "MinGW linking uses explicit platform runtime inputs without MSVC defaults"
     for (args.items) |arg| {
         try std.testing.expect(!std.mem.startsWith(u8, arg, "/libpath:"));
         try std.testing.expect(!std.mem.startsWith(u8, arg, "/defaultlib:"));
+    }
+}
+
+test "MSVC linking uses explicit platform runtime inputs and discovers nothing" {
+    var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
+    defer arena_instance.deinit();
+
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(std.testing.allocator, arena_instance.allocator(), &io, .build);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    // aarch64 from any host: an MSVC link that consulted the machine it runs
+    // on could not build these arguments without that target's SDK installed.
+    const config = LinkConfig{
+        .target_format = .coff,
+        .target_abi = .msvc,
+        .target_os = .windows,
+        .target_arch = .aarch64,
+        .output_path = "app.exe",
+        .object_files = &.{"roc_app.obj"},
+        .platform_files_pre = &.{"host.lib"},
+        .platform_files_post = &.{ "msvc_startup.lib", "kernel32.lib" },
+        .lazy_platform_archives = true,
+    };
+
+    const args = try buildLinkArgs(&ctx, config);
+
+    try std.testing.expectEqualStrings("lld-link", args.items[0]);
+    _ = findArg(args.items, "/nodefaultlib") orelse return error.MissingNoDefaultLib;
+    _ = findArg(args.items, "/machine:arm64") orelse return error.MissingMachine;
+    _ = findArg(args.items, "host.lib") orelse return error.MissingPlatformInput;
+    _ = findArg(args.items, "roc_app.obj") orelse return error.MissingAppObject;
+    _ = findArg(args.items, "msvc_startup.lib") orelse return error.MissingPlatformInput;
+    _ = findArg(args.items, "kernel32.lib") orelse return error.MissingPlatformInput;
+
+    for (args.items) |arg| {
+        try std.testing.expect(!std.mem.eql(u8, arg, "-lldmingw"));
+        try std.testing.expect(!std.mem.startsWith(u8, arg, "/libpath:"));
+        try std.testing.expect(!std.mem.startsWith(u8, arg, "/defaultlib:"));
+        try std.testing.expect(!std.mem.startsWith(u8, arg, "/entry:"));
+    }
+}
+
+test "MSVC links wrap only pre-app platform archives when not lazy" {
+    var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
+    defer arena_instance.deinit();
+
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(std.testing.allocator, arena_instance.allocator(), &io, .build);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    // As on MinGW: the host archive needs every member, but the runtime and
+    // import libraries listed after `app` must stay lazy.
+    const config = LinkConfig{
+        .target_format = .coff,
+        .target_abi = .msvc,
+        .target_os = .windows,
+        .target_arch = .x86_64,
+        .output_path = "app.exe",
+        .object_files = &.{"roc_app.obj"},
+        .platform_files_pre = &.{"host.lib"},
+        .platform_files_post = &.{ "msvc_startup.lib", "kernel32.lib" },
+        .lazy_platform_archives = false,
+    };
+
+    const args = try buildLinkArgs(&ctx, config);
+
+    _ = findArg(args.items, "/wholearchive:host.lib") orelse return error.MissingHostWholeArchive;
+    _ = findArg(args.items, "msvc_startup.lib") orelse return error.MissingPlatformInput;
+    _ = findArg(args.items, "kernel32.lib") orelse return error.MissingPlatformInput;
+    for (args.items) |arg| {
+        try std.testing.expect(!std.mem.eql(u8, arg, "/wholearchive:msvc_startup.lib"));
+        try std.testing.expect(!std.mem.eql(u8, arg, "/wholearchive:kernel32.lib"));
     }
 }
 
