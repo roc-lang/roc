@@ -1553,9 +1553,7 @@ pub const LiteralBinding = struct {
     kind: u8,
     binder: u32,
     type_digest: names.TypeDigest,
-    value_required: bool,
     ty: Type.TypeId,
-    source: @import("lir_core").Program.LiteralBindingSource,
 };
 
 pub const LiteralLocalContext = struct {

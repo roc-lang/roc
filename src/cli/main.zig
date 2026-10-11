@@ -9436,7 +9436,7 @@ const PackOfferGraph = struct {
     }
 };
 
-test "Pack18 publication selects exact semantic literal producers without fixed wrapper edges" {
+test "pack publication selects exact semantic literal producers without fixed wrapper edges" {
     const allocator = std.testing.allocator;
     const read = lir.Program.CachedLiteralRead{
         .recipe = .{

@@ -572,25 +572,11 @@ pub const CachedCtfeRead = struct {
 
 pub const LiteralRepresentation = @import("literal_recipe.zig").Representation;
 
-/// Binding authority is stamped when the binding is produced. Runtime locals
-/// explicitly have no compile-time value provider; their ordinals never persist.
-pub const LiteralBindingSource = union(enum(u8)) {
-    runtime,
-    checked_binding: struct {
-        module: [32]u8,
-        value_expr: u32,
-        pattern: u32,
-    },
-    constant: check.CheckedModule.ConstLocator,
-};
-
 pub const CachedLiteralBinding = struct {
     kind: u8,
     binder: u32,
     type_digest: check.CheckedNames.TypeDigest,
-    value_required: bool,
     ty: LiteralRepresentation,
-    source: LiteralBindingSource,
 
     pub fn deinit(self: CachedLiteralBinding, allocator: Allocator) void {
         self.ty.deinit(allocator);
@@ -649,7 +635,6 @@ pub const CachedLiteralRecipe = struct {
             if (!validEvidence(context.evidence, context.evidence_frames, context.evidence_frame_head)) return false;
             for (context.bindings) |binding| {
                 if (binding.kind > 1 or !binding.ty.valid()) return false;
-                if (binding.value_required and binding.source == .runtime) return false;
             }
         }
         return true;

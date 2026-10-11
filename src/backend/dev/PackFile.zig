@@ -19,7 +19,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RPCK";
 /// Format version; bump whenever the encoding or artifact contents change.
-pub const format_version: u32 = 18;
+pub const format_version: u32 = 19;
 
 /// One specialization the pack can serve: its reservation-time key, the
 /// artifact holding its procedure, and the ownership signature and
@@ -910,22 +910,18 @@ test "pack literal producer declaration roundtrip and malformed recipe rejection
         .args = .{ .start = 0, .len = 0 },
         .ret = @fromBackingInt(@intCast(0)),
     } }};
-    var bindings = [_]lir.Program.CachedLiteralBinding{
+    const bindings = [_]lir.Program.CachedLiteralBinding{
         .{
             .kind = 0,
             .binder = 3,
             .type_digest = .{ .bytes = @as([32]u8, @splat(47)) },
-            .value_required = false,
             .ty = .{ .root = @fromBackingInt(@intCast(0)), .types = &result_types },
-            .source = .runtime,
         },
         .{
             .kind = 1,
             .binder = 4,
             .type_digest = .{ .bytes = @as([32]u8, @splat(49)) },
-            .value_required = true,
             .ty = .{ .root = @fromBackingInt(@intCast(0)), .types = &result_types },
-            .source = .{ .checked_binding = .{ .module = owner, .value_expr = 23, .pattern = 29 } },
         },
     };
     const contexts = [_]lir.Program.CachedLiteralLocalContext{.{
@@ -986,12 +982,6 @@ test "pack literal producer declaration roundtrip and malformed recipe rejection
     var restored = try result.materialize(allocator);
     defer restored.deinit();
     try std.testing.expectEqualDeep(result_types[0], restored.store.type_store.get(result.root));
-    // Type-only lexical locals are portable; an actual runtime-only value
-    // capture cannot authorize retirement or become a fabricated zero.
-    bindings[0].value_required = true;
-    try std.testing.expect(!specs[0].demand.?.permitsRetirement());
-    try std.testing.expectError(error.InvalidLiteralRecipe, write(allocator, &set, &specs));
-    bindings[0].value_required = false;
     literals[0].recipe.result.root = @fromBackingInt(@intCast(100));
     try std.testing.expect(!specs[0].demand.?.permitsRetirement());
     try std.testing.expectError(error.InvalidLiteralRecipe, write(allocator, &set, &specs));

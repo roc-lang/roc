@@ -3168,7 +3168,6 @@ const LocalProcContext = struct {
     restored_specialization_key: ?names.TypeDigest = null,
     entries: []LexicalBinderEntry,
     evidence: EvidenceChain,
-    literal_required_bindings: []const checked.PatternBinderId = &.{},
 };
 
 /// Producer-authored lexical context retained by a ConstStore closure. The
@@ -15271,9 +15270,7 @@ const DraftLiteralBinding = struct {
     kind: u8,
     binder: u32,
     type_digest: names.TypeDigest,
-    value_required: bool,
     ty: DraftTypeCell,
-    source: @import("lir_core").Program.LiteralBindingSource,
 };
 
 const DraftLiteralLocalContext = struct {
@@ -15321,7 +15318,6 @@ const DraftLocal = struct {
     binder: ?checked.PatternBinderId = null,
     capture_id: ?checked.CaptureId = null,
     checked_capture_id: ?checked.CaptureId = null,
-    literal_binding_source: @import("lir_core").Program.LiteralBindingSource = .runtime,
     /// Whether this local, when captured, is a lexical value or the recursive
     /// binding reserved for a top-level compile-time root. Set where the
     /// binding is reserved and carried to the stored closure's captures.
@@ -18610,9 +18606,7 @@ const BodyDraftStore = struct {
                 .kind = binding.kind,
                 .binder = binding.binder,
                 .type_digest = binding.type_digest,
-                .value_required = binding.value_required,
                 .ty = try binding.ty.sealCommitted(committed_types),
-                .source = binding.source,
             };
             out.* = .{
                 .module = .{ .bytes = context.declaration.module },
@@ -20592,10 +20586,6 @@ const BodyContext = struct {
     typed_binders: TypedBinders,
     local_proc_contexts: LocalProcContexts,
     restored_local_proc_scope: ?RestoredLocalProcScope = null,
-    /// Present only during production of a binding; inactive local versions
-    /// inherit their existing source, while parameters have explicit runtime
-    /// authority. A literal recipe never derives origins from a later body walk.
-    active_literal_binding_source: ?@import("lir_core").Program.LiteralBindingSource = null,
     /// The binder relations every nested context created from this one
     /// starts from (see `nestedRelationBase`).
     nested_relation_base: ?*NestedRelationBase = null,
@@ -22455,8 +22445,6 @@ const BodyContext = struct {
         if (existing) |local| {
             self.draft.locals.items[@backingInt(id)].capture_kind = self.draft.locals.items[@backingInt(local)].capture_kind;
         }
-        const inherited_source = if (existing) |local| self.draft.locals.items[@backingInt(local)].literal_binding_source else .runtime;
-        self.draft.locals.items[@backingInt(id)].literal_binding_source = self.active_literal_binding_source orelse inherited_source;
         return id;
     }
 
@@ -22487,9 +22475,7 @@ const BodyContext = struct {
         }
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .draft_ir);
         defer timing_scope.end();
-        const local = try self.draft.addLocal(symbol, ty, binder, null);
-        self.draft.locals.items[@backingInt(local)].literal_binding_source = self.active_literal_binding_source orelse .runtime;
-        return local;
+        return try self.draft.addLocal(symbol, ty, binder, null);
     }
 
     /// The stored form of `chain`, reusing the last conversion when `chain`
@@ -22685,7 +22671,6 @@ const BodyContext = struct {
         binder: checked.PatternBinderId,
     ) Allocator.Error!void {
         const entry = source_view.bodies.patternBinder(binder);
-        if (self.active_literal_binding_source) |source| self.draft.locals.items[@backingInt(local)].literal_binding_source = source;
         const pattern = source_view.bodies.pattern(entry.pattern);
         if (pattern.data != .assign) return;
         const source = source_view.module_env.common.source;
@@ -23615,7 +23600,6 @@ const BodyContext = struct {
             .restored_specialization_key = context.restored_specialization_key,
             .entries = try self.allocator.dupe(LexicalBinderEntry, context.entries),
             .evidence = context.evidence,
-            .literal_required_bindings = context.literal_required_bindings,
         };
     }
 
@@ -23706,29 +23690,11 @@ const BodyContext = struct {
             .restored_specialization_key = null,
             .entries = entries,
             .evidence = self.evidence,
-            .literal_required_bindings = try self.literalRequiredBindings(declaration),
         };
     }
 
     /// Checking's explicit closure captures are consumed when the local
     /// declaration is produced, not recovered from a later body traversal.
-    fn literalRequiredBindings(self: *BodyContext, declaration: DraftLocalProcDeclaration) Allocator.Error![]const checked.PatternBinderId {
-        const view = self.builder.moduleForId(.{ .bytes = declaration.module });
-        const captures = switch (view.bodies.expr(declaration.expr).data) {
-            .closure => |closure| closure.captures,
-            .lambda => &.{},
-            else => Common.invariant("local procedure declaration was not a checked callable"),
-        };
-        var bindings = std.ArrayList(checked.PatternBinderId).empty;
-        defer bindings.deinit(self.allocator);
-        for (captures) |capture| {
-            const binder = checkedCaptureBinder(view, capture.pattern);
-            if (view.bodies.patternBinder(binder).is_scheme_alias) continue;
-            try bindings.append(self.allocator, binder);
-        }
-        return self.builder.evidence_arena.allocator().dupe(checked.PatternBinderId, bindings.items);
-    }
-
     fn releaseLocalProcContext(self: *BodyContext, context: LocalProcContext) void {
         self.allocator.free(context.entries);
     }
@@ -31129,16 +31095,6 @@ const BodyContext = struct {
                 const pattern = switch (statement.data) {
                     inline .decl, .var_, .reassign => |decl| decl.pattern,
                     .pending, .promoted_proc, .var_uninitialized, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => unreachable,
-                };
-                const saved_binding_source = self.active_literal_binding_source;
-                defer self.active_literal_binding_source = saved_binding_source;
-                self.active_literal_binding_source = switch (statement.data) {
-                    .decl => |decl| .{ .checked_binding = .{
-                        .module = self.view.key.bytes,
-                        .value_expr = @backingInt(decl.expr),
-                        .pattern = @backingInt(decl.pattern),
-                    } },
-                    else => .runtime,
                 };
                 const lowered = try self.finishPatternStatement(pattern, statement.source_region, task.requested_cell, input.?.exprValue());
                 const stmt = lowered.stmt orelse {
@@ -49583,9 +49539,7 @@ const BodyContext = struct {
                     .kind = binding.kind,
                     .binder = binding.binder,
                     .type_digest = binding.type_digest,
-                    .value_required = binding.value_required,
                     .ty = DraftTypeCell.fromGraphNode(try self.graph.importMonoIndependent(ty)),
-                    .source = binding.source,
                 };
             }
             out_context.* = .{
@@ -49618,7 +49572,6 @@ const BodyContext = struct {
                 errdefer self.allocator.free(entries);
                 for (context.bindings, entries) |binding, *out| {
                     const local = try self.addFreshLocalWithBinderCell(self.builder.symbols.fresh(), binding.ty, @fromBackingInt(@intCast(binding.binder)));
-                    self.draft.locals.items[@backingInt(local)].literal_binding_source = binding.source;
                     out.* = .{ .kind = binding.kind, .binder = binding.binder, .local = @backingInt(local), .type_digest = binding.type_digest };
                 }
                 id.* = @fromBackingInt(@intCast(@as(u32, @intCast(self.draft.local_proc_contexts.items.len))));
@@ -49630,14 +49583,6 @@ const BodyContext = struct {
                     .restored_specialization_key = context.specialization_key,
                     .entries = entries,
                     .evidence = rootEvidence(context.owner_template, &.{}),
-                    .literal_required_bindings = blk: {
-                        var required = std.ArrayList(checked.PatternBinderId).empty;
-                        defer required.deinit(self.allocator);
-                        for (context.bindings) |binding| if (binding.value_required) {
-                            try required.append(self.allocator, @fromBackingInt(@intCast(binding.binder)));
-                        };
-                        break :blk try self.builder.evidence_arena.allocator().dupe(checked.PatternBinderId, required.items);
-                    },
                 });
             }
             try self.local_proc_contexts.putPermanent(context.declaration.address(), id.*);
@@ -49654,76 +49599,16 @@ const BodyContext = struct {
         return indices;
     }
 
-    /// Only explicit value captures read current producers; lexical type entries
-    /// never replay an initializer.
+    /// Lexical contexts are type-only: a conversion never reads a value of
+    /// its enclosing function, so the producer replays no initializer.
     fn lowerLiteralProducerBody(self: *BodyContext, expr_id: checked.CheckedExprId, value_node: NodeId, callable_node: NodeId, evidence: StoredConstFnEvidence, source: []const DraftLiteralLocalContext) Allocator.Error!DraftExprId {
         // The producer runs during compile-time evaluation, so everything it
-        // requests is evaluation demand, including its capture reads.
+        // requests is evaluation demand.
         self.draft.evaluation_depth += 1;
         defer self.draft.evaluation_depth -= 1;
         const indices = try self.prepareLiteralProducerContext(expr_id, callable_node, evidence, source);
         defer self.allocator.free(indices);
-        const Capture = struct { local: DraftLocalId, value: DraftExprId, ty: DraftTypeCell };
-        var captures = std.ArrayList(Capture).empty;
-        defer captures.deinit(self.allocator);
-        for (source, indices) |context, id| {
-            const entries = self.draft.local_proc_contexts.items[@backingInt(id)].entries;
-            for (context.bindings, entries) |binding, entry| {
-                if (!binding.value_required) continue;
-                const value = try self.literalBindingValue(context, binding) orelse
-                    Common.invariant("literal producer requires a runtime-only capture");
-                try captures.append(self.allocator, .{ .local = @fromBackingInt(@intCast(entry.local)), .value = value, .ty = binding.ty });
-            }
-        }
-        var body = try self.lowerLiteralConversionRootBody(expr_id, DraftTypeCell.fromGraphNode(value_node));
-        var remaining = captures.items.len;
-        while (remaining > 0) {
-            remaining -= 1;
-            const capture = captures.items[remaining];
-            body = try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(value_node), .{ .let_ = .{
-                .bind = try self.addPatWithTypeCell(capture.ty, .{ .bind = capture.local }),
-                .value = capture.value,
-                .rest = body,
-            } });
-        }
-        return body;
-    }
-
-    /// A capture reads its explicitly selected current value producer. The
-    /// binding's initializer is not re-executed under the literal's ownership.
-    fn literalBindingValue(self: *BodyContext, context: DraftLiteralLocalContext, binding: DraftLiteralBinding) Allocator.Error!?DraftExprId {
-        const locator = switch (binding.source) {
-            .runtime => return null,
-            .constant => |locator| locator,
-            .checked_binding => |source| blk: {
-                const view = self.builder.moduleForId(.{ .bytes = source.module });
-                const producer = view.hoisted_constants.lookupByPattern(@fromBackingInt(@intCast(source.pattern))) orelse
-                    Common.invariant("literal capture binding has no checked compile-time value producer");
-                const by_expr = view.hoisted_constants.lookupByExpr(@fromBackingInt(@intCast(source.value_expr))) orelse
-                    Common.invariant("literal capture binding expression has no checked compile-time value producer");
-                if (producer.root != by_expr.root) Common.invariant("literal capture binding authorities disagree");
-                break :blk producer.const_ref;
-            },
-        };
-        const view = self.builder.moduleForId(checked.constModuleId(locator));
-        const root_id = switch (locator.owner) {
-            .top_level_binding => |owner| view.compile_time_roots.lookupIdByPattern(owner.pattern),
-            .hoisted_expr => |owner| if (view.hoisted_constants.lookupByExpr(owner.expr)) |root| root.root else null,
-        } orelse Common.invariant("literal capture locator has no declared checked value root");
-        const root = view.compile_time_roots.root(root_id);
-        if (root.payload == .runtime) Common.invariant("literal capture named a checked runtime-only binding");
-        const node = try binding.ty.toGraphNode(self.graph);
-        const template = view.const_templates.get(locator);
-        var producer_context = try BodyContext.init(self.allocator, self.builder, view, context.owner_template, self.graph, self.draft);
-        defer producer_context.deinit();
-        producer_context.method_scope = self.method_scope;
-        producer_context.evidence = try self.materializeStoredEvidenceFrames(context.owner_template, context.evidence.nodes, context.evidence.frames, context.evidence.head);
-        return switch (template.state) {
-            .stored_const => |stored| try producer_context.restoredStaticDataCandidateNodeAtNode(view, view, stored.node, node, locator, root.checked_type, .disallow),
-            .eval_template => |eval| try producer_context.lowerConstEvalTemplateUseAtNode(view, eval, locator, node, view.bodies.expr(root.expr).source_region, .{ .module = view.key, .root = root_id }),
-            .reserved => Common.invariant("literal capture value template is not finalized"),
-            .unimplemented => Common.invariant("literal capture has no checked value implementation"),
-        };
+        return try self.lowerLiteralConversionRootBody(expr_id, DraftTypeCell.fromGraphNode(value_node));
     }
 
     fn literalLocalContexts(self: *BodyContext) Allocator.Error![]DraftLiteralLocalContext {
@@ -49740,9 +49625,7 @@ const BodyContext = struct {
                     .kind = binding.kind,
                     .binder = binding.binder,
                     .type_digest = binding.type_digest,
-                    .value_required = std.mem.indexOfScalar(checked.PatternBinderId, source.literal_required_bindings, @fromBackingInt(@intCast(binding.binder))) != null,
                     .ty = local.ty,
-                    .source = local.literal_binding_source,
                 };
             }
             contexts[index] = .{

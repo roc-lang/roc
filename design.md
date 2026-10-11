@@ -21763,11 +21763,10 @@ crashes.
 
 Cold discovery and cached replay prepare specialized literal producers through
 one fresh lexical-context factory. Recorded callable types, evidence, and local
-declaration identities define that context; helper locals do not. Type-only
-lexical bindings require no values. Explicit value captures read their current
-checked constant authority, preserving the owning producer's demand and failure
-boundary rather than replaying its initializer. A runtime-only required capture
-cannot authorize cache retirement.
+declaration identities define that context; helper locals do not. The context
+is type-only: a conversion is a method, and methods never capture (see "Methods
+Never Capture"), so a producer reads no value of its enclosing function. Its
+whole body, including the conversion's dispatch, is evaluation demand.
 
 The exact source/specialization key and target/policy namespace select immutable
 producer metadata. Type-only literal projection consumes that producer's recorded

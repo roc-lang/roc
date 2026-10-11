@@ -4742,9 +4742,7 @@ const Lowerer = struct {
                     .kind = binding.kind,
                     .binder = binding.binder,
                     .type_digest = binding.type_digest,
-                    .value_required = binding.value_required,
                     .ty = try @import("literal_recipe.zig").representation(self.allocator, self.solved.lifted.types.view(), &self.solved.lifted.names, binding.ty),
-                    .source = binding.source,
                 };
                 initialized_bindings += 1;
             }

@@ -832,7 +832,7 @@ pub const Pending = struct {
     build_env: *compile.BuildEnv,
 };
 
-test "Pack18 checked materializer projection uses actual pending inputs and survives source retirement" {
+test "pack checked materializer projection uses actual pending inputs and survives source retirement" {
     const allocator = std.testing.allocator;
     const eval = @import("eval");
     var packs = LoadedPacks.init(allocator);
@@ -945,7 +945,7 @@ test "Pack18 checked materializer projection uses actual pending inputs and surv
     try std.testing.expect(LoadedPacks.normalNode(&packs, artifact));
 }
 
-test "Pack18 checked materializer demand is shared across recursive callers and rejects only its closure" {
+test "pack checked materializer demand is shared across recursive callers and rejects only its closure" {
     const allocator = std.testing.allocator;
     var packs = LoadedPacks.init(allocator);
     defer packs.deinit();
@@ -984,7 +984,7 @@ test "Pack18 checked materializer demand is shared across recursive callers and 
     try std.testing.expectEqualSlices(bool, &.{ true, true, true }, accepted);
 }
 
-test "Pack18 literal projection retains producer declarations after source retirement" {
+test "pack literal projection retains producer declarations after source retirement" {
     const allocator = std.testing.allocator;
     const eval = @import("eval");
     const checked = check.CheckedArtifact;
@@ -1909,7 +1909,7 @@ pub const LoadedPacks = struct {
     }
 };
 
-test "Pack18 literal offers require the full transitive exact producer closure" {
+test "pack literal offers require the full transitive exact producer closure" {
     const allocator = std.testing.allocator;
     var packs = LoadedPacks.init(allocator);
     defer packs.deinit();
@@ -1978,7 +1978,7 @@ fn testLiteralRead(key: [32]u8, identity: [32]u8) lir.Program.CachedLiteralRead 
     };
 }
 
-test "Pack18 machine callee literals close empty caller demand and recursive SCCs" {
+test "pack machine callee literals close empty caller demand and recursive SCCs" {
     const allocator = std.testing.allocator;
     const literal = testLiteralRead(@splat(31), lir.ProcIdentity.forTest(131).bytes);
     const Fixture = struct {
@@ -2058,7 +2058,7 @@ test "Pack18 machine callee literals close empty caller demand and recursive SCC
     }
 }
 
-test "Pack18 literal materializers require a recipe in their own serving closure" {
+test "pack literal materializers require a recipe in their own serving closure" {
     const allocator = std.testing.allocator;
     var packs = LoadedPacks.init(allocator);
     defer packs.deinit();
