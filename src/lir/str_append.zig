@@ -62,7 +62,7 @@ pub fn run(store: *LirStore) ResourceError!void {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(proc_index));
         // Only a body with the shape's flag can carry the caller shape; Debug
         // builds run the excluded procedures too and verify nothing rewrites.
-        const admitted = store.getProcSpec(proc_id).shapes.str_call;
+        const admitted = store.getProcSpecImmediate(proc_id).shapes.str_call;
         if (!admitted and builtin.mode != .debug) continue;
         const rewrote = try pass.transformProc(proc_id);
         if (rewrote and !admitted) invariant("{s}", .{"string-append pass rewrote a procedure whose shapes excluded it"});

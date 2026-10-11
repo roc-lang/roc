@@ -1467,8 +1467,8 @@ test "LIR image views empty and populated boxy tables" {
     try std.testing.expectEqual(layout_mod.Idx.str, populated_view.layouts.struct_fields.fieldItem(.layout, struct_field_idx));
     try std.testing.expect(populated_view.layouts.struct_fields.fieldItem(.is_padding, struct_field_idx));
     try std.testing.expectEqual(layout_mod.Idx.u64, populated_view.layouts.tag_union_variants.fieldItem(.payload_layout, tag_variant_idx));
-    try std.testing.expectEqual(LIR.BoxyDescRef{ .local = ret_desc_local }, populated_view.store.getProcSpec(proc_id).ret_desc.?);
-    try std.testing.expectEqual(@as(u64, 7), populated_view.store.getProcSpec(proc_id).native_code_revision);
+    try std.testing.expectEqual(LIR.BoxyDescRef{ .local = ret_desc_local }, populated_view.store.getProcSpecImmediate(proc_id).ret_desc.?);
+    try std.testing.expectEqual(@as(u64, 7), populated_view.store.getProcSpecImmediate(proc_id).native_code_revision);
 }
 
 // Regression for issue #11153: folded scalar lists share the literal store,
@@ -1636,8 +1636,8 @@ test "persisted image bytes do not depend on what store memory held before" {
         try std.testing.expectEqual(local, view.store.getCFStmtImmediate(ret).ret.value);
         try std.testing.expectEqual(layout_mod.Idx.u64, view.store.getLocal(local).layout_idx);
         try std.testing.expectEqual(@as(?LIR.BoxyDescRef, null), view.store.getLocal(local).boxy_desc);
-        try std.testing.expectEqual(@as(?LIR.CFStmtId, ret), view.store.getProcSpec(proc).body);
-        try std.testing.expectEqual(name, view.store.getProcSpec(proc).name);
+        try std.testing.expectEqual(@as(?LIR.CFStmtId, ret), view.store.getProcSpecImmediate(proc).body);
+        try std.testing.expectEqual(name, view.store.getProcSpecImmediate(proc).name);
         try std.testing.expectEqual(proc, view.root_procs[0]);
 
         images[built] = try gpa.alignedAlloc(u8, .@"16", fba.end_index);
@@ -1715,7 +1715,7 @@ test "LIR image round-trips ordered procedure rewrites with relocated suffixes" 
         try worker.setLocalName(local, name);
         const string = try worker.insertString(name);
         const inline_scope = try worker.addInlineScope(.{
-            .source_symbol = store.getProcSpec(procs[0]).name,
+            .source_symbol = store.getProcSpecImmediate(procs[0]).name,
             .source_name = string,
             .source_loc = shard_loc,
             .call_site = .{ .file = 1, .line = 4, .column = 5 },

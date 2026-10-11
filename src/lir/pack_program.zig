@@ -323,7 +323,7 @@ pub fn literalConvertingProcs(allocator: Allocator, store: *const LirStore) Allo
         for (visited.items) |stmt_id| seen[@backingInt(stmt_id)] = false;
         visited.clearRetainingCapacity();
         work.clearRetainingCapacity();
-        const body = store.getProcSpec(@fromBackingInt(@intCast(index))).body orelse continue;
+        const body = store.getProcSpecImmediate(@fromBackingInt(@intCast(index))).body orelse continue;
         try work.append(allocator, body);
         while (work.pop()) |stmt_id| {
             if (seen[@backingInt(stmt_id)]) continue;

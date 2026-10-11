@@ -30,7 +30,7 @@ const ProcScan = struct {
         var result = ProcScan{};
         var stack = std.ArrayList(lir.LIR.CFStmtId).empty;
         defer stack.deinit(allocator);
-        const body = store.getProcSpec(proc_id).body orelse return result;
+        const body = store.getProcSpecImmediate(proc_id).body orelse return result;
         try stack.append(allocator, body);
 
         while (stack.pop()) |stmt_id| {

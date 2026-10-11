@@ -17014,7 +17014,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             out_desc: ?LocalId,
         ) Allocator.Error!ValueLocation {
             std.debug.assert(args.len == arg_layouts.len);
-            const has_runtime_ret_desc = self.store.getProcSpec(proc.id).runtime_ret_desc != null;
+            const has_runtime_ret_desc = self.store.getProcSpecImmediate(proc.id).runtime_ret_desc != null;
             if (builtin.mode == .debug and out_desc != null and !has_runtime_ret_desc) {
                 base.invariant(
                     "Dev/codegen invariant violated: proc {d} call requested an unsupported runtime descriptor output",
@@ -24842,7 +24842,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             ret_layout: layout.Idx,
             runtime_desc_slot_out: ?*?i32,
         ) Allocator.Error!ValueLocation {
-            const has_runtime_ret_desc = self.store.getProcSpec(compiled.id).runtime_ret_desc != null;
+            const has_runtime_ret_desc = self.store.getProcSpecImmediate(compiled.id).runtime_ret_desc != null;
             var runtime_desc_result_slot: ?i32 = null;
             const call_arg_infos: []const ArgInfo = if (has_runtime_ret_desc) blk: {
                 const combined = try self.allocator.alloc(ArgInfo, arg_infos.len + 1);
@@ -26553,7 +26553,7 @@ test "Boxy thunk artifact splice preserves worker namespace in both orders and a
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
     const worker = try addLiteralProc(&store, .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } }, .u64);
-    const identity = store.getProcSpec(worker).identity;
+    const identity = store.getProcSpecImmediate(worker).identity;
     var producer = try HostLirCodeGen.initWithBoxyMetadata(
         allocator,
         &store,
@@ -28439,14 +28439,14 @@ test "independent fragment symbolic calls resolve after all procedures are place
             var lane = try CG.init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
             defer lane.deinit();
             try lane.emitProcFragment(id);
-            const identity = store.getProcSpec(id).identity;
+            const identity = store.getProcSpecImmediate(id).identity;
             const start = try image.appendAssembledRegion(lane.getGeneratedCode(), .{ .spliced_proc = identity }, 0, null);
             try image.registerAssembledProc(identity, start);
             for (lane.codeRefs()) |ref| {
                 try image.queueAssembledSymbolicRef(SymbolicReference{
                     .site = @intCast(start + ref.site),
                     .form = .call,
-                    .target = .{ .proc = store.getProcSpec(ref.target.proc).identity },
+                    .target = .{ .proc = store.getProcSpecImmediate(ref.target.proc).identity },
                 });
             }
         }

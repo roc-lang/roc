@@ -117,7 +117,7 @@ pub const HostSplice = struct {
         var external = std.ArrayList(lir.LIR.LirProcSpecId).empty;
         defer external.deinit(self.allocator);
         for (demand) |proc_id| {
-            if (codegen.store.getProcSpec(proc_id).external) try external.append(self.allocator, proc_id);
+            if (codegen.store.getProcSpecImmediate(proc_id).external) try external.append(self.allocator, proc_id);
         }
         if (external.items.len == 0) return;
         var carried = std.ArrayList(ProcArtifact.DataItem).empty;
@@ -423,7 +423,7 @@ fn comptimeDictSeed() callconv(.c) u64 {
 fn collectCodeSymbols(allocator: Allocator, codegen: *const HostLirCodeGen, out: *std.StringHashMap(usize)) Allocator.Error!void {
     for (codegen.codeRegions()) |region| {
         const name: []u8 = switch (region.kind) {
-            .proc => |proc_id| try codegen.store.getProcSpec(proc_id).identity.symbolName(allocator),
+            .proc => |proc_id| try codegen.store.getProcSpecImmediate(proc_id).identity.symbolName(allocator),
             .spliced_proc => |identity| try identity.symbolName(allocator),
             .rc_helper => |key| try LirCodeGenMod.compiledRcHelperSymbolName(allocator, codegen.layout_store, key),
             .spliced_helper => try allocator.dupe(u8, codegen.splicedHelperName(region.start + region.entry) orelse continue),

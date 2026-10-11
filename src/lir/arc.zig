@@ -759,7 +759,7 @@ fn recordObjectCacheFacts(
     try recordTailGroups(store, solution);
     for (0..proc_count) |proc_index| {
         const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
-        if (store.getProcSpec(proc).body == null) continue;
+        if (store.getProcSpecImmediate(proc).body == null) continue;
         const sig = solution.sigOf(proc);
         const rows = solution.sigTable().retConditionsOf(sig);
         const words = try store.allocator.alloc(u32, rows.len);
@@ -974,7 +974,7 @@ const EmissionOwner = struct {
         const dismantles = inserter.dismantles;
         const emit_sig = self.job.sig;
         const source_proc = self.job.source;
-        const emit_args = store.getProcSpec(source_proc).args;
+        const emit_args = store.getProcSpecImmediate(source_proc).args;
         // The source's original body is retained explicitly, since the base
         // procedure's metadata may already name its emitted body in later waves.
         inserter.current_proc_body = self.source.body.?;
@@ -3862,7 +3862,7 @@ const Inserter = struct {
         if (self.current_sig.outcomes.isEmpty()) return;
         const mask = self.solution.restitutionParamsAt(stmt);
         if (mask == 0) return;
-        const params = self.store.getLocalSpan(self.store.getProcSpec(self.current_proc).args);
+        const params = self.store.getLocalSpan(self.store.getProcSpecImmediate(self.current_proc).args);
         for (0..GuardedList.borrowLen(params)) |position| {
             const bit = arc_sig.paramBit(position) orelse break;
             if ((mask & bit) == 0) continue;
@@ -3894,7 +3894,7 @@ const Inserter = struct {
     ) ResourceError!void {
         const mask = self.solution.restitutionParamsAt(stmt);
         if (mask == 0) return;
-        const params = self.store.getLocalSpan(self.store.getProcSpec(self.current_source_proc).args);
+        const params = self.store.getLocalSpan(self.store.getProcSpecImmediate(self.current_source_proc).args);
         for (0..GuardedList.borrowLen(params)) |position| {
             const bit = arc_sig.paramBit(position) orelse break;
             if ((mask & bit) == 0) continue;
@@ -5421,7 +5421,7 @@ const Inserter = struct {
         loop_keep: ?LoopKeep,
         releases: *std.ArrayList(ReleaseDecision),
     ) ResourceError!void {
-        const params = self.store.getLocalSpan(self.store.getProcSpec(self.current_source_proc).args);
+        const params = self.store.getLocalSpan(self.store.getProcSpecImmediate(self.current_source_proc).args);
         for (self.boxy_desc_users.usersOf(desc_local)) |local| {
             if (!owned.contains(local)) continue;
             if (localSpanContains(params, local)) continue;
@@ -9964,7 +9964,7 @@ const ArcTest = struct {
         defer visited.deinit();
         var stack = std.ArrayList(LIR.CFStmtId).empty;
         defer stack.deinit(self.allocator);
-        const body = self.store.getProcSpec(proc_id).body orelse return 0;
+        const body = self.store.getProcSpecImmediate(proc_id).body orelse return 0;
         try stack.append(self.allocator, body);
         while (stack.pop()) |current| {
             if (visited.contains(current)) continue;
@@ -10336,7 +10336,7 @@ test "ARC preserves erased callable repack reuse" {
 
     try f.run();
 
-    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var cursor = f.store.getProcSpecImmediate(caller).body orelse return error.MissingCallerBody;
     var found = false;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
@@ -10435,7 +10435,7 @@ test "ARC preserves erased call ABI metadata" {
 
     try f.run();
 
-    var cursor = f.store.getProcSpec(caller).body.?;
+    var cursor = f.store.getProcSpecImmediate(caller).body.?;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
         const stmt = f.store.getCFStmt(cursor);
@@ -10497,7 +10497,7 @@ test "ARC runtime-checks erased callable repack from an ordinary parameter" {
 
     try f.run();
 
-    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var cursor = f.store.getProcSpecImmediate(caller).body orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
         switch (f.store.getCFStmtImmediate(cursor).*) {
@@ -10585,7 +10585,7 @@ test "ARC transfers erased call ownership from an explicit outer source" {
     try testing.expectEqual(@as(usize, 0), f.countRc(extracted_callable, .incref));
     try testing.expectEqual(@as(usize, 0), f.countRc(extracted_callable, .decref));
 
-    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var cursor = f.store.getProcSpecImmediate(caller).body orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
         switch (f.store.getCFStmtImmediate(cursor).*) {
@@ -10676,7 +10676,7 @@ test "ARC retains an erased call reuse source that is read after the call" {
     var saw_retain = false;
     var saw_call = false;
     var saw_later_use = false;
-    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var cursor = f.store.getProcSpecImmediate(caller).body orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
         switch (f.store.getCFStmtImmediate(cursor).*) {
@@ -10790,7 +10790,7 @@ test "ARC retains an erased callable whose repack input is used later" {
     try f.run();
 
     try testing.expectEqual(@as(usize, 1), f.countRc(old_callable, .incref));
-    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var cursor = f.store.getProcSpecImmediate(caller).body orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
         switch (f.store.getCFStmtImmediate(cursor).*) {
@@ -10954,7 +10954,7 @@ test "ARC proc domain excludes scalar and other-proc locals" {
             &solution,
             &local_contains_refcounted,
             &global_local_index,
-            f.store.getProcSpec(resource_proc).frame_locals,
+            f.store.getProcSpecImmediate(resource_proc).frame_locals,
         );
         defer domain.clearGlobalIndices();
         try testing.expectEqual(@as(usize, 2), domain.frame_locals.len);
@@ -10985,7 +10985,7 @@ test "ARC proc domain excludes scalar and other-proc locals" {
         &solution,
         &local_contains_refcounted,
         &global_local_index,
-        f.store.getProcSpec(other_proc).frame_locals,
+        f.store.getProcSpecImmediate(other_proc).frame_locals,
     );
     defer other_domain.clearGlobalIndices();
     try testing.expectEqual(@as(usize, 1), other_domain.frame_locals.len);
@@ -11047,7 +11047,7 @@ test "ARC proc domain filters module-wide borrow groups to its frame" {
         &solution,
         &local_contains_refcounted,
         &global_local_index,
-        f.store.getProcSpec(local_proc).frame_locals,
+        f.store.getProcSpecImmediate(local_proc).frame_locals,
     );
     defer domain.clearGlobalIndices();
 
@@ -11092,7 +11092,7 @@ test "ARC lender-death query sees a live solver-only borrow anchor" {
         &solution,
         &concrete_rc,
         &global_local_index,
-        f.store.getProcSpec(proc).frame_locals,
+        f.store.getProcSpecImmediate(proc).frame_locals,
     );
     defer domain.clearGlobalIndices();
     try testing.expectEqual(@as(usize, 2), domain.resource_locals.len);
@@ -11147,7 +11147,7 @@ test "ARC prepared source liveness survives transient domains and frozen reuse" 
         var temporary = collections.SingleThreadArena.init(testing.allocator);
         defer temporary.deinit();
         var indices = collections.DenseMap(LIR.LocalId, u32).init(temporary.allocator());
-        var domain = try ProcArcDomain.init(temporary.allocator(), &f.store, &solution, &rc, &indices, f.store.getProcSpec(proc).frame_locals);
+        var domain = try ProcArcDomain.init(temporary.allocator(), &f.store, &solution, &rc, &indices, f.store.getProcSpecImmediate(proc).frame_locals);
         defer domain.clearGlobalIndices();
         inserter.current_domain = &domain;
         try inserter.prepareSourceLiveness();
@@ -11195,7 +11195,7 @@ test "ARC proc domain sparse high global IDs retain only a tiny frame" {
     var bounded = std.heap.FixedBufferAllocator.init(&storage);
     var indices = collections.DenseMap(LIR.LocalId, u32).init(bounded.allocator());
     defer indices.deinit();
-    var domain = try ProcArcDomain.init(arena.allocator(), &f.store, &solution, rc, &indices, f.store.getProcSpec(proc).frame_locals);
+    var domain = try ProcArcDomain.init(arena.allocator(), &f.store, &solution, rc, &indices, f.store.getProcSpecImmediate(proc).frame_locals);
     try testing.expectEqual(@as(usize, 1), indices.count());
     try testing.expectEqual(@as(usize, 0), domain.frameIndexOf(local));
     try testing.expect(domain.frameContainsLocal(local));
@@ -11246,7 +11246,7 @@ test "ARC sparse join seeds agree with exhaustive group predicates and emission 
     defer indices.deinit();
     var arena = collections.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
-    var domain = try ProcArcDomain.init(arena.allocator(), &f.store, &solution, &concrete_rc, &indices, f.store.getProcSpec(proc).frame_locals);
+    var domain = try ProcArcDomain.init(arena.allocator(), &f.store, &solution, &concrete_rc, &indices, f.store.getProcSpecImmediate(proc).frame_locals);
     defer domain.clearGlobalIndices();
     const grouped = try GroupLivenessIndex.init(arena.allocator(), &domain, &solution, &concrete_rc);
     const no_joins = try GroupLivenessIndex.init(arena.allocator(), &domain, &solution, null);
@@ -11310,7 +11310,7 @@ test "ARC grouped raw liveness agrees with exhaustive resource queries" {
     defer indices.deinit();
     var arena = collections.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
-    var domain = try ProcArcDomain.init(arena.allocator(), &f.store, &solution, &rc, &indices, f.store.getProcSpec(proc).frame_locals);
+    var domain = try ProcArcDomain.init(arena.allocator(), &f.store, &solution, &rc, &indices, f.store.getProcSpecImmediate(proc).frame_locals);
     defer domain.clearGlobalIndices();
     const grouped = try GroupLivenessIndex.init(arena.allocator(), &domain, &solution, null);
     var reads = try ExactBitSet.initEmpty(arena.allocator(), domain.livenessBitLen());
@@ -11551,8 +11551,8 @@ test "RC shared neutral proc body is rewritten separately for each proc" {
 
     try f.run();
 
-    const first_body = f.store.getProcSpec(first).body orelse return error.MissingProcBody;
-    const second_body = f.store.getProcSpec(second).body orelse return error.MissingProcBody;
+    const first_body = f.store.getProcSpecImmediate(first).body orelse return error.MissingProcBody;
+    const second_body = f.store.getProcSpecImmediate(second).body orelse return error.MissingProcBody;
     try testing.expect(first_body != shared_body);
     try testing.expect(second_body != shared_body);
     try testing.expect(first_body != second_body);
@@ -11580,8 +11580,8 @@ test "RC shared neutral join body keeps compact indices per proc" {
 
     try f.run();
 
-    const first_body = f.store.getProcSpec(first).body orelse return error.MissingProcBody;
-    const second_body = f.store.getProcSpec(second).body orelse return error.MissingProcBody;
+    const first_body = f.store.getProcSpecImmediate(first).body orelse return error.MissingProcBody;
+    const second_body = f.store.getProcSpecImmediate(second).body orelse return error.MissingProcBody;
     try testing.expect(first_body != shared_body);
     try testing.expect(second_body != shared_body);
     try testing.expect(first_body != second_body);
@@ -15701,7 +15701,7 @@ test "RC sublist of a dying unique argument passed to a non-inlined callee consu
         try insert(&f.store, &f.layouts, .{ .roots = &.{caller}, .specialize = specialize });
 
         // Follow the caller's call to the callee emission it actually runs.
-        var cursor = f.store.getProcSpec(caller).body.?;
+        var cursor = f.store.getProcSpecImmediate(caller).body.?;
         const target_proc = while (true) switch (f.store.getCFStmtImmediate(cursor).*) {
             .assign_call => |assign| break assign.proc,
             .assign_list => |assign| cursor = assign.next,
@@ -15751,7 +15751,7 @@ test "RC sublist of a dying unique argument passed to a non-inlined callee consu
             .crash,
             => return error.TestUnexpectedResult,
         };
-        cursor = f.store.getProcSpec(target_proc).body.?;
+        cursor = f.store.getProcSpecImmediate(target_proc).body.?;
         const emitted_op = while (true) switch (f.store.getCFStmtImmediate(cursor).*) {
             .assign_low_level => |assign| {
                 if (assign.target == slice) break assign.op;
@@ -15889,7 +15889,7 @@ test "RC borrow: read-only sublist keeps its parameter borrowed" {
     } }, .test_fixture);
     const proc = try f.addProc(&.{param}, try f.assignI64(range, 0, sublist), .i64);
     try insert(&f.store, &f.layouts, .{ .specialize = false });
-    try testing.expectEqual(@as(u64, 1), f.store.getProcSpec(proc).rc_borrowed_params);
+    try testing.expectEqual(@as(u64, 1), f.store.getProcSpecImmediate(proc).rc_borrowed_params);
     try testing.expectEqual(LIR.LowLevel.list_sublist_borrowed, f.reachableLowLevelAssign(slice).op);
     try f.expectRc(param, 0, 0, 0);
     try f.expectRc(slice, 0, 0, 0);
@@ -15922,7 +15922,7 @@ test "RC borrow: returned sublist transfers a dying caller buffer" {
     } }, .test_fixture);
     const caller = try f.addProc(&.{}, try f.assignList(list, &.{}, call), f.list_i64);
     try insert(&f.store, &f.layouts, .{ .roots = &.{caller}, .specialize = false });
-    try testing.expectEqual(@as(u64, 0), f.store.getProcSpec(callee).rc_borrowed_params);
+    try testing.expectEqual(@as(u64, 0), f.store.getProcSpecImmediate(callee).rc_borrowed_params);
     try testing.expectEqual(LIR.LowLevel.list_sublist, f.reachableLowLevelAssign(slice).op);
     try f.expectRc(param, 0, 0, 0);
     try f.expectRc(slice, 0, 0, 0);
@@ -16147,7 +16147,7 @@ test "RC outcome restitution preserves List Str on failure and seeds the success
     try testing.expectEqual(@as(u64, 0), try f.uniqueArgsInProc(callee, changed));
     try testing.expectEqual(@as(u64, 1), try f.uniqueArgsInProc(outcome_variant, changed));
 
-    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var cursor = f.store.getProcSpecImmediate(caller).body orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
         const stmt = f.store.getCFStmt(cursor);
@@ -16369,7 +16369,7 @@ test "RC outcome restitution spends retained arguments through aliases only on s
             var arena = collections.SingleThreadArena.init(testing.allocator);
             defer arena.deinit();
             var indices = collections.DenseMap(LIR.LocalId, u32).init(arena.allocator());
-            var domain = try ProcArcDomain.init(arena.allocator(), &f.store, &solution, rc, &indices, f.store.getProcSpec(callee).frame_locals);
+            var domain = try ProcArcDomain.init(arena.allocator(), &f.store, &solution, rc, &indices, f.store.getProcSpecImmediate(callee).frame_locals);
             defer domain.clearGlobalIndices();
             var source = SourceLiveness.init(arena.allocator(), testing.allocator);
             const base_sig = solution.sigOf(callee);
@@ -16410,7 +16410,7 @@ test "RC outcome restitution spends retained arguments through aliases only on s
         const base_proc_count = f.store.procSpecCount();
         try insert(&f.store, &f.layouts, .{ .roots = &.{caller}, .specialize = specialize });
         try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
-        const caller_body = f.store.getCFStmt(f.store.getProcSpec(caller).body.?);
+        const caller_body = f.store.getCFStmt(f.store.getProcSpecImmediate(caller).body.?);
         try testing.expect(caller_body == .assign_call);
         try testing.expectEqual(base_proc_count, @backingInt(caller_body.assign_call.proc));
 
@@ -16534,7 +16534,7 @@ test "RC outcome restitution releases every returned argument before a nested jo
     try testing.expectEqual(@as(usize, 1), f.countRc(rejected_first, .incref));
     try testing.expectEqual(@as(usize, 1), f.countRc(rejected_second, .incref));
 
-    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var cursor = f.store.getProcSpecImmediate(caller).body orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
         const stmt = f.store.getCFStmt(cursor);
@@ -16583,7 +16583,7 @@ test "RC outcome restitution releases every returned argument before a nested jo
     }
     try testing.expect(remaining > 0);
 
-    cursor = f.store.getProcSpec(rejected_caller).body orelse return error.MissingCallerBody;
+    cursor = f.store.getProcSpecImmediate(rejected_caller).body orelse return error.MissingCallerBody;
     remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
         const stmt = f.store.getCFStmt(cursor);
@@ -17489,7 +17489,7 @@ test "RC field take restores the exact aggregate field on checked failure withou
     try testing.expectEqual(@as(usize, 0), f.countRc(failure_projection, .incref));
     try testing.expectEqual(@as(usize, 0), f.countRc(pair, .decref));
 
-    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var cursor = f.store.getProcSpecImmediate(caller).body orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
         const stmt = f.store.getCFStmt(cursor);
@@ -17667,9 +17667,9 @@ test "RC specialization: caller body survives variant proc append" {
 
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     const variant: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_proc_count))));
-    try testing.expectEqual(callee_flag, f.store.getProcSpec(variant).runtime_ret_desc.?);
+    try testing.expectEqual(callee_flag, f.store.getProcSpecImmediate(variant).runtime_ret_desc.?);
 
-    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var cursor = f.store.getProcSpecImmediate(caller).body orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
         switch (f.store.getCFStmtImmediate(cursor).*) {
@@ -17772,8 +17772,8 @@ test "RC specialization: a variant's frame excludes the source's base dismantle 
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     const variant: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_proc_count))));
 
-    const base_frame = f.store.getLocalSpan(f.store.getProcSpec(callee).frame_locals);
-    const variant_frame = f.store.getLocalSpan(f.store.getProcSpec(variant).frame_locals);
+    const base_frame = f.store.getLocalSpan(f.store.getProcSpecImmediate(callee).frame_locals);
+    const variant_frame = f.store.getLocalSpan(f.store.getProcSpecImmediate(variant).frame_locals);
     var base_generated: usize = 0;
     var variant_generated: usize = 0;
     var shared_generated: usize = 0;
@@ -17987,7 +17987,7 @@ test "RC interprocedural: tail self-call keeps a read-only parameter borrowed" {
     // requirement is not an ownership requirement, so position 0 stays
     // borrowed and the parameter's read-only uses emit nothing.
     const solved: arc_sig.RcSig = .{
-        .borrowed_params = @intCast(f.store.getProcSpec(recurse).rc_borrowed_params),
+        .borrowed_params = @intCast(f.store.getProcSpecImmediate(recurse).rc_borrowed_params),
     };
     try testing.expectEqual(arc_sig.Mode.borrowed, solved.paramMode(0));
     try f.expectRc(text, 0, 0, 0);
@@ -18057,12 +18057,12 @@ test "RC interprocedural: tail self-call transfers an SCC-local argument" {
     // edge targets itself with no cleanup after the call.
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     const owned_variant: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_proc_count))));
-    const base_switch = f.walkToSwitch(f.store.getProcSpec(recurse).body.?);
+    const base_switch = f.walkToSwitch(f.store.getProcSpecImmediate(recurse).body.?);
     const base_borrow_call = f.walkToDirectCall(base_switch.default_branch);
     try testing.expectEqual(identity, base_borrow_call.proc);
     const base_call = f.walkToDirectCall(base_borrow_call.next);
     try testing.expectEqual(owned_variant, base_call.proc);
-    const variant_switch = f.walkToSwitch(f.store.getProcSpec(owned_variant).body.?);
+    const variant_switch = f.walkToSwitch(f.store.getProcSpecImmediate(owned_variant).body.?);
     const variant_borrow_call = f.walkToDirectCall(variant_switch.default_branch);
     try testing.expectEqual(identity, variant_borrow_call.proc);
     const variant_call = f.walkToDirectCall(variant_borrow_call.next);
@@ -18138,8 +18138,8 @@ test "RC interprocedural: mutual tail calls preserve an SCC-entry borrow" {
     try f.run();
 
     try testing.expectEqual(base_proc_count, f.store.procSpecCount());
-    const left_sig: arc_sig.RcSig = .{ .borrowed_params = @intCast(f.store.getProcSpec(left).rc_borrowed_params) };
-    const right_sig: arc_sig.RcSig = .{ .borrowed_params = @intCast(f.store.getProcSpec(right).rc_borrowed_params) };
+    const left_sig: arc_sig.RcSig = .{ .borrowed_params = @intCast(f.store.getProcSpecImmediate(left).rc_borrowed_params) };
+    const right_sig: arc_sig.RcSig = .{ .borrowed_params = @intCast(f.store.getProcSpecImmediate(right).rc_borrowed_params) };
     try testing.expectEqual(arc_sig.Mode.borrowed, left_sig.paramMode(0));
     try testing.expectEqual(arc_sig.Mode.borrowed, right_sig.paramMode(0));
     try f.expectRc(left_text, 0, 0, 0);
@@ -18193,12 +18193,12 @@ test "RC interprocedural: tail call matches the caller return ownership" {
     const base_proc_count = f.store.procSpecCount();
     try f.run();
 
-    try testing.expect(!f.store.getProcSpec(caller).rc_ret_borrowed);
-    try testing.expect(f.store.getProcSpec(lender).rc_ret_borrowed);
+    try testing.expect(!f.store.getProcSpecImmediate(caller).rc_ret_borrowed);
+    try testing.expect(f.store.getProcSpecImmediate(lender).rc_ret_borrowed);
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     const owned_return_variant: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_proc_count))));
-    try testing.expect(!f.store.getProcSpec(owned_return_variant).rc_ret_borrowed);
-    const caller_switch = f.walkToSwitch(f.store.getProcSpec(caller).body.?);
+    try testing.expect(!f.store.getProcSpecImmediate(owned_return_variant).rc_ret_borrowed);
+    const caller_switch = f.walkToSwitch(f.store.getProcSpecImmediate(caller).body.?);
     const rewritten_tail_call = f.walkToDirectCall(caller_switch.default_branch);
     try testing.expectEqual(owned_return_variant, rewritten_tail_call.proc);
     const after_tail_call = f.store.getCFStmt(rewritten_tail_call.next);
@@ -18242,7 +18242,7 @@ test "RC interprocedural: borrowed call result anchors a recursive tail argument
 
     try f.run();
 
-    const recurse_sig: arc_sig.RcSig = .{ .borrowed_params = @intCast(f.store.getProcSpec(recurse).rc_borrowed_params) };
+    const recurse_sig: arc_sig.RcSig = .{ .borrowed_params = @intCast(f.store.getProcSpecImmediate(recurse).rc_borrowed_params) };
     try testing.expectEqual(arc_sig.Mode.borrowed, recurse_sig.paramMode(0));
     try f.expectRc(text, 0, 0, 0);
     try f.expectRc(borrowed_result, 0, 0, 0);

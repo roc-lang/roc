@@ -5529,7 +5529,7 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     try program.erased_fns.append(allocator, .{ .layout = erased_layout, .entries = entries });
     const slot_name = try LirProgram.staticDataSymbolName(allocator, closure_slot);
     defer allocator.free(slot_name);
-    const proc_name = try static_data_exports.procSymbolName(allocator, program.store.getProcSpec(worker).identity);
+    const proc_name = try static_data_exports.procSymbolName(allocator, program.store.getProcSpecImmediate(worker).identity);
     defer allocator.free(proc_name);
     const word = @sizeOf(usize);
     var payload_bytes: [4 * word + @sizeOf(builtins.str.RocStr)]u8 = @splat(0);

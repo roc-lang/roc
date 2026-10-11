@@ -2259,7 +2259,7 @@ fn reachableStatementSet(
     defer stack.deinit(allocator);
 
     if (only_proc) |proc_id| {
-        if (store.getProcSpec(proc_id).body) |body| try stack.append(allocator, body);
+        if (store.getProcSpecImmediate(proc_id).body) |body| try stack.append(allocator, body);
     } else {
         for (0..store.procSpecCount()) |proc_index| {
             const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
@@ -3360,7 +3360,7 @@ fn computeVisibilityFromFacts(
     // facts, but returns may be encountered after their callers during the
     // structural walk, so connect them after the lift is complete.
     for (solver.unique_calls.items) |call| {
-        if (solver.store.getProcSpec(call.callee).body == null) continue;
+        if (solver.store.getProcSpecImmediate(call.callee).body == null) continue;
         const target = domain.indexOf(call.target) orelse continue;
         for (solver.proc_returns[@backingInt(call.callee)].items) |return_local| {
             const returned = domain.indexOfRaw(return_local) orelse continue;

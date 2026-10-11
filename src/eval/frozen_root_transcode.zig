@@ -372,7 +372,7 @@ const Builder = struct {
             const result = try self.reserveAllocation(.{ .source = src, .plan = job.plan, .layout_idx = job.layout_idx, .count = 1, .kind = .erased }, capture_offset - prefix + (if (entry.boxy != null) std.mem.alignForward(usize, capture_size, self.word()) + self.word() else capture_size), builtins.erased_callable.payload_alignment, builtins.erased_callable.allocation_has_refcounted_children, null);
             try self.relocate(job.dest, result.dest);
             if (!result.fresh) return;
-            try self.node(result.dest).relocations.append(self.allocator, .{ .offset = result.dest.offset, .target_symbol_name = try static_data.procSymbolName(self.allocator, self.program.store.getProcSpec(entry.entry).identity), .kind = .function_pointer, .callable_capture_offset = @intCast(capture_offset), .procedure = entry.entry, .boxy_recipe = if (entry.boxy != null) @intCast(recipe_index) else null });
+            try self.node(result.dest).relocations.append(self.allocator, .{ .offset = result.dest.offset, .target_symbol_name = try static_data.procSymbolName(self.allocator, self.program.store.getProcSpecImmediate(entry.entry).identity), .kind = .function_pointer, .callable_capture_offset = @intCast(capture_offset), .procedure = entry.entry, .boxy_recipe = if (entry.boxy != null) @intCast(recipe_index) else null });
             switch (entry.on_drop) {
                 .none => {},
                 .rc_helper => |helper| try self.node(result.dest).relocations.append(self.allocator, .{ .offset = result.dest.offset + self.word(), .target_symbol_name = try static_data.atomicRcHelperSymbolName(self.allocator, &self.program.layouts, helper), .kind = .function_pointer, .rc_helper = helper }),

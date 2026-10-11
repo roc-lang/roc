@@ -360,7 +360,7 @@ fn applyCandidate(
     // their identities. Parameter binders of alpha-renamed joins receive
     // fresh identities. The eliminated outer parameter is substituted with
     // the inner parameter that carried the same value.
-    const frame = store.getLocalSpan(store.getProcSpec(proc_id).frame_locals);
+    const frame = store.getLocalSpan(store.getProcSpecImmediate(proc_id).frame_locals);
     for (0..frame.len) |index| {
         const local = GuardedList.at(frame, index);
         if (candidate.moved.fresh_definitions.get(local) == 0) {
@@ -523,7 +523,7 @@ fn testSoleConsumer(scratch_allocator: Allocator, mode: TestMode, unrelated_coun
 
     try testRun(&store, &layouts, proc, scratch_allocator, mode);
 
-    const rewritten_outer = store.getCFStmt(store.getProcSpec(proc).body.?);
+    const rewritten_outer = store.getCFStmt(store.getProcSpecImmediate(proc).body.?);
     try testing.expect(rewritten_outer == .join);
     try testing.expectEqual(inner_id, rewritten_outer.join.id);
     const moved = store.getCFStmt(rewritten_outer.join.body);
@@ -533,7 +533,7 @@ fn testSoleConsumer(scratch_allocator: Allocator, mode: TestMode, unrelated_coun
     const moved_ret = store.getCFStmt(moved.assign_ref.next);
     try testing.expect(moved_ret == .ret);
     try testing.expectEqual(moved.assign_ref.target, moved_ret.ret.value);
-    const rewritten_frame = store.getLocalSpan(store.getProcSpec(proc).frame_locals);
+    const rewritten_frame = store.getLocalSpan(store.getProcSpecImmediate(proc).frame_locals);
     try testing.expectEqual(@as(usize, 4), rewritten_frame.len);
 }
 
@@ -619,7 +619,7 @@ fn testSharedTail(scratch_allocator: Allocator, mode: TestMode) TestError!void {
 
     try testRun(&store, &layouts, proc, scratch_allocator, mode);
 
-    const rewritten = store.getCFStmt(store.getProcSpec(proc).body.?);
+    const rewritten = store.getCFStmt(store.getProcSpecImmediate(proc).body.?);
     try testing.expect(rewritten == .join);
     try testing.expectEqual(inner_id, rewritten.join.id);
     const moved_prefix = store.getCFStmt(rewritten.join.body);
@@ -631,7 +631,7 @@ fn testSharedTail(scratch_allocator: Allocator, mode: TestMode) TestError!void {
     const original_tail = store.getCFStmt(shared_tail);
     try testing.expectEqual(shared_result, original_tail.assign_ref.target);
     try testing.expectEqual(shared_ret, original_tail.assign_ref.next);
-    const rewritten_frame = store.getLocalSpan(store.getProcSpec(proc).frame_locals);
+    const rewritten_frame = store.getLocalSpan(store.getProcSpecImmediate(proc).frame_locals);
     try testing.expectEqual(@as(usize, 5), rewritten_frame.len);
 }
 
@@ -693,7 +693,7 @@ test "forwarding join inline preserves recursive outer join declarations" {
 
     try run(&store, &layouts);
 
-    const preserved = store.getCFStmt(store.getProcSpec(proc).body.?);
+    const preserved = store.getCFStmt(store.getProcSpecImmediate(proc).body.?);
     try testing.expect(preserved == .join);
     try testing.expectEqual(outer_id, preserved.join.id);
     try testing.expectEqual(outer_back_edge, preserved.join.body);
@@ -752,7 +752,7 @@ test "forwarding join inline preserves owning continuation parameters" {
 
     try run(&store, &layouts);
 
-    const preserved = store.getCFStmt(store.getProcSpec(proc).body.?);
+    const preserved = store.getCFStmt(store.getProcSpecImmediate(proc).body.?);
     try testing.expect(preserved == .join);
     try testing.expectEqual(outer_id, preserved.join.id);
     try testing.expectEqual(outer_body, preserved.join.body);

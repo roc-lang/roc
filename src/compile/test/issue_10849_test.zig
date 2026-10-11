@@ -48,7 +48,7 @@ fn countReachableOps(
         const proc_index = @backingInt(proc_id);
         if (seen_procs[proc_index]) continue;
         seen_procs[proc_index] = true;
-        if (store.getProcSpec(proc_id).body) |body| try stmt_work.append(allocator, body);
+        if (store.getProcSpecImmediate(proc_id).body) |body| try stmt_work.append(allocator, body);
 
         while (stmt_work.pop()) |stmt_id| {
             const stmt_index = @backingInt(stmt_id);

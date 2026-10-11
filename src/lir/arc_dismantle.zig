@@ -2909,7 +2909,7 @@ pub fn compute(
     // rescanning bodies or reconstructing parameter identity from statements.
     for (0..store.procSpecCount()) |proc_index| {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
-        const params = store.getLocalSpan(store.getProcSpec(proc_id).args);
+        const params = store.getLocalSpan(store.getProcSpecImmediate(proc_id).args);
         for (0..GuardedList.borrowLen(params)) |position| {
             const bit = arc_sig.paramBit(position) orelse break;
             const param = GuardedList.at(params, position);
@@ -2931,7 +2931,7 @@ pub fn compute(
 
     for (0..store.procSpecCount()) |proc_index| {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
-        const params = store.getLocalSpan(store.getProcSpec(proc_id).args);
+        const params = store.getLocalSpan(store.getProcSpecImmediate(proc_id).args);
         for (0..GuardedList.borrowLen(params)) |position| {
             const param = GuardedList.at(params, position);
             const param_index = @backingInt(param);

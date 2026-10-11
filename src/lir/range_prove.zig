@@ -181,7 +181,7 @@ test "range prove ordered procedure runs match whole-store constant arithmetic a
             try run(&store, &layouts);
         }
         try testing.expectEqual(.num_int_add_proven_cannot_overflow, store.getCFStmtImmediate(add).assign_low_level.op);
-        try testing.expectEqual(noop_body, store.getProcSpec(noop).body.?);
+        try testing.expectEqual(noop_body, store.getProcSpecImmediate(noop).body.?);
         try testing.expectEqual(arg, store.getCFStmtImmediate(noop_body).ret.value);
     }
 }
@@ -243,7 +243,7 @@ test "range prove retargets jumps inside unreached join bodies when threading a 
     defer join_ids.deinit();
     var jump_targets = std.ArrayList(LIR.JoinPointId).empty;
     defer jump_targets.deinit(testing.allocator);
-    var walk = try BodyClone.ReachableStmts.initWithAllocator(&store, store.getProcSpec(proc).body.?, testing.allocator);
+    var walk = try BodyClone.ReachableStmts.initWithAllocator(&store, store.getProcSpecImmediate(proc).body.?, testing.allocator);
     defer walk.deinit();
     while (try walk.next()) |stmt| {
         const cf = store.getCFStmt(stmt);

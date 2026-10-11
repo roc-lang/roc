@@ -8675,7 +8675,7 @@ fn writePacksToStore(
             std.debug.print("lowered {s} {x:0>16} {s}\n", .{ &proc.identity.symbolHex(), fingerprint, program_store.procDebugName(proc_id) orelse "" });
         }
         for (app_lowered.lir_result.spec_procs.items) |spec_proc| {
-            if (program_store.getProcSpec(spec_proc.proc).body == null) continue;
+            if (program_store.getProcSpecImmediate(spec_proc.proc).body == null) continue;
             const fingerprint = try procFingerprint(ctx.gpa, app_lowered, spec_proc.proc);
             std.debug.print("compiled {x} {x:0>16} {s}\n", .{ &spec_proc.key, fingerprint, program_store.procDebugName(spec_proc.proc) orelse "" });
         }

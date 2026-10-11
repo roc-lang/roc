@@ -1620,7 +1620,7 @@ pub const Interpreter = struct {
         }
 
         const args = try self.marshalAbiArgs(request.arg_ptr, request.arg_layouts);
-        const proc_ret_layout = self.store.getProcSpec(request.proc_id).ret_layout;
+        const proc_ret_layout = self.store.getProcSpecImmediate(request.proc_id).ret_layout;
         const result = try self.evalProcById(request.proc_id, args, request.arg_layouts);
         const ret_layout = request.ret_layout orelse proc_ret_layout;
         const normalized_result = try self.coerceExplicitRefValueToLayout(result.value, proc_ret_layout, ret_layout);
@@ -1857,7 +1857,7 @@ pub const Interpreter = struct {
                     // Inside a TRMC-transformed proc a null box pointer is a
                     // legal in-flight hole (zero-filled cells await their child
                     // value); everywhere else it is a real bug.
-                    if (self.store.getProcSpec(proc_id).tail_transform == .trmc) return;
+                    if (self.store.getProcSpecImmediate(proc_id).tail_transform == .trmc) return;
                     if (allow_zeroed_box_payload_holes and path_len > 0) return;
                     self.debugValueShapePanicAt(
                         proc_id,
@@ -2799,7 +2799,7 @@ pub const Interpreter = struct {
                             // now to whoever makes the pending call.
                             if (assign.returns_pending) |pending_return| {
                                 self.pending_erased.?.conversion = .{
-                                    .layout = self.store.getProcSpec(frame.proc_id).ret_layout,
+                                    .layout = self.store.getProcSpecImmediate(frame.proc_id).ret_layout,
                                     .desc = try self.resolveOptionalBoxyDescRef(frame, pending_return.result_desc),
                                     .keeps_own_desc = pending_return.keeps_own_desc,
                                 };
@@ -2929,7 +2929,7 @@ pub const Interpreter = struct {
                             // now to whoever makes the pending call.
                             if (assign.returns_pending) |pending_return| {
                                 self.pending_erased.?.conversion = .{
-                                    .layout = self.store.getProcSpec(frame.proc_id).ret_layout,
+                                    .layout = self.store.getProcSpecImmediate(frame.proc_id).ret_layout,
                                     .desc = try self.resolveOptionalBoxyDescRef(frame, pending_return.result_desc),
                                     .keeps_own_desc = pending_return.keeps_own_desc,
                                 };

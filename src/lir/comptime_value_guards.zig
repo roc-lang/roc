@@ -145,7 +145,7 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
         while (use_index < uses.items.len and uses.items[use_index].proc == proc_id) : (use_index += 1) {
             try locals.appendSlice(allocator, &guards.get(uses.items[use_index].stmt).?.locals);
         }
-        const frame = store.getLocalSpan(store.getProcSpec(proc_id).frame_locals);
+        const frame = store.getLocalSpan(store.getProcSpecImmediate(proc_id).frame_locals);
         for (0..frame.len) |i| try locals.append(allocator, GuardedList.at(frame, i));
         std.mem.sort(LIR.LocalId, locals.items, {}, localLessThan);
         var count: usize = 0;
@@ -274,10 +274,10 @@ fn testSharedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error || er
         try std.testing.expectEqual(@as(u64, 1), proc.native_code_revision);
         try std.testing.expectEqual(LIR.ProcIdentity.forTest(1), proc.identity);
     }
-    try std.testing.expectEqual(@as(u64, 0), program.store.getProcSpec(unrelated).native_code_revision);
+    try std.testing.expectEqual(@as(u64, 0), program.store.getProcSpecImmediate(unrelated).native_code_revision);
     var clone = try program.store.cloneForProcRewrite(allocator, owners[0]);
     defer clone.deinit();
-    try std.testing.expectEqual(@as(u64, 1), clone.getProcSpec(owners[0]).native_code_revision);
+    try std.testing.expectEqual(@as(u64, 1), clone.getProcSpecImmediate(owners[0]).native_code_revision);
 }
 
 test "completed compile-time values guard only the reads of failed values" {
@@ -356,11 +356,11 @@ fn testCompletedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error ||
     try std.testing.expectEqual(owners[1], guard.owner);
     try std.testing.expectEqual(value_slots[1], guard.value_slot);
     try std.testing.expect(program.store.getCFStmtImmediate(loads[1]).assign_literal.value.static_data != value_slots[1]);
-    try std.testing.expectEqual(@as(usize, 4), program.store.getLocalSpan(program.store.getProcSpec(owners[1]).frame_locals).len);
+    try std.testing.expectEqual(@as(usize, 4), program.store.getLocalSpan(program.store.getProcSpecImmediate(owners[1]).frame_locals).len);
 
     // The successful read is left exactly as lowered.
     const kept = program.store.getCFStmtImmediate(loads[0]).assign_literal;
     try std.testing.expectEqual(value_slots[0], kept.value.static_data);
-    try std.testing.expectEqual(@as(usize, 1), program.store.getLocalSpan(program.store.getProcSpec(owners[0]).frame_locals).len);
-    try std.testing.expectEqual(@as(u64, 0), program.store.getProcSpec(owners[0]).native_code_revision);
+    try std.testing.expectEqual(@as(usize, 1), program.store.getLocalSpan(program.store.getProcSpecImmediate(owners[0]).frame_locals).len);
+    try std.testing.expectEqual(@as(u64, 0), program.store.getProcSpecImmediate(owners[0]).native_code_revision);
 }

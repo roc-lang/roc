@@ -3571,7 +3571,7 @@ pub fn lirInterpreterTranscript(allocator: Allocator, lowered: *const LoweredPro
         .aborted => |aborted| if (aborted.message) |msg| allocator.free(msg),
     };
     if (interp.eval(.{ .proc_id = lowered.mainProc(), .arg_layouts = arg_layouts })) |result| {
-        const ret_layout = lowered.view.store.getProcSpec(lowered.mainProc()).ret_layout;
+        const ret_layout = lowered.view.store.getProcSpecImmediate(lowered.mainProc()).ret_layout;
         outcome = .{ .output = try copyReturnedRocStr(
             allocator,
             &lowered.view.layouts,

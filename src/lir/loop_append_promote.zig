@@ -443,7 +443,7 @@ const Pass = struct {
             var work = std.ArrayList(Frame).empty;
             defer work.deinit(self.allocator);
             try self.append_kind.put(proc_id, null);
-            try work.append(self.allocator, .{ .proc = proc_id, .current = self.store.getProcSpec(proc_id).body });
+            try work.append(self.allocator, .{ .proc = proc_id, .current = self.store.getProcSpecImmediate(proc_id).body });
             while (work.items.len != 0) {
                 const frame = &work.items[work.items.len - 1];
                 if (frame.current) |current| {
@@ -453,7 +453,7 @@ const Pass = struct {
                             frame.current = a.next;
                             if (!self.append_kind.contains(a.proc)) {
                                 try self.append_kind.put(a.proc, null);
-                                try work.append(self.allocator, .{ .proc = a.proc, .current = self.store.getProcSpec(a.proc).body });
+                                try work.append(self.allocator, .{ .proc = a.proc, .current = self.store.getProcSpecImmediate(a.proc).body });
                             }
                         },
                         .ret,
@@ -1243,7 +1243,7 @@ const Pass = struct {
         while (promoting) {
             promoting = false;
             scan.clear();
-            try self.scanProc(self.store.getProcSpec(proc_id).body.?, &scan);
+            try self.scanProc(self.store.getProcSpecImmediate(proc_id).body.?, &scan);
             max_join_id = @max(max_join_id, scan.max_join_id);
             if (scan.edges.items.len == 0) break;
             try self.classifyMetadataTransfers(&scan, proc_id);
@@ -1267,8 +1267,8 @@ const Pass = struct {
             }
         }
 
-        try self.versionLoops(self.store.getProcSpec(proc_id).body.?, &max_join_id, &new_locals);
-        try self.versionSlackLoops(self.store.getProcSpec(proc_id).body.?, &max_join_id, &new_locals);
+        try self.versionLoops(self.store.getProcSpecImmediate(proc_id).body.?, &max_join_id, &new_locals);
+        try self.versionSlackLoops(self.store.getProcSpecImmediate(proc_id).body.?, &max_join_id, &new_locals);
 
         if (new_locals.items.len > 0) {
             const spec = self.store.getProcSpec(proc_id);
@@ -3369,9 +3369,9 @@ test "promote prepared summaries are frozen across long forward helper chains an
         }, .none);
     }
     const helper = try f.addAppendHelper();
-    const args = store.getProcSpec(helper).args;
+    const args = store.getProcSpecImmediate(helper).args;
     const list_arg = GuardedList.at(store.getLocalSpan(args), 0);
-    var helper_body = store.getProcSpec(helper).body.?;
+    var helper_body = store.getProcSpecImmediate(helper).body.?;
     for (0..96) |_| {
         helper_body = try store.addCFStmt(.{ .assign_ref = .{
             .target = list_arg,
@@ -3398,7 +3398,7 @@ test "promote prepared summaries are frozen across long forward helper chains an
 
     // Phase input changes cannot change an already-prepared summary. A fresh
     // preparation, however, must reject this recursive cycle exactly.
-    const last_body = store.getProcSpec(wrappers[wrappers.len - 1]).body.?;
+    const last_body = store.getProcSpecImmediate(wrappers[wrappers.len - 1]).body.?;
     store.getCFStmtPtr(last_body).assign_call.proc = wrappers[0];
     var recursive = try prepareCallees(store, testing.allocator);
     defer recursive.deinit();
@@ -3416,13 +3416,13 @@ test "promote summaries reject ignored recursive calls in either procedure order
         const second = try f.addAppendHelper();
         const a = if (reverse) second else first;
         const b = if (reverse) first else second;
-        const args = f.store.getProcSpec(a).args;
+        const args = f.store.getProcSpecImmediate(a).args;
         const ignored = try f.store.addLocal(.{ .layout_idx = f.list });
         const body = try f.store.addCFStmt(.{ .assign_call = .{
             .target = ignored,
             .proc = b,
             .args = args,
-            .next = f.store.getProcSpec(a).body.?,
+            .next = f.store.getProcSpecImmediate(a).body.?,
         } }, .test_fixture);
         f.store.getProcSpecPtr(a).body = body;
         const ret = try f.store.addCFStmt(.{ .ret = .{ .value = ignored } }, .test_fixture);
@@ -3446,9 +3446,9 @@ test "promote summaries reject discarded operations before checked append" {
         var f = try PromoteTest.init(testing.allocator);
         defer f.deinit();
         const helper = try f.addAppendHelper();
-        const args = f.store.getProcSpec(helper).args;
+        const args = f.store.getProcSpecImmediate(helper).args;
         const ignored = try f.store.addLocal(.{ .layout_idx = f.list });
-        const next = f.store.getProcSpec(helper).body.?;
+        const next = f.store.getProcSpecImmediate(helper).body.?;
         const prefix = if (op) |low_level|
             try f.store.addCFStmt(.{ .assign_low_level = .{
                 .target = ignored,
@@ -3487,7 +3487,7 @@ test "promote summaries do not treat an exact reserve as an append's growth step
     var f = try PromoteTest.init(testing.allocator);
     defer f.deinit();
     const helper = try f.addAppendHelper();
-    const literal = f.store.getCFStmtImmediate(f.store.getProcSpec(helper).body.?).assign_literal;
+    const literal = f.store.getCFStmtImmediate(f.store.getProcSpecImmediate(helper).body.?).assign_literal;
     const reserve = f.store.getCFStmtPtr(literal.next);
     try testing.expectEqual(LowLevelOp.list_reserve_for_append, reserve.assign_low_level.op);
     reserve.assign_low_level.op = .list_reserve;
@@ -3502,7 +3502,7 @@ test "promote summaries preserve direct reserve and unsafe append wrappers" {
         var f = try PromoteTest.init(testing.allocator);
         defer f.deinit();
         const helper = try f.addAppendHelper();
-        const args = f.store.getProcSpec(helper).args;
+        const args = f.store.getProcSpecImmediate(helper).args;
         const result = try f.store.addLocal(.{ .layout_idx = f.list });
         const ret = try f.store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
         const body = try f.store.addCFStmt(.{ .assign_low_level = .{
@@ -3539,7 +3539,7 @@ test "promote summary provenance distinguishes aliased reserve siblings" {
         var f = try PromoteTest.init(testing.allocator);
         defer f.deinit();
         const helper = try f.addAppendHelper();
-        const literal = f.store.getCFStmtImmediate(f.store.getProcSpec(helper).body.?).assign_literal;
+        const literal = f.store.getCFStmtImmediate(f.store.getProcSpecImmediate(helper).body.?).assign_literal;
         const reserve = f.store.getCFStmtImmediate(literal.next).assign_low_level;
         const append = f.store.getCFStmtImmediate(reserve.next).assign_low_level;
         const reserved_alias = try f.store.addLocal(.{ .layout_idx = f.list });
@@ -3598,7 +3598,7 @@ fn testMetadataTransfer(f: *PromoteTest, proc: LIR.LirProcSpecId, site_entry: CF
         .assigned_targets = collections.DenseMap(LocalId, u32).init(allocator),
     };
     defer scan.deinit(allocator);
-    try pass.scanProc(f.store.getProcSpec(proc).body.?, &scan);
+    try pass.scanProc(f.store.getProcSpecImmediate(proc).body.?, &scan);
     try pass.classifyMetadataTransfers(&scan, proc);
     for (scan.edges.items) |edge| if (edge.stmt == site) {
         try testing.expectEqual(expected, edge.preserves_metadata);

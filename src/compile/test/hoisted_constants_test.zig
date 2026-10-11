@@ -540,7 +540,7 @@ test "hoisted list constants lower to internal static data in request order" {
     // order must then determine their body order.
     if (@backingInt(first_body) >= @backingInt(second_body)) return error.StaticDataInitializerRequestOrderMismatch;
     for (lowered.lir_result.root_procs.items) |root_proc| {
-        const root_body = lowered.lir_result.store.getProcSpec(root_proc).body orelse return error.StaticDataLiteralNotFound;
+        const root_body = lowered.lir_result.store.getProcSpecImmediate(root_proc).body orelse return error.StaticDataLiteralNotFound;
         if (@backingInt(root_body) >= @backingInt(first_body)) return error.StaticDataInitializerPrecededRootBody;
     }
     try expectStaticDataLiteralPresent(&lowered.lir_result);
@@ -2715,7 +2715,7 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
 
 fn expectStaticInitializersMaterializationOnly(result: *const lir.Program.Result) HoistedConstantsTestError!void {
     for (result.static_data_values.items) |value| {
-        try std.testing.expect(result.store.getProcSpec(value.initializer.?).is_static_initializer);
+        try std.testing.expect(result.store.getProcSpecImmediate(value.initializer.?).is_static_initializer);
     }
 }
 

@@ -48,7 +48,7 @@ pub const ScalarizeError = std.mem.Allocator.Error;
 
 /// Internal aggregates can be scalarized under any procedure calling convention.
 pub fn rewritableProcBody(store: *const LirStore, proc_id: LIR.LirProcSpecId) ?LIR.CFStmtId {
-    return store.getProcSpec(proc_id).body;
+    return store.getProcSpecImmediate(proc_id).body;
 }
 
 /// Maximum scalarized field count per parameter; wider wrappers keep their
@@ -615,7 +615,7 @@ const Pass = struct {
         // a view into the store's local-id buffer, which `tryScalarize`
         // reallocates when it scalarizes, so it must not be read across that
         // call.
-        const proc_args = try GuardedList.dupe(self.allocator, LIR.LocalId, self.store.getLocalSpan(self.store.getProcSpec(proc_id).args));
+        const proc_args = try GuardedList.dupe(self.allocator, LIR.LocalId, self.store.getLocalSpan(self.store.getProcSpecImmediate(proc_id).args));
         defer self.allocator.free(proc_args);
 
         // Ordinary constructor candidates have disjoint definitions and
@@ -2377,7 +2377,7 @@ fn testLiteralInitializedStruct(procedure_local: bool) (Allocator.Error || error
     } else {
         try run(store, &f.layouts);
     }
-    try testing.expectEqual(noop_body, store.getProcSpec(noop).body.?);
+    try testing.expectEqual(noop_body, store.getProcSpecImmediate(noop).body.?);
     try testing.expectEqual(noop_arg, store.getCFStmtImmediate(noop_body).ret.value);
 
     // The join now carries two parameters, the field reads are aliases of
@@ -2722,7 +2722,7 @@ test "scalarize sees through pure aliases to field reads" {
     const new_read_s = store.getCFStmtImmediate(read_s).assign_ref;
     try testing.expectEqual(GuardedList.at(params, 1), new_read_s.op.local);
     try testing.expectEqual(read_n, store.getCFStmtImmediate(join).join.body);
-    try testing.expectEqual(join, store.getProcSpec(proc).body);
+    try testing.expectEqual(join, store.getProcSpecImmediate(proc).body);
 }
 
 test "scalarize keeps parameters whose alias escapes whole" {
@@ -3064,7 +3064,7 @@ test "scalarize dissolves nested wrappers in one round" {
     // One eliminating round and one confirming round, each collecting the
     // proc's statements twice.
     try testing.expect(metrics.collected_statements <= 4 * (2 * depth + 1));
-    const final_body = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, 0)))).body.?;
+    const final_body = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, 0)))).body.?;
     const first = store.getCFStmt(final_body);
     try testing.expect(first == .assign_ref);
     try testing.expectEqual(reads[0], first.assign_ref.target);
@@ -3097,7 +3097,7 @@ test "scalarize propagates escaping alias chains in linear work" {
     var metrics = Metrics{};
     try runMeasured(store, &fixture.layouts, &metrics);
     try testing.expect(metrics.alias_edges <= aliases.len);
-    try testing.expectEqual(body, store.getProcSpec(@fromBackingInt(@intCast(@as(u32, 0)))).body.?);
+    try testing.expectEqual(body, store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, 0)))).body.?);
 }
 
 test "scalarize keeps a constructor with an alias definition and its source" {
@@ -3139,7 +3139,7 @@ test "scalarize keeps a constructor with an alias definition and its source" {
         .ret_layout = .i64,
     }, .none);
     try run(store, &fixture.layouts);
-    try testing.expectEqual(original, store.getProcSpec(proc).body.?);
+    try testing.expectEqual(original, store.getProcSpecImmediate(proc).body.?);
     try testing.expect(store.getCFStmtImmediate(read).assign_ref.op == .field);
     try testing.expectEqual(alias, store.getCFStmtImmediate(read).assign_ref.op.field.source);
 }
@@ -3173,7 +3173,7 @@ test "scalarize propagates an escaping whole value through a long alias chain" {
     try run(store, &f.layouts);
     // The field read does not justify deleting the constructor: the last
     // alias returns the entire record, so that use must reach its producer.
-    try testing.expectEqual(build, store.getProcSpec(proc_id).body.?);
+    try testing.expectEqual(build, store.getProcSpecImmediate(proc_id).body.?);
     try testing.expect(store.getCFStmtImmediate(build).* == .assign_struct);
     try testing.expectEqual(result, store.getCFStmtImmediate(ret).ret.value);
 }

@@ -332,7 +332,7 @@ pub fn runWithStats(store: *LirStore, layouts: *const layout_mod.Store) Resource
 
 /// Fusion applies to every available body, including erased-ABI procedures.
 pub fn rewritableProcBody(store: *const LirStore, proc: LIR.LirProcSpecId) ?LIR.CFStmtId {
-    return store.getProcSpec(proc).body;
+    return store.getProcSpecImmediate(proc).body;
 }
 
 /// Reach the procedure's fixed point using task-owned scratch. The caller must
@@ -412,7 +412,7 @@ fn debugCheckJumpScopes(store: *LirStore, proc: LIR.LirProcSpecId, fused_id: LIR
     defer visited.deinit();
     var declarations = collections.DenseMap(LIR.JoinPointId, void).init(allocator);
     defer declarations.deinit();
-    try work.append(allocator, .{ .stmt = store.getProcSpec(proc).body orelse return, .depth = 0 });
+    try work.append(allocator, .{ .stmt = store.getProcSpecImmediate(proc).body orelse return, .depth = 0 });
     while (work.pop()) |item| {
         if ((try visited.getOrPut(item.stmt)).found_existing) continue;
         scope.shrinkRetainingCapacity(item.depth);
@@ -764,7 +764,7 @@ fn cloneSharedConsumer(
     defer defs.deinit();
     var cloner = try body_clone.BodyCloner(ConsumerRewriter).initWithFreshDeclaredJoinsAndAllocator(store, .{}, body, join_params, allocator);
     defer cloner.deinit();
-    const frame = store.getLocalSpan(store.getProcSpec(candidate.proc).frame_locals);
+    const frame = store.getLocalSpan(store.getProcSpecImmediate(candidate.proc).frame_locals);
     for (0..frame.len) |index| {
         const local = GuardedList.at(frame, index);
         if (defs.get(local) == 0) try cloner.local_map.put(local, local);
@@ -772,7 +772,7 @@ fn cloneSharedConsumer(
     const cloned = try cloner.cloneStmt(body);
     var locals = std.ArrayList(LIR.LocalId).empty;
     defer locals.deinit(allocator);
-    const old_frame = store.getLocalSpan(store.getProcSpec(candidate.proc).frame_locals);
+    const old_frame = store.getLocalSpan(store.getProcSpecImmediate(candidate.proc).frame_locals);
     for (0..old_frame.len) |index| try locals.append(allocator, GuardedList.at(old_frame, index));
     try locals.appendSlice(allocator, cloner.new_locals.items);
     const frame_locals = try store.addLocalSpan(locals.items);
@@ -1231,7 +1231,7 @@ fn applyCandidate(
         // Statements the rewrite leaves unchanged are shared with the
         // original arm, and copied statements define fresh locals.
         for (plan.shared.items) |stmt_id| try cloner.stmt_map.put(stmt_id, stmt_id);
-        const frame = store.getLocalSpan(store.getProcSpec(candidate.proc).frame_locals);
+        const frame = store.getLocalSpan(store.getProcSpecImmediate(candidate.proc).frame_locals);
         for (0..frame.len) |index| {
             const local = GuardedList.at(frame, index);
             if (plan.copied_defs.get(local) == 0) try cloner.local_map.put(local, local);
@@ -2207,7 +2207,7 @@ test "tag case fusion routes exact constructor edges without materializing tags"
 
     try run(&store, &layouts);
 
-    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpec(proc).body.?);
+    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpecImmediate(proc).body.?);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         const stmt = store.getCFStmt(stmt_id);
@@ -2322,7 +2322,7 @@ test "tag case fusion shares the suffix its arms converge on" {
     // Neither arm reads the union, so both fused variants keep their arm and
     // the suffix it converges on, which still defines its local once.
     var default_count: usize = 0;
-    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpec(proc).body.?);
+    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpecImmediate(proc).body.?);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         const stmt = store.getCFStmt(stmt_id);
@@ -2419,7 +2419,7 @@ test "tag case fusion carries releases on a producer edge" {
     try run(&store, &layouts);
 
     var releases: u32 = 0;
-    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpec(proc).body.?);
+    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpecImmediate(proc).body.?);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         const stmt = store.getCFStmt(stmt_id);
@@ -2520,7 +2520,7 @@ test "tag case fusion releases the payload where an arm released the union" {
     try run(&store, &layouts);
 
     var payload_releases: u32 = 0;
-    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpec(proc).body.?);
+    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpecImmediate(proc).body.?);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         const stmt = store.getCFStmt(stmt_id);
@@ -2644,7 +2644,7 @@ fn testContinuationJoin(shared_continuation: bool) TestError!void {
 
     // The continuation is now the outermost declaration, and every jump to it
     // sits inside its remainder.
-    const proc_body = store.getProcSpec(proc).body.?;
+    const proc_body = store.getProcSpecImmediate(proc).body.?;
     const root = store.getCFStmt(if (shared_continuation) store.getCFStmt(proc_body).join.remainder else proc_body);
     try testing.expect(root == .join);
     if (shared_continuation) {
@@ -2671,7 +2671,7 @@ fn testContinuationJoin(shared_continuation: bool) TestError!void {
 
     var declarations = collections.DenseMap(LIR.JoinPointId, LIR.CFStmtId).init(testing.allocator);
     defer declarations.deinit();
-    var all = try body_clone.ReachableStmts.init(&store, store.getProcSpec(proc).body.?);
+    var all = try body_clone.ReachableStmts.init(&store, store.getProcSpecImmediate(proc).body.?);
     defer all.deinit();
     while (try all.next()) |stmt_id| {
         const stmt = store.getCFStmt(stmt_id);
@@ -2779,7 +2779,7 @@ test "tag case fusion keeps the join when a producer edge is shared with another
     // shared path, still matching the tag.
     var union_joins: u32 = 0;
     var tag_builds: u32 = 0;
-    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpec(proc).body.?);
+    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpecImmediate(proc).body.?);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         const stmt = store.getCFStmt(stmt_id);

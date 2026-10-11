@@ -31,7 +31,7 @@ fn procReachesListSet(store: *const lir.LirStore, start: lir.LIR.LirProcSpecId) 
             const index = @backingInt(proc_id);
             if (seen_procs[index]) continue;
             seen_procs[index] = true;
-            if (store.getProcSpec(proc_id).body) |body| {
+            if (store.getProcSpecImmediate(proc_id).body) |body| {
                 try stack.append(allocator, .{ .stmt = body });
             }
         },

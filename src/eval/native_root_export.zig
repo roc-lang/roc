@@ -467,7 +467,7 @@ const Builder = struct {
             }, if (entry.boxy != null) builtins.erased_callable.compilerPayloadSize(capture_size) else builtins.erased_callable.payloadSize(capture_size), builtins.erased_callable.payload_alignment, builtins.erased_callable.allocation_has_refcounted_children, null);
             try self.relocate(job.dest, result.dest);
             if (!result.fresh) return;
-            const proc_name = try static_data.procSymbolName(self.allocator, self.program.store.getProcSpec(resolved.proc).identity);
+            const proc_name = try static_data.procSymbolName(self.allocator, self.program.store.getProcSpecImmediate(resolved.proc).identity);
             try self.node(result.dest).relocations.append(self.allocator, .{
                 .offset = result.dest.offset,
                 .target_symbol_name = proc_name,

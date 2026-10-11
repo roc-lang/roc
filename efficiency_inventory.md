@@ -280,6 +280,10 @@ stages it touches; the instruction-count effect is reported in "Results".
     of scanning the layout table; and a canonical-root commit returns empty
     slices without allocating.
 
+48. `LirStore.getProcSpecImmediate` returns a read-only pointer to a stored
+    procedure specification; the 244 reads that used one or two fields of a
+    by-value `getProcSpec` copy go through it.
+
 ## Findings from profiling
 
 These were found by profiling the ReleaseFast compiler with
@@ -2228,7 +2232,7 @@ reading code, and were not in the audit above.
 - category C/D; runs per `assign_call` statement in many passes (54 call sites in arc.zig, 19 in loop_append_promote, 18 in LirCodeGen, 17 in arc_solve, 15 in trmc, ...; see count …; impact medium; risk low
 - Finding: `LirProcSpec` has ~45 fields including `identity: [32]u8`, `hosted: ?HostedProc` (12), `ret_desc: ?BoxyDescRef` (28), ten `?LocalId`/`?u32` optionals (8 each), five `BoxySpan`s, `tail_calls: ?TailCalls` (12), four u64 masks, ~15 bools and small enums: roughly 300 bytes. `LirStore.getProcSpec` (src/lir/LirStore.zig:1953) returns a copy; callers typically read one field (`.args`, `.ret_layout`, `.body`, `.external`). …
 - Fix: add `getProcSpecConst(id) *const LirProcSpec` (the proc_rewrite overlay only ever replaces the whole spec of `proc_id`, so a pointer into the coordinator or the overlay is well defined) and migrate hot callers; repack the spec by moving the Boxy-only fields (`ret_desc`, `runtime_ret_desc`, `erased_*` x6, `static_erased_capture_layout`, `boxy_runtime_entry`) into an optional side record indexed by a u32, and pack the …
-- Status: open
+- Status: partly fixed (fix 48): immediate reads take a pointer; the specification itself is unchanged
 
 ### src/lir/LirStore.zig:1717: `getCFStmt` copies the whole 144-byte union; nearly every pass switches on the copy
 - category D/H; runs per statement visit in every LIR pass (≈700 call sites across src/lir; loop_append_promote 98, scalarize_joins 85, arc 63, tag_case_fusion 63, box_reuse 44, …; impact high (reduces the per-statement cost of every pass; …; risk low

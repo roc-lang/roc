@@ -188,7 +188,7 @@ const Transform = struct {
 
         const box_layout = self.store.getLocal(boxed).layout_idx;
         if (self.store.getLocal(result_box).layout_idx != box_layout) return false;
-        if (self.store.getProcSpec(self.proc_id).ret_layout != box_layout) return false;
+        if (self.store.getProcSpecImmediate(self.proc_id).ret_layout != box_layout) return false;
 
         const box_layout_value = self.layouts.getLayout(box_layout);
         if (box_layout_value.tag != .box) return false;
@@ -283,7 +283,7 @@ const Transform = struct {
 
         const box_layout = self.store.getLocal(boxed).layout_idx;
         if (self.store.getLocal(result_box).layout_idx != box_layout) return false;
-        if (self.store.getProcSpec(self.proc_id).ret_layout != box_layout) return false;
+        if (self.store.getProcSpecImmediate(self.proc_id).ret_layout != box_layout) return false;
 
         const box_layout_value = self.layouts.getLayout(box_layout);
         if (box_layout_value.tag != .box) return false;
@@ -378,7 +378,7 @@ const Transform = struct {
 
         const box_layout = self.store.getLocal(boxed).layout_idx;
         if (self.store.getLocal(result_box).layout_idx != box_layout) return false;
-        if (self.store.getProcSpec(self.proc_id).ret_layout != box_layout) return false;
+        if (self.store.getProcSpecImmediate(self.proc_id).ret_layout != box_layout) return false;
 
         const box_layout_value = self.layouts.getLayout(box_layout);
         if (box_layout_value.tag != .box) return false;
@@ -474,7 +474,7 @@ const Transform = struct {
 
         const erased_layout = self.store.getLocal(old_stmt.target).layout_idx;
         if (self.store.getLocal(new_stmt.target).layout_idx != erased_layout) return false;
-        if (self.store.getProcSpec(self.proc_id).ret_layout != erased_layout) return false;
+        if (self.store.getProcSpecImmediate(self.proc_id).ret_layout != erased_layout) return false;
         if (self.layouts.getLayout(erased_layout).tag != .erased_callable) return false;
 
         if (!self.samePackedErasedPayloadShape(old_stmt.capture_layout, new_stmt.capture_layout)) return false;
@@ -770,7 +770,7 @@ fn testDirectBoxReuse(per_proc: bool) (Allocator.Error || error{ TestExpectedEqu
         defer scratch.deinit();
         try runProc(&store, &layouts, caller, scratch.allocator());
         try std.testing.expectEqual(layout_count, layouts.layoutCount());
-        try std.testing.expect(store.getProcSpec(callee).body == null);
+        try std.testing.expect(store.getProcSpecImmediate(callee).body == null);
     } else {
         try run(&store, &layouts);
     }
@@ -798,7 +798,7 @@ fn testDirectBoxReuse(per_proc: bool) (Allocator.Error || error{ TestExpectedEqu
     try std.testing.expectEqual(new_payload, GuardedList.at(store_args, 1));
     try std.testing.expectEqual(ret, store_payload.next);
 
-    const frame_locals = store.getLocalSpan(store.getProcSpec(caller).frame_locals);
+    const frame_locals = store.getLocalSpan(store.getProcSpecImmediate(caller).frame_locals);
     try std.testing.expect(frame_locals.len >= 6);
 }
 
@@ -1002,7 +1002,7 @@ test "box reuse rewrites joined update wrappers" {
     try std.testing.expectEqual(body_payload_alias, GuardedList.at(store_args, 1));
     try std.testing.expectEqual(ret, store_payload.next);
 
-    const frame_locals = store.getLocalSpan(store.getProcSpec(caller).frame_locals);
+    const frame_locals = store.getLocalSpan(store.getProcSpecImmediate(caller).frame_locals);
     try std.testing.expect(frame_locals.len >= 13);
 }
 
@@ -1111,7 +1111,7 @@ test "box reuse rewrites platform-style join remainder update wrappers" {
     try std.testing.expectEqual(body_payload_alias, GuardedList.at(store_args, 1));
     try std.testing.expectEqual(ret, store_payload.next);
 
-    const frame_locals = store.getLocalSpan(store.getProcSpec(caller).frame_locals);
+    const frame_locals = store.getLocalSpan(store.getProcSpecImmediate(caller).frame_locals);
     try std.testing.expect(frame_locals.len >= 11);
 }
 
@@ -1176,7 +1176,7 @@ test "erased callable reuse rewrites adjacent same-shape repack" {
     try std.testing.expectEqual(old_callable, rewritten.reuse.?);
     try std.testing.expect(!rewritten.reuse_unique);
 
-    const frame_locals = store.getLocalSpan(store.getProcSpec(caller).frame_locals);
+    const frame_locals = store.getLocalSpan(store.getProcSpecImmediate(caller).frame_locals);
     try std.testing.expectEqual(@as(usize, 4), frame_locals.len);
 }
 

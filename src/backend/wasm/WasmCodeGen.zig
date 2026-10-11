@@ -6735,7 +6735,7 @@ fn emitReturnIfCallPending(self: *Self, pending: LIR.PendingReturn) Allocator.Er
     const proc_id = self.current_proc_id orelse
         wasmInvariantFmt("WASM/codegen invariant violated: a pending-call return outside a procedure", .{});
     if (pending.result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
-    try self.emitI32Const(@intCast(@backingInt(self.runtimeRepresentationLayoutIdx(self.store.getProcSpec(proc_id).ret_layout))));
+    try self.emitI32Const(@intCast(@backingInt(self.runtimeRepresentationLayoutIdx(self.store.getProcSpecImmediate(proc_id).ret_layout))));
     try self.emitI32Const(@intFromBool(pending.keeps_own_desc));
     try self.emitBoxyCall("roc_boxy_return_pending");
     self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;

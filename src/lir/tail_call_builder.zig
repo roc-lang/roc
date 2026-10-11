@@ -124,7 +124,7 @@ pub fn record(self: *Self, id: LIR.CFStmtId, stmt: LIR.CFStmt) std.mem.Allocator
 pub fn finish(self: *Self, store: anytype) std.mem.Allocator.Error!?LIR.TailCalls {
     std.debug.assert(!self.published);
     const proc = self.proc.?;
-    const ret_layout = store.getProcSpec(proc).ret_layout;
+    const ret_layout = store.getProcSpecImmediate(proc).ret_layout;
     var head: ?LIR.CFStmtId = null;
     for (self.calls.items) |id| {
         const stmt = store.getCFStmt(id);
@@ -152,7 +152,7 @@ pub fn finish(self: *Self, store: anytype) std.mem.Allocator.Error!?LIR.TailCall
         // with the value only when the callee writes it to the descriptor
         // local this procedure returns, which is the value's own.
         if (call.out_desc) |out_desc| {
-            if (store.getProcSpec(proc).runtime_ret_desc != out_desc) continue;
+            if (store.getProcSpecImmediate(proc).runtime_ret_desc != out_desc) continue;
             const target_desc = store.getLocal(call.target).boxy_desc orelse continue;
             if (target_desc.localOrNull() != out_desc) continue;
         }

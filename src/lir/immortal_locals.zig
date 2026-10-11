@@ -289,7 +289,7 @@ pub fn elide(gpa: Allocator, store: *LirStore) Allocator.Error!usize {
 /// no local can be immortal.
 fn anyStaticLiteral(store: *const LirStore) bool {
     for (0..store.procSpecCount()) |index| {
-        if (store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(index))))).shapes.static_literal) return true;
+        if (store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(index))))).shapes.static_literal) return true;
     }
     return false;
 }

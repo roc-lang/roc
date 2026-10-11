@@ -814,7 +814,7 @@ fn canonicalReference(
         if (end > start + 1 and (end == source.len or !isIdentByte(source[end]))) {
             const value = std.fmt.parseInt(u64, source[start + 1 .. end], 10) catch return null;
             if (letter == 'p') {
-                const identity = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(value))))).identity;
+                const identity = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(value))))).identity;
                 try writer.print("p{s}", .{&identity.symbolHex()});
             } else {
                 try writer.print("{c}{d}", .{ letter, try canonicalId(gpa, names, source[start .. start + 1], value) });

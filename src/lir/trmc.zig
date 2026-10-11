@@ -833,13 +833,13 @@ const Detection = struct {
         const local_layout = self.layouts.getLayout(self.store.getLocal(local).layout_idx);
         if (local_layout.tag != .box) return false;
         const inner = self.layouts.getLayout(local_layout.getIdx());
-        const ret_layout = self.layouts.getLayout(self.store.getProcSpec(self.proc_id).ret_layout);
+        const ret_layout = self.layouts.getLayout(self.store.getProcSpecImmediate(self.proc_id).ret_layout);
         return inner.eql(ret_layout);
     }
 
     fn isRetLayoutLocal(self: *const Detection, local: LocalId) bool {
         const local_layout = self.layouts.getLayout(self.store.getLocal(local).layout_idx);
-        const ret_layout = self.layouts.getLayout(self.store.getProcSpec(self.proc_id).ret_layout);
+        const ret_layout = self.layouts.getLayout(self.store.getProcSpecImmediate(self.proc_id).ret_layout);
         return local_layout.eql(ret_layout);
     }
 
@@ -1035,7 +1035,7 @@ const Transform = struct {
             .ready_moves = &detection.scratch.ready_moves,
             .old_args = &.{},
             .move_targets = .init(gpa),
-            .join_id = if (store.getProcSpec(proc_id).tail_calls) |sites|
+            .join_id = if (store.getProcSpecImmediate(proc_id).tail_calls) |sites|
                 sites.loop
             else
                 @fromBackingInt(@intCast(detection.max_join_id + 1)),
@@ -1188,7 +1188,7 @@ const Transform = struct {
     }
 
     fn rewriteTailSites(self: *Transform) ResourceError!void {
-        var site: ?CFStmtId = if (self.store.getProcSpec(self.proc_id).tail_calls) |sites| sites.head else null;
+        var site: ?CFStmtId = if (self.store.getProcSpecImmediate(self.proc_id).tail_calls) |sites| sites.head else null;
         while (site) |id| {
             const call = self.store.getCFStmtImmediate(id).assign_call;
             site = call.tail_call.?.next;
@@ -1312,7 +1312,7 @@ const Transform = struct {
     /// Wrap the (rewritten) body in the loop join and re-point the proc at
     /// fresh argument locals; the original args become the join params.
     fn installWrapper(self: *Transform, comptime is_trmc: bool, initial: LocalId) ResourceError!void {
-        const old_body = self.store.getProcSpec(self.proc_id).body.?;
+        const old_body = self.store.getProcSpecImmediate(self.proc_id).body.?;
         const origin = trmcOrigin(self.store.stmtOrigin(old_body));
 
         const fresh = try self.gpa.alloc(LocalId, self.old_args.len);
@@ -1412,7 +1412,7 @@ const Transform = struct {
     /// frame_locals must stay complete, unique, and sorted: the interpreter
     /// binary-searches it for every local in the proc.
     fn rebuildFrameLocals(self: *Transform) ResourceError!LIR.LocalSpan {
-        const old_span = self.store.getProcSpec(self.proc_id).frame_locals;
+        const old_span = self.store.getProcSpecImmediate(self.proc_id).frame_locals;
         const old = self.store.getLocalSpan(old_span);
         if (builtin.mode == .debug) {
             var previous: ?LocalId = null;

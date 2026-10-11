@@ -225,7 +225,7 @@ test "Boxy frozen evidence compares runtime descriptor graphs and declared metho
     try std.testing.expect(!try matcher.dictionary(&left, &right));
     matcher.seen.clearRetainingCapacity();
     // Equality requires producer evidence, never similarity of procedure bodies.
-    const origin = Program.BoxyFrozenMethodOrigin{ .worker = program.store.getProcSpec(first).identity, .requirement_module = .{ .bytes = @splat(0) }, .requirement_type = @fromBackingInt(@intCast(1)), .callable_module = .{ .bytes = @splat(0) }, .callable_type = @fromBackingInt(@intCast(2)) };
+    const origin = Program.BoxyFrozenMethodOrigin{ .worker = program.store.getProcSpecImmediate(first).identity, .requirement_module = .{ .bytes = @splat(0) }, .requirement_type = @fromBackingInt(@intCast(1)), .callable_module = .{ .bytes = @splat(0) }, .callable_type = @fromBackingInt(@intCast(2)) };
     try program.boxy_frozen_method_origins.put(gpa, first, origin);
     try program.boxy_frozen_method_origins.put(gpa, second, origin);
     try std.testing.expect(try matcher.dictionary(&left, &right));

@@ -2012,6 +2012,18 @@ pub fn setProcSpecBodyAndJoinPoints(self: *Self, idx: LirProcSpecId, body: ?CFSt
     proc.shapes = proc.shapes.merged(self.shapes);
 }
 
+/// A read-only pointer to the stored procedure specification, valid until a
+/// procedure is next added or a rewrite next materializes. A caller that reads
+/// a field or two goes through this instead of copying the whole
+/// specification out with `getProcSpec`.
+pub fn getProcSpecImmediate(self: *const Self, idx: LirProcSpecId) *const LirProcSpec {
+    if (self.proc_rewrite) |*rewrite| {
+        if (idx == rewrite.proc_id) return &rewrite.proc;
+    }
+    if (self.body_coordinator) |coordinator| return coordinator.getProcSpecImmediate(idx);
+    return self.proc_specs.getPtrConstImmediate(@backingInt(idx));
+}
+
 /// Returns a mutable pointer to the stored proc specification for the given id.
 pub fn getProcSpecPtr(self: *Self, idx: LirProcSpecId) *LirProcSpec {
     if (self.proc_rewrite) |*rewrite| {

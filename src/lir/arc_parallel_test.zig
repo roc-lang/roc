@@ -404,7 +404,7 @@ test "ARC public solve component barriers preserve conditional rows and shared g
             try testing.expectEqual(@as(usize, 0), direct.sigTable().retConditionsOf(sig).len);
         }
     }
-    const shared_param = core.LirStore.GuardedList.at(fixture.fixture.store.getLocalSpan(fixture.fixture.store.getProcSpec(@fromBackingInt(@intCast(5))).args), 0);
+    const shared_param = core.LirStore.GuardedList.at(fixture.fixture.store.getLocalSpan(fixture.fixture.store.getProcSpecImmediate(@fromBackingInt(@intCast(5))).args), 0);
     try testing.expect(!direct.unique_born.isSet(@backingInt(shared_param)));
     for ([_]usize{ 2, 4 }) |lanes| {
         var runner: ReverseExecutor = .{ .lanes = lanes, .rotate_wave_lane = true };
@@ -601,7 +601,7 @@ const OutcomeFixture = struct {
         const s = &self.fixture.store;
         try testing.expectEqual(@as(usize, 3), s.procSpecCount());
         for ([_]u32{ 0, 2 }) |proc| {
-            var cursor = s.getProcSpec(@fromBackingInt(@intCast(proc))).body.?;
+            var cursor = s.getProcSpecImmediate(@fromBackingInt(@intCast(proc))).body.?;
             while (true) {
                 const stmt = s.getCFStmt(cursor);
                 if (stmt == .assign_low_level) {
@@ -614,7 +614,7 @@ const OutcomeFixture = struct {
                 } else cursor = try linearNext(stmt);
             }
         }
-        var cursor = s.getProcSpec(@fromBackingInt(@intCast(1))).body.?;
+        var cursor = s.getProcSpecImmediate(@fromBackingInt(@intCast(1))).body.?;
         while (true) {
             const stmt = s.getCFStmt(cursor);
             if (stmt == .incref) try testing.expect(stmt.incref.value != self.input);

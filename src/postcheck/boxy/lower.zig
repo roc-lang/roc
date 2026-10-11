@@ -3403,7 +3403,7 @@ const ProcedureBuilder = struct {
         if (self.needsFrozenCallableRecipes()) {
             const contract = if (exact_method) |method| method.requirement_type else fn_type;
             try self.result.boxy_frozen_method_origins.put(self.allocator, frame.method_proc, .{
-                .worker = self.result.store.getProcSpec(worker_proc).identity,
+                .worker = self.result.store.getProcSpecImmediate(worker_proc).identity,
                 .requirement_module = contract.module,
                 .requirement_type = contract.ty,
                 .callable_module = fn_type.module,
@@ -7259,7 +7259,7 @@ const ProcedureBuilder = struct {
             const hidden_count = self.plan.hiddenDescriptorParamSlice(worker_plan.hidden_descs).len +
                 self.plan.hiddenDictionaryParamSlice(worker_plan.hidden_dicts).len;
             const host_arg_count = self.layout_plan.rootLayoutSlice(root_layout.host_args).len;
-            const worker_arg_count = self.result.store.getLocalSpan(self.result.store.getProcSpec(worker_proc).args).len;
+            const worker_arg_count = self.result.store.getLocalSpan(self.result.store.getProcSpecImmediate(worker_proc).args).len;
             // Hidden worker parameters never cross the platform boundary; when
             // the host-facing arity plus the hidden parameters reconciles with
             // the worker's actual arity, wrap the worker and materialize the
@@ -7290,7 +7290,7 @@ const ProcedureBuilder = struct {
         var proc_index: usize = 0;
         while (proc_index < self.result.store.procSpecCount()) : (proc_index += 1) {
             const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
-            const body = self.result.store.getProcSpec(proc_id).body orelse continue;
+            const body = self.result.store.getProcSpecImmediate(proc_id).body orelse continue;
 
             var visited = std.AutoHashMap(u32, void).init(self.allocator);
             defer visited.deinit();
@@ -7867,7 +7867,7 @@ const ProcedureBuilder = struct {
         const proc_id = job.proc_id;
         const ret_local = header.ret_local;
         const args_span = header.args_span;
-        const ret_layout = self.result.store.getProcSpec(proc_id).ret_layout;
+        const ret_layout = self.result.store.getProcSpecImmediate(proc_id).ret_layout;
         const saved_tail_builder = self.result.store.tail_call_builder;
         defer self.result.store.tail_call_builder = saved_tail_builder;
         var tail_builder = lir_core.TailCallBuilder.init(self.allocator, proc_id);
@@ -7920,7 +7920,7 @@ const ProcedureBuilder = struct {
     /// ABI: the callee's body is not built yet and its return local can carry
     /// a runtime descriptor.
     fn directCallNeedsProvisionalAbi(self: *ProcedureBuilder, worker: Plan.WorkerPlanId, callee_proc: LIR.LirProcSpecId) Allocator.Error!bool {
-        if (self.result.store.getProcSpec(callee_proc).body != null) return false;
+        if (self.result.store.getProcSpecImmediate(callee_proc).body != null) return false;
         try self.ensureWorkerHeader(worker);
         const ret_local = self.worker_return_locals[@backingInt(worker)] orelse
             boxyLowerInvariant("boxy direct call reached a worker without a reserved return local");
@@ -7936,7 +7936,7 @@ const ProcedureBuilder = struct {
         const ret_local = header.ret_local;
         const args_span = header.args_span;
         const erased = header.erased.?;
-        const ret_layout = self.result.store.getProcSpec(proc_id).ret_layout;
+        const ret_layout = self.result.store.getProcSpecImmediate(proc_id).ret_layout;
         const saved_tail_builder = self.result.store.tail_call_builder;
         self.result.store.tail_call_builder = null;
         defer self.result.store.tail_call_builder = saved_tail_builder;

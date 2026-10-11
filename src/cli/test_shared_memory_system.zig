@@ -274,7 +274,7 @@ test "integration - one LIR image resolves layouts for both pointer widths" {
 
     // `main` returns `List(I64)`, a three-word RocList: 12 bytes at 4-byte
     // pointers, 24 bytes at 8-byte pointers—both resolved from one image.
-    const ret_layout = view32.store.getProcSpec(view32.root_procs[0]).ret_layout;
+    const ret_layout = view32.store.getProcSpecImmediate(view32.root_procs[0]).ret_layout;
     const size32 = view32.layouts.layoutSize(view32.layouts.getLayout(ret_layout));
     const size64 = view64.layouts.layoutSize(view64.layouts.getLayout(ret_layout));
     try testing.expectEqual(@as(u32, 12), size32);

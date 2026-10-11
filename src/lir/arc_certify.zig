@@ -2984,7 +2984,7 @@ const Certifier = struct {
         };
         try self.seen_outcomes.put(discriminant, {});
         if (mask == 0) return;
-        const params = self.store.getLocalSpan(self.store.getProcSpec(self.current_proc).args);
+        const params = self.store.getLocalSpan(self.store.getProcSpecImmediate(self.current_proc).args);
         for (0..GuardedList.borrowLen(params)) |position| {
             const bit = arc_sig.paramBit(position) orelse break;
             if ((mask & bit) == 0) continue;
