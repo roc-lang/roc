@@ -598,7 +598,7 @@ pub fn expectArcParallelismDeterministicLir(
         .app_path => |path| try lowerAppPathToLir(gpa, path, &reference.writer, opts, null, null),
         .app_body => |body| try runToLir(body, &reference.writer, opts, null),
     }
-    inline for (.{ "source", "planning", "emission" }) |phase| {
+    inline for (.{ "dismantle", "source", "planning", "emission" }) |phase| {
         try std.testing.expectEqual(@as(u64, 0), @field(serial_metrics, phase ++ "_tasks_submitted"));
         try std.testing.expectEqual(@as(u64, 0), @field(serial_metrics, phase ++ "_tasks_committed"));
     }
@@ -612,6 +612,8 @@ pub fn expectArcParallelismDeterministicLir(
     // A fresh serial lowering must overwrite every caller-provided metric,
     // including the common algorithm's nonzero wave and variant counters.
     var metrics: lir.CheckedPipeline.ArcParallelMetrics = .{
+        .dismantle_tasks_submitted = 89,
+        .dismantle_tasks_committed = 90,
         .source_tasks_submitted = 91,
         .source_tasks_committed = 92,
         .planning_tasks_submitted = 93,
@@ -651,7 +653,7 @@ pub fn expectArcParallelismDeterministicLir(
                 .app_body => |body| try runToLir(body, &candidate.writer, opts, null),
             }
             try std.testing.expectEqualStrings(reference.written(), candidate.written());
-            inline for (.{ "source", "planning", "emission" }) |phase| {
+            inline for (.{ "dismantle", "source", "planning", "emission" }) |phase| {
                 try std.testing.expect(@field(metrics, phase ++ "_tasks_submitted") > 0);
                 try std.testing.expectEqual(
                     @field(metrics, phase ++ "_tasks_submitted"),

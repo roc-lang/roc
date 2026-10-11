@@ -83,6 +83,8 @@ pub const UniquenessMetrics = arc_solve.UniquenessMetrics;
 /// Emission callback counts exclude inline execution; waves and reservations
 /// describe the common schedule. All analysis/emission counters reset together.
 pub const ParallelMetrics = struct {
+    dismantle_tasks_submitted: u64 = 0,
+    dismantle_tasks_committed: u64 = 0,
     source_tasks_submitted: u64 = 0,
     source_tasks_committed: u64 = 0,
     planning_tasks_submitted: u64 = 0,
@@ -592,13 +594,16 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     defer solution.deinit();
     inserter.solution = &solution;
 
-    var dismantles = try arc_dismantle.compute(
-        store.allocator,
-        store,
-        layouts,
-        local_contains_refcounted,
-        &solution,
-    );
+    var dismantle_metrics: arc_dismantle.TaskMetrics = .{};
+    const dismantle_result = arc_dismantle.compute(store.allocator, store, layouts, local_contains_refcounted, &solution, .{
+        .executor = options.post_check_executor,
+        .metrics = &dismantle_metrics,
+    });
+    if (options.metrics_out) |metrics| {
+        metrics.dismantle_tasks_submitted = dismantle_metrics.submitted;
+        metrics.dismantle_tasks_committed = dismantle_metrics.committed;
+    }
+    var dismantles = try dismantle_result;
     defer dismantles.deinit();
     inserter.dismantles = &dismantles;
 
@@ -12833,7 +12838,7 @@ test "RC loop payload view preserves field units of a tag union defined outside 
     defer testing.allocator.free(rc);
     var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, &.{}, &.{}, true);
     defer solution.deinit();
-    var dismantles = try arc_dismantle.compute(testing.allocator, &f.store, &f.layouts, rc, &solution);
+    var dismantles = try arc_dismantle.compute(testing.allocator, &f.store, &f.layouts, rc, &solution, .{});
     defer dismantles.deinit();
     try testing.expectEqual(false, dismantles.takes.contains(read));
     try testing.expectEqual(false, dismantles.containers.contains(outer));
@@ -12896,7 +12901,7 @@ test "RC loop payload view takes fresh field units of a tag union rebuilt inside
     defer testing.allocator.free(rc);
     var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, &.{}, &.{}, true);
     defer solution.deinit();
-    var dismantles = try arc_dismantle.compute(testing.allocator, &f.store, &f.layouts, rc, &solution);
+    var dismantles = try arc_dismantle.compute(testing.allocator, &f.store, &f.layouts, rc, &solution, .{});
     defer dismantles.deinit();
     try testing.expectEqual(true, dismantles.takes.contains(read));
     try testing.expectEqual(true, dismantles.containers.contains(outer));
