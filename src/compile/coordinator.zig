@@ -2463,7 +2463,6 @@ pub const Coordinator = struct {
         };
     }
 
-
     pub fn checkedArtifactByKey(
         self: *Coordinator,
         key: check.CheckedArtifact.CheckedModuleArtifactKey,
