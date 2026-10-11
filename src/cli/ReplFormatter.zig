@@ -8,6 +8,10 @@ const reporting = @import("reporting");
 const CliCtx = @import("CliCtx.zig").CliCtx;
 const ReplSession = @import("ReplSession.zig");
 const RocStr = builtins.str.RocStr;
+const CallError = eval.Inspected.Error || eval.LirInterpreter.Error || std.Io.Writer.Error || error{InvalidFormatter};
+const EvaluateError = ReplSession.ReplStepError || std.Io.Writer.Error || error{UnsupportedReplEffect};
+/// Operational failures and formatter protocol errors reported by this frontend.
+pub const Error = CallError || EvaluateError || @import("ctx").CoreCtx.ReadError || std.Io.Reader.StreamRemainingError || error{ MultilineFormatterReply, DuplicateVirtualModule, ReservedVirtualModule };
 
 // This compiler-owned wrapper checks the plugin contract before lowering.
 // Tuples are an internal host ABI; their offsets come from committed layouts.
@@ -39,7 +43,7 @@ const Reply = struct {
 
 /// Call an already checked and lowered formatter. Each call owns its runtime
 /// allocations, including on a language crash; the compiled program is reused.
-fn call(allocator: std.mem.Allocator, stderr: *std.Io.Writer, program: *const eval.Inspected.CompiledTargetProgram, decoding: bool, strings: [4][]const u8, value: ReplSession.ResultValue) !Reply {
+fn call(allocator: std.mem.Allocator, stderr: *std.Io.Writer, program: *const eval.Inspected.CompiledTargetProgram, decoding: bool, strings: [4][]const u8, value: ReplSession.ResultValue) CallError!Reply {
     const lowered = &program.lowered;
     const layouts = &lowered.view.layouts;
     var runtime = eval.RuntimeHostEnv.init(allocator);
@@ -101,7 +105,8 @@ fn field(comptime T: type, bytes: [*]u8, layouts: *const layout.Store, idx: layo
     return @ptrCast(bytes + offset);
 }
 
-pub fn run(ctx: *CliCtx, session: *ReplSession, path: []const u8) !void {
+/// Load the formatter once and process framed requests in the supplied session.
+pub fn run(ctx: *CliCtx, session: *ReplSession, path: []const u8) Error!void {
     const allocator = ctx.gpa;
     session.capture_result_value = true;
     defer session.capture_result_value = false;
@@ -164,15 +169,15 @@ pub fn run(ctx: *CliCtx, session: *ReplSession, path: []const u8) !void {
     }
 }
 
-fn writeReply(ctx: *CliCtx, bytes: []const u8) !void {
+fn writeReply(ctx: *CliCtx, bytes: []const u8) (std.Io.Writer.Error || error{MultilineFormatterReply})!void {
     // Framing is part of the formatter contract. Reject a broken plugin rather
     // than silently desynchronizing the caller's next response.
-    if (std.mem.indexOfScalar(u8, bytes, '\n') != null) return error.MultilineFormatterReply;
+    if (std.mem.findScalar(u8, bytes, '\n') != null) return error.MultilineFormatterReply;
     try ctx.io.stdout().print("{s}\n", .{bytes});
     ctx.io.flush();
 }
 
-fn evaluate(session: *ReplSession, source: []const u8, config: reporting.ReportingConfig, result: *std.Io.Writer.Allocating, output: *std.Io.Writer.Allocating, diagnostics: *std.Io.Writer.Allocating) !ReplSession.ResultValue {
+fn evaluate(session: *ReplSession, source: []const u8, config: reporting.ReportingConfig, result: *std.Io.Writer.Allocating, output: *std.Io.Writer.Allocating, diagnostics: *std.Io.Writer.Allocating) EvaluateError!ReplSession.ResultValue {
     var value: ReplSession.ResultValue = .{};
     errdefer value.deinit(session.allocator);
     const statements = try session.splitInputIntoStatements(source);

@@ -8,3 +8,7 @@ The scripts and utilities here are responsible for:
 - **Tracy Profiler Integration**: Setting up integration with the [Tracy profiler](https://github.com/wolfpld/tracy) for performance analysis through `tracy.zig`
 - **LLVM Integration**: C++ bindings for LLVM integration through `zig_llvm.cpp` and `zig_llvm.h`
 - **Build System**: Coordinating the build process across all compiler modules and their dependencies
+
+`downstream_package.zig` validates the fetched Zig package through a separate
+compiler consumer. `build-test-downstream-package` prepares and builds it;
+`run-test-downstream-package` executes it. Both participate in MiniCI.

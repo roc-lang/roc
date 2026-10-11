@@ -321,6 +321,12 @@ fn hashExplicitRootRequestInput(
 ) void {
     hashByteSlice(hasher, @tagName(root.kind));
     hashRootSource(hasher, root.source);
+    if (root.source_pattern) |pattern| {
+        hasher.update(&[_]u8{1});
+        hashU32(hasher, @backingInt(pattern));
+    } else {
+        hasher.update(&[_]u8{0});
+    }
     hashByteSlice(hasher, @tagName(root.abi));
     hashByteSlice(hasher, @tagName(root.exposure));
 }
@@ -576,9 +582,9 @@ fn collectMethodLookupScope(
     // This is the same first-match order used by EvidencePass:
     // available views, platform-relation views, then direct-import views that
     // are not otherwise present (needed by small/snapshot-style compilations).
-    for (available_artifacts) |artifact| {
+    for (available_artifacts) |*artifact| {
         if (moduleViewIsSuperseded(artifact, relation_artifacts, direct_imports)) continue;
-        if (artifact.method_registry.entries.len != 0) try builder.appendView(artifact);
+        if (artifact.method_registry.entries.len != 0) try builder.appendView(artifact.*);
     }
     for (relation_artifacts) |artifact| {
         if (artifact.method_registry.entries.len != 0) try builder.appendView(artifact);
@@ -590,16 +596,36 @@ fn collectMethodLookupScope(
     return try builder.finish();
 }
 
+/// The import views method-target lookup searches after the local registry,
+/// in search order: the available views a platform relation or direct import
+/// does not supersede, the platform-relation views, then the direct-import
+/// views. (Snapshot-style compiles pass the builtin module only as a direct
+/// import, so searching `available` alone misses every builtin-owned method.)
+fn methodLookupViews(allocator: Allocator, import_views: CheckedImportViews) Allocator.Error![]const *const ImportedModuleView {
+    var views = try std.ArrayList(*const ImportedModuleView).initCapacity(
+        allocator,
+        import_views.available.len + import_views.relations.len + import_views.direct.len,
+    );
+    errdefer views.deinit(allocator);
+    for (import_views.available) |*available| {
+        if (moduleViewIsSuperseded(available, import_views.relations, import_views.direct)) continue;
+        views.appendAssumeCapacity(available);
+    }
+    for (import_views.relations) |*relation| views.appendAssumeCapacity(relation);
+    for (import_views.direct) |*import| views.appendAssumeCapacity(&import.view);
+    return try views.toOwnedSlice(allocator);
+}
+
 fn moduleViewIsSuperseded(
-    view: ImportedModuleView,
+    view: *const ImportedModuleView,
     relation_artifacts: []const ImportedModuleView,
     direct_imports: []const PublishImportArtifact,
 ) bool {
-    for (relation_artifacts) |relation| {
+    for (relation_artifacts) |*relation| {
         if (base.ModuleIdentity.eql(&view.module_identity.stable_hash, &relation.module_identity.stable_hash) and
             !checkedArtifactKeyEql(view.key, relation.key)) return true;
     }
-    for (direct_imports) |direct| {
+    for (direct_imports) |*direct| {
         if (base.ModuleIdentity.eql(&view.module_identity.stable_hash, &direct.view.module_identity.stable_hash) and
             !checkedArtifactKeyEql(view.key, direct.key)) return true;
     }
@@ -2398,6 +2424,8 @@ pub const CheckedTypeId = checked_ids.CheckedTypeId;
 pub const ConstStore = const_store.ConstStore;
 pub const ConstNodeId = const_store.ConstNodeId;
 pub const ConstFnId = const_store.ConstFnId;
+pub const ConstCaptureKind = const_store.ConstCaptureKind;
+pub const ConstRecursiveBinding = const_store.ConstRecursiveBinding;
 pub const ConstValue = const_store.ConstValue;
 pub const ConstScalar = const_store.ConstScalar;
 pub const ConstList = const_store.ConstList;
@@ -4464,6 +4492,19 @@ pub const CheckedTypeStore = struct {
         // the constraint function that identifies a selected dispatch target
         // or a per-use where-method callable.
         try output_type_roots.forEachSchemeUseTypeRoot(module_env, &publisher);
+
+        // A row-coerced use reads its value at the value's own type
+        // (`ModuleEnv.RowCoercedUse`), which checked-body construction gives
+        // the coercion's child.
+        for (module_env.row_coerced_uses.items.items) |use| {
+            _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @fromBackingInt(use.value_var));
+        }
+        // A row-coerced call is lowered at its function's own type and result
+        // (`ModuleEnv.RowCoercedCallee`).
+        for (module_env.row_coerced_callees.items.items) |callee| {
+            _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @fromBackingInt(callee.fn_var));
+            _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @fromBackingInt(callee.ret_var));
+        }
 
         for (module_env.store.sliceDefs(module_env.global_value_defs)) |def_idx| {
             const root = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, module.defType(def_idx));
@@ -8119,6 +8160,7 @@ const CheckedSourceTypeRoots = struct {
         /// shared by all of the module's declaration walks. Keys own their
         /// argument slices.
         alias_expansions: AliasExpansions = .empty,
+        imported_origins: ImportedOriginIndex,
     },
 
     fn init(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!CheckedSourceTypeRoots {
@@ -8135,6 +8177,7 @@ const CheckedSourceTypeRoots = struct {
                 .graph_analysis = graph_analysis,
                 .key_writer = key_writer,
                 .local_nominal_declarations = local_nominal_declarations,
+                .imported_origins = ImportedOriginIndex.init(allocator),
             },
         };
     }
@@ -8146,6 +8189,7 @@ const CheckedSourceTypeRoots = struct {
             var expansions = scratch.alias_expansions.keyIterator();
             while (expansions.next()) |key| if (key.args.len != 0) scratch.allocator.free(key.args);
             scratch.alias_expansions.deinit(scratch.allocator);
+            scratch.imported_origins.deinit();
             scratch.local_nominal_declarations.deinit();
             scratch.key_writer.deinit();
             scratch.graph_analysis.deinit();
@@ -8579,7 +8623,7 @@ const CheckedTypePublisher = struct {
                     build.* = .{ .alias = .{
                         .name = name,
                         .origin_module = origin_module,
-                        .owner_module = checkedNamedTypeOwnerForSource(module, self.imports, alias.origin_module),
+                        .owner_module = try self.active.scratch.?.imported_origins.owner(module.moduleEnvConst(), self.imports, alias.origin_module),
                         .source_decl = alias.source_decl.toOptional(),
                         .builtin_origin = alias.source_decl.originIsBuiltin(),
                         .backing = undefined,
@@ -8615,11 +8659,12 @@ const CheckedTypePublisher = struct {
                 },
                 .nominal_type => |nominal| switch (cursor) {
                     0 => {
-                        const builtin_nominal = categorizeBuiltinNominal(module, self.imports, nominal);
+                        const scratch = &self.active.scratch.?;
+                        const builtin_nominal = try scratch.imported_origins.builtinNominal(module.moduleEnvConst(), self.imports, nominal);
                         const name = try names.internTypeIdent(module.identStoreConst(), nominal.ident.ident_idx);
                         const origin_module = try names.internModuleIdentity(module.moduleEnvConst().moduleIdentityHash(nominal.origin_module));
-                        const owner_module = checkedNamedTypeOwnerForSource(module, self.imports, nominal.origin_module);
-                        const representation = try checkedNominalRepresentationForSourceNominal(module, names, self.imports, &self.active.scratch.?.local_nominal_declarations, nominal, builtin_nominal);
+                        const owner_module = try scratch.imported_origins.owner(module.moduleEnvConst(), self.imports, nominal.origin_module);
+                        const representation = try checkedNominalRepresentationForSourceNominal(module, names, self.imports, &scratch.imported_origins, &scratch.local_nominal_declarations, nominal, builtin_nominal);
                         build.* = .{
                             .nominal = .{
                                 .name = name,
@@ -8963,47 +9008,187 @@ fn checkedTagUnionExtIsEmpty(module: TypedCIR.Module, ext: Var) bool {
     };
 }
 
-fn checkedNamedTypeOwnerForSource(
-    module: TypedCIR.Module,
-    imports: CheckedImportViews,
-    origin_module: base.ModuleIdentity.Idx,
-) ModuleId {
-    const module_env = module.moduleEnvConst();
-    if (origin_module == module_env.selfModuleIdentity()) return imports.current_owner;
+/// Imported origin modules a type publication has resolved, by the
+/// publishing module's identity index. Every nominal and alias a published
+/// type mentions names its origin module, and resolving an origin examines
+/// every import view and indexes the owner's nominal declarations. The index
+/// does that once per origin, so publication work grows with the number of
+/// named types plus the size of the imports, not with their product.
+const ImportedOriginIndex = struct {
+    allocator: Allocator,
+    /// The import views every resolution in this index reads; fixed by the
+    /// first resolution.
+    imports: ?CheckedImportViews = null,
+    slots: collections.DenseMap(base.ModuleIdentity.Idx, u32),
+    origins: std.ArrayList(ImportedOrigin) = .empty,
+    /// Import views examined while resolving origins.
+    view_visits: u64 = 0,
+    /// Nominal declarations examined while indexing owners' declarations.
+    declaration_visits: u64 = 0,
 
-    return checkedImportedOwnerForOriginHash(imports, module_env.moduleIdentityHash(origin_module));
-}
+    const no_declaration = std.math.maxInt(u32);
 
-fn checkedImportedOwnerForOriginHash(
-    imports: CheckedImportViews,
-    origin_hash: *const [32]u8,
-) ModuleId {
-    var found: ?ModuleId = null;
+    const ImportedOrigin = struct {
+        /// The first import view carrying the origin's identity. Every view
+        /// with that identity is the same checked artifact. Null when no
+        /// import view carries it.
+        view: ?*const ImportedModuleView,
+        /// The view's nominal declarations by source statement, built on the
+        /// first declaration lookup: `first` maps a statement to its first
+        /// declaration index and `next` chains declarations that share one.
+        first: std.AutoHashMapUnmanaged(u32, u32) = .empty,
+        next: []u32 = &.{},
+        declarations_indexed: bool = false,
+    };
 
-    for (imports.direct) |import| {
-        if (!importedViewIdentityMatches(import.view, origin_hash)) continue;
-        found = checkedUniqueOwnerArtifact(found, import.key);
+    fn init(allocator: Allocator) ImportedOriginIndex {
+        return .{
+            .allocator = allocator,
+            .slots = collections.DenseMap(base.ModuleIdentity.Idx, u32).init(allocator),
+        };
     }
-    for (imports.available) |view| {
-        if (!importedViewIdentityMatches(view, origin_hash)) continue;
-        found = checkedUniqueOwnerArtifact(found, view.key);
+
+    fn deinit(self: *ImportedOriginIndex) void {
+        for (self.origins.items) |*origin| {
+            origin.first.deinit(self.allocator);
+            self.allocator.free(origin.next);
+        }
+        self.origins.deinit(self.allocator);
+        self.slots.deinit();
     }
 
-    return found orelse checkedArtifactInvariant(
-        "checked named type source origin had no available checked owner artifact {any}",
-        .{origin_hash.*},
-    );
-}
+    fn resolve(
+        self: *ImportedOriginIndex,
+        module_env: *const ModuleEnv,
+        imports: CheckedImportViews,
+        origin_module: base.ModuleIdentity.Idx,
+    ) Allocator.Error!*ImportedOrigin {
+        if (self.imports) |bound| {
+            std.debug.assert(bound.direct.ptr == imports.direct.ptr and bound.direct.len == imports.direct.len);
+            std.debug.assert(bound.available.ptr == imports.available.ptr and bound.available.len == imports.available.len);
+        } else self.imports = imports;
+        if (self.slots.get(origin_module)) |slot| return &self.origins.items[slot];
 
-fn checkedUniqueOwnerArtifact(existing: ?ModuleId, next: ModuleId) ModuleId {
-    if (existing) |found| {
-        if (!checkedArtifactKeyEql(found, next)) {
+        const origin_hash = module_env.moduleIdentityHash(origin_module);
+        var view: ?*const ImportedModuleView = null;
+        for (imports.direct) |*import| {
+            self.view_visits += 1;
+            if (!importedViewIdentityMatches(&import.view, origin_hash)) continue;
+            view = uniqueOwnerView(view, &import.view);
+        }
+        for (imports.available) |*available| {
+            self.view_visits += 1;
+            if (!importedViewIdentityMatches(available, origin_hash)) continue;
+            view = uniqueOwnerView(view, available);
+        }
+        const slot: u32 = @intCast(self.origins.items.len);
+        try self.origins.append(self.allocator, .{ .view = view });
+        errdefer _ = self.origins.pop();
+        try self.slots.put(origin_module, slot);
+        return &self.origins.items[slot];
+    }
+
+    fn uniqueOwnerView(existing: ?*const ImportedModuleView, next: *const ImportedModuleView) *const ImportedModuleView {
+        const found = existing orelse return next;
+        if (!checkedArtifactKeyEql(found.key, next.key)) {
             checkedArtifactInvariant("checked named type source origin resolved to multiple owner artifacts", .{});
         }
         return found;
     }
-    return next;
-}
+
+    /// The artifact that owns a named type from `origin_module`.
+    fn owner(
+        self: *ImportedOriginIndex,
+        module_env: *const ModuleEnv,
+        imports: CheckedImportViews,
+        origin_module: base.ModuleIdentity.Idx,
+    ) Allocator.Error!ModuleId {
+        if (origin_module == module_env.selfModuleIdentity()) return imports.current_owner;
+        const origin = try self.resolve(module_env, imports, origin_module);
+        const view = origin.view orelse checkedArtifactInvariant(
+            "checked named type source origin had no available checked owner artifact {any}",
+            .{module_env.moduleIdentityHash(origin_module).*},
+        );
+        return view.key;
+    }
+
+    /// The builtin a nominal names, if any.
+    fn builtinNominal(
+        self: *ImportedOriginIndex,
+        module_env: *const ModuleEnv,
+        imports: CheckedImportViews,
+        nominal: types.NominalType,
+    ) Allocator.Error!?CheckedBuiltinNominal {
+        if (!nominal.originIsBuiltin()) return null;
+        const source_decl = nominal.sourceDeclOptional() orelse return null;
+        if (module_env.module_role == .builtin and
+            moduleEnvIdentityMatches(module_env, module_env.moduleIdentityHash(nominal.origin_module)))
+        {
+            return checkedBuiltinNominalForSourceDecl(module_env, source_decl);
+        }
+        const origin = try self.resolve(module_env, imports, nominal.origin_module);
+        const view = origin.view orelse return null;
+        return checkedBuiltinNominalForMatchingView(view, source_decl);
+    }
+
+    /// The imported declaration of the nominal `type_text` declared at
+    /// `source_decl` in `origin_module`.
+    fn nominalDeclaration(
+        self: *ImportedOriginIndex,
+        module_env: *const ModuleEnv,
+        imports: CheckedImportViews,
+        origin_module: base.ModuleIdentity.Idx,
+        type_text: []const u8,
+        source_decl: u32,
+    ) Allocator.Error!ImportedNominalDeclarationRef {
+        const origin = try self.resolve(module_env, imports, origin_module);
+        const view = origin.view orelse checkedArtifactInvariant(
+            "checked nominal representation referenced a nominal from an origin with no import view {any}",
+            .{module_env.moduleIdentityHash(origin_module).*},
+        );
+        const declarations = view.checked_types.nominal_declarations;
+        if (!origin.declarations_indexed) {
+            const next = try self.allocator.alloc(u32, declarations.len);
+            errdefer self.allocator.free(next);
+            var first: std.AutoHashMapUnmanaged(u32, u32) = .empty;
+            errdefer first.deinit(self.allocator);
+            try first.ensureTotalCapacity(self.allocator, @intCast(declarations.len));
+            // Chain in reverse so each statement's chain runs in table order.
+            var index = declarations.len;
+            while (index > 0) {
+                index -= 1;
+                self.declaration_visits += 1;
+                const head = first.getOrPutAssumeCapacity(declarations[index].source_statement);
+                next[index] = if (head.found_existing) head.value_ptr.* else no_declaration;
+                head.value_ptr.* = @intCast(index);
+            }
+            origin.first = first;
+            origin.next = next;
+            origin.declarations_indexed = true;
+        }
+
+        var found: ?CheckedNominalDeclarationId = null;
+        var cursor = origin.first.get(source_decl) orelse no_declaration;
+        while (cursor != no_declaration) : (cursor = origin.next[cursor]) {
+            const declaration = declarations[cursor];
+            if (!Ident.textEql(view.canonical_names.typeNameText(declaration.nominal.type_name), type_text)) continue;
+            if (found) |existing| {
+                if (existing != declaration.id) {
+                    checkedArtifactInvariant("checked nominal representation import declaration resolution was ambiguous", .{});
+                }
+            } else {
+                found = declaration.id;
+            }
+        }
+        return .{
+            .artifact = view.key,
+            .declaration = found orelse checkedArtifactInvariant(
+                "checked nominal representation referenced a missing imported nominal declaration for owner identity {any} type {s} statement {d}",
+                .{ module_env.moduleIdentityHash(origin_module).*, type_text, source_decl },
+            ),
+        };
+    }
+};
 
 fn categorizeBuiltinNominal(module: TypedCIR.Module, imports: CheckedImportViews, nominal: types.NominalType) ?CheckedBuiltinNominal {
     if (!nominal.originIsBuiltin()) return null;
@@ -9026,8 +9211,8 @@ fn checkedBuiltinNominalForImportedSource(
     source_decl: u32,
 ) ?CheckedBuiltinNominal {
     var found: ?CheckedBuiltinNominal = null;
-    for (imports) |import| {
-        if (checkedBuiltinNominalForView(import.view, origin_hash, source_decl)) |builtin_nominal| {
+    for (imports) |*import| {
+        if (checkedBuiltinNominalForView(&import.view, origin_hash, source_decl)) |builtin_nominal| {
             if (found) |existing| {
                 if (existing != builtin_nominal) {
                     checkedArtifactInvariant("checked builtin nominal source resolved to multiple builtin declarations", .{});
@@ -9046,7 +9231,7 @@ fn checkedBuiltinNominalForAvailableSource(
     source_decl: u32,
 ) ?CheckedBuiltinNominal {
     var found: ?CheckedBuiltinNominal = null;
-    for (views) |view| {
+    for (views) |*view| {
         if (checkedBuiltinNominalForView(view, origin_hash, source_decl)) |builtin_nominal| {
             if (found) |existing| {
                 if (existing != builtin_nominal) {
@@ -9060,8 +9245,14 @@ fn checkedBuiltinNominalForAvailableSource(
     return found;
 }
 
-fn checkedBuiltinNominalForView(view: ImportedModuleView, origin_hash: *const [32]u8, source_decl: u32) ?CheckedBuiltinNominal {
+fn checkedBuiltinNominalForView(view: *const ImportedModuleView, origin_hash: *const [32]u8, source_decl: u32) ?CheckedBuiltinNominal {
     if (!importedViewIdentityMatches(view, origin_hash)) return null;
+    return checkedBuiltinNominalForMatchingView(view, source_decl);
+}
+
+/// The builtin a nominal names, given the import view whose identity is the
+/// nominal's origin.
+fn checkedBuiltinNominalForMatchingView(view: *const ImportedModuleView, source_decl: u32) ?CheckedBuiltinNominal {
     if (sourceDeclTypeIdent(view.module_env, source_decl) == null) return null;
     if (view.module_env.module_role != .builtin) return null;
     return checkedBuiltinNominalForSourceDecl(view.module_env, source_decl);
@@ -10146,6 +10337,86 @@ test "checked output retains defaulted identity inside parent function digest" {
     }.inspect);
 }
 
+/// Empty per-artifact tables for building `ImportedModuleView`s in tests.
+const TestImportViewTables = struct {
+    checked_const_bodies: CheckedConstBodyTable = .{},
+    exhaustiveness_sites: CheckedExhaustivenessSiteTable = .{},
+    checked_procedure_templates: CheckedProcedureTemplateTable = .{},
+    compile_time_roots: CompileTimeRootTable = .{},
+    entry_wrappers: EntryWrapperTable = .{},
+    intrinsic_wrappers: IntrinsicWrapperTable = .{},
+    resolved_value_refs: ResolvedValueRefTable = .{},
+    nested_proc_sites: NestedProcSiteTable = .{},
+    static_dispatch_plans: static_dispatch.StaticDispatchPlanTable = .{},
+    hosted_procs: HostedProcTable = .{},
+    hosted_bindings: HostedBindingTable = .{},
+    exported_procedure_templates: ExportedProcedureTemplateTable = .{},
+    exported_procedure_bindings: ExportedProcedureBindingTable = .{},
+    exported_const_templates: ExportedConstTemplateTable = .{},
+    provided_exports: ProvidedExportTable = .{},
+    top_level_procedure_bindings: TopLevelProcedureBindingTable = .{},
+    platform_required_declarations: PlatformRequiredDeclarationTable = .{},
+    platform_required_bindings: PlatformRequiredBindingTable = .{},
+    callable_eval_templates: CallableEvalTemplateTable = .{},
+    hoisted_constants: HoistedConstTable = .{},
+    const_templates: ConstTemplateTable = .{},
+    method_registry: static_dispatch.MethodRegistry = .{},
+    interface_capabilities: ModuleInterfaceCapabilities = .{},
+    const_store: ConstStore,
+
+    fn init(allocator: Allocator) TestImportViewTables {
+        if (!builtin.is_test) unreachable;
+        return .{ .const_store = ConstStore.init(allocator) };
+    }
+
+    fn deinit(self: *TestImportViewTables) void {
+        self.const_store.deinit();
+    }
+
+    fn view(
+        self: *const TestImportViewTables,
+        key: CheckedModuleArtifactKey,
+        module_env: *const ModuleEnv,
+        names: *const canonical.CanonicalNameStore,
+        identity: ModuleIdentity,
+        checked_types: CheckedTypeStoreView,
+    ) ImportedModuleView {
+        return .{
+            .key = key,
+            .module_env = module_env,
+            .canonical_names = names,
+            .module_identity = identity,
+            .exports = .{},
+            .checked_types = checked_types,
+            .checked_bodies = .{},
+            .exhaustiveness_sites = &self.exhaustiveness_sites,
+            .checked_const_bodies = &self.checked_const_bodies,
+            .checked_procedure_templates = &self.checked_procedure_templates,
+            .compile_time_roots = &self.compile_time_roots,
+            .entry_wrappers = &self.entry_wrappers,
+            .intrinsic_wrappers = &self.intrinsic_wrappers,
+            .resolved_value_refs = &self.resolved_value_refs,
+            .nested_proc_sites = &self.nested_proc_sites,
+            .static_dispatch_plans = &self.static_dispatch_plans,
+            .hosted_procs = &self.hosted_procs,
+            .hosted_bindings = &self.hosted_bindings,
+            .exported_procedure_templates = self.exported_procedure_templates.view(),
+            .exported_procedure_bindings = self.exported_procedure_bindings.view(),
+            .exported_const_templates = self.exported_const_templates.view(),
+            .provided_exports = &self.provided_exports,
+            .top_level_procedure_bindings = &self.top_level_procedure_bindings,
+            .platform_required_declarations = &self.platform_required_declarations,
+            .platform_required_bindings = &self.platform_required_bindings,
+            .callable_eval_templates = self.callable_eval_templates.view(),
+            .hoisted_constants = &self.hoisted_constants,
+            .const_templates = &self.const_templates,
+            .method_registry = &self.method_registry,
+            .interface_capabilities = &self.interface_capabilities,
+            .const_store = &self.const_store,
+        };
+    }
+};
+
 test "checked artifact builtin nominal categorization requires explicit builtin origin" {
     const testing = std.testing;
     const TestEnv = @import("test/TestEnv.zig");
@@ -10176,65 +10447,9 @@ test "checked artifact builtin nominal categorization requires explicit builtin 
         .kind = builtin_env.module_kind,
     };
 
-    const empty_checked_const_bodies = CheckedConstBodyTable{};
-    const empty_exhaustiveness_sites = CheckedExhaustivenessSiteTable{};
-    const empty_checked_procedure_templates = CheckedProcedureTemplateTable{};
-    const empty_compile_time_roots = CompileTimeRootTable{};
-    const empty_entry_wrappers = EntryWrapperTable{};
-    const empty_intrinsic_wrappers = IntrinsicWrapperTable{};
-    const empty_resolved_value_refs = ResolvedValueRefTable{};
-    const empty_nested_proc_sites = NestedProcSiteTable{};
-    const empty_static_dispatch_plans = static_dispatch.StaticDispatchPlanTable{};
-    const empty_hosted_procs = HostedProcTable{};
-    const empty_hosted_bindings = HostedBindingTable{};
-    const empty_exported_procedure_templates = ExportedProcedureTemplateTable{};
-    const empty_exported_procedure_bindings = ExportedProcedureBindingTable{};
-    const empty_exported_const_templates = ExportedConstTemplateTable{};
-    const empty_provided_exports = ProvidedExportTable{};
-    const empty_top_level_procedure_bindings = TopLevelProcedureBindingTable{};
-    const empty_platform_required_declarations = PlatformRequiredDeclarationTable{};
-    const empty_platform_required_bindings = PlatformRequiredBindingTable{};
-    const empty_callable_eval_templates = CallableEvalTemplateTable{};
-    const empty_hoisted_constants = HoistedConstTable{};
-    const empty_const_templates = ConstTemplateTable{};
-    const empty_method_registry = static_dispatch.MethodRegistry{};
-    const empty_interface_capabilities = ModuleInterfaceCapabilities{};
-    var empty_const_store = ConstStore.init(allocator);
-    defer empty_const_store.deinit();
-
-    const builtin_view = ImportedModuleView{
-        .key = .{},
-        .module_env = builtin_env,
-        .canonical_names = &builtin_names,
-        .module_identity = builtin_identity,
-        .exports = .{},
-        .checked_types = .{},
-        .checked_bodies = .{},
-        .exhaustiveness_sites = &empty_exhaustiveness_sites,
-        .checked_const_bodies = &empty_checked_const_bodies,
-        .checked_procedure_templates = &empty_checked_procedure_templates,
-        .compile_time_roots = &empty_compile_time_roots,
-        .entry_wrappers = &empty_entry_wrappers,
-        .intrinsic_wrappers = &empty_intrinsic_wrappers,
-        .resolved_value_refs = &empty_resolved_value_refs,
-        .nested_proc_sites = &empty_nested_proc_sites,
-        .static_dispatch_plans = &empty_static_dispatch_plans,
-        .hosted_procs = &empty_hosted_procs,
-        .hosted_bindings = &empty_hosted_bindings,
-        .exported_procedure_templates = empty_exported_procedure_templates.view(),
-        .exported_procedure_bindings = empty_exported_procedure_bindings.view(),
-        .exported_const_templates = empty_exported_const_templates.view(),
-        .provided_exports = &empty_provided_exports,
-        .top_level_procedure_bindings = &empty_top_level_procedure_bindings,
-        .platform_required_declarations = &empty_platform_required_declarations,
-        .platform_required_bindings = &empty_platform_required_bindings,
-        .callable_eval_templates = empty_callable_eval_templates.view(),
-        .hoisted_constants = &empty_hoisted_constants,
-        .const_templates = &empty_const_templates,
-        .method_registry = &empty_method_registry,
-        .interface_capabilities = &empty_interface_capabilities,
-        .const_store = &empty_const_store,
-    };
+    var tables = TestImportViewTables.init(allocator);
+    defer tables.deinit();
+    const builtin_view = tables.view(.{}, builtin_env, &builtin_names, builtin_identity, .{});
     const imports = [_]PublishImportArtifact{.{
         .module_idx = 1,
         .key = .{},
@@ -10253,6 +10468,77 @@ test "checked artifact builtin nominal categorization requires explicit builtin 
     try testing.expect(categorizeBuiltinNominal(module, .{ .current_owner = testCheckedModuleKey(1), .direct = &imports }, nominal) == null);
 }
 
+test "imported origin resolution visits each import view and owner declaration once" {
+    const testing = std.testing;
+    const TestEnv = @import("test/TestEnv.zig");
+    const allocator = testing.allocator;
+
+    var test_env = try TestEnv.init("Main", "x = 1");
+    defer test_env.deinit();
+    const module_env = test_env.module_env;
+
+    var tables = TestImportViewTables.init(allocator);
+    defer tables.deinit();
+    var owner_names = canonical.CanonicalNameStore.init(allocator);
+    defer owner_names.deinit();
+    const owner_module_name = try owner_names.internModuleName("Owner");
+
+    // One owner module declares many nominals; the importing module also
+    // sees many unrelated views. Publishing a reference to every declaration
+    // used to rescan every view and every owner declaration per reference.
+    const view_count = 64;
+    const declaration_count = 256;
+    const owner_view_index = view_count / 2;
+    var owner_hash: [32]u8 = @splat(0);
+    owner_hash[0] = owner_view_index;
+    const owner_identity_id = try owner_names.internModuleIdentity(&owner_hash);
+
+    var declarations: [declaration_count]CheckedNominalDeclaration = undefined;
+    var type_names: [declaration_count]canonical.TypeNameId = undefined;
+    for (&declarations, &type_names, 0..) |*declaration, *type_name, index| {
+        var text_buf: [16]u8 = undefined;
+        type_name.* = try owner_names.internTypeName(try std.fmt.bufPrint(&text_buf, "T{d}", .{index}));
+        declaration.* = .{
+            .id = @fromBackingInt(@intCast(index)),
+            .nominal = .{ .module = owner_identity_id, .type_name = type_name.*, .source_decl = @intCast(index) },
+            .source_statement = @intCast(index),
+            // Origin resolution reads only the id, nominal key and statement.
+            .declaration_root = undefined,
+            .backing = undefined,
+        };
+    }
+
+    var views: [view_count]ImportedModuleView = undefined;
+    for (&views, 0..) |*view, index| {
+        var hash: [32]u8 = @splat(0);
+        hash[0] = @intCast(index);
+        view.* = tables.view(testCheckedModuleKey(@intCast(index)), module_env, &owner_names, .{
+            .stable_hash = hash,
+            .module_idx = @intCast(index),
+            .module_name = owner_module_name,
+            .display_module_name = owner_module_name,
+            .kind = module_env.module_kind,
+        }, if (index == owner_view_index) .{ .nominal_declarations = &declarations } else .{});
+    }
+    const imports = CheckedImportViews{
+        .current_owner = testCheckedModuleKey(255),
+        .direct = &.{},
+        .available = &views,
+    };
+    const origin = try module_env.internModuleIdentity(&owner_hash, base.Ident.Idx.NONE);
+
+    var index = ImportedOriginIndex.init(allocator);
+    defer index.deinit();
+    for (type_names, 0..) |type_name, statement| {
+        try testing.expect(checkedArtifactKeyEql(testCheckedModuleKey(owner_view_index), try index.owner(module_env, imports, origin)));
+        const found = try index.nominalDeclaration(module_env, imports, origin, owner_names.typeNameText(type_name), @intCast(statement));
+        try testing.expect(checkedArtifactKeyEql(testCheckedModuleKey(owner_view_index), found.artifact));
+        try testing.expectEqual(declarations[statement].id, found.declaration);
+    }
+    try testing.expectEqual(@as(u64, view_count), index.view_visits);
+    try testing.expectEqual(@as(u64, declaration_count), index.declaration_visits);
+}
+
 fn moduleEnvIdentityMatches(module_env: *const ModuleEnv, origin_hash: *const [32]u8) bool {
     const env_hash = module_env.contentIdentityHash() orelse return false;
     return base.ModuleIdentity.eql(env_hash, origin_hash);
@@ -10262,6 +10548,7 @@ fn checkedNominalRepresentationForSourceNominal(
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
     imports: CheckedImportViews,
+    origins: *ImportedOriginIndex,
     local_nominal_declarations: *const LocalNominalDeclarationIds,
     nominal: types.NominalType,
     builtin_nominal: ?CheckedBuiltinNominal,
@@ -10276,71 +10563,14 @@ fn checkedNominalRepresentationForSourceNominal(
         return .{ .local_declaration = local_nominal_declarations.get(@fromBackingInt(@intCast(statement))) };
     }
 
-    const origin_hash = module_env.moduleIdentityHash(nominal.origin_module);
     const type_name = try names.internTypeIdent(module.identStoreConst(), nominal.ident.ident_idx);
-    return .{ .imported_declaration = importedNominalDeclarationRefForSourceNominal(
-        names,
+    return .{ .imported_declaration = try origins.nominalDeclaration(
+        module_env,
         imports,
-        origin_hash,
-        type_name,
+        nominal.origin_module,
+        names.typeNameText(type_name),
         source_decl orelse checkedArtifactInvariant("checked imported nominal representation had no source declaration", .{}),
     ) };
-}
-
-/// Resolve the artifact + declaration that owns an imported nominal type:
-/// the declaring module by 32-byte content identity, the declaration by its
-/// full nominal key.
-fn importedNominalDeclarationRefForSourceNominal(
-    names: *const canonical.CanonicalNameStore,
-    imports: CheckedImportViews,
-    origin_hash: *const [32]u8,
-    type_name: canonical.TypeNameId,
-    source_decl: u32,
-) ImportedNominalDeclarationRef {
-    const type_text = names.typeNameText(type_name);
-    var found: ?ImportedNominalDeclarationRef = null;
-
-    for (imports.direct) |import| {
-        if (!importedViewIdentityMatches(import.view, origin_hash)) continue;
-        for (import.view.checked_types.nominal_declarations) |declaration| {
-            if (!Ident.textEql(import.view.canonical_names.typeNameText(declaration.nominal.type_name), type_text)) continue;
-            if (declaration.source_statement != source_decl) continue;
-            const next = ImportedNominalDeclarationRef{
-                .artifact = import.key,
-                .declaration = declaration.id,
-            };
-            if (found) |existing| {
-                if (!checkedArtifactKeyEql(existing.artifact, next.artifact) or existing.declaration != next.declaration) {
-                    checkedArtifactInvariant("checked nominal representation import declaration resolution was ambiguous", .{});
-                }
-            } else {
-                found = next;
-            }
-        }
-    }
-    for (imports.available) |view| {
-        if (!importedViewIdentityMatches(view, origin_hash)) continue;
-        for (view.checked_types.nominal_declarations) |declaration| {
-            if (!Ident.textEql(view.canonical_names.typeNameText(declaration.nominal.type_name), type_text)) continue;
-            if (declaration.source_statement != source_decl) continue;
-            const next = ImportedNominalDeclarationRef{
-                .artifact = view.key,
-                .declaration = declaration.id,
-            };
-            if (found) |existing| {
-                if (!checkedArtifactKeyEql(existing.artifact, next.artifact) or existing.declaration != next.declaration) {
-                    checkedArtifactInvariant("checked nominal representation import declaration resolution was ambiguous", .{});
-                }
-            } else {
-                found = next;
-            }
-        }
-    }
-
-    return found orelse checkedArtifactInvariant(
-        "checked nominal representation referenced a missing imported nominal declaration for owner identity {any} type {s} statement {d}",
-        .{ origin_hash.*, type_text, source_decl },
-    );
 }
 
 /// The checked declaration id of every published local nominal declaration,
@@ -10724,7 +10954,7 @@ pub fn literalConversionRootOf(data: CheckedExprData) ?ComptimeRootId {
     return switch (data) {
         .numeral => |numeral| numeral.conversion_root,
         .str_from_quote => |quote| quote.conversion_root,
-        .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
+        .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => null,
     };
 }
 
@@ -10905,6 +11135,13 @@ pub const CheckedExprData = union(enum) {
         lambda: CheckedExprId,
         context: CheckedReturnContext,
     },
+    /// A checker-stamped row coercion (design.md "Row Coercion Primitive"):
+    /// `value` is a closed tag row whose every tag this expression's wider
+    /// type lists. The two types are related, never unified, and lowering
+    /// re-tags the value. No checker site emits it yet.
+    row_coerce: struct {
+        value: CheckedExprId,
+    },
     for_: struct {
         pattern: CheckedPatternId,
         expr: CheckedExprId,
@@ -11065,6 +11302,13 @@ pub const StoredCheckedExprData = union(enum) {
         expr: CheckedExprId,
         lambda: CheckedExprId,
         context: CheckedReturnContext,
+    },
+    /// A checker-stamped row coercion (design.md "Row Coercion Primitive"):
+    /// `value` is a closed tag row whose every tag this expression's wider
+    /// type lists. The two types are related, never unified, and lowering
+    /// re-tags the value. No checker site emits it yet.
+    row_coerce: struct {
+        value: CheckedExprId,
     },
     for_: struct {
         pattern: CheckedPatternId,
@@ -11293,6 +11537,7 @@ fn reconstructCheckedExprData(pool_owner: anytype, stored: StoredCheckedExprData
         .expect => |e| .{ .expect = e },
         .break_ => .break_,
         .return_ => |r| .{ .return_ = .{ .expr = r.expr, .lambda = r.lambda, .context = r.context } },
+        .row_coerce => |c| .{ .row_coerce = .{ .value = c.value } },
         .for_ => |f| .{ .for_ = .{ .pattern = f.pattern, .expr = f.expr, .body = f.body, .plan = f.plan, .mutations = f.mutations } },
         .hosted_lambda => |h| .{ .hosted_lambda = .{
             .symbol_name = h.symbol_name,
@@ -12368,6 +12613,7 @@ const CheckedLoopMutationPublisher = struct {
             },
             .tag => |tag| for (tag.args) |arg| try self.pushExpr(arg),
             .nominal => |nominal| try self.pushExpr(nominal.backing_expr),
+            .row_coerce => |coerce| try self.pushExpr(coerce.value),
             .binop => |binop| {
                 try self.pushExpr(binop.lhs);
                 try self.pushExpr(binop.rhs);
@@ -12579,7 +12825,13 @@ pub const CheckedBodyStore = struct {
             const node: CIR.Node.Idx = @fromBackingInt(@intCast(node_idx));
             if (source_nodes.hasExpr(@fromBackingInt(@intCast(node_idx)))) {
                 const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(node_idx));
-                const ty = checked_types.rootForSourceVar(module, module.exprType(expr_idx)) orelse {
+                // A row-coerced callee is read at its function's own type; the
+                // call widens the result (`ModuleEnv.RowCoercedCallee`).
+                const source_var = if (module.moduleEnvConst().rowCoercedCallee(node)) |callee|
+                    @as(Var, @fromBackingInt(callee.fn_var))
+                else
+                    module.exprType(expr_idx);
+                const ty = checked_types.rootForSourceVar(module, source_var) orelse {
                     if (builtin.mode == .debug) {
                         base.invariant("checked artifact invariant violated: checked expr type root was not published", .{});
                     }
@@ -12658,7 +12910,10 @@ pub const CheckedBodyStore = struct {
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
             if (source_nodes.hasExpr(@fromBackingInt(@intCast(node_idx)))) {
                 const id = source_node_map.exprAtRawNode(node_idx) orelse unreachable;
-                exprs.items[@backingInt(id)].data = try copier.copyExprData(@fromBackingInt(@intCast(node_idx)));
+                // Copying a row-coerced use appends its coercion's child to
+                // `exprs`, so take the slot only after the copy has grown it.
+                const data = try copier.copyExprData(@fromBackingInt(@intCast(node_idx)));
+                exprs.items[@backingInt(id)].data = data;
             } else if (source_nodes.hasPattern(@fromBackingInt(@intCast(node_idx)))) {
                 const id = source_node_map.patternAtRawNode(node_idx) orelse unreachable;
                 patterns.items[@backingInt(id)].data = try copier.copyPatternData(@fromBackingInt(@intCast(node_idx)));
@@ -13137,6 +13392,7 @@ pub const CheckedBodyStore = struct {
             .expect => |e| .{ .expect = e },
             .break_ => .break_,
             .return_ => |r| .{ .return_ = .{ .expr = r.expr, .lambda = r.lambda, .context = r.context } },
+            .row_coerce => |c| .{ .row_coerce = .{ .value = c.value } },
             .for_ => |f| .{ .for_ = .{ .pattern = f.pattern, .expr = f.expr, .body = f.body, .plan = f.plan, .mutations = f.mutations } },
             .hosted_lambda => |h| .{ .hosted_lambda = .{
                 .symbol_name = h.symbol_name,
@@ -14284,6 +14540,7 @@ fn CheckedBodyDiagnosticErrorScan(comptime follow_constants: bool) type {
                 },
                 .tag => |tag| try self.pushExprSpan(tag.args),
                 .nominal => |nominal| try self.pushExpr(nominal.backing_expr),
+                .row_coerce => |coerce| try self.pushExpr(coerce.value),
                 .closure => |closure| {
                     try self.pushExpr(closure.lambda);
                     for (closure.captures) |capture| try self.pushPattern(capture.pattern);
@@ -14775,6 +15032,7 @@ const DivergenceScan = struct {
             },
             .tag => |tag| try anyOf(items, tag.args),
             .nominal => |nominal| try one(items, nominal.backing_expr),
+            .row_coerce => |coerce| try one(items, coerce.value),
             .closure => .{ .value = false },
             .lambda => .{ .value = false },
             .binop => |binop| try anyOf(items, &.{ binop.lhs, binop.rhs }),
@@ -15220,11 +15478,11 @@ const CheckedBodyPayloadCopier = struct {
             .e_str_segment => |str| .{ .str_segment = try self.string_builder.intern(str.literal) },
             .e_str => |str| try self.copyStrExpr(expr_idx, str.span),
             .e_bytes_literal => |bytes| .{ .bytes_literal = try self.string_builder.intern(bytes.literal) },
-            .e_lookup_local => |lookup| .{ .lookup_local = .{
+            .e_lookup_local => |lookup| try self.rowCoercedUseData(expr_idx, .{ .lookup_local = .{
                 .pattern = self.checkedPattern(lookup.pattern_idx),
                 .resolved = null,
-            } },
-            .e_lookup_external, .e_lookup_associated_resolved => .{ .lookup_external = null },
+            } }),
+            .e_lookup_external, .e_lookup_associated_resolved => try self.rowCoercedUseData(expr_idx, .{ .lookup_external = null }),
             .e_lookup_associated_local, .e_lookup_associated => checkedArtifactInvariant("unresolved associated lookup reached checked body publication", .{}),
             .e_lookup_required => .{ .lookup_required = null },
             .e_list => |list| .{ .list = try self.copyExprSpan(list.elems) },
@@ -15242,15 +15500,7 @@ const CheckedBodyPayloadCopier = struct {
                 .final_else = self.checkedExpr(if_.final_else),
                 .warn_unused_branches = if_.origin == .source,
             } },
-            .e_call => |call| .{ .call = .{
-                .func = self.checkedExpr(call.func),
-                .args = try self.copyExprSpan(call.args),
-                .called_via = call.called_via,
-                .source_fn_ty_payload = try self.checkedTypeForRequiredVar(
-                    call.constraint_fn_var orelse checkedArtifactInvariant("checked call expression had no published function constraint type", .{}),
-                    "checked call function constraint type root was not published",
-                ),
-            } },
+            .e_call => |call| try self.copyCallData(expr_idx, call),
             .e_record => |record| .{ .record = .{
                 .fields = try self.copyRecordFields(record.fields),
                 .unsets = try self.copyUnsetFieldLabels(record.unsets),
@@ -16135,6 +16385,54 @@ const CheckedBodyPayloadCopier = struct {
         return null;
     }
 
+    /// A call, or, when its callee is a row-coerced callee
+    /// (`ModuleEnv.RowCoercedCallee`), a row coercion of the call made at the
+    /// function's own type: the inner call's result is the function's own
+    /// result, and the coercion's type is this expression's wider one
+    /// (design.md "Row Subsumption").
+    fn copyCallData(self: *@This(), expr_idx: CIR.Expr.Idx, call: @FieldType(CIR.Expr, "e_call")) Allocator.Error!CheckedExprData {
+        const callee = self.module.moduleEnvConst().rowCoercedCallee(ModuleEnv.nodeIdxFrom(call.func));
+        const call_data: CheckedExprData = .{ .call = .{
+            .func = self.checkedExpr(call.func),
+            .args = try self.copyExprSpan(call.args),
+            .called_via = call.called_via,
+            .source_fn_ty_payload = if (callee) |coerced|
+                try self.checkedTypeForRequiredVar(@fromBackingInt(coerced.fn_var), "row-coerced callee function type root was not published")
+            else
+                try self.checkedTypeForRequiredVar(
+                    call.constraint_fn_var orelse checkedArtifactInvariant("checked call expression had no published function constraint type", .{}),
+                    "checked call function constraint type root was not published",
+                ),
+        } };
+        const coerced = callee orelse return call_data;
+        const call_id: CheckedExprId = @fromBackingInt(try checkedSourceNodeIdFromLen(self.exprs.items.len));
+        try self.exprs.append(self.allocator, .{
+            .id = call_id,
+            .ty = try self.checkedTypeForRequiredVar(@fromBackingInt(coerced.ret_var), "row-coerced call result type root was not published"),
+            .source_region = self.module.regionAt(ModuleEnv.nodeIdxFrom(expr_idx)),
+            .data = call_data,
+        });
+        return .{ .row_coerce = .{ .value = call_id } };
+    }
+
+    /// A use checking recorded as a widening of a top-level value
+    /// (`ModuleEnv.RowCoercedUse`) coerces the value—the lookup, at the
+    /// value's own type—to the row this use relates to, which is this
+    /// expression's checked type (design.md "Value Rows: Local Values Share,
+    /// Top-Level Values Widen At Each Use", "Row Coercion Primitive"). Every
+    /// other lookup is the lookup itself.
+    fn rowCoercedUseData(self: *@This(), expr_idx: CIR.Expr.Idx, lookup_data: CheckedExprData) Allocator.Error!CheckedExprData {
+        const value_var = self.module.moduleEnvConst().rowCoercedUseValueVar(ModuleEnv.nodeIdxFrom(expr_idx)) orelse return lookup_data;
+        const value_id: CheckedExprId = @fromBackingInt(try checkedSourceNodeIdFromLen(self.exprs.items.len));
+        try self.exprs.append(self.allocator, .{
+            .id = value_id,
+            .ty = try self.checkedTypeForRequiredVar(value_var, "row-coerced value type root was not published"),
+            .source_region = self.module.regionAt(ModuleEnv.nodeIdxFrom(expr_idx)),
+            .data = lookup_data,
+        });
+        return .{ .row_coerce = .{ .value = value_id } };
+    }
+
     fn checkedTypeForRequiredVar(
         self: *@This(),
         var_: Var,
@@ -16269,6 +16567,7 @@ fn deinitCheckedExprData(allocator: Allocator, data: *CheckedExprData) void {
         .anno_only,
         .break_,
         .return_,
+        .row_coerce,
         .for_,
         => {},
         inline .str, .list, .tuple => |items| allocator.free(items),
@@ -16391,6 +16690,11 @@ fn verifyCheckedExprDataComplete(
             }
         },
         .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .hosted_lambda, .run_low_level => {},
+        .row_coerce => |coerce| {
+            if (@backingInt(coerce.value) >= checked_bodies.exprCount()) {
+                checkedArtifactInvariant("checked row coercion value expression was out of range", .{});
+            }
+        },
     }
 }
 
@@ -17131,7 +17435,22 @@ pub const ResolvedValueRefTable = struct {
                 tag != .expr_required_lookup) continue;
 
             const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(node_idx));
-            const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse continue;
+            const source_checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse continue;
+            // A row-coerced use of a top-level value is a coercion of the
+            // value: the lookup, and so the reference and its type, is the
+            // coercion's child (design.md "Value Rows: Local Values Share,
+            // Top-Level Values Widen At Each Use").
+            const coerced_lookup: ?CheckedExpr = switch (checked_bodies.expr(source_checked_expr).data) {
+                .row_coerce => |coerce| blk: {
+                    const value = checked_bodies.expr(coerce.value);
+                    if (value.data != .lookup_local and value.data != .lookup_external) {
+                        checkedArtifactInvariant("row coercion of a value use did not wrap a lookup", .{});
+                    }
+                    break :blk value;
+                },
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
+            };
+            const checked_expr = if (coerced_lookup) |value| value.id else source_checked_expr;
             var resolved_ref = try categorizeValueRef(
                 allocator,
                 module,
@@ -17149,7 +17468,8 @@ pub const ResolvedValueRefTable = struct {
                 &local_pattern_roles,
                 checked_bodies,
             );
-            const checked_ty = checked_types.rootForSourceVar(module, module.exprType(expr_idx)) orelse {
+            const coerced_callee = module.moduleEnvConst().rowCoercedCallee(ModuleEnv.nodeIdxFrom(expr_idx)) != null;
+            const checked_ty = if (coerced_lookup) |value| value.ty else if (coerced_callee) checked_bodies.expr(checked_expr).ty else checked_types.rootForSourceVar(module, module.exprType(expr_idx)) orelse {
                 if (builtin.mode == .debug) {
                     base.invariant("checked artifact invariant violated: resolved value ref type root was not published", .{});
                 }
@@ -17157,7 +17477,7 @@ pub const ResolvedValueRefTable = struct {
             };
             // Publication keys every source root by this same writer.
             const checked_type_key = checked_types.store.view().rootKey(checked_ty);
-            if (builtin.mode == .debug) {
+            if (builtin.mode == .debug and coerced_lookup == null and !coerced_callee) {
                 const written = (try key_writer.fromVar(module.exprType(expr_idx))).key;
                 if (@as(u256, @bitCast(written.bytes)) != @as(u256, @bitCast(checked_type_key.bytes))) {
                     base.invariant("checked artifact invariant violated: resolved value ref type key differs from its published root", .{});
@@ -17319,6 +17639,7 @@ fn checkedExprDataCategory(tag: std.meta.Tag(CheckedExprData)) CheckedExprDataCa
         .anno_only,
         .break_,
         .return_,
+        .row_coerce,
         .for_,
         .hosted_lambda,
         .run_low_level,
@@ -17813,13 +18134,13 @@ fn importedViewForOriginHash(
     origin_hash: *const base.ModuleIdentity.Hash,
 ) ?ImportedModuleView {
     var found: ?ImportedModuleView = null;
-    for (imports) |import| {
-        if (!importedViewIdentityMatches(import.view, origin_hash)) continue;
+    for (imports) |*import| {
+        if (!importedViewIdentityMatches(&import.view, origin_hash)) continue;
         found = uniqueImportedView(found, import.view);
     }
-    for (available_artifacts) |view| {
+    for (available_artifacts) |*view| {
         if (!importedViewIdentityMatches(view, origin_hash)) continue;
-        found = uniqueImportedView(found, view);
+        found = uniqueImportedView(found, view.*);
     }
     return found;
 }
@@ -18722,6 +19043,9 @@ const EvidencePass = struct {
     rejected_dispatches: bool = false,
     local_method_registry: *static_dispatch.MethodRegistry,
     import_views: CheckedImportViews,
+    /// The import views method-target lookup searches after the local
+    /// registry, in search order; built once when the pass runs.
+    method_lookup_views: []const *const ImportedModuleView = &.{},
     plan_table: *static_dispatch.StaticDispatchPlanTable,
     templates: *CheckedProcedureTemplateTable,
     resolved_value_refs: *const ResolvedValueRefTable,
@@ -18900,6 +19224,7 @@ const EvidencePass = struct {
     }
 
     fn deinit(self: *EvidencePass) void {
+        self.allocator.free(self.method_lookup_views);
         self.allocator.free(self.plan_resolved);
         self.allocator.free(self.iterator_plan_resolved);
         self.deferred_use_sites.deinit(self.allocator);
@@ -18943,6 +19268,7 @@ const EvidencePass = struct {
     }
 
     fn run(self: *EvidencePass) Allocator.Error!void {
+        self.method_lookup_views = try methodLookupViews(self.allocator, self.import_views);
         self.plan_resolved = try self.allocator.alloc(bool, self.plan_table.plans.len);
         @memset(self.plan_resolved, false);
         self.iterator_plan_resolved = try self.allocator.alloc(bool, self.plan_table.iterator_for_plans.len);
@@ -19984,35 +20310,9 @@ const EvidencePass = struct {
     }
 
     /// Exact method-target lookup across every registry this publication can
-    /// see: the local registry, the direct import views, then the available
-    /// views. (Snapshot-style compiles pass the builtin module only as a
-    /// direct import, so searching `available` alone misses every
-    /// builtin-owned method.)
+    /// see: the local registry, then `method_lookup_views`.
     fn lookupMethodTargetAcrossViews(self: *EvidencePass, owner: static_dispatch.MethodOwner, method: canonical.MethodNameId) ?static_dispatch.CheckedMethodLookup {
-        if (static_dispatch.lookupCheckedMethodTarget(self.names, self.local_method_registry, &.{}, owner, method)) |target| {
-            return target;
-        }
-        var one_view: [1]ImportedModuleView = undefined;
-        for (self.import_views.available) |available| {
-            if (moduleViewIsSuperseded(available, self.import_views.relations, self.import_views.direct)) continue;
-            one_view[0] = available;
-            if (static_dispatch.lookupCheckedMethodTarget(self.names, self.local_method_registry, one_view[0..1], owner, method)) |target| {
-                return target;
-            }
-        }
-        for (self.import_views.relations) |relation| {
-            one_view[0] = relation;
-            if (static_dispatch.lookupCheckedMethodTarget(self.names, self.local_method_registry, one_view[0..1], owner, method)) |target| {
-                return target;
-            }
-        }
-        for (self.import_views.direct) |import| {
-            one_view[0] = import.view;
-            if (static_dispatch.lookupCheckedMethodTarget(self.names, self.local_method_registry, one_view[0..1], owner, method)) |target| {
-                return target;
-            }
-        }
-        return null;
+        return static_dispatch.lookupCheckedMethodTarget(self.names, self.local_method_registry, self.method_lookup_views, owner, method);
     }
 
     /// Map a generalized VALUE decl's scheme param roots to its pattern for
@@ -22256,6 +22556,7 @@ const CheckedTemplateRefCollector = struct {
                 self.endChildren(children);
             },
             .nominal => |nominal| try self.pushChild(.{ .expr = nominal.backing_expr }),
+            .row_coerce => |coerce| try self.pushChild(.{ .expr = coerce.value }),
             .closure => |closure| try self.pushChild(.{ .expr = closure.lambda }),
             .lambda => |lambda| {
                 const children = self.beginChildren();
@@ -22676,10 +22977,10 @@ pub const ProcTarget = union(enum) {
     comptime_only,
 };
 
-/// Checker-owned capability for adapting a hosted function whose exact
-/// `Builtin.Try` result has a closed structural error row and is requested with
-/// a wider error row. The nominal, tags, and type argument positions are
-/// explicit so postcheck never recognizes Try by names or backing shape.
+/// Checker-owned capability for a closed `Builtin.Try` result row. General
+/// dispatch adapters use it to retag results, including hosted selections;
+/// hosted ABI validation also uses it. The nominal, tags, and type argument positions
+/// are explicit so postcheck never recognizes Try by names or backing shape.
 pub const HostedTryAdapterCapability = struct {
     nominal: canonical.NominalTypeKey,
     ok_tag: canonical.TagLabelId,
@@ -23755,6 +24056,7 @@ const NestedProcSiteBuilder = struct {
                 for (tag.args) |arg| try self.pushExpr(arg, owner);
             },
             .nominal => |nominal| try self.pushExpr(nominal.backing_expr, owner),
+            .row_coerce => |coerce| try self.pushExpr(coerce.value, owner),
             .binop => |binop| {
                 try self.pushExpr(binop.lhs, owner);
                 try self.pushExpr(binop.rhs, owner);
@@ -24061,7 +24363,7 @@ const NestedProcSiteBuilder = struct {
         const expr_id = site.checked_expr orelse return &.{};
         return switch (self.checked_bodies.expr(expr_id).data) {
             .closure => |closure| closure.captures,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => &.{},
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => &.{},
         };
     }
 
@@ -24097,7 +24399,7 @@ const NestedProcSiteBuilder = struct {
             try site_by_expr.put(allocator, expr_id, @intCast(index));
             switch (self.checked_bodies.expr(expr_id).data) {
                 .closure => |closure| try site_by_expr.put(allocator, closure.lambda, @intCast(index)),
-                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => {},
             }
         }
 
@@ -26100,6 +26402,7 @@ fn publishLiteralConversionRoots(
             .anno_only,
             .break_,
             .return_,
+            .row_coerce,
             .for_,
             .hosted_lambda,
             .run_low_level,
@@ -26189,6 +26492,7 @@ fn publishLiteralConversionRoots(
             .anno_only,
             .break_,
             .return_,
+            .row_coerce,
             .for_,
             .hosted_lambda,
             .run_low_level,
@@ -27351,6 +27655,7 @@ pub fn pairCheckedPlatform(
             .anno_only,
             .break_,
             .return_,
+            .row_coerce,
             .for_,
             .hosted_lambda,
             .run_low_level,
@@ -28317,7 +28622,7 @@ fn checkedTypeHasNoReachableCallableSlots(
 }
 
 /// Public `ComptimeRootId` declaration.
-pub const ComptimeRootId = enum(u32) { _ };
+pub const ComptimeRootId = checked_ids.ComptimeRootId;
 
 /// Public `CompileTimeRootKind` declaration.
 pub const CompileTimeRootKind = enum {
@@ -29391,6 +29696,7 @@ fn checkedExprContains(
                 },
                 .tag => |tag| for (tag.args) |arg| try pending.append(allocator, .{ .expr = arg }),
                 .nominal => |nominal| try pending.append(allocator, .{ .expr = nominal.backing_expr }),
+                .row_coerce => |coerce| try pending.append(allocator, .{ .expr = coerce.value }),
                 .closure => |closure| try pending.append(allocator, .{ .expr = closure.lambda }),
                 .lambda => |lambda| {
                     if (patterns) for (lambda.args) |arg| try pending.append(allocator, .{ .pattern = arg });
@@ -31173,12 +31479,13 @@ fn appendPublicApiOwnerDependency(
     type_owner_keys: *ArtifactKeyAccumulator,
 ) Allocator.Error!void {
     if (checkedArtifactKeyEql(owner_key, artifact_key)) return;
+    if (keys.contains(owner_key) and type_owner_keys.contains(owner_key)) return;
     if (publicApiDependencyKeyIsKnownBuiltin(owner_key, imports, available_artifacts)) return;
     _ = try keys.append(allocator, owner_key);
     _ = try type_owner_keys.append(allocator, owner_key);
 }
 
-fn importedViewIdentityMatches(view: ImportedModuleView, origin_hash: *const [32]u8) bool {
+fn importedViewIdentityMatches(view: *const ImportedModuleView, origin_hash: *const [32]u8) bool {
     return base.ModuleIdentity.eql(&view.module_identity.stable_hash, origin_hash);
 }
 
@@ -31191,6 +31498,7 @@ fn appendPublicApiClosureDependencyKey(
     key: CheckedModuleArtifactKey,
 ) Allocator.Error!void {
     if (checkedArtifactKeyEql(key, artifact_key)) return;
+    if (keys.contains(key)) return;
     if (publicApiDependencyKeyIsKnownBuiltin(key, imports, available_artifacts)) return;
     _ = try keys.append(allocator, key);
 }
@@ -31200,7 +31508,7 @@ fn publicApiDependencyKeyIsKnownBuiltin(
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
 ) bool {
-    if (publicApiDependencyViewByKey(key, imports, available_artifacts)) |view| {
+    if (dependencyViewByKey(key, imports, available_artifacts, &.{})) |view| {
         return view.module_env.module_role == .builtin;
     }
     return false;
@@ -31533,6 +31841,10 @@ const LoweringVisibilityBuilder = struct {
     available_artifacts: []const ImportedModuleView,
     relation_artifacts: []const ImportedModuleView,
     keys: ArtifactKeyAccumulator = .empty,
+    /// Every key `appendKey` has settled. The type walk names an owner at
+    /// every alias and nominal it reaches, so each owner settles once
+    /// rather than once per reference.
+    settled_keys: std.AutoHashMapUnmanaged(CheckedModuleArtifactKey, void) = .empty,
     visited_types: std.AutoHashMap(LoweringVisibilityTypeVisit, void),
     visited_public_api: std.AutoHashMap(CheckedModuleArtifactKey, void),
 
@@ -31557,6 +31869,7 @@ const LoweringVisibilityBuilder = struct {
     }
 
     fn deinit(self: *LoweringVisibilityBuilder) void {
+        self.settled_keys.deinit(self.allocator);
         self.visited_public_api.deinit();
         self.visited_types.deinit();
         self.keys.deinit(self.allocator);
@@ -31576,6 +31889,8 @@ const LoweringVisibilityBuilder = struct {
         try pending.append(self.allocator, key);
         while (pending.pop()) |next| {
             if (checkedArtifactKeyEql(next, self.artifact_key)) continue;
+            const settled = try self.settled_keys.getOrPut(self.allocator, next);
+            if (settled.found_existing) continue;
             if (self.viewByKey(next)) |view| {
                 if (view.module_env.module_role == .builtin) continue;
             }
@@ -31621,7 +31936,7 @@ const LoweringVisibilityBuilder = struct {
         defer pending.deinit(self.allocator);
         try pending.append(self.allocator, root);
         const local = checkedArtifactKeyEql(artifact, self.artifact_key);
-        const view: ?ImportedModuleView = if (local) null else self.viewByKey(artifact) orelse {
+        const view: ?*const ImportedModuleView = if (local) null else self.viewByKey(artifact) orelse {
             checkedArtifactInvariant("lowering visibility type root referenced unavailable checked artifact", .{});
         };
         while (pending.pop()) |ty| {
@@ -31685,7 +32000,7 @@ const LoweringVisibilityBuilder = struct {
         }
     }
 
-    fn viewByKey(self: *LoweringVisibilityBuilder, key: CheckedModuleArtifactKey) ?ImportedModuleView {
+    fn viewByKey(self: *LoweringVisibilityBuilder, key: CheckedModuleArtifactKey) ?*const ImportedModuleView {
         return dependencyViewByKey(key, self.imports, self.available_artifacts, self.relation_artifacts);
     }
 };
@@ -31771,7 +32086,7 @@ fn collectLoweringVisibility(
         try appendPlatformRelationDependencyArtifactKeysFromView(
             allocator,
             &relation_keys,
-            relation_view,
+            relation_view.*,
             binding,
             platform_required_bindings.relationClosure(binding),
         );
@@ -31786,27 +32101,19 @@ fn collectLoweringVisibility(
     return try builder.finish();
 }
 
-fn publicApiDependencyViewByKey(
-    key: CheckedModuleArtifactKey,
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
-) ?ImportedModuleView {
-    return dependencyViewByKey(key, imports, available_artifacts, &.{});
-}
-
 fn dependencyViewByKey(
     key: CheckedModuleArtifactKey,
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
     relation_artifacts: []const ImportedModuleView,
-) ?ImportedModuleView {
-    for (imports) |import_artifact| {
-        if (checkedArtifactKeyEql(import_artifact.key, key)) return import_artifact.view;
+) ?*const ImportedModuleView {
+    for (imports) |*import_artifact| {
+        if (checkedArtifactKeyEql(import_artifact.key, key)) return &import_artifact.view;
     }
-    for (available_artifacts) |view| {
+    for (available_artifacts) |*view| {
         if (checkedArtifactKeyEql(view.key, key)) return view;
     }
-    for (relation_artifacts) |view| {
+    for (relation_artifacts) |*view| {
         if (checkedArtifactKeyEql(view.key, key)) return view;
     }
     return null;
@@ -32010,6 +32317,10 @@ fn UniqueList(comptime T: type) type {
 
             try self.items.append(allocator, value);
             return true;
+        }
+
+        fn contains(self: *const Self, value: T) bool {
+            return self.seen.contains(value);
         }
 
         fn toOwnedSlice(self: *Self, allocator: Allocator) Allocator.Error![]T {
@@ -34575,6 +34886,7 @@ pub const CheckedModuleArtifact = struct {
                     .anno_only,
                     .break_,
                     .return_,
+                    .row_coerce,
                     .for_,
                     .hosted_lambda,
                     .run_low_level,
@@ -40292,8 +40604,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x22, 0x1E, 0xDC, 0xAA, 0xFE, 0xF0, 0xDA, 0xA0, 0x8F, 0x11, 0xF2, 0x70, 0x4B, 0xE9, 0xED, 0x93,
-        0x7C, 0x88, 0x20, 0xB5, 0xB8, 0xD3, 0x0C, 0xF7, 0x76, 0xBB, 0xCC, 0xCE, 0xF0, 0xA0, 0xB9, 0xF7,
+        0x8C, 0x4A, 0x89, 0xB9, 0xE8, 0x3D, 0x89, 0x21, 0x44, 0xB8, 0x55, 0x53, 0x01, 0x24, 0xE5, 0xF4,
+        0x66, 0x9F, 0x41, 0x45, 0x91, 0x8A, 0xF3, 0xEF, 0xE4, 0xE7, 0xB6, 0x09, 0xB2, 0xDA, 0x65, 0xF9,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
@@ -41069,4 +41381,27 @@ test "checked polarity alias publication erases hidden arguments and preserves b
     const loaded_alias = roundtrip.loaded.payload(root).alias;
     try std.testing.expectEqual(@as(usize, 1), loaded_alias.args.len);
     try std.testing.expectEqual(row.ext, roundtrip.loaded.payload(loaded_alias.backing).tag_union.ext);
+}
+
+test "checking context identity includes the explicit root scheme owner" {
+    // These fixture identities are hashed, never dereferenced.
+    var root: ExplicitRootRequestInput = .{
+        .kind = .repl_expr,
+        .source = .{ .expr = testIndexId(CIR.Expr.Idx, 1) },
+        .abi = .compile_time,
+        .exposure = .private,
+    };
+    var without_owner = base.Sha256.init(.{});
+    hashExplicitRootRequestInput(&without_owner, root);
+    root.source_pattern = testIndexId(CIR.Pattern.Idx, 0);
+    var first_owner = base.Sha256.init(.{});
+    hashExplicitRootRequestInput(&first_owner, root);
+    root.source_pattern = testIndexId(CIR.Pattern.Idx, 1);
+    var second_owner = base.Sha256.init(.{});
+    hashExplicitRootRequestInput(&second_owner, root);
+    const without_hash = without_owner.finalResult();
+    const first_hash = first_owner.finalResult();
+    const second_hash = second_owner.finalResult();
+    try std.testing.expect(!std.meta.eql(without_hash, first_hash));
+    try std.testing.expect(!std.meta.eql(first_hash, second_hash));
 }

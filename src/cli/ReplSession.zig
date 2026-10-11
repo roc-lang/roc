@@ -97,6 +97,7 @@ pub const ResultValue = struct {
     }
 };
 
+/// Transfer the captured value projection to the caller and clear it here.
 pub fn takeResultValue(self: *ReplSession) ResultValue {
     const value = self.last_value;
     self.last_value = .{};
@@ -173,7 +174,7 @@ pub const Command = union(enum) {
 pub fn parseTypeQuery(input: []const u8) ?[]const u8 {
     const line = std.mem.trim(u8, input, " \t\r\n");
     if (line.len <= 2 or !std.mem.startsWith(u8, line, ":t") or
-        (line[2] != ' ' and line[2] != '\t') or std.mem.indexOfScalar(u8, line, '\n') != null)
+        (line[2] != ' ' and line[2] != '\t') or std.mem.findScalar(u8, line, '\n') != null)
     {
         return null;
     }
@@ -1459,7 +1460,6 @@ pub fn programFailureKind(err: eval.Inspected.Error) ProgramFailureKind {
         error.VirtualAllocFailed,
         error.VirtualProtectFailed,
         error.WasmExecFailed,
-        error.WindowsSDKNotFound,
         error.WouldBlock,
         error.WriteFailed,
         => .operational,
@@ -1611,7 +1611,7 @@ fn evaluateMainSource(self: *ReplSession, source: []const u8, report_config: rep
                         }
                     }
                 },
-                else => {},
+                .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .checked_error, .nominal, .fn_value => {},
             }
             break :blk eval.Inspected.finalizedConstStr(&resources, tuple[0]);
         },

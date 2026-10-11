@@ -714,6 +714,9 @@ pub const ModuleState = struct {
     depth: u32,
     /// Accumulated compile time for this module (parse + canonicalize + type-check)
     compile_time_ns: u64,
+    /// Time this build spent type checking this module and publishing its
+    /// checked artifact, excluding compile-time evaluation run inside the check.
+    type_check_ns: u64 = 0,
 
     pub fn init(name: []const u8, qualified_name: []const u8, path: []const u8) ModuleState {
         return .{
@@ -2319,11 +2322,52 @@ pub const Coordinator = struct {
         return false;
     }
 
+    /// The name a package goes by in timing output: the app's shorthand for
+    /// it, else the alphabetically first shorthand any package gives it,
+    /// else its registered name (a URL for downloaded packages).
+    fn packageTimingLabel(self: *const Coordinator, package_name: []const u8) []const u8 {
+        if (self.app_package_name) |app_package_name| {
+            if (std.mem.eql(u8, app_package_name, package_name)) return "app";
+            if (self.packages.get(app_package_name)) |app_pkg| {
+                if (shorthandFor(app_pkg, package_name)) |shorthand| return shorthand;
+            }
+        }
+        var best: ?[]const u8 = null;
+        var pkg_it = self.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            const shorthand = shorthandFor(entry.value_ptr.*, package_name) orelse continue;
+            if (best == null or std.mem.order(u8, shorthand, best.?) == .lt) best = shorthand;
+        }
+        return best orelse package_name;
+    }
+
+    /// The alphabetically first shorthand `pkg` declares for `package_name`.
+    fn shorthandFor(pkg: *const PackageState, package_name: []const u8) ?[]const u8 {
+        var best: ?[]const u8 = null;
+        var shorthand_it = pkg.shorthands.iterator();
+        while (shorthand_it.next()) |shorthand| {
+            if (!std.mem.eql(u8, shorthand.value_ptr.*, package_name)) continue;
+            const alias = shorthand.key_ptr.*;
+            if (best == null or std.mem.order(u8, alias, best.?) == .lt) best = alias;
+        }
+        return best;
+    }
+
     /// Return timing totals for frontend checking and post-check evaluation.
     pub fn getTimingInfo(self: *const Coordinator) compile_package.TimingInfo {
         var all_compile_time = eval.CompileTimeFinalization.Timing.init(self.roc_ctx.std_io);
         all_compile_time.addSnapshot(self.ctfe_timing.snapshot());
         all_compile_time.addSnapshot(self.module_ctfe_timing.snapshot());
+        var slowest_type_checks: compile_package.SlowestTypeChecks = .{};
+        var pkg_it = self.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            const pkg = entry.value_ptr.*;
+            const label = self.packageTimingLabel(pkg.name);
+            for (pkg.modules.items) |*mod| {
+                if (mod.type_check_ns == 0) continue;
+                slowest_type_checks.offer(label, mod.name, mod.type_check_ns);
+            }
+        }
         return .{
             .tokenize_parse_ns = self.total_parse_ns,
             .canonicalize_ns = self.total_canonicalize_ns,
@@ -2334,6 +2378,7 @@ pub const Coordinator = struct {
             .program_finalization_ns = self.program_finalization_ns,
             .compile_time_evaluation = self.ctfe_timing.snapshot(),
             .compile_time_counters = all_compile_time.snapshot(),
+            .slowest_type_checks = slowest_type_checks,
         };
     }
 
@@ -3512,13 +3557,9 @@ pub const Coordinator = struct {
         };
         defer manager.allocator.free(entries_dir);
 
-        // Serialize the env and artifact into scatter-gather writers, then gather both
-        // directly into a single cache-entry buffer laid out as
-        // [header][env blob][artifact blob]. Gathering straight into the final buffer
-        // avoids materializing each body in its own allocation and then concatenating
-        // header + bodies into a third buffer. The writers' iovecs alias the arena
-        // (relocation headers) and the live artifact/env, both of which outlive the
-        // gather below.
+        // The writers borrow live columns and retain only relocation headers.
+        // Stream canonical bytes to the staging file before atomic publication;
+        // no complete cache entry or scrubbed column is materialized in memory.
         var arena = base.SingleThreadArena.init(manager.allocator);
         defer arena.deinit();
         const arena_alloc = arena.allocator();
@@ -3538,23 +3579,34 @@ pub const Coordinator = struct {
         const env_len = env_writer.total_bytes;
         const artifact_len = artifact_writer.total_bytes;
 
-        const entry = manager.allocator.alloc(u8, checked_module_cache_header_len + env_len + artifact_len) catch {
-            manager.recordStoreFailure();
-            return;
-        };
-        defer manager.allocator.free(entry);
-
+        var header: [checked_module_cache_header_len]u8 = undefined;
         writeCheckedModuleCacheHeader(
-            entry[0..checked_module_cache_header_len],
+            &header,
             artifact.key,
             env_len,
             artifact_len,
             canonicalized_cache_entry.pinValidationHash(has_source_version_pin, self.source_pin_version),
         );
-        _ = env_writer.writeToBuffer(entry[checked_module_cache_header_len..][0..env_len]) catch unreachable;
-        _ = artifact_writer.writeToBuffer(entry[checked_module_cache_header_len + env_len ..][0..artifact_len]) catch unreachable;
+        const Entry = struct {
+            header: []const u8,
+            env: *const CompactWriter,
+            artifact: *const CompactWriter,
 
-        manager.storeRawBytes(artifact.key.bytes, entry, entries_dir, artifact.moduleEnvConst().module_name);
+            fn write(raw: *const anyopaque, destination: *std.Io.Writer) std.Io.Writer.Error!void {
+                const entry: *const @This() = @ptrCast(@alignCast(raw));
+                try destination.writeAll(entry.header);
+                try entry.env.writeTo(destination);
+                try entry.artifact.writeTo(destination);
+            }
+        };
+        const entry = Entry{ .header = &header, .env = &env_writer, .artifact = &artifact_writer };
+        manager.storeStream(
+            artifact.key.bytes,
+            .{ .context = &entry, .write = Entry.write },
+            header.len + env_len + artifact_len,
+            entries_dir,
+            artifact.moduleEnvConst().module_name,
+        );
     }
 
     fn tryLoadCachedCheckedModule(
@@ -4810,6 +4862,7 @@ pub const Coordinator = struct {
         self.total_typecheck_ns += result.type_check_ns;
         self.total_typecheck_diag_ns += result.check_diagnostics_ns;
         mod.compile_time_ns += result.type_check_ns + result.check_diagnostics_ns;
+        mod.type_check_ns = result.type_check_ns + result.check_diagnostics_ns;
 
         // Record per-module compile time for min/max/avg stats
         const module_time = mod.compile_time_ns;

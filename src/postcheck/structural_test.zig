@@ -225,6 +225,7 @@ test "post-check expression forms do not reintroduce checked-only syntax" {
         "method_eq",
         "anno_only",
         "for_",
+        "row_coerce",
     };
 
     inline for (checked_only) |name| {
@@ -232,6 +233,19 @@ test "post-check expression forms do not reintroduce checked-only syntax" {
         try std.testing.expect(!@hasField(Lifted.ExprData, name));
         try std.testing.expect(!@hasField(LambdaMono.ExprData, name));
     }
+}
+
+test "a checked row coercion has one post-check form at every stage" {
+    // design.md "Row Coercion Primitive": the checked `row_coerce` becomes the
+    // Monotype `row_widen`, which every later stage keeps as a value-only
+    // boundary. Neither form is a return: `row_widen` has no target field,
+    // because this expression's own type is the destination row.
+    try std.testing.expect(@hasField(check.CheckedArtifact.CheckedExprData, "row_coerce"));
+    try std.testing.expect(@hasField(Mono.ExprData, "row_widen"));
+    try std.testing.expect(@hasField(Lifted.ExprData, "row_widen"));
+    try std.testing.expect(@hasField(LambdaMono.ExprData, "row_widen"));
+    try std.testing.expect(!@hasField(Mono.RowWiden, "target"));
+    try std.testing.expect(@typeInfo(Mono.RowWiden).@"struct".field_names.len == 1);
 }
 
 test "stage expression forms only shrink checked syntax or add runtime encoding forms" {
@@ -1462,10 +1476,10 @@ test "Monotype generated-private call requests retain separate request nodes" {
 
 test "hosted Try adaptation consumes checker-recorded nominal provenance" {
     const lower_source = @embedFile("monotype/lower.zig");
-    const graph_relation = sourceSliceBetween(
+    const nominal_provenance = sourceSliceBetween(
         lower_source,
-        "fn graphHostedTryInfoOrNull(",
-        "const Builder = struct",
+        "fn hostedTryNamedOrNull(",
+        "fn hostedTryTypeLike(",
     );
     // The hosted `Try` adapter is now one instance of the general result-row
     // widening adapter (design.md "Result-Row Widening Adapter"), so the two
@@ -1481,9 +1495,9 @@ test "hosted Try adaptation consumes checker-recorded nominal provenance" {
     );
     try std.testing.expect(@hasField(check.CheckedModule.CheckedProcedureTemplate, "hosted_try_adapter"));
     try expectContains(lower_source, "template.hosted_try_adapter");
-    try expectContains(graph_relation, "capability.def");
-    try expectContains(graph_relation, "capability.ok_type_arg_index");
-    try expectContains(graph_relation, "capability.err_type_arg_index");
+    try expectContains(nominal_provenance, "capability.def");
+    try expectContains(nominal_provenance, "capability.ok_type_arg_index");
+    try expectContains(nominal_provenance, "capability.err_type_arg_index");
     try expectContains(adapter_source, "self.hostedTryInfoOrNull(try_capability, requested.ret)");
     try expectContains(adapter_source, "self.hostedTryInfoOrNull(try_capability, declared.ret)");
     try expectContains(lower_source, "sameTypeDef(named.def, capability.def)");

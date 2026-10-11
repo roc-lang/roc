@@ -451,9 +451,9 @@ pub fn SafeMultiList(comptime T: type) type {
         /// rather than of the allocation history that produced its capacity.
         ///
         /// The input is not mutated. A column whose element bytes are already fully
-        /// defined is gathered straight from the list with no copy; only a column that
-        /// needs padding scrubbed is copied into writer-owned memory first. Which case
-        /// applies is decided at compile time, and an element shape whose undefined bytes
+        /// defined is gathered straight from the list; a column that needs padding
+        /// scrubbed records its canonicalization operation for the write boundary.
+        /// This is decided at compile time, and an element shape whose undefined bytes
         /// nothing could scrub is rejected there too.
         fn writeCompactedColumns(
             list: *const Self,

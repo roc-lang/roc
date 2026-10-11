@@ -5,7 +5,6 @@
 //! for surgical linking.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const shim_symbols = @import("builtins").shim_symbols;
 const Allocator = std.mem.Allocator;
 const roc_base = @import("base");
@@ -895,7 +894,6 @@ fn resolveUndefinedFunctionSymbols(
         if (!self.isUndefinedFunctionNamed(sym, name)) continue;
         if (sym.index >= self.imports.items.len) return error.InvalidSection;
         if (self.imports.items[sym.index].type_idx != defined_type) {
-            if (builtin.mode == .debug) std.debug.print("WASM merge: import '{s}' has type {d}, but its definition has type {d}\n", .{ name, self.imports.items[sym.index].type_idx, defined_type });
             return error.FunctionTypeMismatch;
         }
         if (first_match == null) first_match = @intCast(i);
@@ -1521,7 +1519,6 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
             const local_idx = fn_idx - old_import_count;
             if (local_idx >= self.func_type_indices.items.len) return error.InvalidSection;
             if (!self.funcTypesEqual(self.func_type_indices.items[local_idx], remapped_type)) {
-                if (builtin.mode == .debug) std.debug.print("WASM merge: '{s}' is defined with type {d}, but the merged module imports it with type {d}\n", .{ src_imp.field_name, self.func_type_indices.items[local_idx], remapped_type });
                 return error.FunctionTypeMismatch;
             }
             func_remap[src_idx] = fn_idx;
@@ -1534,7 +1531,6 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
         for (self.imports.items, 0..) |self_imp, self_idx| {
             if (std.mem.eql(u8, self_imp.field_name, src_imp.field_name)) {
                 if (!self.funcTypesEqual(self_imp.type_idx, remapped_type)) {
-                    if (builtin.mode == .debug) std.debug.print("WASM merge: both modules import '{s}', with types {d} and {d}\n", .{ src_imp.field_name, self_imp.type_idx, remapped_type });
                     return error.FunctionTypeMismatch;
                 }
                 matched = @intCast(self_idx);

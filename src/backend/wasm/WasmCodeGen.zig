@@ -748,6 +748,16 @@ fn emitStrConcatLowLevel(self: *Self, args: anytype, unique_args: u64) Allocator
     try self.emitFpOffset(result_offset);
 }
 
+/// Store a U64 argument in a new i64 local. The builtins take the full value;
+/// wrapping it to i32 would silently turn an impossible count into a small one.
+fn emitU64ArgToNewLocal(self: *Self, arg: ProcLocalId) Allocator.Error!u32 {
+    try self.emitProcLocal(arg);
+    if (try self.procLocalValType(arg) == .i32) {
+        self.currentCode().append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
+    }
+    return self.emitSetNewLocal(.i64);
+}
+
 fn emitStrCountedResultCall(
     self: *Self,
     str_ptr: u32,
@@ -760,7 +770,6 @@ fn emitStrCountedResultCall(
     try self.emitFpOffset(result_offset);
     try self.emitRocStrFields(fields);
     try self.emitLocalGet(count);
-    self.currentCode().append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
     if (update_mode) |mode| try self.emitI32Const(mode);
     try self.emitBuiltinCall(kind);
 }
@@ -772,12 +781,7 @@ fn emitStrCountedLowLevel(
     update_mode: ?i32,
 ) Allocator.Error!void {
     const str_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
-    try self.emitProcLocal(GuardedList.at(args, 1));
-    const int_vt = try self.procLocalValType(GuardedList.at(args, 1));
-    if (int_vt == .i64) {
-        self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-    }
-    const int_local = try self.emitSetNewLocal(.i32);
+    const int_local = try self.emitU64ArgToNewLocal(GuardedList.at(args, 1));
     const result_offset = try self.allocStackMemory(12, 4);
     try self.emitStrCountedResultCall(str_local, int_local, result_offset, kind, update_mode);
     try self.emitFpOffset(result_offset);
@@ -11889,16 +11893,10 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .str_repeat => try self.emitStrCountedLowLevel(args, BuiltinSignatures.kindOf(comptime LowLevelBuiltins.strOp(.str_repeat)), null),
         .str_reserve => try self.emitStrCountedLowLevel(args, BuiltinSignatures.kindOf(comptime LowLevelBuiltins.strOp(.str_reserve)), updateModeImmForArg(ll.unique_args, 0)),
         .str_with_capacity => {
-            try self.emitProcLocal(GuardedList.at(args, 0));
-            const int_vt = try self.procLocalValType(GuardedList.at(args, 0));
-            if (int_vt == .i64) {
-                self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-            }
-            const int_local = try self.emitSetNewLocal(.i32);
+            const int_local = try self.emitU64ArgToNewLocal(GuardedList.at(args, 0));
             const result_offset = try self.allocStackMemory(12, 4);
             try self.emitFpOffset(result_offset);
             try self.emitLocalGet(int_local);
-            self.currentCode().append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
             try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.strOp(.str_with_capacity)));
             try self.emitFpOffset(result_offset);
         },
@@ -17378,20 +17376,10 @@ fn generateLLListDropAt(self: *Self, args: anytype, ret_layout: layout.Idx, targ
     // the length, and only when the index is in bounds.
     if (elem_size == 0) {
         const len_local = try self.emitListLenLocal(list_ptr);
-        const index_i32 = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-        try self.emitLocalGet(index_local);
-        self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-        try self.emitLocalSet(index_i32);
-        const one_local = try self.emitI32ConstToNewLocal(1);
-        const dropped = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-        try self.emitU32SaturatingSub(len_local, index_i32);
-        try self.emitLocalSet(dropped);
-        // dropped is nonzero exactly when the index is in bounds, so removing
-        // min(dropped, 1) elements covers both the in- and out-of-bounds cases.
-        const shrink = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-        try self.emitU32Min(dropped, one_local);
-        try self.emitLocalSet(shrink);
-        try self.emitU32SaturatingSub(len_local, shrink);
+        // The comparison must retain every index bit. Its i32 Boolean result
+        // is exactly the number of elements to remove (zero or one).
+        try self.emitLocalGets(.{ len_local, index_local, len_local });
+        try self.emitOps(.{ Op.i64_extend_i32_u, Op.i64_lt_u, Op.i32_sub });
         try self.emitZstListFromStackLen();
         return;
     }
@@ -17566,9 +17554,17 @@ fn generateLLListWithCapacity(self: *Self, args: anytype, ret_layout: layout.Idx
 
     const elem_align = list_abi.elem_align;
 
-    // Generate capacity arg (may be i64 from MonoIR layout; convert to i32 for wasm32)
-    try self.emitProcLocal(GuardedList.at(args, 0));
-    try self.emitConversion(try self.procLocalValType(GuardedList.at(args, 0)), .i32);
+    // Crash on a capacity whose bytes plus header do not fit wasm32's address
+    // space, so the i32 arithmetic below cannot wrap to a smaller allocation.
+    const data_offset = rcAllocationLayout(elem_align, list_abi.elements_refcounted).data_offset;
+    const max_capacity = (std.math.maxInt(u32) - data_offset) / elem_size;
+    const cap64 = try self.emitU64ArgToNewLocal(GuardedList.at(args, 0));
+    try self.emitLocalGet(cap64);
+    try self.emitI64Const(max_capacity);
+    self.currentCode().append(self.allocator, Op.i64_gt_u) catch return error.OutOfMemory;
+    try self.emitCrashIfStackBool(builtins.utils.allocation_too_large_message);
+    try self.emitLocalGet(cap64);
+    self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
     const cap = try self.emitSetNewLocal(.i32);
 
     const new_data = try self.emitI32ConstToNewLocal(0);
@@ -17879,6 +17875,31 @@ fn generateLLListReserve(self: *Self, kind: BuiltinKind, boxy_symbol: []const u8
     try self.emitFpOffset(result_offset);
 }
 
+/// Clamp a U64 value against a wasm32 bound before narrowing it. The bound
+/// proves that the selected value fits in i32 without discarding any bits.
+fn emitU64ClampedToU32Bound(self: *Self, value: u32, bound: u32) Allocator.Error!u32 {
+    try self.emitLocalGet(value);
+    try self.emitLocalGet(bound);
+    try self.emitOps(.{Op.i64_extend_i32_u});
+    try self.emitLocalGet(value);
+    try self.emitLocalGet(bound);
+    try self.emitOps(.{ Op.i64_extend_i32_u, Op.i64_lt_u, Op.select, Op.i32_wrap_i64 });
+    return self.emitSetNewLocal(.i32);
+}
+
+/// Compute the same bounded window for allocated and zero-width lists.
+fn emitListSublistWindow(self: *Self, list_local: u32, rec_local: u32, len_field_off: u32, start_field_off: u32) Allocator.Error!struct { start: u32, len: u32 } {
+    const size = try self.emitListLenLocal(list_local);
+    const requested_start = try self.emitLoadAtToNewLocal(rec_local, .i64, start_field_off);
+    const start = try self.emitU64ClampedToU32Bound(requested_start, size);
+    try self.emitLocalGets(.{ size, start });
+    try self.emitOps(.{Op.i32_sub});
+    const remaining = try self.emitSetNewLocal(.i32);
+    const requested_len = try self.emitLoadAtToNewLocal(rec_local, .i64, len_field_off);
+    const len = try self.emitU64ClampedToU32Bound(requested_len, remaining);
+    return .{ .start = start, .len = len };
+}
+
 /// Emit a sublist of the list in wasm local `list_local` over the `{ start,
 /// len }` record at the address in `rec_local`, whose fields sit at the given
 /// offsets; `list_arg` is the LIR list operand, for its Boxy descriptor.
@@ -17888,19 +17909,8 @@ fn generateListSublistLocals(self: *Self, list_local: u32, rec_local: u32, len_f
     // Zero-width elements have no bytes to slice, so the result is the
     // window length alone: min(len, size -| start).
     if (boxy_list_abi.elem_size == 0) {
-        const size_local = try self.emitListLenLocal(list_local);
-        const start_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-        try self.emitLoadAt(rec_local, .i64, start_field_off);
-        self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-        try self.emitLocalSet(start_local);
-        const want_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-        try self.emitLoadAt(rec_local, .i64, len_field_off);
-        self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-        try self.emitLocalSet(want_local);
-        const avail_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-        try self.emitU32SaturatingSub(size_local, start_local);
-        try self.emitLocalSet(avail_local);
-        try self.emitU32Min(want_local, avail_local);
+        const window = try self.emitListSublistWindow(list_local, rec_local, len_field_off, start_field_off);
+        try self.emitLocalGet(window.len);
         try self.emitZstListFromStackLen();
         return;
     }
@@ -17927,34 +17937,9 @@ fn generateListSublistLocals(self: *Self, list_local: u32, rec_local: u32, len_f
         try self.emitBoxyCall("roc_boxy_list_sublist");
         try self.emitFpOffset(result_offset);
     } else {
-        // Load "len" field by original semantic index, wrap to i32
-        try self.emitLoadAt(rec_local, .i64, len_field_off);
-        self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-        const sub_len = try self.emitSetNewLocal(.i32);
-
-        // Load "start" field by original semantic index, wrap to i32
-        try self.emitLoadAt(rec_local, .i64, start_field_off);
-        self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-        const start_local = try self.emitSetNewLocal(.i32);
-
-        // Load old_len from list
-        try self.emitLoadAt(list_local, .i32, 4);
-        const old_len = try self.emitSetNewLocal(.i32);
-
-        // actual_start = min(start, old_len)
-        try self.emitLocalGets(.{ start_local, old_len, start_local, old_len });
-        try self.emitOps(.{ Op.i32_le_u, Op.select });
-        const actual_start = try self.emitSetNewLocal(.i32);
-
-        // remaining = old_len - actual_start
-        try self.emitLocalGets(.{ old_len, actual_start });
-        self.currentCode().append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
-        const remaining = try self.emitSetNewLocal(.i32);
-
-        // actual_len = min(sub_len, remaining)
-        try self.emitLocalGets(.{ sub_len, remaining, sub_len, remaining });
-        try self.emitOps(.{ Op.i32_le_u, Op.select });
-        const actual_len = try self.emitSetNewLocal(.i32);
+        const window = try self.emitListSublistWindow(list_local, rec_local, len_field_off, start_field_off);
+        const actual_start = window.start;
+        const actual_len = window.len;
 
         // Allocate result RocList (12 bytes)
         const result_offset = try self.allocStackMemory(12, 4);
@@ -19086,4 +19071,134 @@ test "abandoning a failed nested compilation restores the caller's binding scope
 
     codegen.endFunction();
     codegen.restoreState(outer);
+}
+
+// Regression for https://github.com/roc-lang/roc/issues/12198: a U64 start
+// beyond a wasm32 list's bounds must produce an empty sublist.
+test "issue 12198: wasm sublist preserves U64 start bounds" {
+    try expectSublistWindowLength(.u8, 4294967296, 1, 0);
+}
+
+test "issue 12198: wasm zero-sized sublist preserves U64 start bounds" {
+    try expectSublistWindowLength(.zst, 4294967296, 1, 0);
+}
+
+test "issue 12198: wasm sublist ordinary boundary controls" {
+    for ([_]layout.Idx{ .u8, .zst }) |element| {
+        try expectSublistWindowLength(element, 0, 3, 3);
+        try expectSublistWindowLength(element, 1, 1, 1);
+        try expectSublistWindowLength(element, 3, 1, 0);
+        try expectSublistWindowLength(element, 0, 0, 0);
+    }
+}
+
+test "issue 12198: wasm sublist clamps a U64 requested length" {
+    try expectSublistWindowLength(.u8, 0, 4294967296, 3);
+}
+
+test "issue 12198: wasm zero-sized sublist clamps a U64 requested length" {
+    try expectSublistWindowLength(.zst, 0, 4294967296, 3);
+}
+
+test "issue 12198: wasm zero-sized drop_at preserves U64 index bounds" {
+    try expectListWindowLength(.zst, 4294967296, 0, 3, .drop_at);
+}
+
+test "issue 12198: wasm zero-sized drop_at ordinary boundary controls" {
+    try expectListWindowLength(.zst, 0, 0, 2, .drop_at);
+    try expectListWindowLength(.zst, 3, 0, 3, .drop_at);
+}
+
+test "issue 12198: wasm list windows preserve unsigned U64 extremes" {
+    for ([_]layout.Idx{ .u8, .zst }) |element| {
+        for ([_]u64{ 4294967295, 4294967297, 1 << 63, std.math.maxInt(u64) }) |large| {
+            try expectSublistWindowLength(element, large, 1, 0);
+            try expectSublistWindowLength(element, 1, large, 2);
+        }
+        // The public take_first/drop_first wrappers pass n into these fields.
+        try expectSublistWindowLength(element, 0, 4294967296, 3);
+        try expectSublistWindowLength(element, 4294967296, 3, 0);
+    }
+    try expectListWindowLength(.zst, std.math.maxInt(u64), 0, 3, .drop_at);
+}
+
+/// Every way building, running and checking a list window fixture can fail.
+const ListWindowLengthError = Allocator.Error ||
+    WasmModule.EncodeError ||
+    @import("bytebox").MalformedError ||
+    @import("bytebox").ValidationError ||
+    @import("bytebox").UnlinkableError ||
+    @import("bytebox").UninstantiableError ||
+    @import("bytebox").ExportError ||
+    @import("bytebox").TrapError ||
+    error{TestExpectedEqual};
+
+fn expectSublistWindowLength(element: layout.Idx, start: u64, len: u64, expected: i32) ListWindowLengthError!void {
+    try expectListWindowLength(element, start, len, expected, .sublist);
+}
+
+fn expectListWindowLength(element: layout.Idx, start: u64, len: u64, expected: i32, operation: enum { sublist, drop_at }) ListWindowLengthError!void {
+    const bytebox = @import("bytebox");
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u32);
+    defer layouts.deinit();
+    const list_layout = try layouts.insertList(element);
+    const list_arg = try store.addLocal(.{ .layout_idx = list_layout });
+
+    var codegen = Self.init(allocator, &store, &layouts, &.{}, &.{}, &.{}, .default);
+    defer codegen.deinit();
+    const signature = try codegen.module.addFuncType(&.{ .i32, .i32 }, &.{.i32});
+    const function = try codegen.module.addDefinedFunction(signature);
+    try codegen.beginFunction(function.local);
+    const scope = codegen.storage.beginScope();
+    defer codegen.storage.endScope(scope);
+    const list_local = try codegen.storage.allocLocal(list_arg, .i32);
+    const record_local = try codegen.storage.allocAnonymousLocal(.i32);
+    codegen.fp_local = try codegen.storage.allocAnonymousLocal(.i32);
+    try codegen.emitI32Const(4096);
+    try codegen.emitLocalSet(codegen.fp_local);
+    switch (operation) {
+        .sublist => try codegen.generateListSublistLocals(list_local, record_local, 0, 8, list_arg, list_layout, null, 0),
+        .drop_at => {
+            const index_arg = try store.addLocal(.{ .layout_idx = .u64 });
+            const index_local = try codegen.storage.allocLocal(index_arg, .i64);
+            try codegen.emitLoadAt(record_local, .i64, 8);
+            try codegen.emitLocalSet(index_local);
+            try codegen.generateLLListDropAt(&[_]ProcLocalId{ list_arg, index_arg }, list_layout, null, 0);
+        },
+    }
+    try codegen.emitLoadOp(.i32, 4);
+    try codegen.emitOps(.{Op.end});
+    try codegen.encodeLocalsDecl(&codegen.currentBody().preamble, 2);
+    codegen.endFunction();
+    try codegen.flushPendingBodies();
+    try codegen.module.addExport("window_len", .func, function.function.raw());
+    try codegen.module.finalizeMemoryAndTableWithConfig(.{ .stack_bytes = 65536, .export_memory = true });
+    try codegen.module.materializeFuncBodies();
+    const bytes = try codegen.module.encode(allocator);
+    defer allocator.free(bytes);
+
+    var arena_impl = std.heap.ArenaAllocator.init(allocator);
+    defer arena_impl.deinit();
+    var definition = try bytebox.createModuleDefinition(arena_impl.allocator(), .{});
+    defer definition.destroy();
+    try definition.decode(bytes);
+    var instance = try bytebox.createModuleInstance(.Stack, definition, allocator);
+    defer instance.destroy();
+    try instance.instantiate(.{ .stack_size = 65536 });
+    const memory = instance.store.getMemory(0).buffer();
+    // A three-element list at 256 and a { len, start } record at 512.
+    std.mem.writeInt(u32, memory[256..260], if (element == .zst) 0 else 1024, .little);
+    std.mem.writeInt(u32, memory[260..264], 3, .little);
+    std.mem.writeInt(u32, memory[264..268], if (element == .zst) 0 else 6, .little);
+    std.mem.writeInt(u64, memory[512..520], len, .little);
+    std.mem.writeInt(u64, memory[520..528], start, .little);
+    @memcpy(memory[1024..1027], &[_]u8{ 1, 2, 3 });
+    const handle = try instance.getFunctionHandle("window_len");
+    var params = [_]bytebox.Val{ .{ .I32 = 256 }, .{ .I32 = 512 } };
+    var returns = [_]bytebox.Val{.{ .I32 = 0 }};
+    try instance.invoke(handle, &params, &returns, .{});
+    try std.testing.expectEqual(expected, returns[0].I32);
 }

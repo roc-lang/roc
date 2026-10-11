@@ -78,7 +78,6 @@ pub const Error = Allocator.Error || lir.CheckedPipeline.LowerResourceError || s
     MprotectFailed,
     VirtualProtectFailed,
     InvalidHandle,
-    WindowsSDKNotFound,
     CompilationFailed,
     NoBitcodeModules,
     UnsupportedLlvmTriple,
@@ -1363,7 +1362,7 @@ pub fn finalizedComptimeReplValue(resources: *const ParsedResources) check.Const
         if (root.kind != .repl_expr) continue;
         return switch (root.payload) {
             .const_node => |node| node,
-            else => unreachable,
+            .pending, .fn_value, .discarded, .expect, .runtime => unreachable,
         };
     }
     unreachable;
@@ -1374,12 +1373,13 @@ pub fn finalizedComptimeReplStr(resources: *const ParsedResources) Error![]const
     return finalizedConstStr(resources, finalizedComptimeReplValue(resources));
 }
 
+/// Read a checked string value, following its explicit nominal backing nodes.
 pub fn finalizedConstStr(resources: *const ParsedResources, initial: check.ConstStore.ConstNodeId) []const u8 {
     var node = initial;
     while (true) switch (resources.checked_artifact.const_store.get(node)) {
         .str => |str| return resources.checked_artifact.const_store.strBytes(str),
         .nominal => |nominal| node = nominal.backing,
-        else => unreachable,
+        .pending, .zst, .scalar, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .fn_value => unreachable,
     };
 }
 
@@ -1607,7 +1607,11 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
                 unreachable;
             };
             const root_def = main_checked.module_env.store.getDef(root_def_idx);
-            if (main_checked.module_env.store.getExpr(root_def.expr) != .e_runtime_error) {
+            // A REPL cell is one transaction: report its checked errors before
+            // requesting evaluation of the extracted body and its scheme.
+            if (main_checked.module_env.store.getExpr(root_def.expr) != .e_runtime_error and
+                !try moduleDiagnosticsHaveErrors(allocator, main_checked.module_env, main_checked.checker))
+            {
                 const body_expr = main_checked.checker.compileTimeExecutableRootBody(root_def_idx) orelse {
                     if (@import("builtin").mode == .debug) {
                         base.invariant("eval helper invariant violated: compile-time REPL root body was not recorded", .{});
