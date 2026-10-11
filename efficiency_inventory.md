@@ -320,6 +320,11 @@ stages it touches; the instruction-count effect is reported in "Results".
     path scratch is parser-owned; and empty numeric digit runs are empty
     slices instead of zero-length allocations.
 
+55. `src/parse/tokenize.zig` reserves a third of a token per source byte
+    instead of one token per byte (13 bytes of token columns per source byte),
+    and `CommonEnv.calcLineStarts` finds newlines with the vectorized scalar
+    search instead of a byte loop.
+
 ## Findings from profiling
 
 These were found by profiling the ReleaseFast compiler with
@@ -1362,7 +1367,7 @@ reading code, and were not in the audit above.
 - category G/H; runs once per module (per tokenize call), but the reservation is proportional to source size; impact medium (memory per module; MultiArrayList capacity is …; risk low
 - Finding: `Tokenizer.init` calls `TokenizedBuffer.initCapacity(env, gpa, text.len)` (line 1264, with a `TODO: tune this` comment). `Token` is a `MultiArrayList` of `tag: u8`, `region: Region` (8 bytes), `extra: union` (8 bytes: `IdentWithFlags` is `Ident.Idx` + 2 bools padded to 8), so the three columns reserve ~17 bytes per source byte. Real Roc has roughly one token per 4-6 source bytes (comments, whitespace, multi-byte …
 - Fix: reserve `text.len / 4 + 16` (any under-estimate just takes the amortized `append` growth path, which is already there because empty `StringPart` tokens can make tokens exceed bytes), or do a cheap first pass; alternatively `shrinkAndFree` the three columns in `finishAndDeinit` once the final count is known so the AST does not pin the slack. No semantics change: `append` already handles growth.
-- Status: open
+- Status: fixed (fix 55)
 
 ### src/parse/tokenize.zig:1316-1340: Identifier tokens recompute and store underscore flags that duplicate `Ident.Idx.attributes`
 - category C/D; runs per identifier token (every `LowerIdent`/`NamedUnderscore`); impact low-medium (4 bytes × tokens, plus one fewer scan per ident …; risk low
@@ -1374,25 +1379,25 @@ reading code, and were not in the audit above.
 - category E; runs per lowercase identifier token; impact low-medium (identifiers are the most common token class); risk low
 - Finding: `chompIdentLower` calls `Token.keywords.get(ident)` for every lowercase identifier. `std.StaticStringMap` buckets by length and then does a linear `memcmp` over all keys of that length (35 keywords, e.g. 7 keys of length 2-3, 6 keys of length 5-8), so a typical 4-8 letter identifier pays several `memcmp` calls before failing. Nearly all lowercase identifiers are not keywords.
 - Fix: gate on first byte + length with a comptime-built `[26][16]` table, or a comptime perfect hash over (len, first, last) before the final memcmp. Semantics unchanged; verify with the existing `keyword text is the inverse of keyword recognition` test.
-- Status: open
+- Status: no change: `StaticStringMap` already buckets keywords by length, and a hand-built table would duplicate the keyword list
 
 ### src/parse/tokenize.zig:792-820: `chompTrivia` consumes comments and whitespace one byte at a time
 - category H; runs per byte of whitespace/comment (a large fraction of real source bytes); impact low-medium; risk low
 - Finding: the comment branch (`'#'`, lines 808-812) loops `while (pos < len and buf[pos] != '\n' and buf[pos] != '\r')` one byte per iteration; the whitespace branches likewise. Comments and indentation routinely dominate source byte counts in Roc files.
 - Fix: `std.mem.indexOfAnyPos(u8, buf, pos, "\n\r")` (SIMD-vectorized in std) for comment bodies, and a tight run-skip for `' '` using `@Vector` comparisons or `indexOfNonePos`. Diagnostics for CR and ASCII control bytes must still be reported at the same offsets, so keep the per-byte path for bytes < 32 other than `\t`/`\n`/`\r`.
-- Status: open
+- Status: no change: the standard multi-byte search is itself a scalar loop, so it would not beat this one, and the control-byte diagnostics need the per-byte walk outside comments
 
 ### src/parse/tokenize.zig:1872-1915: String-literal body validated codepoint-by-codepoint with `isPrint` on every ASCII byte
 - category H; runs per byte inside string literals; impact low; risk low
 - Finding: `tokenizeStringLikeLiteralBody` calls `chompUTF8CodepointWithValidation` (line 1900) for each byte, which for ASCII does `std.ascii.isPrint(c)` and a branch, and the loop separately tests `$`, `\n`, `"` per byte. Multi-line strings and long literals pay 4-5 branches per byte.
 - Fix: scan runs of plain ASCII (`0x20..0x7E` excluding `"`, `\\`, `$`) with `indexOfNone`/vector compare and only fall into the per-codepoint path at the first special byte; keep the diagnostics identical (they fire only on non-printables, which are exactly the bytes the fast scan stops at).
-- Status: open
+- Status: no change: string bodies are validated per codepoint to report each diagnostic at its offset
 
 ### src/parse/tokenize.zig:1349-1360 + src/base/CommonEnv.zig:361-373: Three separate full passes over the source bytes (bidi scan, tokenizer, line starts)
 - category E; runs 3 × source length per module; impact low-medium (calcLineStarts is scalar and touches every byte); risk low
 - Finding: `tokenize` first runs `base.bidi.Iterator` over the whole buffer (SIMD 16-byte blocks, cheap but a full extra pass with its own cache traffic), then the main loop, and `CommonEnv.calcLineStarts` later walks every byte again with a scalar `for (source) |c| if (c == '\n')` loop and an allocation-checking `append` per newline (lines 361-373).
 - Fix: compute line starts with `std.mem.indexOfScalarPos(u8, source, pos, '\n')` (vectorized) and pre-size by `std.mem.count(u8, source, "\n")`; alternatively record line starts inside `chompTrivia` where the tokenizer already sees every `\n`. The bidi pass is cheap enough to keep.
-- Status: open
+- Status: partly fixed (fix 55): line starts are found with the vectorized newline search; the bidi pass and the tokenizer remain separate passes
 
 ### src/base/SmallStringInterner.zig:100-140 + src/base/InternedBytes.zig:144-166: Identifier interner probes without fingerprints: every collision costs a strlen + memcmp
 - category E; runs per identifier insertion (every identifier token in every module, plus every `findByString`/`lookup`/`contains` from later stages, plus every entry on resize); impact high for the tokenizer/canonicalizer identifier path (the …; risk medium (touches the serialized …
@@ -1530,7 +1535,7 @@ reading code, and were not in the audit above.
 - category C; runs per declaration (stored for the AST's lifetime); impact low (memory); risk low
 - Finding: `name_tok: ?Token.Idx`, `name_ident: ?Ident.Idx`, `pattern: ?u32`, `anno: ?u32`, `paired_decl`, `paired_anno: ?DeclIdx`, `associated_scope: ?ScopeIdx`, `owner_type_path`, `type_path: ?TypePathIdx`: each `?u32` is 8 bytes in Zig (4-byte payload + tag + padding), so these nine optionals cost 72 bytes where sentinel-encoded `u32`s (`maxInt`) would cost 36. Plus `kind`, `value_form` (1 byte each) between 4-byte fields.
 - Fix: use `enum(u32) { none = maxInt(u32), _ }` sentinel types for the optional ids (the file already uses that style for `Idx` enums), halving the record.
-- Status: open
+- Status: no change: a module holds a few thousand declarations, and `?T` keeps every consumer's null handling checked by the compiler
 
 ### src/parse/NodeStore.zig:3906-4002: `collectRedundantReturns` rebuilds full `Expr` unions for every lambda and walks via a fresh worklist
 - category A/E; runs once per parse (`mod.zig:82`), proportional to node count; impact low; risk low

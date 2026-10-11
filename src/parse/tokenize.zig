@@ -1246,9 +1246,9 @@ pub const Tokenizer = struct {
     /// Note that the caller must also provide a pre-allocated messages buffer.
     pub fn init(env: *CommonEnv, gpa: std.mem.Allocator, text: []const u8, messages: []Diagnostic) std.mem.Allocator.Error!Tokenizer {
         const cursor = Cursor.init(text, messages);
-        // TODO: tune this more. Syntax grab bag is 3:1.
-        // Generally, roc code will be less dense than that.
-        const output = try TokenizedBuffer.initCapacity(env, gpa, text.len);
+        // Even the densest syntax averages three bytes per token, and most code
+        // is sparser; a file that has more tokens grows the buffer as usual.
+        const output = try TokenizedBuffer.initCapacity(env, gpa, text.len / 3 + 16);
         return Tokenizer{
             .cursor = cursor,
             .output = output,
