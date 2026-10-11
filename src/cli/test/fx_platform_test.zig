@@ -19,7 +19,7 @@ const testing = std.testing;
 const util = @import("util.zig");
 const fx_test_specs = @import("fx_test_specs.zig");
 
-const FxPlatformTestError = util.RocRunError || util.ChildTimeoutError || util.ResultCheckError || std.mem.Allocator.Error || std.Io.Dir.RealPathFileAllocError || std.Io.Dir.CreateDirPathError || std.Io.Dir.ReadFileAllocError || error{
+const FxPlatformTestError = util.RocRunError || util.ChildTimeoutError || util.ResultCheckError || std.mem.Allocator.Error || std.Io.Dir.RealPathFileAllocError || std.Io.Dir.CreateDirPathError || std.Io.Dir.ReadFileAllocError || std.Io.Dir.WriteFileError || error{
     NativeBackendBuildFailed,
     DivisionByZeroNotHandled,
     StackOverflowNotHandled,
@@ -982,6 +982,56 @@ test "fx platform run from different cwd" {
 
     // Verify stdout contains expected messages
     try testing.expect(std.mem.find(u8, run_result.stdout, "Hello from stdout!") != null);
+}
+
+/// Runs an app whose declared platform is an unreachable URL, with
+/// `--replace-dep` pointing that URL at the local fx platform. Every dependency
+/// in the graph is local, so the run must succeed without fetching anything.
+/// Repro for https://github.com/roc-lang/roc/issues/12104
+fn runWithReplacedUrlPlatform(opt_args: []const []const u8) FxPlatformTestError!void {
+    const allocator = testing.allocator;
+
+    // Nothing listens on the discard port, so any attempt to fetch this
+    // bundle fails with a download error.
+    const platform_url = "http://127.0.0.1:9/fx/0.0.1/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst";
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data = "app [main!] { pf: platform \"" ++ platform_url ++ "\" }\n\n" ++
+            "import pf.Stdout\n\n" ++
+            "main! = || {\n" ++
+            "\tStdout.line!(\"replaced platform ok\")\n" ++
+            "}\n",
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", allocator);
+    defer allocator.free(app_path);
+
+    const local_platform = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, "test/fx/platform/main.roc", allocator);
+    defer allocator.free(local_platform);
+
+    const args = try std.mem.concat(allocator, []const u8, &.{
+        &.{ "--replace-dep", platform_url, local_platform },
+        opt_args,
+        &.{app_path},
+    });
+    defer allocator.free(args);
+
+    const run_result = try util.runRocCommand(std.testing.io, allocator, args);
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try util.checkSuccess(run_result);
+    try testing.expectEqualStrings("replaced platform ok\n", run_result.stdout);
+}
+
+test "default roc command loads a --replace-dep platform instead of the declared URL" {
+    try runWithReplacedUrlPlatform(&.{});
+}
+
+test "roc --opt=interpreter loads a --replace-dep platform instead of the declared URL" {
+    try runWithReplacedUrlPlatform(&.{"--opt=interpreter"});
 }
 
 test "drop_prefix segfault regression" {
