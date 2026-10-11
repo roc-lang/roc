@@ -304,11 +304,13 @@ pub const Constants = struct {
     ///      "Row Coercion Primitive").
     /// 142: Module environments record the uses of top-level values that read
     ///      the value through a row coercion.
-    /// 143: Canonical node payloads are encoded from their payload field types.
-    /// 144: Low-level op numbering covers only ops that lowering produces.
-    /// 145: A stored checked runtime error keeps its evaluated operands in a
+    /// 143: Module environments record row-coerced callees and the definitions
+    ///      whose bodies closed an annotated open result row.
+    /// 144: Canonical node payloads are encoded from their payload field types.
+    /// 145: Low-level op numbering covers only ops that lowering produces.
+    /// 146: A stored checked runtime error keeps its evaluated operands in a
     ///      field of their own.
-    pub const CACHE_VERSION = 145;
+    pub const CACHE_VERSION = 146;
 };
 
 /// Configuration for the Roc cache system.
