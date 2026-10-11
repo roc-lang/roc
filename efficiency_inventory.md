@@ -30,7 +30,7 @@ measured with every fix below applied:
 
 | Workload | Baseline | This branch | Change |
 | --- | ---: | ---: | ---: |
-| `roc check -j1 package/main.roc` (roc-pg) | 266.28 G | 217.90 G | -18.2% |
+| `roc check -j1 package/main.roc` (roc-pg) | 266.28 G | 218.16 G | -18.1% |
 | `roc build --opt=dev examples/query.roc` | 244.83 G | 222.54 G | -9.1% |
 | `roc build examples/query.roc` (LLVM) | 524.75 G | 344.94 G | -34.3% |
 | `roc test test/fx/issue8826_full.roc` | 141.4 M | 139.9 M | -1.1% |
@@ -343,6 +343,13 @@ stages it touches; the instruction-count effect is reported in "Results".
     byte-identical; `roc check` on roc-pg is 0.2% above the commit before,
     from short-lived maps over large id domains that design.md says should
     become reusable scratch.
+
+58. `src/postcheck/monotype/lower.zig` `BodyContext`: the per-body memo maps
+    (uninhabitedness entries and settled answers, explicit-binding answers)
+    come from a builder pool and return to it emptied with their pages kept,
+    since a body's node keys are scattered over a large graph; and the
+    body-level direct-call request map nothing read is gone. This recovers
+    the cost of fix 57: `roc check` on roc-pg is 218.16 G.
 
 ## Findings from profiling
 

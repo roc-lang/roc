@@ -4134,6 +4134,10 @@ const Builder = struct {
     /// with their capacity kept for the next backing. Scope maps are never
     /// forked.
     decl_scope_pool: std.ArrayList(*InstantiatingNodeMap) = .empty,
+    /// The per-body memo maps of finished body contexts, emptied with their
+    /// pages kept: a body's keys are scattered over a large graph, so a fresh
+    /// map would open new pages for nearly every entry.
+    body_memo_pool: std.ArrayList(BodyContext.Memos) = .empty,
     field_kind_scope_pool: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind)) = .empty,
     /// The object cache consulted for closed specializations, if any.
     spec_cache: ?Common.SpecCacheLookup,
@@ -4616,6 +4620,8 @@ const Builder = struct {
             self.allocator.destroy(scope);
         }
         self.decl_scope_pool.deinit(self.allocator);
+        for (self.body_memo_pool.items) |*memos| memos.deinit(self.allocator);
+        self.body_memo_pool.deinit(self.allocator);
         for (self.field_kind_scope_pool.items) |scope| {
             scope.deinit();
             self.allocator.destroy(scope);
@@ -19480,9 +19486,6 @@ const BodyContext = struct {
     /// determines them.
     constructing_scheme_vars: []const checked.CheckedTypeId = &.{},
     propagate_constructor_value_evidence: bool = false,
-    /// One shared request interface per direct call expression of this body;
-    /// see `DirectCallRequest`.
-    direct_call_requests: collections.DenseMapUnmanaged(checked.CheckedExprId, DirectCallRequest) = .empty,
     /// Constructor expressions already related to a request node, keyed by
     /// the node's class root at the time. A constructor's relation only
     /// unifies its children with the node's component slots, so relating it
@@ -20467,6 +20470,8 @@ const BodyContext = struct {
     ) Allocator.Error!BodyContext {
         var ctx = try initBodyState(allocator, builder, view, owner_template, graph, draft);
         errdefer ctx.deinit();
+        std.debug.assert(allocator.ptr == builder.allocator.ptr);
+        if (builder.body_memo_pool.pop()) |memos| ctx.installMemos(memos);
         ctx.method_scope = method_scope;
         ctx.source_file_id = builder.sourceFileId(view);
         return ctx;
@@ -20525,7 +20530,6 @@ const BodyContext = struct {
 
     fn deinit(self: *BodyContext) void {
         self.destroyNestedRelationBase();
-        self.explicit_binding_memo.deinit(self.allocator);
         var error_rows = self.parser_error_rows.valueIterator();
         while (error_rows.next()) |row| self.allocator.free(row.*);
         self.parser_error_rows.deinit(self.allocator);
@@ -20544,14 +20548,12 @@ const BodyContext = struct {
         self.deinitSpareInstFrames();
         self.codec_contract_expansion_stack.deinit(self.allocator);
         self.instantiated_codec_calls.deinit(self.allocator);
-        self.direct_call_requests.deinit(self.allocator);
         self.related_constructors.deinit(self.allocator);
         self.pattern_literal_guards.deinit(self.allocator);
         self.optional_destruct_binds.deinit(self.allocator);
         self.loop_contexts.deinit(self.allocator);
         self.inhabitation_visiting.deinit(self.allocator);
-        self.inhabitation_entered.deinit(self.allocator);
-        for (&self.settled_node_uninhabited) |*settled| settled.deinit(self.allocator);
+        self.releaseMemos();
         self.node_uninhabited_scratch.deinit(self.allocator);
         self.pattern_uninhabited_scratch.deinit(self.allocator);
         self.instantiation.deinit();
@@ -23585,6 +23587,38 @@ const BodyContext = struct {
         call: InstTask,
         ret: InstResult,
     };
+
+    /// The per-body memo maps the builder pools across body contexts.
+    const Memos = struct {
+        inhabitation_entered: collections.DenseMapUnmanaged(NodeId, usize) = .empty,
+        settled_node_uninhabited: [2]collections.DenseMapUnmanaged(NodeId, bool) = .{ .empty, .empty },
+        explicit_binding_memo: collections.DenseMapUnmanaged(checked.CheckedPatternId, bool) = .empty,
+
+        fn deinit(self: *Memos, allocator: Allocator) void {
+            self.inhabitation_entered.deinit(allocator);
+            for (&self.settled_node_uninhabited) |*settled| settled.deinit(allocator);
+            self.explicit_binding_memo.deinit(allocator);
+        }
+    };
+
+    fn installMemos(self: *BodyContext, memos: Memos) void {
+        self.inhabitation_entered = memos.inhabitation_entered;
+        self.settled_node_uninhabited = memos.settled_node_uninhabited;
+        self.explicit_binding_memo = memos.explicit_binding_memo;
+    }
+
+    /// Empty this body's memo maps and return them to the builder's pool.
+    fn releaseMemos(self: *BodyContext) void {
+        var memos: Memos = .{
+            .inhabitation_entered = self.inhabitation_entered,
+            .settled_node_uninhabited = self.settled_node_uninhabited,
+            .explicit_binding_memo = self.explicit_binding_memo,
+        };
+        memos.inhabitation_entered.clearRetainingCapacity();
+        for (&memos.settled_node_uninhabited) |*settled| settled.clearRetainingCapacity();
+        memos.explicit_binding_memo.clearRetainingCapacity();
+        self.builder.body_memo_pool.append(self.builder.allocator, memos) catch memos.deinit(self.builder.allocator);
+    }
 
     fn deinitSpareInstFrames(self: *BodyContext) void {
         for (self.spare_inst_frames.items) |*frames| frames.deinit(self.allocator);
