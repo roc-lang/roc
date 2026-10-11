@@ -80,8 +80,9 @@ a second walk in `lift.zig`.
 
 The Lambda Mono oracle-fidelity project has landed. Its dead `Queue` had
 already been deleted. The materializer now asserts that every type source of
-a local lowers to one Lambda Mono type (including the typed-local sequence
-path, which had reused the cached type instead of checking it), and it
+a local lowers to one Lambda Mono type up to nominal lifts (including the
+typed-local sequence path, which had reused the cached type instead of
+checking it), and it
 re-derives each replayed `List.map` fold through `FoldedMatch.isResolutionOf`
 instead of trusting the recorded body. The negative controls test that
 predicate directly.

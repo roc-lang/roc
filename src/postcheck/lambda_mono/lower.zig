@@ -2099,15 +2099,111 @@ const Lowerer = struct {
         return ty;
     }
 
+    /// Whether `left` and `right` are one type up to nominal lifts: a nominal
+    /// with an inspectable backing stands for that backing, and every other
+    /// constructor must match with its components agreeing in turn. Callable
+    /// slots are shared across a lift, so callable types must be identical.
+    fn agreeUpToNominalLifts(self: *Lowerer, left: Type.TypeId, right: Type.TypeId) Allocator.Error!bool {
+        const Pair = struct { left: Type.TypeId, right: Type.TypeId };
+        var pending = std.ArrayList(Pair).empty;
+        defer pending.deinit(self.allocator);
+        var visited = std.AutoHashMapUnmanaged(Pair, void).empty;
+        defer visited.deinit(self.allocator);
+        const types = &self.program.types;
+        try pending.append(self.allocator, .{ .left = left, .right = right });
+        while (pending.pop()) |pair| {
+            if (pair.left == pair.right) continue;
+            if ((try visited.getOrPut(self.allocator, pair)).found_existing) continue;
+            const left_content = types.get(pair.left);
+            const right_content = types.get(pair.right);
+            if (liftedBacking(left_content)) |backing| if (right_content != .named or !std.meta.eql(right_content.named.def, left_content.named.def)) {
+                try pending.append(self.allocator, .{ .left = backing, .right = pair.right });
+                continue;
+            };
+            if (liftedBacking(right_content)) |backing| if (left_content != .named) {
+                try pending.append(self.allocator, .{ .left = pair.left, .right = backing });
+                continue;
+            };
+            switch (left_content) {
+                .primitive => |prim| if (right_content != .primitive or right_content.primitive != prim) return false,
+                .zst, .erased_capture_ptr => if (std.meta.activeTag(right_content) != std.meta.activeTag(left_content)) return false,
+                .named => |named| {
+                    if (right_content != .named or !std.meta.eql(right_content.named.def, named.def)) return false;
+                    const left_args = types.span(named.args);
+                    const right_args = types.span(right_content.named.args);
+                    if (left_args.len != right_args.len) return false;
+                    for (0..left_args.len) |i| try pending.append(self.allocator, .{ .left = left_args.at(i), .right = right_args.at(i) });
+                },
+                .record => |fields| {
+                    if (right_content != .record) return false;
+                    const left_fields = types.fieldSpan(fields);
+                    const right_fields = types.fieldSpan(right_content.record);
+                    if (left_fields.len != right_fields.len) return false;
+                    for (0..left_fields.len) |i| {
+                        const left_field = left_fields.at(i);
+                        const right_field = right_fields.at(i);
+                        if (left_field.name != right_field.name) return false;
+                        try pending.append(self.allocator, .{ .left = left_field.ty, .right = right_field.ty });
+                    }
+                },
+                .tuple => |elems| {
+                    if (right_content != .tuple) return false;
+                    const left_elems = types.span(elems);
+                    const right_elems = types.span(right_content.tuple);
+                    if (left_elems.len != right_elems.len) return false;
+                    for (0..left_elems.len) |i| try pending.append(self.allocator, .{ .left = left_elems.at(i), .right = right_elems.at(i) });
+                },
+                .tag_union => |tags| {
+                    if (right_content != .tag_union) return false;
+                    const left_tags = types.tagSpan(tags);
+                    const right_tags = types.tagSpan(right_content.tag_union);
+                    if (left_tags.len != right_tags.len) return false;
+                    for (0..left_tags.len) |i| {
+                        const left_tag = left_tags.at(i);
+                        const right_tag = right_tags.at(i);
+                        if (left_tag.name != right_tag.name) return false;
+                        const left_payloads = types.span(left_tag.payloads);
+                        const right_payloads = types.span(right_tag.payloads);
+                        if (left_payloads.len != right_payloads.len) return false;
+                        for (0..left_payloads.len) |j| try pending.append(self.allocator, .{ .left = left_payloads.at(j), .right = right_payloads.at(j) });
+                    }
+                },
+                .list => |elem| {
+                    if (right_content != .list) return false;
+                    try pending.append(self.allocator, .{ .left = elem, .right = right_content.list });
+                },
+                .box => |elem| {
+                    if (right_content != .box) return false;
+                    try pending.append(self.allocator, .{ .left = elem, .right = right_content.box });
+                },
+                .callable, .capture_record, .erased_fn => return false,
+            }
+        }
+        return true;
+    }
+
+    fn liftedBacking(content: Type.Content) ?Type.TypeId {
+        if (content != .named) return null;
+        const named = content.named;
+        if (named.kind != .nominal) return null;
+        const backing = named.backing orelse return null;
+        if (backing.use != .inspectable) return null;
+        return backing.ty;
+    }
+
     fn localFor(self: *Lowerer, local: Lifted.LocalId, ty: Type.TypeId) Allocator.Error!Ast.LocalId {
         const index = @backingInt(local);
         if (self.local_map[index]) |existing| {
             // Every source of a local's type (signature argument, pattern,
             // expression, loop parameter, payload local) resolves to one
-            // Lambda Solved root, and `type_map` lowers each root once, so
-            // agreement is identity of the lowered type.
-            if (self.program.getLocal(existing).ty != ty) {
-                Common.invariant("Lambda Mono local reached with a type that disagrees with its first lowering");
+            // Lambda Solved root, except across a nominal lift (design.md
+            // "root reads"): a function reached through a read that lifted a
+            // record or tag union into a nominal sees that nominal where its
+            // body sees the structural type, and the two share callable slots
+            // without being joined. Lowered types therefore agree up to such
+            // lifts.
+            if (!try self.agreeUpToNominalLifts(self.program.getLocal(existing).ty, ty)) {
+                Common.invariant("Lambda Mono local reached with a type that disagrees with its first lowering beyond nominal lifts");
             }
             return existing;
         }
