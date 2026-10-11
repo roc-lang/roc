@@ -9228,7 +9228,10 @@ test "check type - polarity - closed value closes the output row" {
     try checkTypesModule(source, .{ .pass = .last_def }, "[A, B] -> [A, B]");
 }
 
-test "check type - polarity - closed output row cannot be widened by callers" {
+test "check type - polarity - a caller widens a forwarded closed output row" {
+    // `id`'s body forwards its closed input, which closes the result row its
+    // annotation leaves open; a call still uses the result at a wider union
+    // (design.md "Row Subsumption").
     const source =
         \\id : [A, B] -> [A, B]
         \\id = |x| x
@@ -9236,7 +9239,9 @@ test "check type - polarity - closed output row cannot be widened by callers" {
         \\wider : [A, B] -> [A, B, C]
         \\wider = |x| id(x)
     ;
-    try checkTypesModule(source, .fail_first, "Type Mismatch");
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
 }
 
 test "check type - polarity - closed output row cannot be widened by its own recursive call" {
@@ -14397,4 +14402,66 @@ test "check type - polarity - hidden alias rows do not change source arity" {
         \\bad = Ok("x")
     ;
     try checkTypesModule(source, .fail_first, "Too Many Args");
+}
+
+test "check type - row subsumption - a call widens a forwarded closed result row" {
+    // `forward` and `construct` carry the same signature; `forward`'s body
+    // forwards its closed input into the result. A call of either may use the
+    // result at a wider union (design.md "Row Subsumption").
+    const source =
+        \\forward : [A, B] -> [A, B]
+        \\forward = |x| x
+        \\
+        \\construct : [A, B] -> [A, B]
+        \\construct = |x| match x {
+        \\    A => A
+        \\    B => B
+        \\}
+        \\
+        \\describe : [A, B, C] -> Str
+        \\describe = |_| "x"
+        \\
+        \\out = (describe(forward(B)), describe(construct(B)))
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - row subsumption - a forwarder's input row stays closed" {
+    // Re-opening the forwarded result must not re-open the input row it is
+    // one class with: a call at a tag the input does not list is rejected.
+    const source =
+        \\forward : [A, B] -> [A, B]
+        \\forward = |x| x
+        \\
+        \\out = forward(C)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Type Mismatch");
+}
+
+test "check type - row subsumption - an importer's call widens a forwarded closed result row" {
+    const source_lib =
+        \\module [forward]
+        \\
+        \\forward : [A, B] -> [A, B]
+        \\forward = |x| x
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+    try std.testing.expectEqual(@as(usize, 0), try lib_env.typeProblemCount());
+
+    const source_main =
+        \\import Lib
+        \\
+        \\describe : [A, B, C] -> Str
+        \\describe = |_| "x"
+        \\
+        \\out = describe(Lib.forward(B))
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertNoErrors();
 }
