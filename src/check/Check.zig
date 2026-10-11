@@ -44574,11 +44574,12 @@ fn deferredDispatchRelationWasRetained(
 /// Whether every relation of a queued entry was already consumed by an entry
 /// attributing its failure to the same use, so consuming it again could
 /// neither decide, record, nor report anything new. On a concrete receiver,
-/// consuming a relation that is not a generated codec either selects its
-/// method target and records that target's instantiation, or derives a
-/// structural comparison's or hash's component obligations; a relation
-/// consumed before either happened is not settled for this entry, which
-/// does it.
+/// a relation that is not a generated codec is settled once it has selected
+/// its method target and recorded that target's instantiation. A structural
+/// comparison's or hash's components are derived once per relation however
+/// often it is consumed, but having derived them does not settle it: the
+/// receiver they were derived for can later ground to a nominal type whose
+/// own method this entry still has to select.
 fn deferredRelationsAlreadySettled(self: *Self, deferred: DeferredConstraintCheck) bool {
     const constraints = self.types.sliceStaticDispatchConstraints(deferred.constraints);
     if (constraints.len == 0) return false;
@@ -44589,8 +44590,7 @@ fn deferredRelationsAlreadySettled(self: *Self, deferred: DeferredConstraintChec
         const generated_codec = constraint.fn_name.eql(self.cir.idents.parser_for) or
             constraint.fn_name.eql(self.cir.idents.encoder_for);
         if (concrete_receiver and !generated_codec and
-            !self.dispatch_target_instantiation_by_fn_var.contains(constraint.fn_var) and
-            !self.component_derived_relation_set.contains(constraint.fn_var)) return false;
+            !self.dispatch_target_instantiation_by_fn_var.contains(constraint.fn_var)) return false;
     }
     return true;
 }
