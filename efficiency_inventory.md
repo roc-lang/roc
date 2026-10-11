@@ -30,7 +30,7 @@ measured with every fix below applied:
 
 | Workload | Baseline | This branch | Change |
 | --- | ---: | ---: | ---: |
-| `roc check -j1 package/main.roc` (roc-pg) | 266.28 G | 217.88 G | -18.2% |
+| `roc check -j1 package/main.roc` (roc-pg) | 266.28 G | 216.19 G | -18.8% |
 | `roc build --opt=dev examples/query.roc` | 244.83 G | 222.54 G | -9.1% |
 | `roc build examples/query.roc` (LLVM) | 524.75 G | 344.94 G | -34.3% |
 | `roc test test/fx/issue8826_full.roc` | 141.4 M | 139.9 M | -1.1% |
@@ -420,6 +420,13 @@ stages it touches; the instruction-count effect is reported in "Results".
     `-Dstrip=false` emits a dev-backend `.text` 208 bytes larger than a
     stripped one from the same source; the comparisons here use stripped
     builds.)
+
+68. Profile-guided (ARC): a solved place-use region is a pair of bitsets
+    over the procedure's statement nodes and loops, reached through a dense
+    map by root, instead of entries `root << 32 | index` in two `u64` hash
+    sets; the solve's work list is kept between solves. The hash sets were
+    2.9% of the LLVM build. Generated code is byte-identical; `roc check` is
+    216.19 G (-0.8%), the LLVM build 340.5 G (-1.3%), the dev build flat.
 
 ## Findings from profiling
 

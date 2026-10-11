@@ -6314,14 +6314,23 @@ const Inserter = struct {
         /// statement that rebinds it, or zero when none does. No statement
         /// rebinding the root is reachable from a component at or above it.
         rebind_component_end: []u32,
-        /// Roots whose place-use region is solved, and the nodes and loops
-        /// in each region, keyed by `root << 32 | index`.
-        solved_roots: std.AutoHashMapUnmanaged(u32, void) = .empty,
-        live_nodes: std.AutoHashMapUnmanaged(u64, void) = .empty,
-        live_loops: std.AutoHashMapUnmanaged(u64, void) = .empty,
+        /// The place-use region of each solved root.
+        solved_regions: collections.DenseMapUnmanaged(LIR.LocalId, PlaceUseRegion) = .empty,
+        /// Units waiting while a region is solved, kept between solves.
+        region_work: std.ArrayList(PlaceUseRegion.Unit) = .empty,
         node_stamp: []u32,
         loop_stamp: []u32,
         stamp: u32 = 0,
+    };
+
+    /// The statement nodes and loops from which a root's place is used
+    /// before the root is rebound; a node inside a loop that is transparent
+    /// for the root is represented by that loop.
+    const PlaceUseRegion = struct {
+        nodes: std.bit_set.DynamicBitSetUnmanaged,
+        loops: std.bit_set.DynamicBitSetUnmanaged,
+
+        const Unit = struct { loop: bool, index: u32 };
     };
 
     const no_rebind: LIR.LocalId = @fromBackingInt(@intCast(std.math.maxInt(u32)));
@@ -6499,14 +6508,18 @@ const Inserter = struct {
     /// Solve where `root`'s place is used later: one backward search from the
     /// statements using the place, stopped by statements that rebind `root`,
     /// in which every loop that never rebinds `root` is a single unit.
-    fn solvePlaceUseRegion(self: *Inserter, facts: *PlaceUseFacts, root: LIR.LocalId) ResourceError!void {
+    fn solvePlaceUseRegion(self: *Inserter, facts: *PlaceUseFacts, root: LIR.LocalId) ResourceError!*const PlaceUseRegion {
         const allocator = self.emission_allocator;
         const graph = self.source_liveness.graphFor(self.current_sig);
-        const root_key = @as(u64, @backingInt(root)) << 32;
         const transparency = PlaceRootTransparency{ .facts = facts, .root_bit = @backingInt(root) };
         facts.stamp +%= 1;
-        const Unit = struct { loop: bool, index: u32 };
-        var work = std.ArrayList(Unit).empty;
+        const Unit = PlaceUseRegion.Unit;
+        var region: PlaceUseRegion = .{
+            .nodes = try .initEmpty(allocator, graph.nodes.items.len),
+            .loops = try .initEmpty(allocator, facts.forest.loops.len),
+        };
+        const work = &facts.region_work;
+        work.clearRetainingCapacity();
         const Reach = struct {
             fn reach(facts_: *PlaceUseFacts, transparency_: PlaceRootTransparency, work_: *std.ArrayList(Unit), allocator_: Allocator, node: u32) Allocator.Error!void {
                 if (transparency_.outermost(node)) |loop| {
@@ -6529,36 +6542,38 @@ const Inserter = struct {
         }
         if (low < facts.place_leaders.len and facts.place_leaders[low] == place) {
             for (facts.place_users[facts.place_user_starts[low]..facts.place_user_starts[low + 1]]) |user| {
-                try Reach(facts, transparency, &work, allocator, user);
+                try Reach(facts, transparency, work, allocator, user);
             }
         }
         while (work.pop()) |unit| {
             if (unit.loop) {
-                try facts.live_loops.put(allocator, root_key | unit.index, {});
+                region.loops.set(unit.index);
                 const header = facts.forest.loops[unit.index].header;
                 const pred_start = graph.predecessor_starts[header];
                 const pred_end = graph.predecessor_starts[header + 1];
                 for (graph.predecessors[pred_start..pred_end]) |predecessor| {
                     const pred: u32 = @intCast(predecessor);
                     if (facts.forest.containsNode(unit.index, pred) or facts.rebinds[pred] == root) continue;
-                    try Reach(facts, transparency, &work, allocator, pred);
+                    try Reach(facts, transparency, work, allocator, pred);
                 }
                 for (facts.side_entries[facts.side_entry_starts[unit.index]..facts.side_entry_starts[unit.index + 1]]) |pred| {
                     if (facts.rebinds[pred] == root) continue;
-                    try Reach(facts, transparency, &work, allocator, pred);
+                    try Reach(facts, transparency, work, allocator, pred);
                 }
             } else {
-                try facts.live_nodes.put(allocator, root_key | unit.index, {});
+                region.nodes.set(unit.index);
                 const pred_start = graph.predecessor_starts[unit.index];
                 const pred_end = graph.predecessor_starts[unit.index + 1];
                 for (graph.predecessors[pred_start..pred_end]) |predecessor| {
                     const pred: u32 = @intCast(predecessor);
                     if (facts.rebinds[pred] == root) continue;
-                    try Reach(facts, transparency, &work, allocator, pred);
+                    try Reach(facts, transparency, work, allocator, pred);
                 }
             }
         }
-        try facts.solved_roots.put(allocator, @backingInt(root), {});
+        const entry = try facts.solved_regions.getOrPut(allocator, root);
+        entry.value_ptr.* = region;
+        return entry.value_ptr;
     }
 
     /// Exact use query for one complete ownership place, keyed by the unit
@@ -6593,12 +6608,11 @@ const Inserter = struct {
             return facts.places_used_from[start_component].isSet(place) or
                 facts.reaches_every_place_use.isSet(start_node);
         }
-        if (!facts.solved_roots.contains(@backingInt(root))) try self.solvePlaceUseRegion(facts, root);
-        const root_key = @as(u64, @backingInt(root)) << 32;
+        const region = facts.solved_regions.getPtr(root) orelse try self.solvePlaceUseRegion(facts, root);
         const transparency = PlaceRootTransparency{ .facts = facts, .root_bit = @backingInt(root) };
         if (transparency.outermost(start_node)) |loop| {
-            if (facts.live_loops.contains(root_key | loop)) return true;
-        } else if (facts.live_nodes.contains(root_key | start_node)) {
+            if (region.loops.isSet(loop)) return true;
+        } else if (region.nodes.isSet(start_node)) {
             return true;
         }
         if (!facts.reaches_every_place_use.isSet(start_node)) return false;
