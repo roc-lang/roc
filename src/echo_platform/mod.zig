@@ -11,6 +11,7 @@ const roc_args = @import("roc_args");
 
 /// Shared MinGW runtime inventory and default-platform link inputs.
 pub const mingw_runtime = @import("mingw_runtime.zig");
+pub const msvc_runtime = @import("msvc_runtime.zig");
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
 
@@ -101,16 +102,12 @@ pub const build_c_platform_main_source =
     \\        inputs_dir: "targets/",
     \\        x64mac: { inputs: [app] },
     \\        arm64mac: { inputs: [app] },
-    \\        x64win: { inputs: [app] },
-++ "\n        x64mingw: { inputs: " ++ mingw_runtime.executable_inputs ++ " },\n" ++
-    \\        arm64win: { inputs: [app] },
-++ "\n        arm64mingw: { inputs: " ++ mingw_runtime.executable_inputs ++ " },\n" ++
+++ "\n        x64win: { inputs: " ++ msvc_runtime.executable_inputs ++ " }," ++ "\n        x64mingw: { inputs: " ++ mingw_runtime.executable_inputs ++ " },\n" ++
+    "        arm64win: { inputs: " ++ msvc_runtime.executable_inputs ++ " }," ++ "\n        arm64mingw: { inputs: " ++ mingw_runtime.executable_inputs ++ " },\n" ++
     \\        x64openbsd: { inputs: [app] },
     \\        x64v1mac: { inputs: [app] },
-    \\        x64v1win: { inputs: [app] },
-++ "\n        x64v1mingw: { inputs: " ++ mingw_runtime.executable_inputs ++ " },\n" ++
-    \\        arm64v1win: { inputs: [app] },
-++ "\n        arm64v1mingw: { inputs: " ++ mingw_runtime.executable_inputs ++ " },\n" ++
+++ "\n        x64v1win: { inputs: " ++ msvc_runtime.executable_inputs ++ " }," ++ "\n        x64v1mingw: { inputs: " ++ mingw_runtime.executable_inputs ++ " },\n" ++
+    "        arm64v1win: { inputs: " ++ msvc_runtime.executable_inputs ++ " }," ++ "\n        arm64v1mingw: { inputs: " ++ mingw_runtime.executable_inputs ++ " },\n" ++
     \\        x64v1openbsd: { inputs: [app] },
     \\    }
     \\

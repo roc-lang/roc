@@ -20,6 +20,9 @@ pub const CheckedTypeId = enum(u32) { _ };
 pub const CheckedTypeSchemeId = enum(u32) { _ };
 /// Public `PatternBinderId` declaration.
 pub const PatternBinderId = enum(u32) { _ };
+
+/// Identity of one compile-time root within its checked module.
+pub const ComptimeRootId = enum(u32) { _ };
 /// Stable identity of a generalized-local dispatch scope within a checked
 /// module artifact.
 pub const DispatchScopeId = enum(u32) { _ };

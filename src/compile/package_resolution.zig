@@ -4466,6 +4466,9 @@ const StubDownload = struct {
     /// would see while ours is still running, and what that look found.
     var watched: ?[]const u8 = null;
     var watched_existed: bool = false;
+    /// When set, exercise real tar.zst extraction instead of writing stub files.
+    var archive_bytes: ?[]const u8 = null;
+    var extraction_error: ?@import("unbundle").UnbundleError = null;
 
     fn reset() void {
         attempts = 0;
@@ -4473,15 +4476,17 @@ const StubDownload = struct {
         published_by_another = null;
         watched = null;
         watched_existed = false;
+        archive_bytes = null;
+        extraction_error = null;
     }
 
     fn fetchUrl(
         _: ?*anyopaque,
         io: std.Io,
         allocator: Allocator,
-        _: []const u8,
+        url: []const u8,
         dest_path: []const u8,
-        _: ?u64,
+        max_expanded_bytes: ?u64,
     ) CoreCtx.FetchUrlError!u64 {
         const fs = CoreCtx.default(allocator, allocator, io);
 
@@ -4490,6 +4495,27 @@ const StubDownload = struct {
             watched_existed = fs.fileExists(path);
         }
         if (fails) return error.DownloadFailed;
+
+        if (archive_bytes) |bytes| {
+            const unbundle = @import("unbundle");
+            const parsed = unbundle.download.validateUrl(url) catch return error.DownloadFailed;
+            const expected_hash = (try unbundle.validateBase58Hash(parsed.hash)) orelse return error.DownloadFailed;
+            var dir = std.Io.Dir.openDirAbsolute(io, dest_path, .{}) catch return error.DownloadFailed;
+            defer dir.close(io);
+            var writer = unbundle.DirExtractWriter.init(dir, io, allocator);
+            defer writer.deinit();
+            var reader = std.Io.Reader.fixed(bytes);
+            return unbundle.unbundleStream(allocator, &reader, writer.extractWriter(), &expected_hash, null, .{
+                .max_expanded_bytes = max_expanded_bytes,
+            }) catch |err| {
+                extraction_error = err;
+                return switch (err) {
+                    error.OutOfMemory => error.OutOfMemory,
+                    error.ExpandedSizeLimitExceeded => error.ExpandedSizeLimitExceeded,
+                    else => error.DownloadFailed,
+                };
+            };
+        }
 
         if (published_by_another) |dir| {
             fs.makePath(dir) catch return error.DownloadFailed;
@@ -4506,6 +4532,90 @@ const StubDownload = struct {
         try fs.writeFile(path, main_roc);
     }
 };
+
+test "bundle links - rejected archives leave warm cache slots unchanged and no staging directories" {
+    const unbundle = @import("unbundle");
+    const test_support = unbundle.test_support;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var harness = try CacheTestHarness.init(gpa);
+    defer harness.deinit();
+    const io = std.testing.io;
+
+    const victim_hash = "11111111111111111111111111111111";
+    const victim_url = "https://example.com/victim/" ++ victim_hash ++ ".tar.zst";
+    try harness.tmp.dir.createDir(io, victim_hash, .default_dir);
+    try harness.tmp.dir.writeFile(io, .{ .sub_path = victim_hash ++ "/main.roc", .data = StubDownload.main_roc });
+    try harness.tmp.dir.writeFile(io, .{ .sub_path = victim_hash ++ "/Thing.roc", .data = "module [value]\nvalue = 42\n" });
+    // Generate the real sidecar and confirm this slot is a warm-cache hit.
+    _ = try CtxFetcher.fetchUrlImpl(&harness.fetcher, gpa, victim_url, victim_hash, null);
+    try std.testing.expectEqual(@as(usize, 0), StubDownload.attempts);
+
+    const victim_files = [_][]const u8{
+        victim_hash ++ "/main.roc",
+        victim_hash ++ "/Thing.roc",
+        victim_hash ++ ".deps.json",
+    };
+    var original: [victim_files.len][]const u8 = undefined;
+    for (victim_files, &original) |path, *bytes| {
+        bytes.* = try harness.tmp.dir.readFileAlloc(io, path, gpa, .limited(1024 * 1024));
+    }
+
+    const cases = [_]struct { entry: test_support.Entry, expected_error: unbundle.UnbundleError }{
+        .{
+            .entry = .{ .name = "../" ++ victim_hash ++ "/main.roc", .data = "overwrite" },
+            .expected_error = error.InvalidPath,
+        },
+        .{
+            .entry = .{ .name = "a", .kind = .symlink, .data = "../" ++ victim_hash },
+            .expected_error = error.InvalidPath,
+        },
+        .{
+            .entry = .{ .name = "a", .kind = .hard_link, .data = "../" ++ victim_hash ++ "/main.roc" },
+            .expected_error = error.InvalidTarHeader,
+        },
+    };
+    for (cases, 0..) |case, index| {
+        // Write a legitimate file before the attack so failure must also clean
+        // up a partially populated staging directory.
+        const bytes = try test_support.archive(gpa, &.{
+            .{ .name = "main.roc", .data = StubDownload.main_roc },
+            case.entry,
+            .{ .name = "a/main.roc", .data = "overwrite" },
+        });
+        StubDownload.archive_bytes = bytes;
+        StubDownload.extraction_error = null;
+        var hash_buffer: [44]u8 = undefined;
+        const hash = test_support.hashName(bytes, &hash_buffer);
+        const url = try std.fmt.allocPrint(gpa, "https://example.com/attack/{s}.tar.zst", .{hash});
+
+        try std.testing.expectError(error.DownloadFailed, CtxFetcher.fetchUrlImpl(&harness.fetcher, gpa, url, hash, null));
+        try std.testing.expectEqual(case.expected_error, StubDownload.extraction_error.?);
+        try std.testing.expectEqual(index + 1, StubDownload.attempts);
+        for (victim_files, original) |path, expected| {
+            const actual = try harness.tmp.dir.readFileAlloc(io, path, gpa, .limited(1024 * 1024));
+            try std.testing.expectEqualStrings(expected, actual);
+        }
+        var victim_dir = try harness.tmp.dir.openDir(io, victim_hash, .{ .iterate = true });
+        defer victim_dir.close(io);
+        var victim_entries = victim_dir.iterate();
+        var victim_entry_count: usize = 0;
+        while (try victim_entries.next(io)) |entry| {
+            try std.testing.expectEqual(std.Io.File.Kind.file, entry.kind);
+            try std.testing.expect(std.mem.eql(u8, entry.name, "main.roc") or std.mem.eql(u8, entry.name, "Thing.roc"));
+            victim_entry_count += 1;
+        }
+        try std.testing.expectEqual(@as(usize, 2), victim_entry_count);
+        // The entire cache still consists of the victim and its sidecar: no
+        // attacker slot, sidecar, or staging directory survives rejection.
+        try std.testing.expectEqual(@as(usize, 2), (try harness.entryNames(gpa)).len);
+        try std.testing.expect(try harness.hasEntry(gpa, victim_hash));
+        try std.testing.expect(try harness.hasEntry(gpa, victim_hash ++ ".deps.json"));
+        _ = try CtxFetcher.fetchUrlImpl(&harness.fetcher, gpa, victim_url, victim_hash, null);
+        try std.testing.expectEqual(index + 1, StubDownload.attempts);
+    }
+}
 
 /// A fake clock for the cache tests, so a test can make a staging directory
 /// look abandoned without waiting a day. Starts at the real current time and

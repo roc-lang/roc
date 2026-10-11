@@ -2748,6 +2748,7 @@ const Inserter = struct {
                     .unique_args = step.unique_args,
                     .args = assign.args,
                     .interchangeable = assign.interchangeable,
+                    .map_output_elem = assign.map_output_elem,
                     .simd_concat_count = assign.simd_concat_count,
                     .next = next,
                 } }, origin);
@@ -12777,6 +12778,132 @@ test "RC divergent field takes normalize exact residual places on each switch ed
     try f.expectRc(second_read, 0, 0, 0);
     try f.expectRc(pair, 0, 0, 0);
     try testing.expectEqual(@as(usize, 2), f.countAllRc());
+}
+
+test "RC loop payload view preserves field units of a tag union defined outside the loop" {
+    // https://github.com/roc-lang/roc/issues/12107
+    // Recreating a borrowed payload view does not supply fresh stored units:
+    // each iteration must retain the field before moving it into a new tag.
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const record_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = .str },
+    });
+    const tag_record = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        record_layout,
+    });
+    const tag_str = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        .str,
+    });
+    const flag = try f.local(.bool);
+    const outer = try f.local(tag_record);
+    const disc = try f.local(.u32);
+    const view = try f.local(record_layout);
+    const field = try f.local(.str);
+    const inner = try f.local(tag_str);
+    const sink = try f.local(.i64);
+    const result = try f.local(.i64);
+    const join_id = f.freshJoinPointId();
+
+    const ret = try f.ret(result);
+    const exit = try f.assignI64(result, 0, ret);
+    const back_jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const consume = try f.assignCall(sink, &.{inner}, back_jump);
+    const wrap = try f.assignTag(inner, 1, field, consume);
+    const read = try f.assignRefField(field, view, 0, wrap);
+    const project = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = view,
+        .op = .{ .tag_payload_struct = .{ .source = outer, .variant_index = 1, .tag_discriminant = 1 } },
+        .next = read,
+    } }, .test_fixture);
+    const match = try f.switchStmt(disc, project, back_jump, null);
+    const discriminate = try f.assignDiscriminant(disc, outer, match);
+    const dispatch = try f.switchStmt(flag, discriminate, exit, null);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = LIR.LocalSpan.empty(),
+        .body = dispatch,
+        .remainder = back_jump,
+    } }, .test_fixture);
+    const body = try f.assignCall(outer, &.{}, join);
+    _ = try f.addProc(&.{flag}, body, .i64);
+
+    const rc = try arc_solve.computeLocalContainsRefcounted(testing.allocator, &f.store, &f.layouts);
+    defer testing.allocator.free(rc);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, &.{}, &.{}, true);
+    defer solution.deinit();
+    var dismantles = try arc_dismantle.compute(testing.allocator, &f.store, &f.layouts, rc, &solution);
+    defer dismantles.deinit();
+    try testing.expectEqual(false, dismantles.takes.contains(read));
+    try testing.expectEqual(false, dismantles.containers.contains(outer));
+
+    try f.run();
+    try testing.expectEqual(@as(usize, 1), f.countRc(field, .incref));
+    try testing.expectEqual(@as(usize, 1), f.countRc(outer, .decref));
+}
+
+test "RC loop payload view takes fresh field units of a tag union rebuilt inside the loop" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const record_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = .str },
+    });
+    const tag_record = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        record_layout,
+    });
+    const tag_str = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        .str,
+    });
+    const flag = try f.local(.bool);
+    const outer = try f.local(tag_record);
+    const disc = try f.local(.u32);
+    const view = try f.local(record_layout);
+    const field = try f.local(.str);
+    const inner = try f.local(tag_str);
+    const sink = try f.local(.i64);
+    const result = try f.local(.i64);
+    const join_id = f.freshJoinPointId();
+
+    const ret = try f.ret(result);
+    const exit = try f.assignI64(result, 0, ret);
+    const back_jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const consume = try f.assignCall(sink, &.{inner}, back_jump);
+    const wrap = try f.assignTag(inner, 1, field, consume);
+    const read = try f.assignRefField(field, view, 0, wrap);
+    const project = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = view,
+        .op = .{ .tag_payload_struct = .{ .source = outer, .variant_index = 1, .tag_discriminant = 1 } },
+        .next = read,
+    } }, .test_fixture);
+    const match = try f.switchStmt(disc, project, back_jump, null);
+    const discriminate = try f.assignDiscriminant(disc, outer, match);
+    // The call produces a new union before every view, restoring the stored
+    // field unit even though the same projection is reached through the loop.
+    const make_outer = try f.assignCall(outer, &.{}, discriminate);
+    const dispatch = try f.switchStmt(flag, make_outer, exit, null);
+    const body = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = LIR.LocalSpan.empty(),
+        .body = dispatch,
+        .remainder = back_jump,
+    } }, .test_fixture);
+    _ = try f.addProc(&.{flag}, body, .i64);
+
+    const rc = try arc_solve.computeLocalContainsRefcounted(testing.allocator, &f.store, &f.layouts);
+    defer testing.allocator.free(rc);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, &.{}, &.{}, true);
+    defer solution.deinit();
+    var dismantles = try arc_dismantle.compute(testing.allocator, &f.store, &f.layouts, rc, &solution);
+    defer dismantles.deinit();
+    try testing.expectEqual(true, dismantles.takes.contains(read));
+    try testing.expectEqual(true, dismantles.containers.contains(outer));
+
+    try f.run();
+    try testing.expectEqual(@as(usize, 0), f.countRc(field, .incref));
 }
 
 test "RC tag union dismantles through its payload view when the payload dies field by field" {
