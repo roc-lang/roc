@@ -335,6 +335,18 @@ pub const Store = struct {
     /// separate digest calls. Keys and values are content-addressed, so
     /// entries stay valid across `restore` truncations and need no rollback.
     recursive_digest_unfoldings: std.AutoHashMap([32]u8, names.TypeDigest),
+    /// Every reduced recursive group by its shape: the hash of its members'
+    /// content labels in discovery order and each member's ordered in-group
+    /// references by position. A group's reduction is a function of exactly
+    /// that shape, so a later group of the same shape takes each position's
+    /// digest from here. Its unfoldings were indexed when the entry was
+    /// recorded. Keys and values are content-addressed, so entries stay valid
+    /// across `restore` truncations and need no rollback.
+    recursive_scc_shapes: std.AutoHashMap([32]u8, RecursiveSccShape),
+    /// Each recorded shape's per-position rank into its block digests.
+    recursive_scc_ranks: std.ArrayList(u32),
+    /// Each recorded shape's block digests, in rank order.
+    recursive_scc_digests: std.ArrayList(names.TypeDigest),
     /// Full-content-identity buckets for store-level acyclic interning: full
     /// digest bytes to every committed candidate that hashed to them,
     /// resolved to exact equality with `typeEql`. Keys and stored ids are
@@ -393,6 +405,9 @@ pub const Store = struct {
             .iterator_interface_visit_epochs = .empty,
             .iterator_interface_visit_epoch = 0,
             .recursive_digest_unfoldings = std.AutoHashMap([32]u8, names.TypeDigest).init(allocator),
+            .recursive_scc_shapes = std.AutoHashMap([32]u8, RecursiveSccShape).init(allocator),
+            .recursive_scc_ranks = .empty,
+            .recursive_scc_digests = .empty,
             .full_digest_interned = std.AutoHashMap(DigestBucketKey, std.ArrayList(TypeId)).init(allocator),
             .spans = .empty,
             .fields = .empty,
@@ -505,6 +520,9 @@ pub const Store = struct {
         while (full_digest_buckets.next()) |bucket| bucket.deinit(self.allocator);
         self.full_digest_interned.deinit();
         self.recursive_digest_unfoldings.deinit();
+        self.recursive_scc_shapes.deinit();
+        self.recursive_scc_ranks.deinit(self.allocator);
+        self.recursive_scc_digests.deinit(self.allocator);
         self.iterator_interface_visit_epochs.deinit(self.allocator);
         self.iterator_interface_visited.deinit(self.allocator);
         self.iterator_interface_pending.deinit(self.allocator);
@@ -2224,6 +2242,14 @@ pub const Store = struct {
         return self.equalityDigestCached(name_store, ty, null);
     }
 
+    /// One recorded recursive-group shape, as spans of the store's rank and
+    /// block-digest pools.
+    const RecursiveSccShape = struct {
+        ranks_start: u32,
+        digests_start: u32,
+        block_count: u32,
+    };
+
     pub const DigestStats = struct {
         root_requests: u64 = 0,
         commit_root_requests: u64 = 0,
@@ -3673,6 +3699,42 @@ pub const Store = struct {
                 labels[pos] = hasher.finalResult();
                 try distinct_labels.put(labels[pos], no_scc_position);
             }
+
+            // Labels and positional in-group references determine the whole
+            // reduction below, so a group of a recorded shape is already
+            // reduced.
+            const shape = shape: {
+                var hasher = TypeDigestHasher.init();
+                hashBytes(&hasher, "recursive-scc-shape");
+                hashU32(&hasher, @intCast(member_count));
+                for (members, 0..) |node_index, pos| {
+                    hasher.update(&labels[pos]);
+                    for (self.linksOf(node_index)) |ref| {
+                        const target = switch (ref) {
+                            .external => continue,
+                            .node => |node_target| node_target,
+                        };
+                        const target_pos = member_pos_of_node[target];
+                        if (target_pos == no_scc_position) continue;
+                        hashU32(&hasher, target_pos);
+                    }
+                    hashBytes(&hasher, "end-member");
+                }
+                break :shape hasher.finalResult();
+            };
+            if (self.store.recursive_scc_shapes.get(shape)) |recorded| {
+                const ranks = self.store.recursive_scc_ranks.items[recorded.ranks_start..][0..member_count];
+                const digests = self.store.recursive_scc_digests.items[recorded.digests_start..][0..recorded.block_count];
+                for (members, ranks) |node_index, rank| {
+                    const node = &self.nodes.items[node_index];
+                    std.debug.assert(!node.resolved);
+                    node.digest = digests[rank];
+                    node.resolved = true;
+                    self.store.setCachedDigest(node.ty, node.mode, node.digest);
+                }
+                return;
+            }
+
             var label_count: u32 = distinct_labels.count();
             while (true) {
                 distinct_labels.clearRetainingCapacity();
@@ -3779,6 +3841,9 @@ pub const Store = struct {
                 unfoldings[rank] = typeHashOf(self.render_buf.items);
             }
             try self.store.recursive_digest_unfoldings.ensureUnusedCapacity(block_count);
+            try self.store.recursive_scc_shapes.ensureUnusedCapacity(1);
+            try self.store.recursive_scc_ranks.ensureUnusedCapacity(self.store.allocator, member_count);
+            try self.store.recursive_scc_digests.ensureUnusedCapacity(self.store.allocator, block_count);
 
             // No fallible work remains; completed earlier SCCs remain reusable
             // if any subsequent SCC fails.
@@ -3792,6 +3857,13 @@ pub const Store = struct {
                     gop.value_ptr.* = block_digest[rank];
                 }
             }
+            self.store.recursive_scc_shapes.putAssumeCapacityNoClobber(shape, .{
+                .ranks_start = @intCast(self.store.recursive_scc_ranks.items.len),
+                .digests_start = @intCast(self.store.recursive_scc_digests.items.len),
+                .block_count = block_count,
+            });
+            self.store.recursive_scc_ranks.appendSliceAssumeCapacity(rank_of_member);
+            self.store.recursive_scc_digests.appendSliceAssumeCapacity(block_digest);
             for (members) |node_index| {
                 const node = self.nodes.items[node_index];
                 self.store.setCachedDigest(node.ty, node.mode, node.digest);
@@ -6207,6 +6279,34 @@ test "monotype digest equates bisimilar recursive graphs of different sizes" {
     const prefix = try store.add(.{ .list = z });
     const prefix_digest = store.typeDigest(&name_store, prefix);
     try std.testing.expectEqualSlices(u8, z_digest.bytes[0..], prefix_digest.bytes[0..]);
+}
+
+test "monotype digest reuses the reduction of a recorded recursive group shape" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const str = try store.add(.{ .primitive = .str });
+    var digests: [2][2]names.TypeDigest = undefined;
+    var encodings: [2]u64 = undefined;
+    for (&digests, &encodings) |*pair, *count| {
+        const x = try store.reserveSlot();
+        const y = try store.reserveSlot();
+        store.fillReservedSlot(x, .{ .tuple = try store.addSpan(&.{ y, str }) });
+        store.fillReservedSlot(y, .{ .list = x });
+        var stats: Store.DigestStats = .{};
+        pair[0] = store.typeDigestCached(&name_store, x, &stats);
+        pair[1] = store.typeDigest(&name_store, y);
+        count.* = stats.group_encodings;
+    }
+    try std.testing.expectEqualSlices(u8, digests[0][0].bytes[0..], digests[1][0].bytes[0..]);
+    try std.testing.expectEqualSlices(u8, digests[0][1].bytes[0..], digests[1][1].bytes[0..]);
+    try std.testing.expect(!std.mem.eql(u8, digests[0][0].bytes[0..], digests[0][1].bytes[0..]));
+    // The second knot replays only its two member labels.
+    try std.testing.expectEqual(@as(u64, 2), encodings[1]);
+    try std.testing.expect(encodings[0] > encodings[1]);
 }
 
 test "monotype digest ignores child cachedness inside a recursive group" {

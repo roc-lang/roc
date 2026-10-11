@@ -30,10 +30,10 @@ measured with every fix below applied:
 
 | Workload | Baseline | This branch | Change |
 | --- | ---: | ---: | ---: |
-| `roc check -j1 package/main.roc` (roc-pg) | 266.28 G | 236.84 G | -11.1% |
-| `roc build --opt=dev examples/query.roc` | 244.83 G | 239.52 G | -2.2% |
-| `roc build examples/query.roc` (LLVM) | 524.75 G | 367.20 G | -30.0% |
-| `roc test test/fx/issue8826_full.roc` | 141.4 M | 140.6 M | -0.6% |
+| `roc check -j1 package/main.roc` (roc-pg) | 266.28 G | 221.39 G | -16.9% |
+| `roc build --opt=dev examples/query.roc` | 244.83 G | 224.41 G | -8.3% |
+| `roc build examples/query.roc` (LLVM) | 524.75 G | 352.30 G | -32.9% |
+| `roc test test/fx/issue8826_full.roc` | 141.4 M | 139.9 M | -1.1% |
 
 Validation: the module unit tests of every touched module, the lint gates,
 and all CLI suites (platforms, echo, subcommands, glue: 2198 tests) pass.
@@ -203,6 +203,15 @@ stages it touches; the instruction-count effect is reported in "Results".
     The LLVM build of `query.roc` drops from 416.0 G to 367.2 G instructions
     and `roc check` on roc-pg from 249.8 G to 236.8 G; the generated code of
     both backends is byte-identical.
+
+38. `src/postcheck/monotype/type.zig` `resolveCyclicScc`: the store records
+    every reduced recursive group by its shape (member labels in discovery
+    order plus positional in-group references), so a later group of the same
+    shape takes each member's digest without refinement rounds, the group
+    rendering, or the unfolding renders. `roc check` on roc-pg drops from
+    236.8 G to 221.4 G instructions, the dev build of `query.roc` from
+    239.5 G to 224.4 G, and the LLVM build from 367.2 G to 352.3 G; the
+    generated code is byte-identical.
 
 ## Findings from profiling
 
