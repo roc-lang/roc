@@ -447,6 +447,9 @@ its exact runtime expression, never on its symbolic structure, so both fields
 are exact at any depth and reading them costs constant time. Substitution
 requires a substitutable value and admits it only when its expanded size is
 within an explicit code-growth limit; a larger value keeps its named binding.
+A compile-time value read is not a substitutable read: its value guard crashes
+where the program evaluates the read when that value's evaluation failed, so
+substitution may neither drop a discarded read nor move one to a later use.
 Making a value reusable is decided by substitutability alone, never by that
 limit: a substitutable value of any size is already reusable and is kept whole,
 so reuse never walks or copies its structure. A long interpolation binds one
