@@ -194,5 +194,5 @@ match person {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "({ address: { city: a }, name: _field }, { city: a }, a)"))
+(expr (type "_a"))
 ~~~

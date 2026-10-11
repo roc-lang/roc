@@ -266,21 +266,21 @@ pub fn parse(arena: Allocator, bytes: []const u8) LoadError!loader.Parsed {
             switch (arch) {
                 .x86_64 => {
                     addend = readFieldAddend(field, rel.length) orelse return error.MalformedObject;
-                    signed_adjust = switch (@as(X86_64Kind, @enumFromInt(rel.kind))) {
+                    signed_adjust = switch (@as(X86_64Kind, @fromBackingInt(@intCast(rel.kind)))) {
                         .signed_1 => 1,
                         .signed_2 => 2,
                         .signed_4 => 4,
                         else => 0,
                     };
                 },
-                .aarch64 => switch (@as(Arm64Kind, @enumFromInt(rel.kind))) {
+                .aarch64 => switch (@as(Arm64Kind, @fromBackingInt(@intCast(rel.kind)))) {
                     .addend => {
                         const raw_addend: u24 = rel.symbolnum;
                         addend = @as(i24, @bitCast(raw_addend));
                         i += 1;
                         if (i >= raw.nreloc) return error.MalformedObject;
                         rel = RelocInfo.read(entries[i * reloc_size ..][0..reloc_size]);
-                        switch (@as(Arm64Kind, @enumFromInt(rel.kind))) {
+                        switch (@as(Arm64Kind, @fromBackingInt(@intCast(rel.kind)))) {
                             .page21, .pageoff12 => {},
                             else => return error.MalformedObject,
                         }
@@ -292,8 +292,8 @@ pub fn parse(arena: Allocator, bytes: []const u8) LoadError!loader.Parsed {
             }
 
             const kind_is_subtractor = switch (arch) {
-                .x86_64 => @as(X86_64Kind, @enumFromInt(rel.kind)) == .subtractor,
-                .aarch64 => @as(Arm64Kind, @enumFromInt(rel.kind)) == .subtractor,
+                .x86_64 => @as(X86_64Kind, @fromBackingInt(@intCast(rel.kind))) == .subtractor,
+                .aarch64 => @as(Arm64Kind, @fromBackingInt(@intCast(rel.kind))) == .subtractor,
                 else => unreachable,
             };
             if (kind_is_subtractor) {
@@ -389,11 +389,11 @@ const Arm64Kind = enum(u4) {
 
 pub fn needsGot(arch: std.Target.Cpu.Arch, kind: u32) bool {
     return switch (arch) {
-        .x86_64 => switch (@as(X86_64Kind, @enumFromInt(@as(u4, @truncate(kind))))) {
+        .x86_64 => switch (@as(X86_64Kind, @fromBackingInt(@intCast(@as(u4, @truncate(kind)))))) {
             .got_load, .got => true,
             else => false,
         },
-        .aarch64 => switch (@as(Arm64Kind, @enumFromInt(@as(u4, @truncate(kind))))) {
+        .aarch64 => switch (@as(Arm64Kind, @fromBackingInt(@intCast(@as(u4, @truncate(kind)))))) {
             .got_load_page21, .got_load_pageoff12, .pointer_to_got => true,
             else => false,
         },
@@ -403,8 +403,8 @@ pub fn needsGot(arch: std.Target.Cpu.Arch, kind: u32) bool {
 
 pub fn isBranch(arch: std.Target.Cpu.Arch, kind: u32) bool {
     return switch (arch) {
-        .x86_64 => @as(X86_64Kind, @enumFromInt(@as(u4, @truncate(kind)))) == .branch,
-        .aarch64 => @as(Arm64Kind, @enumFromInt(@as(u4, @truncate(kind)))) == .branch26,
+        .x86_64 => @as(X86_64Kind, @fromBackingInt(@intCast(@as(u4, @truncate(kind))))) == .branch,
+        .aarch64 => @as(Arm64Kind, @fromBackingInt(@intCast(@as(u4, @truncate(kind))))) == .branch26,
         else => false,
     };
 }
@@ -430,7 +430,7 @@ fn writeUnsigned(ctx: *loader.Apply, value: i64) LoadError!void {
 }
 
 fn applyX86_64(ctx: *loader.Apply) LoadError!void {
-    const kind: X86_64Kind = @enumFromInt(@as(u4, @truncate(ctx.reloc.kind)));
+    const kind: X86_64Kind = @fromBackingInt(@intCast(@as(u4, @truncate(ctx.reloc.kind))));
     const P = ctx.placeAddress();
     const A = ctx.addendValue();
     const S = ctx.symbolAddress();
@@ -456,7 +456,7 @@ fn applyX86_64(ctx: *loader.Apply) LoadError!void {
 }
 
 fn applyArm64(ctx: *loader.Apply) LoadError!void {
-    const kind: Arm64Kind = @enumFromInt(@as(u4, @truncate(ctx.reloc.kind)));
+    const kind: Arm64Kind = @fromBackingInt(@intCast(@as(u4, @truncate(ctx.reloc.kind))));
     const P = ctx.placeAddress();
     const A = ctx.addendValue();
     const S = ctx.symbolAddress();

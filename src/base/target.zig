@@ -18,14 +18,14 @@ pub const TargetUsize = enum(u1) {
 
     /// The size of the target usize, in bytes
     pub fn size(self: @This()) u32 {
-        return (@as(u32, @intCast(@intFromEnum(self))) + 1) * @sizeOf(u32);
+        return (@as(u32, @intCast(@backingInt(self))) + 1) * @sizeOf(u32);
     }
 
     /// The alignment of the target usize
     pub fn alignment(self: @This()) std.mem.Alignment {
         // u32 has alignment 4 (log2(4) = 2), u64 has alignment 8 (log2(8) = 3)
-        const log2_value = @as(std.math.Log2Int(usize), @intFromEnum(self)) + 2;
-        return @enumFromInt(log2_value);
+        const log2_value = @as(std.math.Log2Int(usize), @backingInt(self)) + 2;
+        return @fromBackingInt(@intCast(log2_value));
     }
 
     /// The usize for the native target (that is, the currently-running machine)

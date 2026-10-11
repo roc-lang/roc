@@ -174,8 +174,8 @@ test "object cache interleaved writers expose only complete final bytes" {
     var hook = Hook{ .store = &store, .base = base };
     store.roc_ctx.ctx = &hook;
     store.roc_ctx.vtable.writeTempFile = &Hook.writeTempFile;
-    const identity = [_]u8{1} ** 32;
-    const key = [_]u8{2} ** 32;
+    const identity = @as([32]u8, @splat(1));
+    const key = @as([32]u8, @splat(2));
     try store.write(.local, identity, key, "whole completed pack");
     try std.testing.expect(hook.distinct);
     try std.testing.expect(hook.observed_complete);
@@ -211,8 +211,8 @@ test "partial object publications are additive and do not occupy the complete ke
         .verbose = false,
     };
     defer store.deinit();
-    const identity = [_]u8{1} ** 32;
-    const key = [_]u8{2} ** 32;
+    const identity = @as([32]u8, @splat(1));
+    const key = @as([32]u8, @splat(2));
     try store.writePartial(.local, identity, key, "first subset");
     try store.writePartial(.local, identity, key, "first subset");
     try std.testing.expect(!try store.has(.local, identity, key));
@@ -245,7 +245,7 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const identity = lir.ProcIdentity.forTest(43);
-    const key = [_]u8{41} ** 32;
+    const key = @as([32]u8, @splat(41));
     const set = backend.dev.ProcArtifact.Set{
         .arena = std.heap.ArenaAllocator.init(allocator),
         .artifacts = &.{.{
@@ -256,7 +256,7 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
             .refs = &.{},
             .relocations = &.{},
             .data = &.{},
-            .callable_contract = [_]u8{1} ** 32,
+            .callable_contract = @as([32]u8, @splat(1)),
         }},
     };
     const bytes = try PackFile.write(allocator, &set, &.{.{
@@ -330,11 +330,11 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
 }
 
 test "object cache semantic offers select compatible relations in either order" {
-    const key = [_]u8{21} ** 32;
-    const independent_key = [_]u8{22} ** 32;
-    const mixed_key = [_]u8{23} ** 32;
-    const first_relation = [_]u8{31} ** 32;
-    const second_relation = [_]u8{32} ** 32;
+    const key = @as([32]u8, @splat(21));
+    const independent_key = @as([32]u8, @splat(22));
+    const mixed_key = @as([32]u8, @splat(23));
+    const first_relation = @as([32]u8, @splat(31));
+    const second_relation = @as([32]u8, @splat(32));
     const Attempt = struct {
         fn run(allocator: Allocator, reverse: bool) (LoadedPacks.LoadError || PackFile.WriteError || error{ TestExpectedEqual, TestUnexpectedResult })!void {
             var packs = LoadedPacks.init(allocator);
@@ -357,7 +357,7 @@ test "object cache semantic offers select compatible relations in either order" 
                         .refs = &.{},
                         .relocations = &.{},
                         .data = &.{},
-                        .callable_contract = [_]u8{1} ** 32,
+                        .callable_contract = @as([32]u8, @splat(1)),
                     }},
                 };
                 const spec: PackFile.SpecEntry = .{
@@ -388,13 +388,13 @@ test "object cache semantic offers select compatible relations in either order" 
                 try std.testing.expectEqualSlices(u32, &.{0x0001_02ff}, hit.rc_ret_conditions);
             }
             // Independent offers are still visible beside incompatible ones.
-            const mixed = lookup.lookup(mixed_key, [_]u8{33} ** 32) orelse return error.TestUnexpectedResult;
+            const mixed = lookup.lookup(mixed_key, @as([32]u8, @splat(33))) orelse return error.TestUnexpectedResult;
             try std.testing.expect(mixed.platform_requirement_relation == null);
             try std.testing.expectEqualSlices(u8, &lir.ProcIdentity.forTest(53).bytes, &mixed.identity);
             const exact = lookup.lookup(mixed_key, second_relation) orelse return error.TestUnexpectedResult;
             try std.testing.expectEqualDeep(second_relation, exact.platform_requirement_relation.?);
             try std.testing.expect(lookup.lookup(key, null) == null);
-            try std.testing.expect(lookup.lookup(key, [_]u8{33} ** 32) == null);
+            try std.testing.expect(lookup.lookup(key, @as([32]u8, @splat(33))) == null);
             for ([_]?[32]u8{ null, first_relation, second_relation }) |relation| {
                 const hit = lookup.lookup(independent_key, relation) orelse return error.TestUnexpectedResult;
                 try std.testing.expect(hit.platform_requirement_relation == null);
@@ -411,8 +411,8 @@ test "object cache semantic offers select compatible relations in either order" 
 test "normal native offers attest one exact physical definition and fixed metadata" {
     const allocator = std.testing.allocator;
     const identity = lir.ProcIdentity.forTest(71);
-    const first_key = [_]u8{72} ** 32;
-    const second_key = [_]u8{73} ** 32;
+    const first_key = @as([32]u8, @splat(72));
+    const second_key = @as([32]u8, @splat(73));
     const Producer = struct {
         fn bytes(a: Allocator, proc_identity: lir.ProcIdentity, key: [32]u8, code: []const u8, borrowed: u64) PackFile.WriteError![]u8 {
             const set = backend.dev.ProcArtifact.Set{
@@ -425,7 +425,7 @@ test "normal native offers attest one exact physical definition and fixed metada
                     .refs = &.{},
                     .relocations = &.{},
                     .data = &.{},
-                    .callable_contract = [_]u8{1} ** 32,
+                    .callable_contract = @as([32]u8, @splat(1)),
                 }},
             };
             return PackFile.write(a, &set, &.{.{
@@ -481,7 +481,7 @@ test "normal native retained objects keep borrowed exact graphs stable while the
             .refs = &.{},
             .relocations = &.{},
             .data = &.{},
-            .callable_contract = [_]u8{1} ** 32,
+            .callable_contract = @as([32]u8, @splat(1)),
         }, .{
             .kind = .{ .proc = lir.ProcIdentity.forTest(100) },
             .code = "\xc3",
@@ -500,7 +500,7 @@ test "normal native retained objects keep borrowed exact graphs stable while the
             .artifacts = if (index == 0) &artifacts else artifacts[0..1],
         };
         const bytes = try PackFile.write(allocator, &set, &.{.{
-            .key = [_]u8{@intCast(index + 1)} ** 32,
+            .key = @as([32]u8, @splat(@intCast(index + 1))),
             .artifact = 0,
             .demand = .{ .complete = true },
             .rc_borrowed_params = 0,
@@ -539,7 +539,7 @@ test "normal native source certificates reload only against current checked auth
     owner.module_env = .{ .checked_source = &env };
     const identity = lir.ProcIdentity.forTest(33);
     const descriptor = SourceEvents.Descriptor{
-        .header = .{ .kind = @intFromEnum(SourceEvents.Kind.call_enter) },
+        .header = .{ .kind = @backingInt(SourceEvents.Kind.call_enter) },
         .source = .{
             .checked_module = owner.key.bytes,
             .source_identity = owner.key.module_identity_hash,
@@ -550,7 +550,7 @@ test "normal native source certificates reload only against current checked auth
         },
         .procedure_identity = identity.bytes,
     };
-    var event_data = [_]u8{0} ** @sizeOf(SourceEvents.Descriptor);
+    var event_data = @as([@sizeOf(SourceEvents.Descriptor)]u8, @splat(0));
     backend.dev.LirCodeGenMod.encodeSourceEventField(SourceEvents.Descriptor, descriptor, &event_data, .little);
     const set = backend.dev.ProcArtifact.Set{
         .arena = std.heap.ArenaAllocator.init(allocator),
@@ -568,7 +568,7 @@ test "normal native source certificates reload only against current checked auth
                 .symbol_offset = 0,
                 .relocations = &.{},
             }},
-            .callable_contract = [_]u8{34} ** 32,
+            .callable_contract = @as([32]u8, @splat(34)),
             .context_contract = .{
                 .target = .x64linux,
                 .cpu_level = .default,
@@ -586,7 +586,7 @@ test "normal native source certificates reload only against current checked auth
             }},
         }},
     };
-    const key = [_]u8{35} ** 32;
+    const key = @as([32]u8, @splat(35));
     const bytes = try PackFile.write(allocator, &set, &.{.{
         .key = key,
         .artifact = 0,
@@ -637,33 +637,33 @@ test "normal native site and literal certificates attest exact checked semantic 
     owner.checked_bodies = .{};
     defer owner.checked_bodies.deinit(allocator);
     try owner.checked_bodies.stored_patterns.append(allocator, .{
-        .id = @enumFromInt(0),
-        .ty = @enumFromInt(0),
+        .id = @fromBackingInt(@intCast(0)),
+        .ty = @fromBackingInt(@intCast(0)),
         .source_region = Region.from_raw_offsets(1, 2),
         .data = .underscore,
     });
     for (0..2) |index| try owner.checked_bodies.stored_exprs.append(allocator, .{
-        .id = @enumFromInt(index),
-        .ty = @enumFromInt(0),
+        .id = @fromBackingInt(@intCast(index)),
+        .ty = @fromBackingInt(@intCast(0)),
         .source_region = Region.from_raw_offsets(@intCast(index + 1), @intCast(index + 2)),
-        .data = .{ .str_from_quote = .{ .literal = @enumFromInt(0), .plan = @enumFromInt(0) } },
+        .data = .{ .str_from_quote = .{ .literal = @fromBackingInt(@intCast(0)), .plan = @fromBackingInt(@intCast(0)) } },
     });
-    try owner.checked_bodies.if_branch_pool.append(allocator, .{ .cond = @enumFromInt(0), .body = @enumFromInt(1) });
+    try owner.checked_bodies.if_branch_pool.append(allocator, .{ .cond = @fromBackingInt(@intCast(0)), .body = @fromBackingInt(@intCast(1)) });
     try owner.checked_bodies.stored_exprs.append(allocator, .{
-        .id = @enumFromInt(2),
-        .ty = @enumFromInt(0),
+        .id = @fromBackingInt(@intCast(2)),
+        .ty = @fromBackingInt(@intCast(0)),
         .source_region = Region.from_raw_offsets(0, 5),
         .data = .{ .if_ = .{
             .branches = .{ .start = 0, .len = 1 },
-            .final_else = @enumFromInt(1),
+            .final_else = @fromBackingInt(@intCast(1)),
             .warn_unused_branches = true,
         } },
     });
     var sites = [_]Checked.CheckedExhaustivenessSite{.{
-        .id = @enumFromInt(0),
+        .id = @fromBackingInt(@intCast(0)),
         .kind = .destructure,
         .region = Region.from_raw_offsets(0, 5),
-        .checked_pattern = @enumFromInt(0),
+        .checked_pattern = @fromBackingInt(@intCast(0)),
         .policy = .not_pending,
     }};
     owner.exhaustiveness_sites = .{ .sites = &sites };
@@ -675,7 +675,7 @@ test "normal native site and literal certificates attest exact checked semantic 
         .site_origin = .{ .checked_pattern = 0 },
         .descriptor = .{
             .header = .{
-                .kind = @intFromEnum(SourceEvents.Kind.branch_taken),
+                .kind = @backingInt(SourceEvents.Kind.branch_taken),
                 .byte_size = @sizeOf(SourceEvents.Descriptor) + @sizeOf(SourceEvents.Region),
             },
             .site = .{
@@ -683,7 +683,7 @@ test "normal native site and literal certificates attest exact checked semantic 
                 .procedure_identity = lir.ProcIdentity.forTest(83).bytes,
                 .checked_site = 0,
                 .has_checked_site = 1,
-                .kind = @intFromEnum(SourceEvents.SiteKind.destructure),
+                .kind = @backingInt(SourceEvents.SiteKind.destructure),
                 .region = .{ .start = 0, .end = 5 },
                 .branches_offset = @sizeOf(SourceEvents.Descriptor),
                 .branch_count = 1,
@@ -703,9 +703,9 @@ test "normal native site and literal certificates attest exact checked semantic 
     };
     try packs.pinAuthority(certificate);
     try std.testing.expect(LoadedPacks.normalNode(&packs, artifact));
-    certificate.descriptor.site.kind = @intFromEnum(SourceEvents.SiteKind.match);
+    certificate.descriptor.site.kind = @backingInt(SourceEvents.SiteKind.match);
     try std.testing.expect(!LoadedPacks.normalNode(&packs, artifact));
-    certificate.descriptor.site.kind = @intFromEnum(SourceEvents.SiteKind.destructure);
+    certificate.descriptor.site.kind = @backingInt(SourceEvents.SiteKind.destructure);
     certificate.branch_regions = &.{Region.from_raw_offsets(2, 3)};
     try std.testing.expect(!LoadedPacks.normalNode(&packs, artifact));
     certificate.branch_regions = &.{Region.from_raw_offsets(1, 2)};
@@ -713,7 +713,7 @@ test "normal native site and literal certificates attest exact checked semantic 
     try std.testing.expect(!LoadedPacks.normalNode(&packs, artifact));
     certificate.descriptor.site.region.start = 0;
     certificate.descriptor.site.has_checked_site = 0;
-    certificate.descriptor.site.kind = @intFromEnum(SourceEvents.SiteKind.if_);
+    certificate.descriptor.site.kind = @backingInt(SourceEvents.SiteKind.if_);
     certificate.descriptor.site.branch_count = 2;
     certificate.descriptor.header.byte_size = @sizeOf(SourceEvents.Descriptor) + 2 * @sizeOf(SourceEvents.Region);
     certificate.site_origin = .{ .checked_expr = 2 };
@@ -724,7 +724,7 @@ test "normal native site and literal certificates attest exact checked semantic 
     try packs.pinAuthority(certificate);
     try std.testing.expect(!LoadedPacks.normalNode(&packs, artifact));
     certificate.descriptor = .{
-        .header = .{ .kind = @intFromEnum(SourceEvents.Kind.failure) },
+        .header = .{ .kind = @backingInt(SourceEvents.Kind.failure) },
         .source = .{
             .checked_module = owner.key.bytes,
             .source_identity = owner.key.module_identity_hash,
@@ -735,7 +735,7 @@ test "normal native site and literal certificates attest exact checked semantic 
         },
         .failure = .{
             .has_literal_rejection = 1,
-            .literal_rejection = .{ .checked_module = owner.key.bytes, .checked_expr = 0, .kind = @intFromEnum(SourceEvents.LiteralKind.quote) },
+            .literal_rejection = .{ .checked_module = owner.key.bytes, .checked_expr = 0, .kind = @backingInt(SourceEvents.LiteralKind.quote) },
         },
     };
     certificate.site_origin = null;
@@ -808,8 +808,8 @@ test "object cache write failures preserve quiet behavior and report verbose cau
             }, .arm64mac, "dev");
             defer store.deinit();
             for (0..2) |_| {
-                try std.testing.expectError(error.PackWriteFailed, store.write(.local, [_]u8{1} ** 32, [_]u8{2} ** 32, "pack"));
-                try std.testing.expectError(error.PackWriteFailed, store.writePartial(.local, [_]u8{1} ** 32, [_]u8{2} ** 32, "pack"));
+                try std.testing.expectError(error.PackWriteFailed, store.write(.local, @as([32]u8, @splat(1)), @as([32]u8, @splat(2)), "pack"));
+                try std.testing.expectError(error.PackWriteFailed, store.writePartial(.local, @as([32]u8, @splat(1)), @as([32]u8, @splat(2)), "pack"));
             }
             try std.testing.expectEqual(@as(usize, if (stage == .rename) 4 else 0), capture.deleted);
             if (verbose) {
@@ -861,7 +861,7 @@ test "Pack18 checked materializer projection uses actual pending inputs and surv
         defer uses.deinit(allocator);
         for (resources.checked_artifact.root_requests.compile_time_requests) |request| {
             const root = request.compile_time_root orelse continue;
-            try uses.append(allocator, .{ .module = resources.checked_artifact.key.bytes, .root = @intFromEnum(root) });
+            try uses.append(allocator, .{ .module = resources.checked_artifact.key.bytes, .root = @backingInt(root) });
         }
         try std.testing.expect(uses.items.len != 0);
         try packs.projectCheckedMaterializers(.{
@@ -938,7 +938,7 @@ test "Pack18 checked materializer projection uses actual pending inputs and surv
         .relocations = &.{},
         .data = &.{.{
             .name = binding,
-            .bytes = &([_]u8{0} ** 8),
+            .bytes = &(@as([8]u8, @splat(0))),
             .alignment = 8,
             .symbol_offset = 0,
             .relocations = &.{.{ .offset = 0, .name = header, .addend = 0, .function = false, .external = true }},
@@ -1186,10 +1186,14 @@ pub const LoadedPacks = struct {
     /// Read every `.rpk` file in `dir_path`, in name order, without indexing.
     pub fn loadDirInto(self: *LoadedPacks, io: std.Io, dir_path: []const u8, input: Input) LoadError!void {
         std.debug.assert(self.state == .pending);
-        errdefer |err| {
+        self.loadDirIntoUnrecorded(io, dir_path, input) catch |err| {
             self.state = .unavailable;
             self.failure = err;
-        }
+            return err;
+        };
+    }
+
+    fn loadDirIntoUnrecorded(self: *LoadedPacks, io: std.Io, dir_path: []const u8, input: Input) LoadError!void {
         const allocator = self.allocator;
         var names = std.ArrayList([]u8).empty;
         defer {
@@ -1247,21 +1251,23 @@ pub const LoadedPacks = struct {
     pub fn retain(self: *LoadedPacks, bytes: []const u8) LoadError!void {
         std.debug.assert(!self.revoked);
         if (self.state == .unavailable) return self.failure.?;
-        errdefer |err| {
-            self.state = .unavailable;
-            self.failure = err;
-        }
-        try self.appendPack(bytes);
+        self.appendPack(bytes) catch |err| return self.recordFailure(err);
         try self.indexPacks();
+    }
+
+    fn recordFailure(self: *LoadedPacks, err: LoadError) LoadError {
+        self.state = .unavailable;
+        self.failure = err;
+        return err;
     }
 
     /// Index new decoded owners. Existing physical graph addresses stay fixed.
     pub fn indexPacks(self: *LoadedPacks) LoadError!void {
         if (self.state == .unavailable) return self.failure.?;
-        errdefer |err| {
-            self.state = .unavailable;
-            self.failure = err;
-        }
+        self.indexPacksUnrecorded() catch |err| return self.recordFailure(err);
+    }
+
+    fn indexPacksUnrecorded(self: *LoadedPacks) LoadError!void {
         for (self.packs.items[self.indexed_count..]) |pack| {
             for (pack.set.artifacts) |artifact| {
                 backend.dev.ProcArtifact.validateSourceEventCertificates(self.allocator, artifact, @import("builtin").cpu.arch.endian()) catch |err| switch (err) {
@@ -1407,8 +1413,8 @@ pub const LoadedPacks = struct {
                 if (!std.mem.eql(u8, &authority.identity, &descriptor.source.source_identity) or
                     !validRegion(descriptor.source.region, authority.length)) return false;
             }
-            if (descriptor.header.kind == @intFromEnum(SourceEvents.Kind.branch_taken) or
-                descriptor.header.kind == @intFromEnum(SourceEvents.Kind.exhaustiveness_failed))
+            if (descriptor.header.kind == @backingInt(SourceEvents.Kind.branch_taken) or
+                descriptor.header.kind == @backingInt(SourceEvents.Kind.exhaustiveness_failed))
             {
                 const key = siteKey(certificate) orelse return false;
                 const authority = self.sites.get(key) orelse return false;
@@ -1727,13 +1733,13 @@ pub const LoadedPacks = struct {
             if (self.literals.contains(key)) return;
             const owner = self.checkedArtifact(key.module) orelse return;
             if (key.id >= owner.checked_bodies.exprCount()) return;
-            const expr = owner.checked_bodies.expr(@enumFromInt(key.id));
+            const expr = owner.checked_bodies.expr(@fromBackingInt(@intCast(key.id)));
             const kind: SourceEvents.LiteralKind = switch (expr.data) {
                 .numeral => |numeral| if (numeral.plan != null) .numeral else return,
                 .str_from_quote => |quote| if (quote.plan != null) .quote else return,
                 else => return,
             };
-            try self.literals.put(key, .{ .kind = @intFromEnum(kind), .region = sourceRegion(expr.source_region) });
+            try self.literals.put(key, .{ .kind = @backingInt(kind), .region = sourceRegion(expr.source_region) });
         }
     }
 
@@ -1749,7 +1755,7 @@ pub const LoadedPacks = struct {
         switch (key.origin) {
             .checked_expr => |raw| {
                 if (raw >= bodies.exprCount()) return;
-                const expr = bodies.expr(@enumFromInt(raw));
+                const expr = bodies.expr(@fromBackingInt(@intCast(raw)));
                 region = sourceRegion(expr.source_region);
                 switch (expr.data) {
                     .match_ => |match| {
@@ -1779,7 +1785,7 @@ pub const LoadedPacks = struct {
             },
             .checked_pattern => |raw| {
                 if (raw >= bodies.patternCount()) return;
-                const id: check.CheckedArtifact.CheckedPatternId = @enumFromInt(raw);
+                const id: check.CheckedArtifact.CheckedPatternId = @fromBackingInt(@intCast(raw));
                 kind = .destructure;
                 region = sourceRegion(bodies.pattern(id).source_region);
                 destructure_pattern = id;
@@ -1799,10 +1805,10 @@ pub const LoadedPacks = struct {
                 if (key.origin == .checked_pattern) region = sourceRegion(checked_site.region);
             } else {
                 if (key.origin != .checked_expr or checked_site.checked_expr == null or
-                    @intFromEnum(checked_site.checked_expr.?) != key.origin.checked_expr) return;
+                    @backingInt(checked_site.checked_expr.?) != key.origin.checked_expr) return;
             }
         }
-        try self.sites.put(key, .{ .kind = @intFromEnum(kind), .region = region, .branches = branches.items });
+        try self.sites.put(key, .{ .kind = @backingInt(kind), .region = region, .branches = branches.items });
     }
 
     /// Load the pending store's packs for the root module and every module
@@ -1963,13 +1969,13 @@ fn testLiteralRead(key: [32]u8, identity: [32]u8) lir.Program.CachedLiteralRead 
             .kind = .numeral,
             .producer_key = key,
             .object_identity = identity,
-            .owner_template = .{ .artifact = .{ .bytes = @splat(7) }, .proc_base = @enumFromInt(0), .template = @enumFromInt(0) },
+            .owner_template = .{ .artifact = .{ .bytes = @splat(7) }, .proc_base = @fromBackingInt(@intCast(0)), .template = @fromBackingInt(@intCast(0)) },
             .owner_context_fn_key = .{ .bytes = @splat(8) },
             .current_fn_key = .{ .bytes = @splat(9) },
             .method_scope = @splat(7),
-            .checked_callable_ty = @enumFromInt(0),
-            .callable = .{ .root = @enumFromInt(1), .types = &.{ .{ .primitive = .u64 }, .{ .func = .{ .args = .{ .start = 0, .len = 0 }, .ret = @enumFromInt(0) } } } },
-            .result = .{ .root = @enumFromInt(0), .types = &.{.{ .primitive = .u64 }} },
+            .checked_callable_ty = @fromBackingInt(@intCast(0)),
+            .callable = .{ .root = @fromBackingInt(@intCast(1)), .types = &.{ .{ .primitive = .u64 }, .{ .func = .{ .args = .{ .start = 0, .len = 0 }, .ret = @fromBackingInt(@intCast(0)) } } } },
+            .result = .{ .root = @fromBackingInt(@intCast(0)), .types = &.{.{ .primitive = .u64 }} },
             .evidence_frames = &.{.{ .scope_id = .root, .parent = null, .roots_start = 0, .roots_len = 0 }},
             .evidence_frame_head = 0,
         },

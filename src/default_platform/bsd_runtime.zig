@@ -12,6 +12,11 @@ const RocList = @import("roc_str_view").RocList;
 const raw_pages = @import("raw_pages");
 const roc_args = @import("roc_args");
 const shim_symbols = @import("shim_symbols");
+const runtime_shared = @import("runtime_shared.zig");
+const SourceFrame = runtime_shared.SourceFrame;
+const normalizedAlignment = runtime_shared.normalizedAlignment;
+const alignForward = runtime_shared.alignForward;
+const defaultTrunc = runtime_shared.defaultTrunc;
 
 pub const panic = std.debug.no_panic;
 
@@ -39,15 +44,6 @@ const syscall_number = switch (bsd_os) {
         const exit: usize = 1;
         const write: usize = 4;
     },
-};
-
-const SourceFrame = extern struct {
-    name_ptr: [*]const u8,
-    name_len: usize,
-    file_ptr: [*]const u8,
-    file_len: usize,
-    line: u32,
-    column: u32,
 };
 
 const roc_default_start_main: *const fn (RocList) callconv(.c) i32 =
@@ -385,14 +381,6 @@ fn allocationHeaderPtr(user: [*]u8, index: usize) *usize {
     return @ptrCast(@alignCast(user - byte_offset));
 }
 
-fn normalizedAlignment(alignment: usize) usize {
-    return @max(alignment, @alignOf(usize));
-}
-
-fn alignForward(value: usize, alignment: usize) usize {
-    return (value + alignment - 1) & ~(alignment - 1);
-}
-
 fn defaultMemcpy(dest: [*]u8, src: [*]const u8, len: usize) callconv(.c) [*]u8 {
     var i: usize = 0;
     while (i < len) : (i += 1) dest[i] = src[i];
@@ -419,17 +407,4 @@ fn defaultMemset(dest: [*]u8, value: c_int, len: usize) callconv(.c) [*]u8 {
     var i: usize = 0;
     while (i < len) : (i += 1) volatile_dest[i] = byte;
     return dest;
-}
-
-fn defaultTrunc(value: f64) callconv(.c) f64 {
-    const bits: u64 = @bitCast(value);
-    const exponent_bits = (bits >> 52) & 0x7ff;
-    const exponent: i32 = @as(i32, @intCast(exponent_bits)) - 1023;
-
-    if (exponent >= 52) return value;
-    if (exponent < 0) return @bitCast(bits & (@as(u64, 1) << 63));
-
-    const fraction_bits: u6 = @intCast(52 - exponent);
-    const fraction_mask = (@as(u64, 1) << fraction_bits) - 1;
-    return @bitCast(bits & ~fraction_mask);
 }

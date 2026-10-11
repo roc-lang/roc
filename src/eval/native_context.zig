@@ -38,9 +38,9 @@ pub const Catalog = struct {
             descriptor.* = .{
                 .module = root.module.bytes,
                 .producer = switch (root.root) {
-                    .checked => |checked_root| .{ .checked = @intFromEnum(checked_root) },
+                    .checked => |checked_root| .{ .checked = @backingInt(checked_root) },
                     .literal => |literal| blk: {
-                        const plan = result.literal_roots.items[@intFromEnum(literal)];
+                        const plan = result.literal_roots.items[@backingInt(literal)];
                         break :blk .{ .literal = .{
                             .literal = literalDescriptor(result, plan.site),
                             .procedure_identity = result.store.getProcSpec(plan.proc).identity.bytes,
@@ -87,16 +87,16 @@ pub const Catalog = struct {
         // Materializers append producer statements after consumer failure IDs
         // reserve their prefix. That prefix does not bound the producer domain.
         if (statement_raw >= self.result.store.cfStmtCount()) return null;
-        const statement: lir.LIR.CFStmtId = @enumFromInt(statement_raw);
+        const statement: lir.LIR.CFStmtId = @fromBackingInt(@intCast(statement_raw));
         return sourceDescriptor(&self.result.store, self.result.store.stmtRegion(statement), self.result.store.stmtLoc(statement));
     }
 
     fn provideFailure(context: *const anyopaque, statement: u32) ?Context.FailureDescriptor {
         const self: *const Catalog = @ptrCast(@alignCast(context));
         const provenance = provideSource(context, statement) orelse return null;
-        const observation = self.registry.sourceStatement(@enumFromInt(statement));
-        const guard = if (self.registry.guards.get(@enumFromInt(statement))) |slot|
-            self.roots[@intFromEnum(slot)] orelse return null
+        const observation = self.registry.sourceStatement(@fromBackingInt(@intCast(statement)));
+        const guard = if (self.registry.guards.get(@fromBackingInt(@intCast(statement)))) |slot|
+            self.roots[@backingInt(slot)] orelse return null
         else
             null;
         return .{
@@ -113,7 +113,7 @@ pub const Catalog = struct {
         const original = self.result.comptime_sites.items[index];
         return .{
             .checked_module = self.result.loweringModuleKey(original.owner).bytes,
-            .checked_site = if (original.checked_site) |checked_site| @intFromEnum(checked_site) else null,
+            .checked_site = if (original.checked_site) |checked_site| @backingInt(checked_site) else null,
             .procedure_identity = self.result.store.getProcSpec(original.proc).identity.bytes,
             .kind = switch (original.kind) {
                 .match => .match,
@@ -161,7 +161,7 @@ test "native producer catalog owns appended materializer call and failure record
         .msg = .{ .literal = try result.store.insertString("materializer failed") },
         .checked_error = true,
     } }, origin);
-    try std.testing.expectEqual(bound, @intFromEnum(crash));
+    try std.testing.expectEqual(bound, @backingInt(crash));
     try std.testing.expect(!registry.get(bound).checked_error);
     const callee = try result.store.addProcSpec(.{
         .name = result.store.freshSyntheticSymbol(),
@@ -186,11 +186,11 @@ test "native producer catalog owns appended materializer call and failure record
         .ret_layout = .i64,
     }, .none);
 
-    const source = catalog.view.source(@intFromEnum(call)).?;
+    const source = catalog.view.source(@backingInt(call)).?;
     try std.testing.expectEqual(@as([32]u8, @splat(42)), source.checked_module);
     try std.testing.expectEqual(@as([32]u8, @splat(41)), source.source_identity);
     try std.testing.expectEqualDeep(origin.region, source.region);
-    const failure = catalog.view.failure(@intFromEnum(crash)).?;
+    const failure = catalog.view.failure(@backingInt(crash)).?;
     try std.testing.expectEqualDeep(source, failure.source);
     try std.testing.expect(failure.checked_error);
     const absent: u32 = @intCast(result.store.cfStmtCount());
@@ -220,7 +220,7 @@ test "native producer catalog owns appended materializer call and failure record
         for (artifact.source_events) |certificate| {
             try std.testing.expectEqual(source.checked_module, certificate.descriptor.source.checked_module);
             try std.testing.expectEqual(source.source_identity, certificate.descriptor.source.source_identity);
-            switch (@as(Events.Kind, @enumFromInt(certificate.descriptor.header.kind))) {
+            switch (@as(Events.Kind, @fromBackingInt(@intCast(certificate.descriptor.header.kind)))) {
                 .call_enter, .call_exit => calls += 1,
                 .failure => {
                     failures += 1;
@@ -261,6 +261,7 @@ fn literalDescriptor(result: *const lir.Program.Result, literal: lir.LIR.Literal
         .kind = switch (literal.kind) {
             .numeral => .numeral,
             .quote => .quote,
+            .interpolation => .interpolation,
         },
     };
 }
@@ -321,13 +322,13 @@ pub const RootIndex = struct {
 
 test "CTFE root index selects unique current slots and rejects incompatible descriptors" {
     const value: Context.RootDescriptor = .{
-        .module = [_]u8{11} ** 32,
+        .module = @as([32]u8, @splat(11)),
         .producer = .{ .checked = 4 },
-        .layout_digest = [_]u8{12} ** 32,
+        .layout_digest = @as([32]u8, @splat(12)),
         .role = .value,
     };
     var failure = value;
-    failure.layout_digest = [_]u8{13} ** 32;
+    failure.layout_digest = @as([32]u8, @splat(13));
     failure.role = .{ .failure_message = .{ .failed_field = 0, .message_field = 1, .failed_offset = 24, .message_offset = 0 } };
     var index = try RootIndex.init(std.testing.allocator, &.{ null, failure, null, value });
     defer index.deinit();
@@ -352,7 +353,7 @@ test "CTFE root index selects unique current slots and rejects incompatible desc
     var literal = value;
     literal.producer = .{ .literal = .{
         .literal = .{ .checked_module = value.module, .checked_expr = 9, .kind = .numeral },
-        .procedure_identity = [_]u8{21} ** 32,
+        .procedure_identity = @as([32]u8, @splat(21)),
     } };
     var instances = try RootIndex.init(std.testing.allocator, &.{literal});
     defer instances.deinit();
@@ -363,9 +364,9 @@ test "CTFE root index selects unique current slots and rejects incompatible desc
 
 test "CTFE root index owns allocation failure paths" {
     const root: Context.RootDescriptor = .{
-        .module = [_]u8{1} ** 32,
+        .module = @as([32]u8, @splat(1)),
         .producer = .{ .checked = 0 },
-        .layout_digest = [_]u8{2} ** 32,
+        .layout_digest = @as([32]u8, @splat(2)),
         .role = .value,
     };
     try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
@@ -416,12 +417,12 @@ pub const BindingPlan = struct {
             try plan.files.put(.{ .checked = owner, .content = result.store.sourceFileModuleIdentity(file) }, file);
         }
         for (result.lowering_modules.items, 0..) |module, index| {
-            try plan.modules.put(module.bytes, @enumFromInt(index));
+            try plan.modules.put(module.bytes, @fromBackingInt(@intCast(index)));
         }
         for (0..result.comptime_sites.items.len) |index| {
             if (catalog.view.site(@intCast(index))) |descriptor| {
                 try plan.values.put(.{ .site = descriptor }, index);
-                try plan.event_sites.put(siteKey(base.Region, descriptor, descriptor.branch_regions), @enumFromInt(index));
+                try plan.event_sites.put(siteKey(base.Region, descriptor, descriptor.branch_regions), @fromBackingInt(@intCast(index)));
             }
         }
         for (0..failures.prefix) |statement| {
@@ -451,13 +452,14 @@ pub const BindingPlan = struct {
                 const observation = Failure.Observation{
                     .checked_error = failure.checked_error,
                     .guard_producer = if (producer) |root| .{ .module = root.module, .root = root.root } else null,
-                    .origin_slot = if (guard_slot) |slot| @enumFromInt(slot) else null,
+                    .origin_slot = if (guard_slot) |slot| @fromBackingInt(@intCast(slot)) else null,
                     .literal_rejection = if (failure.literal_rejection) |literal| .{
                         .owner = self.modules.get(literal.checked_module) orelse unreachable,
                         .checked_expr = literal.checked_expr,
                         .kind = switch (literal.kind) {
                             .numeral => .numeral,
                             .quote => .quote,
+                            .interpolation => .interpolation,
                         },
                     } else null,
                 };
@@ -468,7 +470,7 @@ pub const BindingPlan = struct {
                 _ = std.math.cast(u32, index) orelse return error.OutOfMemory;
                 try self.sites.append(self.allocator, .{
                     .owner = self.modules.get(site.checked_module) orelse unreachable,
-                    .checked_site = if (site.checked_site) |checked_site| @enumFromInt(checked_site) else null,
+                    .checked_site = if (site.checked_site) |checked_site| @fromBackingInt(@intCast(checked_site)) else null,
                     .procedure_identity = .{ .bytes = site.procedure_identity },
                     .kind = switch (site.kind) {
                         .match => .match,
@@ -478,7 +480,7 @@ pub const BindingPlan = struct {
                     .region = site.region,
                     .branch_regions = try self.catalog.arena.allocator().dupe(base.Region, site.branch_regions),
                 });
-                try self.event_sites.put(siteKey(base.Region, site, site.branch_regions), @enumFromInt(index));
+                try self.event_sites.put(siteKey(base.Region, site, site.branch_regions), @fromBackingInt(@intCast(index)));
                 break :blk index;
             },
             .static_root => |root| self.roots.resolve(root) orelse unreachable,
@@ -499,7 +501,7 @@ pub const BindingPlan = struct {
             .checked_module = site.checked_module,
             .checked_site = if (site.has_checked_site == 1) site.checked_site else null,
             .procedure_identity = site.procedure_identity,
-            .kind = switch (@as(Events.SiteKind, @enumFromInt(site.kind))) {
+            .kind = switch (@as(Events.SiteKind, @fromBackingInt(@intCast(site.kind)))) {
                 .match => .match,
                 .destructure => .destructure,
                 .if_ => .if_,
@@ -541,7 +543,7 @@ pub const BindingPlan = struct {
         if (descriptor.source.has_location == 1) {
             _ = resolveEventSourceFile(self, &descriptor.source);
         }
-        switch (@as(Events.Kind, @enumFromInt(descriptor.header.kind))) {
+        switch (@as(Events.Kind, @fromBackingInt(@intCast(descriptor.header.kind)))) {
             .call_enter, .call_exit => {},
             .failure => try self.bind(.{ .failure = eventFailureDescriptor(&descriptor) }),
             .branch_taken, .exhaustiveness_failed => {
@@ -550,7 +552,7 @@ pub const BindingPlan = struct {
                     .checked_module = site.checked_module,
                     .checked_site = if (site.has_checked_site == 1) site.checked_site else null,
                     .procedure_identity = site.procedure_identity,
-                    .kind = switch (@as(Events.SiteKind, @enumFromInt(site.kind))) {
+                    .kind = switch (@as(Events.SiteKind, @fromBackingInt(@intCast(site.kind)))) {
                         .match => .match,
                         .destructure => .destructure,
                         .if_ => .if_,
@@ -570,9 +572,10 @@ pub const BindingPlan = struct {
         return .{
             .checked_module = literal.checked_module,
             .checked_expr = literal.checked_expr,
-            .kind = switch (@as(Events.LiteralKind, @enumFromInt(literal.kind))) {
+            .kind = switch (@as(Events.LiteralKind, @fromBackingInt(@intCast(literal.kind)))) {
                 .numeral => .numeral,
                 .quote => .quote,
+                .interpolation => .interpolation,
             },
         };
     }
@@ -580,12 +583,12 @@ pub const BindingPlan = struct {
     fn eventRoot(root: Events.Root) Context.RootDescriptor {
         return .{
             .module = root.module,
-            .producer = switch (@as(Events.ProducerKind, @enumFromInt(root.producer_kind))) {
+            .producer = switch (@as(Events.ProducerKind, @fromBackingInt(@intCast(root.producer_kind)))) {
                 .checked => .{ .checked = root.checked_expr },
                 .literal => .{ .literal = .{ .literal = eventLiteral(root.literal), .procedure_identity = root.procedure_identity } },
             },
             .layout_digest = root.layout_digest,
-            .role = switch (@as(Events.RootRole, @enumFromInt(root.role))) {
+            .role = switch (@as(Events.RootRole, @fromBackingInt(@intCast(root.role)))) {
                 .value => .value,
                 .failure_message => .{ .failure_message = .{
                     .failed_field = root.failed_field,
@@ -608,7 +611,7 @@ pub const BindingPlan = struct {
         hasher.update("roc.source-event.site.v1");
         hasher.update(&site.checked_module);
         hasher.update(&site.procedure_identity);
-        siteWord(&hasher, @intFromEnum(site.kind));
+        siteWord(&hasher, @backingInt(site.kind));
         siteWord(&hasher, @intFromBool(site.checked_site != null));
         siteWord(&hasher, site.checked_site orelse 0);
         siteWord(&hasher, site.region.start.offset);

@@ -1,7 +1,8 @@
 //! Bytebox-driven integration test for echo.wasm.
 //!
-//! Loads zig-out/lib/echo/echo.wasm via bytebox, supplies js_echo + js_stderr host
-//! functions that capture output into in-process buffers, and drives the
+//! Loads the echo.wasm path passed as its first argument via bytebox. Supplies
+//! js_echo + js_stderr host functions that capture output into in-process
+//! buffers, and drives the
 //! exported API (init / allocateBuffer / addFile / compileAndRun) the same
 //! way `www/app.js` does. Validates that the tutorial example produces
 //! "Hello from the Greeting module!" as raw echo output.
@@ -104,6 +105,13 @@ pub fn main(init: std.process.Init) anyerror!void {
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
+    const args = try init.minimal.args.toSlice(arena);
+    if (args.len != 2) {
+        std.debug.print("Usage: echo-wasm-test <echo.wasm>\n", .{});
+        std.process.exit(2);
+    }
+    const wasm_path = args[1];
+
     capture_ctx = .{
         .echoed = std.ArrayList(u8).empty,
         .stderr = std.ArrayList(u8).empty,
@@ -112,11 +120,8 @@ pub fn main(init: std.process.Init) anyerror!void {
     defer capture_ctx.echoed.deinit(gpa);
     defer capture_ctx.stderr.deinit(gpa);
 
-    // Locate echo.wasm relative to repo root (cwd when run via `zig build`).
-    const wasm_path = "zig-out/lib/echo/echo.wasm";
     const wasm_bytes = std.Io.Dir.cwd().readFileAlloc(io, wasm_path, arena, .unlimited) catch |err| {
         std.debug.print("FAIL: could not read {s}: {s}\n", .{ wasm_path, @errorName(err) });
-        std.debug.print("(Did you run `zig build build-echo-wasm` first?)\n", .{});
         std.process.exit(2);
     };
 

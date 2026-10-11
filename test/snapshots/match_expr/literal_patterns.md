@@ -62,17 +62,13 @@ TYPE MISMATCH - literal_patterns.md:3:13:3:20
 		(title "Type Mismatch")
 		(region (start 3 13) (end 3 20))
 		(headline
-			(reflow "This string literal is being used where a non-string type is needed."))
+			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both:"))
 		(document
 			(source-region (file "literal_patterns.md") (start 3 13) (end 3 20) (annotation error) (line-text "    Zero => \"hello\""))
 			(line-break)
-			(reflow "The type was determined to be:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "Dec")
-			(annotation-end))))
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Add a type annotation saying which type it should be."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -114,7 +110,35 @@ match Answer {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "erroneous_value_expr"))
+(e-match
+	(match
+		(cond
+			(e-tag (name "Answer")))
+		(branches
+			(branch
+				(patterns
+					(pattern (degenerate false)
+						(p-applied-tag)))
+				(value
+					(e-runtime-error (tag "erroneous_value_expr"))))
+			(branch
+				(patterns
+					(pattern (degenerate false)
+						(p-applied-tag)))
+				(value
+					(e-runtime-error (tag "erroneous_value_expr"))))
+			(branch
+				(patterns
+					(pattern (degenerate false)
+						(p-applied-tag)))
+				(value
+					(e-runtime-error (tag "erroneous_value_expr"))))
+			(branch
+				(patterns
+					(pattern (degenerate false)
+						(p-num (value "10"))))
+				(value
+					(e-runtime-error (tag "erroneous_value_expr")))))))
 ~~~
 # TYPES
 ~~~clojure

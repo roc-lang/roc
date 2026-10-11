@@ -141,43 +141,6 @@ pub fn Channel(comptime T: type) type {
             self.not_empty.signal(self.std_io);
         }
 
-        /// Send an item with a timeout (in nanoseconds).
-        /// Returns error.Timeout if the operation times out.
-        /// Returns error.Closed if the channel has been closed.
-        pub fn sendTimeout(self: *Self, item: T, timeout_ns: u64) ChannelError!void {
-            const deadline_ns = std.Io.Timestamp.now(self.std_io, .awake).nanoseconds + @as(i96, @intCast(timeout_ns));
-
-            while (true) {
-                self.mutex.lockUncancelable(self.std_io);
-
-                if (self.count < self.buffer.len or self.closed) break;
-
-                const now_ns = std.Io.Timestamp.now(self.std_io, .awake).nanoseconds;
-                if (now_ns >= deadline_ns) {
-                    self.mutex.unlock(self.std_io);
-                    return error.Timeout;
-                }
-
-                self.mutex.unlock(self.std_io);
-
-                // Sleep for up to 1ms, waking early if deadline arrives.
-                // std.Io.Condition has no waitTimeout; polling is the simplest
-                // correct approach for the coordinator's coarse timeouts.
-                if (comptime !threading.is_freestanding) {
-                    const remaining: i96 = deadline_ns - now_ns;
-                    std.Io.sleep(self.std_io, .{ .nanoseconds = @min(remaining, 1_000_000) }, .awake) catch {};
-                }
-            }
-            defer self.mutex.unlock(self.std_io);
-
-            if (self.closed) return error.Closed;
-
-            self.buffer[self.write_pos] = item;
-            self.write_pos = (self.write_pos + 1) % self.buffer.len;
-            self.count += 1;
-            self.not_empty.signal(self.std_io);
-        }
-
         /// Receive an item from the channel, blocking if empty.
         /// Returns null if the channel is closed and empty.
         pub fn recv(self: *Self) ?T {
@@ -282,13 +245,6 @@ pub fn Channel(comptime T: type) type {
         /// Check if the channel is empty
         pub fn isEmpty(self: *Self) bool {
             return self.len() == 0;
-        }
-
-        /// Check if the channel is full
-        pub fn isFull(self: *Self) bool {
-            self.mutex.lockUncancelable(self.std_io);
-            defer self.mutex.unlock(self.std_io);
-            return self.count >= self.buffer.len;
         }
 
         /// Get the capacity of the channel

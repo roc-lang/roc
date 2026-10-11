@@ -370,7 +370,7 @@ fn buildMachOObject(allocator: std.mem.Allocator) ![]u8 {
     // LC_SEGMENT_64 with one section
     try writeLe(&out, allocator, u32, 0x19);
     try writeLe(&out, allocator, u32, segment_size);
-    try out.appendSlice(allocator, "\x00" ** 16);
+    try out.appendSlice(allocator, @as([16]u8, @splat('\x00')));
     try writeLe(&out, allocator, u64, 0);
     try writeLe(&out, allocator, u64, text.len);
     try writeLe(&out, allocator, u64, text_offset);

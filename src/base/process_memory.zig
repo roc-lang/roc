@@ -35,6 +35,12 @@ pub fn currentBytes() ?u64 {
             if (K32GetProcessMemoryInfo(std.os.windows.GetCurrentProcess(), &counters, counters.cb) == 0) return null;
             return counters.WorkingSetSize;
         },
+        .wiiu,
+        .@"switch",
+        .gba,
+        .psx,
+        .tios,
+        .ashetos,
         .freestanding,
         .other,
         .contiki,

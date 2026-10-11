@@ -570,9 +570,9 @@ pub const Token = struct {
             .MalformedDotQuestionUnicodeIdent,
             .MalformedNoSpaceDotQuestionUnicodeIdent,
         };
-        const first = @intFromEnum(ordered_dot_suffix_tags[0]);
+        const first = @backingInt(ordered_dot_suffix_tags[0]);
         for (ordered_dot_suffix_tags, 0..) |tag, offset| {
-            if (@intFromEnum(tag) != first + offset) {
+            if (@backingInt(tag) != first + offset) {
                 @compileError("dot suffix token tags must remain contiguous for parser dispatch");
             }
         }
@@ -616,16 +616,37 @@ pub const Token = struct {
         .{ "break", .KwBreak },
     });
 
+    /// The source spelling of a keyword token, or null for any other token.
+    /// Read from `keywords`, so the recognizer and every writer of keyword
+    /// text share one table.
+    pub fn keywordText(tag: Tag) ?[]const u8 {
+        for (keywords.keys(), keywords.values()) |text, keyword_tag| {
+            if (keyword_tag == tag) return text;
+        }
+        return null;
+    }
+
+    comptime {
+        @setEvalBranchQuota(100_000);
+        // A keyword token tag without a spelling in `keywords` could be
+        // neither recognized nor written back out.
+        for (std.meta.fieldNames(Tag)) |name| {
+            if (std.mem.startsWith(u8, name, "Kw") and keywordText(@field(Tag, name)) == null) {
+                @compileError("keyword token " ++ name ++ " has no spelling in Token.keywords");
+            }
+        }
+    }
+
     /// The numeric-literal suffixes the tokenizer accepts, derived at comptime
     /// from `NumericLiteral.DeprecatedSuffix` so the accepted set and the set the
     /// parser can interpret are equal by construction.
     pub const valid_number_suffixes = blk: {
         const Suffix = NumericLiteral.DeprecatedSuffix;
-        const fields = @typeInfo(Suffix).@"enum".fields;
+        const fields = @typeInfo(Suffix).@"enum".field_values;
         var kvs: [fields.len - 1]struct { []const u8, void } = undefined;
         var i: usize = 0;
         for (fields) |field| {
-            const suffix: Suffix = @enumFromInt(field.value);
+            const suffix: Suffix = @fromBackingInt(@intCast(field));
             if (suffix.oldText()) |text| {
                 kvs[i] = .{ text, {} };
                 i += 1;
@@ -671,21 +692,6 @@ pub const TokenizedBuffer = struct {
             return extra.ident_with_flags.ident;
         } else if (tag.isInterned()) {
             return extra.interned;
-        } else {
-            return null;
-        }
-    }
-
-    /// Gets underscore flags for identifier tokens.
-    /// Returns null if token is not an identifier with underscore flags.
-    pub fn resolveUnderscoreFlags(self: *TokenizedBuffer, token: Token.Idx) ?struct { starts_with_underscore: bool, ends_with_underscore: bool } {
-        const tag = self.tokens.items(.tag)[@intCast(token)];
-        if (tag.hasUnderscoreFlags()) {
-            const extra = self.tokens.items(.extra)[@intCast(token)];
-            return .{
-                .starts_with_underscore = extra.ident_with_flags.starts_with_underscore,
-                .ends_with_underscore = extra.ident_with_flags.ends_with_underscore,
-            };
         } else {
             return null;
         }
@@ -782,15 +788,6 @@ pub const Cursor = struct {
             false;
     }
 
-    /// Requires that the next byte is `ch`, otherwise pushes a message.
-    pub fn require(self: *Cursor, ch: u8, tag: Diagnostic.Tag) void {
-        if (self.peek() == ch) {
-            self.pos += 1;
-        } else {
-            self.pushMessageHere(tag);
-        }
-    }
-
     /// Chomps "trivia" (whitespace, comments, etc.).
     pub fn chompTrivia(self: *Cursor) void {
         while (self.pos < self.buf.len) {
@@ -830,47 +827,18 @@ pub const Cursor = struct {
         if (initialDigit == '0') {
             while (true) {
                 const c = self.peek() orelse 0;
+                if (self.chompBasePrefixedInteger(c)) |prefixed| {
+                    tok = prefixed;
+                    break;
+                }
                 switch (c) {
-                    'x', 'X' => {
-                        if (c == 'X') {
-                            self.pushMessageHere(.UppercaseBase);
-                        }
-                        self.pos += 1;
-                        self.chompIntegerBase16() catch {
-                            tok = .MalformedNumberNoDigits;
-                        };
-                        tok = self.chompNumberSuffix(tok);
-                        break;
-                    },
-                    'o', 'O' => {
-                        if (c == 'O') {
-                            self.pushMessageHere(.UppercaseBase);
-                        }
-                        self.pos += 1;
-                        self.chompIntegerBase8() catch {
-                            tok = .MalformedNumberNoDigits;
-                        };
-                        tok = self.chompNumberSuffix(tok);
-                        break;
-                    },
-                    'b', 'B' => {
-                        if (c == 'B') {
-                            self.pushMessageHere(.UppercaseBase);
-                        }
-                        self.pos += 1;
-                        self.chompIntegerBase2() catch {
-                            tok = .MalformedNumberNoDigits;
-                        };
-                        tok = self.chompNumberSuffix(tok);
-                        break;
-                    },
                     '0'...'9' => {
                         self.pushMessageHere(.LeadingZero);
                         tok = self.chompNumberBase10();
                         tok = self.chompNumberSuffix(tok);
                         break;
                     },
-                    '_' => {
+                    NumericLiteral.digit_separator => {
                         self.pos += 1;
                         continue;
                     },
@@ -893,17 +861,36 @@ pub const Cursor = struct {
         return tok;
     }
 
+    /// Chomp a base prefix letter and the integer it introduces, if `c` (the
+    /// byte after a leading `0`) is one. Returns the resulting token tag.
+    fn chompBasePrefixedInteger(self: *Cursor, c: u8) ?Token.Tag {
+        inline for (NumericLiteral.base_prefixes) |prefix| {
+            if (c == prefix.lower or c == prefix.upper) {
+                if (c == prefix.upper) {
+                    self.pushMessageHere(.UppercaseBase);
+                }
+                self.pos += 1;
+                var tok = Token.Tag.Int;
+                self.chompDigits(prefix.radix) catch {
+                    tok = .MalformedNumberNoDigits;
+                };
+                return self.chompNumberSuffix(tok);
+            }
+        }
+        return null;
+    }
+
     /// Chomps an exponent including sign and digits, if one if found.
     /// Returns true if an exponent was chomped.
     /// Will error if the exponent has no digits.
     pub fn chompExponent(self: *Cursor) error{EmptyExponent}!bool {
-        if (self.peek() orelse 0 == 'e' or self.peek() orelse 0 == 'E') {
+        if (NumericLiteral.isExponentMarker(self.peek() orelse 0)) {
             self.pos += 1;
             // Optional sign
             if (self.peek() orelse 0 == '+' or self.peek() orelse 0 == '-') {
                 self.pos += 1;
             }
-            self.chompIntegerBase10() catch {
+            self.chompDigits(10) catch {
                 return error.EmptyExponent;
             };
             return true;
@@ -940,10 +927,10 @@ pub const Cursor = struct {
     /// Before calling this method, a valid leading digit must have been parsed.
     pub fn chompNumberBase10(self: *Cursor) Token.Tag {
         var token_type: Token.Tag = .Int;
-        self.chompIntegerBase10() catch {}; // This is not an issue, have leading digit.
-        if (self.peek() orelse 0 == '.' and (self.isPeekedCharInRange(1, '0', '9') or self.peekAt(1) == 'e' or self.peekAt(1) == 'E')) {
+        self.chompDigits(10) catch {}; // This is not an issue, have leading digit.
+        if (self.peek() orelse 0 == '.' and (self.isPeekedCharInRange(1, '0', '9') or NumericLiteral.isExponentMarker(self.peekAt(1) orelse 0))) {
             self.pos += 1;
-            self.chompIntegerBase10() catch {}; // This is not an issue, guaranteed to have digits before the decimal point.
+            self.chompDigits(10) catch {}; // This is not an issue, guaranteed to have digits before the decimal point.
             token_type = .Float;
         }
         const has_exponent = self.chompExponent() catch {
@@ -955,72 +942,15 @@ pub const Cursor = struct {
         return token_type;
     }
 
-    /// Chomp the digits of an integer in base 10.
-    /// Will error if the integer has no digits.
-    pub fn chompIntegerBase10(self: *Cursor) error{EmptyInteger}!void {
+    /// Chomp the digits of an integer in `radix`, with any digit separators
+    /// among them. Will error if the integer has no digits.
+    pub fn chompDigits(self: *Cursor, comptime radix: u8) error{EmptyInteger}!void {
         var contains_digits = false;
         while (self.peek()) |c| {
-            if (c >= '0' and c <= '9') {
+            if (NumericLiteral.isDigitInRadix(c, radix)) {
                 contains_digits = true;
                 self.pos += 1;
-            } else if (c == '_') {
-                self.pos += 1;
-            } else {
-                break;
-            }
-        }
-        if (!contains_digits) {
-            return error.EmptyInteger;
-        }
-    }
-
-    /// Chomp the digits of an integer in base 16.
-    /// Will error if the integer has no digits.
-    pub fn chompIntegerBase16(self: *Cursor) error{EmptyInteger}!void {
-        var contains_digits = false;
-        while (self.peek()) |c| {
-            if ((c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')) {
-                contains_digits = true;
-                self.pos += 1;
-            } else if (c == '_') {
-                self.pos += 1;
-            } else {
-                break;
-            }
-        }
-        if (!contains_digits) {
-            return error.EmptyInteger;
-        }
-    }
-
-    /// Chomp the digits of an integer in base 8.
-    /// Will error if the integer has no digits.
-    pub fn chompIntegerBase8(self: *Cursor) error{EmptyInteger}!void {
-        var contains_digits = false;
-        while (self.peek()) |c| {
-            if (c >= '0' and c <= '7') {
-                contains_digits = true;
-                self.pos += 1;
-            } else if (c == '_') {
-                self.pos += 1;
-            } else {
-                break;
-            }
-        }
-        if (!contains_digits) {
-            return error.EmptyInteger;
-        }
-    }
-
-    /// Chomp the digits of an integer in base 2.
-    /// Will error if the integer has no digits.
-    pub fn chompIntegerBase2(self: *Cursor) error{EmptyInteger}!void {
-        var contains_digits = false;
-        while (self.peek()) |c| {
-            if (c == '0' or c == '1') {
-                contains_digits = true;
-                self.pos += 1;
-            } else if (c == '_') {
+            } else if (c == NumericLiteral.digit_separator) {
                 self.pos += 1;
             } else {
                 break;
@@ -1877,7 +1807,7 @@ pub const Tokenizer = struct {
                 // first byte of a UTF-8 sequence
                 0x80...0xff => {
                     const valid = self.cursor.chompIdentGeneral();
-                    if (comptime @import("builtin").mode == .Debug) {
+                    if (comptime @import("builtin").mode == .debug) {
                         std.debug.assert(!valid);
                     } else if (valid) {
                         unreachable;
@@ -2416,11 +2346,7 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
                 std.debug.assert(length == 1);
                 try buf2.append('=');
             },
-            .OpBinaryMinus => {
-                std.debug.assert(length == 1);
-                try buf2.append('-');
-            },
-            .OpUnaryMinus => {
+            .OpBinaryMinus, .OpUnaryMinus => {
                 std.debug.assert(length == 1);
                 try buf2.append('-');
             },
@@ -2432,12 +2358,6 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             .OpBang => {
                 std.debug.assert(length == 1);
                 try buf2.append('!');
-            },
-            .OpAnd => {
-                std.debug.assert(length == 3);
-                try buf2.append('a');
-                try buf2.append('n');
-                try buf2.append('d');
             },
             .OpAmpersand => {
                 std.debug.assert(length == 1);
@@ -2451,11 +2371,6 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
                 std.debug.assert(length == 2);
                 try buf2.append('?');
                 try buf2.append('?');
-            },
-            .OpOr => {
-                std.debug.assert(length == 2);
-                try buf2.append('o');
-                try buf2.append('r');
             },
             .OpBar => {
                 std.debug.assert(length == 1);
@@ -2572,105 +2487,42 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
                 try buf2.append('\\');
             },
 
-            .KwApp => {
-                try buf2.appendSlice("app");
-            },
-            .KwAs => {
-                try buf2.appendSlice("as");
-            },
-            .KwCrash => {
-                try buf2.appendSlice("crash");
-            },
-            .KwDbg => {
-                try buf2.appendSlice("dbg");
-            },
-            .KwElse => {
-                try buf2.appendSlice("else");
-            },
-            .KwExpect => {
-                try buf2.appendSlice("expect");
-            },
-            .KwExposes => {
-                try buf2.appendSlice("exposes");
-            },
-            .KwExposing => {
-                try buf2.appendSlice("exposing");
-            },
-            .KwFor => {
-                try buf2.appendSlice("for");
-            },
-            .KwForBang => {
-                try buf2.appendSlice("for!");
-            },
-            .KwGenerates => {
-                try buf2.appendSlice("generates");
-            },
-            .KwHas => {
-                try buf2.appendSlice("has");
-            },
-            .KwHosted => {
-                try buf2.appendSlice("hosted");
-            },
-            .KwIf => {
-                try buf2.appendSlice("if");
-            },
-            .KwImplements => {
-                try buf2.appendSlice("implements");
-            },
-            .KwImport => {
-                try buf2.appendSlice("import");
-            },
-            .KwImports => {
-                try buf2.appendSlice("imports");
-            },
-            .KwIn => {
-                try buf2.appendSlice("in");
-            },
-            .KwInterface => {
-                try buf2.appendSlice("interface");
-            },
-            .KwModule => {
-                try buf2.appendSlice("module");
-            },
-            .KwPackage => {
-                try buf2.appendSlice("package");
-            },
-            .KwPackages => {
-                try buf2.appendSlice("packages");
-            },
-            .KwPlatform => {
-                try buf2.appendSlice("platform");
-            },
-            .KwProvides => {
-                try buf2.appendSlice("provides");
-            },
-            .KwRequires => {
-                try buf2.appendSlice("requires");
-            },
-            .KwReturn => {
-                try buf2.appendSlice("return");
-            },
-            .KwTargets => {
-                try buf2.appendSlice("targets");
-            },
-            .KwVar => {
-                try buf2.appendSlice("var");
-            },
-            .KwMatch => {
-                try buf2.appendSlice("match");
-            },
-            .KwWhere => {
-                try buf2.appendSlice("where");
-            },
-            .KwWhile => {
-                try buf2.appendSlice("while");
-            },
-            .KwWith => {
-                try buf2.appendSlice("with");
-            },
-            .KwBreak => {
-                try buf2.appendSlice("break");
-            },
+            .OpAnd,
+            .OpOr,
+            .KwApp,
+            .KwAs,
+            .KwCrash,
+            .KwDbg,
+            .KwElse,
+            .KwExpect,
+            .KwExposes,
+            .KwExposing,
+            .KwFor,
+            .KwForBang,
+            .KwGenerates,
+            .KwHas,
+            .KwHosted,
+            .KwIf,
+            .KwImplements,
+            .KwImport,
+            .KwImports,
+            .KwIn,
+            .KwInterface,
+            .KwModule,
+            .KwPackage,
+            .KwPackages,
+            .KwPlatform,
+            .KwProvides,
+            .KwRequires,
+            .KwReturn,
+            .KwTargets,
+            .KwVar,
+            .KwMatch,
+            .KwWhere,
+            .KwWhile,
+            .KwWith,
+            .KwBreak,
+            => try buf2.appendSlice(Token.keywordText(token.tag).?),
 
             // If the input has malformed tokens, we don't want to assert anything about it (yet)
             .MalformedNumberBadSuffix,
@@ -2697,6 +2549,57 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
         prev_token_tag = token.tag;
     }
     return buf2;
+}
+
+test "keyword text is the inverse of keyword recognition" {
+    for (Token.keywords.keys(), Token.keywords.values()) |text, tag| {
+        try std.testing.expectEqualStrings(text, Token.keywordText(tag).?);
+    }
+    try std.testing.expectEqual(@as(?[]const u8, null), Token.keywordText(.LowerIdent));
+    try std.testing.expectEqual(@as(?[]const u8, null), Token.keywordText(.OpPlus));
+}
+
+test "number tokens the tokenizer accepts are numbers to the value parser" {
+    const gpa = std.testing.allocator;
+    const corpus = [_][]const u8{
+        // Decimal integers, separators, leading zeros.
+        "0",      "7",     "42",          "1_000",    "1_",      "0_1",    "007",    "0_",
+        // Every base prefix in both spellings, with separators.
+        "0x1F",   "0X1f",  "0xdead_BEEF", "0x_1",     "0x1_",    "0o17",   "0O7_7",  "0b1010",
+        "0B1",    "0b1_0",
+        // Fractions and exponents.
+        "3.14",        "0.0",      "1_0.5_0", "1e10",   "1E10",   "2.5e-3",
+        "1e+7",   "0e0",   "1.e5",        "1.5E+1_0",
+        // Deprecated suffixes, including hex digits that spell one.
+        "12u8",    "0xFFu8", "0x1f32", "0b1i64",
+        "1.5f64", "10dec", "1e3f32",
+        // Malformed: no digits after a prefix, digits outside the radix, empty
+        // exponents, unknown suffixes.
+             "0x",       "0o",      "0b",     "0x_",    "0xG",
+        "0o8",    "0b2",   "0b12",        "1e",       "1e+",     "1.5e-",  "12abc",  "0x1Fzz",
+        "1.5q",
+    };
+
+    var accepted: usize = 0;
+    var malformed: usize = 0;
+    for (corpus) |text| {
+        errdefer std.debug.print("number text: '{s}'\n", .{text});
+        var messages: [4]Diagnostic = undefined;
+        var cursor = Cursor.init(text, &messages);
+        const tag = cursor.chompNumber();
+        const kind: NumericLiteral.Kind = if (tag == .Int) .int else if (tag == .Float) .frac else {
+            malformed += 1;
+            continue;
+        };
+        accepted += 1;
+        try std.testing.expectEqual(text.len, cursor.pos);
+
+        const parsed = try NumericLiteral.parse(gpa, text, kind);
+        defer parsed.deinit(gpa);
+        try std.testing.expect(parsed.compact != .invalid);
+    }
+    try std.testing.expect(accepted > 30);
+    try std.testing.expect(malformed > 10);
 }
 
 test "tokenizer" {

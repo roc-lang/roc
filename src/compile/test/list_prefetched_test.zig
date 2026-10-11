@@ -49,7 +49,7 @@ fn countFillShape(store: *const lir.LirStore, layouts: *const layout.Store) harn
     defer gpa.free(buf);
     for (0..store.getProcSpecs().len) |index| {
         var writer = std.Io.Writer.fixed(buf);
-        try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), &writer);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @fromBackingInt(@intCast(@as(u32, @intCast(index)))), &writer);
         const text = writer.buffered();
         if (std.mem.count(u8, text, "u64_to_u16_wrap") == 0) continue;
         if (std.c.getenv("PREFETCHED_DUMP") != null) std.debug.print("\n===== fill proc =====\n{s}\n", .{text});

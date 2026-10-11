@@ -1,8 +1,7 @@
-//! CompactWriter provides efficient serialization using scatter-gather I/O operations.
-//! It collects multiple memory regions into iovecs and writes them in a single system call
-//! using pwritev, minimizing system call overhead for serialization tasks.
-//! The writer handles alignment requirements and padding automatically to ensure
-//! proper deserialization of the written data.
+//! Plans relocatable serialization as borrowed slices and owned relocation headers.
+//! Emits deterministic bytes into a destination buffer or a buffered file writer,
+//! canonicalizing padding without a whole-column scratch copy. Alignment and
+//! offsets are identical for both output paths.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -17,7 +16,7 @@ const CompactWriter = @This();
 /// require aligned memory access.
 pub const SERIALIZATION_ALIGNMENT = std.mem.Alignment.@"16";
 
-const ZEROS: [16]u8 = [_]u8{0} ** 16;
+const ZEROS: [16]u8 = @as([16]u8, @splat(0));
 
 iovecs: std.ArrayList(Iovec),
 total_bytes: usize,
@@ -32,19 +31,30 @@ pub fn init() CompactWriter {
     };
 }
 
-/// Write all gathered buffers to a file sequentially using positional writes.
-/// Accepts any file/io pair where `file.writePositionalAll(io, bytes, offset)` is valid
-/// (e.g. the std_io File and Io types). Generic to avoid depending on the io module.
+/// Write the complete plan through the file's buffered positional writer.
+/// Accepts a file/io pair providing `file.writer(io, buffer)`. Generic to avoid
+/// coupling the serialization plan to a particular filesystem implementation.
 pub fn writeGather(
     self: *@This(),
     file: anytype,
     io: anytype,
 ) std.Io.File.WritePositionalError!void {
-    var offset: u64 = 0;
-    for (self.iovecs.items) |iovec| {
-        const bytes = @as([*]const u8, @ptrCast(iovec.iov_base))[0..iovec.iov_len];
-        try file.writePositionalAll(io, bytes, offset);
-        offset += iovec.iov_len;
+    var buffer: [8192]u8 = undefined;
+    var destination = file.writer(io, &buffer);
+    self.writeTo(&destination.interface) catch return destination.err.?;
+    destination.interface.flush() catch return destination.err.?;
+}
+
+/// Emit the planned bytes without materializing a contiguous entry. Scrubbable
+/// slices are canonicalized in bounded, type-aligned chunks at the write boundary.
+pub fn writeTo(self: *const @This(), destination: *std.Io.Writer) std.Io.Writer.Error!void {
+    for (self.iovecs.items) |part| {
+        const bytes = part.iov_base[0..part.iov_len];
+        if (part.canonical) |canonical| {
+            try canonical.write(bytes, destination);
+        } else {
+            try destination.writeAll(bytes);
+        }
     }
 }
 
@@ -144,7 +154,7 @@ pub fn appendSlice(
     self.total_bytes += size * len;
 
     // Return the same slice type as the input
-    const result = if (info.pointer.is_const)
+    const result = if (info.pointer.attrs.@"const")
         @as([*]const T, @ptrFromInt(offset))[0..len]
     else
         @as([*]T, @ptrFromInt(offset))[0..len];
@@ -165,9 +175,8 @@ pub fn appendSlice(
 /// alone—`needsPaddingZeroing` says which, and rejects at compile time anything whose
 /// undefined bytes nothing could identify.
 ///
-/// Assignment copies ALL bytes, padding included, so this must run on the copy that is
-/// about to be written. `appendSlicePodZeroedOffset` is the one caller that does so on
-/// the serialization path, which keeps a single deterministic-bytes implementation.
+/// Assignment copies ALL bytes, padding included, so this runs only on destination
+/// bytes or bounded streaming scratch, never on the borrowed source.
 pub fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
     // The padding mask + per-byte `inline for` are O(@sizeOf(V)) comptime work; large
     // POD element types (e.g. the artifact's stored expr/payload unions) exceed the
@@ -184,21 +193,21 @@ pub fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
             if (tag_size == 0) {
                 // A zero-size tag (e.g. a single-variant union) carries no discriminant; the
                 // sole payload sits at offset 0.
-                if (uinfo.fields.len >= 1 and @sizeOf(uinfo.fields[0].type) > 0) {
-                    zeroValuePadding(uinfo.fields[0].type, ptr);
-                    @memset(ptr[@sizeOf(uinfo.fields[0].type)..vsize], 0);
+                if (uinfo.field_names.len >= 1 and @sizeOf(uinfo.field_types[0]) > 0) {
+                    zeroValuePadding(uinfo.field_types[0], ptr);
+                    @memset(ptr[@sizeOf(uinfo.field_types[0])..vsize], 0);
                 } else {
                     @memset(ptr[0..vsize], 0);
                 }
             } else {
                 const max_payload = comptime blk: {
                     var m: usize = 0;
-                    for (uinfo.fields) |f| m = @max(m, @sizeOf(f.type));
+                    for (uinfo.field_types) |FieldType| m = @max(m, @sizeOf(FieldType));
                     break :blk m;
                 };
                 const max_payload_align = comptime blk: {
                     var a: usize = 1;
-                    for (uinfo.fields) |f| a = @max(a, @alignOf(f.type));
+                    for (uinfo.field_types) |FieldType| a = @max(a, @alignOf(FieldType));
                     break :blk a;
                 };
                 // Zig lays out a tagged union like a 2-field struct {tag, payload}: the tag
@@ -220,7 +229,7 @@ pub fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
                 // width mirrors what the compiler's own tag read sees, so an in-range value
                 // still selects the right variant.
                 const TagInt = @typeInfo(TagType).@"enum".tag_type;
-                const StorageInt = std.meta.Int(.unsigned, tag_size * 8);
+                const StorageInt = @Int(.unsigned, tag_size * 8);
                 const tag_mask: StorageInt = if (@bitSizeOf(TagInt) >= tag_size * 8)
                     ~@as(StorageInt, 0)
                 else
@@ -235,10 +244,10 @@ pub fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
                 // masked value rather than the original bytes makes a sub-byte-width tag's
                 // storage byte deterministic without assuming how the compiler extended it.
                 var handled = false;
-                inline for (uinfo.fields) |f| {
-                    if (!handled and @intFromEnum(@field(TagType, f.name)) == tag_val) {
+                inline for (uinfo.field_names, uinfo.field_types) |field_name, FieldType| {
+                    if (!handled and @backingInt(@field(TagType, field_name)) == tag_val) {
                         handled = true;
-                        const active_size = @sizeOf(f.type);
+                        const active_size = @sizeOf(FieldType);
                         const saved_payload: [active_size]u8 = if (active_size > 0)
                             ptr[payload_offset..][0..active_size].*
                         else
@@ -247,7 +256,7 @@ pub fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
                         std.mem.writeInt(StorageInt, ptr[tag_offset..][0..tag_size], masked_tag, native_endian);
                         if (active_size > 0) {
                             ptr[payload_offset..][0..active_size].* = saved_payload;
-                            zeroValuePadding(f.type, ptr + payload_offset);
+                            zeroValuePadding(FieldType, ptr + payload_offset);
                         }
                     }
                 }
@@ -262,7 +271,7 @@ pub fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
         // When non-null, recurse into the payload to zero its internal padding,
         // then zero any trailing padding after payload + tag.
         const ChildType = vinfo.optional.child;
-        const item = @as(*const V, @ptrCast(@alignCast(ptr)));
+        const item = @as(*align(1) const V, @ptrCast(ptr));
         if (item.* == null) {
             @memset(ptr[0..vsize], 0);
         } else {
@@ -280,10 +289,10 @@ pub fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
     } else if (vinfo == .@"struct" and vinfo.@"struct".layout == .auto) {
         // Zero inter-field gaps
         const covered = comptime blk: {
-            var mask = [_]bool{false} ** vsize;
-            for (vinfo.@"struct".fields) |field| {
-                const start = @offsetOf(V, field.name);
-                const end = start + @sizeOf(field.type);
+            var mask = @as([vsize]bool, @splat(false));
+            for (vinfo.@"struct".field_names, vinfo.@"struct".field_types) |field_name, FieldType| {
+                const start = @offsetOf(V, field_name);
+                const end = start + @sizeOf(FieldType);
                 for (start..end) |j| mask[j] = true;
             }
             break :blk mask;
@@ -303,19 +312,19 @@ pub fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
         // bytes are fully defined has nothing to zero, and a field that is neither
         // defined nor scrubbable is a compile error at the serialization boundary, so it
         // cannot reach here.
-        inline for (vinfo.@"struct".fields) |field| {
-            const FType = field.type;
+        inline for (vinfo.@"struct".field_names, vinfo.@"struct".field_types) |field_name, FieldType| {
+            const FType = FieldType;
             if (@sizeOf(FType) > 0 and comptime !serde_validation.isFullyDefined(FType)) {
-                zeroValuePadding(FType, ptr + @offsetOf(V, field.name));
+                zeroValuePadding(FType, ptr + @offsetOf(V, field_name));
             }
         }
     } else if (vinfo == .@"struct" and vinfo.@"struct".layout == .@"extern") {
         // An extern struct has no implicit gaps (proven at the serialization boundary),
         // but a field may still need scrubbing.
-        inline for (vinfo.@"struct".fields) |field| {
-            const FType = field.type;
+        inline for (vinfo.@"struct".field_names, vinfo.@"struct".field_types) |field_name, FieldType| {
+            const FType = FieldType;
             if (@sizeOf(FType) > 0 and comptime !serde_validation.isFullyDefined(FType)) {
-                zeroValuePadding(FType, ptr + @offsetOf(V, field.name));
+                zeroValuePadding(FType, ptr + @offsetOf(V, field_name));
             }
         }
     } else if (vinfo == .int or vinfo == .@"enum" or
@@ -327,7 +336,7 @@ pub fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
         // declared width. `bits` comes from the declaration, not from inspection.
         const bits = if (vinfo == .@"enum") @bitSizeOf(vinfo.@"enum".tag_type) else @bitSizeOf(V);
         if (bits < vsize * 8) {
-            const StorageInt = std.meta.Int(.unsigned, vsize * 8);
+            const StorageInt = @Int(.unsigned, vsize * 8);
             const mask: StorageInt = (@as(StorageInt, 1) << bits) - 1;
             const stored = std.mem.readInt(StorageInt, ptr[0..vsize], native_endian);
             std.mem.writeInt(StorageInt, ptr[0..vsize], stored & mask, native_endian);
@@ -364,12 +373,13 @@ pub fn needsPaddingZeroing(comptime V: type) bool {
 ///
 /// This is the single append-and-scrub implementation. It pads to the item type's
 /// alignment, then either gathers the caller's bytes verbatim—when every byte of the
-/// item type is already defined, so no copy is needed—or copies them into writer-owned
-/// memory and canonicalizes the undefined bytes there. Either way the caller's data is
+/// item type is already defined, so no copy is needed—or records the type's scrub
+/// operation to canonicalize bytes at the destination. Either way the caller's data is
 /// never modified, so a frozen or shared store can be serialized. Unlike `appendSlice`
 /// (which iovecs the caller's slice verbatim, undefined padding included), the bytes
 /// this writes are byte-identical for byte-identical logical data, which is what
-/// reproducible builds and content-stable cache bodies need.
+/// reproducible builds and content-stable cache bodies need. In both cases the
+/// source slice must remain alive and unchanged until the writer is flushed.
 ///
 /// The offset is returned as an integer, so a store whose data legitimately begins at
 /// byte zero records zero. Anything recording an offset should use this rather than
@@ -386,28 +396,12 @@ pub fn appendSlicePodZeroedOffset(
     const offset = self.total_bytes;
 
     if (len > 0) {
-        if (comptime needsPaddingZeroing(T)) {
-            // `T` has undefined padding; copy into writer-owned memory and zero it so the
-            // bytes are deterministic. Reserve the bookkeeping slots first so the buffer
-            // is never allocated without a path to releasing it.
-            try self.reserveOwnedBuffer(allocator);
-
-            const buf = try allocator.alloc(T, len);
-            for (slice, 0..) |item, i| buf[i] = item;
-            for (buf) |*item| zeroValuePadding(T, @as([*]u8, @ptrCast(item)));
-
-            self.takeOwnedBufferAssumeCapacity(@ptrCast(buf.ptr), len * @sizeOf(T), @alignOf(T));
-        } else {
-            // `T` has no padding to zero, so the source bytes are already deterministic:
-            // iovec them verbatim (no scratch alloc, no copy). The source must outlive the
-            // writer's flush—true on the serialize path, where the store owns the data.
-            try self.iovecs.append(allocator, .{
-                .iov_base = @ptrCast(@as([*]const u8, @ptrCast(slice.ptr))),
-                .iov_len = len * @sizeOf(T),
-            });
-            // The owned-buffer branch accounts for its own bytes when it takes ownership.
-            self.total_bytes += len * @sizeOf(T);
-        }
+        try self.iovecs.append(allocator, .{
+            .iov_base = @ptrCast(slice.ptr),
+            .iov_len = len * @sizeOf(T),
+            .canonical = if (comptime needsPaddingZeroing(T)) &Canonical(T).operations else null,
+        });
+        self.total_bytes += len * @sizeOf(T);
     }
 
     return offset;
@@ -460,6 +454,7 @@ pub fn writeToBuffer(
     var offset: usize = 0;
     for (self.iovecs.items) |iovec| {
         @memcpy(buffer[offset..][0..iovec.iov_len], iovec.iov_base[0..iovec.iov_len]);
+        if (iovec.canonical) |canonical| canonical.scrub(buffer[offset..][0..iovec.iov_len]);
         offset += iovec.iov_len;
     }
 
@@ -472,17 +467,51 @@ pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
     for (self.allocated_memory.items) |memory_slice| {
         const slice = memory_slice.ptr[0..memory_slice.size];
         const alignment_log2 = std.math.log2_int(usize, memory_slice.alignment);
-        const alignment: std.mem.Alignment = @enumFromInt(alignment_log2);
+        const alignment: std.mem.Alignment = @fromBackingInt(@intCast(alignment_log2));
         allocator.rawFree(slice, alignment, @returnAddress());
     }
     self.allocated_memory.deinit(allocator);
     self.iovecs.deinit(allocator);
 }
 
-const Iovec = extern struct {
+const Iovec = struct {
     iov_base: [*]const u8,
     iov_len: usize,
+    canonical: ?*const CanonicalOperations = null,
 };
+
+const CanonicalOperations = struct {
+    scrub: *const fn ([]u8) void,
+    write: *const fn ([]const u8, *std.Io.Writer) std.Io.Writer.Error!void,
+};
+
+fn Canonical(comptime T: type) type {
+    return struct {
+        const operations: CanonicalOperations = .{ .scrub = scrub, .write = write };
+
+        fn scrub(bytes: []u8) void {
+            std.debug.assert(bytes.len % @sizeOf(T) == 0);
+            var offset: usize = 0;
+            while (offset < bytes.len) : (offset += @sizeOf(T)) {
+                zeroValuePadding(T, bytes[offset..].ptr);
+            }
+        }
+
+        fn write(bytes: []const u8, destination: *std.Io.Writer) std.Io.Writer.Error!void {
+            // One item always fits, even when a serialized POD type is larger
+            // than the ordinary I/O chunk. Space depends on T, never row count.
+            var scratch: [@max(1, 32768 / @sizeOf(T)) * @sizeOf(T)]u8 align(@alignOf(T)) = undefined;
+            var offset: usize = 0;
+            while (offset < bytes.len) {
+                const chunk = scratch[0..@min(scratch.len, bytes.len - offset)];
+                @memcpy(chunk, bytes[offset..][0..chunk.len]);
+                scrub(chunk);
+                try destination.writeAll(chunk);
+                offset += chunk.len;
+            }
+        }
+    };
+}
 
 const AllocatedMemory = struct {
     ptr: [*]u8,
@@ -562,9 +591,9 @@ fn writeLeafwiseForTest(comptime V: type, ptr: [*]u8, value: V) void {
                 @as(*align(1) V, @ptrCast(ptr)).* = value;
                 return;
             }
-            inline for (st.fields) |f| {
-                if (@sizeOf(f.type) > 0) {
-                    writeLeafwiseForTest(f.type, ptr + @offsetOf(V, f.name), @field(value, f.name));
+            inline for (st.field_names, st.field_types) |field_name, FieldType| {
+                if (@sizeOf(FieldType) > 0) {
+                    writeLeafwiseForTest(FieldType, ptr + @offsetOf(V, field_name), @field(value, field_name));
                 }
             }
         },
@@ -595,6 +624,7 @@ fn writeLeafwiseForTest(comptime V: type, ptr: [*]u8, value: V) void {
         .frame,
         .@"anyframe",
         .enum_literal,
+        .spirv,
         => @as(*align(1) V, @ptrCast(ptr)).* = value,
     }
 }
@@ -702,8 +732,8 @@ test "zeroValuePadding: canonicalizes a tagged union's inactive bytes" {
     // and the discriminant follows it. Check that before poisoning around it, so a
     // layout change fails here with a clear cause instead of corrupting the value.
     const tag_at = @sizeOf(u64);
-    try std.testing.expectEqual(@intFromEnum(std.meta.Tag(V).small), pair.one[tag_at]);
-    try std.testing.expectEqual(@intFromEnum(std.meta.Tag(V).small), pair.two[tag_at]);
+    try std.testing.expectEqual(@backingInt(std.meta.Tag(V).small), pair.one[tag_at]);
+    try std.testing.expectEqual(@backingInt(std.meta.Tag(V).small), pair.two[tag_at]);
 
     // Everything except the live payload and the discriminant is stale: the tail of the
     // payload area the smaller variant does not reach, and the bytes after the tag.
@@ -809,7 +839,7 @@ test "byteDetermination: implicit padding in a fixed layout is not silently acce
         try std.testing.expect(!serde_validation.isFullyDefined(Short));
 
         const Filled = extern union {
-            small: extern struct { v: u8, _reserved: [@sizeOf(u64) - 1]u8 = .{0} ** (@sizeOf(u64) - 1) },
+            small: extern struct { v: u8, _reserved: [@sizeOf(u64) - 1]u8 = @splat(0) },
             large: u64,
         };
         comptime std.debug.assert(@sizeOf(Filled) == @sizeOf(Short));
@@ -890,4 +920,40 @@ test "allocation failure at any point leaves no writer-owned buffer stranded" {
         try std.testing.expect(reached_success);
         try std.testing.expect(failures_seen > 0);
     }
+}
+
+test "issue 11961: canonical streaming borrows large columns and matches gathered bytes" {
+    const T = union(enum) { small: ?u64, large: u128 };
+    const source = try std.testing.allocator.alloc(T, 10000);
+    defer std.testing.allocator.free(source);
+    @memset(std.mem.sliceAsBytes(source), 0xaa);
+    for (source, 0..) |*item, i| writeLeafwiseForTest(T, @ptrCast(item), .{ .small = @as(u64, @intCast(i)) });
+    const original = try std.testing.allocator.dupe(u8, std.mem.sliceAsBytes(source));
+    defer std.testing.allocator.free(original);
+
+    // Planning a large column must fit in metadata-sized storage. The old
+    // whole-column scrub copy could not satisfy this allocation budget.
+    var metadata: [4096]u8 = undefined;
+    var arena = std.heap.FixedBufferAllocator.init(&metadata);
+    var plan = CompactWriter.init();
+    defer plan.deinit(arena.allocator());
+    _ = try plan.appendSlicePodZeroedOffset(arena.allocator(), source);
+    try std.testing.expectEqual(@as(usize, 0), plan.allocated_memory.items.len);
+
+    const allocation = try std.testing.allocator.alloc(u8, plan.total_bytes + 1);
+    defer std.testing.allocator.free(allocation);
+    // Embedded cache bodies need not start at a host-aligned address.
+    const gathered = allocation[1..];
+    _ = try plan.writeToBuffer(gathered);
+    const streamed = try std.testing.allocator.alloc(u8, plan.total_bytes);
+    defer std.testing.allocator.free(streamed);
+    var destination = std.Io.Writer.fixed(streamed);
+    try plan.writeTo(&destination);
+    try std.testing.expectEqualSlices(u8, gathered, destination.buffered());
+    try std.testing.expectEqualSlices(u8, original, std.mem.sliceAsBytes(source));
+
+    var short: [19]u8 = undefined;
+    var failing = std.Io.Writer.fixed(&short);
+    try std.testing.expectError(error.WriteFailed, plan.writeTo(&failing));
+    try std.testing.expectEqualSlices(u8, original, std.mem.sliceAsBytes(source));
 }

@@ -376,16 +376,16 @@ fn sameValue(comptime T: type, left: T, right: T) bool {
             break :blk true;
         },
         .@"struct" => |info| blk: {
-            inline for (info.fields) |field| {
-                if (!sameValue(field.type, @field(left, field.name), @field(right, field.name))) break :blk false;
+            inline for (info.field_names, info.field_types) |field_name, field_type| {
+                if (!sameValue(field_type, @field(left, field_name), @field(right, field_name))) break :blk false;
             }
             break :blk true;
         },
         .@"union" => |info| blk: {
             if (std.meta.activeTag(left) != std.meta.activeTag(right)) break :blk false;
-            inline for (info.fields) |field| {
-                if (std.mem.eql(u8, @tagName(left), field.name)) {
-                    break :blk sameValue(field.type, @field(left, field.name), @field(right, field.name));
+            inline for (info.field_names, info.field_types) |field_name, field_type| {
+                if (std.mem.eql(u8, @tagName(left), field_name)) {
+                    break :blk sameValue(field_type, @field(left, field_name), @field(right, field_name));
                 }
             }
             unreachable;
@@ -564,7 +564,7 @@ test "physical selection preserves static and seed serving closures" {
                 .refs = &.{},
                 .relocations = &.{},
                 .data = &.{},
-                .callable_contract = [_]u8{11} ** 32,
+                .callable_contract = @as([32]u8, @splat(11)),
                 .context_contract = .{
                     .target = .x64linux,
                     .cpu_level = .default,
@@ -643,7 +643,7 @@ fn testCanonicalMixed(allocator: Allocator, conflict: bool) !void {
         },
     };
     for (&runtime) |*artifact| {
-        artifact.callable_contract = [_]u8{1} ** 32;
+        artifact.callable_contract = @as([32]u8, @splat(1));
         artifact.context_contract = .{
             .target = .x64linux,
             .cpu_level = .default,
@@ -654,8 +654,8 @@ fn testCanonicalMixed(allocator: Allocator, conflict: bool) !void {
     }
     var ctfe = runtime;
     ctfe[0].kind = .{ .proc = lir.ProcIdentity.forTest(3) };
-    ctfe[1].code = "\x48\xb8" ++ "\x00" ** 8 ++ "\x48\xb8" ++ "\x00" ** 8 ++ "\xc3";
-    if (conflict) runtime[1].callable_contract = [_]u8{9} ** 32;
+    ctfe[1].code = "\x48\xb8" ++ "\x00\x00\x00\x00\x00\x00\x00\x00" ++ "\x48\xb8" ++ "\x00\x00\x00\x00\x00\x00\x00\x00" ++ "\xc3";
+    if (conflict) runtime[1].callable_contract = @as([32]u8, @splat(9));
     var runtime_set = ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &runtime };
     defer runtime_set.deinit();
     var ctfe_set = ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &ctfe };
@@ -853,7 +853,7 @@ test "symbolic index declines ambiguous same-identity contracts in either defini
         .refs = &.{},
         .relocations = &.{},
         .data = &.{},
-        .callable_contract = [_]u8{1} ** 32,
+        .callable_contract = @as([32]u8, @splat(1)),
         .context_dependencies = .{},
         .context_contract = .{
             .target = .x64linux,
@@ -867,7 +867,7 @@ test "symbolic index declines ambiguous same-identity contracts in either defini
         const conflict = variant != .identical;
         var ctfe = runtime;
         if (variant == .different_code) ctfe.code = "\x90\xc3";
-        if (variant == .conflicting) ctfe.callable_contract = [_]u8{9} ** 32;
+        if (variant == .conflicting) ctfe.callable_contract = @as([32]u8, @splat(9));
         if (variant == .unsupported) ctfe.callable_contract = null;
         for ([_]bool{ false, true }) |reverse| {
             var artifacts = if (reverse) [_]ProcArtifact.Artifact{ runtime, ctfe, runtime, runtime } else [_]ProcArtifact.Artifact{ runtime, runtime, ctfe, runtime };
@@ -977,7 +977,7 @@ fn testSelection(allocator: Allocator) !void {
         },
         .{
             .kind = .{ .proc = helper },
-            .code = "\x48\xb8" ++ "\x00" ** 8 ++ "\xe8\x00\x00\x00\x00\xc3",
+            .code = "\x48\xb8" ++ "\x00\x00\x00\x00\x00\x00\x00\x00" ++ "\xe8\x00\x00\x00\x00\xc3",
             .entry = 0,
             .frame = null,
             .refs = &.{.{ .site = 10, .form = .call, .target = 2, .delta = 0 }},

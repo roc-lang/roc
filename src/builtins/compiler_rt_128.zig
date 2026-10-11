@@ -37,8 +37,8 @@ const native_endian = builtin.cpu.arch.endian();
 fn HalveInt(comptime T: type, comptime signed_half: bool) type {
     return extern union {
         pub const bits = @divExact(@typeInfo(T).int.bits, 2);
-        pub const HalfTU = std.meta.Int(.unsigned, bits);
-        pub const HalfTS = std.meta.Int(.signed, bits);
+        pub const HalfTU = @Int(.unsigned, bits);
+        pub const HalfTS = @Int(.signed, bits);
         pub const HalfT = if (signed_half) HalfTS else HalfTU;
 
         all: T,
@@ -222,7 +222,7 @@ fn DivMod(comptime T: type) type {
 
 fn udivmod(comptime T: type, a_: T, b_: T) DivMod(T) {
     const HalfT = HalveInt(T, false).HalfT;
-    const SignedT = std.meta.Int(.signed, @bitSizeOf(T));
+    const SignedT = @Int(.signed, @bitSizeOf(T));
 
     if (b_ > a_) {
         return .{ .quot = 0, .rem = a_ };
@@ -306,11 +306,6 @@ pub fn mul_i128(a: i128, b: i128) i128 {
     return mulX(i128, a, b);
 }
 
-/// Wrapping unsigned 128-bit multiplication (low 128 bits only).
-pub fn mul_u128_lo(a: u128, b: u128) u128 {
-    return @bitCast(mulX(i128, @bitCast(a), @bitCast(b)));
-}
-
 // Public API: 128-bit division
 
 /// Signed 128-bit truncating division.
@@ -341,17 +336,6 @@ pub fn mulWithOverflow_i128(a: i128, b: i128, overflow: *c_int) i128 {
     const min = std.math.minInt(i128);
     overflow.* = if (b != 0 and (divTrunc_i128(result, b) != a or (a == min and b == -1))) 1 else 0;
     return result;
-}
-
-/// Signed 128-bit floor division.
-pub fn divFloor_i128(a: i128, b: i128) i128 {
-    const q = divTrunc_i128(a, b);
-    const r = a -% mul_i128(q, b);
-    // If remainder is nonzero and signs of a and b differ, subtract 1
-    if (r != 0 and ((r ^ b) < 0)) {
-        return q - 1;
-    }
-    return q;
 }
 
 // Public API: 128-bit remainder / modulo

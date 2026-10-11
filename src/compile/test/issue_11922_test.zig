@@ -44,10 +44,7 @@ fn renderedErrors(gpa: std.mem.Allocator, files: []const SourceFile, entry: []co
     errdefer rendered.deinit();
     for (drained) |module_reports| {
         for (module_reports.reports) |report| {
-            switch (report.severity) {
-                .warning => {},
-                .runtime_error, .fatal => try report.render(&rendered.writer, .markdown),
-            }
+            if (report.severity.isError()) try report.render(&rendered.writer, .markdown);
         }
     }
     return rendered.toOwnedSlice();

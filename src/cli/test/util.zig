@@ -72,8 +72,12 @@ pub fn putIsolatedTempEnv(env_map: *std.process.Environ.Map, temp_dir: []const u
     }
 }
 
-/// Path to the locally built `roc` executable used by CLI tests.
-pub const roc_binary_path = if (@import("builtin").os.tag == .windows) ".\\zig-out\\bin\\roc.exe" else "./zig-out/bin/roc";
+/// Absolute path to the declared compiler artifact used by CLI tests.
+pub const roc_binary_path = blk: {
+    const options = @import("fixture_options");
+    if (std.fs.path.isAbsolute(options.roc_binary_build_path)) break :blk options.roc_binary_build_path;
+    break :blk options.build_root ++ "/" ++ options.roc_binary_build_path;
+};
 
 /// Errors that can occur while setting up a temporary CLI test directory.
 pub const TestDirError = std.mem.Allocator.Error || std.Io.Dir.CreateDirPathError || std.Io.Dir.CreateDirError || std.Io.Dir.RealPathFileAllocError;
@@ -113,10 +117,12 @@ fn reserveUniqueTestDir(io: std.Io, allocator: std.mem.Allocator, namespace: []c
         // monotonic counter to produce a unique-ish temp-dir suffix.
         var prng = std.Random.DefaultPrng.init(@as(u64, std.testing.random_seed) ^ cache_dir_id);
         const random = prng.random().int(u64);
-        const cache_leaf = try std.fmt.allocPrint(allocator, "{d}-{x}-{d}", .{
+        // Keep the leaf short: on Windows the compiled test executables live
+        // several directories below it, and the total path must stay under
+        // MAX_PATH (260), which the fixture root's own prefix already uses up.
+        const cache_leaf = try std.fmt.allocPrint(allocator, "{d}-{x:0>8}", .{
             cache_dir_id,
-            random,
-            cache_dir_id,
+            @as(u32, @truncate(random)),
         });
         defer allocator.free(cache_leaf);
 
@@ -173,6 +179,12 @@ fn terminateChildGroup(job: windows_job.Handle, child_id: std.process.Child.Id) 
     switch (builtin.os.tag) {
         .windows => windows_job.terminate(job, 1),
         .wasi => {},
+        .wiiu,
+        .@"switch",
+        .gba,
+        .psx,
+        .tios,
+        .ashetos,
         .freestanding,
         .other,
         .contiki,
@@ -393,6 +405,12 @@ pub fn runChildWithTimeout(
         // the whole group (child + any grandchildren) on timeout.
         .pgid = switch (builtin.os.tag) {
             .windows, .wasi => null,
+            .wiiu,
+            .@"switch",
+            .gba,
+            .psx,
+            .tios,
+            .ashetos,
             .freestanding,
             .other,
             .contiki,
@@ -735,12 +753,10 @@ pub fn runRocCommandWithEnv(
     args: []const []const u8,
     extra_env: ?*const std.process.Environ.Map,
 ) RocRunError!RocResult {
-    // Get absolute path to roc binary from current working directory
+    // Resolve the prepared fixture root used for relative test paths.
     const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
     defer allocator.free(cwd_path);
-    const roc_binary_name = if (@import("builtin").os.tag == .windows) "roc.exe" else "roc";
-    const roc_path = try std.fs.path.join(allocator, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
-    defer allocator.free(roc_path);
+    const roc_path = roc_binary_path;
 
     // Build argv: [roc_path, ...args]
     const argv = try std.mem.concat(allocator, []const u8, &.{
@@ -765,12 +781,10 @@ pub fn runRocWithEnv(
     test_file_path: []const u8,
     extra_env: ?*const std.process.Environ.Map,
 ) RocRunError!RocResult {
-    // Get absolute path to roc binary from current working directory
+    // Resolve the prepared fixture root used for relative test paths.
     const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
     defer allocator.free(cwd_path);
-    const roc_binary_name = if (@import("builtin").os.tag == .windows) "roc.exe" else "roc";
-    const roc_path = try std.fs.path.join(allocator, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
-    defer allocator.free(roc_path);
+    const roc_path = roc_binary_path;
 
     const test_file = if (std.fs.path.isAbsolute(test_file_path))
         try allocator.dupe(u8, test_file_path)
@@ -887,12 +901,10 @@ pub fn checkTestSuccess(result: RocResult) ResultCheckError!void {
 
 /// Helper to run roc with stdin input (for REPL testing)
 pub fn runRocWithStdin(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8, stdin_input: []const u8) RocRunError!RocResult {
-    // Get absolute path to roc binary from current working directory
+    // Resolve the prepared fixture root used for relative test paths.
     const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
     defer allocator.free(cwd_path);
-    const roc_binary_name = if (@import("builtin").os.tag == .windows) "roc.exe" else "roc";
-    const roc_path = try std.fs.path.join(allocator, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
-    defer allocator.free(roc_path);
+    const roc_path = roc_binary_path;
 
     // Build argv: [roc_path, ...args]
     const argv = try std.mem.concat(allocator, []const u8, &.{

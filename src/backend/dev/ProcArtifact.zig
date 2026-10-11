@@ -268,7 +268,7 @@ fn callableContract(
     hasher.update("roc.native.callable-contract.v1");
     switch (region.kind) {
         .proc, .boxy_thunk => |id| {
-            const proc = proc_specs[@intFromEnum(id)];
+            const proc = proc_specs[@backingInt(id)];
             // Descriptor/erased ABIs need their own complete producer contract.
             // Recording a partial signature would falsely certify substitution.
             if (proc.erased_reuse_arg != null or proc.erased_call_args != null or
@@ -276,8 +276,8 @@ fn callableContract(
                 proc.erased_capture_arg != null or proc.erased_arg_desc_offsets.len != 0 or
                 proc.erased_arg_layouts.len != 0 or proc.erased_arg_desc_params.len != 0 or
                 proc.hosted != null or proc.is_static_initializer) return null;
-            contractWord(&hasher, @intFromEnum(std.meta.activeTag(region.kind)));
-            contractWord(&hasher, @intFromEnum(proc.abi));
+            contractWord(&hasher, @backingInt(std.meta.activeTag(region.kind)));
+            contractWord(&hasher, @backingInt(proc.abi));
             contractWord(&hasher, @intFromBool(proc.boxy_runtime_entry));
             contractWord(&hasher, @intFromBool(proc.rc_variant_demandable));
             const params = codegen.store.getLocalSpan(proc.args);
@@ -392,22 +392,6 @@ pub fn compileProcFragment(
     constant_exports: []const lir.Program.StaticDataExport,
 ) ExtractError!Fragment {
     try codegen.emitProcFragment(proc_id);
-    return captureFragment(CG, allocator, codegen, proc_specs, layout_store, string_exports, constant_exports);
-}
-
-/// Emit one helper without recursively emitting its transitive requirements.
-/// Its key is interpreted only in the producer's layout and compilation domain.
-pub fn compileRcHelperFragment(
-    comptime CG: type,
-    allocator: Allocator,
-    codegen: *CG,
-    key: u64,
-    proc_specs: []const lir.LIR.LirProcSpec,
-    layout_store: *const layout.Store,
-    string_exports: []const lir.Program.StaticDataExport,
-    constant_exports: []const lir.Program.StaticDataExport,
-) ExtractError!Fragment {
-    try codegen.emitRcHelperFragment(key);
     return captureFragment(CG, allocator, codegen, proc_specs, layout_store, string_exports, constant_exports);
 }
 
@@ -529,8 +513,8 @@ pub fn validateSourceEventCertificates(allocator: Allocator, artifact: Artifact,
         }
         if (certificate.descriptor.header.byte_size != size) return error.InvalidSourceEventCertificate;
         _ = Events.validate(@ptrCast(words.ptr)) catch return error.InvalidSourceEventCertificate;
-        const observes_site = certificate.descriptor.header.kind == @intFromEnum(Events.Kind.branch_taken) or
-            certificate.descriptor.header.kind == @intFromEnum(Events.Kind.exhaustiveness_failed);
+        const observes_site = certificate.descriptor.header.kind == @backingInt(Events.Kind.branch_taken) or
+            certificate.descriptor.header.kind == @backingInt(Events.Kind.exhaustiveness_failed);
         if (observes_site != (certificate.site_origin != null)) return error.InvalidSourceEventCertificate;
         LirCodeGenMod.encodeSourceEventField(Events.Descriptor, certificate.descriptor, bytes, endian);
         for (certificate.branch_regions, 0..) |region, index| {
@@ -687,7 +671,7 @@ pub const ContentNames = struct {
     depth: u32 = 0,
     /// Physical source graph identity, not a callable compatibility proof.
     /// A local ordinal alone could collide between incompatible source packs.
-    code_namespace: [32]u8 = [_]u8{0} ** 32,
+    code_namespace: [32]u8 = @as([32]u8, @splat(0)),
 
     const domain = "roc.static.data.v2";
     const no_reference: u32 = std.math.maxInt(u32);
@@ -865,7 +849,7 @@ pub const PreparedData = struct {
             const relocations = try a.alloc(DataRelocation, constant.relocations.len);
             for (constant.relocations, relocations) |relocation, *out| {
                 const name = switch (relocation.target) {
-                    .data_symbol => |target| constant_exports[@intFromEnum(target)].symbol_name,
+                    .data_symbol => |target| constant_exports[@backingInt(target)].symbol_name,
                     .named => relocation.target_symbol_name,
                 };
                 out.* = .{
@@ -877,7 +861,7 @@ pub const PreparedData = struct {
                         .function_pointer => true,
                     },
                     .code_target = if (relocation.procedure) |proc|
-                        .{ .symbolic = .{ .proc = proc_specs[@intFromEnum(proc)].identity } }
+                        .{ .symbolic = .{ .proc = proc_specs[@backingInt(proc)].identity } }
                     else if (relocation.rc_helper != null)
                         .{ .symbolic = .{ .rc_helper = try a.dupe(u8, name) } }
                     else
@@ -973,7 +957,7 @@ pub fn extractPrepared(
         };
         try data_by_name.put(name, .{
             .name = name,
-            .bytes = try arena_allocator.dupe(u8, &([_]u8{0} ** 8)),
+            .bytes = try arena_allocator.dupe(u8, &(@as([8]u8, @splat(0)))),
             .alignment = 8,
             .symbol_offset = 0,
             .relocations = cell_relocations,
@@ -1011,7 +995,7 @@ pub fn extractPrepared(
     var producer_procs = std.AutoHashMap(lir.ProcIdentity, lir.LIR.LirProcSpecId).init(allocator);
     defer producer_procs.deinit();
     for (proc_specs, 0..) |proc, index| {
-        if (!proc.is_static_initializer and proc.root_materialization == null) try producer_procs.put(proc.identity, @enumFromInt(@as(u32, @intCast(index))));
+        if (!proc.is_static_initializer and proc.root_materialization == null) try producer_procs.put(proc.identity, @fromBackingInt(@intCast(@as(u32, @intCast(index)))));
     }
 
     // Standalone branch islands belong to this placement, not the artifact
@@ -1029,9 +1013,9 @@ pub fn extractPrepared(
     for (regions, 0..) |region, region_index| {
         const index = artifact_of_region[region_index] orelse continue;
         const kind: Kind = switch (region.kind) {
-            .proc => |proc_id| .{ .proc = proc_specs[@intFromEnum(proc_id)].identity },
+            .proc => |proc_id| .{ .proc = proc_specs[@backingInt(proc_id)].identity },
             .rc_helper => |key| .{ .rc_helper = try LirCodeGenMod.compiledRcHelperSymbolName(arena_allocator, layout_store, key) },
-            .boxy_thunk => |proc_id| .{ .boxy_thunk = proc_specs[@intFromEnum(proc_id)].identity },
+            .boxy_thunk => |proc_id| .{ .boxy_thunk = proc_specs[@backingInt(proc_id)].identity },
             .entrypoint => .entrypoint,
             .message_pool_run => .message_pool_run,
             .branch_island, .hosted_stub => unreachable,
@@ -1059,9 +1043,9 @@ pub fn extractPrepared(
         for (refs) |ref| {
             if (ref.site < region.start or ref.site >= region.end) continue;
             const symbolic_target: ?@FieldType(SymbolicReference, "target") = switch (ref.target) {
-                .proc => |proc_id| if (codegen.compiledProcSymbol(proc_id) == null) .{ .proc = proc_specs[@intFromEnum(proc_id)].identity } else null,
+                .proc => |proc_id| if (codegen.compiledProcSymbol(proc_id) == null) .{ .proc = proc_specs[@backingInt(proc_id)].identity } else null,
                 .rc_helper => |key| if (codegen.compiledRcHelperOffset(key) == null) .{ .rc_helper = try LirCodeGenMod.compiledRcHelperSymbolName(arena_allocator, layout_store, key) } else null,
-                .boxy_thunk => |proc_id| if (codegen.boxyThunkOffset(proc_id) == null) .{ .boxy_thunk = proc_specs[@intFromEnum(proc_id)].identity } else null,
+                .boxy_thunk => |proc_id| if (codegen.boxyThunkOffset(proc_id) == null) .{ .boxy_thunk = proc_specs[@backingInt(proc_id)].identity } else null,
                 .message, .offset => null,
             };
             if (symbolic_target) |target| {
@@ -1177,7 +1161,7 @@ pub fn extractPrepared(
         artifacts[index] = .{
             .kind = kind,
             .root_materialization = switch (region.kind) {
-                .proc => |proc| proc_specs[@intFromEnum(proc)].root_materialization,
+                .proc => |proc| proc_specs[@backingInt(proc)].root_materialization,
                 else => null,
             },
             .materializations = try materializations.toOwnedSlice(arena_allocator),
@@ -1328,7 +1312,7 @@ pub fn append(
     defer procs_by_identity.deinit();
     for (proc_specs, 0..) |proc, index| {
         if (proc.is_static_initializer) continue;
-        try procs_by_identity.put(proc.identity, @enumFromInt(@as(u32, @intCast(index))));
+        try procs_by_identity.put(proc.identity, @fromBackingInt(@intCast(@as(u32, @intCast(index)))));
     }
 
     try appendPrepared(CG, allocator, codegen, set, &procs_by_identity, helper_keys);
@@ -1971,7 +1955,7 @@ test "frozen callable names distinguish physical graphs with equal logical ident
             .relocations = &.{},
             .data = &.{.{
                 .name = "roc__d0",
-                .bytes = "\x00" ** 8,
+                .bytes = "\x00\x00\x00\x00\x00\x00\x00\x00",
                 .alignment = 8,
                 .symbol_offset = 0,
                 .program_local_name = true,
@@ -2025,7 +2009,7 @@ test "frozen callable placement and recapture retain exact duplicate variants" {
         .relocations = &.{.{ .offset = 3, .name = "first", .scope = .shared, .kind = .{ .data = .rel32 } }},
         .data = &.{.{
             .name = "first",
-            .bytes = "\x00" ** 8,
+            .bytes = "\x00\x00\x00\x00\x00\x00\x00\x00",
             .alignment = 8,
             .symbol_offset = 0,
             .relocations = &.{.{ .offset = 0, .name = "logical-function", .addend = 0, .function = true, .code_target = .{ .local = 1 } }},
@@ -2044,7 +2028,7 @@ test "frozen callable placement and recapture retain exact duplicate variants" {
     artifacts[3].relocations = &.{.{ .offset = 3, .name = "second", .scope = .shared, .kind = .{ .data = .rel32 } }};
     artifacts[3].data = &.{.{
         .name = "second",
-        .bytes = "\x00" ** 8,
+        .bytes = "\x00\x00\x00\x00\x00\x00\x00\x00",
         .alignment = 8,
         .symbol_offset = 0,
         .relocations = &.{.{ .offset = 0, .name = "logical-function", .addend = 0, .function = true, .code_target = .{ .local = 2 } }},
@@ -2098,19 +2082,19 @@ test "produced references bind selected declarations without rebinding cached si
     };
     var artifacts = [_]Artifact{ leaf, leaf, leaf, leaf };
     artifacts[0].kind = .{ .proc = lir.ProcIdentity.forTest(90) };
-    artifacts[0].producer_proc = @enumFromInt(0);
+    artifacts[0].producer_proc = @fromBackingInt(@intCast(0));
     artifacts[0].symbolic_refs = &.{
         .{ .site = 0, .form = .call, .target = .{ .proc = identity } },
         .{ .site = 1, .form = .call, .target = .{ .rc_helper = "helper" } },
     };
     artifacts[0].data = &.{.{
         .name = "callable",
-        .bytes = "\x00" ** 8,
+        .bytes = "\x00\x00\x00\x00\x00\x00\x00\x00",
         .alignment = 8,
         .symbol_offset = 0,
         .relocations = &.{.{ .offset = 0, .name = "logical-function", .addend = 0, .function = true, .code_target = .{ .symbolic = .{ .proc = identity } } }},
     }};
-    artifacts[1].producer_proc = @enumFromInt(1);
+    artifacts[1].producer_proc = @fromBackingInt(@intCast(1));
     artifacts[2].refs = &.{.{ .site = 0, .form = .call, .target = 2, .delta = 0 }};
     artifacts[3].kind = .{ .rc_helper = "helper" };
     const source = Set{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &artifacts };
@@ -2204,7 +2188,7 @@ test "artifact local calls reserve veneers before later regions exceed reach" {
     var image = try CG.init(allocator, &store, &layouts, .{}, &.{}, .default);
     defer image.deinit();
     image.codegen.branch_reach_limit = 4096;
-    const gap = [_]u8{0} ** 8192;
+    const gap = @as([8192]u8, @splat(0));
     var set = Set{
         .arena = std.heap.ArenaAllocator.init(allocator),
         .artifacts = &.{
@@ -2260,7 +2244,7 @@ fn testPreparedData(allocator: Allocator) (ExtractError || error{ TestExpectedEq
     defer local.deinit();
     try local.put("cell", .{
         .name = "cell",
-        .bytes = &([_]u8{0} ** 8),
+        .bytes = &(@as([8]u8, @splat(0))),
         .alignment = 8,
         .symbol_offset = 0,
         .relocations = &.{.{ .offset = 0, .name = "roc__d0", .addend = 0, .function = false, .external = true }},
@@ -2274,7 +2258,7 @@ fn testPreparedData(allocator: Allocator) (ExtractError || error{ TestExpectedEq
     prepared_live = false;
     try std.testing.expectEqual(@as(usize, 2), items.len);
     try std.testing.expectEqualStrings("cell", items[0].name);
-    try std.testing.expectEqualSlices(u8, &([_]u8{0} ** 8), items[0].bytes);
+    try std.testing.expectEqualSlices(u8, &(@as([8]u8, @splat(0))), items[0].bytes);
     try std.testing.expect(items[0].relocations[0].external);
     try std.testing.expectEqualStrings("roc__d0", items[0].relocations[0].name);
     try std.testing.expectEqualStrings("literal", items[1].name);
@@ -2426,16 +2410,16 @@ test "constants are named by content across programs, through cycles, and never 
     // Program one: a cycle between the first two constants, a leaf, and a
     // host-visible export that points at the leaf.
     const one = [_]DataItem{
-        testItem("roc__d0", "\x00" ** 16, &.{testReloc(8, "roc__d0_1", 0)}, true),
-        testItem("roc__d0_1", "\x00" ** 16, &.{ testReloc(0, "roc__d0", 0), testReloc(8, "roc__d0_2", 4) }, true),
+        testItem("roc__d0", &@as([16]u8, @splat('\x00')), &.{testReloc(8, "roc__d0_1", 0)}, true),
+        testItem("roc__d0_1", &@as([16]u8, @splat('\x00')), &.{ testReloc(0, "roc__d0", 0), testReloc(8, "roc__d0_2", 4) }, true),
         testItem("roc__d0_2", "leaf", &.{}, true),
-        testItem("roc__answer", "\x00" ** 8, &.{testReloc(0, "roc__d0_2", 0)}, false),
+        testItem("roc__answer", &@as([8]u8, @splat('\x00')), &.{testReloc(0, "roc__d0_2", 0)}, false),
     };
     // Program two: the same graph under other names and another order.
     const two = [_]DataItem{
         testItem("roc__d7_2", "leaf", &.{}, true),
-        testItem("roc__d7", "\x00" ** 16, &.{testReloc(8, "roc__d7_1", 0)}, true),
-        testItem("roc__d7_1", "\x00" ** 16, &.{ testReloc(0, "roc__d7", 0), testReloc(8, "roc__d7_2", 4) }, true),
+        testItem("roc__d7", &@as([16]u8, @splat('\x00')), &.{testReloc(8, "roc__d7_1", 0)}, true),
+        testItem("roc__d7_1", &@as([16]u8, @splat('\x00')), &.{ testReloc(0, "roc__d7", 0), testReloc(8, "roc__d7_2", 4) }, true),
     };
 
     var storage_one: [1]Artifact = undefined;
@@ -2461,8 +2445,8 @@ test "constants are named by content across programs, through cycles, and never 
 
     // A different leaf changes every name that reaches it.
     const three = [_]DataItem{
-        testItem("roc__d0", "\x00" ** 16, &.{testReloc(8, "roc__d0_1", 0)}, true),
-        testItem("roc__d0_1", "\x00" ** 16, &.{ testReloc(0, "roc__d0", 0), testReloc(8, "roc__d0_2", 4) }, true),
+        testItem("roc__d0", &@as([16]u8, @splat('\x00')), &.{testReloc(8, "roc__d0_1", 0)}, true),
+        testItem("roc__d0_1", &@as([16]u8, @splat('\x00')), &.{ testReloc(0, "roc__d0", 0), testReloc(8, "roc__d0_2", 4) }, true),
         testItem("roc__d0_2", "LEAF", &.{}, true),
     };
     var storage_three: [1]Artifact = undefined;

@@ -221,9 +221,9 @@ pub const HostSplice = struct {
         const names = codegen.getSymbolNames();
         for (codegen.codegen.relocations.items) |relocation| {
             const name = switch (relocation) {
-                .linked_function => |function| names[@intFromEnum(function.symbol)],
+                .linked_function => |function| names[@backingInt(function.symbol)],
                 .linked_data => |data| blk: {
-                    const name = names[@intFromEnum(data.symbol)];
+                    const name = names[@backingInt(data.symbol)];
                     if (self.static_data_bindings.contains(name)) continue;
                     break :blk name;
                 },
@@ -262,8 +262,8 @@ pub const HostSplice = struct {
         for (codegen.getRelocations()) |indexed| {
             try relocations.append(self.allocator, switch (indexed) {
                 .retired => continue,
-                .linked_function => |function| .{ .linked_function = .{ .offset = function.offset, .name = names[@intFromEnum(function.symbol)] } },
-                .linked_data => |data| .{ .linked_data = .{ .offset = data.offset, .name = names[@intFromEnum(data.symbol)], .kind = data.kind } },
+                .linked_function => |function| .{ .linked_function = .{ .offset = function.offset, .name = names[@backingInt(function.symbol)] } },
+                .linked_data => |data| .{ .linked_data = .{ .offset = data.offset, .name = names[@backingInt(data.symbol)], .kind = data.kind } },
                 .local_data => |data| .{ .local_data = data },
                 .jmp_to_return => |jump| .{ .jmp_to_return = jump },
             });
@@ -432,7 +432,7 @@ fn compilerFunction(name: []const u8, boxy_native_fns: *const BoxyNativeFnTable)
         return builtin_fn.wrapperAddress();
     }
     if (builtins.in_process_host.Symbol.fromName(name)) |symbol| return symbol.address();
-    if (BoxyBuiltinFn.fromSymbolName(name)) |boxy_fn| return boxy_native_fns[@intFromEnum(boxy_fn)];
+    if (BoxyBuiltinFn.fromSymbolName(name)) |boxy_fn| return boxy_native_fns[@backingInt(boxy_fn)];
     return builtins.native_runtime_libcalls.resolve(name);
 }
 
@@ -497,8 +497,8 @@ test "selected procedure logical symbols and recapture preserve nonzero entry" {
     }, .none);
     var cg = try HostLirCodeGen.init(allocator, &store, &layouts, .{}, &.{}, .default);
     defer cg.deinit();
-    _ = try cg.appendAssembledRegion("\x00" ** 8, .entrypoint, 0, null);
-    const start = try cg.appendAssembledRegion("\x00" ** 8, .{ .proc = proc }, 4, .{
+    _ = try cg.appendAssembledRegion("\x00\x00\x00\x00\x00\x00\x00\x00", .entrypoint, 0, null);
+    const start = try cg.appendAssembledRegion("\x00\x00\x00\x00\x00\x00\x00\x00", .{ .proc = proc }, 4, .{
         .prologue_size = 0,
         .stack_alloc = 0,
         .frame_size = 0,
@@ -653,11 +653,11 @@ test "nonfragment ordinary code links shared static cells and common source even
     defer layouts.deinit();
     const value = try store.addLocal(.{ .layout_idx = .i64 });
     const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
-    const load = try store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = @enumFromInt(0) }, .next = ret } }, .test_fixture);
-    const branch = try store.addCFStmt(.{ .comptime_branch_taken = .{ .site = @enumFromInt(0), .branch_index = 0, .next = load } }, .test_fixture);
+    const load = try store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = @fromBackingInt(@intCast(0)) }, .next = ret } }, .test_fixture);
+    const branch = try store.addCFStmt(.{ .comptime_branch_taken = .{ .site = @fromBackingInt(@intCast(0)), .branch_index = 0, .next = load } }, .test_fixture);
     const identity = lir.ProcIdentity.forTest(812);
     const proc = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = identity, .args = .empty(), .body = branch, .ret_layout = .i64 }, .none);
-    const exports = [_]StaticDataExport{.{ .symbol_name = "shared_current_root", .value_id = @enumFromInt(0), .bytes = &([_]u8{0} ** 8), .alignment = 8 }};
+    const exports = [_]StaticDataExport{.{ .symbol_name = "shared_current_root", .value_id = @fromBackingInt(@intCast(0)), .bytes = &(@as([8]u8, @splat(0))), .alignment = 8 }};
     var slots = try StaticDataImage.init(allocator, &exports);
     defer slots.deinit();
     const address = slots.symbolAddress("shared_current_root").?;
@@ -732,7 +732,7 @@ test "static bindings link pointer cells without copying mutable slots" {
 
     const exports = [_]StaticDataExport{.{
         .symbol_name = "test_mutable_slot",
-        .bytes = &([_]u8{0} ** 16),
+        .bytes = &(@as([16]u8, @splat(0))),
         .symbol_offset = 8,
         .alignment = 8,
     }};
@@ -742,7 +742,7 @@ test "static bindings link pointer cells without copying mutable slots" {
     defer splice.deinit();
     const cells = [_]ProcArtifact.DataItem{.{
         .name = "test_slot_pointer",
-        .bytes = &([_]u8{0} ** 8),
+        .bytes = &(@as([8]u8, @splat(0))),
         .alignment = 8,
         .symbol_offset = 0,
         .relocations = &.{.{ .offset = 0, .name = "test_mutable_slot", .addend = 0, .function = false }},

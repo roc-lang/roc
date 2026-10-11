@@ -126,7 +126,12 @@ main! = |_| {
 (can-ir
 	(d-let
 		(p-assign (ident "main!"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-block
+				(s-runtime-error (tag "erroneous_value_expr"))
+				(e-runtime-error (tag "erroneous_value_expr")))))
 	(s-import (mod "pf.Stdout")
 		(exposes))
 	(s-import (mod "json.Json")
@@ -136,7 +141,7 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> Error")))
+		(patt (type "_arg -> _ret")))
 	(expressions
-		(expr (type "_arg -> Error"))))
+		(expr (type "_arg -> _ret"))))
 ~~~

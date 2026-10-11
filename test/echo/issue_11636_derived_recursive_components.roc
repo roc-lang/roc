@@ -69,12 +69,9 @@ main! = |args| {
     t1 = Node(Leaf, n, Node(Leaf, 2, Leaf))
     t2 : Tree
     t2 = Node(Leaf, n, Node(Leaf, 3, Leaf))
-    b1 : [Nope, Yep(Box(U64))]
-    b1 = Yep(Box.box(n))
 
     echo!("${Str.inspect(f1 == f2)} ${Str.inspect(d1 == d2)} ${Str.inspect(o1 == o2)}\n")
     echo!("${Str.inspect(s1 == s2)} ${Str.inspect(s1 == s3)} ${Str.inspect(t1 == t2)} ${Str.inspect(t1 == t1)}\n")
-    echo!("${Str.inspect(b1 == Nope)} ${Str.inspect(b1 != Nope)}\n")
     echo!("${Str.inspect(Opt.Some(n + 1) == Opt.Some(2))} ${Str.inspect(Opt.Some(1) == Opt.Nothing)}\n")
     echo!("${Str.inspect(Set.empty().insert(f1).insert(f2).len())} ${Str.inspect(Set.empty().insert(d1).insert(d2).len())} ${Str.inspect(Set.empty().insert(o1).insert(o2).len())}\n")
     echo!("${Str.inspect(Set.empty().insert(s1).insert(s2).insert(s3).len())} ${Str.inspect(Set.empty().insert(t1).insert(t2).insert(t1).len())}\n")

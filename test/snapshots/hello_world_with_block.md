@@ -99,7 +99,15 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "main!"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-block
+				(s-let
+					(p-assign (ident "world"))
+					(e-string
+						(e-literal (string "World"))))
+				(e-runtime-error (tag "erroneous_value_expr")))))
 	(s-import (mod "pf.Stdout")
 		(exposes)))
 ~~~
@@ -107,7 +115,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> Error")))
+		(patt (type "_arg -> _ret")))
 	(expressions
-		(expr (type "_arg -> Error"))))
+		(expr (type "_arg -> _ret"))))
 ~~~

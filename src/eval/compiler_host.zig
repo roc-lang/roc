@@ -1,6 +1,7 @@
 //! RocOps environment used by compiler-owned evaluation.
 
 const std = @import("std");
+const base = @import("base");
 const builtins = @import("builtins");
 const interpreter = @import("interpreter.zig");
 
@@ -88,7 +89,7 @@ fn rocAlloc(roc_ops: *RocOps, length: usize, alignment: usize) callconv(.c) *any
 fn rocDealloc(roc_ops: *RocOps, ptr: *anyopaque, _: usize) callconv(.c) void {
     const self: *CompilerHost = @ptrCast(@alignCast(roc_ops.env));
     const removed = self.allocations.fetchRemove(@intFromPtr(ptr)) orelse
-        @panic("compiler RocOps deallocated unknown pointer");
+        base.invariant("{s}", .{"compiler RocOps deallocated unknown pointer"});
     freeBytes(self.allocator, ptr, removed.value);
 }
 
@@ -101,7 +102,7 @@ fn rocRealloc(roc_ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: u
     // leaves the old allocation intact and tracked.
     const new_ptr = allocateBytes(self.allocator, new_length, alignment) orelse self.outOfMemory();
     const removed = self.allocations.fetchRemove(@intFromPtr(old_ptr)) orelse
-        @panic("compiler RocOps reallocated unknown pointer");
+        base.invariant("{s}", .{"compiler RocOps reallocated unknown pointer"});
     const old_bytes: [*]u8 = @ptrCast(@alignCast(old_ptr));
     @memcpy(new_ptr[0..@min(removed.value.size, new_length)], old_bytes[0..@min(removed.value.size, new_length)]);
     freeBytes(self.allocator, old_ptr, removed.value);
@@ -117,7 +118,7 @@ fn rocRealloc(roc_ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: u
 /// interpreter's evaluation instead of aborting the whole compiler.
 fn outOfMemory(self: *CompilerHost) noreturn {
     const unwind = self.out_of_memory orelse
-        @panic("compiler RocOps allocation failed with no interpreter bound");
+        base.invariant("{s}", .{"compiler RocOps allocation failed with no interpreter bound"});
     unwind.unwind();
 }
 
@@ -139,7 +140,7 @@ fn rocExpectFailed(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c
 /// The interpreter reports a Roc crash as `error.Crash` and never calls the
 /// host's `roc_crashed`, so reaching this is a compiler bug.
 fn rocCrashed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
-    std.debug.panic("compiler host invariant violated: roc_crashed called during compiler-owned evaluation: {s}", .{bytes[0..len]});
+    base.invariant("compiler host invariant violated: roc_crashed called during compiler-owned evaluation: {s}", .{bytes[0..len]});
 }
 
 /// Returns null on allocation failure (OOM).
@@ -150,7 +151,7 @@ fn allocateBytes(allocator: std.mem.Allocator, len: usize, alignment: usize) ?[*
         4 => (allocator.alignedAlloc(u8, .@"4", len) catch return null).ptr,
         8 => (allocator.alignedAlloc(u8, .@"8", len) catch return null).ptr,
         16 => (allocator.alignedAlloc(u8, .@"16", len) catch return null).ptr,
-        else => @panic("unsupported compiler RocOps allocation alignment"),
+        else => base.invariant("{s}", .{"unsupported compiler RocOps allocation alignment"}),
     };
 }
 
@@ -162,7 +163,7 @@ fn freeBytes(allocator: std.mem.Allocator, ptr: *anyopaque, allocation: Allocati
         4 => allocator.free((@as([*]align(4) u8, @alignCast(bytes)))[0..allocation.size]),
         8 => allocator.free((@as([*]align(8) u8, @alignCast(bytes)))[0..allocation.size]),
         16 => allocator.free((@as([*]align(16) u8, @alignCast(bytes)))[0..allocation.size]),
-        else => @panic("unsupported compiler RocOps free alignment"),
+        else => base.invariant("{s}", .{"unsupported compiler RocOps free alignment"}),
     }
 }
 

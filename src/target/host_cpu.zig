@@ -78,7 +78,7 @@ const hwcap_asimddp = 1 << 20;
 fn detectedX86Features() std.Target.Cpu.Feature.Set {
     var detected = std.Target.Cpu.Feature.Set.empty;
     for (x86_64_default_level_features) |required| {
-        detected.addFeature(@intFromEnum(required.feature));
+        detected.addFeature(@backingInt(required.feature));
     }
     detected.populateDependencies(std.Target.Cpu.Arch.x86_64.allFeaturesList());
     return detected;
@@ -86,9 +86,9 @@ fn detectedX86Features() std.Target.Cpu.Feature.Set {
 
 fn detectedAarch64Features() std.Target.Cpu.Feature.Set {
     var detected = std.Target.Cpu.Feature.Set.empty;
-    detected.addFeature(@intFromEnum(std.Target.aarch64.Feature.aes));
-    detected.addFeature(@intFromEnum(std.Target.aarch64.Feature.sha2));
-    detected.addFeature(@intFromEnum(std.Target.aarch64.Feature.dotprod));
+    detected.addFeature(@backingInt(std.Target.aarch64.Feature.aes));
+    detected.addFeature(@backingInt(std.Target.aarch64.Feature.sha2));
+    detected.addFeature(@backingInt(std.Target.aarch64.Feature.dotprod));
     detected.populateDependencies(std.Target.Cpu.Arch.aarch64.allFeaturesList());
     return detected;
 }
@@ -136,12 +136,12 @@ fn getauxval(index: usize) usize {
 var cached_level = std.atomic.Value(u8).init(0);
 
 fn encode(level_value: CpuLevel) u8 {
-    return @as(u8, @intFromEnum(level_value)) + 1;
+    return @as(u8, @backingInt(level_value)) + 1;
 }
 
 fn decode(cached: u8) ?CpuLevel {
     if (cached == 0) return null;
-    return @enumFromInt(cached - 1);
+    return @fromBackingInt(@intCast(cached - 1));
 }
 
 /// The highest CPU level this machine executes.
@@ -279,7 +279,7 @@ fn detectAarch64() CpuLevel {
     switch (comptime target_mod.classifyOs(builtin.os.tag)) {
         .linux => {
             const required = hwcap_aes | hwcap_pmull | hwcap_sha2 | hwcap_asimddp;
-            const hwcap = getauxval(std.elf.AT_HWCAP);
+            const hwcap = getauxval(std.elf.AT.HWCAP);
             return if (hwcap & required == required) .default else .v1;
         },
         .windows => {
@@ -301,7 +301,7 @@ test "the auxiliary vector is readable however this binary was started" {
     // machine lacking something. That is the failure this wrapper exists for:
     // aarch64 detection reads `AT_HWCAP`, and a lookup that always answers 0
     // reports every aarch64 machine as `.v1` without any sign of trouble.
-    try std.testing.expect(getauxval(std.elf.AT_PAGESZ) != 0);
+    try std.testing.expect(getauxval(std.elf.AT.PAGESZ) != 0);
 }
 
 test "libc-linked builds do not read the auxiliary vector through Zig's startup path" {
@@ -312,7 +312,7 @@ test "libc-linked builds do not read the auxiliary vector through Zig's startup 
     // makes `std.os.linux.getauxval` work under libc shows up here as a
     // failing test rather than as a wrapper nobody can justify removing.
     try std.testing.expect(std.os.linux.elf_aux_maybe == null);
-    try std.testing.expectEqual(@as(usize, 0), std.os.linux.getauxval(std.elf.AT_PAGESZ));
+    try std.testing.expectEqual(@as(usize, 0), std.os.linux.getauxval(std.elf.AT.PAGESZ));
 }
 
 test "detection answers a level the native target has a spelling for" {
@@ -354,7 +354,7 @@ test "CPUID reports every feature this binary was built to use" {
     const cpu = X86Cpuid.query();
 
     for (x86_64_default_level_features) |required| {
-        if (!builtin.cpu.features.isEnabled(@intFromEnum(required.feature))) continue;
+        if (!builtin.cpu.features.isEnabled(@backingInt(required.feature))) continue;
         try std.testing.expect(cpu.reports(required));
     }
 }

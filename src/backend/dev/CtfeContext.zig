@@ -12,7 +12,7 @@ pub const SourceDescriptor = struct {
     column: u32,
     has_location: bool,
 };
-pub const LiteralKind = enum(u8) { numeral, quote };
+pub const LiteralKind = enum(u8) { numeral, quote, interpolation };
 pub const LiteralDescriptor = struct {
     checked_module: [32]u8,
     checked_expr: u32,
@@ -103,8 +103,8 @@ pub const Catalog = struct {
 
 test "source-event catalog selects one immutable producer without row fallback" {
     const descriptor: SourceDescriptor = .{
-        .checked_module = [_]u8{41} ** 32,
-        .source_identity = [_]u8{42} ** 32,
+        .checked_module = @as([32]u8, @splat(41)),
+        .source_identity = @as([32]u8, @splat(42)),
         .region = .{ .start = .{ .offset = 1 }, .end = .{ .offset = 4 } },
         .line = 2,
         .column = 3,

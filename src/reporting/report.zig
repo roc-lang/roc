@@ -207,7 +207,7 @@ fn isValidReportDescription(description: []const u8) bool {
 }
 
 fn assertValidTitleAndDescription(title: []const u8, description: []const u8) void {
-    if (builtin.mode != .Debug) return;
+    if (builtin.mode != .debug) return;
 
     std.debug.assert(isValidReportTitle(title));
     std.debug.assert(isValidReportDescription(description));
@@ -216,15 +216,13 @@ fn assertValidTitleAndDescription(title: []const u8, description: []const u8) vo
     if (titleContainsIgnoreCase(title, "annotation") and
         (titleContainsIgnoreCase(title, "need") or titleContainsIgnoreCase(title, "miss")))
     {
-        @panic(
-            "Error-report title pairs \"annotation\" with \"need\"/\"miss\". Roc never tells " ++
-                "users they NEED to annotate their types: unlike many languages, type annotations " ++
-                "are never required as a matter of course, so no part of a diagnostic report should " ++
-                "say a type needs, or is missing, an annotation. When a type is ambiguous, explain " ++
-                "the ambiguity itself; at most, note that one way to make it unambiguous is to " ++
-                "introduce a type annotation somewhere. Reword this report's title, headline, and " ++
-                "body to describe the ambiguity rather than to demand an annotation.",
-        );
+        base.invariant("{s}", .{"Error-report title pairs \"annotation\" with \"need\"/\"miss\". Roc never tells " ++
+            "users they NEED to annotate their types: unlike many languages, type annotations " ++
+            "are never required as a matter of course, so no part of a diagnostic report should " ++
+            "say a type needs, or is missing, an annotation. When a type is ambiguous, explain " ++
+            "the ambiguity itself; at most, note that one way to make it unambiguous is to " ++
+            "introduce a type annotation somewhere. Reword this report's title, headline, and " ++
+            "body to describe the ambiguity rather than to demand an annotation."});
     }
 }
 
@@ -286,26 +284,6 @@ pub const Report = struct {
         try self.document.addLineBreak();
     }
 
-    /// Add a code snippet with proper formatting and UTF-8 validation.
-    pub fn addCodeSnippet(self: *Report, code: []const u8, line_number: ?u32) Allocator.Error!void {
-        validateUtf8(code) catch |err| switch (err) {
-            error.InvalidUtf8 => {
-                try self.document.addError("[Invalid UTF-8 in code snippet]");
-                try self.document.addLineBreak();
-                return;
-            },
-        };
-
-        if (line_number) |line_num| {
-            try self.document.addFormattedText("{d}", .{line_num});
-            try self.document.addText(" | ");
-        } else {
-            try self.document.addText("   | ");
-        }
-        try self.document.addCodeBlock(code);
-        try self.document.addLineBreak();
-    }
-
     /// Add source context using RegionInfo for better accuracy and simplicity.
     pub fn addSourceContext(self: *Report, region: RegionInfo, filename: ?[]const u8, source: []const u8, line_starts: []const u32) Allocator.Error!void {
         validateUtf8(region.calculateLineText(source, line_starts)) catch |err| switch (err) {
@@ -357,43 +335,6 @@ pub const Report = struct {
         try self.document.addLineBreak();
     }
 
-    /// Add multiple suggestions as a list.
-    pub fn addSuggestions(self: *Report, suggestions: []const []const u8) Allocator.Error!void {
-        if (suggestions.len == 0) return;
-
-        try self.document.addLineBreak();
-        if (suggestions.len == 1) {
-            try self.document.addAnnotated("Hint: ", .suggestion);
-            try self.document.addText(suggestions[0]);
-        } else {
-            try self.document.addAnnotated("Hints:", .suggestion);
-            try self.document.addLineBreak();
-            for (suggestions) |suggestion| {
-                try self.document.addIndent(1);
-                try self.document.addText("• ");
-                try self.document.addText(suggestion);
-                try self.document.addLineBreak();
-            }
-        }
-        try self.document.addLineBreak();
-    }
-
-    /// Add a type comparison showing expected vs actual.
-    pub fn addTypeComparison(self: *Report, expected: []const u8, actual: []const u8) Allocator.Error!void {
-        try self.document.addLineBreak();
-        try self.document.addText("Expected type:");
-        try self.document.addLineBreak();
-        try self.document.addIndent(1);
-        try self.document.addType(expected);
-        try self.document.addLineBreak();
-        try self.document.addLineBreak();
-        try self.document.addText("But found type:");
-        try self.document.addLineBreak();
-        try self.document.addIndent(1);
-        try self.document.addError(actual);
-        try self.document.addLineBreak();
-    }
-
     /// Add a note with dimmed styling.
     pub fn addNote(self: *Report, note: []const u8) Allocator.Error!void {
         try self.document.addLineBreak();
@@ -411,13 +352,6 @@ pub const Report = struct {
     /// Add a warning message with proper styling.
     pub fn addWarningMessage(self: *Report, message: []const u8) Allocator.Error!void {
         try self.document.addWarning(message);
-        try self.document.addLineBreak();
-    }
-
-    /// Add a separator line.
-    pub fn addSeparator(self: *Report) Allocator.Error!void {
-        try self.document.addLineBreak();
-        try self.document.addHorizontalRule(40);
         try self.document.addLineBreak();
     }
 
@@ -480,15 +414,6 @@ pub const Report = struct {
     pub fn isEmpty(self: *const Report) bool {
         return self.document.isEmpty();
     }
-
-    /// Get the number of lines in the report (approximate).
-    pub fn getLineCount(self: *const Report) usize {
-        var count: usize = 2; // Title + blank line
-        for (self.document.elements.items) |element| {
-            if (element == .line_break) count += 1;
-        }
-        return count;
-    }
 };
 
 // Tests
@@ -532,7 +457,6 @@ test "Report basic functionality" {
     try report.addSuggestion("Try fixing the issue.");
 
     try testing.expect(!report.isEmpty());
-    try testing.expect(report.getLineCount() > 2);
 }
 
 test "Report diagnostic location uses the underline rather than its context" {

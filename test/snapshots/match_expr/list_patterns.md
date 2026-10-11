@@ -154,5 +154,5 @@ match numbers {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "Dec"))
 ~~~

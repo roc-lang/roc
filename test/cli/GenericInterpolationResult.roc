@@ -5,15 +5,15 @@ import pf.Stdout
 # A function whose result is an interpolated string literal is generic in that
 # result: each caller chooses the type whose `from_interpolation` assembles it.
 Wrapped := [Wrapped(Str)].{
-	from_interpolation : Str, Iter((Str, Str)) -> Wrapped
-	from_interpolation = |first, rest| Wrapped.Wrapped(rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment)))
+	from_interpolation : List(Str) -> Try((List(Str) -> Wrapped), [InvalidInterpolation(Str)])
+	from_interpolation = |segments| Str.from_interpolation(segments).map_ok(|assemble| |values| Wrapped.Wrapped(assemble(values)))
 }
 
 # This `from_interpolation` is generic in the interpolated item type, so only
 # the interpolated parts determine it.
 Count := [Count(U64)].{
-	from_interpolation : Str, Iter((item, Str)) -> Count
-	from_interpolation = |_first, rest| Count.Count(rest.fold(0.U64, |n, _| n + 1))
+	from_interpolation : List(Str) -> Try((List(item) -> Count), [InvalidInterpolation(Str)])
+	from_interpolation = |_segments| Ok(|values| Count.Count(List.len(values)))
 }
 
 describe = |x| "value=${Str.inspect(x)}"

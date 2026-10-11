@@ -86,7 +86,7 @@ test "pack preserves physical callable targets and observation facts but rejects
     var artifacts = [_]ProcArtifact.Artifact{ leaf, leaf };
     artifacts[1].data = &.{.{
         .name = "frozen",
-        .bytes = "\x00" ** 8,
+        .bytes = "\x00\x00\x00\x00\x00\x00\x00\x00",
         .alignment = 8,
         .symbol_offset = 0,
         .relocations = &relocation,
@@ -261,13 +261,13 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
                 },
                 .data => |data_kind| {
                     try writer.byte(1);
-                    try writer.byte(@intFromEnum(data_kind));
+                    try writer.byte(@backingInt(data_kind));
                 },
             }
             try writer.str(names.of(relocation.name));
             // A reference to carried program data now names it by content.
             const scope: ProcArtifact.SymbolScope = if (names.renames(relocation.name)) .shared else relocation.scope;
-            try writer.byte(@intFromEnum(scope));
+            try writer.byte(@backingInt(scope));
         }
         try writer.word(@intCast(artifact.data.len));
         for (artifact.data) |item| {
@@ -589,7 +589,7 @@ const Writer = struct {
             .int => |info| {
                 if (info.bits == 8) try self.byte(value) else if (info.bits == 32) try self.word(value) else @compileError("unsupported context integer");
             },
-            .@"enum" => try self.byte(@intCast(@intFromEnum(value))),
+            .@"enum" => try self.byte(@intCast(@backingInt(value))),
             .optional => {
                 try self.byte(@intFromBool(value != null));
                 if (value) |present| try self.context(present);
@@ -600,12 +600,12 @@ const Writer = struct {
                 try self.word(@intCast(value.len));
                 for (value) |item| try self.context(item);
             },
-            .@"struct" => |info| inline for (info.fields) |field| try self.context(@field(value, field.name)),
+            .@"struct" => |info| inline for (info.field_names) |field_name| try self.context(@field(value, field_name)),
             .@"union" => |info| {
                 const tag = std.meta.activeTag(value);
                 try self.context(tag);
-                inline for (info.fields) |field| {
-                    if (tag == @field(info.tag_type.?, field.name)) try self.context(@field(value, field.name));
+                inline for (info.field_names) |field_name| {
+                    if (tag == @field(info.tag_type.?, field_name)) try self.context(@field(value, field_name));
                 }
             },
             else => @compileError("unsupported context metadata"),
@@ -677,13 +677,13 @@ const Reader = struct {
             },
             .@"struct" => |info| {
                 var result: T = undefined;
-                inline for (info.fields) |field| @field(result, field.name) = try self.context(field.type, allocator);
+                inline for (info.field_names, info.field_types) |field_name, field_type| @field(result, field_name) = try self.context(field_type, allocator);
                 return result;
             },
             .@"union" => |info| {
                 const tag = try self.context(info.tag_type.?, allocator);
-                inline for (info.fields) |field| {
-                    if (tag == @field(info.tag_type.?, field.name)) return @unionInit(T, field.name, try self.context(field.type, allocator));
+                inline for (info.field_names, info.field_types) |field_name, field_type| {
+                    if (tag == @field(info.tag_type.?, field_name)) return @unionInit(T, field_name, try self.context(field_type, allocator));
                 }
                 return error.MalformedPack;
             },
@@ -724,7 +724,7 @@ test "pack ordinary code patches validate producer-declared spans" {
     const allocator = std.testing.allocator;
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-    const code = [_]u8{ 0x48, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0 } ++ [_]u8{0} ** 32;
+    const code = [_]u8{ 0x48, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0 } ++ @as([32]u8, @splat(0));
     var artifacts = [_]ProcArtifact.Artifact{.{
         .kind = .entrypoint,
         .code = &code,
@@ -774,7 +774,7 @@ test "pack ordinary code patches validate producer-declared spans" {
     artifacts[0].refs = &.{.{ .site = 18, .form = .call, .target = 0, .delta = 0 }};
     artifacts[0].data = &.{.{
         .name = "datum",
-        .bytes = &([_]u8{0} ** 16),
+        .bytes = &(@as([16]u8, @splat(0))),
         .alignment = 8,
         .symbol_offset = 0,
         .relocations = &.{.{ .offset = 2, .name = "ordinary", .addend = 0, .function = false }},
@@ -784,7 +784,7 @@ test "pack ordinary code patches validate producer-declared spans" {
     var accepted = try read(allocator, adjacent);
     defer accepted.set.deinit();
 
-    var arm_code = [_]u8{0} ** 64;
+    var arm_code = @as([64]u8, @splat(0));
     for (0..4) |i| {
         const word: u32 = (if (i == 0) @as(u32, 0xd2800000) else 0xf2800000) |
             (@as(u32, @intCast(i)) << 21) | 7;
@@ -832,14 +832,14 @@ fn testOwnedPack(allocator: Allocator) (ReadError || WriteError || error{TestExp
         .arena = std.heap.ArenaAllocator.init(allocator),
         .artifacts = &.{.{
             .kind = .{ .rc_helper = "helper" },
-            .callable_contract = [_]u8{17} ** 32,
+            .callable_contract = @as([32]u8, @splat(17)),
             .context_contract = .{
                 .target = .arm64glibc,
                 .cpu_level = .default,
                 .hot_reload = false,
                 .default_platform_runtime = false,
             },
-            .code = "\x00" ** 32,
+            .code = "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
             .entry = 0,
             .frame = null,
             .refs = &.{.{ .site = 0, .form = .call, .target = 0, .delta = 0, .veneer = 3 }},
@@ -903,28 +903,28 @@ test "pack literal producer declaration roundtrip and malformed recipe rejection
         .data = &.{},
     }};
     const set: ProcArtifact.Set = .{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &artifacts };
-    const owner = [_]u8{73} ** 32;
+    const owner = @as([32]u8, @splat(73));
     const ConstType = @typeInfo(@FieldType(lir.Program.LiteralRepresentation, "types")).pointer.child;
     const result_types = [_]ConstType{.{ .primitive = .u64 }};
     const callable_types = result_types ++ [_]ConstType{.{ .func = .{
         .args = .{ .start = 0, .len = 0 },
-        .ret = @enumFromInt(0),
+        .ret = @fromBackingInt(@intCast(0)),
     } }};
     var bindings = [_]lir.Program.CachedLiteralBinding{
         .{
             .kind = 0,
             .binder = 3,
-            .type_digest = .{ .bytes = [_]u8{47} ** 32 },
+            .type_digest = .{ .bytes = @as([32]u8, @splat(47)) },
             .value_required = false,
-            .ty = .{ .root = @enumFromInt(0), .types = &result_types },
+            .ty = .{ .root = @fromBackingInt(@intCast(0)), .types = &result_types },
             .source = .runtime,
         },
         .{
             .kind = 1,
             .binder = 4,
-            .type_digest = .{ .bytes = [_]u8{49} ** 32 },
+            .type_digest = .{ .bytes = @as([32]u8, @splat(49)) },
             .value_required = true,
-            .ty = .{ .root = @enumFromInt(0), .types = &result_types },
+            .ty = .{ .root = @fromBackingInt(@intCast(0)), .types = &result_types },
             .source = .{ .checked_binding = .{ .module = owner, .value_expr = 23, .pattern = 29 } },
         },
     };
@@ -933,9 +933,9 @@ test "pack literal producer declaration roundtrip and malformed recipe rejection
         .binder = 5,
         .expr = 31,
         .context_anchor = 37,
-        .owner_template = .{ .artifact = .{ .bytes = owner }, .proc_base = @enumFromInt(2), .template = @enumFromInt(3) },
-        .base_key = .{ .bytes = [_]u8{51} ** 32 },
-        .specialization_key = .{ .bytes = [_]u8{53} ** 32 },
+        .owner_template = .{ .artifact = .{ .bytes = owner }, .proc_base = @fromBackingInt(@intCast(2)), .template = @fromBackingInt(@intCast(3)) },
+        .base_key = .{ .bytes = @as([32]u8, @splat(51)) },
+        .specialization_key = .{ .bytes = @as([32]u8, @splat(53)) },
         .bindings = &bindings,
         .evidence_frames = &.{.{ .scope_id = .root, .parent = null, .roots_start = 0, .roots_len = 0 }},
         .evidence_frame_head = 0,
@@ -945,15 +945,15 @@ test "pack literal producer declaration roundtrip and malformed recipe rejection
             .module = owner,
             .checked_expr = 17,
             .kind = .numeral,
-            .producer_key = [_]u8{39} ** 32,
+            .producer_key = @as([32]u8, @splat(39)),
             .object_identity = lir.ProcIdentity.forTest(991).bytes,
-            .owner_template = .{ .artifact = .{ .bytes = owner }, .proc_base = @enumFromInt(2), .template = @enumFromInt(3) },
-            .owner_context_fn_key = .{ .bytes = [_]u8{41} ** 32 },
-            .current_fn_key = .{ .bytes = [_]u8{43} ** 32 },
+            .owner_template = .{ .artifact = .{ .bytes = owner }, .proc_base = @fromBackingInt(@intCast(2)), .template = @fromBackingInt(@intCast(3)) },
+            .owner_context_fn_key = .{ .bytes = @as([32]u8, @splat(41)) },
+            .current_fn_key = .{ .bytes = @as([32]u8, @splat(43)) },
             .method_scope = owner,
-            .checked_callable_ty = @enumFromInt(8),
-            .callable = .{ .root = @enumFromInt(1), .types = &callable_types },
-            .result = .{ .root = @enumFromInt(0), .types = &result_types },
+            .checked_callable_ty = @fromBackingInt(@intCast(8)),
+            .callable = .{ .root = @fromBackingInt(@intCast(1)), .types = &callable_types },
+            .result = .{ .root = @fromBackingInt(@intCast(0)), .types = &result_types },
             .evidence_frames = &.{.{ .scope_id = .root, .parent = null, .roots_start = 0, .roots_len = 0 }},
             .evidence_frame_head = 0,
             .local_contexts = &contexts,
@@ -961,7 +961,7 @@ test "pack literal producer declaration roundtrip and malformed recipe rejection
         .cause = .{ .module = owner, .region = .{ .start = .{ .offset = 19 }, .end = .{ .offset = 21 } }, .line = 2, .column = 7 },
     }};
     const specs = [_]SpecEntry{.{
-        .key = [_]u8{61} ** 32,
+        .key = @as([32]u8, @splat(61)),
         .artifact = 0,
         .demand = .{ .complete = true, .literal_reads = &literals },
         .rc_borrowed_params = 0,
@@ -992,7 +992,7 @@ test "pack literal producer declaration roundtrip and malformed recipe rejection
     try std.testing.expect(!specs[0].demand.?.permitsRetirement());
     try std.testing.expectError(error.InvalidLiteralRecipe, write(allocator, &set, &specs));
     bindings[0].value_required = false;
-    literals[0].recipe.result.root = @enumFromInt(100);
+    literals[0].recipe.result.root = @fromBackingInt(@intCast(100));
     try std.testing.expect(!specs[0].demand.?.permitsRetirement());
     try std.testing.expectError(error.InvalidLiteralRecipe, write(allocator, &set, &specs));
 }
@@ -1018,7 +1018,7 @@ test "pack bytes round-trip every artifact field and spec entry" {
                 .hot_reload = false,
                 .default_platform_runtime = false,
             },
-            .code = try a.dupe(u8, "\x00" ** 32),
+            .code = try a.dupe(u8, "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"),
             .entry = 0,
             .frame = .{ .prologue_size = 4, .stack_alloc = 16, .frame_size = 16, .callee_saved_mask = 0x1000, .epilogue_offset = 4, .uses_frame_pointer = true },
             .refs = refs,
@@ -1036,7 +1036,7 @@ test "pack bytes round-trip every artifact field and spec entry" {
                 .{ .name = try a.dupe(u8, "roc__hab"), .bytes = try a.dupe(u8, "\x00\x00hi"), .alignment = 8, .symbol_offset = 2 },
                 .{
                     .name = try a.dupe(u8, "roc__hcd"),
-                    .bytes = try a.dupe(u8, "\x00" ** 16),
+                    .bytes = try a.dupe(u8, &@as([16]u8, @splat('\x00'))),
                     .alignment = 8,
                     .symbol_offset = 0,
                     .relocations = try a.dupe(ProcArtifact.DataRelocation, &.{
@@ -1061,7 +1061,7 @@ test "pack bytes round-trip every artifact field and spec entry" {
     defer set.deinit();
     const specs = [_]SpecEntry{
         .{
-            .key = [_]u8{0xab} ** 32,
+            .key = @as([32]u8, @splat(0xab)),
             .artifact = 0,
             .rc_borrowed_params = 0b101,
             .rc_ret_borrowed = true,
@@ -1143,7 +1143,7 @@ test "pack preserves relation summaries and rejects old records" {
                 }},
             };
             const bytes = try write(allocator, &set, &.{.{
-                .key = [_]u8{7} ** 32,
+                .key = @as([32]u8, @splat(7)),
                 .artifact = 0,
                 .platform_requirement_relation = relation,
                 .rc_borrowed_params = 1,
@@ -1168,7 +1168,7 @@ test "pack preserves relation summaries and rejects old records" {
             try std.testing.expectError(error.UnsupportedPackVersion, read(allocator, old));
         }
     };
-    for ([_]?[32]u8{ null, [_]u8{0} ** 32, [_]u8{9} ** 32 }) |relation| {
+    for ([_]?[32]u8{ null, @as([32]u8, @splat(0)), @as([32]u8, @splat(9)) }) |relation| {
         try std.testing.checkAllAllocationFailures(std.testing.allocator, Attempt.run, .{relation});
     }
 }
@@ -1193,7 +1193,7 @@ test "pack writes program-local constants and every reference to them under cont
                 .data = &.{
                     .{
                         .name = "roc__d1",
-                        .bytes = "\x00" ** 8,
+                        .bytes = &@as([8]u8, @splat('\x00')),
                         .alignment = 8,
                         .symbol_offset = 0,
                         .relocations = &.{.{ .offset = 0, .name = "roc__d1_1", .addend = 16, .function = false }},

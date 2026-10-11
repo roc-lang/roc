@@ -220,6 +220,8 @@ pub const LirLoweringOptions = struct {
     /// Receives deterministic Monotype work counters. This is independent of
     /// elapsed-time measurement and is available at the `monotype_only` boundary.
     monotype_diagnostics_out: ?*postcheck.Monotype.Lower.Diagnostics = null,
+    /// Let Monotype replay completed interface summaries.
+    replay_interface_summaries: bool = true,
 };
 
 /// Lower an app whose body is `app_body` (everything after the platform header
@@ -453,13 +455,13 @@ pub fn expectLirPassParallelismDeterministicLir(
             }
             try std.testing.expectEqual(metrics.tasks_committed, committed);
             inline for (phases) |phase| {
-                if (metrics.changed_by_phase[@intFromEnum(phase)] == 0) {
+                if (metrics.changed_by_phase[@backingInt(phase)] == 0) {
                     std.debug.print("No {s} LIR rewrites with {d} workers (reversed: {})\n", .{
                         @tagName(phase), workers, reverse,
                     });
                     std.debug.print("{s}\n", .{reference.written()});
                 }
-                try std.testing.expect(metrics.changed_by_phase[@intFromEnum(phase)] > 0);
+                try std.testing.expect(metrics.changed_by_phase[@backingInt(phase)] > 0);
             }
             if (expected_metrics) |expected| {
                 try std.testing.expectEqualDeep(expected, metrics);
@@ -515,14 +517,14 @@ pub fn expectSpecConstrParallelismDeterministicLir(
         try std.testing.expectEqual(@as(u64, 0), serial.patterns_admitted);
         inline for (.{ .discovery, .unused_loop_results }) |phase| {
             const typed_phase: lir.CheckedPipeline.SpecConstrPhase = phase;
-            try std.testing.expectEqual(@as(u64, 0), serial.changed_by_phase[@intFromEnum(typed_phase)]);
+            try std.testing.expectEqual(@as(u64, 0), serial.changed_by_phase[@backingInt(typed_phase)]);
         }
     }
     inline for (phases) |phase| {
-        if (serial.changed_by_phase[@intFromEnum(phase)] == 0) {
+        if (serial.changed_by_phase[@backingInt(phase)] == 0) {
             std.debug.print("No useful {s} SpecConstr work in serial fixture\n", .{@tagName(phase)});
         }
-        try std.testing.expect(serial.changed_by_phase[@intFromEnum(phase)] > 0);
+        try std.testing.expect(serial.changed_by_phase[@backingInt(phase)] > 0);
         if (phase == .discovery) {
             try std.testing.expect(serial.patterns_admitted > 0);
             try std.testing.expect(serial.patterns_recorded >= serial.patterns_admitted);
@@ -555,11 +557,11 @@ pub fn expectSpecConstrParallelismDeterministicLir(
             for (metrics.committed_by_phase) |count| committed += count;
             try std.testing.expectEqual(metrics.tasks_committed, committed);
             if (options.inline_mode == .none) {
-                try std.testing.expectEqual(metrics.tasks_committed, metrics.committed_by_phase[@intFromEnum(lir.CheckedPipeline.SpecConstrPhase.iterator_fusion)]);
+                try std.testing.expectEqual(metrics.tasks_committed, metrics.committed_by_phase[@backingInt(lir.CheckedPipeline.SpecConstrPhase.iterator_fusion)]);
             }
             inline for (phases) |phase| {
-                try std.testing.expect(metrics.committed_by_phase[@intFromEnum(phase)] > 0);
-                try std.testing.expect(metrics.changed_by_phase[@intFromEnum(phase)] > 0);
+                try std.testing.expect(metrics.committed_by_phase[@backingInt(phase)] > 0);
+                try std.testing.expect(metrics.changed_by_phase[@backingInt(phase)] > 0);
             }
             // Common work includes inline shard execution. Compare every common
             // field rather than allowing scheduling to change admission or IDs.
@@ -894,7 +896,7 @@ fn expectNamedWorkerLocalCommitted(
 ) LowerToLirHarnessError!void {
     var matching_names: usize = 0;
     for (0..store.localCount()) |index| {
-        const name = store.localName(@enumFromInt(@as(u32, @intCast(index)))) orelse continue;
+        const name = store.localName(@fromBackingInt(@intCast(@as(u32, @intCast(index))))) orelse continue;
         if (std.mem.eql(u8, name, "named_local")) matching_names += 1;
     }
     try std.testing.expectEqual(@as(usize, 1), matching_names);
@@ -981,6 +983,42 @@ pub fn expectTargetIndependentLir(app_body: []const u8) LowerToLirHarnessError!v
     var writer_b = std.Io.Writer.fixed(buf_b);
     try runToLir(app_body, &writer_a, .{ .target_usize = .u32, .list_in_place_map = true }, null);
     try runToLir(app_body, &writer_b, .{ .target_usize = .u64, .list_in_place_map = true }, null);
+    try std.testing.expectEqualStrings(writer_a.buffered(), writer_b.buffered());
+}
+
+/// Lower `app_body` with and without replaying completed interface summaries
+/// and assert both runs produce the same specialization identities and
+/// byte-identical LIR. A replay instantiates the summary's open cells as fresh
+/// unresolved cells carrying their recorded defaults, so the live graph a
+/// body's lowering reads cannot depend on whether a callee's summary was
+/// already completed. The replaying run must actually hit a summary, and the
+/// other must expand every request.
+pub fn expectInterfaceSummaryReplayFaithfulLir(app_body: []const u8) LowerToLirHarnessError!void {
+    var replayed: postcheck.Monotype.Lower.Diagnostics = .{};
+    var expanded: postcheck.Monotype.Lower.Diagnostics = .{};
+    try runToLir(app_body, null, .{ .monotype_only = true, .monotype_diagnostics_out = &replayed }, null);
+    try runToLir(app_body, null, .{
+        .monotype_only = true,
+        .monotype_diagnostics_out = &expanded,
+        .replay_interface_summaries = false,
+    }, null);
+    try std.testing.expect(replayed.specialization.interface_summary_hits > 0);
+    try std.testing.expectEqual(@as(u64, 0), expanded.specialization.interface_summary_hits);
+
+    const gpa = std.testing.allocator;
+    const cap = 1 << 22;
+    const buf_a = try gpa.alloc(u8, cap);
+    defer gpa.free(buf_a);
+    const buf_b = try gpa.alloc(u8, cap);
+    defer gpa.free(buf_b);
+    var writer_a = std.Io.Writer.fixed(buf_a);
+    var writer_b = std.Io.Writer.fixed(buf_b);
+    try runToLir(app_body, &writer_a, .{ .proc_debug_names = true, .dump_proc_identities = true }, null);
+    try runToLir(app_body, &writer_b, .{
+        .proc_debug_names = true,
+        .dump_proc_identities = true,
+        .replay_interface_summaries = false,
+    }, null);
     try std.testing.expectEqualStrings(writer_a.buffered(), writer_b.buffered());
 }
 
@@ -1144,7 +1182,7 @@ fn lowerAppPathToLir(
         opts.specialization_workers,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
     );
@@ -1208,7 +1246,10 @@ fn lowerAppPathToLir(
                 .imports = imports,
             },
             .{ .requests = lir_roots },
-            .{ .diagnostics = if (opts.monotype_diagnostics_out != null) &diagnostics else null },
+            .{
+                .diagnostics = if (opts.monotype_diagnostics_out != null) &diagnostics else null,
+                .replay_interface_summaries = .{ .value = opts.replay_interface_summaries },
+            },
         );
         mono.deinit();
         if (opts.monotype_diagnostics_out) |out| out.* = diagnostics;
@@ -1266,6 +1307,7 @@ fn lowerAppPathToLir(
         .list_in_place_map = opts.list_in_place_map,
         .proc_debug_names = opts.proc_debug_names,
         .prove_ranges = opts.prove_ranges,
+        .replay_interface_summaries = .{ .value = opts.replay_interface_summaries },
         .lifted_expr_count_out = opts.lifted_expr_count_out,
         .post_check_executor = post_check_executor,
         .solved_lir_parallel_metrics_out = opts.solved_lir_parallel_metrics_out,
@@ -1289,7 +1331,7 @@ fn lowerAppPathToLir(
         const layouts = &lowered.lir_result.layouts;
         for (0..store.getProcSpecs().len) |index| {
             if (opts.dump_proc_identities) {
-                const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+                const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
                 const proc = store.getProcSpec(proc_id);
                 try writer.print("identity={x} symbol={d} debug_name={s} borrowed_params={x} ret_borrowed={} ret_lenders={x}\n", .{
                     &proc.identity.bytes,
@@ -1300,7 +1342,7 @@ fn lowerAppPathToLir(
                     proc.rc_ret_lenders,
                 });
             }
-            try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), writer);
+            try lir.DebugPrint.writeProc(gpa, store, layouts, @fromBackingInt(@intCast(@as(u32, @intCast(index)))), writer);
         }
     }
 

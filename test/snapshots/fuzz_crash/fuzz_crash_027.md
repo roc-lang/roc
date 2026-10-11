@@ -2280,7 +2280,19 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Blue, Red, ..], _arg -> Error")
+			(text "[Blue, Red, ..d], _arg -> f")
+			(line-break)
+			(indent 1)
+			(text "  where [")
+			(line-break)
+			(indent 1)
+			(text "    d.is_eq : d, d -> Bool,")
+			(line-break)
+			(indent 1)
+			(text "    f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),")
+			(line-break)
+			(indent 1)
+			(text "  ]")
 			(annotation-end)
 			(line-break)
 			(line-break)
@@ -2795,7 +2807,11 @@ EndOfFile,
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "match_time"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-lambda
+			(args
+				(p-assign (ident "a"))
+				(p-assign (ident "b")))
+			(e-runtime-error (tag "erroneous_value_expr"))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-runtime-error (tag "erroneous_value_expr"))
@@ -2893,7 +2909,7 @@ EndOfFile,
 		(patt (type "(Error, Error)"))
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "U64 -> U64"))
-		(patt (type "[Blue, Red, ..], _arg -> Error"))
+		(patt (type "[Blue, Red, ..d], _arg -> f where [d.is_eq : d, d -> Bool, f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(patt (type "List(Error) -> Try({}, _d)")))
 	(type_decls
 		(alias (type "Map(a, b)")
@@ -2928,6 +2944,6 @@ EndOfFile,
 		(expr (type "(Error, Error)"))
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "U64 -> U64"))
-		(expr (type "[Blue, Red, ..], _arg -> Error"))
+		(expr (type "[Blue, Red, ..d], _arg -> f where [d.is_eq : d, d -> Bool, f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(expr (type "List(Error) -> Try({}, _d)"))))
 ~~~

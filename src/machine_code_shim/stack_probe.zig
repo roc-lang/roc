@@ -11,7 +11,7 @@ const builtin = @import("builtin");
 // Zig's self-hosted x86 Debug backend does not emit this libcall. LLVM does
 // in both safe modes; only retain the helper for that explicit codegen ABI.
 const needs_zig_probe = builtin.zig_backend == .stage2_llvm and
-    (builtin.mode == .Debug or builtin.mode == .ReleaseSafe) and
+    (builtin.mode == .debug or builtin.mode == .safe) and
     (builtin.object_format == .elf or builtin.object_format == .macho) and
     (builtin.cpu.arch == .x86 or builtin.cpu.arch == .x86_64);
 

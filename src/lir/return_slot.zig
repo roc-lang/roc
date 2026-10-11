@@ -23,6 +23,7 @@
 //! `out` with an explicit destination store instead of building a temporary.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const core = @import("lir_core");
@@ -51,13 +52,13 @@ pub fn run(store: *LirStore, layouts: *layout_mod.Store) ResourceError!void {
     const proc_count = store.procSpecCount();
     var proc_index: usize = 0;
     while (proc_index < proc_count) : (proc_index += 1) {
-        const proc_id: LIR.LirProcSpecId = @enumFromInt(proc_index);
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(proc_index));
         // Only a body with the shape's flag can carry the caller shape; Debug
         // builds run the excluded procedures too and verify nothing rewrites.
         const admitted = store.getProcSpec(proc_id).shapes.interned_call_result;
-        if (!admitted and builtin.mode != .Debug) continue;
+        if (!admitted and builtin.mode != .debug) continue;
         const rewrote = try pass.transformProc(proc_id);
-        if (rewrote and !admitted) @panic("return-slot pass rewrote a procedure whose shapes excluded it");
+        if (rewrote and !admitted) invariant("{s}", .{"return-slot pass rewrote a procedure whose shapes excluded it"});
     }
 }
 
@@ -207,13 +208,7 @@ const ReturnSlotRewriter = struct {
     pub fn cloneRet(self: *ReturnSlotRewriter, cloner: anytype, value: LocalId, origin: LIR.StmtOrigin) ResourceError!CFStmtId {
         const slot = slotOrigin(origin);
         const ret_stmt = try cloner.store.addCFStmt(.{ .ret = .{ .value = self.store_unit } }, slot);
-        return try cloner.store.addCFStmt(.{ .assign_low_level = .{
-            .target = self.store_unit,
-            .op = .ptr_store,
-            .rc_effect = LowLevelOp.ptr_store.rcEffect(),
-            .args = try cloner.store.addLocalSpan(&.{ self.out_ptr, try cloner.mapLocal(value) }),
-            .next = ret_stmt,
-        } }, slot);
+        return try cloner.store.addLowLevelStmt(self.store_unit, .ptr_store, &.{ self.out_ptr, try cloner.mapLocal(value) }, ret_stmt, slot);
     }
 
     pub fn interceptStmt(self: *ReturnSlotRewriter, cloner: anytype, _: CFStmtId, stmt: LIR.CFStmt, origin: LIR.StmtOrigin) ResourceError!body_clone.Intercept {

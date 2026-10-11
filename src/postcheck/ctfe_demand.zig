@@ -212,14 +212,14 @@ pub const Graph = struct {
         errdefer self.allocator.free(read_starts);
         std.mem.sort(Edge, self.edges.items, {}, struct {
             fn less(_: void, a: Edge, b: Edge) bool {
-                if (a.from != b.from) return @intFromEnum(a.from) < @intFromEnum(b.from);
-                if (a.to != b.to) return @intFromEnum(a.to) < @intFromEnum(b.to);
-                return @intFromEnum(a.relation) < @intFromEnum(b.relation);
+                if (a.from != b.from) return @backingInt(a.from) < @backingInt(b.from);
+                if (a.to != b.to) return @backingInt(a.to) < @backingInt(b.to);
+                return @backingInt(a.relation) < @backingInt(b.relation);
             }
         }.less);
         std.mem.sort(Read, self.reads.items, {}, struct {
             fn less(_: void, a: Read, b: Read) bool {
-                return @intFromEnum(a.node) < @intFromEnum(b.node);
+                return @backingInt(a.node) < @backingInt(b.node);
             }
         }.less);
         var edge_cursor: u32 = 0;
@@ -227,8 +227,8 @@ pub const Graph = struct {
         for (0..self.node_count) |node| {
             edge_starts[node] = edge_cursor;
             read_starts[node] = read_cursor;
-            while (edge_cursor < self.edges.items.len and @intFromEnum(self.edges.items[edge_cursor].from) == node) edge_cursor += 1;
-            while (read_cursor < self.reads.items.len and @intFromEnum(self.reads.items[read_cursor].node) == node) read_cursor += 1;
+            while (edge_cursor < self.edges.items.len and @backingInt(self.edges.items[edge_cursor].from) == node) edge_cursor += 1;
+            while (read_cursor < self.reads.items.len and @backingInt(self.reads.items[read_cursor].node) == node) read_cursor += 1;
         }
         edge_starts[self.node_count] = edge_cursor;
         read_starts[self.node_count] = read_cursor;
@@ -263,7 +263,7 @@ pub const Graph = struct {
     pub fn summarize(self: *const Graph, allocator: std.mem.Allocator, owner: NodeId) std.mem.Allocator.Error!Summary {
         self.validate(owner);
         if (self.edge_starts.len == 0) Common.invariant("CTFE demand summary requested before producer seal");
-        const summary = self.summaries.items[self.components[@intFromEnum(owner)]];
+        const summary = self.summaries.items[self.components[@backingInt(owner)]];
         const reads = try allocator.dupe(u32, summary.reads);
         errdefer allocator.free(reads);
         const captures = try allocator.dupe(u32, summary.address_captures);
@@ -287,9 +287,9 @@ pub const Graph = struct {
         const states = try self.allocator.alloc(State, self.node_count);
         defer self.allocator.free(states);
         @memset(states, .{});
-        for (self.unavailable.items) |node| states[@intFromEnum(node)].unavailable = true;
+        for (self.unavailable.items) |node| states[@backingInt(node)].unavailable = true;
         for (self.contracts.items, 0..) |contract, index| {
-            states[@intFromEnum(contract.node)].contract = @intCast(index);
+            states[@backingInt(contract.node)].contract = @intCast(index);
         }
         const components = try self.allocator.alloc(u32, self.node_count);
         errdefer self.allocator.free(components);
@@ -330,7 +330,7 @@ pub const Graph = struct {
                     const edge = self.edges.items[frame.edge];
                     frame.edge += 1;
                     if (edge.relation != .evaluation and edge.relation != .application) continue;
-                    const target = @intFromEnum(edge.to);
+                    const target = @backingInt(edge.to);
                     if (states[target].index == unseen) {
                         states[target].index = next_index;
                         states[target].low = next_index;
@@ -373,7 +373,7 @@ pub const Graph = struct {
                             .address_capture => try capture_set.put(@intCast(edge_index)),
                             .representation => {},
                             .evaluation, .application => {
-                                const dependency = components[@intFromEnum(edge.to)];
+                                const dependency = components[@backingInt(edge.to)];
                                 if (dependency == unseen) Common.invariant("CTFE demand component consumed an unfinished predecessor");
                                 if (dependency != component) try dependency_set.put(dependency);
                             },
@@ -407,7 +407,7 @@ pub const Graph = struct {
     }
 
     fn validate(self: *const Graph, node: NodeId) void {
-        if (@intFromEnum(node) >= self.node_count) Common.invariant("CTFE demand referenced an unpublished producer node");
+        if (@backingInt(node) >= self.node_count) Common.invariant("CTFE demand referenced an unpublished producer node");
     }
 };
 
@@ -415,27 +415,27 @@ test "CTFE demand recursive applications exclude captured and representation-onl
     const allocator = std.testing.allocator;
     var graph = Graph.init(allocator, 5);
     defer graph.deinit();
-    try graph.addEdge(@enumFromInt(0), @enumFromInt(1), .application);
-    try graph.addEdge(@enumFromInt(1), @enumFromInt(0), .application);
-    try graph.addEdge(@enumFromInt(0), @enumFromInt(2), .address_capture);
-    try graph.addEdge(@enumFromInt(1), @enumFromInt(3), .representation);
-    try graph.addEdge(@enumFromInt(1), @enumFromInt(4), .evaluation);
+    try graph.addEdge(@fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(1)), .application);
+    try graph.addEdge(@fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(0)), .application);
+    try graph.addEdge(@fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(2)), .address_capture);
+    try graph.addEdge(@fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(3)), .representation);
+    try graph.addEdge(@fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(4)), .evaluation);
     const root: Common.ComptimeValueRoot = .{
-        .module = .{ .bytes = [_]u8{5} ** 32 },
-        .root = .{ .literal = @enumFromInt(2) },
+        .module = .{ .bytes = @as([32]u8, @splat(5)) },
+        .root = .{ .literal = @fromBackingInt(@intCast(2)) },
         .const_locator = null,
     };
     for ([_]u32{ 2, 3, 4 }) |node| {
-        try graph.addRead(.{ .node = @enumFromInt(node), .root = root, .region = .zero(), .loc = .none });
+        try graph.addRead(.{ .node = @fromBackingInt(@intCast(node)), .root = root, .region = .zero(), .loc = .none });
     }
-    try graph.addUnavailable(@enumFromInt(2));
+    try graph.addUnavailable(@fromBackingInt(@intCast(2)));
     try graph.seal();
-    var summary = try graph.summarize(allocator, @enumFromInt(0));
+    var summary = try graph.summarize(allocator, @fromBackingInt(@intCast(0)));
     defer summary.deinit(allocator);
     try std.testing.expect(summary.complete);
     try std.testing.expectEqual(@as(usize, 1), summary.reads.len);
-    try std.testing.expectEqual(@as(u32, 4), @intFromEnum(graph.reads.items[summary.reads[0]].node));
-    var incomplete = try graph.summarize(allocator, @enumFromInt(2));
+    try std.testing.expectEqual(@as(u32, 4), @backingInt(graph.reads.items[summary.reads[0]].node));
+    var incomplete = try graph.summarize(allocator, @fromBackingInt(@intCast(2)));
     defer incomplete.deinit(allocator);
     try std.testing.expect(!incomplete.complete);
 }
@@ -446,15 +446,15 @@ test "CTFE demand retired comparator propagates incompleteness only through appl
     defer graph.deinit();
     // Both owners evaluate the same boxed dispatch object. Only sorting
     // invokes its comparator, whose retired body has no complete contract.
-    try graph.addEdge(@enumFromInt(0), @enumFromInt(2), .evaluation);
-    try graph.addEdge(@enumFromInt(1), @enumFromInt(2), .evaluation);
-    try graph.addEdge(@enumFromInt(2), @enumFromInt(3), .address_capture);
-    try graph.addEdge(@enumFromInt(0), @enumFromInt(3), .application);
-    try graph.addUnavailable(@enumFromInt(3));
+    try graph.addEdge(@fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(2)), .evaluation);
+    try graph.addEdge(@fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(2)), .evaluation);
+    try graph.addEdge(@fromBackingInt(@intCast(2)), @fromBackingInt(@intCast(3)), .address_capture);
+    try graph.addEdge(@fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(3)), .application);
+    try graph.addUnavailable(@fromBackingInt(@intCast(3)));
     try graph.seal();
-    var sort = try graph.summarize(allocator, @enumFromInt(0));
+    var sort = try graph.summarize(allocator, @fromBackingInt(@intCast(0)));
     defer sort.deinit(allocator);
-    var box = try graph.summarize(allocator, @enumFromInt(1));
+    var box = try graph.summarize(allocator, @fromBackingInt(@intCast(1)));
     defer box.deinit(allocator);
     try std.testing.expect(!sort.complete);
     try std.testing.expect(box.complete);
@@ -468,13 +468,13 @@ test "CTFE demand shares component closure facts along long sorted chains" {
     var graph = Graph.init(allocator, count);
     defer graph.deinit();
     for (0..count - 1) |index| {
-        try graph.addEdge(@enumFromInt(index), @enumFromInt(index + 1), .evaluation);
+        try graph.addEdge(@fromBackingInt(@intCast(index)), @fromBackingInt(@intCast(index + 1)), .evaluation);
     }
     try graph.addRead(.{
-        .node = @enumFromInt(count - 1),
+        .node = @fromBackingInt(@intCast(count - 1)),
         .root = .{
-            .module = .{ .bytes = [_]u8{11} ** 32 },
-            .root = .{ .literal = @enumFromInt(0) },
+            .module = .{ .bytes = @as([32]u8, @splat(11)) },
+            .root = .{ .literal = @fromBackingInt(@intCast(0)) },
             .const_locator = null,
         },
         .region = .zero(),
@@ -500,7 +500,7 @@ test "CTFE demand scratch work stays linear after fanout followed by isolated no
         var graph = Graph.init(allocator, 2 * width + 1);
         defer graph.deinit();
         for (1..width + 1) |target| {
-            try graph.addEdge(@enumFromInt(0), @enumFromInt(target), .application);
+            try graph.addEdge(@fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(target)), .application);
         }
         try graph.seal();
         // Four generation resets per component, domain initialization, and
@@ -512,24 +512,24 @@ test "CTFE demand scratch work stays linear after fanout followed by isolated no
 fn exerciseDemandAllocations(allocator: std.mem.Allocator) std.mem.Allocator.Error!void {
     var graph = Graph.init(allocator, 4);
     defer graph.deinit();
-    try graph.addEdge(@enumFromInt(0), @enumFromInt(1), .application);
-    try graph.addEdge(@enumFromInt(1), @enumFromInt(0), .application);
-    try graph.addEdge(@enumFromInt(1), @enumFromInt(2), .evaluation);
-    try graph.addEdge(@enumFromInt(1), @enumFromInt(3), .address_capture);
+    try graph.addEdge(@fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(1)), .application);
+    try graph.addEdge(@fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(0)), .application);
+    try graph.addEdge(@fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(2)), .evaluation);
+    try graph.addEdge(@fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(3)), .address_capture);
     try graph.addRead(.{
-        .node = @enumFromInt(2),
+        .node = @fromBackingInt(@intCast(2)),
         .root = .{
-            .module = .{ .bytes = [_]u8{12} ** 32 },
-            .root = .{ .checked = @enumFromInt(0) },
+            .module = .{ .bytes = @as([32]u8, @splat(12)) },
+            .root = .{ .checked = @fromBackingInt(@intCast(0)) },
             .const_locator = null,
         },
         .region = .zero(),
         .loc = .none,
     });
-    try graph.addUnavailable(@enumFromInt(2));
+    try graph.addUnavailable(@fromBackingInt(@intCast(2)));
     try graph.seal();
     var copy = try graph.clone(allocator);
     defer copy.deinit();
-    var summary = try copy.summarize(allocator, @enumFromInt(0));
+    var summary = try copy.summarize(allocator, @fromBackingInt(@intCast(0)));
     defer summary.deinit(allocator);
 }

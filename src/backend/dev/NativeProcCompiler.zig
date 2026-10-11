@@ -13,6 +13,7 @@ const layout = @import("layout");
 const roc_target = @import("roc_target");
 const Emitter = @import("LirCodeGen.zig");
 const Artifact = @import("ProcArtifact.zig");
+const StackPlan = @import("StackPlan.zig");
 const tasks = base.post_check_task_executor;
 const Allocator = std.mem.Allocator;
 const ProcId = lir.LIR.LirProcSpecId;
@@ -34,11 +35,11 @@ pub const Metrics = struct {
 
     /// Combine work counters while preserving the maximum retained wave size.
     pub fn add(self: *Metrics, other: Metrics) void {
-        inline for (@typeInfo(Metrics).@"struct".fields) |field| {
-            if (comptime std.mem.eql(u8, field.name, "peak_inflight_fragments")) {
-                @field(self, field.name) = @max(@field(self, field.name), @field(other, field.name));
+        inline for (@typeInfo(Metrics).@"struct".field_names) |field_name| {
+            if (comptime std.mem.eql(u8, field_name, "peak_inflight_fragments")) {
+                @field(self, field_name) = @max(@field(self, field_name), @field(other, field_name));
             } else {
-                @field(self, field.name) +|= @field(other, field.name);
+                @field(self, field_name) +|= @field(other, field_name);
             }
         }
     }
@@ -137,7 +138,7 @@ pub const Retained = struct {
 fn invariant(err: (Artifact.ExtractError || Artifact.AssembleError)) Allocator.Error {
     return switch (err) {
         error.OutOfMemory => error.OutOfMemory,
-        else => std.debug.panic("native fragment compiler invariant: {s}", .{@errorName(err)}),
+        else => base.invariant("native fragment compiler invariant: {s}", .{@errorName(err)}),
     };
 }
 
@@ -190,6 +191,7 @@ fn Job(comptime CG: type) type {
                 source.cpu_level,
             );
             defer cg.deinit();
+            cg.borrowStackPlanIndexes(try laneStackPlanIndexes(worker));
             cg.generation_mode = source.generation_mode;
             cg.enable_hot_reload = source.enable_hot_reload;
             cg.enable_default_platform_runtime = source.enable_default_platform_runtime;
@@ -203,11 +205,36 @@ fn Job(comptime CG: type) type {
     };
 }
 
+const StackPlanIndexesKey = struct {
+    var value: u8 = 0;
+};
+
+/// The stack-plan indexes this lane lends every procedure it generates.
+fn laneStackPlanIndexes(worker: tasks.Worker) Allocator.Error!*StackPlan.Indexes {
+    const key: *const anyopaque = @ptrCast(&StackPlanIndexesKey.value);
+    if (worker.lane_state.get(key)) |opaque_indexes| return @ptrCast(@alignCast(opaque_indexes));
+    const indexes = try worker.allocator.create(StackPlan.Indexes);
+    errdefer worker.allocator.destroy(indexes);
+    indexes.* = StackPlan.Indexes.init(worker.allocator);
+    errdefer indexes.deinit();
+    try worker.lane_state.put(key, indexes, destroyStackPlanIndexes);
+    return indexes;
+}
+
+fn destroyStackPlanIndexes(opaque_indexes: *anyopaque) void {
+    const indexes: *StackPlan.Indexes = @ptrCast(@alignCast(opaque_indexes));
+    const allocator = indexes.allocator;
+    indexes.deinit();
+    allocator.destroy(indexes);
+}
+
 const wave_capacity = 32;
 
 /// Runs the same callback path with or without an executor. Admission stops on
 /// any observed OOM, but all accepted callbacks finish before owners are touched.
-fn executeWave(comptime CG: type, allocator: Allocator, jobs: []Job(CG), executor: ?tasks.Executor, metrics: *Metrics) Allocator.Error!void {
+/// Without an executor, every wave runs on `sequential_lane`, which outlives
+/// the waves so lane state carries from one to the next as on a worker.
+fn executeWave(comptime CG: type, allocator: Allocator, jobs: []Job(CG), executor: ?tasks.Executor, sequential_lane: *tasks.LaneState, metrics: *Metrics) Allocator.Error!void {
     var failed = false;
     if (executor) |exec| {
         var session = exec.begin();
@@ -235,8 +262,6 @@ fn executeWave(comptime CG: type, allocator: Allocator, jobs: []Job(CG), executo
         }
         session.end();
     } else {
-        var lane = tasks.LaneState.init(allocator);
-        defer lane.deinit();
         var scratch = std.heap.ArenaAllocator.init(allocator);
         defer scratch.deinit();
         var accepted: usize = 0;
@@ -246,7 +271,7 @@ fn executeWave(comptime CG: type, allocator: Allocator, jobs: []Job(CG), executo
             metrics.tasks_submitted +|= 1;
             accepted += 1;
             metrics.peak_inflight_fragments = @max(metrics.peak_inflight_fragments, accepted);
-            _ = Job(CG).execute(job, .{ .id = 0, .allocator = allocator, .scratch = scratch.allocator(), .lane_state = &lane });
+            _ = Job(CG).execute(job, .{ .id = 0, .allocator = allocator, .scratch = scratch.allocator(), .lane_state = sequential_lane });
             if (job.oom) {
                 failed = true;
                 break;
@@ -290,6 +315,8 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
     std.debug.assert(contract.target == options.target.defaultCpuTarget());
     var retained = Retained{ .allocator = allocator, .contract = contract };
     errdefer retained.deinit();
+    var sequential_lane = tasks.LaneState.init(allocator);
+    defer sequential_lane.deinit();
     // Index immutable backing once; workers capture only reached data. Execution
     // callers leave mutable static roots external, never copied placeholder values.
     var data = Artifact.PreparedData.init(allocator, destination.store.getProcSpecs(), destination.static_strings.exports, options.constant_exports, &.{}) catch |err| return invariant(err);
@@ -299,7 +326,7 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
     defer demanded.deinit(allocator);
     var identities = std.AutoHashMap(lir.ProcIdentity, ProcId).init(allocator);
     defer identities.deinit();
-    for (specs, 0..) |spec, i| try identities.putNoClobber(spec.identity, @enumFromInt(i));
+    for (specs, 0..) |spec, i| try identities.putNoClobber(spec.identity, @fromBackingInt(@intCast(i)));
     var cached_procs = std.AutoHashMap(lir.ProcIdentity, *const Procedure).init(allocator);
     defer cached_procs.deinit();
     var cached_helpers = std.AutoHashMap(u64, *const Helper).init(allocator);
@@ -333,10 +360,10 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
         };
         while (cursor < demand.len and count < wave_capacity) : (cursor += 1) {
             const id = demand[cursor];
-            if (demanded.isSet(@intFromEnum(id))) continue;
-            demanded.set(@intFromEnum(id));
+            if (demanded.isSet(@backingInt(id))) continue;
+            demanded.set(@backingInt(id));
             if (destination.compiledProcSymbol(id) != null) continue;
-            const spec = specs[@intFromEnum(id)];
+            const spec = specs[@backingInt(id)];
             storage[count] = .{ .source = destination, .data = &data, .proc = id };
             const job = &storage[count];
             count += 1;
@@ -349,7 +376,7 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
                 }
             }
         }
-        try executeWave(CG, allocator, storage[0..count], options.executor, &metrics);
+        try executeWave(CG, allocator, storage[0..count], options.executor, &sequential_lane, &metrics);
         for (storage[0..count]) |*job| {
             const fragment = &job.fragment.?;
             try requireHelpers(allocator, fragment, &helper_queue, &helper_seen);
@@ -358,7 +385,7 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
             defer allocator.free(starts);
             try retained.appendImageData(CG, destination, fragment, starts);
             const id = job.proc.?;
-            const spec = specs[@intFromEnum(id)];
+            const spec = specs[@backingInt(id)];
             try retained.procedures.append(allocator, .{ .id = id, .identity = spec.identity, .revision = spec.native_code_revision, .fragment = fragment.* });
             account(&metrics, fragment, job.reused, false);
             job.fragment = null;
@@ -376,7 +403,7 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
                 job.reused = true;
             }
         }
-        try executeWave(CG, allocator, @as(*[1]Job(CG), @ptrCast(&job)), options.executor, &metrics);
+        try executeWave(CG, allocator, @as(*[1]Job(CG), @ptrCast(&job)), options.executor, &sequential_lane, &metrics);
         const fragment = &job.fragment.?;
         try requireHelpers(allocator, fragment, &helper_queue, &helper_seen);
         const name = try Emitter.compiledRcHelperSymbolName(allocator, destination.layout_store, key);
@@ -705,7 +732,7 @@ test "native retained data binds local self pointers through nonzero fragment pl
     const spec = store.getProcSpec(proc);
     var cg = try CG.init(a, &store, &layouts, .{}, &.{}, .default);
     defer cg.deinit();
-    _ = try cg.appendAssembledRegion("\x90" ** 8, .entrypoint, 0, null);
+    _ = try cg.appendAssembledRegion("\x90\x90\x90\x90\x90\x90\x90\x90", .entrypoint, 0, null);
     const source = Artifact.Set{
         .arena = std.heap.ArenaAllocator.init(a),
         .artifacts = &.{.{
@@ -724,7 +751,7 @@ test "native retained data binds local self pointers through nonzero fragment pl
             .relocations = &.{.{ .offset = 4, .name = "self-pointer", .scope = .shared, .kind = .{ .data = .rel32 } }},
             .data = &.{.{
                 .name = "self-pointer",
-                .bytes = "\x00" ** 8,
+                .bytes = "\x00\x00\x00\x00\x00\x00\x00\x00",
                 .alignment = 8,
                 .symbol_offset = 0,
                 .relocations = &.{.{ .offset = 0, .name = "original-proc", .addend = 0, .function = true, .code_target = .{ .local = 0 } }},

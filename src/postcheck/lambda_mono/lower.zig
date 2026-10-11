@@ -208,14 +208,14 @@ const FnSpec = struct {
 const FnSpecContext = struct {
     pub fn hash(_: FnSpecContext, spec: FnSpec) u64 {
         var hasher = std.hash.Wyhash.init(0);
-        std.hash.autoHash(&hasher, @intFromEnum(spec.source));
-        std.hash.autoHash(&hasher, @intFromEnum(spec.solved_fn_ty));
+        std.hash.autoHash(&hasher, @backingInt(spec.source));
+        std.hash.autoHash(&hasher, @backingInt(spec.solved_fn_ty));
         std.hash.autoHash(&hasher, spec.abi);
         std.hash.autoHash(&hasher, spec.captures.source);
         std.hash.autoHash(&hasher, spec.captures.start);
         std.hash.autoHash(&hasher, spec.captures.len);
         if (spec.capture_ty) |capture_ty| {
-            std.hash.autoHash(&hasher, @intFromEnum(capture_ty));
+            std.hash.autoHash(&hasher, @backingInt(capture_ty));
         } else {
             std.hash.autoHash(&hasher, @as(u32, std.math.maxInt(u32)));
         }
@@ -388,7 +388,7 @@ const Lowerer = struct {
 
     fn indexSourceFns(self: *Lowerer) Allocator.Error!void {
         for (self.solved.lifted.fns, 0..) |fn_, index| {
-            const fn_id: Lifted.FnId = @enumFromInt(@as(u32, @intCast(index)));
+            const fn_id: Lifted.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             const result = try self.source_symbols.getOrPut(fn_.symbol);
             if (result.found_existing) Common.invariant("two lifted functions had the same symbol");
             result.value_ptr.* = fn_id;
@@ -399,14 +399,14 @@ const Lowerer = struct {
         var index: usize = 0;
         while (index < self.fn_specs.items.len) : (index += 1) {
             if (self.fn_written.items[index]) continue;
-            const out_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(index)));
+            const out_id: Ast.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             try self.lowerFnSpec(out_id, self.fn_specs.items[index]);
         }
     }
 
     fn lowerFnSpec(self: *Lowerer, out_id: Ast.FnId, spec: FnSpec) Allocator.Error!void {
         const fn_id = spec.source;
-        const fn_ = self.solved.lifted.fns[@intFromEnum(fn_id)];
+        const fn_ = self.solved.lifted.fns[@backingInt(fn_id)];
         self.captures.clearRetainingCapacity();
         @memset(self.local_map, null);
         @memset(self.expr_map, null);
@@ -481,7 +481,7 @@ const Lowerer = struct {
             .body = body,
             .ret = ret,
         });
-        self.fn_written.items[@intFromEnum(out_id)] = true;
+        self.fn_written.items[@backingInt(out_id)] = true;
     }
 
     fn ensureOwnFnSpec(self: *Lowerer, fn_id: Lifted.FnId, abi: CaptureAbi) Allocator.Error!Ast.FnId {
@@ -501,7 +501,7 @@ const Lowerer = struct {
     }
 
     fn ownCaptureSpanForFn(self: *Lowerer, fn_id: Lifted.FnId) Allocator.Error!CaptureSpanId {
-        const raw_fn = @intFromEnum(fn_id);
+        const raw_fn = @backingInt(fn_id);
         if (raw_fn >= self.own_capture_spans.len) Common.invariant("own capture span requested for a missing lifted function");
         if (self.own_capture_spans[raw_fn]) |existing| return existing;
 
@@ -518,14 +518,15 @@ const Lowerer = struct {
 
         try self.own_captures.ensureUnusedCapacity(self.allocator, capture_locals.len);
         for (capture_locals) |capture| {
-            const local = self.solved.lifted.locals[@intFromEnum(capture.local)];
+            const local = self.solved.lifted.locals[@backingInt(capture.local)];
             self.own_captures.appendAssumeCapacity(.{
                 .local = capture.local,
                 .symbol = local.symbol,
                 .binder = local.binder,
                 .capture_id = local.capture_id,
                 .checked_capture_id = local.checked_capture_id,
-                .ty = self.solved.local_tys[@intFromEnum(capture.local)],
+                .capture_kind = local.capture_kind,
+                .ty = self.solved.local_tys[@backingInt(capture.local)],
             });
         }
 
@@ -661,9 +662,7 @@ const Lowerer = struct {
     /// Free what a frame still owns.
     fn releaseFrame(self: *Lowerer, frame: *Frame) void {
         switch (frame.task) {
-            .expr => |*task| task.parts.deinit(self.allocator),
-            .stmt => |*task| task.parts.deinit(self.allocator),
-            .pat => |*task| task.parts.deinit(self.allocator),
+            inline .expr, .stmt, .pat => |*task| task.parts.deinit(self.allocator),
             .seq => |*task| task.results.deinit(self.allocator),
             .direct_call_args => |*task| {
                 self.allocator.free(task.args);
@@ -700,7 +699,7 @@ const Lowerer = struct {
                 if (frame.cursor == 0) {
                     if (task.known_ty) |ty| return .{ .ret = .{ .local = try self.localFor(task.local, ty) } };
                     frame.cursor = 1;
-                    return .{ .call = .{ .type_var = .{ .var_id = self.solved.local_tys[@intFromEnum(task.local)] } } };
+                    return .{ .call = .{ .type_var = .{ .var_id = self.solved.local_tys[@backingInt(task.local)] } } };
                 }
                 return .{ .ret = .{ .local = try self.localFor(task.local, input.?.ty) } };
             },
@@ -724,7 +723,7 @@ const Lowerer = struct {
 
     /// The function specialization `ensureOwnFnSpec` selects, as a task.
     fn ownFnSpecTask(self: *Lowerer, fn_id: Lifted.FnId, abi: CaptureAbi) Allocator.Error!Task {
-        const solved_fn_ty = self.solved.types.root(self.solved.fn_tys[@intFromEnum(fn_id)]);
+        const solved_fn_ty = self.solved.types.root(self.solved.fn_tys[@backingInt(fn_id)]);
         switch (self.solved.types.rootContent(solved_fn_ty)) {
             .func => {},
             .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .lambda_set, .erased, .zst, .mono => Common.invariant("Lambda Mono function table contains a non-function type"),
@@ -826,7 +825,7 @@ const Lowerer = struct {
     };
 
     fn stepExpr(self: *Lowerer, frame: *Frame, task: *ExprTask, input: ?Result) Allocator.Error!Step {
-        const index = @intFromEnum(task.expr_id);
+        const index = @backingInt(task.expr_id);
         const expr = self.solved.lifted.exprs[index];
         switch (frame.cursor) {
             0 => {
@@ -875,6 +874,7 @@ const Lowerer = struct {
             .comptime_value => |value| plan.add(.{ .expr = value.initializer }),
             .static_data_candidate => |candidate| plan.add(.{ .expr = candidate.runtime_expr }),
             .typed_boundary => |boundary| plan.add(.{ .expr = boundary.value }),
+            .row_widen => |widen| plan.add(.{ .expr = widen.value }),
             .uninitialized_payload => |payload| plan.add(.{ .local = payload.condition }),
             .list, .tuple => |items| plan.add(.{ .expr_span = items }),
             .record => |fields| plan.add(.{ .field_span = fields }),
@@ -1004,6 +1004,7 @@ const Lowerer = struct {
                 .runtime_expr = parts[0].get(.expr),
             } },
             .typed_boundary => .{ .typed_boundary = .{ .value = parts[0].get(.expr) } },
+            .row_widen => .{ .row_widen = .{ .value = parts[0].get(.expr) } },
             .@"unreachable" => .@"unreachable",
             .uninitialized => .uninitialized,
             .uninitialized_payload => |payload| .{ .uninitialized_payload = .{
@@ -1032,8 +1033,7 @@ const Lowerer = struct {
             .def_ref,
             .fn_def,
             => Common.invariant("pre-lift function expression reached Lambda Mono"),
-            .fn_ref => parts[0].get(.data),
-            .call_value => parts[0].get(.data),
+            .fn_ref, .call_value => parts[0].get(.data),
             .call_proc => |call| .{ .direct_call = .{
                 .target = .{ .local = parts[0].get(.fn_id) },
                 .args = parts[1].get(.expr_span),
@@ -1158,7 +1158,7 @@ const Lowerer = struct {
     };
 
     fn stepStmt(self: *Lowerer, frame: *Frame, task: *StmtTask, input: ?Result) Allocator.Error!Step {
-        const index = @intFromEnum(task.stmt_id);
+        const index = @backingInt(task.stmt_id);
         const stmt = self.solved.lifted.stmts[index];
         if (frame.cursor == 0) {
             if (self.stmt_map[index]) |cached| return .{ .ret = .{ .stmt = cached } };
@@ -1217,7 +1217,7 @@ const Lowerer = struct {
     };
 
     fn stepPat(self: *Lowerer, frame: *Frame, task: *PatTask, input: ?Result) Allocator.Error!Step {
-        const index = @intFromEnum(task.pat_id);
+        const index = @backingInt(task.pat_id);
         const pat = self.solved.lifted.pats[index];
         switch (frame.cursor) {
             0 => {
@@ -1312,7 +1312,7 @@ const Lowerer = struct {
             .stmts => |span| out.add(.{ .stmt = GuardedList.at(lifted.stmtSpan(span), index) }),
             .typed_locals => |span| {
                 const item = GuardedList.at(lifted.typedLocalSpan(span), index);
-                if (self.local_map[@intFromEnum(item.local)]) |mapped| {
+                if (self.local_map[@backingInt(item.local)]) |mapped| {
                     out.add(.{ .local_at = .{ .local = item.local, .ty = self.program.getLocal(mapped).ty } });
                 } else {
                     out.add(.{ .local = item.local });
@@ -1486,7 +1486,7 @@ const Lowerer = struct {
         if (frame.cursor == 0) {
             const captures = self.memberCapturesForExpr(task.expr_id, task.fn_id);
             const capture_operands = self.solved.lifted.captureOperandSpan(task.captures_span);
-            if (self.solved.lifted.typedLocalSpan(self.solved.lifted.fns[@intFromEnum(task.fn_id)].captures).len != capture_operands.len) {
+            if (self.solved.lifted.typedLocalSpan(self.solved.lifted.fns[@backingInt(task.fn_id)].captures).len != capture_operands.len) {
                 Common.invariant("function reference capture operand count differed from lifted function captures");
             }
             const variants = switch (ty_content) {
@@ -1494,7 +1494,7 @@ const Lowerer = struct {
                 .erased_fn => |erased| erased.members,
                 .primitive, .named, .record, .capture_record, .tuple, .tag_union, .list, .box, .erased_capture_ptr, .zst => Common.invariant("function value lowered to non-callable Lambda Mono type"),
             };
-            const fn_symbol = self.solved.lifted.fns[@intFromEnum(task.fn_id)].symbol;
+            const fn_symbol = self.solved.lifted.fns[@backingInt(task.fn_id)].symbol;
             const variant_span = self.program.types.fnVariantSpan(variants);
             const found = for (0..variant_span.len) |index| {
                 const variant = GuardedList.at(variant_span, index);
@@ -1555,7 +1555,7 @@ const Lowerer = struct {
             },
             2 => {
                 const target_fn = input.?.get(.fn_id);
-                const capture_ty = self.fn_specs.items[@intFromEnum(target_fn)].capture_ty orelse
+                const capture_ty = self.fn_specs.items[@backingInt(target_fn)].capture_ty orelse
                     Common.invariant("capturing direct call target had no capture record type");
                 frame.cursor = 3;
                 return .{ .call = .{ .capture_record_expr = .{ .capture_span = task.captures, .operands_span = task.captures_span, .capture_ty = capture_ty } } };
@@ -1900,7 +1900,7 @@ const Lowerer = struct {
             1 => {},
             else => {
                 const ret_ty = input.?.get(.ty);
-                const source_fn = self.solved.lifted.fns[@intFromEnum(task.source)];
+                const source_fn = self.solved.lifted.fns[@backingInt(task.source)];
                 self.program.setFn(task.fn_id, .{
                     .symbol = task.symbol,
                     .source = source_fn.source,
@@ -1923,8 +1923,8 @@ const Lowerer = struct {
         const result = try self.fn_spec_map.getOrPut(task.spec);
         if (result.found_existing) return .{ .ret = .{ .fn_id = result.value_ptr.* } };
 
-        task.fn_id = @enumFromInt(@as(u32, @intCast(self.program.fnCount())));
-        const source_fn = self.solved.lifted.fns[@intFromEnum(task.source)];
+        task.fn_id = @fromBackingInt(@intCast(@as(u32, @intCast(self.program.fnCount()))));
+        const source_fn = self.solved.lifted.fns[@backingInt(task.source)];
         task.symbol = self.symbols.fresh();
         try self.program.fns.append(self.allocator, undefined);
         try self.fn_specs.append(self.allocator, task.spec);
@@ -1974,6 +1974,7 @@ const Lowerer = struct {
                 .binder = capture.binder,
                 .capture_id = capture.capture_id,
                 .checked_capture_id = capture.checked_capture_id,
+                .capture_kind = capture.capture_kind,
                 .ty = capture_ty,
                 .storage_ty = capture_ty,
             });
@@ -2004,7 +2005,7 @@ const Lowerer = struct {
                 .id = undefined, // assigned by addFnVariants before the variant is stored
                 .source = member.lambda,
                 .target = target,
-                .capture_ty = self.fn_specs.items[@intFromEnum(target)].capture_ty,
+                .capture_ty = self.fn_specs.items[@backingInt(target)].capture_ty,
             });
         }
         if (task.variants.items.len < solved_members.len) {
@@ -2015,7 +2016,7 @@ const Lowerer = struct {
                 .solved_fn_ty = if (task.solved_fn_ty) |fn_ty|
                     self.solved.types.root(fn_ty)
                 else
-                    self.solved.types.root(self.solved.fn_tys[@intFromEnum(source)]),
+                    self.solved.types.root(self.solved.fn_tys[@backingInt(source)]),
                 .abi = task.abi,
                 .captures = CaptureSpanId.fromSolved(member.captures),
             } } };
@@ -2059,19 +2060,19 @@ const Lowerer = struct {
     }
 
     fn lowerComptimeSite(self: *Lowerer, site: Lifted.ComptimeSiteId) Allocator.Error!Ast.ComptimeSiteId {
-        const index = @intFromEnum(site);
+        const index = @backingInt(site);
         if (self.comptime_site_map[index]) |existing| return existing;
 
         const source = self.solved.lifted.comptimeSite(site);
         const lowered = try self.program.addComptimeSite(source.kind, source.owner, source.region, source.checked_site, source.branch_regions);
-        self.program.comptime_sites.getPtrImmediate(@intFromEnum(lowered)).checked_origin = source.checked_origin;
+        self.program.comptime_sites.getPtrImmediate(@backingInt(lowered)).checked_origin = source.checked_origin;
         self.comptime_site_map[index] = lowered;
         return lowered;
     }
 
     fn memberCapturesForExpr(self: *Lowerer, expr_id: Lifted.ExprId, fn_id: Lifted.FnId) CaptureSpanId {
-        const fn_symbol = self.solved.lifted.fns[@intFromEnum(fn_id)].symbol;
-        const expr_ty = self.solved.expr_tys[@intFromEnum(expr_id)];
+        const fn_symbol = self.solved.lifted.fns[@backingInt(fn_id)].symbol;
+        const expr_ty = self.solved.expr_tys[@backingInt(expr_id)];
         const callable = switch (self.solved.types.rootContent(expr_ty)) {
             .func => |func| func.callable,
             .lambda_set, .erased => expr_ty,
@@ -2103,11 +2104,11 @@ const Lowerer = struct {
     }
 
     fn localFor(self: *Lowerer, local: Lifted.LocalId, ty: Type.TypeId) Allocator.Error!Ast.LocalId {
-        const index = @intFromEnum(local);
+        const index = @backingInt(local);
         if (self.local_map[index]) |existing| return existing;
         const lifted_local = self.solved.lifted.locals[index];
         const lowered = try self.program.addLocalWithBinder(lifted_local.symbol, ty, lifted_local.binder);
-        try self.program.setLocalName(lowered, self.solved.lifted.localName(@enumFromInt(index)));
+        try self.program.setLocalName(lowered, self.solved.lifted.localName(@fromBackingInt(@intCast(index))));
         self.local_map[index] = lowered;
         return lowered;
     }

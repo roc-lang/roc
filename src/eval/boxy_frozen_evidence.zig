@@ -1,6 +1,7 @@
 //! Match a materialized CTFE environment to its producer's closed recipe.
 //! Traversal follows explicit descriptor and dictionary references only.
 const std = @import("std");
+const invariant = @import("base").invariant;
 const lir = @import("lir");
 const Program = lir.Program;
 const Runtime = @import("boxy_runtime.zig").BoxyRuntime;
@@ -59,7 +60,7 @@ pub const Matcher = struct {
         return switch (ref) {
             .static => |id| self.runtime.requireBoxyTypeDesc(id),
             .runtime => |id| self.runtime.runtime_boxy_type_descs.items[id],
-            .local, .dict_method_arg, .dict_method_hidden => @panic("materialized freeze witness retained frame evidence"),
+            .local, .dict_method_arg, .dict_method_hidden => invariant("{s}", .{"materialized freeze witness retained frame evidence"}),
         };
     }
 
@@ -67,7 +68,7 @@ pub const Matcher = struct {
         return switch (ref) {
             .static => |id| self.runtime.requireBoxyDict(id),
             .runtime => |id| self.runtime.runtime_boxy_dicts.dicts.items[id],
-            .local => @panic("materialized freeze witness retained a dictionary local"),
+            .local => invariant("{s}", .{"materialized freeze witness retained a dictionary local"}),
         };
     }
 
@@ -121,10 +122,10 @@ pub const Matcher = struct {
         if (a == b) return true;
         const key: Pair = .{ .left = @intFromPtr(a), .right = @intFromPtr(b), .dictionary = false };
         if ((try self.seen.getOrPut(self.allocator, key)).found_existing) return true;
-        inline for (.{ "payload_layout", "contains_refcounted", "shape", "presence_slot_present_discriminant", "inspect_opaque", "inspect_method" }) |field| {
+        inline for (.{ "payload_layout", "contains_refcounted", "shape", "presence_slot_present_discriminant", "inspect_opaque", "inspect_method", "eq_method", "eq_nested_dicts", "eq_rejected", "hash_method", "hash_nested_dicts", "hash_rejected", "is_bool" }) |field| {
             if (!std.meta.eql(@field(a, field), @field(b, field))) return false;
         }
-        inline for (.{ "nested_descs", "inspect_hidden_descs", "inspect_arg_descs" }) |field| {
+        inline for (.{ "nested_descs", "inspect_hidden_descs", "inspect_arg_descs", "eq_hidden_descs", "eq_arg_descs", "hash_hidden_descs", "hash_arg_descs" }) |field| {
             if (!try self.descriptors(@field(a, field), @field(b, field))) return false;
         }
         if (!try self.optionalDescriptor(a.tag_ext_desc, b.tag_ext_desc)) return false;
@@ -153,7 +154,7 @@ pub const Matcher = struct {
         if (a == b) return true;
         const key: Pair = .{ .left = @intFromPtr(a), .right = @intFromPtr(b), .dictionary = true };
         if ((try self.seen.getOrPut(self.allocator, key)).found_existing) return true;
-        if (a.template or b.template) @panic("frozen dictionary witness retained frame captures");
+        if (a.template or b.template) invariant("{s}", .{"frozen dictionary witness retained frame captures"});
         if (a.method_slots.len != b.method_slots.len) return false;
         for (self.runtime.requireBoxyMethodSlots(a.method_slots), self.runtime.requireBoxyMethodSlots(b.method_slots)) |left, right| {
             if (left.present != right.present) return false;
@@ -193,44 +194,44 @@ test "Boxy frozen evidence compares runtime descriptor graphs and declared metho
     const gpa = std.testing.allocator;
     var program = try Program.Result.init(gpa, @import("base").target.TargetUsize.native);
     defer program.deinit();
-    const str_desc: Program.BoxyTypeDescId = @enumFromInt(program.boxy_type_descs.items.len);
+    const str_desc: Program.BoxyTypeDescId = @fromBackingInt(@intCast(program.boxy_type_descs.items.len));
     try program.boxy_type_descs.append(gpa, .{ .payload_layout = .str, .contains_refcounted = true, .shape = .primitive, .closure = .closed });
-    const int_desc: Program.BoxyTypeDescId = @enumFromInt(program.boxy_type_descs.items.len);
+    const int_desc: Program.BoxyTypeDescId = @fromBackingInt(@intCast(program.boxy_type_descs.items.len));
     try program.boxy_type_descs.append(gpa, .{ .payload_layout = .u64, .contains_refcounted = false, .shape = .primitive, .closure = .closed });
     try program.boxy_desc_refs.append(gpa, .{ .static = str_desc });
-    const list_desc: Program.BoxyTypeDescId = @enumFromInt(program.boxy_type_descs.items.len);
+    const list_desc: Program.BoxyTypeDescId = @fromBackingInt(@intCast(program.boxy_type_descs.items.len));
     try program.boxy_type_descs.append(gpa, .{ .payload_layout = try program.layouts.insertList(.str), .contains_refcounted = true, .shape = .list, .nested_descs = .{ .start = 0, .len = 1 }, .closure = .closed });
     const first = try program.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(1), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .zst }, .none);
     const second = try program.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(2), .identity = lir.LIR.ProcIdentity.forTest(2), .args = .empty(), .ret_layout = .zst }, .none);
-    const method: @import("check").CheckedNames.MethodNameId = @enumFromInt(1);
+    const method: @import("check").CheckedNames.MethodNameId = @fromBackingInt(@intCast(1));
     try program.boxy_method_slots.appendSlice(gpa, &.{ .{ .method = method, .proc = first }, .{ .method = method, .proc = second } });
     var host = @import("runtime_host.zig").init(gpa);
     defer host.deinit();
     const runtime = try @import("boxy_abi.zig").createRuntimeFromStores(gpa, &program.store, &program.layouts, @import("boxy_runtime.zig").BoxyTables.fromResult(&program), host.get_ops());
     defer @import("boxy_abi.zig").deinitRuntime(runtime);
     try runtime.runtime_boxy_desc_refs.appendSlice(gpa, &.{ .{ .static = str_desc }, .{ .static = int_desc } });
-    var actual = program.boxy_type_descs.items[@intFromEnum(list_desc)];
+    var actual = program.boxy_type_descs.items[@backingInt(list_desc)];
     actual.nested_descs = @import("boxy_runtime.zig").makeRuntimeBoxySpan(0, 1);
     actual.closure = .context;
     var matcher = Matcher{ .allocator = gpa, .runtime = &runtime.runtime, .program = &program };
     defer matcher.deinit();
-    try std.testing.expect(try matcher.descriptor(&actual, &program.boxy_type_descs.items[@intFromEnum(list_desc)]));
+    try std.testing.expect(try matcher.descriptor(&actual, &program.boxy_type_descs.items[@backingInt(list_desc)]));
     matcher.seen.clearRetainingCapacity();
     actual.nested_descs = @import("boxy_runtime.zig").makeRuntimeBoxySpan(1, 1);
-    try std.testing.expect(!try matcher.descriptor(&actual, &program.boxy_type_descs.items[@intFromEnum(list_desc)]));
+    try std.testing.expect(!try matcher.descriptor(&actual, &program.boxy_type_descs.items[@backingInt(list_desc)]));
     matcher.seen.clearRetainingCapacity();
     const left = Program.BoxyDict{ .method_slots = .{ .start = 0, .len = 1 } };
     const right = Program.BoxyDict{ .method_slots = .{ .start = 1, .len = 1 } };
     try std.testing.expect(!try matcher.dictionary(&left, &right));
     matcher.seen.clearRetainingCapacity();
     // Equality requires producer evidence, never similarity of procedure bodies.
-    const origin = Program.BoxyFrozenMethodOrigin{ .worker = program.store.getProcSpec(first).identity, .requirement_module = .{ .bytes = @splat(0) }, .requirement_type = @enumFromInt(1), .callable_module = .{ .bytes = @splat(0) }, .callable_type = @enumFromInt(2) };
+    const origin = Program.BoxyFrozenMethodOrigin{ .worker = program.store.getProcSpec(first).identity, .requirement_module = .{ .bytes = @splat(0) }, .requirement_type = @fromBackingInt(@intCast(1)), .callable_module = .{ .bytes = @splat(0) }, .callable_type = @fromBackingInt(@intCast(2)) };
     try program.boxy_frozen_method_origins.put(gpa, first, origin);
     try program.boxy_frozen_method_origins.put(gpa, second, origin);
     try std.testing.expect(try matcher.dictionary(&left, &right));
     matcher.seen.clearRetainingCapacity();
     var other = origin;
-    other.requirement_type = @enumFromInt(3);
+    other.requirement_type = @fromBackingInt(@intCast(3));
     try program.boxy_frozen_method_origins.put(gpa, second, other);
     try std.testing.expect(!try matcher.dictionary(&left, &right));
 }

@@ -8,7 +8,7 @@ platform ""
         "roc_runtime_seed": Runtime.seed!,
     }
     targets: {
-        inputs_dir: "../platform/targets/",
+        inputs_dir: "targets/",
         wasm32: {
             inputs: ["host.wasm", app],
             output: Shared,

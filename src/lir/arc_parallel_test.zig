@@ -45,7 +45,7 @@ const Fixture = struct {
     fn run(self: *Fixture, runner: ?*const executor.Executor, metrics: *arc.ParallelMetrics) arc.ResourceError!void {
         var roots: [40]core.LIR.LirProcSpecId = undefined;
         const count = self.store.procSpecCount();
-        for (roots[0..count], 0..) |*root, index| root.* = @enumFromInt(index);
+        for (roots[0..count], 0..) |*root, index| root.* = @fromBackingInt(@intCast(index));
         // ABI roots own their unused string arguments, so every body must gain
         // a decref. Borrow inference cannot turn this into a no-op fixture.
         // Forty procedures over 32-wide waves give the two base waves these
@@ -60,7 +60,7 @@ const Fixture = struct {
 
     fn dump(self: *Fixture, writer: *std.Io.Writer) debug_print.Error!void {
         for (0..self.store.procSpecCount()) |index| {
-            try debug_print.writeProc(testing.allocator, &self.store, &self.layouts, @enumFromInt(index), writer);
+            try debug_print.writeProc(testing.allocator, &self.store, &self.layouts, @fromBackingInt(@intCast(index)), writer);
         }
     }
 };
@@ -168,7 +168,7 @@ fn expectSame(expected: *Fixture, actual: *Fixture) (debug_print.Error || error{
     try testing.expectEqualDeep(expected.store.captureBodyPrefix(), actual.store.captureBodyPrefix());
     try testing.expectEqual(expected.store.procSpecCount(), actual.store.procSpecCount());
     for (0..expected.store.procSpecCount()) |index| {
-        const id: core.LIR.LirProcSpecId = @enumFromInt(index);
+        const id: core.LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
         try testing.expectEqualDeep(expected.store.getProcSpec(id), actual.store.getProcSpec(id));
     }
     try testing.expectEqual(expected.store.next_synthetic_symbol, actual.store.next_synthetic_symbol);
@@ -183,7 +183,7 @@ test "ARC executor reverse completions match inline RC bodies and identities acr
     try testing.expect(direct.store.cfStmtCount() > before);
     try testing.expectEqual(@as(u64, 2), inline_metrics.waves);
     for (0..direct.store.procSpecCount()) |index| {
-        const spec = direct.store.getProcSpec(@enumFromInt(index));
+        const spec = direct.store.getProcSpec(@fromBackingInt(@intCast(index)));
         const body = direct.store.getCFStmt(spec.body.?);
         try testing.expect(body == .decref);
         try testing.expectEqual(core.LirStore.GuardedList.at(direct.store.getLocalSpan(spec.args), 1), body.decref.value);
@@ -317,7 +317,7 @@ const UniquenessFixture = struct {
             else if (index <= 3)
                 try s.addCFStmt(.{ .assign_call = .{
                     .target = result,
-                    .proc = @enumFromInt(@as(u32, if (index == 2) 1 else 0)),
+                    .proc = @fromBackingInt(@intCast(@as(u32, if (index == 2) 1 else 0))),
                     .args = try s.addLocalSpan(&.{param}),
                     .next = ret,
                 } }, .test_fixture)
@@ -338,7 +338,7 @@ const UniquenessFixture = struct {
                 .ret_layout = list,
             }, .none);
         }
-        const shared = s.getProcSpec(@enumFromInt(5));
+        const shared = s.getProcSpec(@fromBackingInt(@intCast(5)));
         for (0..2) |index| {
             var spec = shared;
             spec.identity = core.LIR.ProcIdentity.forTest(@intCast(s.procSpecCount()));
@@ -404,8 +404,8 @@ test "ARC public solve component barriers preserve conditional rows and shared g
             try testing.expectEqual(@as(usize, 0), direct.sigTable().retConditionsOf(sig).len);
         }
     }
-    const shared_param = core.LirStore.GuardedList.at(fixture.fixture.store.getLocalSpan(fixture.fixture.store.getProcSpec(@enumFromInt(5)).args), 0);
-    try testing.expect(!direct.unique_born.isSet(@intFromEnum(shared_param)));
+    const shared_param = core.LirStore.GuardedList.at(fixture.fixture.store.getLocalSpan(fixture.fixture.store.getProcSpec(@fromBackingInt(@intCast(5))).args), 0);
+    try testing.expect(!direct.unique_born.isSet(@backingInt(shared_param)));
     for ([_]usize{ 2, 4 }) |lanes| {
         var runner: ReverseExecutor = .{ .lanes = lanes, .rotate_wave_lane = true };
         defer runner.deinit();
@@ -601,7 +601,7 @@ const OutcomeFixture = struct {
         const s = &self.fixture.store;
         try testing.expectEqual(@as(usize, 3), s.procSpecCount());
         for ([_]u32{ 0, 2 }) |proc| {
-            var cursor = s.getProcSpec(@enumFromInt(proc)).body.?;
+            var cursor = s.getProcSpec(@fromBackingInt(@intCast(proc))).body.?;
             while (true) {
                 const stmt = s.getCFStmt(cursor);
                 if (stmt == .assign_low_level) {
@@ -614,12 +614,12 @@ const OutcomeFixture = struct {
                 } else cursor = try linearNext(stmt);
             }
         }
-        var cursor = s.getProcSpec(@enumFromInt(1)).body.?;
+        var cursor = s.getProcSpec(@fromBackingInt(@intCast(1))).body.?;
         while (true) {
             const stmt = s.getCFStmt(cursor);
             if (stmt == .incref) try testing.expect(stmt.incref.value != self.input);
             if (stmt == .assign_call) {
-                try testing.expectEqual(@as(core.LIR.LirProcSpecId, @enumFromInt(2)), stmt.assign_call.proc);
+                try testing.expectEqual(@as(core.LIR.LirProcSpecId, @fromBackingInt(@intCast(2))), stmt.assign_call.proc);
                 break;
             }
             cursor = try linearNext(stmt);

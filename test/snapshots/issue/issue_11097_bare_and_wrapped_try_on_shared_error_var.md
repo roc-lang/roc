@@ -118,7 +118,7 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 323)
+								(e-call (constraint-fn-var 316)
 									(e-lookup-local
 										(p-assign (ident "save")))
 									(e-string
@@ -152,7 +152,7 @@ NO CHANGE
 						(e-empty_record))))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 387)
+		(e-call (constraint-fn-var 370)
 			(e-lookup-local
 				(p-assign (ident "run")))
 			(e-lambda
@@ -167,8 +167,8 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "(a -> Try(ok, err)) -> Try({}, [PersistFailed(err), ..err]) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]"))
-		(patt (type "Try({}, [PersistFailed(err), ..err])")))
+		(patt (type "Try({}, [PersistFailed([])])")))
 	(expressions
 		(expr (type "(a -> Try(ok, err)) -> Try({}, [PersistFailed(err), ..err]) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]"))
-		(expr (type "Try({}, [PersistFailed(err), ..err])"))))
+		(expr (type "Try({}, [PersistFailed([])])"))))
 ~~~

@@ -326,6 +326,7 @@ fn runEchoView(
     };
     defer interpreter.deinit();
     static_data.install(&interpreter);
+    static_data.ownByInterpreter(&interpreter);
 
     _ = interpreter.runEntrypoint(view, 0, @ptrCast(&cli_args_list), @ptrCast(&result_buf)) catch |err| switch (err) {
         error.RuntimeError, error.DivisionByZero => {
@@ -365,10 +366,7 @@ fn emitDiagnostics(build_env: *BuildEnv, diag: Diagnostics, gpa: Allocator) Allo
     var has_blocking_error = false;
     for (drained) |mod| {
         for (mod.reports) |*report| {
-            switch (report.severity) {
-                .runtime_error, .fatal => has_blocking_error = true,
-                .warning => {},
-            }
+            if (report.severity.isError()) has_blocking_error = true;
             diag.emitReport(gpa, report);
         }
     }

@@ -288,6 +288,10 @@ pub fn parseUrlPath(url: []const u8) error{ InvalidUrl, InvalidVersion, Ambiguou
 ///
 /// Rejects all other HTTP URLs for security.
 pub fn isSafeUrl(url: []const u8) bool {
+    // Package group keys use NUL to separate the URL spans around a version.
+    // Reject it before a URL can enter resolution or reach a fetcher.
+    if (std.mem.findScalar(u8, url, 0) != null) return false;
+
     return std.mem.startsWith(u8, url, "https://") or
         std.mem.startsWith(u8, url, "http://localhost:") or
         std.mem.startsWith(u8, url, "http://localhost/") or
@@ -310,6 +314,8 @@ test "isSafeUrl" {
     try testing.expect(isSafeUrl("http://127.0.0.1/path"));
     try testing.expect(isSafeUrl("http://[::1]:8080/path"));
     try testing.expect(isSafeUrl("http://[::1]/path"));
+
+    try testing.expect(!isSafeUrl("https://example.com/a\x00b/1.0.0/hashA.tar.zst"));
 
     // Should return false for non-localhost HTTP URLs
     try testing.expect(!isSafeUrl("http://example.com/path"));

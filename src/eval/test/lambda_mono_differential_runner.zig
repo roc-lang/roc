@@ -148,7 +148,6 @@ fn classifyTestHelperError(err: helpers.TestHelperError) TestHelperErrorKind {
         error.MemfdCreateFailed,
         error.FtruncateFailed,
         error.InvalidHandle,
-        error.WindowsSDKNotFound,
         error.CompilationFailed,
         error.NoBitcodeModules,
         error.UnsupportedLlvmTriple,
@@ -414,7 +413,7 @@ const Pool = test_harness.ProcessPool(Case, CaseResult, .{
 pub fn main(init: std.process.Init) RunnerError!void {
     const io = init.io;
 
-    if (builtin.mode != .Debug) {
+    if (builtin.mode != .debug) {
         std.debug.print("lambda-mono differential harness requires a Debug build (release builds never materialize the Lambda Mono tree)\n", .{});
         return error.RequiresDebugBuild;
     }

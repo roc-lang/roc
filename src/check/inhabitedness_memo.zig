@@ -26,7 +26,7 @@ pub const Memo = struct {
         }
 
         pub fn eql(_: Context, a: Key, b: Key) bool {
-            return a.root == b.root and std.mem.eql(Var, a.known_empty, b.known_empty);
+            return a.root == b.root and varsEqual(a.known_empty, b.known_empty);
         }
     };
 
@@ -73,7 +73,7 @@ pub const Memo = struct {
     }
 
     fn lessThan(_: void, a: Var, b: Var) bool {
-        return @intFromEnum(a) < @intFromEnum(b);
+        return @backingInt(a) < @backingInt(b);
     }
 };
 
@@ -81,8 +81,8 @@ test "inhabitedness memo keeps known-empty query identities separate" {
     const gpa = std.testing.allocator;
     var memo: Memo = .{};
     defer memo.deinit(gpa);
-    const root: Var = @enumFromInt(1);
-    const empty = [_]Var{@enumFromInt(2)};
+    const root: Var = @fromBackingInt(1);
+    const empty = [_]Var{@fromBackingInt(2)};
     const ordinary: Memo.Key = .{ .root = root, .known_empty = &.{} };
     const restricted: Memo.Key = .{ .root = root, .known_empty = &empty };
     try memo.put(gpa, ordinary, true);
@@ -90,7 +90,7 @@ test "inhabitedness memo keeps known-empty query identities separate" {
     try memo.put(gpa, restricted, false);
     try std.testing.expectEqual(@as(?bool, true), memo.get(ordinary));
     try std.testing.expectEqual(@as(?bool, false), memo.get(restricted));
-    try std.testing.expectEqual(@as(?bool, null), memo.get(.{ .root = @enumFromInt(3), .known_empty = &empty }));
+    try std.testing.expectEqual(@as(?bool, null), memo.get(.{ .root = @fromBackingInt(3), .known_empty = &empty }));
 }
 
 test "inhabitedness memo canonicalizes resolved assumption sets" {
@@ -111,15 +111,24 @@ test "inhabitedness memo canonicalizes resolved assumption sets" {
 fn allocationFailureCase(gpa: std.mem.Allocator) (std.mem.Allocator.Error || error{TestExpectedEqual})!void {
     var memo: Memo = .{};
     defer memo.deinit(gpa);
-    var empty = [_]Var{@enumFromInt(2)};
-    const root: Var = @enumFromInt(1);
+    var empty = [_]Var{@fromBackingInt(2)};
+    const root: Var = @fromBackingInt(1);
     try memo.put(gpa, .{ .root = root, .known_empty = &empty }, false);
     // Inserting a key must own its assumptions, not borrow caller scratch.
-    empty[0] = @enumFromInt(3);
-    const original = [_]Var{@enumFromInt(2)};
+    empty[0] = @fromBackingInt(3);
+    const original = [_]Var{@fromBackingInt(2)};
     try std.testing.expectEqual(@as(?bool, false), memo.get(.{ .root = root, .known_empty = &original }));
 }
 
 test "inhabitedness memo owns keys and handles allocation failure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, allocationFailureCase, .{});
+}
+
+/// Whether two type-variable lists name the same variables in the same order.
+fn varsEqual(a: []const Var, b: []const Var) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |left, right| {
+        if (left != right) return false;
+    }
+    return true;
 }

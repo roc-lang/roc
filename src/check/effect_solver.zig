@@ -53,28 +53,28 @@ pub const Solver = struct {
     /// Boundary consumers use this after discovery, before resetting the session.
     pub fn solvedState(self: *const Solver, resolved_var: types.Var) State {
         const id = self.slot_by_var.get(resolved_var).?;
-        return self.slots.items[@intFromEnum(id)].state;
+        return self.slots.items[@backingInt(id)].state;
     }
 
     fn slot(self: *Solver, store: *const types.Store, var_: types.Var) std.mem.Allocator.Error!SlotId {
         const root = store.resolveVar(var_).var_;
         if (self.slot_by_var.get(root)) |id| return id;
-        const id: SlotId = @enumFromInt(self.slots.items.len);
+        const id: SlotId = @fromBackingInt(@intCast(self.slots.items.len));
         try self.slots.append(self.gpa, .{ .var_ = root });
         try self.slot_by_var.put(root, id);
         return id;
     }
 
     fn promote(self: *Solver, id: SlotId, state: State) std.mem.Allocator.Error!void {
-        const current = &self.slots.items[@intFromEnum(id)].state;
-        if (@intFromEnum(state) <= @intFromEnum(current.*)) return;
+        const current = &self.slots.items[@backingInt(id)].state;
+        if (@backingInt(state) <= @backingInt(current.*)) return;
         try self.worklist.append(self.gpa, id);
         current.* = state;
     }
 
     fn depend(self: *Solver, store: *const types.Store, caller: SlotId, var_: types.Var) std.mem.Allocator.Error!void {
         const callee = try self.slot(store, var_);
-        const callee_index = @intFromEnum(callee);
+        const callee_index = @backingInt(callee);
         const edge_index: u32 = @intCast(self.edges.items.len);
         try self.edges.append(self.gpa, .{ .caller = caller, .next = self.slots.items[callee_index].callers });
         self.slots.items[callee_index].callers = edge_index;
@@ -103,7 +103,7 @@ pub const Solver = struct {
         }
         const root = try self.slot(store, var_);
         while (self.discovered < self.slots.items.len) {
-            const id: SlotId = @enumFromInt(self.discovered);
+            const id: SlotId = @fromBackingInt(@intCast(self.discovered));
             const content = store.resolveVar(self.slots.items[self.discovered].var_).desc.content;
             self.discovered += 1;
             switch (content) {
@@ -124,8 +124,8 @@ pub const Solver = struct {
         var next: usize = 0;
         while (next < self.worklist.items.len) : (next += 1) {
             const id = self.worklist.items[next];
-            const state = self.slots.items[@intFromEnum(id)].state;
-            var edge_index = self.slots.items[@intFromEnum(id)].callers;
+            const state = self.slots.items[@backingInt(id)].state;
+            var edge_index = self.slots.items[@backingInt(id)].callers;
             while (edge_index != no_edge) {
                 const edge = self.edges.items[edge_index];
                 try self.promote(edge.caller, state);
@@ -133,7 +133,7 @@ pub const Solver = struct {
             }
         }
         self.worklist.clearRetainingCapacity();
-        return self.slots.items[@intFromEnum(root)].state;
+        return self.slots.items[@backingInt(root)].state;
     }
 };
 

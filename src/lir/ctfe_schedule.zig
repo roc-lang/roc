@@ -14,8 +14,8 @@ pub const Key = struct {
 
     pub fn init(module: [32]u8, producer: LIR.ComptimeProducer) Key {
         return switch (producer) {
-            .checked => |id| .{ .module = module, .kind = .checked, .id = @intFromEnum(id) },
-            .literal => |id| .{ .module = module, .kind = .literal, .id = @intFromEnum(id) },
+            .checked => |id| .{ .module = module, .kind = .checked, .id = @backingInt(id) },
+            .literal => |id| .{ .module = module, .kind = .literal, .id = @backingInt(id) },
         };
     }
 };
@@ -238,8 +238,8 @@ fn testRead(module: u8, producer: LIR.ComptimeProducer) Program.CtfeDemandRead {
 }
 
 test "CTFE schedule crosses modules and literal roots dependency first" {
-    const a: LIR.ComptimeProducer = .{ .checked = @enumFromInt(0) };
-    const b: LIR.ComptimeProducer = .{ .literal = @enumFromInt(0) };
+    const a: LIR.ComptimeProducer = .{ .checked = @fromBackingInt(@intCast(0)) };
+    const b: LIR.ComptimeProducer = .{ .literal = @fromBackingInt(@intCast(0)) };
     const nodes = [_]Node{
         testNode(1, a, &.{testRead(2, a)}),
         testNode(2, a, &.{testRead(2, b)}),
@@ -252,8 +252,8 @@ test "CTFE schedule crosses modules and literal roots dependency first" {
 }
 
 test "CTFE schedule classifies cycles before execution and ignores address captures" {
-    const a: LIR.ComptimeProducer = .{ .checked = @enumFromInt(0) };
-    const b: LIR.ComptimeProducer = .{ .checked = @enumFromInt(1) };
+    const a: LIR.ComptimeProducer = .{ .checked = @fromBackingInt(@intCast(0)) };
+    const b: LIR.ComptimeProducer = .{ .checked = @fromBackingInt(@intCast(1)) };
     var nodes = [_]Node{
         testNode(1, a, &.{testRead(1, b)}),
         testNode(1, b, &.{testRead(1, a)}),
@@ -268,7 +268,7 @@ test "CTFE schedule classifies cycles before execution and ignores address captu
 }
 
 test "CTFE schedule rejects missing proof and undeclared producers" {
-    const root: LIR.ComptimeProducer = .{ .checked = @enumFromInt(0) };
+    const root: LIR.ComptimeProducer = .{ .checked = @fromBackingInt(@intCast(0)) };
     var node = testNode(1, root, &.{testRead(2, root)});
     try std.testing.expectError(error.MissingRootProducer, Schedule.build(std.testing.allocator, &.{node}, &.{}));
     var schedule = try Schedule.build(std.testing.allocator, &.{node}, &.{Key.init(@splat(2), root)});
@@ -280,7 +280,7 @@ test "CTFE schedule rejects missing proof and undeclared producers" {
 test "CTFE schedule publishes all cycle failures before serial execution" {
     const root = struct {
         fn of(id: u32) LIR.ComptimeProducer {
-            return .{ .checked = @enumFromInt(id) };
+            return .{ .checked = @fromBackingInt(@intCast(id)) };
         }
     }.of;
     const nodes = [_]Node{

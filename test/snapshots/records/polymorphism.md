@@ -165,7 +165,18 @@ EndOfFile,
 				(p-assign (ident "make_pair")))
 			(e-tag (name "True"))
 			(e-tag (name "False"))))
-	(e-runtime-error (tag "erroneous_value_expr")))
+	(e-runtime-error (tag "erroneous_value_expr")
+		(e-record
+			(fields
+				(field (name "pair1")
+					(e-lookup-local
+						(p-assign (ident "pair1"))))
+				(field (name "pair2")
+					(e-lookup-local
+						(p-assign (ident "pair2"))))
+				(field (name "pair3")
+					(e-lookup-local
+						(p-assign (ident "pair3"))))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -763,7 +763,7 @@ pub fn Engine(comptime Adapter: type) type {
             const desc = self.nodeDesc(node);
             self.step_words.clearRetainingCapacity();
             try self.appendStepWords(&self.step_words, desc);
-            var hasher = std.hash.Wyhash.init(@intFromEnum(desc.kind));
+            var hasher = std.hash.Wyhash.init(@backingInt(desc.kind));
             const words = self.step_words.items;
             hasher.update(@as([*]const u8, @ptrCast(words.ptr))[0 .. words.len * @sizeOf(u32)]);
             hasher.update(self.descBytes(desc));

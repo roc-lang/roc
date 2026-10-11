@@ -10,7 +10,8 @@ A _tag_ is a name for one of the alternatives in a tag union. Tags can optionall
 - In `y = Foo(4)`, `Foo` is a tag with a payload of `4`.
 - In `y = Foo(4, 2)`, `Foo` is a tag with payloads of `4` and `2`.
 
-> **Note:** At runtime, payloads optimize to the same thing as tuples. After optimizations, `Foo(4, 2)` and `Foo((4, 2))` compile to exactly the same thing.
+> Note that at runtime, payloads are stored the same way as tuples. `Foo(4, 2)` and
+> `Foo((4, 2))` compile to exactly the same thing.
 
 Tag unions can't have multiple tags with the same name but different payload types. So for example,
 `Foo("a string")` and `Foo(1, 2)` couldn't go in the same tag union, because their tags have
@@ -46,15 +47,26 @@ Each structural tag union type can optionally include a type parameter represent
 other tags that might be included in it. For example:
 
 ```roc
-add_blue : [Red, Green, ..others], Bool -> [Red, Green, Blue, ..others]
-add_blue = |color, green_to_blue| match color {
-    Red => Red
-    Green => if (green_to_blue) Blue else Green
+green_to_blue : [Red, Green, Blue, ..others] -> [Red, Green, Blue, ..others]
+green_to_blue = |color| match color {
+    Green => Blue
     other => other
 }
 ```
 
-If the `Green =>` branch always returned `Blue`, then the return type here would become `[Red, Blue, ..others]`.
+Here, `..others` stands for whatever other tags the argument might have. Since the return type
+has the same `..others`, those tags come back out. So if you call `green_to_blue` on a value
+that might also be `Purple`, you get back a value that might also be `Purple`:
+
+```roc
+is_purple = |color| match green_to_blue(color) {
+    Purple => True
+    _ => False
+}
+```
+
+(Note that the `other => other` branch returns the original `color`, so the return type has to
+include every tag the argument type has, which is why `Green` appears in both.)
 
 You can use these type parameters in type aliases:
 
@@ -122,8 +134,9 @@ mark it as closed so that it can be sent across the host boundary.
 ### Limitations
 
 Structural tag unions are not allowed to be recursive. To make a recursive tag union,
-use a [nominal tag union](#nominal-tag-unions) instead. (This used to be supported,
-but [was removed because of its nonobvious downsides](https://github.com/roc-lang/rfcs/pull/1).)
+use a [nominal tag union](#nominal-tag-unions) instead. (Recursive structural types have some
+[nonobvious downsides](https://github.com/roc-lang/rfcs/pull/1), which is why they aren't
+supported.)
 
 Platform authors should note the previous section on [closed tag unions](#closed-tag-unions),
 which explains why only closed tag unions can be sent across the host boundary.
@@ -230,7 +243,8 @@ Here, `Ok(age)` and `Err(InvalidAge)` are structural tags, but since they're use
 This works as long as the structural tag is one that the nominal tag union actually has, with a
 compatible payload. `Ok(1, 2)` or `Maybe(5)` could not become a `Try`.
 
-> **Note:** This does not get around opaque access boundaries.
+> Note that this doesn't work with [opaque](#opaque-tag-unions) tag unions outside the module
+> that defines them, since their tags are hidden there.
 
 ### Limitations
 
@@ -265,3 +279,65 @@ unwrap = |result| match result {
 
 Similarly, `Ok(n) = always_ok(5)` is allowed as a [destructuring assignment](pattern-matching#destructuring-assignments-with-),
 because the `Err` case can't happen.
+
+## Performance
+
+### Memory Layout
+
+A tag union is stored inline (not in a separate heap allocation), as a payload area followed by
+a _discriminant_, which is a number saying which tag it is. The payload area is as big as the
+biggest payload of any tag in the union, so every value of the union takes up the same amount of
+space, no matter which tag it has.
+
+The discriminant is as small as it can be:
+
+| Number of tags | Discriminant size |
+| --- | --- |
+| 1 | 0 bytes (there's nothing to distinguish) |
+| 2 to 256 | 1 byte |
+| 257 to 65,536 | 2 bytes |
+
+Like a [record](records#memory-layout), the whole tag union is then padded so its size is a
+multiple of its alignment. Some examples on a 64-bit target:
+
+- `[Red, Green, Blue]` has no payloads, so it's just a 1-byte discriminant.
+- `[Circle(F64), Rectangle(F64, F64)]` is 24 bytes: 16 for the biggest payload, 1 for the
+  discriminant, and 7 bytes of padding to make the total a multiple of 8.
+- `[Name(Str)]` has only one tag, so it's 24 bytes, exactly the same as a plain `Str`.
+
+This means one tag with a large payload makes every value of the union large, even if most
+values use a different tag. If you have a tag union where one tag's payload is much bigger than
+the others, and you store lots of these values (say, in a big list), it can be worth putting the
+large payload in a [`Box`](../Box), so that the payload area only needs to be big enough for a
+pointer.
+
+### Recursive Tag Unions
+
+When a nominal tag union refers to itself, each place where it does gets stored in its own heap
+allocation, which is [reference counted](expressions#reference-counting). For example:
+
+```roc
+Tree := [Leaf, Node(Tree, U64, Tree)]
+```
+
+Here, each `Node`'s payload holds a `U64` and two pointers (one to each child `Tree`'s
+allocation). Without the pointers, a `Tree` would have to contain two more `Tree`s inline, which
+would each contain two more, and so on forever.
+
+So building a tree with a million `Node`s involves a million heap allocations, and like other
+reference-counted values, nodes are freed as soon as nothing refers to them anymore. Since
+values can't refer to themselves (Roc has no [reference cycles](expressions#reference-cycles)),
+freeing a tree never leaves any nodes behind.
+
+### Matching
+
+Since the discriminant is a small number, a `match` on a tag union compiles to the same kind of
+code as a `switch` statement in C: the compiler can jump straight to the right branch rather than
+checking each tag one at a time.
+
+### At the Host Boundary
+
+For the purposes of the discriminant, tags are numbered in alphabetical order, starting at 0.
+So in `[Red, Green, Blue]`, `Blue` is 0, `Green` is 1, and `Red` is 2, regardless of the order
+they're written in. Platform authors don't need to compute these by hand, though; `roc glue`
+generates host code that uses the right numbers.

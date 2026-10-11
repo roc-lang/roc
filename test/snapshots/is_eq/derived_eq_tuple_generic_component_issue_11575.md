@@ -113,7 +113,19 @@ NO CHANGE
 			(args
 				(p-assign (ident "x"))
 				(p-assign (ident "y")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+			(e-runtime-error (tag "erroneous_value_expr")
+				(e-tuple
+					(elems
+						(e-lookup-local
+							(p-assign (ident "x")))
+						(e-lookup-local
+							(p-assign (ident "y")))))
+				(e-tuple
+					(elems
+						(e-lookup-local
+							(p-assign (ident "x")))
+						(e-lookup-local
+							(p-assign (ident "y")))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "a"))

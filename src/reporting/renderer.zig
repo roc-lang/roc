@@ -76,7 +76,7 @@ pub const RenderTarget = enum {
 /// release builds. Reports that have not yet been migrated to a headline
 /// (none of the elements carry text) are exempt.
 fn assertValidHeadline(report: *const Report) void {
-    if (builtin.mode != .Debug) return;
+    if (builtin.mode != .debug) return;
 
     var last: u8 = 0;
     for (report.headline.elements.items) |el| {
@@ -185,10 +185,10 @@ const IconAndColor = struct {
 
 fn getSeverityIcon(severity: @import("severity.zig").Severity, title: []const u8, palette: ColorPalette) IconAndColor {
     if (std.mem.eql(u8, title, "FAIL")) return .{ .icon = "✗", .color = palette.error_color, .width = 1 };
-    return switch (severity) {
-        .fatal, .runtime_error => .{ .icon = "✗", .color = palette.error_color, .width = 1 },
-        .warning => .{ .icon = "●", .color = palette.warning, .width = 1 },
-    };
+    return if (severity.isError())
+        .{ .icon = "✗", .color = palette.error_color, .width = 1 }
+    else
+        .{ .icon = "●", .color = palette.warning, .width = 1 };
 }
 
 /// A source region pulled out of a document, normalized for rendering.
@@ -723,11 +723,7 @@ fn renderReportPlainFallback(report: *const Report, writer: *std.Io.Writer, pale
 /// Render a report to HTML.
 pub fn renderReportToHtml(report: *const Report, writer: *std.Io.Writer, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
     assertValidHeadline(report);
-    const title_class = switch (report.severity) {
-        .fatal => "error",
-        .runtime_error => "error",
-        .warning => "warning",
-    };
+    const title_class = if (report.severity.isError()) "error" else "warning";
 
     try writer.print("<div class=\"report {s}\">\n", .{title_class});
     try writer.writeAll("<h1 class=\"report-title\">");
@@ -788,8 +784,9 @@ pub fn renderDocumentToLsp(document: *const Document, writer: *std.Io.Writer, co
 
 /// Render every element of a document through the single walker.
 fn renderDocumentAs(comptime target: RenderTarget, document: *const Document, writer: *std.Io.Writer, palette: ColorPalette, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
-    var ann_sfa = std.heap.stackFallback(16 * @sizeOf(Annotation), document.allocator);
-    var annotation_stack = std.array_list.Managed(Annotation).init(ann_sfa.get());
+    var ann_sfa_buffer: [16 * @sizeOf(Annotation)]u8 align(@alignOf(usize)) = undefined;
+    var ann_sfa = std.heap.BufferFirstAllocator.init(&ann_sfa_buffer, document.allocator);
+    var annotation_stack = std.array_list.Managed(Annotation).init(ann_sfa.allocator());
     defer annotation_stack.deinit();
     var ctx = RenderCtx{ .config = config, .palette = palette, .annotation_stack = &annotation_stack };
 

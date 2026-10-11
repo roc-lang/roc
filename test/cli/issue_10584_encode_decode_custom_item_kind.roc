@@ -26,7 +26,7 @@ ItemKind := [Text, Method].{
 	parser_for = |encoding| {
 		|state| {
 			parsed = encoding.parse_u32(state) ? |InvalidJson(err)| InvalidJson(err)
-			item_kind : Try(ItemKind, [TooShort, ..])
+			item_kind : Try(ItemKind, [TooShort])
 			item_kind = match parsed.value {
 				1 => Ok(ItemKind.(Text))
 				2 => Ok(ItemKind.(Method))

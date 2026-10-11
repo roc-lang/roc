@@ -43,7 +43,7 @@ pub const Plan = struct {
 
     pub fn kind(self: Plan, fn_id: Lifted.FnId) InlineKind {
         if (self.kinds.len == 0) return .none;
-        const index = @intFromEnum(fn_id);
+        const index = @backingInt(fn_id);
         if (index >= self.kinds.len) {
             Common.invariant("inline plan did not contain a lifted function");
         }
@@ -65,7 +65,7 @@ pub const Plan = struct {
     pub fn bodyForFn(self: Plan, fn_id: Lifted.FnId) ?Lifted.ExprId {
         if (self.inline_bodies.len == 0) return null;
 
-        const index = @intFromEnum(fn_id);
+        const index = @backingInt(fn_id);
         if (index >= self.inline_bodies.len) {
             Common.invariant("inline plan did not contain a lifted function");
         }
@@ -175,7 +175,7 @@ const InlineAnalyzer = struct {
         defer analyzer.stack.deinit(allocator);
 
         for (0..solved.lifted.fnCount()) |index| {
-            const fn_id: Lifted.FnId = @enumFromInt(@as(u32, @intCast(index)));
+            const fn_id: Lifted.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             _ = try analyzer.inlineBody(fn_id);
         }
 
@@ -183,7 +183,7 @@ const InlineAnalyzer = struct {
         defer allocator.free(materialization_states);
         @memset(materialization_states, .unknown);
         for (0..solved.lifted.fnCount()) |index| {
-            const fn_id: Lifted.FnId = @enumFromInt(@as(u32, @intCast(index)));
+            const fn_id: Lifted.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             try analyzer.resolveSingleUseMaterialization(fn_id, materialization_states);
         }
 
@@ -280,7 +280,7 @@ const InlineAnalyzer = struct {
 
     fn solvedCapturesForFn(self: *const InlineAnalyzer, fn_id: Lifted.FnId) SolvedType.Span {
         const fn_symbol = self.solved.lifted.getFn(fn_id).symbol;
-        const fn_content = self.solved.types.rootContent(self.solved.fn_tys.items[@intFromEnum(fn_id)]);
+        const fn_content = self.solved.types.rootContent(self.solved.fn_tys.items[@backingInt(fn_id)]);
         if (fn_content != .func) Common.invariant("direct Lambda Mono function table contains a non-function type");
         const callable_content = self.solved.types.rootContent(fn_content.func.callable);
         const callable = if (callable_content == .lambda_set)
@@ -337,7 +337,7 @@ const InlineAnalyzer = struct {
     }
 
     fn enterInlineBody(self: *InlineAnalyzer, fn_id: Lifted.FnId, visits: *std.ArrayList(Visit)) std.mem.Allocator.Error!Entered {
-        const index = @intFromEnum(fn_id);
+        const index = @backingInt(fn_id);
         switch (self.decisions[index]) {
             .unknown => {},
             .visiting => {
@@ -375,7 +375,7 @@ const InlineAnalyzer = struct {
     }
 
     fn finishVisit(self: *InlineAnalyzer, visit: Visit, closed: bool) ?Lifted.ExprId {
-        const index = @intFromEnum(visit.fn_id);
+        const index = @backingInt(visit.fn_id);
         defer self.leaveInlineBody(visit.fn_id);
         if (!closed) {
             self.decisions[index] = .never;
@@ -421,8 +421,7 @@ const InlineAnalyzer = struct {
                 },
                 .expr => |expr_id| switch (self.solved.lifted.getExpr(expr_id).data) {
                     .return_ => return .open,
-                    .break_ => if (depth == 0) return .open else try Lifted.appendChildren(self.allocator, &self.solved.lifted, expr_id, &children),
-                    .continue_ => if (depth == 0) return .open else try Lifted.appendChildren(self.allocator, &self.solved.lifted, expr_id, &children),
+                    .break_, .continue_ => if (depth == 0) return .open else try Lifted.appendChildren(self.allocator, &self.solved.lifted, expr_id, &children),
                     .loop_ => |loop| {
                         const initial_values = self.solved.lifted.exprSpan(loop.initial_values);
                         for (0..initial_values.len) |index| try children.append(self.allocator, .{ .expr = GuardedList.at(initial_values, index) });
@@ -457,6 +456,7 @@ const InlineAnalyzer = struct {
                     .record_update,
                     .tag,
                     .typed_boundary,
+                    .row_widen,
                     .static_data_candidate,
                     .comptime_value,
                     .nominal,
@@ -527,7 +527,7 @@ const InlineAnalyzer = struct {
             const frame = frames.items[frames.items.len - 1];
             switch (frame) {
                 .resolve => |fn_id| {
-                    const index = @intFromEnum(fn_id);
+                    const index = @backingInt(fn_id);
                     if (result) |once| {
                         if (!once) self.decisions[index] = .never;
                         states[index] = .once;
@@ -570,7 +570,7 @@ const InlineAnalyzer = struct {
                     try frames.append(self.allocator, .{ .body_once = owner });
                 },
                 .body_once => |fn_id| {
-                    const index = @intFromEnum(fn_id);
+                    const index = @backingInt(fn_id);
                     if (result) |once| {
                         states[index] = if (once) .once else .multiple;
                         _ = frames.pop();
@@ -693,6 +693,7 @@ const InlineAnalyzer = struct {
                 .static_data_candidate,
                 .comptime_value,
                 .typed_boundary,
+                .row_widen,
                 .nominal,
                 .dbg,
                 .expect,
@@ -801,6 +802,7 @@ const InlineAnalyzer = struct {
                     .static_data_candidate,
                     .comptime_value,
                     .typed_boundary,
+                    .row_widen,
                     .dbg,
                     .expect,
                     .return_,
@@ -849,7 +851,7 @@ const InlineAnalyzer = struct {
                     if (lifted.stmtSpan(block.statements).len != 0) return false;
                     try stack.append(self.allocator, .{ .role = .body, .expr = block.final_expr });
                 },
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
             }
         }
         return true;
@@ -884,7 +886,7 @@ const InlineAnalyzer = struct {
                         .uninitialized, .let_, .expect, .dbg, .return_ => return false,
                     }
                 },
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .loop_, .break_, .continue_, .join_point, .jump, .return_, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .loop_, .break_, .continue_, .join_point, .jump, .return_, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
             }
         }
     }
@@ -896,7 +898,7 @@ const InlineAnalyzer = struct {
                 .str_lit => return true,
                 .nominal => |backing| expr_id = backing,
                 .typed_boundary => |boundary| expr_id = boundary.value,
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .bytes_lit, .static_data_candidate, .comptime_value, .list, .tuple, .record, .record_update, .tag, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .bytes_lit, .static_data_candidate, .comptime_value, .row_widen, .list, .tuple, .record, .record_update, .tag, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
             }
         }
     }
@@ -911,7 +913,7 @@ const InlineAnalyzer = struct {
         }
         const start = cycle_start orelse Common.invariant("inline cycle did not refer to a visiting function");
         for (self.stack.items[start..]) |fn_id| {
-            self.decisions[@intFromEnum(fn_id)] = .never;
+            self.decisions[@backingInt(fn_id)] = .never;
         }
     }
 };

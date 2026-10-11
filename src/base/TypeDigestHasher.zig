@@ -74,7 +74,7 @@ pub fn hash(bytes: []const u8) [digest_length]u8 {
 }
 
 test "constant tags preserve encoding across hash block boundaries" {
-    const prefix = [_]u8{43} ** 128;
+    const prefix = @as([128]u8, @splat(43));
     for (0..prefix.len + 1) |len| {
         var split = init();
         var batched = init();

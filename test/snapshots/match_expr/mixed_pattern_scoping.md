@@ -13,26 +13,9 @@ match data {
 }
 ~~~
 # EXPECTED
-POLYMORPHIC VALUE - mixed_pattern_scoping.md:1:1:6:2
+NIL
 # PROBLEMS
-~~~clojure
-(reports
-	(report
-		(severity runtime_error)
-		(title "Polymorphic Value")
-		(region (start 1 1) (end 6 2))
-		(headline
-			(reflow "This top-level value still has an unresolved polymorphic type."))
-		(document
-			(source-region (file "mixed_pattern_scoping.md") (start 1 1) (end 6 2) (annotation error) (line-text "match data {\n    Ok([x, y]) => x + y\n    Err(x) => x - 1\n    Ok([x]) => x * 2\n    Err(y) => y / 2\n}"))
-			(line-break)
-			(line-break)
-			(reflow "Its type is:")
-			(line-break)
-			(annotated code-block "a\n  where [\n    a.div_by : a, Dec -> a,\n    a.minus : a, Dec -> a,\n    a.plus : a, a -> a,\n    a.times : a, Dec -> a,\n  ]")
-			(line-break)
-			(reflow "Add an annotation or use this value in a way that fixes its concrete type."))))
-~~~
+NIL
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -97,48 +80,40 @@ match data {
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 241)
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "x"))))
-						(args
-							(e-lookup-local
-								(p-assign (ident "y")))))))
+					(e-binop (op "add")
+						(e-lookup-local
+							(p-assign (ident "x")))
+						(e-lookup-local
+							(p-assign (ident "y"))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "minus") (constraint-fn-var 254)
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "x"))))
-						(args
-							(e-num (value "1"))))))
+					(e-binop (op "sub")
+						(e-lookup-local
+							(p-assign (ident "x")))
+						(e-num (value "1")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "times") (constraint-fn-var 265)
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "x"))))
-						(args
-							(e-num (value "2"))))))
+					(e-binop (op "mul")
+						(e-lookup-local
+							(p-assign (ident "x")))
+						(e-num (value "2")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "div_by") (constraint-fn-var 276)
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "y"))))
-						(args
-							(e-num (value "2")))))))))
+					(e-binop (op "div")
+						(e-lookup-local
+							(p-assign (ident "y")))
+						(e-num (value "2"))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a where [a.div_by : a, Dec -> a, a.minus : a, Dec -> a, a.plus : a, a -> a, a.times : a, Dec -> a]"))
+(expr (type "_a"))
 ~~~

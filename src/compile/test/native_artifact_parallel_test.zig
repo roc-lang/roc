@@ -253,7 +253,7 @@ fn inspectFallible(lowered: *const lir.CheckedPipeline.LoweredProgram) Inspectio
     const demand = try allocator.alloc(lir.LIR.LirProcSpecId, program.store.getProcSpecs().len);
     defer allocator.free(demand);
     try std.testing.expect(demand.len >= 4);
-    for (demand, 0..) |*id, i| id.* = @enumFromInt(i);
+    for (demand, 0..) |*id, i| id.* = @fromBackingInt(@intCast(i));
     var root: ?lir.LIR.LirProcSpecId = null;
     for (program.root_procs.items) |id| {
         const proc = program.store.getProcSpec(id);
@@ -274,7 +274,7 @@ fn inspectFallible(lowered: *const lir.CheckedPipeline.LoweredProgram) Inspectio
     var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
     for ([_]usize{ 2, 4 }) |workers| {
-        var coord = try Coordinator.init(allocator, .multi_threaded, workers, target.detectNative(), &builtins, @import("build_options").compiler_version, null, CoreCtx.default(allocator, arena.allocator(), std.testing.io));
+        var coord = try Coordinator.init(allocator, .multi_threaded, workers, target.detectNative(), &builtins, @import("build_options").compiler_compatibility_id, null, CoreCtx.default(allocator, arena.allocator(), std.testing.io));
         defer coord.deinit();
         try coord.start();
         try coord.coordinatorLoop();

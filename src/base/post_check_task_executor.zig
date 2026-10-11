@@ -1,6 +1,7 @@
 //! Type-erased task execution shared by compiler stages without introducing stage dependencies.
 
 const std = @import("std");
+const invariant = @import("invariant.zig").invariant;
 
 /// Type-erased state retained by one exclusive executor lane.
 ///
@@ -46,7 +47,7 @@ pub const LaneState = struct {
         deinitFn: *const fn (*anyopaque) void,
     ) std.mem.Allocator.Error!void {
         if (self.get(key) != null) {
-            @panic("post-check executor lane state key was registered more than once");
+            invariant("{s}", .{"post-check executor lane state key was registered more than once"});
         }
         try self.entries.append(self.allocator, .{
             .key = key,
@@ -275,7 +276,7 @@ test "post-check executor never admits more tasks than worker capacity" {
         fn submitTask(context_opaque: *anyopaque, task: Task) std.mem.Allocator.Error!void {
             const self: *@This() = @ptrCast(@alignCast(context_opaque));
             if (self.active >= 2) {
-                @panic("post-check executor admitted work beyond its worker capacity");
+                invariant("{s}", .{"post-check executor admitted work beyond its worker capacity"});
             }
             self.accepted[self.accepted_len] = task;
             self.accepted_len += 1;

@@ -101,9 +101,9 @@ pub fn roc_builtins_simd_eval(
     args: *const [3]u128,
 ) callconv(.c) void {
     out.* = simd.eval(
-        @enumFromInt(op),
-        @enumFromInt(arg_kind),
-        @enumFromInt(ret_kind),
+        @fromBackingInt(@intCast(op)),
+        @fromBackingInt(@intCast(arg_kind)),
+        @fromBackingInt(@intCast(ret_kind)),
         args[0],
         args[1],
         args[2],
@@ -189,7 +189,7 @@ pub fn roc_builtins_hasher_write_bytes(seed: u64, domain: u8, bytes: ?[*]const u
 pub fn roc_builtins_hasher_write_str(seed: u64, str_bytes: ?[*]u8, str_len: usize, str_cap: usize) callconv(.c) u64 {
     const value = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
     const bytes = value.asSlice();
-    return hash.hasher_write_bytes(seed, @intFromEnum(hash.HasherDomain.str), bytes.ptr, bytes.len);
+    return hash.hasher_write_bytes(seed, @backingInt(hash.HasherDomain.str), bytes.ptr, bytes.len);
 }
 
 /// C ABI wrapper for finalizing a builtin Hasher state.
@@ -605,66 +605,16 @@ pub fn roc_builtins_str_from_utf8_result(out: [*]u8, list_bytes: ?[*]u8, list_le
     }
 
     utils.writeAs(u64, out + layout.err_index_offset, result.byte_index, @src());
-    utils.writeAs(u8, out + layout.err_problem_offset, @intFromEnum(result.problem_code), @src());
+    utils.writeAs(u8, out + layout.err_problem_offset, @backingInt(result.problem_code), @src());
     writeDiscriminant(out, layout.inner_disc_offset, layout.inner_disc_size, layout.inner_bad_utf8_tag);
     writeDiscriminant(out, layout.outer_disc_offset, layout.outer_disc_size, layout.err_tag);
 }
 
-/// Converts a UTF-8 byte list to a RocStr, returning the result components via separate out-pointers.
-pub fn roc_builtins_str_from_utf8_parts(out_string: *RocStr, out_index: *u64, out_problem: *u8, list_bytes: ?[*]u8, list_len: usize, list_cap: usize) callconv(.c) u8 {
-    const roc_ops = in_process_host.ops();
-    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    const result = str.fromUtf8C(l, .Immutable, roc_ops);
-    out_string.* = result.string;
-    out_index.* = result.byte_index;
-    out_problem.* = @intFromEnum(result.problem_code);
-    return @intFromBool(result.is_ok);
-}
-
-/// Wrapper: escape special characters and wrap in double quotes for Str.inspect
+/// Wrapper: strEscapeAndQuote(RocStr, *RocOps) -> RocStr
 pub fn roc_builtins_str_escape_and_quote(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize) callconv(.c) void {
     const roc_ops = in_process_host.ops();
-    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
-    const slice = s.asSlice();
-
-    var extra: usize = 0;
-    for (slice) |ch| {
-        if (ch == '\\' or ch == '"') extra += 1;
-    }
-
-    const result_len = slice.len + extra + 2;
-    const small_string_size = @sizeOf(RocStr);
-
-    if (result_len < small_string_size) {
-        var buf: [small_string_size]u8 = .{0} ** small_string_size;
-        buf[0] = '"';
-        var pos: usize = 1;
-        for (slice) |ch| {
-            if (ch == '\\' or ch == '"') {
-                buf[pos] = '\\';
-                pos += 1;
-            }
-            buf[pos] = ch;
-            pos += 1;
-        }
-        buf[pos] = '"';
-        buf[small_string_size - 1] = @intCast(result_len | 0x80);
-        out.* = @bitCast(buf);
-    } else {
-        const heap_ptr = allocateWithRefcountC(result_len, 1, false, roc_ops);
-        heap_ptr[0] = '"';
-        var pos: usize = 1;
-        for (slice) |ch| {
-            if (ch == '\\' or ch == '"') {
-                heap_ptr[pos] = '\\';
-                pos += 1;
-            }
-            heap_ptr[pos] = ch;
-            pos += 1;
-        }
-        heap_ptr[pos] = '"';
-        out.* = .{ .bytes = heap_ptr, .capacity_or_alloc_ptr = RocStr.encodeCapacity(result_len), .length = result_len };
-    }
+    const arg = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
+    out.* = str.strEscapeAndQuote(arg, roc_ops);
 }
 
 /// Wrapper: project a runtime RocStr to the host crash ABI using the actual RocStr storage.
@@ -831,11 +781,11 @@ test "formatInvalidLocal renders the check identity and reason" {
     var buffer: [192]u8 = undefined;
     try std.testing.expectEqualStrings(
         "LIR/codegen invariant violated: str local 7 of roc__p0dd5e7903b5a4e63af0a004f1598b1ae received an invalid RocStr (null bytes pointer)",
-        formatInvalidLocal(&buffer, @intFromEnum(InvalidLocalKind.str), @intFromEnum(InvalidLocalReason.null_bytes_pointer), 7, 0x0dd5e7903b5a4e63, 0xaf0a004f1598b1ae),
+        formatInvalidLocal(&buffer, @backingInt(InvalidLocalKind.str), @backingInt(InvalidLocalReason.null_bytes_pointer), 7, 0x0dd5e7903b5a4e63, 0xaf0a004f1598b1ae),
     );
     try std.testing.expectEqualStrings(
         "LIR/codegen invariant violated: box local 3 of roc__p00000000000000090000000000000002 received a non-aligned pointer",
-        formatInvalidLocal(&buffer, @intFromEnum(InvalidLocalKind.box), @intFromEnum(InvalidLocalReason.non_aligned_pointer), 3, 9, 2),
+        formatInvalidLocal(&buffer, @backingInt(InvalidLocalKind.box), @backingInt(InvalidLocalReason.non_aligned_pointer), 3, 9, 2),
     );
     try std.testing.expectEqualStrings(
         "LIR/codegen invariant violated: unknown local 1 of roc__p00000000000000020000000000000003 received an invalid value (unknown reason)",
@@ -847,11 +797,11 @@ test "formatInvalidLocal fits maximum identifiers and the longest reason" {
     var buffer: [192]u8 = undefined;
     try std.testing.expectEqualStrings(
         "LIR/codegen invariant violated: unknown local outside the frame of roc__pffffffffffffffffffffffffffffffff received an invalid RocStr (misaligned allocation pointer)",
-        formatInvalidLocal(&buffer, 200, @intFromEnum(InvalidLocalReason.misaligned_allocation_pointer), std.math.maxInt(u32), std.math.maxInt(u64), std.math.maxInt(u64)),
+        formatInvalidLocal(&buffer, 200, @backingInt(InvalidLocalReason.misaligned_allocation_pointer), std.math.maxInt(u32), std.math.maxInt(u64), std.math.maxInt(u64)),
     );
     try std.testing.expectEqualStrings(
         "LIR/codegen invariant violated: str local 0 of roc__p00000000000000000000000000000000 received an invalid RocStr (null bytes pointer)",
-        formatInvalidLocal(&buffer, @intFromEnum(InvalidLocalKind.str), @intFromEnum(InvalidLocalReason.null_bytes_pointer), 0, 0, 0),
+        formatInvalidLocal(&buffer, @backingInt(InvalidLocalKind.str), @backingInt(InvalidLocalReason.null_bytes_pointer), 0, 0, 0),
     );
 }
 
@@ -867,12 +817,6 @@ fn strListElementDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void
     str_ptr.decref(roc_ops);
 }
 
-const FlatListElementDecrefContext = struct {
-    inner_alignment: u32,
-    inner_element_width: usize,
-    roc_ops: *RocOps,
-};
-
 const CallbackElementDecrefContext = struct {
     callback: RcDropFn,
 };
@@ -880,25 +824,6 @@ const CallbackElementDecrefContext = struct {
 const CallbackElementIncrefContext = struct {
     callback: RcIncFn,
 };
-
-fn flatListElementDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
-    if (element == null) return;
-    const ctx_ptr = context orelse unreachable;
-    const ctx: *const FlatListElementDecrefContext = utils.alignedPtrCast(
-        *const FlatListElementDecrefContext,
-        @as([*]u8, @ptrCast(ctx_ptr)),
-        @src(),
-    );
-    const inner_list: *RocList = utils.alignedPtrCast(*RocList, element.?, @src());
-    inner_list.decref(
-        ctx.inner_alignment,
-        ctx.inner_element_width,
-        false,
-        null,
-        &rcNone,
-        ctx.roc_ops,
-    );
-}
 
 fn callbackListElementDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
     if (element == null) return;
@@ -1327,26 +1252,6 @@ pub fn roc_builtins_list_decref_str(list_bytes: ?[*]u8, list_len: usize, list_ca
     );
 }
 
-/// Wrapper: decref a List(List a) where the inner lists do not themselves contain refcounted elements.
-pub fn roc_builtins_list_decref_flat_list(list_bytes: ?[*]u8, list_len: usize, list_cap: usize, inner_alignment: u32, inner_element_width: usize) callconv(.c) void {
-    const roc_ops = in_process_host.ops();
-    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    var ctx = FlatListElementDecrefContext{
-        .inner_alignment = inner_alignment,
-        .inner_element_width = inner_element_width,
-        .roc_ops = roc_ops,
-    };
-    listDecref(
-        l,
-        @alignOf(RocList),
-        @sizeOf(RocList),
-        true,
-        @ptrCast(&ctx),
-        &flatListElementDecref,
-        roc_ops,
-    );
-}
-
 /// Decref a Roc list and optionally run an element decref callback when unique.
 pub fn roc_builtins_list_decref_with(list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, element_decref: ?RcDropFn) callconv(.c) void {
     const roc_ops = in_process_host.ops();
@@ -1459,27 +1364,6 @@ test "roc_builtins_list_decref_with_single_thread keeps an element alive while a
 
     shared.decrefWithAtomicity(.single_thread, ops);
     try std.testing.expectEqual(@as(usize, 0), env.getAllocationCount());
-}
-
-/// Wrapper: free a List(List a) where the inner lists do not themselves contain refcounted elements.
-pub fn roc_builtins_list_free_flat_list(list_bytes: ?[*]u8, list_len: usize, list_cap: usize, inner_alignment: u32, inner_element_width: usize) callconv(.c) void {
-    const roc_ops = in_process_host.ops();
-    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    var ctx = FlatListElementDecrefContext{
-        .inner_alignment = inner_alignment,
-        .inner_element_width = inner_element_width,
-        .roc_ops = roc_ops,
-    };
-
-    if (l.getAllocationDataPtr(roc_ops)) |source| {
-        const count = l.getAllocationElementCount(true, roc_ops);
-        var i: usize = 0;
-        while (i < count) : (i += 1) {
-            flatListElementDecref(@ptrCast(&ctx), source + i * @sizeOf(RocList));
-        }
-    }
-
-    freeDataPtrC(l.getAllocationDataPtr(roc_ops), @alignOf(RocList), true, roc_ops);
 }
 
 /// Free a Roc list and optionally run an element decref callback first.
@@ -1830,10 +1714,10 @@ fn writeRocStrFromSlice(out: *RocStr, slice: []const u8, roc_ops: *RocOps) void 
     const small_string_size = @sizeOf(RocStr);
 
     if (slice.len < small_string_size) {
-        var buf: [small_string_size]u8 = .{0} ** small_string_size;
+        var buf: [small_string_size]u8 = @splat(0);
         @memcpy(buf[0..slice.len], slice);
         buf[small_string_size - 1] = @intCast(slice.len | 0x80);
-        out.* = @bitCast(buf);
+        @memcpy(std.mem.asBytes(out), &buf);
     } else {
         const heap_ptr = allocateWithRefcountC(slice.len, 1, false, roc_ops);
         @memcpy(heap_ptr[0..slice.len], slice);
@@ -2104,118 +1988,83 @@ pub fn roc_builtins_u128_to_dec_try_unsafe(out: [*]u8, val_low: u64, val_high: u
 
 // ── Dec arithmetic wrappers (decomposed i128) ──
 
-/// Dec multiply (decomposed)
-pub fn roc_builtins_dec_mul(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64) callconv(.c) void {
-    const roc_ops = in_process_host.ops();
-    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
-    const b: i128 = @bitCast(i128h.from_u64_pair(b_low, b_high));
-    const result = dec.mulOrPanicC(dec.RocDec{ .num = a }, dec.RocDec{ .num = b }, roc_ops);
-    out_low.* = @truncate(@as(u128, @bitCast(result)));
-    out_high.* = i128h.hi64(@as(u128, @bitCast(result)));
+/// A C-ABI wrapper around a two-argument Dec builtin that takes each Dec and
+/// returns the result as low and high 64-bit halves.
+fn decBinaryWrapper(comptime op: anytype) fn (*u64, *u64, u64, u64, u64, u64) callconv(.c) void {
+    return struct {
+        fn wrapper(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64) callconv(.c) void {
+            const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
+            const b: i128 = @bitCast(i128h.from_u64_pair(b_low, b_high));
+            const raw = op(dec.RocDec{ .num = a }, dec.RocDec{ .num = b }, in_process_host.ops());
+            const result: u128 = @bitCast(if (@TypeOf(raw) == dec.RocDec) raw.num else raw);
+            out_low.* = @truncate(result);
+            out_high.* = i128h.hi64(result);
+        }
+    }.wrapper;
 }
 
-/// Dec multiply saturated (decomposed)
-pub fn roc_builtins_dec_mul_saturated(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64) callconv(.c) void {
-    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
-    const b: i128 = @bitCast(i128h.from_u64_pair(b_low, b_high));
-    const result = dec.mulSaturatedC(dec.RocDec{ .num = a }, dec.RocDec{ .num = b });
-    out_low.* = @truncate(@as(u128, @bitCast(result.num)));
-    out_high.* = i128h.hi64(@as(u128, @bitCast(result.num)));
+/// A C-ABI wrapper around a two-argument 128-bit integer builtin that takes
+/// each operand and returns the result as low and high 64-bit halves.
+fn int128BinaryWrapper(comptime T: type, comptime op: anytype) fn (*u64, *u64, u64, u64, u64, u64) callconv(.c) void {
+    return struct {
+        fn wrapper(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64) callconv(.c) void {
+            const a: T = @bitCast(i128h.from_u64_pair(a_low, a_high));
+            const b: T = @bitCast(i128h.from_u64_pair(b_low, b_high));
+            const result: u128 = @bitCast(op(a, b, in_process_host.ops()));
+            out_low.* = @truncate(result);
+            out_high.* = i128h.hi64(result);
+        }
+    }.wrapper;
 }
+
+/// Dec multiply (decomposed)
+pub const roc_builtins_dec_mul = decBinaryWrapper(dec.mulOrPanicC);
 
 /// Dec divide (decomposed)
-pub fn roc_builtins_dec_div(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64) callconv(.c) void {
-    const roc_ops = in_process_host.ops();
-    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
-    const b: i128 = @bitCast(i128h.from_u64_pair(b_low, b_high));
-    const result = dec.divC(dec.RocDec{ .num = a }, dec.RocDec{ .num = b }, roc_ops);
-    out_low.* = @truncate(@as(u128, @bitCast(result)));
-    out_high.* = i128h.hi64(@as(u128, @bitCast(result)));
-}
+pub const roc_builtins_dec_div = decBinaryWrapper(dec.divC);
 
 /// Dec divide truncating (decomposed)
-pub fn roc_builtins_dec_div_trunc(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64) callconv(.c) void {
-    const roc_ops = in_process_host.ops();
-    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
-    const b: i128 = @bitCast(i128h.from_u64_pair(b_low, b_high));
-    const result = dec.divTruncC(dec.RocDec{ .num = a }, dec.RocDec{ .num = b }, roc_ops);
-    out_low.* = @truncate(@as(u128, @bitCast(result)));
-    out_high.* = i128h.hi64(@as(u128, @bitCast(result)));
-}
+pub const roc_builtins_dec_div_trunc = decBinaryWrapper(dec.divTruncC);
 
 /// Dec power (decomposed)
-pub fn roc_builtins_dec_pow(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64) callconv(.c) void {
-    const roc_ops = in_process_host.ops();
-    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
-    const b: i128 = @bitCast(i128h.from_u64_pair(b_low, b_high));
-    const result = dec.powC(dec.RocDec{ .num = a }, dec.RocDec{ .num = b }, roc_ops);
-    out_low.* = @truncate(@as(u128, @bitCast(result)));
-    out_high.* = i128h.hi64(@as(u128, @bitCast(result)));
-}
+pub const roc_builtins_dec_pow = decBinaryWrapper(dec.powC);
 
 /// Two-coordinate arctangent (y, x).
-pub fn roc_builtins_dec_atan2(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64) callconv(.c) void {
-    const roc_ops = in_process_host.ops();
-    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
-    const b: i128 = @bitCast(i128h.from_u64_pair(b_low, b_high));
-    const result = dec.atan2C(dec.RocDec{ .num = a }, dec.RocDec{ .num = b }, roc_ops);
-    out_low.* = @truncate(@as(u128, @bitCast(result)));
-    out_high.* = i128h.hi64(@as(u128, @bitCast(result)));
-}
+pub const roc_builtins_dec_atan2 = decBinaryWrapper(dec.atan2C);
 
-fn writeDecUnaryResult(out_low: *u64, out_high: *u64, result: i128) void {
-    out_low.* = @truncate(@as(u128, @bitCast(result)));
-    out_high.* = i128h.hi64(@as(u128, @bitCast(result)));
+/// A C-ABI wrapper around a one-argument Dec builtin that takes the Dec and
+/// returns the result as low and high 64-bit halves.
+fn decUnaryWrapper(comptime op: anytype) fn (*u64, *u64, u64, u64) callconv(.c) void {
+    return struct {
+        fn wrapper(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64) callconv(.c) void {
+            const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
+            const result: u128 = @bitCast(op(dec.RocDec{ .num = a }, in_process_host.ops()));
+            out_low.* = @truncate(result);
+            out_high.* = i128h.hi64(result);
+        }
+    }.wrapper;
 }
 
 /// Dec square root (decomposed)
-pub fn roc_builtins_dec_sqrt(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64) callconv(.c) void {
-    const roc_ops = in_process_host.ops();
-    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
-    writeDecUnaryResult(out_low, out_high, dec.sqrtC(dec.RocDec{ .num = a }, roc_ops));
-}
+pub const roc_builtins_dec_sqrt = decUnaryWrapper(dec.sqrtC);
 
 /// Dec sine (decomposed)
-pub fn roc_builtins_dec_sin(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64) callconv(.c) void {
-    const roc_ops = in_process_host.ops();
-    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
-    writeDecUnaryResult(out_low, out_high, dec.sinC(dec.RocDec{ .num = a }, roc_ops));
-}
+pub const roc_builtins_dec_sin = decUnaryWrapper(dec.sinC);
 
 /// Dec cosine (decomposed)
-pub fn roc_builtins_dec_cos(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64) callconv(.c) void {
-    const roc_ops = in_process_host.ops();
-    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
-    writeDecUnaryResult(out_low, out_high, dec.cosC(dec.RocDec{ .num = a }, roc_ops));
-}
+pub const roc_builtins_dec_cos = decUnaryWrapper(dec.cosC);
 
 /// Dec tangent (decomposed)
-pub fn roc_builtins_dec_tan(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64) callconv(.c) void {
-    const roc_ops = in_process_host.ops();
-    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
-    writeDecUnaryResult(out_low, out_high, dec.tanC(dec.RocDec{ .num = a }, roc_ops));
-}
+pub const roc_builtins_dec_tan = decUnaryWrapper(dec.tanC);
 
 /// Dec arcsine (decomposed)
-pub fn roc_builtins_dec_asin(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64) callconv(.c) void {
-    const roc_ops = in_process_host.ops();
-    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
-    writeDecUnaryResult(out_low, out_high, dec.asinC(dec.RocDec{ .num = a }, roc_ops));
-}
+pub const roc_builtins_dec_asin = decUnaryWrapper(dec.asinC);
 
 /// Dec arccosine (decomposed)
-pub fn roc_builtins_dec_acos(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64) callconv(.c) void {
-    const roc_ops = in_process_host.ops();
-    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
-    writeDecUnaryResult(out_low, out_high, dec.acosC(dec.RocDec{ .num = a }, roc_ops));
-}
+pub const roc_builtins_dec_acos = decUnaryWrapper(dec.acosC);
 
 /// Dec arctangent (decomposed)
-pub fn roc_builtins_dec_atan(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64) callconv(.c) void {
-    const roc_ops = in_process_host.ops();
-    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
-    writeDecUnaryResult(out_low, out_high, dec.atanC(dec.RocDec{ .num = a }, roc_ops));
-}
+pub const roc_builtins_dec_atan = decUnaryWrapper(dec.atanC);
 
 // ── i128 div/rem wrappers (decomposed) ──
 
@@ -2241,54 +2090,19 @@ pub fn roc_builtins_num_mul_with_overflow_i128(out_low: *u64, out_high: *u64, a_
 }
 
 /// u128 div trunc (decomposed)
-pub fn roc_builtins_num_div_trunc_u128(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64) callconv(.c) void {
-    const roc_ops = in_process_host.ops();
-    const a: u128 = i128h.from_u64_pair(a_low, a_high);
-    const b: u128 = i128h.from_u64_pair(b_low, b_high);
-    const result = num.divTruncU128(a, b, roc_ops);
-    out_low.* = @truncate(@as(u128, @bitCast(result)));
-    out_high.* = i128h.hi64(@as(u128, @bitCast(result)));
-}
+pub const roc_builtins_num_div_trunc_u128 = int128BinaryWrapper(u128, num.divTruncU128);
 
 /// i128 div trunc (decomposed)
-pub fn roc_builtins_num_div_trunc_i128(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64) callconv(.c) void {
-    const roc_ops = in_process_host.ops();
-    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
-    const b: i128 = @bitCast(i128h.from_u64_pair(b_low, b_high));
-    const result = num.divTruncI128(a, b, roc_ops);
-    out_low.* = @truncate(@as(u128, @bitCast(result)));
-    out_high.* = i128h.hi64(@as(u128, @bitCast(result)));
-}
+pub const roc_builtins_num_div_trunc_i128 = int128BinaryWrapper(i128, num.divTruncI128);
 
 /// u128 rem trunc (decomposed)
-pub fn roc_builtins_num_rem_trunc_u128(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64) callconv(.c) void {
-    const roc_ops = in_process_host.ops();
-    const a: u128 = i128h.from_u64_pair(a_low, a_high);
-    const b: u128 = i128h.from_u64_pair(b_low, b_high);
-    const result = num.remTruncU128(a, b, roc_ops);
-    out_low.* = @truncate(@as(u128, @bitCast(result)));
-    out_high.* = i128h.hi64(@as(u128, @bitCast(result)));
-}
+pub const roc_builtins_num_rem_trunc_u128 = int128BinaryWrapper(u128, num.remTruncU128);
 
 /// i128 rem trunc (decomposed)
-pub fn roc_builtins_num_rem_trunc_i128(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64) callconv(.c) void {
-    const roc_ops = in_process_host.ops();
-    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
-    const b: i128 = @bitCast(i128h.from_u64_pair(b_low, b_high));
-    const result = num.remTruncI128(a, b, roc_ops);
-    out_low.* = @truncate(@as(u128, @bitCast(result)));
-    out_high.* = i128h.hi64(@as(u128, @bitCast(result)));
-}
+pub const roc_builtins_num_rem_trunc_i128 = int128BinaryWrapper(i128, num.remTruncI128);
 
 /// i128 modulo, result carries the sign of the divisor (decomposed)
-pub fn roc_builtins_num_mod_i128(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64) callconv(.c) void {
-    const roc_ops = in_process_host.ops();
-    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
-    const b: i128 = @bitCast(i128h.from_u64_pair(b_low, b_high));
-    const result = num.modI128(a, b, roc_ops);
-    out_low.* = @truncate(@as(u128, @bitCast(result)));
-    out_high.* = i128h.hi64(@as(u128, @bitCast(result)));
-}
+pub const roc_builtins_num_mod_i128 = int128BinaryWrapper(i128, num.modI128);
 
 // ── i128/u128 shift wrappers (decomposed) ──
 
@@ -2468,74 +2282,38 @@ pub fn roc_builtins_float_atan2(y: f64, x: f64) callconv(.c) f64 {
     return float_math_f64.atan2(y, x);
 }
 
-const FloatUnaryMathOp = enum {
-    sin,
-    cos,
-    tan,
-    asin,
-    acos,
-    atan,
-};
-
-fn floatUnaryMathF64(val: f64, comptime op: FloatUnaryMathOp) f64 {
-    return switch (op) {
-        .sin => float_math_f64.sin(val),
-        .cos => float_math_f64.cos(val),
-        .tan => float_math_f64.tan(val),
-        .asin => float_math_f64.asin(val),
-        .acos => float_math_f64.acos(val),
-        .atan => float_math_f64.atan(val),
-    };
+fn floatUnaryWrapper(comptime T: type, comptime op: fn (T) T) fn (T) callconv(.c) T {
+    return struct {
+        fn wrapper(val: T) callconv(.c) T {
+            return op(val);
+        }
+    }.wrapper;
 }
 
 /// Compute the sine of an F32 value.
-pub fn roc_builtins_float_sin_f32(val: f32) callconv(.c) f32 {
-    return float_math_f32.sin(val);
-}
+pub const roc_builtins_float_sin_f32 = floatUnaryWrapper(f32, float_math_f32.sin);
 /// Compute the sine of an F64 value.
-pub fn roc_builtins_float_sin(val: f64) callconv(.c) f64 {
-    return floatUnaryMathF64(val, .sin);
-}
+pub const roc_builtins_float_sin = floatUnaryWrapper(f64, float_math_f64.sin);
 /// Compute the cosine of an F32 value.
-pub fn roc_builtins_float_cos_f32(val: f32) callconv(.c) f32 {
-    return float_math_f32.cos(val);
-}
+pub const roc_builtins_float_cos_f32 = floatUnaryWrapper(f32, float_math_f32.cos);
 /// Compute the cosine of an F64 value.
-pub fn roc_builtins_float_cos(val: f64) callconv(.c) f64 {
-    return floatUnaryMathF64(val, .cos);
-}
+pub const roc_builtins_float_cos = floatUnaryWrapper(f64, float_math_f64.cos);
 /// Compute the tangent of an F32 value.
-pub fn roc_builtins_float_tan_f32(val: f32) callconv(.c) f32 {
-    return float_math_f32.tan(val);
-}
+pub const roc_builtins_float_tan_f32 = floatUnaryWrapper(f32, float_math_f32.tan);
 /// Compute the tangent of an F64 value.
-pub fn roc_builtins_float_tan(val: f64) callconv(.c) f64 {
-    return floatUnaryMathF64(val, .tan);
-}
+pub const roc_builtins_float_tan = floatUnaryWrapper(f64, float_math_f64.tan);
 /// Compute the inverse sine of an F32 value.
-pub fn roc_builtins_float_asin_f32(val: f32) callconv(.c) f32 {
-    return float_math_f32.asin(val);
-}
+pub const roc_builtins_float_asin_f32 = floatUnaryWrapper(f32, float_math_f32.asin);
 /// Compute the inverse sine of an F64 value.
-pub fn roc_builtins_float_asin(val: f64) callconv(.c) f64 {
-    return floatUnaryMathF64(val, .asin);
-}
+pub const roc_builtins_float_asin = floatUnaryWrapper(f64, float_math_f64.asin);
 /// Compute the inverse cosine of an F32 value.
-pub fn roc_builtins_float_acos_f32(val: f32) callconv(.c) f32 {
-    return float_math_f32.acos(val);
-}
+pub const roc_builtins_float_acos_f32 = floatUnaryWrapper(f32, float_math_f32.acos);
 /// Compute the inverse cosine of an F64 value.
-pub fn roc_builtins_float_acos(val: f64) callconv(.c) f64 {
-    return floatUnaryMathF64(val, .acos);
-}
+pub const roc_builtins_float_acos = floatUnaryWrapper(f64, float_math_f64.acos);
 /// Compute the inverse tangent of an F32 value.
-pub fn roc_builtins_float_atan_f32(val: f32) callconv(.c) f32 {
-    return float_math_f32.atan(val);
-}
+pub const roc_builtins_float_atan_f32 = floatUnaryWrapper(f32, float_math_f32.atan);
 /// Compute the inverse tangent of an F64 value.
-pub fn roc_builtins_float_atan(val: f64) callconv(.c) f64 {
-    return floatUnaryMathF64(val, .atan);
-}
+pub const roc_builtins_float_atan = floatUnaryWrapper(f64, float_math_f64.atan);
 
 test "float floor and ceiling wrappers" {
     try std.testing.expectEqual(@as(f32, 3.0), roc_builtins_float_floor_f32(3.9));
@@ -2981,7 +2759,12 @@ test "numeric prefix wrappers return an owned rest slice and borrow the input" {
     try std.testing.expectEqual(@as(usize, 0), numPrefixRecordRestStr(&record).len());
     try std.testing.expect(source_str.isUnique());
 
-    const bytes = [_]u8{ '5', 0x0D, 0xFF, 'x', 'y', 'z' } ** 8;
+    const bytes = repeated: {
+        const pattern = [_]u8{ '5', 0x0D, 0xFF, 'x', 'y', 'z' };
+        var result: [pattern.len * (8)]@TypeOf(pattern[0]) = undefined;
+        for (0..(8)) |i| @memcpy(result[i * pattern.len ..][0..pattern.len], &pattern);
+        break :repeated result;
+    };
     const source_list = RocList.fromSlice(u8, &bytes, false, ops);
     defer source_list.decref(@alignOf(u8), @sizeOf(u8), false, null, list.rcNone, ops);
     roc_builtins_int_from_utf8_prefix(&record, source_list.bytes, source_list.length, source_list.capacity_or_alloc_ptr, 1, false, &num_prefix_test_layout);

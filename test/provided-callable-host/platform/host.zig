@@ -42,6 +42,7 @@ const HostEnv = struct {
 
 extern fn roc_make_boxed_callable(offset: u64) callconv(.c) ?[*]u8;
 extern fn roc_make_boxed_str_callable(captured: RocStr) callconv(.c) ?[*]u8;
+extern fn roc_make_constant_boxed_callable(unused: u64) callconv(.c) ?[*]u8;
 extern fn roc_drop_boxed_callable(callable: ?[*]u8) callconv(.c) void;
 extern fn roc_make_aliased_boxed_callables() callconv(.c) ?[*]u8;
 extern fn roc_make_shared_boxed_callables() callconv(.c) ?[*]u8;
@@ -98,12 +99,14 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     const drop_mode = "--run-provided-boxed-callable-drop";
     const identity_mode = "--run-provided-boxed-callable-identity";
     const post_root_call_mode = "--run-provided-boxed-callable-post-root-call";
+    const constant_call_mode = "--run-provided-constant-boxed-callable-call";
     const mode = if (argc == 2) std.mem.span(argv[1]) else "";
     const run_drop = std.mem.eql(u8, mode, drop_mode);
     const run_identity = std.mem.eql(u8, mode, identity_mode);
     const run_post_root_call = std.mem.eql(u8, mode, post_root_call_mode);
-    if (!run_drop and !run_identity and !run_post_root_call) {
-        std.debug.print("usage: <app> {s}|{s}|{s}\n", .{ drop_mode, identity_mode, post_root_call_mode });
+    const run_constant_call = std.mem.eql(u8, mode, constant_call_mode);
+    if (!run_drop and !run_identity and !run_post_root_call and !run_constant_call) {
+        std.debug.print("usage: <app> {s}|{s}|{s}|{s}\n", .{ drop_mode, identity_mode, post_root_call_mode, constant_call_mode });
         return 1;
     }
 
@@ -180,6 +183,37 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
         }
 
         std.debug.print("provided boxed callable post-root call ok\n", .{});
+        return 0;
+    }
+
+    // Repro for https://github.com/roc-lang/roc/issues/12025
+    //
+    // A provided root returns a boxed callable stored in a top-level constant.
+    // The host invokes it after that root has returned, then releases its
+    // reference.
+    if (run_constant_call) {
+        const callable = roc_make_constant_boxed_callable(0) orelse {
+            std.debug.print("provided constant callable maker returned null\n", .{});
+            return 1;
+        };
+
+        const first_result = callBoxedU64ToU64(&roc_ops, callable, 1);
+        const second_result = callBoxedU64ToU64(&roc_ops, callable, 2);
+        roc_drop_boxed_callable(callable);
+
+        if (first_result != 42 or second_result != 43) {
+            std.debug.print("provided constant callable calls returned {d}, {d}\n", .{ first_result, second_result });
+            return 1;
+        }
+        if (host_env.dealloc_count != host_env.alloc_count) {
+            std.debug.print("provided constant callable drop released {d} of {d} allocations\n", .{
+                host_env.dealloc_count,
+                host_env.alloc_count,
+            });
+            return 1;
+        }
+
+        std.debug.print("provided constant boxed callable call ok\n", .{});
         return 0;
     }
 

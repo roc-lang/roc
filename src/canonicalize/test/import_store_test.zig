@@ -67,7 +67,7 @@ test "Import.Store deduplicates through interned string indices" {
     const duplicate_idx = try store.getOrPutWithIdent(gpa, &common, "test.Module", ident_idx);
 
     try testing.expectEqual(import_idx, duplicate_idx);
-    try testing.expectEqual(string_idx, store.imports.items.items[@intFromEnum(import_idx)]);
+    try testing.expectEqual(string_idx, store.imports.items.items[@backingInt(import_idx)]);
     try testing.expectEqual(import_idx, store.map.get(string_idx).?);
     try testing.expectEqual(ident_idx, store.getIdentIdx(import_idx).?);
 }

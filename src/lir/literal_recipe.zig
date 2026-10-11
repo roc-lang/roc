@@ -34,7 +34,7 @@ pub const Representation = struct {
         result.declared_field_pool = try store.declared_field_pool.toOwnedSlice(allocator);
         const modules = try allocator.alloc([32]u8, names.module_identities.count());
         result.modules = modules;
-        for (modules, 0..) |*module, index| module.* = names.moduleIdentityBytes(@enumFromInt(index)).*;
+        for (modules, 0..) |*module, index| module.* = names.moduleIdentityBytes(@fromBackingInt(@intCast(index))).*;
         result.type_names = try captureNames(allocator, &names, .type_names);
         result.field_names = try captureNames(allocator, &names, .record_field_labels);
         result.tag_names = try captureNames(allocator, &names, .tag_labels);
@@ -51,9 +51,9 @@ pub const Representation = struct {
         }
         for (result, 0..) |*text, index| {
             text.* = try allocator.dupe(u8, switch (kind) {
-                .type_names => names.typeNameText(@enumFromInt(index)),
-                .record_field_labels => names.recordFieldLabelText(@enumFromInt(index)),
-                .tag_labels => names.tagLabelText(@enumFromInt(index)),
+                .type_names => names.typeNameText(@fromBackingInt(@intCast(index))),
+                .record_field_labels => names.recordFieldLabelText(@fromBackingInt(@intCast(index))),
+                .tag_labels => names.tagLabelText(@fromBackingInt(@intCast(index))),
             });
             initialized += 1;
         }
@@ -88,16 +88,16 @@ pub const Representation = struct {
         var result: Materialized = .{ .names = Names.NameStore.init(allocator), .store = ConstStore.ConstStore.init(allocator) };
         errdefer result.deinit();
         for (self.modules, 0..) |module, index| {
-            if (@intFromEnum(try result.names.internModuleIdentity(&module)) != index) return error.InvalidLiteralRecipe;
+            if (@backingInt(try result.names.internModuleIdentity(&module)) != index) return error.InvalidLiteralRecipe;
         }
         inline for (.{ "type_names", "field_names", "tag_names" }) |field| {
             for (@field(self, field), 0..) |text, index| {
                 const id = if (comptime std.mem.eql(u8, field, "type_names"))
-                    @intFromEnum(try result.names.internTypeName(text))
+                    @backingInt(try result.names.internTypeName(text))
                 else if (comptime std.mem.eql(u8, field, "field_names"))
-                    @intFromEnum(try result.names.internRecordFieldLabel(text))
+                    @backingInt(try result.names.internRecordFieldLabel(text))
                 else
-                    @intFromEnum(try result.names.internTagLabel(text));
+                    @backingInt(try result.names.internTagLabel(text));
                 if (id != index) return error.InvalidLiteralRecipe;
             }
         }
@@ -110,7 +110,7 @@ pub const Representation = struct {
     }
 
     fn hasType(self: Representation, id: ConstStore.ConstTypeId) bool {
-        return @intFromEnum(id) < self.types.len;
+        return @backingInt(id) < self.types.len;
     }
     fn hasRange(range: ConstStore.ConstRange, len: usize) bool {
         return range.start <= len and range.len <= len - range.start;
@@ -129,16 +129,16 @@ pub const Representation = struct {
         }
         for (self.type_pool) |ty| if (!self.hasType(ty)) return false;
         for (self.field_pool) |field| {
-            if (@intFromEnum(field.name) >= self.field_names.len or !self.hasType(field.ty)) return false;
+            if (@backingInt(field.name) >= self.field_names.len or !self.hasType(field.ty)) return false;
             if (field.value_ty) |ty| if (!self.hasType(ty)) return false;
-            if (field.default) |value| if (@intFromEnum(value.module) >= self.modules.len) return false;
+            if (field.default) |value| if (@backingInt(value.module) >= self.modules.len) return false;
         }
         for (self.tag_pool) |tag| {
-            if (@intFromEnum(tag.name) >= self.tag_names.len or @intFromEnum(tag.checked_name) >= self.tag_names.len) return false;
+            if (@backingInt(tag.name) >= self.tag_names.len or @backingInt(tag.checked_name) >= self.tag_names.len) return false;
             if (!hasRange(tag.payloads, self.type_pool.len)) return false;
         }
         for (self.declared_field_pool) |field| switch (field) {
-            .named => |name| if (@intFromEnum(name) >= self.field_names.len) return false,
+            .named => |name| if (@backingInt(name) >= self.field_names.len) return false,
             .padding => |ty| if (!self.hasType(ty)) return false,
         };
         for (self.types) |ty| switch (ty) {
@@ -151,7 +151,7 @@ pub const Representation = struct {
                 if (!hasRange(func.args, self.type_pool.len) or !self.hasType(func.ret)) return false;
             },
             .named => |named| {
-                if (@intFromEnum(named.def.module) >= self.modules.len or @intFromEnum(named.def.type_name) >= self.type_names.len) return false;
+                if (@backingInt(named.def.module) >= self.modules.len or @backingInt(named.def.type_name) >= self.type_names.len) return false;
                 if (!hasRange(named.args, self.type_pool.len) or !hasRange(named.declared_order, self.declared_field_pool.len)) return false;
                 if (named.backing) |backing| if (!self.hasType(backing.ty)) return false;
                 if (named.kind == .alias) {
@@ -162,16 +162,16 @@ pub const Representation = struct {
                         remaining -= 1;
                         const backing = current.backing orelse return false;
                         if (!self.hasType(backing.ty)) return false;
-                        const next = self.types[@intFromEnum(backing.ty)];
+                        const next = self.types[@backingInt(backing.ty)];
                         if (next != .named) break;
                         current = next.named;
                     }
                 }
                 if (named.def.iterator_topology) |topology| {
-                    if (@intFromEnum(topology.len_field) >= self.field_names.len or @intFromEnum(topology.step_field) >= self.field_names.len) return false;
-                    if (@intFromEnum(topology.item_field) >= self.field_names.len or @intFromEnum(topology.rest_field) >= self.field_names.len) return false;
+                    if (@backingInt(topology.len_field) >= self.field_names.len or @backingInt(topology.step_field) >= self.field_names.len) return false;
+                    if (@backingInt(topology.item_field) >= self.field_names.len or @backingInt(topology.rest_field) >= self.field_names.len) return false;
                     inline for (.{ "known_tag", "unknown_tag", "done_tag", "one_tag", "skip_tag" }) |field| {
-                        if (@intFromEnum(@field(topology, field)) >= self.tag_names.len) return false;
+                        if (@backingInt(@field(topology, field)) >= self.tag_names.len) return false;
                     }
                 }
             },
@@ -204,8 +204,8 @@ test "literal producer representation restores exact name and type closure" {
 }
 
 test "literal producer representation rejects malformed references" {
-    const types = [_]ConstStore.ConstType{.{ .list = @enumFromInt(1) }};
-    const recipe: Representation = .{ .root = @enumFromInt(0), .types = &types };
+    const types = [_]ConstStore.ConstType{.{ .list = @fromBackingInt(@intCast(1)) }};
+    const recipe: Representation = .{ .root = @fromBackingInt(@intCast(0)), .types = &types };
     try std.testing.expect(!recipe.valid());
     try std.testing.expectError(error.InvalidLiteralRecipe, recipe.materialize(std.testing.allocator));
 }

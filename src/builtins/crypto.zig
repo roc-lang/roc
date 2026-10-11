@@ -42,7 +42,8 @@ const blake3_cv_stack_max = 55;
 const blake3_state_base_len = 1 + 8 * 4 + 8 * 4 + 8 + Blake3.block_length + 1 + 1 + 1 + 1;
 
 fn invariant(roc_ops: *RocOps, comptime message: []const u8) noreturn {
-    roc_ops.crash("crypto builtin invariant violated: " ++ message);
+    if (std.debug.runtime_safety) roc_ops.crash("crypto builtin invariant violated: " ++ message);
+    unreachable;
 }
 
 fn readInput(bytes: ?[*]const u8, len: usize, roc_ops: *RocOps) []const u8 {

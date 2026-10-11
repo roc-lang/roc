@@ -1849,6 +1849,63 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "True" },
     },
+    // A capacity whose byte size overflows `usize` must crash, not wrap to a
+    // tiny allocation the next write overruns. `2^61 + 1` U64s overflow 64 bits.
+    .{
+        .name = "low_level - List.reserve rejects growth whose byte size overflows",
+        .source =
+        \\{
+        \\big : List(U64)
+        \\big = List.reserve([1, 2, 3], 2305843009213693953)
+        \\List.len(big)
+        \\}
+        ,
+        .expected = .{ .crash = {} },
+    },
+    .{
+        .name = "low_level - List.with_capacity rejects a capacity whose byte size overflows",
+        .source =
+        \\{
+        \\big : List(U64)
+        \\big = List.with_capacity(2305843009213693953)
+        \\List.len(big)
+        \\}
+        ,
+        .expected = .{ .crash = {} },
+    },
+    .{
+        .name = "low_level - List.repeat rejects a count whose byte size overflows",
+        .source = "List.len(List.repeat(0.U64, 2305843009213693953))",
+        .expected = .{ .crash = {} },
+    },
+    // wasm32-only boundaries: these fit a 64-bit address space, so native
+    // backends would really allocate them.
+    .{
+        // `2^29 + 1` U64s wrap i32 to an 8-byte allocation.
+        .name = "low_level - List.with_capacity rejects a byte size that overflows wasm32",
+        .source =
+        \\{
+        \\big : List(U64)
+        \\big = List.with_capacity(536870913)
+        \\List.len(List.append(big, 7))
+        \\}
+        ,
+        .expected = .{ .crash = {} },
+        .skip = .{ .interpreter = true, .dev = true, .llvm = true },
+    },
+    .{
+        .name = "low_level - Str.with_capacity rejects a capacity that overflows wasm32",
+        .source = "Str.with_capacity(4294967301)",
+        .expected = .{ .crash = {} },
+        .skip = .{ .interpreter = true, .dev = true, .llvm = true },
+    },
+    .{
+        // `2^32 + 1` once wrapped to a single repetition.
+        .name = "low_level - Str.repeat rejects a count that overflows wasm32",
+        .source = "Str.repeat(\"ab\", 4294967297)",
+        .expected = .{ .crash = {} },
+        .skip = .{ .interpreter = true, .dev = true, .llvm = true },
+    },
     .{
         .name = "low_level - List.capacity of zero-sized items stays zero on every backend",
         .source =
@@ -3177,6 +3234,60 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "240" },
     },
     .{
+        .name = "low_level - I128.abs_diff spans the whole I128 range",
+        .source =
+        \\{
+        \\a : I128
+        \\a = I128.highest
+        \\b : I128
+        \\b = I128.lowest
+        \\x = I128.abs_diff(a, b)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "340282366920938463463374607431768211455" },
+    },
+    .{
+        .name = "low_level - F64.abs_diff keeps the fractional part",
+        .source =
+        \\{
+        \\a : F64
+        \\a = 7.5
+        \\b : F64
+        \\b = 2.25
+        \\x = F64.abs_diff(b, a)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "5.25" },
+    },
+    .{
+        .name = "low_level - F32.abs_diff keeps the fractional part",
+        .source =
+        \\{
+        \\a : F32
+        \\a = -0.5
+        \\b : F32
+        \\b = 2.25
+        \\x = F32.abs_diff(a, b)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "2.75" },
+    },
+    .{
+        .name = "low_level - F64.abs of negative zero is positive zero",
+        .source =
+        \\{
+        \\a : F64
+        \\a = -0.0
+        \\x = F64.abs(a)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "0" },
+    },
+    .{
         .name = "low_level - U16.to_str",
         .source =
         \\{
@@ -3199,6 +3310,19 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "\"-500\"" },
+    },
+    .{
+        .name = "regression: signed narrow formatting and 128-bit limb extraction",
+        .source =
+        \\{
+        \\signed_16 = I16.to_str(-32768.I16)
+        \\signed_32 = I32.to_str(-2147483648.I32)
+        \\signed_128 = I128.to_str(-18446744073709551617.I128)
+        \\unsigned_128 = U128.to_str(18446744073709551617.U128)
+        \\"${signed_16}|${signed_32}|${signed_128}|${unsigned_128}"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"-32768|-2147483648|-18446744073709551617|18446744073709551617\"" },
     },
     .{
         .name = "low_level - U32.to_str",
@@ -3765,6 +3889,30 @@ pub const tests = [_]TestCase{
         \\a : U8
         \\a = 200.U8
         \\x = U8.to_i8_try(a)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Err(OutOfRange)" },
+    },
+    .{
+        .name = "low_level - U128.to_i64_try at I64.highest returns Ok",
+        .source =
+        \\{
+        \\a : U128
+        \\a = 9223372036854775807.U128
+        \\x = U128.to_i64_try(a)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(9223372036854775807)" },
+    },
+    .{
+        .name = "low_level - U128.to_i64_try one past I64.highest returns Err",
+        .source =
+        \\{
+        \\a : U128
+        \\a = 9223372036854775808.U128
+        \\x = U128.to_i64_try(a)
         \\x
         \\}
         ,
@@ -4459,6 +4607,17 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "\"\"" },
+    },
+    .{
+        // A wrapped `len + spare` would make the reserve a silent no-op.
+        .name = "low_level - Str.reserve rejects a spare that overflows its length",
+        .source =
+        \\{
+        \\big = Str.reserve("hello", 18446744073709551615)
+        \\big
+        \\}
+        ,
+        .expected = .{ .crash = {} },
     },
     .{
         .name = "low_level - Str.release_excess_capacity preserves content",

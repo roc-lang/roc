@@ -68,17 +68,23 @@ pub const Memo = struct {
     /// The one-step unfolding of every cyclic group position rendered so far,
     /// mapped to that position's digest.
     unfoldings: std.AutoHashMap(Identity, Identity),
+    /// Reduction node maps kept across reductions. A fresh map spanning old
+    /// and new variables would allocate and clear a chunk table for that
+    /// whole span on every reduction.
+    node_maps: collections.DenseMapPool(SolvedType.TypeVarId, u32),
 
     pub fn init(allocator: Allocator) Memo {
         return .{
             .digests = collections.DenseMap(SolvedType.TypeVarId, Identity).init(allocator),
             .unfoldings = std.AutoHashMap(Identity, Identity).init(allocator),
+            .node_maps = collections.DenseMapPool(SolvedType.TypeVarId, u32).init(allocator),
         };
     }
 
     pub fn deinit(self: *Memo) void {
         self.digests.deinit();
         self.unfoldings.deinit();
+        self.node_maps.deinit();
     }
 };
 
@@ -130,7 +136,7 @@ pub const Renderer = struct {
     }
 
     fn sourceDigest(self: *const Renderer, fn_id: Lifted.FnId) Identity {
-        return self.source_digests[@intFromEnum(fn_id)] orelse
+        return self.source_digests[@backingInt(fn_id)] orelse
             Common.invariant("lifted function without a checked source template reached procedure identity rendering");
     }
 
@@ -201,13 +207,13 @@ const Engine = struct {
         return .{
             .renderer = renderer,
             .gpa = renderer.allocator,
-            .node_of_ty = collections.DenseMap(SolvedType.TypeVarId, u32).init(renderer.allocator),
+            .node_of_ty = renderer.memo.node_maps.acquire(),
         };
     }
 
     fn deinit(self: *Engine) void {
         self.nodes.deinit(self.gpa);
-        self.node_of_ty.deinit();
+        self.renderer.memo.node_maps.release(&self.node_of_ty);
         self.items.deinit(self.gpa);
         self.children.deinit(self.gpa);
         self.bytes.deinit(self.gpa);
@@ -277,7 +283,7 @@ const Engine = struct {
             const captures = renderer.types.captureSpan(member.captures);
             try self.putU32(@intCast(captures.len));
             for (captures) |capture| try self.putChild(capture.ty);
-            try self.putChild(renderer.fn_tys[@intFromEnum(fn_id)]);
+            try self.putChild(renderer.fn_tys[@backingInt(fn_id)]);
         }
     }
 
@@ -698,9 +704,9 @@ test "procedure identity excludes outer callable sets but retains nested callabl
     const first = symbols.fresh();
     const second = symbols.fresh();
     // Renderer function arrays use the dense IDs assigned by this symbol table.
-    const first_fn: Lifted.FnId = @enumFromInt(fn_by_symbol.count());
+    const first_fn: Lifted.FnId = @fromBackingInt(@intCast(fn_by_symbol.count()));
     try fn_by_symbol.put(first, first_fn);
-    const second_fn: Lifted.FnId = @enumFromInt(fn_by_symbol.count());
+    const second_fn: Lifted.FnId = @fromBackingInt(@intCast(fn_by_symbol.count()));
     try fn_by_symbol.put(second, second_fn);
     const scalar = try types.add(.{ .primitive = .i64 });
     const args = try types.addSpan(&.{ scalar, scalar });

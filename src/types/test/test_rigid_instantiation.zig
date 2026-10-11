@@ -762,7 +762,7 @@ test "instantiate - markers in a constraint signature get their own choices" {
     const copy = try instantiator.instantiateVar(source);
     const copied_constraints = env.types.resolveVar(copy).desc.content.flex.constraints;
     try std.testing.expectEqual(@as(usize, 1), copied_constraints.len());
-    const copied_method = env.types.static_dispatch_constraints.items.items[@intFromEnum(copied_constraints.start)].fn_var;
+    const copied_method = env.types.static_dispatch_constraints.items.items[@backingInt(copied_constraints.start)].fn_var;
     const func = env.types.resolveVar(copied_method).desc.content.structure.fn_pure;
     const copied_arg = env.types.resolveVar(env.types.getVarAt(func.args, 0)).desc.content.structure.tag_union;
     const copied_ret = env.types.resolveVar(func.ret).desc.content.structure.tag_union;
@@ -809,7 +809,7 @@ test "instantiate - markers in interpolation metadata get their own choices" {
     const copy = try instantiator.instantiateVar(source);
     const copied_constraints = env.types.resolveVar(copy).desc.content.flex.constraints;
     try std.testing.expectEqual(@as(usize, 1), copied_constraints.len());
-    const metadata = env.types.static_dispatch_constraints.items.items[@intFromEnum(copied_constraints.start)].interpolation;
+    const metadata = env.types.static_dispatch_constraints.items.items[@backingInt(copied_constraints.start)].interpolation;
     try std.testing.expect(metadata.isPresent());
     const copied_part = env.types.resolveVar(env.types.getInterpolationPartAt(metadata.interpolated_parts, 0).var_).desc.content.structure.tag_union;
     const copied_item = env.types.resolveVar(metadata.item_var).desc.content.structure.tag_union;
@@ -852,7 +852,7 @@ test "instantiate - markers reached through a record presence var get their own 
     const copied_presence = env.types.getRecordFieldAt(record.fields, 0).presence.presenceVar().?;
     const copied_constraints = env.types.resolveVar(copied_presence).desc.content.flex.constraints;
     try std.testing.expectEqual(@as(usize, 1), copied_constraints.len());
-    const copied_method = env.types.static_dispatch_constraints.items.items[@intFromEnum(copied_constraints.start)].fn_var;
+    const copied_method = env.types.static_dispatch_constraints.items.items[@backingInt(copied_constraints.start)].fn_var;
     const copied_ret = env.types.resolveVar(env.types.resolveVar(copied_method).desc.content.structure.fn_pure.ret).desc.content.structure.tag_union;
     try std.testing.expect(env.types.resolveVar(copied_ret.ext).desc.content == .flex);
 }

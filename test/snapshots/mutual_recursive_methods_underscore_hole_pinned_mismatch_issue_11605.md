@@ -348,9 +348,7 @@ run = |num| {
 				(s-let
 					(p-assign (ident "done"))
 					(e-runtime-error (tag "erroneous_value_expr")))
-				(e-tag (name "Ok")
-					(args
-						(e-runtime-error (tag "erroneous_value_use"))))))
+				(e-runtime-error (tag "erroneous_value_expr"))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "U64") (builtin))

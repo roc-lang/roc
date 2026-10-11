@@ -19,15 +19,15 @@ test "body shards borrow compile-time descriptors through publication and rollba
     defer source.deinit();
     const root_a: Common.ComptimeValueRoot = .{
         .module = std.mem.zeroes(check.CheckedModule.ModuleId),
-        .root = .{ .checked = @enumFromInt(9) },
+        .root = .{ .checked = @fromBackingInt(@intCast(9)) },
         .const_locator = null,
     };
     var root_b = root_a;
     root_b.module.bytes[0] = 1;
     root_b.const_locator = .{
         .artifact = root_b.module,
-        .owner = .{ .hoisted_expr = .{ .module_idx = 1, .expr = @enumFromInt(2) } },
-        .template = @enumFromInt(3),
+        .owner = .{ .hoisted_expr = .{ .module_idx = 1, .expr = @fromBackingInt(@intCast(2)) } },
+        .template = @fromBackingInt(@intCast(3)),
         .source_scheme = std.mem.zeroes(@FieldType(check.CheckedModule.ConstLocator, "source_scheme")),
     };
     const a = try source.addComptimeValueRoot(root_a);
@@ -129,7 +129,7 @@ fn prefix(allocator: Allocator, extra: usize, ids: *PrefixIds) Allocator.Error!A
     ids.ty = ty;
     ids.field = try p.names.internRecordFieldLabel("value");
     ids.tag = try p.names.internTagLabel("Ok");
-    ids.local = try p.addLocalWithBinder(@enumFromInt(3), ty, @enumFromInt(7));
+    ids.local = try p.addLocalWithBinder(@fromBackingInt(@intCast(3)), ty, @fromBackingInt(@intCast(7)));
     try p.setLocalName(ids.local, "frozen_local");
     const frozen_body = try p.addExpr(.{ .ty = ty, .data = .unit });
     ids.expression = frozen_body;
@@ -138,7 +138,7 @@ fn prefix(allocator: Allocator, extra: usize, ids: *PrefixIds) Allocator.Error!A
     ids.string = try p.addStringLiteral("frozen");
     ids.last_string = ids.string;
     ids.scope = try p.addInlineScope(.{
-        .source_symbol = @enumFromInt(3),
+        .source_symbol = @fromBackingInt(@intCast(3)),
         .source_loc = base.SourceLoc.none,
         .call_site = base.SourceLoc.none,
     });
@@ -148,7 +148,7 @@ fn prefix(allocator: Allocator, extra: usize, ids: *PrefixIds) Allocator.Error!A
     _ = try p.addTypedLocalSpan(&.{.{ .local = ids.local, .ty = ty }});
     for (0..2) |i| {
         ids.functions[i] = try p.addFn(.{
-            .symbol = @enumFromInt(10 + @as(u32, @intCast(i))),
+            .symbol = @fromBackingInt(@intCast(10 + @as(u32, @intCast(i)))),
             .args = .empty(),
             .captures = .empty(),
             .body = .{ .roc = frozen_body },
@@ -173,18 +173,18 @@ fn expr(p: *Ast.Program, ty: Type.TypeId, data: Ast.ExprData) Allocator.Error!As
 fn body(p: *Ast.Program, ids: PrefixIds, fn_id: Ast.FnId, symbol: u32, join: u32) Allocator.Error!void {
     const ty = ids.ty;
     const frozen = ids.expression;
-    const local = try p.addLocalWithBinder(@enumFromInt(symbol), ty, @enumFromInt(7));
+    const local = try p.addLocalWithBinder(@fromBackingInt(@intCast(symbol)), ty, @fromBackingInt(@intCast(7)));
     try p.setLocalName(local, "private_local");
-    const other = try p.addLocal(@enumFromInt(4), ty);
+    const other = try p.addLocal(@fromBackingInt(@intCast(4)), ty);
     const text = try p.addStringLiteral("private string");
     const scope = try p.addInlineScope(.{
-        .source_symbol = @enumFromInt(symbol),
+        .source_symbol = @fromBackingInt(@intCast(symbol)),
         .source_loc = .{ .file = 5, .line = 100, .column = 30 },
         .call_site = .{ .file = 6, .line = 20, .column = 40 },
         .parent = ids.scope,
     });
     const child_scope = try p.addInlineScope(.{
-        .source_symbol = @enumFromInt(4),
+        .source_symbol = @fromBackingInt(@intCast(4)),
         .source_loc = base.SourceLoc.none,
         .call_site = base.SourceLoc.none,
         .parent = scope,
@@ -243,13 +243,13 @@ fn body(p: *Ast.Program, ids: PrefixIds, fn_id: Ast.FnId, symbol: u32, join: u32
         .try_expr = frozen,
         .ok_local = local,
         .err_is_cold = true,
-        .err_target = @enumFromInt(join),
+        .err_target = @fromBackingInt(@intCast(join)),
         .ok_body = value,
     } });
     _ = try expr(p, ty, .{ .try_sequence = .{
         .try_expr = value,
         .ok_local = other,
-        .err_target = @enumFromInt(2),
+        .err_target = @fromBackingInt(@intCast(2)),
         .ok_body = frozen,
     } });
     _ = try expr(p, ty, .{ .try_sequence = .{
@@ -263,7 +263,7 @@ fn body(p: *Ast.Program, ids: PrefixIds, fn_id: Ast.FnId, symbol: u32, join: u32
         .value_field = ids.field,
         .rest_local = other,
         .rest_field = ids.field,
-        .err_target = @enumFromInt(join),
+        .err_target = @fromBackingInt(@intCast(join)),
         .ok_body = frozen,
     } });
     _ = try expr(p, ty, .{ .uninitialized_payload = .{ .condition = local, .mask = 100 } });
@@ -277,16 +277,16 @@ fn body(p: *Ast.Program, ids: PrefixIds, fn_id: Ast.FnId, symbol: u32, join: u32
     _ = try expr(p, ty, .{ .structural_eq = .{ .lhs = frozen, .rhs = value, .negated = true } });
     _ = try expr(p, ty, .{ .structural_hash = .{ .value = value, .hasher = frozen } });
     _ = try expr(p, ty, .{ .jump = .{
-        .target = @enumFromInt(join),
+        .target = @fromBackingInt(@intCast(join)),
         .args = args,
         .loop_params = params,
         .loop_values = args,
     } });
-    _ = try expr(p, ty, .{ .jump = .{ .target = @enumFromInt(2), .args = .{ .start = 0, .len = 1 } } });
+    _ = try expr(p, ty, .{ .jump = .{ .target = @fromBackingInt(@intCast(2)), .args = .{ .start = 0, .len = 1 } } });
     const continuation = try expr(p, ty, .{ .continue_ = .{ .values = args } });
     const loop = try expr(p, ty, .{ .loop_ = .{ .params = params, .initial_values = args, .body = continuation } });
     const joined = try expr(p, ty, .{ .join_point = .{
-        .id = @enumFromInt(join),
+        .id = @fromBackingInt(@intCast(join)),
         .params = params,
         .retained = .{ .start = 0, .len = 1 },
         .body = loop,
@@ -317,14 +317,14 @@ fn equalPrograms(expected: *const Ast.Program, expected_ids: PrefixIds, actual: 
     try testing.expectEqual(expected.names.recordFieldLabelCount(), actual.names.recordFieldLabelCount());
     try testing.expectEqual(expected.names.tagLabelCount(), actual.names.tagLabelCount());
     try testing.expectEqualDeep(expected.types.get(expected_ids.ty), actual.types.get(actual_ids.ty));
-    inline for (@typeInfo(Ast.ProgramView).@"struct".fields) |field| {
-        if (comptime !std.mem.eql(u8, field.name, "names") and
-            !std.mem.eql(u8, field.name, "types") and
-            !std.mem.eql(u8, field.name, "proc_debug_names") and
-            !std.mem.eql(u8, field.name, "next_symbol") and
-            !std.mem.eql(u8, field.name, "string_literals"))
+    inline for (@typeInfo(Ast.ProgramView).@"struct".field_names) |field_name| {
+        if (comptime !std.mem.eql(u8, field_name, "names") and
+            !std.mem.eql(u8, field_name, "types") and
+            !std.mem.eql(u8, field_name, "proc_debug_names") and
+            !std.mem.eql(u8, field_name, "next_symbol") and
+            !std.mem.eql(u8, field_name, "string_literals"))
         {
-            try testing.expectEqualDeep(@field(a, field.name), @field(b, field.name));
+            try testing.expectEqualDeep(@field(a, field_name), @field(b, field_name));
         }
     }
     try testing.expectEqual(a.string_literals.len, b.string_literals.len);

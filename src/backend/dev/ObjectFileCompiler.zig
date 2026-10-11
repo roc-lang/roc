@@ -12,6 +12,7 @@
 //! ```
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
@@ -40,14 +41,14 @@ fn defineMaterializationHeaders(comptime CG: type, allocator: Allocator, scratch
                 @panic("materialization wrapper did not retain its declared semantic identity");
             const entry = try producers.getOrPut(proc.identity);
             if (entry.found_existing) @panic("duplicate semantic materialization producer");
-            entry.value_ptr.* = @enumFromInt(@as(u32, @intCast(index)));
+            entry.value_ptr.* = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         }
     }
     for (codegen.bindingDataCells()) |binding| {
         const declaration = binding.root_materialization orelse continue;
         const proc = producers.get(.{ .bytes = declaration.wrapper_identity }) orelse
             @panic("linked output omitted a declared materialization wrapper");
-        if (!std.meta.eql(specs[@intFromEnum(proc)].root_materialization.?, declaration))
+        if (!std.meta.eql(specs[@backingInt(proc)].root_materialization.?, declaration))
             @panic("linked output changed a typed materialization provision");
         const implementation = codegen.compiledProcSymbol(proc) orelse
             @panic("linked output did not compile its materialization wrapper");
@@ -62,7 +63,7 @@ fn defineMaterializationHeaders(comptime CG: type, allocator: Allocator, scratch
         };
         try data.append(allocator, .{
             .name = binding.target_name,
-            .bytes = try scratch.dupe(u8, &([_]u8{0} ** 8)),
+            .bytes = try scratch.dupe(u8, &(@as([8]u8, @splat(0)))),
             .alignment = 8,
             .symbol_offset = 0,
             .relocations = relocation,
@@ -395,7 +396,7 @@ fn compileWithCodeGen(
         var external_procs = std.ArrayList(lir.LIR.LirProcSpecId).empty;
         defer external_procs.deinit(allocator);
         for (proc_specs, 0..) |proc, index| {
-            if (proc.external) external_procs.append(allocator, @enumFromInt(@as(u32, @intCast(index)))) catch return CompilationError.OutOfMemory;
+            if (proc.external) external_procs.append(allocator, @fromBackingInt(@intCast(@as(u32, @intCast(index))))) catch return CompilationError.OutOfMemory;
         }
         spliceExternalProcs(CodeGen, allocator, &codegen, proc_specs, external_procs.items, source, &spliced_data) catch return CompilationError.OutOfMemory;
     }
@@ -403,7 +404,7 @@ fn compileWithCodeGen(
     defer demand.deinit(allocator);
     for (proc_specs, 0..) |proc, index| {
         if (proc.is_static_initializer or proc.external) continue;
-        demand.append(allocator, @enumFromInt(index)) catch return CompilationError.OutOfMemory;
+        demand.append(allocator, @fromBackingInt(@intCast(index))) catch return CompilationError.OutOfMemory;
     }
     var native_metrics: NativeProcCompiler.Metrics = .{};
     var retained = NativeProcCompiler.run(CodeGen, allocator, &codegen, demand.items, .{
@@ -477,7 +478,7 @@ fn compileWithCodeGen(
     // declarations themselves never consult these logical maps.
     for (proc_specs, 0..) |proc, index| {
         if (proc.is_static_initializer) continue;
-        const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(index);
+        const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
         const selected = codegen.compiledProcSymbol(proc_id) orelse unreachable;
         try selected_targets.functions.put(proc_id, physical_entries.get(selected.code_start) orelse unreachable);
     }
@@ -530,17 +531,17 @@ fn compileWithCodeGen(
     }
 
     for (proc_specs, 0..) |_, i| {
-        const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(i)));
+        const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
         if (proc_specs[i].is_static_initializer) continue;
         const proc_symbol = codegen.compiledProcSymbol(proc_id) orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("ObjectFileCompiler invariant violated: LIR proc {d} was not compiled before symbol publication", .{i});
+            if (builtin.mode == .debug) {
+                invariant("ObjectFileCompiler invariant violated: LIR proc {d} was not compiled before symbol publication", .{i});
             }
             unreachable;
         };
         const symbol_name = static_data_export.procSymbolName(allocator, proc_specs[i].identity) catch return CompilationError.OutOfMemory;
         if (seen_proc_symbol_names.contains(symbol_name)) {
-            std.debug.panic("ObjectFileCompiler invariant violated: two LIR procs share the symbol {s}", .{symbol_name});
+            invariant("ObjectFileCompiler invariant violated: two LIR procs share the symbol {s}", .{symbol_name});
         }
         seen_proc_symbol_names.putNoClobber(symbol_name, {}) catch return CompilationError.OutOfMemory;
         owned_proc_symbol_names.append(allocator, symbol_name) catch {
@@ -571,8 +572,8 @@ fn compileWithCodeGen(
     }
     for (static_rc_helpers) |helper_key| {
         const helper = codegen.compiledStaticDataRcHelperInfo(helper_key) orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic(
+            if (builtin.mode == .debug) {
+                invariant(
                     "ObjectFileCompiler invariant violated: static RC helper {x} was not compiled before symbol publication",
                     .{helper_key.encode()},
                 );
@@ -713,7 +714,7 @@ fn compileWithCodeGen(
             error.UnknownProcIdentity,
             error.UnknownRcHelper,
             error.RoundTripMismatch,
-            => std.debug.panic("dev artifact round trip failed: {s}", .{@errorName(err)}),
+            => invariant("dev artifact round trip failed: {s}", .{@errorName(err)}),
         };
     }
     const code = codegen.getGeneratedCode();
@@ -779,7 +780,7 @@ fn compileWithCodeGen(
     if (pack_mode or capture_artifacts) {
         artifacts = ProcArtifact.extract(CodeGen, allocator, &codegen, proc_specs, layout_store, static_strings.exports, static_data_exports, spliced_data.items) catch |err| switch (err) {
             error.OutOfMemory => return CompilationError.OutOfMemory,
-            error.NestedCodeRegion, error.UncoveredCode, error.DanglingReference, error.UnsupportedRelocation => std.debug.panic("pack artifact extraction failed: {s}", .{@errorName(err)}),
+            error.NestedCodeRegion, error.UncoveredCode, error.DanglingReference, error.UnsupportedRelocation => invariant("pack artifact extraction failed: {s}", .{@errorName(err)}),
         };
     }
 
@@ -843,11 +844,11 @@ pub fn spliceExternalProcs(
     }
 
     for (external_procs) |proc_id| {
-        const proc = proc_specs[@intFromEnum(proc_id)];
-        if (!proc.external) std.debug.panic("procedure {d} was offered for splicing but is not an object-cache entry", .{@intFromEnum(proc_id)});
+        const proc = proc_specs[@backingInt(proc_id)];
+        if (!proc.external) invariant("procedure {d} was offered for splicing but is not an object-cache entry", .{@backingInt(proc_id)});
         const located = source.find(source.context, proc.identity) orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("object cache served a specialization whose artifact {s} is not in any loaded pack", .{&proc.identity.symbolHex()});
+            if (builtin.mode == .debug) {
+                invariant("object cache served a specialization whose artifact {s} is not in any loaded pack", .{&proc.identity.symbolHex()});
             }
             unreachable;
         };
@@ -912,17 +913,17 @@ fn resolveObjectSymbols(
     };
     for (relocations) |relocation| switch (relocation) {
         .linked_function => |function| {
-            symbols[@intFromEnum(function.symbol)].is_function = true;
+            symbols[@backingInt(function.symbol)].is_function = true;
         },
         .linked_data, .local_data, .jmp_to_return, .retired => {},
     };
     for (definitions) |definition| {
-        const symbol = &symbols[@intFromEnum(definition.id)];
+        const symbol = &symbols[@backingInt(definition.id)];
         std.debug.assert(symbol.is_external);
         symbol.* = definition.symbol;
     }
     for (table.required_definitions.items) |id| {
-        std.debug.assert(!symbols[@intFromEnum(id)].is_external);
+        std.debug.assert(!symbols[@backingInt(id)].is_external);
     }
     return .{ .symbols = symbols };
 }
@@ -959,8 +960,8 @@ test "physical region symbols static exports use selected provider not logical s
     }, .none);
     var cg = try CG.init(allocator, &store, &layouts, .{}, &.{}, .default);
     defer cg.deinit();
-    _ = try cg.appendAssembledRegion("\x90" ** 16, .{ .spliced_proc = identity }, 0, null);
-    const start = try cg.appendAssembledRegion("\x90" ** 16, .{ .proc = proc }, 4, .{
+    _ = try cg.appendAssembledRegion("\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90", .{ .spliced_proc = identity }, 0, null);
+    const start = try cg.appendAssembledRegion("\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90", .{ .proc = proc }, 4, .{
         .prologue_size = 0,
         .stack_alloc = 0,
         .frame_size = 0,
@@ -1007,9 +1008,9 @@ test "physical region symbols static exports use selected provider not logical s
     try std.testing.expect(table.indices.get("logical_old_provider") == null);
     var resolved = try resolveObjectSymbols(allocator, &table, symbols.items, &.{});
     defer resolved.deinit(allocator);
-    try std.testing.expectEqual(@as(u64, 0), resolved.symbols[@intFromEnum(old)].offset);
-    try std.testing.expectEqual(@as(u64, 20), resolved.symbols[@intFromEnum(current)].offset);
-    try std.testing.expect(!resolved.symbols[@intFromEnum(current)].is_global);
+    try std.testing.expectEqual(@as(u64, 0), resolved.symbols[@backingInt(old)].offset);
+    try std.testing.expectEqual(@as(u64, 20), resolved.symbols[@backingInt(current)].offset);
+    try std.testing.expect(!resolved.symbols[@backingInt(current)].is_global);
 }
 
 fn appendStaticDataExports(
@@ -1037,7 +1038,7 @@ fn appendStaticDataExports(
         const aligned_offset = std.mem.alignForward(usize, start, @intCast(data_export.alignment));
         for (data_export.relocations) |relocation| {
             const id = switch (relocation.target) {
-                .data_symbol => |target| data_symbols[@intFromEnum(target)],
+                .data_symbol => |target| data_symbols[@backingInt(target)],
                 .named => blk: {
                     if (relocation.procedure) |proc| {
                         if (selected) |targets| break :blk targets.functions.get(proc) orelse unreachable;
@@ -1082,8 +1083,8 @@ fn appendStaticDataExport(
 ) CompilationError!void {
     const alignment = @as(usize, @intCast(data_export.alignment));
     const symbol_offset: usize = @intCast(data_export.symbol_offset);
-    if (builtin.mode == .Debug and symbol_offset > data_export.bytes.len) {
-        std.debug.panic(
+    if (builtin.mode == .debug and symbol_offset > data_export.bytes.len) {
+        invariant(
             "ObjectFileCompiler invariant violated: static data symbol offset {d} exceeds byte length {d}",
             .{ data_export.symbol_offset, data_export.bytes.len },
         );
@@ -1217,8 +1218,8 @@ fn crossCompileDispatch(
 ) CompilationError!CompilationResult {
     const enum_info = @typeInfo(RocTarget).@"enum";
     const default_target = target.defaultCpuTarget();
-    inline for (enum_info.fields) |field| {
-        const comptime_target: RocTarget = @enumFromInt(field.value);
+    inline for (enum_info.field_values) |field_value| {
+        const comptime_target: RocTarget = @fromBackingInt(@intCast(field_value));
         if (comptime comptime_target.defaultCpuTarget() != comptime_target) continue;
         if (default_target == comptime_target) {
             const arch = comptime comptime_target.toCpuArch();
@@ -1339,7 +1340,7 @@ test "ObjectFileCompiler ordinary static-root pack binds consumer storage withou
             const ret = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
             const body = try store.addCFStmt(.{ .assign_literal = .{
                 .target = local,
-                .value = .{ .static_data = @enumFromInt(7) },
+                .value = .{ .static_data = @fromBackingInt(@intCast(7)) },
                 .next = ret,
             } }, .test_fixture);
             _ = try store.addProcSpec(.{
@@ -1361,13 +1362,13 @@ test "ObjectFileCompiler ordinary static-root pack binds consumer storage withou
             relocation[0] = .{
                 .offset = 0,
                 .target_symbol_name = try a.dupe(u8, "fixture_semantic_backing"),
-                .target = .{ .data_symbol = @enumFromInt(1) },
+                .target = .{ .data_symbol = @fromBackingInt(@intCast(1)) },
                 .addend = 8,
             };
             exports[0] = .{
                 .symbol_name = try a.dupe(u8, "fixture_semantic_root"),
                 .symbol_identity = @splat(7),
-                .value_id = @enumFromInt(7),
+                .value_id = @fromBackingInt(@intCast(7)),
                 .bytes = descriptor,
                 .alignment = 8,
                 .is_exported = false,
@@ -1450,7 +1451,7 @@ test "ObjectFileCompiler ordinary static-root pack binds consumer storage withou
             var current_backing: [16 + text.len]u8 = @splat(0);
             @memcpy(current_backing[16..], text);
             const current_exports = [_]StaticDataExport{
-                .{ .symbol_name = "fixture_semantic_root", .symbol_identity = @splat(7), .bytes = &current_descriptor, .alignment = 8, .relocations = &.{.{ .offset = 0, .target_symbol_name = "fixture_semantic_backing", .target = .{ .data_symbol = @enumFromInt(1) }, .addend = 8 }} },
+                .{ .symbol_name = "fixture_semantic_root", .symbol_identity = @splat(7), .bytes = &current_descriptor, .alignment = 8, .relocations = &.{.{ .offset = 0, .target_symbol_name = "fixture_semantic_backing", .target = .{ .data_symbol = @fromBackingInt(@intCast(1)) }, .addend = 8 }} },
                 .{ .symbol_name = "fixture_semantic_backing", .bytes = &current_backing, .symbol_offset = 8, .alignment = 8 },
             };
             var current_slots = try @import("StaticDataImage.zig").StaticDataImage.init(allocator, &current_exports);

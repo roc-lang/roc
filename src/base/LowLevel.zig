@@ -633,7 +633,9 @@ pub const LowLevel = enum(u16) {
     /// () -> Box(T): heap cell via allocateWithRefcount (rc=1), payload zero-filled.
     /// Bit-identical to a box_box whose payload is all zeroes.
     box_alloc_zeroed,
-    /// (Ptr(T), T) -> {}: copy sizeOf(T) bytes from the value into *ptr.
+    /// (Box(T) | Ptr(T), T) -> {}: copy sizeOf(T) bytes from the value into
+    /// the pointed-at payload. A Box address is borrowed for the store, so the
+    /// store keeps its allocation alive.
     ptr_store,
     /// (Ptr(T)) -> T: copy sizeOf(T) bytes out of *ptr.
     ptr_load,
@@ -651,9 +653,9 @@ pub const LowLevel = enum(u16) {
     /// evaluator share the semantic oracle's operation vocabulary without a
     /// module cycle.
     pub fn simdOpIndex(self: LowLevel) ?u8 {
-        const raw = @intFromEnum(self);
-        const first = @intFromEnum(LowLevel.simd_load_16_unchecked);
-        const last = @intFromEnum(LowLevel.simd_clmul_hi);
+        const raw = @backingInt(self);
+        const first = @backingInt(LowLevel.simd_load_16_unchecked);
+        const last = @backingInt(LowLevel.simd_clmul_hi);
         if (raw < first or raw > last) return null;
         return @intCast(raw - first);
     }
@@ -765,10 +767,6 @@ pub const LowLevel = enum(u16) {
             };
         }
 
-        pub fn retainsOrReleases() RcEffect {
-            return .{ .may_retain_or_release = true };
-        }
-
         pub fn retainsResult() RcEffect {
             return .{
                 .may_retain_or_release = true,
@@ -781,13 +779,6 @@ pub const LowLevel = enum(u16) {
                 .may_retain_or_release = true,
                 .retain_result = true,
                 .result_borrows_args = mask,
-            };
-        }
-
-        pub fn allocatesAndRetainsOrReleases() RcEffect {
-            return .{
-                .may_allocate = true,
-                .may_retain_or_release = true,
             };
         }
 
@@ -1668,7 +1659,7 @@ pub const LowLevel = enum(u16) {
             .box_alloc_zeroed => RcEffect.allocates(),
 
             // The stored value's ownership transfers into the pointed-at structure.
-            // The pointer args/results are ptr layouts, which are never refcounted.
+            // A ptr address is never refcounted; a Box address is borrowed.
             .ptr_store => RcEffect.consumesArgsRetainingArgs(argMask(&.{1}), 0),
 
             .ptr_alloca,

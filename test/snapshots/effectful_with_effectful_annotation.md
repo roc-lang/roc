@@ -95,7 +95,10 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "print_msg!"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-lambda
+			(args
+				(p-assign (ident "msg")))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful true)
 				(ty-lookup (name "Str") (builtin))

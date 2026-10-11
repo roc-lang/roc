@@ -456,11 +456,7 @@ const Pass = struct {
                 // (resolution needs solved types), but the argument rule is
                 // uniform across every call form—each argument walks as
                 // invoked. Receivers are operands, not arguments.
-                .e_method_call => |call| {
-                    try self.walk.append(self.gpa, call.receiver);
-                    try self.appendSpanInvoked(call.args);
-                },
-                .e_dispatch_call => |call| {
+                inline .e_method_call, .e_dispatch_call => |call| {
                     try self.walk.append(self.gpa, call.receiver);
                     try self.appendSpanInvoked(call.args);
                 },
@@ -478,13 +474,9 @@ const Pass = struct {
                     try self.walk.append(self.gpa, h.value);
                     try self.walk.append(self.gpa, h.hasher);
                 },
-                .e_method_eq => |eq| {
+                inline .e_method_eq, .e_binop => |eq| {
                     try self.walk.append(self.gpa, eq.lhs);
                     try self.walk.append(self.gpa, eq.rhs);
-                },
-                .e_binop => |binop| {
-                    try self.walk.append(self.gpa, binop.lhs);
-                    try self.walk.append(self.gpa, binop.rhs);
                 },
                 .e_unary_minus => |unop| try self.walk.append(self.gpa, unop.expr),
                 .e_block => |block| {
@@ -571,11 +563,7 @@ const Pass = struct {
 
     fn appendStmtExprs(self: *Pass, stmt_idx: CIR.Statement.Idx) Allocator.Error!void {
         switch (self.env.store.getStatement(stmt_idx)) {
-            .s_decl => |decl| try self.walk.append(self.gpa, decl.expr),
-            .s_var => |var_stmt| try self.walk.append(self.gpa, var_stmt.expr),
-            .s_reassign => |reassign| try self.walk.append(self.gpa, reassign.expr),
-            .s_dbg => |dbg| try self.walk.append(self.gpa, dbg.expr),
-            .s_expr => |expr_stmt| try self.walk.append(self.gpa, expr_stmt.expr),
+            inline .s_decl, .s_var, .s_reassign, .s_dbg, .s_expr => |decl| try self.walk.append(self.gpa, decl.expr),
             .s_expect => |expect| try self.walk.append(self.gpa, expect.body),
             .s_for => |for_stmt| {
                 try self.walk.append(self.gpa, for_stmt.expr);

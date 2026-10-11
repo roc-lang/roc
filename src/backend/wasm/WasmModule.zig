@@ -128,22 +128,12 @@ pub const Op = struct {
     pub const i32_load8_u: u8 = 0x2D;
     pub const i32_load16_s: u8 = 0x2E;
     pub const i32_load16_u: u8 = 0x2F;
-    pub const i64_load8_s: u8 = 0x30;
-    pub const i64_load8_u: u8 = 0x31;
-    pub const i64_load16_s: u8 = 0x32;
-    pub const i64_load16_u: u8 = 0x33;
-    pub const i64_load32_s: u8 = 0x34;
-    pub const i64_load32_u: u8 = 0x35;
     pub const i32_store: u8 = 0x36;
     pub const i64_store: u8 = 0x37;
     pub const f32_store: u8 = 0x38;
     pub const f64_store: u8 = 0x39;
     pub const i32_store8: u8 = 0x3A;
     pub const i32_store16: u8 = 0x3B;
-    pub const i64_store8: u8 = 0x3C;
-    pub const i64_store16: u8 = 0x3D;
-    pub const i64_store32: u8 = 0x3E;
-
     // Constants
     pub const i32_const: u8 = 0x41;
     pub const i64_const: u8 = 0x42;
@@ -178,7 +168,6 @@ pub const Op = struct {
 
     // f32 comparison
     pub const f32_eq: u8 = 0x5B;
-    pub const f32_ne: u8 = 0x5C;
     pub const f32_lt: u8 = 0x5D;
     pub const f32_gt: u8 = 0x5E;
     pub const f32_le: u8 = 0x5F;
@@ -186,7 +175,6 @@ pub const Op = struct {
 
     // f64 comparison
     pub const f64_eq: u8 = 0x61;
-    pub const f64_ne: u8 = 0x62;
     pub const f64_lt: u8 = 0x63;
     pub const f64_gt: u8 = 0x64;
     pub const f64_le: u8 = 0x65;
@@ -211,9 +199,6 @@ pub const Op = struct {
     pub const i32_shl: u8 = 0x74;
     pub const i32_shr_s: u8 = 0x75;
     pub const i32_shr_u: u8 = 0x76;
-    pub const i32_rotl: u8 = 0x77;
-    pub const i32_rotr: u8 = 0x78;
-
     // i64 unary
     pub const i64_clz: u8 = 0x79;
     pub const i64_ctz: u8 = 0x7A;
@@ -233,53 +218,32 @@ pub const Op = struct {
     pub const i64_shl: u8 = 0x86;
     pub const i64_shr_s: u8 = 0x87;
     pub const i64_shr_u: u8 = 0x88;
-    pub const i64_rotl: u8 = 0x89;
-    pub const i64_rotr: u8 = 0x8A;
-
     // f32 arithmetic
     pub const f32_abs: u8 = 0x8B;
     pub const f32_neg: u8 = 0x8C;
     pub const f32_ceil: u8 = 0x8D;
     pub const f32_floor: u8 = 0x8E;
     pub const f32_trunc: u8 = 0x8F;
-    pub const f32_nearest: u8 = 0x90;
     pub const f32_sqrt: u8 = 0x91;
     pub const f32_add: u8 = 0x92;
     pub const f32_sub: u8 = 0x93;
     pub const f32_mul: u8 = 0x94;
     pub const f32_div: u8 = 0x95;
-    pub const f32_min: u8 = 0x96;
-    pub const f32_max: u8 = 0x97;
-    pub const f32_copysign: u8 = 0x98;
-
     // f64 arithmetic
     pub const f64_abs: u8 = 0x99;
     pub const f64_neg: u8 = 0x9A;
     pub const f64_ceil: u8 = 0x9B;
     pub const f64_floor: u8 = 0x9C;
     pub const f64_trunc: u8 = 0x9D;
-    pub const f64_nearest: u8 = 0x9E;
     pub const f64_sqrt: u8 = 0x9F;
     pub const f64_add: u8 = 0xA0;
     pub const f64_sub: u8 = 0xA1;
     pub const f64_mul: u8 = 0xA2;
     pub const f64_div: u8 = 0xA3;
-    pub const f64_min: u8 = 0xA4;
-    pub const f64_max: u8 = 0xA5;
-    pub const f64_copysign: u8 = 0xA6;
-
     // Conversions
     pub const i32_wrap_i64: u8 = 0xA7;
-    pub const i32_trunc_f32_s: u8 = 0xA8;
-    pub const i32_trunc_f32_u: u8 = 0xA9;
-    pub const i32_trunc_f64_s: u8 = 0xAA;
-    pub const i32_trunc_f64_u: u8 = 0xAB;
     pub const i64_extend_i32_s: u8 = 0xAC;
     pub const i64_extend_i32_u: u8 = 0xAD;
-    pub const i64_trunc_f32_s: u8 = 0xAE;
-    pub const i64_trunc_f32_u: u8 = 0xAF;
-    pub const i64_trunc_f64_s: u8 = 0xB0;
-    pub const i64_trunc_f64_u: u8 = 0xB1;
     pub const f32_convert_i32_s: u8 = 0xB2;
     pub const f32_convert_i32_u: u8 = 0xB3;
     pub const f32_convert_i64_s: u8 = 0xB4;
@@ -701,7 +665,7 @@ pub fn addGlobalImportWithSymbol(
     val_type: ValType,
     mutable: bool,
 ) Allocator.Error!struct { global_index: u32, symbol: SymbolIndex } {
-    const imported = try self.addGlobalImportWithSymbolRaw(module_name, field_name, @intFromEnum(val_type), mutable);
+    const imported = try self.addGlobalImportWithSymbolRaw(module_name, field_name, @backingInt(val_type), mutable);
     return .{
         .global_index = imported.global_index,
         .symbol = imported.symbol,
@@ -896,12 +860,6 @@ pub fn findDefinedFunctionSymbolExact(self: *const Self, name: []const u8) Symbo
     return found orelse error.MissingSymbol;
 }
 
-/// Find exactly one defined function symbol by exact name and return its function index.
-pub fn findDefinedFunctionIndexExact(self: *const Self, name: []const u8) SymbolLookupError!u32 {
-    const symbol = try self.findDefinedFunctionSymbolExact(name);
-    return self.linking.symbol_table.items[symbol.raw()].index;
-}
-
 /// Find a symbol table index by exact symbol name and linking symbol kind.
 pub fn findSymbolByNameAndKind(self: *const Self, name: []const u8, kind: WasmLinking.SymKind) ?u32 {
     for (self.linking.symbol_table.items, 0..) |sym, i| {
@@ -937,7 +895,7 @@ fn resolveUndefinedFunctionSymbols(
         if (!self.isUndefinedFunctionNamed(sym, name)) continue;
         if (sym.index >= self.imports.items.len) return error.InvalidSection;
         if (self.imports.items[sym.index].type_idx != defined_type) {
-            if (builtin.mode == .Debug) std.debug.print("WASM merge: import '{s}' has type {d}, but its definition has type {d}\n", .{ name, self.imports.items[sym.index].type_idx, defined_type });
+            if (builtin.mode == .debug) std.debug.print("WASM merge: import '{s}' has type {d}, but its definition has type {d}\n", .{ name, self.imports.items[sym.index].type_idx, defined_type });
             return error.FunctionTypeMismatch;
         }
         if (first_match == null) first_match = @intCast(i);
@@ -1041,18 +999,6 @@ pub fn functionType(self: *const Self, function: FunctionIndex) u32 {
     return self.func_type_indices.items[local];
 }
 
-/// Assert that a function has the expected wasm type index.
-pub fn assertFunctionType(self: *const Self, function: FunctionIndex, expected_type_idx: u32) void {
-    if (self.functionType(function) == expected_type_idx) return;
-    if (@import("builtin").mode == .Debug) {
-        std.debug.panic(
-            "WasmModule invariant violated: function {d} has type {d}, expected {d}",
-            .{ function.raw(), self.functionType(function), expected_type_idx },
-        );
-    }
-    unreachable;
-}
-
 /// Set the body of a function. Takes a global function index (as returned by addFunction).
 pub fn setFunctionBody(self: *Self, global_func_idx: u32, body: []const u8) Allocator.Error!void {
     const local_idx = global_func_idx - self.importCount();
@@ -1077,20 +1023,6 @@ pub fn addExport(self: *Self, name: []const u8, kind: ExportKind, idx: u32) Allo
     });
 }
 
-/// Remove function exports whose names are link-time plumbing rather than
-/// part of the final wasm module's host-visible ABI.
-pub fn removeFunctionExports(self: *Self, names: []const []const u8) void {
-    var write_idx: usize = 0;
-    for (self.exports.items) |exp| {
-        if (exp.kind == .func and stringInSlice(exp.name, names)) {
-            continue;
-        }
-        self.exports.items[write_idx] = exp;
-        write_idx += 1;
-    }
-    self.exports.items.len = write_idx;
-}
-
 fn stringInSlice(needle: []const u8, haystack: []const []const u8) bool {
     for (haystack) |candidate| {
         if (std.mem.eql(u8, needle, candidate)) return true;
@@ -1103,17 +1035,6 @@ pub fn enableMemory(self: *Self, min_pages: u32) void {
     self.has_memory = true;
     self.memory_import = false;
     self.memory_min_pages = min_pages;
-}
-
-/// Ensure the module's memory minimum covers at least `byte_count` bytes.
-pub fn ensureMemoryMinBytes(self: *Self, byte_count: usize) void {
-    const page_size: usize = 65536;
-    const requested_pages: u32 = @intCast(@max(1, (byte_count + page_size - 1) / page_size));
-    self.has_memory = true;
-    self.memory_min_pages = @max(self.memory_min_pages, requested_pages);
-    if (self.has_stack_pointer and self.stack_pointer_init < self.memory_min_pages * @as(u32, 65536)) {
-        self.stack_pointer_init = self.memory_min_pages * @as(u32, 65536);
-    }
 }
 
 /// First byte after all statically assigned data addresses.
@@ -1421,145 +1342,18 @@ pub fn addTableElement(self: *Self, func_idx: u32) Allocator.Error!u32 {
     return table_idx;
 }
 
-/// Import a hosted function and add it to the funcref table.
-///
-/// Hosted functions use the RocCall ABI: (i32 roc_ops_ptr, i32 ret_ptr, i32 args_ptr) → void.
-/// The caller must provide the type index for this 3-arg signature (registered separately
-/// from the 2-arg RocOps callback type).
-///
-/// Returns the table index that can be used with `call_indirect` to invoke the function.
-pub fn addHostedFunctionToTable(self: *Self, module_name: []const u8, fn_name: []const u8, roc_call_type_idx: u32) Allocator.Error!u32 {
-    const func_idx = try self.addImport(module_name, fn_name, roc_call_type_idx);
-    return try self.addTableElement(func_idx);
-}
-
-/// Find an imported function's index by module and field name.
-/// Returns null if no matching import exists.
-pub fn findImportFuncIdx(self: *const Self, module_name: []const u8, field_name: []const u8) ?u32 {
-    for (self.imports.items, 0..) |imp, i| {
-        if (std.mem.eql(u8, imp.module_name, module_name) and std.mem.eql(u8, imp.field_name, field_name)) {
-            return @intCast(i);
-        }
-    }
-    return null;
-}
-
-/// Find a function index by its resolved symbol/import name.
-pub fn findFunctionIdxByName(self: *const Self, name: []const u8) ?u32 {
-    if (self.linking.findSymbolByName(name, self.imports.items, self.global_imports.items, self.table_imports.items)) |sym_idx| {
-        const sym = self.linking.symbol_table.items[sym_idx];
-        if (sym.kind == .function) return sym.index;
-    }
-
-    for (self.imports.items, 0..) |imp, i| {
-        if (std.mem.eql(u8, imp.field_name, name)) return @intCast(i);
-    }
-
-    return null;
-}
-
-/// Find a defined function whose resolved name ends with `suffix`.
-/// This intentionally ignores undefined/imported symbols so host callback lookups
-/// do not accidentally bind raw platform imports like `roc_dbg`.
-pub fn findFunctionIdxBySuffix(self: *const Self, suffix: []const u8) ?u32 {
-    for (self.linking.symbol_table.items) |sym| {
-        if (sym.kind != .function or sym.isUndefined()) continue;
-        const sym_name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse continue;
-        if (std.mem.endsWith(u8, sym_name, suffix)) return sym.index;
-    }
-    return null;
-}
-
 /// Find or append a function in the element section.
 pub fn ensureTableElement(self: *Self, func_idx: u32) Allocator.Error!u32 {
     return self.findTableIndex(func_idx) orelse try self.addTableElement(func_idx);
 }
 
-// --- Surgical Linking ---
-
 /// Dummy function body: unreachable + end. Inserted to maintain function index
-/// stability when an import is removed during surgical linking.
+/// stability when a dead import is removed.
 pub const DUMMY_FUNCTION = [3]u8{
     0x00, // zero local variable declarations
     Op.@"unreachable", // trap if called (means DCE was wrong)
     Op.end, // end of function body
 };
-
-/// Entry in the host-to-app linking map: maps an app function name
-/// (which the host imports) to its defined function index.
-pub const HostToAppEntry = struct {
-    name: []const u8,
-    fn_index: u32,
-};
-
-/// Perform surgical linking: for each (app_fn_name, app_fn_index) pair,
-/// remove the host's import for that name and redirect all call sites to
-/// the app-defined function at app_fn_index.
-///
-/// The last function import is swapped into the vacated slot so that only
-/// two symbols need relocation updates. A dummy function is prepended to
-/// func_type_indices to keep the total function count stable.
-pub fn linkHostToAppCalls(self: *Self, host_to_app_map: []const HostToAppEntry) Allocator.Error!void {
-    for (host_to_app_map) |entry| {
-        const app_fn_name = entry.name;
-        const app_fn_index = entry.fn_index;
-
-        // 1. Find the host import matching app_fn_name, and the last import (swap candidate).
-        //    Since self.imports only contains function imports, import_index == fn_index.
-        var host_fn_index: ?u32 = null;
-        var last_fn_index: u32 = 0;
-        for (self.imports.items, 0..) |imp, i| {
-            last_fn_index = @intCast(i);
-            if (std.mem.eql(u8, imp.field_name, app_fn_name)) {
-                host_fn_index = @intCast(i);
-            }
-        }
-
-        const host_idx = host_fn_index orelse {
-            // The host doesn't import this function—export the app's definition
-            // so it can be called from JS.
-            try self.exports.append(self.allocator, .{
-                .name = app_fn_name,
-                .kind = .func,
-                .idx = app_fn_index,
-            });
-            continue;
-        };
-
-        // 2. Swap: remove the last import and put it where the host import was.
-        //    This keeps all other import indices stable—only the host and swap
-        //    indices need relocation updates.
-        const swap_import = self.imports.items[last_fn_index];
-        self.imports.items.len -= 1;
-        if (last_fn_index != host_idx) {
-            self.imports.items[host_idx] = swap_import;
-        }
-
-        // 3. Update symbol table and apply relocations for the host function.
-        //    The host import (at host_idx) is now a defined app function at app_fn_index.
-        if (self.linking.findAndReindexImportedFn(host_idx, app_fn_index)) |sym_index| {
-            self.reloc_code.applyRelocsU32(self.code_bytes.items, sym_index, app_fn_index);
-        }
-
-        // 4. Update symbol table and apply relocations for the swapped function.
-        //    The last import (at last_fn_index) moved to host_idx.
-        if (last_fn_index != host_idx) {
-            if (self.linking.findAndReindexImportedFn(last_fn_index, host_idx)) |swap_sym_index| {
-                self.reloc_code.applyRelocsU32(self.code_bytes.items, swap_sym_index, host_idx);
-            }
-        }
-
-        // 5. Insert a dummy function to compensate for the removed import.
-        //    This keeps defined-function indices unchanged: import_count decreases
-        //    by 1, but one dummy is prepended to the code section, so the first
-        //    real defined function stays at the same global index.
-        self.dead_import_dummy_count += 1;
-        try self.func_type_indices.insert(self.allocator, 0, 0); // dummy uses type signature 0
-
-        // 6. Track the decreased import count.
-        self.import_fn_count -= 1;
-    }
-}
 
 // --- Phase 8a: Module Merging (Builtins) ---
 
@@ -1727,7 +1521,7 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
             const local_idx = fn_idx - old_import_count;
             if (local_idx >= self.func_type_indices.items.len) return error.InvalidSection;
             if (!self.funcTypesEqual(self.func_type_indices.items[local_idx], remapped_type)) {
-                if (builtin.mode == .Debug) std.debug.print("WASM merge: '{s}' is defined with type {d}, but the merged module imports it with type {d}\n", .{ src_imp.field_name, self.func_type_indices.items[local_idx], remapped_type });
+                if (builtin.mode == .debug) std.debug.print("WASM merge: '{s}' is defined with type {d}, but the merged module imports it with type {d}\n", .{ src_imp.field_name, self.func_type_indices.items[local_idx], remapped_type });
                 return error.FunctionTypeMismatch;
             }
             func_remap[src_idx] = fn_idx;
@@ -1740,7 +1534,7 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
         for (self.imports.items, 0..) |self_imp, self_idx| {
             if (std.mem.eql(u8, self_imp.field_name, src_imp.field_name)) {
                 if (!self.funcTypesEqual(self_imp.type_idx, remapped_type)) {
-                    if (builtin.mode == .Debug) std.debug.print("WASM merge: both modules import '{s}', with types {d} and {d}\n", .{ src_imp.field_name, self_imp.type_idx, remapped_type });
+                    if (builtin.mode == .debug) std.debug.print("WASM merge: both modules import '{s}', with types {d} and {d}\n", .{ src_imp.field_name, self_imp.type_idx, remapped_type });
                     return error.FunctionTypeMismatch;
                 }
                 matched = @intCast(self_idx);
@@ -2473,33 +2267,6 @@ pub fn resolveRelocations(self: *Self) RelocationError!void {
     try self.resolveDataRelocations();
 }
 
-/// Transfer function bodies added via setFunctionBody into the code_bytes
-/// representation. This makes app-generated functions compatible with
-/// linkHostToAppCalls, resolveCodeRelocations, eliminateDeadCode, and
-/// materializeFuncBodies.
-///
-/// Must be called after all addFunction/setFunctionBody calls are complete
-/// and before linkHostToAppCalls.
-pub fn transferAppFunctions(self: *Self) Allocator.Error!void {
-    const host_defined_count = self.function_offsets.items.len;
-    const total_defined_count = self.func_type_indices.items.len;
-
-    if (total_defined_count <= host_defined_count) return;
-
-    for (host_defined_count..total_defined_count) |i| {
-        if (i >= self.func_bodies.items.len) break;
-        const body = self.func_bodies.items[i].body;
-        if (body.len == 0) continue;
-
-        const fn_offset: u32 = @intCast(self.code_bytes.items.len);
-        try self.function_offsets.append(self.allocator, fn_offset);
-
-        // Write body length + body to code_bytes
-        try leb128WriteU32(self.allocator, &self.code_bytes, @intCast(body.len));
-        try self.code_bytes.appendSlice(self.allocator, body);
-    }
-}
-
 /// Convert code_bytes + function_offsets into func_bodies for encoding.
 ///
 /// After `resolveRelocations()` has patched all relocation sites, this method
@@ -2700,7 +2467,7 @@ pub fn patchRelocatableSymbolFlags(self: *const Self, object_bytes: []u8) ParseE
         const payload_len = try readU32(object_bytes, &cursor);
         const payload_end = cursor + payload_len;
         if (payload_end > object_bytes.len) return error.UnexpectedEnd;
-        if (section_id != @intFromEnum(SectionId.custom_section)) {
+        if (section_id != @backingInt(SectionId.custom_section)) {
             cursor = payload_end;
             continue;
         }
@@ -2721,7 +2488,7 @@ pub fn patchRelocatableSymbolFlags(self: *const Self, object_bytes: []u8) ParseE
             const subsection_len = try readU32(object_bytes[0..payload_end], &linking_cursor);
             const subsection_end = linking_cursor + subsection_len;
             if (subsection_end > payload_end) return error.UnexpectedEnd;
-            if (subsection_id != @intFromEnum(WasmLinking.LinkingSubsection.symbol_table)) {
+            if (subsection_id != @backingInt(WasmLinking.LinkingSubsection.symbol_table)) {
                 linking_cursor = subsection_end;
                 continue;
             }
@@ -3145,152 +2912,6 @@ fn traceLiveFunctions(
 
 // --- Phase 5: Memory, Table, and Stack Pointer Ownership ---
 
-/// Promote globally-visible, defined function symbols from the linking section
-/// to actual WASM exports. In relocatable objects, `export fn` in Zig generates
-/// symbols with `binding=global vis=default`, but no Export section exists.
-/// This must be called after preload so that the surgical linker pipeline can
-/// see and preserve these exports.
-pub fn exportGlobalSymbols(self: *Self) Allocator.Error!void {
-    for (self.linking.symbol_table.items) |sym| {
-        if (sym.kind != .function or sym.isUndefined() or sym.isLocal()) continue;
-        if ((sym.flags & WasmLinking.SymFlag.VISIBILITY_HIDDEN) != 0) continue;
-        const name = sym.name orelse continue;
-        // Skip roc-internal symbols (roc__p*, roc__num_*); entrypoints use
-        // the literal provides symbols and are exported like any host export.
-        if (std.mem.startsWith(u8, name, "roc__")) continue;
-        // Avoid duplicate exports.
-        var already_exported = false;
-        for (self.exports.items) |exp| {
-            if (exp.kind == .func and std.mem.eql(u8, exp.name, name)) {
-                already_exported = true;
-                break;
-            }
-        }
-        if (!already_exported) {
-            try self.addExport(name, .func, sym.index);
-        }
-    }
-}
-
-/// Prepare the explicit Wasm object ABI symbols for a final surgical link.
-///
-/// Memory and table ownership is already represented by module state. Imported
-/// `__stack_pointer`, `__memory_base`, `__table_base`, and table symbols must be
-/// promoted to their final definitions so relocations cannot keep object-file
-/// indices that do not exist in the encoded final module.
-pub fn prepareObjectAbiForFinalLink(self: *Self) (Allocator.Error || error{ UnexpectedGlobalImport, UnexpectedTableImport })!void {
-    // The parser separates function imports from memory/table/global imports.
-    // Non-function imports are NOT in self.imports, so import_fn_count is correct.
-    // Memory and table flags were set during parseImportSection.
-    //
-    // Assert the host module declared memory (required for any useful program).
-    std.debug.assert(self.has_memory);
-    // Note: has_table may not be set if the host doesn't use indirect calls yet.
-    // Table will be set during finalization if table_func_indices are populated.
-
-    for (self.global_imports.items, 0..) |imp, import_index| {
-        const is_stack = std.mem.eql(u8, imp.field_name, "__stack_pointer");
-        const is_base = std.mem.eql(u8, imp.field_name, "__memory_base") or
-            std.mem.eql(u8, imp.field_name, "__table_base");
-        if (!std.mem.eql(u8, imp.module_name, "env") or
-            imp.val_type != @intFromEnum(ValType.i32) or
-            !(is_stack or is_base) or
-            (is_stack and !imp.mutable))
-        {
-            return error.UnexpectedGlobalImport;
-        }
-
-        var has_symbol = false;
-        for (self.linking.symbol_table.items) |sym| {
-            if (sym.kind == .global and sym.isUndefined() and sym.index == import_index) {
-                has_symbol = true;
-                break;
-            }
-        }
-        if (!has_symbol) return error.UnexpectedGlobalImport;
-    }
-
-    for (self.table_imports.items, 0..) |imp, import_index| {
-        if (!std.mem.eql(u8, imp.module_name, "env") or
-            !std.mem.eql(u8, imp.field_name, "__indirect_function_table"))
-        {
-            return error.UnexpectedTableImport;
-        }
-
-        var has_symbol = false;
-        for (self.linking.symbol_table.items) |sym| {
-            if (sym.kind == .table and sym.isUndefined() and sym.index == import_index) {
-                has_symbol = true;
-                break;
-            }
-        }
-        if (!has_symbol) return error.UnexpectedTableImport;
-    }
-
-    var memory_base_index: ?u32 = null;
-    var memory_base_mutable: ?bool = null;
-    var table_base_index: ?u32 = null;
-    var table_base_mutable: ?bool = null;
-    for (self.linking.symbol_table.items) |*sym| {
-        if (sym.kind != .global or !sym.isUndefined()) continue;
-        const name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse
-            return error.UnexpectedGlobalImport;
-        if (sym.index >= self.global_imports.items.len or
-            !std.mem.eql(u8, self.global_imports.items[sym.index].field_name, name))
-        {
-            return error.UnexpectedGlobalImport;
-        }
-        const imported = self.global_imports.items[sym.index];
-
-        const final_index = if (std.mem.eql(u8, name, "__stack_pointer")) blk: {
-            self.enableStackPointer(self.stack_pointer_init);
-            break :blk 0;
-        } else if (std.mem.eql(u8, name, "__memory_base")) blk: {
-            if (memory_base_index == null) {
-                memory_base_index = try self.addDefinedGlobal(@intFromEnum(ValType.i32), imported.mutable, 0);
-                memory_base_mutable = imported.mutable;
-            }
-            if (memory_base_mutable.? != imported.mutable) return error.UnexpectedGlobalImport;
-            break :blk memory_base_index.?;
-        } else if (std.mem.eql(u8, name, "__table_base")) blk: {
-            if (table_base_index == null) {
-                table_base_index = try self.addDefinedGlobal(@intFromEnum(ValType.i32), imported.mutable, 0);
-                table_base_mutable = imported.mutable;
-            }
-            if (table_base_mutable.? != imported.mutable) return error.UnexpectedGlobalImport;
-            break :blk table_base_index.?;
-        } else {
-            return error.UnexpectedGlobalImport;
-        };
-
-        sym.flags &= ~WasmLinking.SymFlag.UNDEFINED;
-        sym.flags |= WasmLinking.SymFlag.EXPLICIT_NAME;
-        sym.name = name;
-        sym.index = final_index;
-    }
-
-    for (self.linking.symbol_table.items) |*sym| {
-        if (sym.kind != .table or !sym.isUndefined()) continue;
-        const name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse
-            return error.UnexpectedTableImport;
-        if (sym.index >= self.table_imports.items.len or
-            !std.mem.eql(u8, self.table_imports.items[sym.index].field_name, name) or
-            !std.mem.eql(u8, name, "__indirect_function_table"))
-        {
-            return error.UnexpectedTableImport;
-        }
-
-        sym.flags &= ~WasmLinking.SymFlag.UNDEFINED;
-        sym.flags |= WasmLinking.SymFlag.EXPLICIT_NAME;
-        sym.name = name;
-        sym.index = 0;
-    }
-
-    self.global_imports.clearRetainingCapacity();
-    self.import_global_count = 0;
-    self.table_imports.clearRetainingCapacity();
-}
-
 /// Memory settings used when finalizing a wasm module after code generation.
 pub const FinalMemoryConfig = struct {
     stack_bytes: u32,
@@ -3300,12 +2921,6 @@ pub const FinalMemoryConfig = struct {
     maximum_memory: ?usize = null,
     export_memory: bool = true,
 };
-
-/// Set the byte offset where this module's data segments begin.
-pub fn setDataBase(self: *Self, offset: u32) void {
-    std.debug.assert(self.data_segments.items.len == 0);
-    self.data_offset = offset;
-}
 
 /// Finalization step (called after all code generation and surgical linking,
 /// before encode):
@@ -3491,7 +3106,7 @@ fn normalizeDataRelocations(self: *Self) ParseError!void {
 /// If yes, read the section size and return it. If no, return null (section absent).
 fn beginSection(bytes: []const u8, cursor: *usize, expected: SectionId) ParseError!?u32 {
     if (cursor.* >= bytes.len) return null;
-    if (bytes[cursor.*] != @intFromEnum(expected)) return null;
+    if (bytes[cursor.*] != @backingInt(expected)) return null;
     cursor.* += 1;
     return try readU32(bytes, cursor);
 }
@@ -3791,7 +3406,7 @@ fn parseDataSection_(self: *Self, bytes: []const u8, cursor: *usize) ParseError!
 
 fn parseCustomSection(self: *Self, bytes: []const u8, cursor: *usize) ParseError!void {
     if (cursor.* >= bytes.len) return;
-    if (bytes[cursor.*] != @intFromEnum(SectionId.custom_section)) return error.InvalidSection;
+    if (bytes[cursor.*] != @backingInt(SectionId.custom_section)) return error.InvalidSection;
     cursor.* += 1;
 
     const section_size = try readU32(bytes, cursor);
@@ -4091,7 +3706,7 @@ fn encodeRelocatableImportSection(self: *Self, gpa: Allocator, output: *std.Arra
         try section_data.append(gpa, if (imp.mutable) @as(u8, 0x01) else @as(u8, 0x00));
     }
 
-    try output.append(gpa, @intFromEnum(SectionId.import_section));
+    try output.append(gpa, @backingInt(SectionId.import_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
     try output.appendSlice(gpa, section_data.items);
 }
@@ -4105,7 +3720,7 @@ fn encodeCodeSectionFromCodeBytes(self: *Self, gpa: Allocator, output: *std.Arra
     const count_leb_size: u32 = @intCast(section_data.items.len - before_count);
     try section_data.appendSlice(gpa, self.code_bytes.items);
 
-    try output.append(gpa, @intFromEnum(SectionId.code_section));
+    try output.append(gpa, @backingInt(SectionId.code_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
     try output.appendSlice(gpa, section_data.items);
     return count_leb_size;
@@ -4135,7 +3750,7 @@ fn encodeLinkingSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8),
             try leb128WriteU32(gpa, &segment_data, segment.alignment);
             try leb128WriteU32(gpa, &segment_data, segment.flags);
         }
-        try payload.append(gpa, @intFromEnum(WasmLinking.LinkingSubsection.segment_info));
+        try payload.append(gpa, @backingInt(WasmLinking.LinkingSubsection.segment_info));
         try leb128WriteU32(gpa, &payload, @intCast(segment_data.items.len));
         try payload.appendSlice(gpa, segment_data.items);
     }
@@ -4147,17 +3762,17 @@ fn encodeLinkingSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8),
         if (!symbol_encode_map.emit[i]) continue;
         try encodeSymbol(gpa, &symbol_data, sym);
     }
-    try payload.append(gpa, @intFromEnum(WasmLinking.LinkingSubsection.symbol_table));
+    try payload.append(gpa, @backingInt(WasmLinking.LinkingSubsection.symbol_table));
     try leb128WriteU32(gpa, &payload, @intCast(symbol_data.items.len));
     try payload.appendSlice(gpa, symbol_data.items);
 
-    try output.append(gpa, @intFromEnum(SectionId.custom_section));
+    try output.append(gpa, @backingInt(SectionId.custom_section));
     try leb128WriteU32(gpa, output, @intCast(payload.items.len));
     try output.appendSlice(gpa, payload.items);
 }
 
 fn encodeSymbol(gpa: Allocator, output: *std.ArrayList(u8), sym: WasmLinking.SymInfo) Allocator.Error!void {
-    try output.append(gpa, @intFromEnum(sym.kind));
+    try output.append(gpa, @backingInt(sym.kind));
     try leb128WriteU32(gpa, output, sym.flags);
     switch (sym.kind) {
         .function, .global, .event, .table => {
@@ -4242,7 +3857,7 @@ fn encodeRelocationSection(
         const segment_delta = self.relocationSegmentDelta(entry);
         switch (entry) {
             .index => |idx| {
-                try payload.append(gpa, @intFromEnum(idx.type_id));
+                try payload.append(gpa, @backingInt(idx.type_id));
                 try leb128WriteU32(gpa, &payload, idx.offset + code_offset_delta + segment_delta);
                 const relocation_index = if (idx.type_id == .type_index_leb)
                     idx.symbol_index
@@ -4251,7 +3866,7 @@ fn encodeRelocationSection(
                 try leb128WriteU32(gpa, &payload, relocation_index);
             },
             .offset => |off| {
-                try payload.append(gpa, @intFromEnum(off.type_id));
+                try payload.append(gpa, @backingInt(off.type_id));
                 try leb128WriteU32(gpa, &payload, off.offset + code_offset_delta + segment_delta);
                 try leb128WriteU32(gpa, &payload, try encodedSymbolIndex(symbol_encode_map, off.symbol_index));
                 try leb128WriteI32(gpa, &payload, off.addend);
@@ -4259,7 +3874,7 @@ fn encodeRelocationSection(
         }
     }
 
-    try output.append(gpa, @intFromEnum(SectionId.custom_section));
+    try output.append(gpa, @backingInt(SectionId.custom_section));
     try leb128WriteU32(gpa, output, @intCast(payload.items.len));
     try output.appendSlice(gpa, payload.items);
 }
@@ -4280,17 +3895,17 @@ fn encodeTypeSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) Al
         try section_data.append(gpa, 0x60); // func type marker
         try leb128WriteU32(gpa, &section_data, @intCast(ft.params.len));
         for (ft.params) |p| {
-            try section_data.append(gpa, @intFromEnum(p));
+            try section_data.append(gpa, @backingInt(p));
         }
         if (self.func_type_results.items[idx]) |r| {
             try section_data.append(gpa, 1); // 1 result
-            try section_data.append(gpa, @intFromEnum(r));
+            try section_data.append(gpa, @backingInt(r));
         } else {
             try section_data.append(gpa, 0); // 0 results
         }
     }
 
-    try output.append(gpa, @intFromEnum(SectionId.type_section));
+    try output.append(gpa, @backingInt(SectionId.type_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
     try output.appendSlice(gpa, section_data.items);
 }
@@ -4330,7 +3945,7 @@ fn encodeImportSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) 
         }
     }
 
-    try output.append(gpa, @intFromEnum(SectionId.import_section));
+    try output.append(gpa, @backingInt(SectionId.import_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
     try output.appendSlice(gpa, section_data.items);
 }
@@ -4344,7 +3959,7 @@ fn encodeFunctionSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)
         try leb128WriteU32(gpa, &section_data, type_idx);
     }
 
-    try output.append(gpa, @intFromEnum(SectionId.function_section));
+    try output.append(gpa, @backingInt(SectionId.function_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
     try output.appendSlice(gpa, section_data.items);
 }
@@ -4363,7 +3978,7 @@ fn encodeMemorySection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) 
         try leb128WriteU32(gpa, &section_data, self.memory_min_pages);
     }
 
-    try output.append(gpa, @intFromEnum(SectionId.memory_section));
+    try output.append(gpa, @backingInt(SectionId.memory_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
     try output.appendSlice(gpa, section_data.items);
 }
@@ -4376,7 +3991,7 @@ fn encodeGlobalSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) 
     try leb128WriteU32(gpa, &section_data, global_count);
 
     // Global 0: __stack_pointer (i32, mutable)
-    try section_data.append(gpa, @intFromEnum(ValType.i32));
+    try section_data.append(gpa, @backingInt(ValType.i32));
     try section_data.append(gpa, 0x01); // mutable
     try section_data.append(gpa, Op.i32_const);
     try leb128WriteI32(gpa, &section_data, @intCast(self.stack_pointer_init));
@@ -4391,7 +4006,7 @@ fn encodeGlobalSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) 
         try section_data.append(gpa, Op.end);
     }
 
-    try output.append(gpa, @intFromEnum(SectionId.global_section));
+    try output.append(gpa, @backingInt(SectionId.global_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
     try output.appendSlice(gpa, section_data.items);
 }
@@ -4404,11 +4019,11 @@ fn encodeExportSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) 
     for (self.exports.items) |exp| {
         try leb128WriteU32(gpa, &section_data, @intCast(exp.name.len));
         try section_data.appendSlice(gpa, exp.name);
-        try section_data.append(gpa, @intFromEnum(exp.kind));
+        try section_data.append(gpa, @backingInt(exp.kind));
         try leb128WriteU32(gpa, &section_data, exp.idx);
     }
 
-    try output.append(gpa, @intFromEnum(SectionId.export_section));
+    try output.append(gpa, @backingInt(SectionId.export_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
     try output.appendSlice(gpa, section_data.items);
 }
@@ -4423,7 +4038,7 @@ fn encodeCodeSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) Al
         try section_data.appendSlice(gpa, fb.body);
     }
 
-    try output.append(gpa, @intFromEnum(SectionId.code_section));
+    try output.append(gpa, @backingInt(SectionId.code_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
     try output.appendSlice(gpa, section_data.items);
 }
@@ -4480,7 +4095,7 @@ fn encodeDataSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8), om
         try section_data.appendSlice(gpa, ds.data);
     }
 
-    try output.append(gpa, @intFromEnum(SectionId.data_section));
+    try output.append(gpa, @backingInt(SectionId.data_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
     try output.appendSlice(gpa, section_data.items);
 }
@@ -4498,7 +4113,7 @@ fn encodeTableSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) A
     try section_data.append(gpa, 0x00); // limits: no max
     try leb128WriteU32(gpa, &section_data, table_size);
 
-    try output.append(gpa, @intFromEnum(SectionId.table_section));
+    try output.append(gpa, @backingInt(SectionId.table_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
     try output.appendSlice(gpa, section_data.items);
 }
@@ -4520,7 +4135,7 @@ fn encodeElementSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8))
         try leb128WriteU32(gpa, &section_data, func_idx);
     }
 
-    try output.append(gpa, @intFromEnum(SectionId.element_section));
+    try output.append(gpa, @backingInt(SectionId.element_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
     try output.appendSlice(gpa, section_data.items);
 }
@@ -4735,31 +4350,31 @@ fn decodePaddedI32(bytes: []const u8) i32 {
 }
 
 test "overwritePaddedU32—value 0 encodes as [0x80, 0x80, 0x80, 0x80, 0x00]" {
-    var buf = [_]u8{0} ** 5;
+    var buf = @as([5]u8, @splat(0));
     overwritePaddedU32(&buf, 0, 0);
     try std.testing.expectEqualSlices(u8, &.{ 0x80, 0x80, 0x80, 0x80, 0x00 }, &buf);
 }
 
 test "overwritePaddedU32—value 1 encodes as [0x81, 0x80, 0x80, 0x80, 0x00]" {
-    var buf = [_]u8{0} ** 5;
+    var buf = @as([5]u8, @splat(0));
     overwritePaddedU32(&buf, 0, 1);
     try std.testing.expectEqualSlices(u8, &.{ 0x81, 0x80, 0x80, 0x80, 0x00 }, &buf);
 }
 
 test "overwritePaddedU32—value 0x7F encodes as [0xFF, 0x80, 0x80, 0x80, 0x00]" {
-    var buf = [_]u8{0} ** 5;
+    var buf = @as([5]u8, @splat(0));
     overwritePaddedU32(&buf, 0, 0x7F);
     try std.testing.expectEqualSlices(u8, &.{ 0xFF, 0x80, 0x80, 0x80, 0x00 }, &buf);
 }
 
 test "overwritePaddedU32—value 128 encodes as [0x80, 0x81, 0x80, 0x80, 0x00]" {
-    var buf = [_]u8{0} ** 5;
+    var buf = @as([5]u8, @splat(0));
     overwritePaddedU32(&buf, 0, 128);
     try std.testing.expectEqualSlices(u8, &.{ 0x80, 0x81, 0x80, 0x80, 0x00 }, &buf);
 }
 
 test "overwritePaddedU32—max u32 (0xFFFFFFFF) encodes correctly" {
-    var buf = [_]u8{0} ** 5;
+    var buf = @as([5]u8, @splat(0));
     overwritePaddedU32(&buf, 0, 0xFFFFFFFF);
     try std.testing.expectEqualSlices(u8, &.{ 0xFF, 0xFF, 0xFF, 0xFF, 0x0F }, &buf);
 }
@@ -4767,14 +4382,14 @@ test "overwritePaddedU32—max u32 (0xFFFFFFFF) encodes correctly" {
 test "overwritePaddedU32—round-trip: write then decode matches original value" {
     const test_values = [_]u32{ 0, 1, 127, 128, 255, 256, 16383, 16384, 2097151, 2097152, 0x0FFFFFFF, 0xFFFFFFFF };
     for (test_values) |val| {
-        var buf = [_]u8{0} ** 5;
+        var buf = @as([5]u8, @splat(0));
         overwritePaddedU32(&buf, 0, val);
         try std.testing.expectEqual(val, decodePaddedU32(&buf));
     }
 }
 
 test "overwritePaddedI32—negative value (-1) encodes correctly" {
-    var buf = [_]u8{0} ** 5;
+    var buf = @as([5]u8, @splat(0));
     overwritePaddedI32(&buf, 0, -1);
     // -1 in signed padded LEB128: all 7-bit groups are 0x7F, last byte keeps sign bit
     try std.testing.expectEqualSlices(u8, &.{ 0xFF, 0xFF, 0xFF, 0xFF, 0x7F }, &buf);
@@ -4783,7 +4398,7 @@ test "overwritePaddedI32—negative value (-1) encodes correctly" {
 test "overwritePaddedI32—positive value round-trips correctly" {
     const test_values = [_]i32{ 0, 1, -1, 127, -128, 32767, -32768, std.math.maxInt(i32), std.math.minInt(i32) };
     for (test_values) |val| {
-        var buf = [_]u8{0} ** 5;
+        var buf = @as([5]u8, @splat(0));
         overwritePaddedI32(&buf, 0, val);
         try std.testing.expectEqual(val, decodePaddedI32(&buf));
     }
@@ -4862,7 +4477,7 @@ fn buildTestRelocatableModule(allocator: Allocator) Allocator.Error![]u8 {
     try out.appendSlice(allocator, &[_]u8{ 0x01, 0x00, 0x00, 0x00 });
 
     // Type section: 1 type () -> ()
-    try out.append(allocator, @intFromEnum(SectionId.type_section));
+    try out.append(allocator, @backingInt(SectionId.type_section));
     try writeSectionBody(allocator, &out, &.{
         0x01, // 1 type
         0x60, // func
@@ -4885,20 +4500,20 @@ fn buildTestRelocatableModule(allocator: Allocator) Allocator.Error![]u8 {
         try import_data.append(allocator, 0x00);
         try leb128WriteU32(allocator, &import_data, 0);
 
-        try out.append(allocator, @intFromEnum(SectionId.import_section));
+        try out.append(allocator, @backingInt(SectionId.import_section));
         try leb128WriteU32(allocator, &out, @intCast(import_data.items.len));
         try out.appendSlice(allocator, import_data.items);
     }
 
     // Function section: 1 function with type 0
-    try out.append(allocator, @intFromEnum(SectionId.function_section));
+    try out.append(allocator, @backingInt(SectionId.function_section));
     try writeSectionBody(allocator, &out, &.{
         0x01, // 1 function
         0x00, // type index 0
     });
 
     // Memory section: 1 memory, min 1 page
-    try out.append(allocator, @intFromEnum(SectionId.memory_section));
+    try out.append(allocator, @backingInt(SectionId.memory_section));
     try writeSectionBody(allocator, &out, &.{
         0x01, // 1 memory
         0x00, // no max
@@ -4915,7 +4530,7 @@ fn buildTestRelocatableModule(allocator: Allocator) Allocator.Error![]u8 {
         try export_data.append(allocator, 0x00); // func export
         try leb128WriteU32(allocator, &export_data, 1); // func index 1
 
-        try out.append(allocator, @intFromEnum(SectionId.export_section));
+        try out.append(allocator, @backingInt(SectionId.export_section));
         try leb128WriteU32(allocator, &out, @intCast(export_data.items.len));
         try out.appendSlice(allocator, export_data.items);
     }
@@ -4937,7 +4552,7 @@ fn buildTestRelocatableModule(allocator: Allocator) Allocator.Error![]u8 {
         try leb128WriteU32(allocator, &code_section, body.len);
         try code_section.appendSlice(allocator, &body);
 
-        try out.append(allocator, @intFromEnum(SectionId.code_section));
+        try out.append(allocator, @backingInt(SectionId.code_section));
         try leb128WriteU32(allocator, &out, @intCast(code_section.items.len));
         try out.appendSlice(allocator, code_section.items);
     }
@@ -4962,23 +4577,23 @@ fn buildTestRelocatableModule(allocator: Allocator) Allocator.Error![]u8 {
             try leb128WriteU32(allocator, &sym_data, 2); // 2 symbols
 
             // Symbol 0: undefined function import "roc__main_exposed" (index 0)
-            try sym_data.append(allocator, @intFromEnum(WasmLinking.SymKind.function));
+            try sym_data.append(allocator, @backingInt(WasmLinking.SymKind.function));
             try leb128WriteU32(allocator, &sym_data, WasmLinking.SymFlag.UNDEFINED); // flags
             try leb128WriteU32(allocator, &sym_data, 0); // function index
 
             // Symbol 1: defined function "_start" (index 1)
-            try sym_data.append(allocator, @intFromEnum(WasmLinking.SymKind.function));
+            try sym_data.append(allocator, @backingInt(WasmLinking.SymKind.function));
             try leb128WriteU32(allocator, &sym_data, 0); // flags (defined, not undefined)
             try leb128WriteU32(allocator, &sym_data, 1); // function index
             try leb128WriteU32(allocator, &sym_data, 6); // name length
             try sym_data.appendSlice(allocator, "_start");
 
-            try linking_body.append(allocator, @intFromEnum(WasmLinking.LinkingSubsection.symbol_table));
+            try linking_body.append(allocator, @backingInt(WasmLinking.LinkingSubsection.symbol_table));
             try leb128WriteU32(allocator, &linking_body, @intCast(sym_data.items.len));
             try linking_body.appendSlice(allocator, sym_data.items);
         }
 
-        try out.append(allocator, @intFromEnum(SectionId.custom_section));
+        try out.append(allocator, @backingInt(SectionId.custom_section));
         try leb128WriteU32(allocator, &out, @intCast(linking_body.items.len));
         try out.appendSlice(allocator, linking_body.items);
     }
@@ -4993,17 +4608,17 @@ fn buildTestRelocatableModule(allocator: Allocator) Allocator.Error![]u8 {
         try reloc_body.appendSlice(allocator, "reloc.CODE");
 
         // Target section index (code section)
-        try leb128WriteU32(allocator, &reloc_body, @intFromEnum(SectionId.code_section));
+        try leb128WriteU32(allocator, &reloc_body, @backingInt(SectionId.code_section));
 
         // 1 relocation entry
         try leb128WriteU32(allocator, &reloc_body, 1);
 
         // R_WASM_FUNCTION_INDEX_LEB, offset=2 (after size+locals), symbol_index=0
-        try reloc_body.append(allocator, @intFromEnum(WasmLinking.IndexRelocType.function_index_leb));
+        try reloc_body.append(allocator, @backingInt(WasmLinking.IndexRelocType.function_index_leb));
         try leb128WriteU32(allocator, &reloc_body, 2); // offset within code_bytes
         try leb128WriteU32(allocator, &reloc_body, 0); // symbol index
 
-        try out.append(allocator, @intFromEnum(SectionId.custom_section));
+        try out.append(allocator, @backingInt(SectionId.custom_section));
         try leb128WriteU32(allocator, &out, @intCast(reloc_body.items.len));
         try out.appendSlice(allocator, reloc_body.items);
     }
@@ -5211,24 +4826,6 @@ test "function types match structurally rather than by table index" {
     try std.testing.expect(!module.funcTypeMatches(duplicate, &.{ .i32, .v128 }, &.{.i32}));
 }
 
-test "removeFunctionExports—removes only named function exports" {
-    const allocator = std.testing.allocator;
-    var module = init(allocator);
-    defer module.deinit();
-
-    try module.addExport("start", .func, 0);
-    try module.addExport("host_unused", .func, 1);
-    try module.addExport("memory", .memory, 0);
-
-    module.removeFunctionExports(&.{"host_unused"});
-
-    try std.testing.expectEqual(@as(usize, 2), module.exports.items.len);
-    try std.testing.expectEqualStrings("start", module.exports.items[0].name);
-    try std.testing.expectEqual(ExportKind.func, module.exports.items[0].kind);
-    try std.testing.expectEqualStrings("memory", module.exports.items[1].name);
-    try std.testing.expectEqual(ExportKind.memory, module.exports.items[1].kind);
-}
-
 test "preload—parses memory section" {
     const allocator = std.testing.allocator;
     const wasm_bytes = try buildTestRelocatableModule(allocator);
@@ -5260,13 +4857,13 @@ test "preload—symbol name resolution from imports" {
     try std.testing.expectEqual(@as(?u32, 0), found);
 }
 
-// --- Tests for linkHostToAppCalls ---
+// --- Import-bearing module fixture ---
 
-/// Build a WasmModule in memory for testing linkHostToAppCalls.
+/// Build a WasmModule in memory whose defined functions call imports.
 ///
 /// Function index space:
 ///   0: js_foo          (import, env)
-///   1: roc__main_exposed (import, env)—the app function to link
+///   1: roc__main_exposed (import, env)
 ///   2: js_bar          (import, env)
 ///   3: defined_0—body calls roc__main_exposed (fn 1)
 ///   4: defined_1—body calls js_bar (fn 2)
@@ -5348,206 +4945,6 @@ fn buildLinkingTestModule(allocator: Allocator) Allocator.Error!Self {
     return module;
 }
 
-test "linkHostToAppCalls—single app function: import removed, dummy inserted" {
-    const allocator = std.testing.allocator;
-    var module = try buildLinkingTestModule(allocator);
-    defer module.deinit();
-
-    // Before: 3 imports, 2 defined, 0 dummies
-    try std.testing.expectEqual(@as(usize, 3), module.imports.items.len);
-    try std.testing.expectEqual(@as(usize, 2), module.func_type_indices.items.len);
-    try std.testing.expectEqual(@as(u32, 0), module.dead_import_dummy_count);
-
-    // Link roc__main_exposed → app function at index 5
-    try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
-
-    // After: 2 imports, 3 func_type_indices (1 dummy + 2 original), 1 dummy
-    try std.testing.expectEqual(@as(usize, 2), module.imports.items.len);
-    try std.testing.expectEqual(@as(usize, 3), module.func_type_indices.items.len);
-    try std.testing.expectEqual(@as(u32, 1), module.dead_import_dummy_count);
-}
-
-test "linkHostToAppCalls—verifies call instruction patched to app function index" {
-    const allocator = std.testing.allocator;
-    var module = try buildLinkingTestModule(allocator);
-    defer module.deinit();
-
-    // Before: fn3 calls fn 1 (roc__main_exposed)—LEB128 at code_bytes[3..8]
-    try std.testing.expectEqual(@as(u32, 1), decodePaddedU32(module.code_bytes.items[3..8]));
-
-    try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
-
-    // After: fn3's call should be patched to fn 5 (the app function)
-    try std.testing.expectEqual(@as(u32, 5), decodePaddedU32(module.code_bytes.items[3..8]));
-}
-
-test "linkHostToAppCalls—last import swapped into vacated slot" {
-    const allocator = std.testing.allocator;
-    var module = try buildLinkingTestModule(allocator);
-    defer module.deinit();
-
-    try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
-
-    // js_bar (was at index 2) should now be at index 1 (the vacated slot)
-    try std.testing.expectEqualStrings("js_foo", module.imports.items[0].field_name);
-    try std.testing.expectEqualStrings("js_bar", module.imports.items[1].field_name);
-}
-
-test "linkHostToAppCalls—swap import's call sites updated to new index" {
-    const allocator = std.testing.allocator;
-    var module = try buildLinkingTestModule(allocator);
-    defer module.deinit();
-
-    // Before: fn4 calls fn 2 (js_bar)—LEB128 at code_bytes[12..17]
-    try std.testing.expectEqual(@as(u32, 2), decodePaddedU32(module.code_bytes.items[12..17]));
-
-    try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
-
-    // After: fn4's call should be patched to fn 1 (js_bar's new position)
-    try std.testing.expectEqual(@as(u32, 1), decodePaddedU32(module.code_bytes.items[12..17]));
-}
-
-test "linkHostToAppCalls—multiple app functions linked in sequence" {
-    const allocator = std.testing.allocator;
-    var module = try buildLinkingTestModule(allocator);
-    defer module.deinit();
-
-    // Link two app functions sequentially
-    try module.linkHostToAppCalls(&.{
-        .{ .name = "roc__main_exposed", .fn_index = 5 },
-        .{ .name = "js_foo", .fn_index = 6 },
-    });
-
-    // 2 imports removed → 1 remaining, 2 dummies
-    try std.testing.expectEqual(@as(usize, 1), module.imports.items.len);
-    try std.testing.expectEqual(@as(u32, 2), module.dead_import_dummy_count);
-    try std.testing.expectEqual(@as(usize, 4), module.func_type_indices.items.len); // 2 dummies + 2 original
-}
-
-test "linkHostToAppCalls—dead_import_dummy_count incremented correctly" {
-    const allocator = std.testing.allocator;
-    var module = try buildLinkingTestModule(allocator);
-    defer module.deinit();
-
-    try std.testing.expectEqual(@as(u32, 0), module.dead_import_dummy_count);
-
-    try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
-    try std.testing.expectEqual(@as(u32, 1), module.dead_import_dummy_count);
-
-    try module.linkHostToAppCalls(&.{.{ .name = "js_foo", .fn_index = 6 }});
-    try std.testing.expectEqual(@as(u32, 2), module.dead_import_dummy_count);
-}
-
-test "linkHostToAppCalls—func_type_indices has dummy signature at position 0" {
-    const allocator = std.testing.allocator;
-    var module = try buildLinkingTestModule(allocator);
-    defer module.deinit();
-
-    // Before: func_type_indices = [0, 0] (two defined functions, both type 0)
-    try std.testing.expectEqual(@as(usize, 2), module.func_type_indices.items.len);
-
-    try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
-
-    // After: func_type_indices = [0, 0, 0]—dummy at position 0
-    try std.testing.expectEqual(@as(usize, 3), module.func_type_indices.items.len);
-    try std.testing.expectEqual(@as(u32, 0), module.func_type_indices.items[0]); // dummy type signature
-}
-
-test "linkHostToAppCalls—total function count unchanged after linking" {
-    const allocator = std.testing.allocator;
-    var module = try buildLinkingTestModule(allocator);
-    defer module.deinit();
-
-    // Before: 3 imports + 2 defined = 5 total
-    const total_before = module.imports.items.len + module.func_type_indices.items.len;
-    try std.testing.expectEqual(@as(usize, 5), total_before);
-
-    try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
-
-    // After: 2 imports + 3 func_type_indices (1 dummy + 2 original) = 5 total
-    const total_after = module.imports.items.len + module.func_type_indices.items.len;
-    try std.testing.expectEqual(@as(usize, 5), total_after);
-}
-
-test "linkHostToAppCalls—unfound import exports app function instead" {
-    const allocator = std.testing.allocator;
-    var module = try buildLinkingTestModule(allocator);
-    defer module.deinit();
-
-    const exports_before = module.exports.items.len;
-
-    // Link a function name that doesn't exist in imports
-    try module.linkHostToAppCalls(&.{.{ .name = "roc__nonexistent", .fn_index = 7 }});
-
-    // No imports removed, but an export was added
-    try std.testing.expectEqual(@as(usize, 3), module.imports.items.len);
-    try std.testing.expectEqual(exports_before + 1, module.exports.items.len);
-    const new_export = module.exports.items[module.exports.items.len - 1];
-    try std.testing.expectEqualStrings("roc__nonexistent", new_export.name);
-    try std.testing.expectEqual(ExportKind.func, new_export.kind);
-    try std.testing.expectEqual(@as(u32, 7), new_export.idx);
-}
-
-test "linkHostToAppCalls—import_fn_count decremented" {
-    const allocator = std.testing.allocator;
-    var module = try buildLinkingTestModule(allocator);
-    defer module.deinit();
-
-    try std.testing.expectEqual(@as(u32, 3), module.import_fn_count);
-
-    try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
-
-    try std.testing.expectEqual(@as(u32, 2), module.import_fn_count);
-}
-
-test "linkHostToAppCalls—symbol table updated for linked function" {
-    const allocator = std.testing.allocator;
-    var module = try buildLinkingTestModule(allocator);
-    defer module.deinit();
-
-    // Before: sym 1 (roc__main_exposed) has index 1
-    try std.testing.expectEqual(@as(u32, 1), module.linking.symbol_table.items[1].index);
-
-    try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
-
-    // After: sym 1 should now point to app function index 5
-    try std.testing.expectEqual(@as(u32, 5), module.linking.symbol_table.items[1].index);
-}
-
-test "linkHostToAppCalls—symbol table updated for swapped function" {
-    const allocator = std.testing.allocator;
-    var module = try buildLinkingTestModule(allocator);
-    defer module.deinit();
-
-    // Before: sym 2 (js_bar) has index 2
-    try std.testing.expectEqual(@as(u32, 2), module.linking.symbol_table.items[2].index);
-
-    try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
-
-    // After: sym 2 (js_bar) should now have index 1 (swapped into roc__main_exposed's slot)
-    try std.testing.expectEqual(@as(u32, 1), module.linking.symbol_table.items[2].index);
-}
-
-test "linkHostToAppCalls—linking last import is a no-op swap" {
-    const allocator = std.testing.allocator;
-    var module = try buildLinkingTestModule(allocator);
-    defer module.deinit();
-
-    // Link js_bar (the last import)—swap_fn_index == host_fn_index, no swap needed
-    try module.linkHostToAppCalls(&.{.{ .name = "js_bar", .fn_index = 5 }});
-
-    // js_bar removed, js_foo and roc__main_exposed remain
-    try std.testing.expectEqual(@as(usize, 2), module.imports.items.len);
-    try std.testing.expectEqualStrings("js_foo", module.imports.items[0].field_name);
-    try std.testing.expectEqualStrings("roc__main_exposed", module.imports.items[1].field_name);
-
-    // fn4's call should be patched from 2 to 5
-    try std.testing.expectEqual(@as(u32, 5), decodePaddedU32(module.code_bytes.items[12..17]));
-
-    // No swap relocation needed—sym 1 (roc__main_exposed) should be unchanged
-    try std.testing.expectEqual(@as(u32, 1), module.linking.symbol_table.items[1].index);
-}
-
 // --- Tests for loading a real relocatable host module ---
 
 test "preload—parses real Zig-compiled wasm host object" {
@@ -5615,7 +5012,7 @@ fn buildPhase5TestModule(allocator: Allocator) Allocator.Error!Self {
     try module.global_imports.append(allocator, .{
         .module_name = "env",
         .field_name = "__stack_pointer",
-        .val_type = @intFromEnum(ValType.i32),
+        .val_type = @backingInt(ValType.i32),
         .mutable = true,
     });
     module.import_global_count = 1;
@@ -5647,69 +5044,11 @@ fn buildPhase5TestModule(allocator: Allocator) Allocator.Error!Self {
     return module;
 }
 
-test "setup—function imports survive object ABI preparation" {
-    const allocator = std.testing.allocator;
-    var module = try buildPhase5TestModule(allocator);
-    defer module.deinit();
-
-    try module.prepareObjectAbiForFinalLink();
-
-    // After setup, the imports array should only contain function imports
-    try std.testing.expectEqual(@as(usize, 2), module.imports.items.len);
-    try std.testing.expectEqualStrings("roc__main", module.imports.items[0].field_name);
-    try std.testing.expectEqualStrings("roc_panic", module.imports.items[1].field_name);
-
-    // Memory and table flags should still be set (they'll be defined sections)
-    try std.testing.expect(module.has_memory);
-    try std.testing.expect(module.has_table);
-}
-
-test "setup—object ABI globals become valid final global indices" {
-    const allocator = std.testing.allocator;
-    var module = Self.init(allocator);
-    defer module.deinit();
-    module.has_memory = true;
-
-    _ = try module.addGlobalImportWithSymbol("env", "__stack_pointer", .i32, true);
-    _ = try module.addGlobalImportWithSymbol("env", "__memory_base", .i32, true);
-    _ = try module.addGlobalImportWithSymbol("env", "__table_base", .i32, false);
-    const table_symbol = try module.addTableImportWithSymbol();
-
-    try module.prepareObjectAbiForFinalLink();
-
-    try std.testing.expect(module.has_stack_pointer);
-    try std.testing.expectEqual(@as(usize, 0), module.global_imports.items.len);
-    try std.testing.expectEqual(@as(u32, 0), module.import_global_count);
-    try std.testing.expectEqual(@as(usize, 0), module.table_imports.items.len);
-    try std.testing.expectEqual(@as(usize, 2), module.extra_globals.items.len);
-    for (module.linking.symbol_table.items[0..3], 0..) |sym, expected_index| {
-        try std.testing.expect(!sym.isUndefined());
-        try std.testing.expectEqual(@as(u32, @intCast(expected_index)), sym.index);
-    }
-    const table = module.linking.symbol_table.items[table_symbol.raw()];
-    try std.testing.expect(!table.isUndefined());
-    try std.testing.expectEqual(@as(u32, 0), table.index);
-}
-
-test "setup—object ABI preparation leaves function import count unchanged" {
-    const allocator = std.testing.allocator;
-    var module = try buildPhase5TestModule(allocator);
-    defer module.deinit();
-
-    const fn_count_before = module.import_fn_count;
-    try module.prepareObjectAbiForFinalLink();
-
-    // import_fn_count should be unchanged—it only counts function imports
-    try std.testing.expectEqual(fn_count_before, module.import_fn_count);
-    try std.testing.expectEqual(@as(u32, 2), module.import_fn_count);
-}
-
 test "setup—__stack_pointer global defined with correct initial value" {
     const allocator = std.testing.allocator;
     var module = try buildPhase5TestModule(allocator);
     defer module.deinit();
 
-    try module.prepareObjectAbiForFinalLink();
     try module.finalizeMemoryAndTable(1024); // 1KB stack
 
     // __stack_pointer should be defined (not imported)
@@ -5723,8 +5062,6 @@ test "setup—memory section has correct minimum pages" {
     const allocator = std.testing.allocator;
     var module = try buildPhase5TestModule(allocator);
     defer module.deinit();
-
-    try module.prepareObjectAbiForFinalLink();
 
     // Data segment: 12 bytes at offset 1024 → data_end = 1036
     // data_offset is 1024 (init default), data_end = max(1024, 1036) = 1036
@@ -5751,7 +5088,6 @@ test "setup—table size matches element count after finalization" {
     try module.table_func_indices.append(allocator, 3); // another fn
     try module.table_func_indices.append(allocator, 4); // another fn
 
-    try module.prepareObjectAbiForFinalLink();
     try module.finalizeMemoryAndTable(1024);
 
     // Encode and verify the table section uses the correct size
@@ -5782,7 +5118,7 @@ test "initial memory ends above static data and the reserved stack" {
     var module = Self.init(allocator);
     defer module.deinit();
 
-    _ = try module.addDataSegment(&([_]u8{0} ** 32), 16);
+    _ = try module.addDataSegment(&(@as([32]u8, @splat(0))), 16);
     try module.finalizeMemoryAndTable(1024 * 1024);
 
     try std.testing.expectEqual(module.stack_pointer_init, module.initialMemoryByteLen());
@@ -5795,7 +5131,6 @@ test "setup—memory exported as 'memory'" {
     defer module.deinit();
 
     const exports_before = module.exports.items.len;
-    try module.prepareObjectAbiForFinalLink();
     try module.finalizeMemoryAndTable(1024);
 
     // Should have one more export than before
@@ -5829,7 +5164,6 @@ test "setup—finalized module encodes and re-parses as valid WASM" {
     // Add table entries for encoding
     try module.table_func_indices.append(allocator, 2);
 
-    try module.prepareObjectAbiForFinalLink();
     try module.finalizeMemoryAndTable(4096);
 
     // Encode to final WASM binary
@@ -5860,26 +5194,6 @@ test "setup—finalized module encodes and re-parses as valid WASM" {
     try std.testing.expectEqual(@as(u32, 1), decoded.preloaded_defined_global_count);
 }
 
-test "phase5—real host object ABI preparation preserves function imports" {
-    const allocator = std.testing.allocator;
-    const host_bytes = @import("wasm_host_fixture").host_wasm;
-
-    var module = try preload(allocator, host_bytes, .relocatable_for_merge);
-    defer module.deinit();
-
-    const fn_count_before = module.import_fn_count;
-    const imports_before = module.imports.items.len;
-
-    try module.prepareObjectAbiForFinalLink();
-
-    // Function imports should be completely unchanged
-    try std.testing.expectEqual(fn_count_before, module.import_fn_count);
-    try std.testing.expectEqual(imports_before, module.imports.items.len);
-
-    // Memory flag should be set (host imports memory)
-    try std.testing.expect(module.has_memory);
-}
-
 test "phase5—real host module: full setup and finalization produces valid WASM" {
     const allocator = std.testing.allocator;
     const host_bytes = @import("wasm_host_fixture").host_wasm;
@@ -5888,7 +5202,6 @@ test "phase5—real host module: full setup and finalization produces valid WASM
     defer module.deinit();
 
     // Phase 5 setup
-    try module.prepareObjectAbiForFinalLink();
 
     // Phase 5 finalization with 64KB stack
     try module.finalizeMemoryAndTable(65536);
@@ -5931,29 +5244,6 @@ test "call_indirect—roc_alloc uses 2-arg callback type, not RocCall type" {
     // Verify the import's type index is the 2-arg type, not the 3-arg type
     try std.testing.expectEqual(roc_ops_type, module.imports.items[roc_alloc_idx].type_idx);
     try std.testing.expect(module.imports.items[roc_alloc_idx].type_idx != roc_call_type);
-}
-
-test "call_indirect—hosted function uses 3-arg RocCall type" {
-    const allocator = std.testing.allocator;
-    var module = Self.init(allocator);
-    defer module.deinit();
-
-    // Register both type signatures
-    const roc_ops_type = try module.addFuncType(&.{ .i32, .i32 }, &.{});
-    const roc_call_type = try module.addFuncType(&.{ .i32, .i32, .i32 }, &.{});
-
-    module.enableTable();
-
-    // Add a hosted function using the convenience method
-    const table_idx = try module.addHostedFunctionToTable("env", "hosted_fn_0", roc_call_type);
-
-    // The hosted function import should use the 3-arg type
-    try std.testing.expectEqual(roc_call_type, module.imports.items[0].type_idx);
-    try std.testing.expect(module.imports.items[0].type_idx != roc_ops_type);
-
-    // It should have a valid table entry
-    try std.testing.expectEqual(@as(u32, 0), table_idx);
-    try std.testing.expectEqual(@as(u32, 0), module.table_func_indices.items[0]);
 }
 
 test "call_indirect—mismatched type index would trap (validate type separation)" {
@@ -6033,66 +5323,6 @@ test "function table—all RocOps functions have valid table entries after linki
     for (module.imports.items) |import| {
         try std.testing.expectEqual(roc_ops_type, import.type_idx);
     }
-}
-
-test "function table—hosted functions added to table with correct indices" {
-    const allocator = std.testing.allocator;
-    var module = Self.init(allocator);
-    defer module.deinit();
-
-    const roc_ops_type = try module.addFuncType(&.{ .i32, .i32 }, &.{});
-    const roc_call_type = try module.addFuncType(&.{ .i32, .i32, .i32 }, &.{});
-    module.enableTable();
-
-    // Add RocOps callbacks first (as the codegen does)
-    const roc_alloc_idx = try module.addImport("env", shim_symbols.roc_alloc, roc_ops_type);
-    _ = try module.addTableElement(roc_alloc_idx);
-    const roc_dealloc_idx = try module.addImport("env", shim_symbols.roc_dealloc, roc_ops_type);
-    _ = try module.addTableElement(roc_dealloc_idx);
-
-    // Now add hosted functions—they follow the RocOps entries in the table
-    const hosted_0_table = try module.addHostedFunctionToTable("env", "hosted_fn_0", roc_call_type);
-    const hosted_1_table = try module.addHostedFunctionToTable("env", "hosted_fn_1", roc_call_type);
-    const hosted_2_table = try module.addHostedFunctionToTable("env", "hosted_fn_2", roc_call_type);
-
-    // Hosted functions follow RocOps entries (indices 0, 1 are alloc/dealloc)
-    try std.testing.expectEqual(@as(u32, 2), hosted_0_table);
-    try std.testing.expectEqual(@as(u32, 3), hosted_1_table);
-    try std.testing.expectEqual(@as(u32, 4), hosted_2_table);
-
-    // Total table size: 2 RocOps + 3 hosted = 5
-    try std.testing.expectEqual(@as(usize, 5), module.table_func_indices.items.len);
-
-    // Verify hosted function imports use the 3-arg type
-    // Imports: [roc_alloc, roc_dealloc, hosted_fn_0, hosted_fn_1, hosted_fn_2]
-    try std.testing.expectEqual(roc_ops_type, module.imports.items[0].type_idx);
-    try std.testing.expectEqual(roc_ops_type, module.imports.items[1].type_idx);
-    try std.testing.expectEqual(roc_call_type, module.imports.items[2].type_idx);
-    try std.testing.expectEqual(roc_call_type, module.imports.items[3].type_idx);
-    try std.testing.expectEqual(roc_call_type, module.imports.items[4].type_idx);
-
-    // Verify table entries point to correct function indices
-    try std.testing.expectEqual(@as(u32, 2), module.table_func_indices.items[2]); // hosted_fn_0
-    try std.testing.expectEqual(@as(u32, 3), module.table_func_indices.items[3]); // hosted_fn_1
-    try std.testing.expectEqual(@as(u32, 4), module.table_func_indices.items[4]); // hosted_fn_2
-}
-
-test "findFunctionIdxBySuffix—ignores imported symbols and finds defined host callback" {
-    const allocator = std.testing.allocator;
-    var module = Self.init(allocator);
-    defer module.deinit();
-
-    const type_idx = try module.addFuncType(&.{ .i32, .i32 }, &.{});
-    _ = try module.addImport("env", shim_symbols.roc_dbg, type_idx);
-    module.import_fn_count = 1;
-
-    const callback_idx = try module.addFunction(type_idx);
-    try module.linking.symbol_table.appendSlice(allocator, &.{
-        .{ .kind = .function, .flags = WasmLinking.SymFlag.UNDEFINED, .name = null, .index = 0 },
-        .{ .kind = .function, .flags = 0, .name = "host.roc_dbg", .index = callback_idx },
-    });
-
-    try std.testing.expectEqual(callback_idx, module.findFunctionIdxBySuffix(shim_symbols.roc_dbg).?);
 }
 
 test "ensureTableElement—reuses existing table entry" {
@@ -6443,7 +5673,7 @@ test "mergeModule—later weak definition resolves earlier undefined function im
     try std.testing.expectEqual(@as(u32, 2), host.table_func_indices.items[0]);
 
     try host.resolveRelocations();
-    var expected = [_]u8{0} ** 5;
+    var expected = @as([5]u8, @splat(0));
     overwritePaddedU32(&expected, 0, 2);
     try std.testing.expectEqualSlices(u8, &expected, host.code_bytes.items[3..8]);
 
@@ -6544,7 +5774,7 @@ fn encodedDataSummary(bytes: []const u8) ParseError!EncodedDataSummary {
         const section_end = cursor + section_size;
         if (section_end > bytes.len) return error.UnexpectedEnd;
 
-        if (section_id == @intFromEnum(SectionId.data_section)) {
+        if (section_id == @backingInt(SectionId.data_section)) {
             const count = try readU32(bytes, &cursor);
             var payload_len: u32 = 0;
             for (0..count) |_| {
@@ -6591,7 +5821,7 @@ test "encode—omits bss payload when final memory starts zero-filled" {
     defer module.deinit();
 
     _ = try module.addDataSegmentWithInfo("DATA", 4, ".data.test", 0);
-    _ = try module.addDataSegmentWithInfo(&([_]u8{0} ** 64), 16, ".bss.heap", 0);
+    _ = try module.addDataSegmentWithInfo(&(@as([64]u8, @splat(0))), 16, ".bss.heap", 0);
     try std.testing.expect(module.data_segments.items[1].zero_fill);
 
     try module.finalizeMemoryAndTableWithConfig(.{
@@ -6617,7 +5847,7 @@ test "encode—keeps bss payload when imported memory may be uninitialized" {
     defer module.deinit();
 
     _ = try module.addDataSegmentWithInfo("DATA", 4, ".data.test", 0);
-    _ = try module.addDataSegmentWithInfo(&([_]u8{0} ** 64), 16, ".bss.heap", 0);
+    _ = try module.addDataSegmentWithInfo(&(@as([64]u8, @splat(0))), 16, ".bss.heap", 0);
 
     try module.finalizeMemoryAndTableWithConfig(.{
         .stack_bytes = 16,
@@ -6713,7 +5943,7 @@ test "resolveCodeRelocations—table_index_sleb resolves to table index not func
     try module.resolveCodeRelocations();
 
     // Should be patched to table index 2 (position in table_func_indices), NOT function index 4
-    var expected = [_]u8{0} ** 5;
+    var expected = @as([5]u8, @splat(0));
     overwritePaddedI32(&expected, 0, 2);
     try std.testing.expectEqualSlices(u8, &expected, module.code_bytes.items[3..8]);
 }
@@ -6746,7 +5976,7 @@ test "resolveCodeRelocations—table index relocation materializes a missing ele
     try module.resolveCodeRelocations();
 
     try std.testing.expectEqualSlices(u32, &.{0}, module.table_func_indices.items);
-    var expected = [_]u8{0} ** 5;
+    var expected = @as([5]u8, @splat(0));
     overwritePaddedI32(&expected, 0, 0);
     try std.testing.expectEqualSlices(u8, &expected, module.code_bytes.items[3..8]);
 }
@@ -6828,7 +6058,7 @@ test "BuiltinSymbols—all symbols found after merge" {
     // Spot check a few builtins (populate returns function index = enum index + 1,
     // since index 0 is the import and symbols are added in `BuiltinKind` order).
     try std.testing.expectEqual(@as(u32, 1), syms.get(.dec_mul)); // first defined fn after import
-    try std.testing.expectEqual(@as(u32, @intFromEnum(BuiltinKind.str_trim)) + 1, syms.get(.str_trim));
+    try std.testing.expectEqual(@as(u32, @backingInt(BuiltinKind.str_trim)) + 1, syms.get(.str_trim));
 }
 
 test "BuiltinSymbols—fails when symbol missing" {
@@ -6857,7 +6087,7 @@ test "resolveCodeRelocations—patches function call in code_bytes" {
     try module.resolveCodeRelocations();
 
     // Read the patched value at offset 3 (5-byte padded LEB128).
-    var expected = [_]u8{0} ** 5;
+    var expected = @as([5]u8, @splat(0));
     overwritePaddedU32(&expected, 0, 42);
     try std.testing.expectEqualSlices(u8, &expected, module.code_bytes.items[3..8]);
 }
@@ -7470,10 +6700,10 @@ test "all-zero static exports without relocations become zero-fill segments" {
     defer exports.deinit(allocator);
     // Capture the table's actual export index before adding its descriptor.
     const table_id = exports.items.len;
-    try exports.append(allocator, .{ .symbol_name = "table", .bytes = &([_]u8{0} ** 64), .symbol_offset = 8, .alignment = 8, .is_exported = false });
-    const relocations = [_]StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "table", .target = .{ .data_symbol = @enumFromInt(table_id) }, .addend = 8 }};
+    try exports.append(allocator, .{ .symbol_name = "table", .bytes = &(@as([64]u8, @splat(0))), .symbol_offset = 8, .alignment = 8, .is_exported = false });
+    const relocations = [_]StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "table", .target = .{ .data_symbol = @fromBackingInt(@intCast(table_id)) }, .addend = 8 }};
     // The descriptor is zeroed too, but its relocation requires stored data.
-    try exports.append(allocator, .{ .symbol_name = "descriptor", .bytes = &([_]u8{0} ** 12), .alignment = 4, .is_exported = false, .relocations = &relocations });
+    try exports.append(allocator, .{ .symbol_name = "descriptor", .bytes = &(@as([12]u8, @splat(0))), .alignment = 4, .is_exported = false, .relocations = &relocations });
     try exports.append(allocator, .{ .symbol_name = "filled", .bytes = &.{ 1, 0, 0, 0 }, .alignment = 4, .is_exported = false });
     try module.addStaticDataExports(exports.items);
     // Linear memory starts zeroed, so the table needs no bytes; the
@@ -7763,7 +6993,7 @@ test "eliminateDeadCode—exported function and its callees are preserved" {
     defer module.deinit();
 
     // No extra called_fns—only exports seed the live set.
-    var called_fns = [_]bool{false} ** 6;
+    var called_fns = @as([6]bool, @splat(false));
     try module.eliminateDeadCode(&called_fns);
 
     // main_fn (3) is exported → live.
@@ -7790,7 +7020,7 @@ test "eliminateDeadCode—unreachable function body replaced with unreachable st
     var module = try buildDCETestModule(allocator);
     defer module.deinit();
 
-    var called_fns = [_]bool{false} ** 6;
+    var called_fns = @as([6]bool, @splat(false));
     try module.eliminateDeadCode(&called_fns);
 
     try module.materializeFuncBodies();
@@ -7810,7 +7040,7 @@ test "eliminateDeadCode—dead import removed, dead_import_dummy_count increment
     const orig_import_count = module.imports.items.len;
     const orig_dummy_count = module.dead_import_dummy_count;
 
-    var called_fns = [_]bool{false} ** 6;
+    var called_fns = @as([6]bool, @splat(false));
     try module.eliminateDeadCode(&called_fns);
 
     // js_unused (import 1) is only called by dead_fn which is dead.
@@ -7840,7 +7070,7 @@ test "eliminateDeadCode—non-function imports are preserved" {
     module.has_memory = true;
     module.has_table = true;
 
-    var called_fns = [_]bool{false} ** 6;
+    var called_fns = @as([6]bool, @splat(false));
     try module.eliminateDeadCode(&called_fns);
 
     try std.testing.expect(module.has_memory);
@@ -7857,7 +7087,7 @@ test "eliminateDeadCode—indirect call targets (element section) preserved" {
     // it's in the table.
     try module.table_func_indices.append(allocator, 5);
 
-    var called_fns = [_]bool{false} ** 6;
+    var called_fns = @as([6]bool, @splat(false));
     try module.eliminateDeadCode(&called_fns);
 
     try module.materializeFuncBodies();
@@ -7877,7 +7107,7 @@ test "eliminateDeadCode—table indices follow compacted function imports" {
     // dead import before it is removed and shifts js_helper to function index 1.
     try module.table_func_indices.append(allocator, 2);
 
-    var called_fns = [_]bool{false} ** 6;
+    var called_fns = @as([6]bool, @splat(false));
     try module.eliminateDeadCode(&called_fns);
 
     try std.testing.expectEqual(@as(usize, 2), module.imports.items.len);
@@ -7893,7 +7123,7 @@ test "eliminateDeadCode—transitive callees preserved (A calls B calls C → al
     // main_fn (3) → helper_fn (4) → js_helper (import 2)
     // All three should be live. js_helper is an import that's called by
     // helper_fn which is called by exported main_fn.
-    var called_fns = [_]bool{false} ** 6;
+    var called_fns = @as([6]bool, @splat(false));
     try module.eliminateDeadCode(&called_fns);
 
     // js_helper should still be in imports.
@@ -7915,7 +7145,7 @@ test "eliminateDeadCode—init functions preserved" {
     // But mark dead_fn (sym 5) as an init function—it should stay live.
     try module.linking.init_funcs.append(allocator, .{ .priority = 0, .symbol_index = 5 });
 
-    var called_fns = [_]bool{false} ** 6;
+    var called_fns = @as([6]bool, @splat(false));
     try module.eliminateDeadCode(&called_fns);
 
     try module.materializeFuncBodies();
@@ -7960,7 +7190,7 @@ test "eliminateDeadCode—call_indirect conservatively keeps matching-signature 
     // Remove the direct call to helper_fn (reloc at offset 10) so the only
     // reason dead_fn stays live is the indirect call.
     // Actually, let's keep things simple: just verify dead_fn is live.
-    var called_fns = [_]bool{false} ** 6;
+    var called_fns = @as([6]bool, @splat(false));
     try module.eliminateDeadCode(&called_fns);
 
     try module.materializeFuncBodies();
@@ -7980,7 +7210,7 @@ test "eliminateDeadCode—function indices unchanged after elimination" {
     // Record original function count.
     const orig_defined_count = module.function_offsets.items.len;
 
-    var called_fns = [_]bool{false} ** 6;
+    var called_fns = @as([6]bool, @splat(false));
     try module.eliminateDeadCode(&called_fns);
 
     // The number of function_offsets entries should be unchanged
@@ -8000,7 +7230,7 @@ test "eliminateDeadCode—function indices unchanged after elimination" {
 
 /// Build a module simulating the post-surgical-linking state:
 /// - Has code_bytes and function_offsets (from preload)
-/// - Has dead_import_dummy_count > 0 (from linkHostToAppCalls)
+/// - Has dead_import_dummy_count > 0
 /// - Has linking and reloc sections (from preload, should NOT appear in output)
 /// - Has memory, exports, and data segments
 fn buildEncodeTestModule(allocator: Allocator) Allocator.Error!Self {
@@ -8124,7 +7354,7 @@ test "encode—code section function count includes dummies" {
         pos += 1;
         var cursor: usize = pos;
         const section_size = readU32(output, &cursor) catch unreachable;
-        if (section_id == @intFromEnum(SectionId.code_section)) {
+        if (section_id == @backingInt(SectionId.code_section)) {
             code_section_start = cursor;
             break;
         }
@@ -8158,7 +7388,7 @@ test "encode—dummy functions prepended before real functions in code section" 
         pos += 1;
         var cursor: usize = pos;
         const section_size = readU32(output, &cursor) catch unreachable;
-        if (section_id == @intFromEnum(SectionId.code_section)) {
+        if (section_id == @backingInt(SectionId.code_section)) {
             // Skip the function count
             _ = readU32(output, &cursor) catch unreachable;
             code_body_start = cursor;
@@ -8214,7 +7444,7 @@ test "encode—linking section NOT present in output" {
         const section_size = readU32(output, &cursor) catch unreachable;
         const section_end = cursor + section_size;
 
-        if (section_id == @intFromEnum(SectionId.custom_section)) {
+        if (section_id == @backingInt(SectionId.custom_section)) {
             // Read custom section name
             const name_len = readU32(output, &cursor) catch unreachable;
             const name = output[cursor .. cursor + name_len];
@@ -8246,7 +7476,7 @@ test "encode—reloc.CODE section NOT present in output" {
         const section_size = readU32(output, &cursor) catch unreachable;
         const section_end = cursor + section_size;
 
-        if (section_id == @intFromEnum(SectionId.custom_section)) {
+        if (section_id == @backingInt(SectionId.custom_section)) {
             // Read custom section name
             const name_len = readU32(output, &cursor) catch unreachable;
             const name = output[cursor .. cursor + name_len];

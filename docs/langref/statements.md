@@ -13,6 +13,22 @@ answer = 42
 
 The name an assignment gives must be a valid Roc [lowercase name](naming#lowercase-names).
 
+### [Type Annotations](#type-annotations) {#type-annotations}
+
+You can put a [type annotation](types#type-annotations) on the line before an assignment,
+using the same name followed by `:` and a type:
+
+```roc
+answer : U64
+answer = 42
+```
+
+This works the same way at the top level of a module and inside a function body. The
+annotation is optional; without it, the compiler [infers](types) the type. With it, you get a
+compile-time error if the value doesn't have that type, which is useful both as
+documentation and for getting errors reported where you meant something to be a certain type,
+rather than wherever the mismatch happens to show up later.
+
 ### [Pattern matching in assignments](#assignment-patterns) {#assignment-patterns}
 
 You can use [pattern matching](pattern-matching) in assignments to do things like destructuring:

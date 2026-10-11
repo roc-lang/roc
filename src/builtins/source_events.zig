@@ -39,7 +39,7 @@ pub const Source = extern struct {
     has_location: u32 = 0,
 };
 
-pub const LiteralKind = enum(u32) { numeral = 1, quote = 2 };
+pub const LiteralKind = enum(u32) { numeral = 1, quote = 2, interpolation = 3 };
 pub const Literal = extern struct {
     checked_module: Identity = @splat(0),
     checked_expr: u32 = 0,
@@ -249,7 +249,7 @@ pub fn roc_source_event(header: *const Header) callconv(.c) void {
 fn observe(header: *const Header) void {
     const observer = current_observer orelse return;
     _ = validate(header) catch |err| {
-        observer.on_invalid(observer.context, @intFromEnum(invalidTag(err)));
+        observer.on_invalid(observer.context, @backingInt(invalidTag(err)));
         return;
     };
     observer.on_event(observer.context, header);
@@ -285,8 +285,8 @@ fn region(value: Region) Invalid!void {
 }
 
 fn tag(comptime T: type, value: u32) ?T {
-    inline for (@typeInfo(T).@"enum".fields) |field| {
-        if (value == field.value) return @enumFromInt(value);
+    inline for (@typeInfo(T).@"enum".field_values) |field_value| {
+        if (value == field_value) return @fromBackingInt(@intCast(value));
     }
     return null;
 }
@@ -358,7 +358,7 @@ pub fn validate(header: *const Header) Invalid!Event {
 /// descriptor first. Other callers must use `validate`; mutation invalidates
 /// the capability. No bounds, tags, or semantic fields are checked again here.
 pub fn decodeValidated(header: *const Header) Event {
-    const kind: Kind = @enumFromInt(header.kind);
+    const kind: Kind = @fromBackingInt(@intCast(header.kind));
     const descriptor: *const Descriptor = @ptrCast(header);
     var branches: []align(1) const Region = &.{};
     switch (kind) {
@@ -394,7 +394,7 @@ const Recorder = struct {
     fn invalid(context: ?*anyopaque, raw_tag: u32) callconv(.c) void {
         const self: *Recorder = @ptrCast(@alignCast(context.?));
         self.invalid_count += 1;
-        self.last_invalid = @enumFromInt(raw_tag);
+        self.last_invalid = @fromBackingInt(@intCast(raw_tag));
     }
 };
 
@@ -410,7 +410,7 @@ test "source events disabled execution does not inspect or record descriptors" {
 test "source events registered execution and nested restoration" {
     var outer: Recorder = .{};
     var inner: Recorder = .{};
-    const descriptor: Descriptor = .{ .header = .{ .kind = @intFromEnum(Kind.call_enter) } };
+    const descriptor: Descriptor = .{ .header = .{ .kind = @backingInt(Kind.call_enter) } };
     const saved = enter(outer.observer());
     defer leave(saved);
     roc_source_event(&descriptor.header);
@@ -458,7 +458,7 @@ test "source events registration is owned by the executing thread" {
     const Worker = struct {
         const Counts = struct { during: usize = 0, after: usize = 0 };
         fn run(counts: *Counts) void {
-            const descriptor: Descriptor = .{ .header = .{ .kind = @intFromEnum(Kind.call_exit) } };
+            const descriptor: Descriptor = .{ .header = .{ .kind = @backingInt(Kind.call_exit) } };
             roc_source_event(&descriptor.header);
             var local: Recorder = .{};
             const nested = enter(local.observer());
@@ -481,7 +481,7 @@ test "source events invalid descriptors report violations without delivering eve
     var recorder: Recorder = .{};
     const saved = enter(recorder.observer());
     defer leave(saved);
-    var descriptor: Descriptor = .{ .header = .{ .kind = @intFromEnum(Kind.failure) } };
+    var descriptor: Descriptor = .{ .header = .{ .kind = @backingInt(Kind.failure) } };
     descriptor.header.version = 2;
     roc_source_event(&descriptor.header);
     try std.testing.expectEqual(InvalidTag.UnsupportedVersion, recorder.last_invalid.?);
@@ -504,12 +504,12 @@ test "source events semantic site tail and branch bounds" {
     };
     var record: WithBranches = .{
         .descriptor = .{
-            .header = .{ .kind = @intFromEnum(Kind.branch_taken), .byte_size = @sizeOf(WithBranches) },
+            .header = .{ .kind = @backingInt(Kind.branch_taken), .byte_size = @sizeOf(WithBranches) },
             .source = .{ .has_location = 1, .line = 7, .column = 9, .region = .{ .start = 12, .end = 24 } },
             .site = .{
                 .has_checked_site = 1,
                 .checked_site = 42,
-                .kind = @intFromEnum(SiteKind.match),
+                .kind = @backingInt(SiteKind.match),
                 .branches_offset = @sizeOf(Descriptor),
                 .branch_count = 2,
             },
@@ -526,7 +526,7 @@ test "source events semantic site tail and branch bounds" {
     try std.testing.expectEqual(@as(u32, 3), event.branches[1].start);
     record.descriptor.branch_index = 2;
     try std.testing.expectError(error.InvalidBranch, validate(&record.descriptor.header));
-    record.descriptor.header.kind = @intFromEnum(Kind.exhaustiveness_failed);
+    record.descriptor.header.kind = @backingInt(Kind.exhaustiveness_failed);
     _ = try validate(&record.descriptor.header);
     record.descriptor.site.branch_count = std.math.maxInt(u32);
     try std.testing.expectError(error.InvalidSize, validate(&record.descriptor.header));
@@ -563,16 +563,16 @@ test "source events observer context may be null under the C registration ABI" {
     var saved: Saved = undefined;
     roc_source_event_observer_enter(&observer, &saved);
     defer roc_source_event_observer_leave(&saved);
-    const descriptor: Descriptor = .{ .header = .{ .kind = @intFromEnum(Kind.call_exit) } };
+    const descriptor: Descriptor = .{ .header = .{ .kind = @backingInt(Kind.call_exit) } };
     roc_source_event(&descriptor.header);
     try std.testing.expectEqual(@as(usize, 1), Sink.calls);
 }
 
 test "source events malformed version tags flags ranges and offsets" {
-    var descriptor: Descriptor = .{ .header = .{ .kind = @intFromEnum(Kind.failure) } };
+    var descriptor: Descriptor = .{ .header = .{ .kind = @backingInt(Kind.failure) } };
     descriptor.header.kind = 0;
     try std.testing.expectError(error.InvalidKind, validate(&descriptor.header));
-    descriptor.header.kind = @intFromEnum(Kind.failure);
+    descriptor.header.kind = @backingInt(Kind.failure);
     descriptor.header.reserved = 1;
     try std.testing.expectError(error.InvalidReserved, validate(&descriptor.header));
     descriptor.header.reserved = 0;
@@ -592,19 +592,19 @@ test "source events malformed version tags flags ranges and offsets" {
     try std.testing.expectError(error.InvalidFlag, validate(&descriptor.header));
     descriptor.failure.has_literal_rejection = 1;
     try std.testing.expectError(error.InvalidLiteral, validate(&descriptor.header));
-    descriptor.failure.literal_rejection.kind = @intFromEnum(LiteralKind.quote);
+    descriptor.failure.literal_rejection.kind = @backingInt(LiteralKind.quote);
     descriptor.failure.has_guard_root = 2;
     try std.testing.expectError(error.InvalidFlag, validate(&descriptor.header));
     descriptor.failure.has_guard_root = 1;
-    descriptor.failure.guard_root.producer_kind = @intFromEnum(ProducerKind.checked);
+    descriptor.failure.guard_root.producer_kind = @backingInt(ProducerKind.checked);
     try std.testing.expectError(error.InvalidRoot, validate(&descriptor.header));
-    descriptor.failure.guard_root.role = @intFromEnum(RootRole.value);
-    descriptor.failure.guard_root.producer_kind = @intFromEnum(ProducerKind.literal);
+    descriptor.failure.guard_root.role = @backingInt(RootRole.value);
+    descriptor.failure.guard_root.producer_kind = @backingInt(ProducerKind.literal);
     try std.testing.expectError(error.InvalidLiteral, validate(&descriptor.header));
 
-    descriptor.header.kind = @intFromEnum(Kind.exhaustiveness_failed);
+    descriptor.header.kind = @backingInt(Kind.exhaustiveness_failed);
     try std.testing.expectError(error.InvalidSite, validate(&descriptor.header));
-    descriptor.site.kind = @intFromEnum(SiteKind.if_);
+    descriptor.site.kind = @backingInt(SiteKind.if_);
     descriptor.site.has_checked_site = 2;
     try std.testing.expectError(error.InvalidFlag, validate(&descriptor.header));
     descriptor.site.has_checked_site = 0;
@@ -621,13 +621,13 @@ test "source events malformed version tags flags ranges and offsets" {
     descriptor.site.branch_count = 0;
     descriptor.site.branches_offset = 0;
     _ = try validate(&descriptor.header);
-    descriptor.header.kind = @intFromEnum(Kind.branch_taken);
+    descriptor.header.kind = @backingInt(Kind.branch_taken);
     try std.testing.expectError(error.InvalidBranch, validate(&descriptor.header));
 }
 
 test "source events preserve failure literal guard and original source identities" {
     const descriptor: Descriptor = .{
-        .header = .{ .kind = @intFromEnum(Kind.failure) },
+        .header = .{ .kind = @backingInt(Kind.failure) },
         .source = .{
             .checked_module = @splat(1),
             .source_identity = @splat(2),
@@ -643,20 +643,20 @@ test "source events preserve failure literal guard and original source identitie
             .literal_rejection = .{
                 .checked_module = @splat(4),
                 .checked_expr = 19,
-                .kind = @intFromEnum(LiteralKind.numeral),
+                .kind = @backingInt(LiteralKind.numeral),
             },
             .has_guard_root = 1,
             .guard_root = .{
                 .module = @splat(5),
-                .producer_kind = @intFromEnum(ProducerKind.literal),
+                .producer_kind = @backingInt(ProducerKind.literal),
                 .literal = .{
                     .checked_module = @splat(6),
                     .checked_expr = 29,
-                    .kind = @intFromEnum(LiteralKind.quote),
+                    .kind = @backingInt(LiteralKind.quote),
                 },
                 .procedure_identity = @splat(7),
                 .layout_digest = @splat(8),
-                .role = @intFromEnum(RootRole.failure_message),
+                .role = @backingInt(RootRole.failure_message),
                 .failed_field = 11,
                 .message_field = 13,
                 .failed_offset = 17,
@@ -678,9 +678,9 @@ test "source events reject invalid tail regions and trailing bytes" {
     const WithBranch = extern struct { descriptor: Descriptor, branch: Region };
     var record: WithBranch = .{
         .descriptor = .{
-            .header = .{ .kind = @intFromEnum(Kind.branch_taken), .byte_size = @sizeOf(WithBranch) },
+            .header = .{ .kind = @backingInt(Kind.branch_taken), .byte_size = @sizeOf(WithBranch) },
             .site = .{
-                .kind = @intFromEnum(SiteKind.destructure),
+                .kind = @backingInt(SiteKind.destructure),
                 .branches_offset = @sizeOf(Descriptor),
                 .branch_count = 1,
             },
@@ -692,6 +692,6 @@ test "source events reject invalid tail regions and trailing bytes" {
     _ = try validate(&record.descriptor.header);
     record.descriptor.header.byte_size += 1;
     try std.testing.expectError(error.InvalidSize, validate(&record.descriptor.header));
-    record.descriptor.header.kind = @intFromEnum(Kind.call_exit);
+    record.descriptor.header.kind = @backingInt(Kind.call_exit);
     try std.testing.expectError(error.InvalidSize, validate(&record.descriptor.header));
 }

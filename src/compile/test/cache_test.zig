@@ -67,6 +67,9 @@ test "getTestCacheDir returns test subdirectory" {
 
     const version_dir = try config.getVersionCacheDir(allocator);
     defer allocator.free(version_dir);
+    const namespace = std.fs.path.basename(version_dir);
+    try testing.expect(std.mem.startsWith(u8, namespace, "compat-"));
+    try testing.expectEqualStrings(@import("build_options").compiler_compatibility_id, namespace["compat-".len..]);
 
     const test_dir = try config.getTestCacheDir(allocator);
     defer allocator.free(test_dir);
@@ -136,7 +139,7 @@ test "storeRawBytes and loadRawBytes round-trip" {
     var manager = CacheManager.init(allocator, config, filesystem);
 
     const test_data = "Hello, test cache!";
-    const cache_key = [_]u8{0x42} ** 32;
+    const cache_key = @as([32]u8, @splat(0x42));
 
     // Store raw bytes
     manager.storeRawBytes(cache_key, test_data, tmp_path, "Test");
@@ -165,7 +168,7 @@ test "concurrent cache stores of one key use separate staging files" {
     var first = CacheManager.init(std.heap.page_allocator, config, filesystem);
     var second = CacheManager.init(std.heap.page_allocator, config, filesystem);
 
-    const key = [_]u8{0x51} ** 32;
+    const key = @as([32]u8, @splat(0x51));
     const data = "same checked artifact";
     var first_task = CacheStoreTask{ .manager = &first, .directory = tmp_path, .key = key, .data = data };
     var second_task = CacheStoreTask{ .manager = &second, .directory = tmp_path, .key = key, .data = data };
@@ -198,7 +201,7 @@ test "loadRawBytes returns null on miss" {
 
     var manager = CacheManager.init(allocator, config, filesystem);
 
-    const cache_key = [_]u8{0x24} ** 32;
+    const cache_key = @as([32]u8, @splat(0x24));
     const loaded = manager.loadRawBytes(cache_key, tmp_path);
 
     // Should return null
@@ -224,6 +227,70 @@ test "recordStoreFailure prints non-verbose warning once" {
 
     try testing.expectEqual(@as(u64, 2), manager.stats.store_failures);
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, capture.stderr.items, "Roc cache writes are failing"));
+}
+
+test "issue 11961: streamed cache publication preserves the old entry on write failure" {
+    const Stream = struct {
+        fail: bool,
+        fn write(raw: *const anyopaque, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+            const self: *const @This() = @ptrCast(@alignCast(raw));
+            try writer.writeAll("new ");
+            if (self.fail) {
+                try writer.flush(); // fail after staging a real partial write
+                return error.WriteFailed;
+            }
+            try writer.writeAll("entry");
+        }
+        fn rejectRename(_: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) CoreCtx.RenameError!void {
+            return error.AccessDenied;
+        }
+    };
+    const gpa = testing.allocator;
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(path);
+    var capture = WarningCapture{ .allocator = gpa };
+    defer capture.deinit();
+    var filesystem = CoreCtx.os(gpa, gpa, io);
+    filesystem.ctx = &capture;
+    filesystem.vtable.writeStderr = captureStderr;
+    var manager = CacheManager.init(gpa, .{ .roc_ctx = filesystem }, filesystem);
+    const key = @as([32]u8, @splat(0x42));
+    manager.storeRawBytes(key, "old entry", path, "Test");
+    const bad = Stream{ .fail = true };
+    manager.storeStream(key, .{ .context = &bad, .write = Stream.write }, 9, path, "Test");
+    const old = manager.loadRawBytes(key, path).?;
+    defer gpa.free(old);
+    try testing.expectEqualStrings("old entry", old);
+    try testing.expectEqual(@as(u64, 1), manager.stats.store_failures);
+
+    var directory = try tmp.dir.openDir(io, "42", .{ .iterate = true });
+    defer directory.close(io);
+    var iterator = directory.iterate();
+    var files: usize = 0;
+    while (try iterator.next(io)) |_| files += 1;
+    try testing.expectEqual(@as(usize, 1), files);
+
+    const good = Stream{ .fail = false };
+    const rename = manager.roc_ctx.vtable.rename;
+    manager.roc_ctx.vtable.rename = Stream.rejectRename;
+    manager.storeStream(key, .{ .context = &good, .write = Stream.write }, 9, path, "Test");
+    manager.roc_ctx.vtable.rename = rename;
+    try testing.expectEqual(@as(u64, 2), manager.stats.store_failures);
+    const preserved = manager.loadRawBytes(key, path).?;
+    defer gpa.free(preserved);
+    try testing.expectEqualStrings("old entry", preserved);
+    iterator = directory.iterate();
+    files = 0;
+    while (try iterator.next(io)) |_| files += 1;
+    try testing.expectEqual(@as(usize, 1), files);
+
+    manager.storeStream(key, .{ .context = &good, .write = Stream.write }, 9, path, "Test");
+    const current = manager.loadRawBytes(key, path).?;
+    defer gpa.free(current);
+    try testing.expectEqualStrings("new entry", current);
 }
 
 const FailingCacheFilesystem = struct {
@@ -259,8 +326,15 @@ test "cache write failures report every operation only in verbose mode" {
     const allocator = testing.allocator;
     const warning = "warning: Roc cache writes are failing; compilation will continue without updating the cache. Run with --verbose for details.\n";
     // Long diagnostic context must not silently discard a failure report.
-    const source_name = "package." ++ "LongModuleName" ** 100;
-    const key = [_]u8{0x42} ** 32;
+    const source_name = comptime blk: {
+        const piece = "LongModuleName";
+        var buffer: [8 + piece.len * 100]u8 = undefined;
+        @memcpy(buffer[0..8], "package.");
+        for (0..100) |index| @memcpy(buffer[8 + index * piece.len ..][0..piece.len], piece);
+        const final = buffer;
+        break :blk &final;
+    };
+    const key = @as([32]u8, @splat(0x42));
     const expected_path = try CacheManager.computeCacheFilePathIn(allocator, key, "cache");
     defer allocator.free(expected_path);
     for ([_]bool{ false, true }) |verbose| {

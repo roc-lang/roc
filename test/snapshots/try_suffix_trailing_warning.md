@@ -440,7 +440,7 @@ NO CHANGE
 				(e-match
 					(match
 						(cond
-							(e-call (constraint-fn-var 444)
+							(e-call (constraint-fn-var 442)
 								(e-lookup-local
 									(p-assign (ident "nested")))
 								(e-lookup-local
@@ -496,7 +496,7 @@ NO CHANGE
 										(e-match
 											(match
 												(cond
-													(e-call (constraint-fn-var 514)
+													(e-call (constraint-fn-var 505)
 														(e-lookup-local
 															(p-assign (ident "nested")))
 														(e-lookup-local
@@ -538,7 +538,7 @@ NO CHANGE
 							(e-match
 								(match
 									(cond
-										(e-call (constraint-fn-var 581)
+										(e-call (constraint-fn-var 565)
 											(e-lookup-local
 												(p-assign (ident "nested")))
 											(e-lookup-local

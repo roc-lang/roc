@@ -227,7 +227,7 @@ fn truncatedMessage(result: TestResult) []const u8 {
 fn serializeResult(fd: posix.fd_t, result: TestResult) void {
     const message_out = truncatedMessage(result);
     const header = WireHeader{
-        .status = @intFromEnum(result.status),
+        .status = @backingInt(result.status),
         .duration_ns = result.duration_ns,
         .message_len = @intCast(message_out.len),
     };
@@ -251,7 +251,7 @@ fn deserializeResult(buf: []const u8, allocator: Allocator) ?TestResult {
     const message = harness.readStr(buf, &offset, header.message_len, allocator);
 
     return .{
-        .status = @enumFromInt(header.status),
+        .status = @fromBackingInt(@intCast(header.status)),
         .duration_ns = header.duration_ns,
         .message = message,
     };
@@ -513,10 +513,10 @@ pub fn log(
     args: anytype,
 ) void {
     @disableInstrumentation();
-    if (@intFromEnum(message_level) <= @intFromEnum(std.log.Level.err)) {
+    if (@backingInt(message_level) <= @backingInt(std.log.Level.err)) {
         log_err_count +|= 1;
     }
-    if (@intFromEnum(message_level) <= @intFromEnum(log_level)) {
+    if (@backingInt(message_level) <= @backingInt(log_level)) {
         std.debug.print(
             "[" ++ @tagName(scope) ++ "] (" ++ @tagName(message_level) ++ "): " ++ format ++ "\n",
             args,

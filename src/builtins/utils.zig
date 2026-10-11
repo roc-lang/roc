@@ -31,16 +31,16 @@ inline fn debugPrint(comptime fmt: []const u8, args: anytype) void {
 /// The `src` parameter should always be `@src()` at the call site - this captures
 /// the file, function, and line number to aid in reproducing alignment bugs.
 pub inline fn alignedPtrCast(comptime T: type, ptr: anytype, src: std.builtin.SourceLocation) T {
-    if (comptime builtin.mode == .Debug) {
+    if (comptime builtin.mode == .debug) {
         const ptr_info = @typeInfo(T);
         if (ptr_info != .pointer) @compileError("alignedPtrCast target must be a pointer type");
-        const alignment = ptr_info.pointer.alignment orelse 0;
+        const alignment = ptr_info.pointer.attrs.@"align" orelse 0;
         const ptr_int = @intFromPtr(ptr);
         if (alignment > 0 and ptr_int % alignment != 0) {
             // Alignment errors indicate a bug in the caller.
             // We use unreachable here because:
             // 1. We don't have access to roc_ops in this utility function
-            // 2. This is a debug-only check (comptime builtin.mode == .Debug)
+            // 2. This is a debug-only check (comptime builtin.mode == .debug)
             // 3. On non-WASM, this will trigger a trap with a stack trace
             // 4. The @src() parameter helps identify the call site in logs
             debugPrint("alignedPtrCast alignment failure at {s}:{d}\n", .{ src.file, src.line });
@@ -303,20 +303,6 @@ else
 /// - As a placeholder when the decrement operation is handled elsewhere
 pub fn rcNone(_: ?*anyopaque, _: ?[*]u8) callconv(.c) void {}
 
-/// Enum representing different integer widths and signedness for runtime type information
-pub const IntWidth = enum(u8) {
-    U8 = 0,
-    U16 = 1,
-    U32 = 2,
-    U64 = 3,
-    U128 = 4,
-    I8 = 5,
-    I16 = 6,
-    I32 = 7,
-    I64 = 8,
-    I128 = 9,
-};
-
 const Refcount = enum {
     none,
     normal,
@@ -342,7 +328,7 @@ pub fn increfRcPtr(ptr_to_refcount: *isize, amount: isize, atomicity: RcAtomicit
     const refcount: isize = ptr_to_refcount.*;
 
     // Debug-only assertions to catch refcount bugs early.
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         if (refcount == POISON_VALUE) {
             if (builtin.os.tag != .freestanding) {
                 DebugRefcountTracker.printHistory(@intFromPtr(ptr_to_refcount));
@@ -365,7 +351,7 @@ pub fn increfRcPtr(ptr_to_refcount: *isize, amount: isize, atomicity: RcAtomicit
                 const previous = @atomicRmw(isize, ptr_to_refcount, .Add, amount, .monotonic);
                 const new_refcount = previous +% amount;
                 if (new_refcount == POISON_VALUE) {
-                    if (builtin.mode == .Debug) {
+                    if (builtin.mode == .debug) {
                         if (builtin.os.tag != .freestanding) {
                             DebugRefcountTracker.printHistory(@intFromPtr(ptr_to_refcount));
                         }
@@ -384,12 +370,6 @@ pub fn increfRcPtr(ptr_to_refcount: *isize, amount: isize, atomicity: RcAtomicit
 /// Increments reference count of an RC pointer by specified amount
 pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize, roc_ops: *RocOps) callconv(.c) void {
     increfRcPtr(ptr_to_refcount, amount, .atomic, roc_ops);
-}
-
-/// Increments reference count of an RC pointer by specified amount, for
-/// allocations proven confined to a single thread.
-pub fn increfRcPtrSingleThreadC(ptr_to_refcount: *isize, amount: isize, roc_ops: *RocOps) callconv(.c) void {
-    increfRcPtr(ptr_to_refcount, amount, .single_thread, roc_ops);
 }
 
 /// Decrements the refcount pointed to directly by `bytes_or_null`,
@@ -414,76 +394,6 @@ pub fn decrefRcPtr(
     );
 }
 
-/// TODO
-pub fn decrefRcPtrC(
-    bytes_or_null: ?[*]isize,
-    alignment: u32,
-    elements_refcounted: bool,
-    roc_ops: *RocOps,
-) callconv(.c) void {
-    return decrefRcPtr(bytes_or_null, alignment, elements_refcounted, .atomic, roc_ops);
-}
-
-/// Decrements the refcount pointed to directly by `bytes_or_null`, for
-/// allocations proven confined to a single thread.
-pub fn decrefRcPtrSingleThreadC(
-    bytes_or_null: ?[*]isize,
-    alignment: u32,
-    elements_refcounted: bool,
-    roc_ops: *RocOps,
-) callconv(.c) void {
-    return decrefRcPtr(bytes_or_null, alignment, elements_refcounted, .single_thread, roc_ops);
-}
-
-/// Safely decrements reference count for a potentially null pointer,
-/// using the given count-update atomicity.
-/// WARNING: This function assumes `bytes` points to 8-byte aligned data.
-/// It should NOT be used for seamless slices with non-zero start offsets,
-/// as those have misaligned bytes pointers. Use RocList.decref instead.
-pub fn decrefCheckNull(
-    bytes_or_null: ?[*]u8,
-    alignment: u32,
-    elements_refcounted: bool,
-    atomicity: RcAtomicity,
-    roc_ops: *RocOps,
-) void {
-    if (bytes_or_null) |bytes| {
-        const isizes: [*]isize = alignedPtrCast([*]isize, bytes, @src());
-        return @call(
-            .always_inline,
-            decref_ptr_to_refcount,
-            .{ isizes - 1, alignment, elements_refcounted, atomicity, roc_ops, .decref_check_null },
-        );
-    }
-}
-
-/// Safely decrements reference count for a potentially null pointer
-/// WARNING: This function assumes `bytes` points to 8-byte aligned data.
-/// It should NOT be used for seamless slices with non-zero start offsets,
-/// as those have misaligned bytes pointers. Use RocList.decref instead.
-pub fn decrefCheckNullC(
-    bytes_or_null: ?[*]u8,
-    alignment: u32,
-    elements_refcounted: bool,
-    roc_ops: *RocOps,
-) callconv(.c) void {
-    return decrefCheckNull(bytes_or_null, alignment, elements_refcounted, .atomic, roc_ops);
-}
-
-/// Safely decrements reference count for a potentially null pointer, for
-/// allocations proven confined to a single thread.
-/// WARNING: This function assumes `bytes` points to 8-byte aligned data.
-/// It should NOT be used for seamless slices with non-zero start offsets,
-/// as those have misaligned bytes pointers. Use RocList.decref instead.
-pub fn decrefCheckNullSingleThreadC(
-    bytes_or_null: ?[*]u8,
-    alignment: u32,
-    elements_refcounted: bool,
-    roc_ops: *RocOps,
-) callconv(.c) void {
-    return decrefCheckNull(bytes_or_null, alignment, elements_refcounted, .single_thread, roc_ops);
-}
-
 /// Decrements reference count for a data pointer and frees memory if count
 /// reaches zero, using the given count-update atomicity.
 /// Handles tag bits in the pointer and extracts the reference count pointer.
@@ -503,7 +413,7 @@ pub fn decrefDataPtr(
     if (unmasked_ptr == 0) return;
 
     // Verify alignment before @ptrFromInt
-    if (comptime builtin.mode == .Debug) {
+    if (comptime builtin.mode == .debug) {
         if (unmasked_ptr % @alignOf(isize) != 0) {
             roc_ops.crash("decrefDataPtr: unmasked pointer is not aligned");
         }
@@ -559,7 +469,7 @@ pub fn increfDataPtr(
     const rc_addr = masked_ptr - @sizeOf(usize);
 
     // Verify alignment before @ptrFromInt
-    if (comptime builtin.mode == .Debug) {
+    if (comptime builtin.mode == .debug) {
         if (rc_addr % @alignOf(isize) != 0) {
             roc_ops.crash("increfDataPtr: refcount pointer is not aligned");
         }
@@ -662,7 +572,7 @@ inline fn free_ptr_to_refcount(
 
     // Debug-only: Poison the refcount slot before freeing to detect use-after-free.
     // Any subsequent access to this refcount will see POISON_VALUE and panic.
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         refcount_ptr[0] = POISON_VALUE;
     }
 
@@ -697,7 +607,7 @@ inline fn decref_ptr_to_refcount(
 
     // Debug-only assertions to catch refcount bugs early.
     // Use roc_ops.crash() instead of @panic for WASM compatibility.
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         if (refcount == POISON_VALUE) {
             if (builtin.os.tag != .freestanding) {
                 DebugRefcountTracker.printHistory(@intFromPtr(refcount_ptr));
@@ -759,10 +669,7 @@ pub fn isUnique(
 /// Used to determine if in-place mutation is safe for reference-counted data
 pub inline fn rcUnique(refcount: isize) bool {
     switch (RC_TYPE) {
-        .normal => {
-            return refcount == 1;
-        },
-        .atomic => {
+        .normal, .atomic => {
             return refcount == 1;
         },
         .none => {
@@ -775,35 +682,12 @@ pub inline fn rcUnique(refcount: isize) bool {
 /// Constant references (REFCOUNT_MAX_ISIZE) are never freed when decremented
 pub inline fn rcConstant(refcount: isize) bool {
     switch (RC_TYPE) {
-        .normal => {
-            return refcount == REFCOUNT_STATIC_DATA;
-        },
-        .atomic => {
+        .normal, .atomic => {
             return refcount == REFCOUNT_STATIC_DATA;
         },
         .none => {
             return true;
         },
-    }
-}
-
-/// Debug-only assertion that a data pointer has a valid refcount.
-/// Panics if the refcount is poisoned (use-after-free) or invalid (underflow).
-/// Compiles to nothing in release builds - zero overhead.
-///
-/// Use this at key points in slice-creating or refcount-manipulating functions
-/// to catch bugs early during development.
-pub inline fn assertValidRefcount(data_ptr: ?[*]u8, roc_ops: *RocOps) void {
-    if (builtin.mode != .Debug) return;
-    if (data_ptr) |ptr| {
-        const rc_ptr: [*]isize = alignedPtrCast([*]isize, ptr - @sizeOf(usize), @src());
-        const rc = rc_ptr[0];
-        if (rc == POISON_VALUE) {
-            roc_ops.crash("assertValidRefcount: Use-after-free detected");
-        }
-        if (rc <= 0 and !rcConstant(rc)) {
-            roc_ops.crash("assertValidRefcount: Invalid refcount (underflow or corruption)");
-        }
     }
 }
 
@@ -826,6 +710,42 @@ pub inline fn geometricGrowth(old_capacity: usize, element_width: usize) usize {
     } else {
         return (old_capacity * 3 + 1) / 2;
     }
+}
+
+/// Crash message for an allocation whose size does not fit the address space.
+pub const allocation_too_large_message = "Attempted to allocate a collection larger than the platform address space";
+
+// Roc-controlled sizes must crash rather than wrap to a tiny allocation that
+// the next write overruns. `noinline` keeps the cold path out of callers.
+noinline fn crashAllocationTooLarge(roc_ops: *RocOps) noreturn {
+    roc_ops.crash(allocation_too_large_message);
+}
+
+/// Returns `count * element_width`, or crashes if the product overflows `usize`.
+///
+/// A comparison rather than `@mulWithOverflow`: the builtins are inlined as
+/// unoptimized bitcode, and LLVM cannot fold the intrinsic's `i1` flag once it
+/// is spilled, so the guard would survive even for constant sizes.
+pub inline fn checkedByteCount(count: usize, element_width: usize, roc_ops: *RocOps) usize {
+    if (byteCountOverflows(count, element_width)) crashAllocationTooLarge(roc_ops);
+    return count *% element_width;
+}
+
+/// Whether `count * element_width` would overflow `usize`. Separate so tests
+/// can reach it without crashing.
+pub inline fn byteCountOverflows(count: usize, element_width: usize) bool {
+    return element_width != 0 and count > std.math.maxInt(usize) / element_width;
+}
+
+/// Returns `data_bytes + header_bytes`, or crashes if the sum overflows `usize`.
+pub inline fn checkedAllocLen(data_bytes: usize, header_bytes: usize, roc_ops: *RocOps) usize {
+    if (allocLenOverflows(data_bytes, header_bytes)) crashAllocationTooLarge(roc_ops);
+    return data_bytes +% header_bytes;
+}
+
+/// Whether `data_bytes + header_bytes` would overflow `usize`.
+pub inline fn allocLenOverflows(data_bytes: usize, header_bytes: usize) bool {
+    return data_bytes > std.math.maxInt(usize) - header_bytes;
 }
 
 /// Allocates memory with space for a reference count, for C compatibility
@@ -854,7 +774,8 @@ pub fn allocateWithRefcount(
     const alignment = @max(ptr_width, element_alignment);
     const required_space: usize = if (elements_refcounted) (2 * ptr_width) else ptr_width;
     const extra_bytes = @max(required_space, element_alignment);
-    const length = extra_bytes + data_bytes;
+    // `data_bytes` is Roc-controlled.
+    const length = checkedAllocLen(data_bytes, extra_bytes, roc_ops);
 
     const new_bytes = @as([*]u8, @ptrCast(roc_ops.allocRaw(length, alignment)));
 
@@ -869,12 +790,6 @@ pub fn allocateWithRefcount(
 
     return data_ptr;
 }
-
-/// A C-compatible slice structure containing a pointer and length
-pub const CSlice = extern struct {
-    pointer: *anyopaque,
-    len: usize,
-};
 
 /// Reallocates memory for a list to accommodate growth
 /// Preserves existing data and handles refcount placement
@@ -892,8 +807,13 @@ pub fn unsafeReallocate(
     const required_space: usize = if (elements_refcounted) (2 * ptr_width) else ptr_width;
     const extra_bytes = @max(required_space, element_alignment);
 
+    // `new_length` is Roc-controlled.
+    const new_data_bytes = checkedByteCount(new_length, element_width, roc_ops);
+    const new_width = checkedAllocLen(new_data_bytes, extra_bytes, roc_ops);
+
+    // Callers only grow, so `old_width` is bounded by the checked `new_width`.
+    std.debug.assert(old_length <= new_length);
     const old_width = extra_bytes + old_length * element_width;
-    const new_width = extra_bytes + new_length * element_width;
 
     if (old_width >= new_width) {
         return source_ptr;
@@ -994,8 +914,8 @@ pub const DebugRefcountTracker = struct {
         site: Site,
     };
 
-    var rc_addrs: [max_tracked]usize = [_]usize{0} ** max_tracked;
-    var shadow_rcs: [max_tracked]isize = [_]isize{0} ** max_tracked;
+    var rc_addrs: [max_tracked]usize = @as([max_tracked]usize, @splat(0));
+    var shadow_rcs: [max_tracked]isize = @as([max_tracked]isize, @splat(0));
     var count: usize = 0;
     var active: bool = false;
 
@@ -1218,36 +1138,6 @@ test "increfC, static data" {
     try std.testing.expectEqual(mock_rc, @import("utils.zig").REFCOUNT_STATIC_DATA);
 }
 
-test "increfRcPtrSingleThreadC, refcounted data" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    var mock_rc: isize = 17;
-    const ptr_to_refcount: *isize = &mock_rc;
-    @import("utils.zig").increfRcPtrSingleThreadC(ptr_to_refcount, 2, test_env.getOps());
-    try std.testing.expectEqual(mock_rc, 19);
-}
-
-test "increfRcPtrSingleThreadC, static data" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    var mock_rc: isize = @import("utils.zig").REFCOUNT_STATIC_DATA;
-    const ptr_to_refcount: *isize = &mock_rc;
-    @import("utils.zig").increfRcPtrSingleThreadC(ptr_to_refcount, 2, test_env.getOps());
-    try std.testing.expectEqual(mock_rc, @import("utils.zig").REFCOUNT_STATIC_DATA);
-}
-
-test "decrefRcPtrSingleThreadC, refcounted data" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    var mock_rc: isize = 17;
-    const ptr_to_refcount: *isize = &mock_rc;
-    @import("utils.zig").decrefRcPtrSingleThreadC(@ptrCast(ptr_to_refcount), 8, false, test_env.getOps());
-    try std.testing.expectEqual(mock_rc, 16);
-}
-
 test "single-thread incref/decref pair on a real allocation frees on zero" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
@@ -1270,26 +1160,6 @@ test "single-thread incref/decref pair on a real allocation frees on zero" {
 
     decrefDataPtr(data_ptr, 8, false, .single_thread, ops);
     try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
-}
-
-test "decrefC, refcounted data" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    var mock_rc: isize = 17;
-    const ptr_to_refcount: *isize = &mock_rc;
-    @import("utils.zig").decrefRcPtrC(@ptrCast(ptr_to_refcount), 8, false, test_env.getOps());
-    try std.testing.expectEqual(mock_rc, 16);
-}
-
-test "decrefC, static data" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    var mock_rc: isize = @import("utils.zig").REFCOUNT_STATIC_DATA;
-    const ptr_to_refcount: *isize = &mock_rc;
-    @import("utils.zig").decrefRcPtrC(@ptrCast(ptr_to_refcount), 8, false, test_env.getOps());
-    try std.testing.expectEqual(mock_rc, @import("utils.zig").REFCOUNT_STATIC_DATA);
 }
 
 test "TestEnv basic functionality" {
@@ -1317,6 +1187,54 @@ test "TestEnv allocation tracking" {
     // Test deallocation
     ops.roc_dealloc(ops, allocated, 8);
     try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
+}
+
+// The guards' comparisons must match the overflow intrinsics exactly.
+test "byteCountOverflows agrees with the multiply overflow intrinsic" {
+    const max = std.math.maxInt(usize);
+    const widths = [_]usize{ 0, 1, 2, 3, 8, 16, 24, 4096, max / 2, max };
+    const counts = [_]usize{ 0, 1, 2, 3, 7, 8, 1000, max / 4096, max / 2, max - 1, max };
+    for (widths) |width| {
+        for (counts) |count| {
+            const expected = @mulWithOverflow(count, width)[1] != 0;
+            try std.testing.expectEqual(expected, byteCountOverflows(count, width));
+        }
+    }
+}
+
+test "allocLenOverflows agrees with the add overflow intrinsic" {
+    const max = std.math.maxInt(usize);
+    const headers = [_]usize{ 0, 1, 8, 16, 24, max / 2, max };
+    const sizes = [_]usize{ 0, 1, 8, 1000, max / 2, max - 24, max - 1, max };
+    for (headers) |header| {
+        for (sizes) |size| {
+            const expected = @addWithOverflow(size, header)[1] != 0;
+            try std.testing.expectEqual(expected, allocLenOverflows(size, header));
+        }
+    }
+}
+
+test "checked size helpers return exact values at the largest safe input" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const ops = test_env.getOps();
+    const max = std.math.maxInt(usize);
+
+    // An off-by-one in the guard would crash here.
+    for ([_]usize{ 1, 2, 3, 8, 4096 }) |width| {
+        const largest_safe = max / width;
+        try std.testing.expect(!byteCountOverflows(largest_safe, width));
+        try std.testing.expectEqual(largest_safe * width, checkedByteCount(largest_safe, width, ops));
+    }
+
+    // A zero element width can never overflow, whatever the count.
+    try std.testing.expectEqual(@as(usize, 0), checkedByteCount(max, 0, ops));
+
+    for ([_]usize{ 0, 8, 16, 24 }) |header| {
+        const largest_safe = max - header;
+        try std.testing.expect(!allocLenOverflows(largest_safe, header));
+        try std.testing.expectEqual(max, checkedAllocLen(largest_safe, header, ops));
+    }
 }
 
 test "allocateWithRefcount basic functionality" {

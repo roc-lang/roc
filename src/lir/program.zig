@@ -132,12 +132,6 @@ pub const ErasedFnsId = enum(u32) { _ };
 /// Identifier for one finite callable variant.
 pub const FnVariantId = enum(u32) { _ };
 
-/// Callable lowering result used by const plans.
-pub const FnResult = union(enum) {
-    finite: FnSetId,
-    erased: ErasedFnsId,
-};
-
 /// Exact member context in the common target-independent Lambda Solved graph.
 /// Own captures belong to `source`; solved captures name their producer span.
 pub const FrozenCallableContext = struct {
@@ -172,6 +166,9 @@ pub const FnTemplate = struct {
 /// `ConstStore`; runtime capture joining was completed before LIR.
 pub const CaptureSlot = struct {
     id: const_store.CaptureId,
+    /// Whether this slot holds a lexical capture or a top-level root's
+    /// recursive binding, carried from the captured Monotype local.
+    kind: const_store.ConstCaptureKind,
     slot: u32,
     ty: const_store.ConstTypeId,
     plan: ConstPlanId,
@@ -416,6 +413,40 @@ pub const BoxyTypeDesc = struct {
     /// One descriptor: this value in the storage of `inspect_method`'s
     /// worker parameter, instantiated at this descriptor's type arguments.
     inspect_arg_descs: BoxySpan = .{},
+    /// The type's own `is_eq`, which descriptor-guided equality calls in
+    /// place of comparing the value's structure.
+    eq_method: ?BoxyMethodSlotId = null,
+    /// The hidden descriptors `eq_method`'s worker receives, in worker
+    /// parameter order, like `inspect_hidden_descs`.
+    eq_hidden_descs: BoxySpan = .{},
+    /// Two descriptors: this value in the storage of each of `eq_method`'s
+    /// worker parameters.
+    eq_arg_descs: BoxySpan = .{},
+    /// The static dictionaries `eq_method`'s worker receives at this
+    /// descriptor's type, in worker parameter order.
+    eq_nested_dicts: BoxySpan = .{},
+    /// The type declares `is_eq`, but checking rejected that declaration:
+    /// descriptor-guided equality reaching this type crashes as code checking
+    /// rejected, exactly as a specialized comparison of it does.
+    eq_rejected: bool = false,
+    /// The type's own `to_hash`, which descriptor-guided hashing calls in
+    /// place of hashing the value's structure.
+    hash_method: ?BoxyMethodSlotId = null,
+    /// The hidden descriptors `hash_method`'s worker receives, in worker
+    /// parameter order, like `inspect_hidden_descs`.
+    hash_hidden_descs: BoxySpan = .{},
+    /// Two descriptors: this value in the storage of `hash_method`'s worker
+    /// value parameter, and the Hasher.
+    hash_arg_descs: BoxySpan = .{},
+    /// The static dictionaries `hash_method`'s worker receives at this
+    /// descriptor's type, in worker parameter order.
+    hash_nested_dicts: BoxySpan = .{},
+    /// The type declares `to_hash`, but checking rejected that declaration,
+    /// like `eq_rejected`.
+    hash_rejected: bool = false,
+    /// The described value is builtin Bool, which derived hashing writes as a
+    /// Bool rather than as a tag.
+    is_bool: bool = false,
     debug_checked_type: ?checked.CheckedTypeId = null,
     /// Set for static descriptors once lowering has produced every descriptor;
     /// a descriptor built at runtime reads runtime context.
@@ -612,7 +643,7 @@ pub const CachedLiteralRecipe = struct {
 
     pub fn valid(self: CachedLiteralRecipe) bool {
         if (!self.callable.valid() or !self.result.valid()) return false;
-        if (self.callable.types[@intFromEnum(self.callable.root)] != .func) return false;
+        if (self.callable.types[@backingInt(self.callable.root)] != .func) return false;
         if (!validEvidence(self.evidence, self.evidence_frames, self.evidence_frame_head)) return false;
         for (self.local_contexts) |context| {
             if (!validEvidence(context.evidence, context.evidence_frames, context.evidence_frame_head)) return false;
@@ -772,7 +803,7 @@ pub fn rootMaterializationIdentity(module: [32]u8, producer: @FieldType(RootMate
     if (producer == .literal) {
         const literal = producer.literal;
         hasher.update(&literal.conversion_identity);
-        hasher.update(&.{@intFromEnum(literal.kind)});
+        hasher.update(&.{@backingInt(literal.kind)});
     }
     hasher.update("owned-roc-value");
     hasher.update(&representation_digest);
@@ -781,21 +812,21 @@ pub fn rootMaterializationIdentity(module: [32]u8, producer: @FieldType(RootMate
 }
 
 test "literal materialization identity retains conversion and representation authority" {
-    const module = [_]u8{1} ** 32;
-    const representation = [_]u8{2} ** 32;
-    const layout_digest = [_]u8{3} ** 32;
+    const module = @as([32]u8, @splat(1));
+    const representation = @as([32]u8, @splat(2));
+    const layout_digest = @as([32]u8, @splat(3));
     var producer: @FieldType(RootMaterialization, "producer") = .{ .literal = .{
         .checked_expr = 17,
         .kind = .numeral,
-        .conversion_identity = [_]u8{4} ** 32,
+        .conversion_identity = @as([32]u8, @splat(4)),
     } };
     const original = rootMaterializationIdentity(module, producer, representation, layout_digest);
     try std.testing.expectEqual(original, rootMaterializationIdentity(module, producer, representation, layout_digest));
     producer.literal.conversion_identity[0] = 5;
     try std.testing.expect(!std.mem.eql(u8, &original.bytes, &rootMaterializationIdentity(module, producer, representation, layout_digest).bytes));
     producer.literal.conversion_identity[0] = 4;
-    try std.testing.expect(!std.mem.eql(u8, &original.bytes, &rootMaterializationIdentity(module, producer, [_]u8{6} ** 32, layout_digest).bytes));
-    try std.testing.expect(!std.mem.eql(u8, &original.bytes, &rootMaterializationIdentity(module, producer, representation, [_]u8{7} ** 32).bytes));
+    try std.testing.expect(!std.mem.eql(u8, &original.bytes, &rootMaterializationIdentity(module, producer, @as([32]u8, @splat(6)), layout_digest).bytes));
+    try std.testing.expect(!std.mem.eql(u8, &original.bytes, &rootMaterializationIdentity(module, producer, representation, @as([32]u8, @splat(7))).bytes));
 }
 
 /// Semantic pointer header supplied by the current materialization consumer.
@@ -900,7 +931,7 @@ pub const content_data_symbol_prefix = "roc__h";
 /// Symbol of the value in static-data slot `id`: `roc__d{id}`. The naming
 /// scheme is in design.md, "Object Symbol Names".
 pub fn staticDataSymbolName(allocator: Allocator, id: LIR.StaticDataId) Allocator.Error![]u8 {
-    return try std.fmt.allocPrint(allocator, "roc__d{d}", .{@intFromEnum(id)});
+    return try std.fmt.allocPrint(allocator, "roc__d{d}", .{@backingInt(id)});
 }
 
 /// Symbol of the `index`th further node (from 1) of the value owner `owner`
@@ -943,6 +974,11 @@ pub const Result = struct {
     const_type_names: names.NameStore,
     fn_sets: std.ArrayList(FnSet),
     erased_fns: std.ArrayList(ErasedFns),
+    /// Bytes every erased callable value of this program reserves at the
+    /// start of its capture: the dev shim's hot-reload header when the
+    /// program runs under hot reload, and none otherwise. Workers read their
+    /// captures after it, so a value frozen into static data reserves it too.
+    erased_capture_prefix: u32 = 0,
     boxy_type_descs: std.ArrayList(BoxyTypeDesc),
     boxy_dicts: std.ArrayList(BoxyDict),
     /// Selected implementation behind each Boxy dictionary boundary adapter.
@@ -1075,9 +1111,9 @@ pub const Result = struct {
     }
 
     pub fn staticDataSymbolName(self: *const Result, allocator: Allocator, id: LIR.StaticDataId) Allocator.Error![]u8 {
-        const value = self.static_data_values.items[@intFromEnum(id)];
+        const value = self.static_data_values.items[@backingInt(id)];
         if (value.symbol_identity) |identity| return std.fmt.allocPrint(allocator, "roc__sv{x}", .{&identity});
-        return std.fmt.allocPrint(allocator, "roc__d{d}", .{@intFromEnum(id)});
+        return std.fmt.allocPrint(allocator, "roc__d{d}", .{@backingInt(id)});
     }
 
     pub fn requestedLayoutForType(self: *const Result, ty: names.TypeDigest) ?layout.Idx {
@@ -1098,7 +1134,7 @@ pub const Result = struct {
     ) Allocator.Error!LIR.ComptimeSiteId {
         const owned_branch_regions = try self.store.allocator.dupe(base.Region, branch_regions);
         errdefer self.store.allocator.free(owned_branch_regions);
-        const id: LIR.ComptimeSiteId = @enumFromInt(@as(u32, @intCast(self.comptime_sites.items.len)));
+        const id: LIR.ComptimeSiteId = @fromBackingInt(@intCast(@as(u32, @intCast(self.comptime_sites.items.len))));
         try self.comptime_sites.append(self.store.allocator, .{
             .kind = kind,
             .owner = owner,
@@ -1119,9 +1155,9 @@ pub const Result = struct {
 
     /// The checked module a `LIR.LoweringModuleId` names.
     pub fn loweringModuleKey(self: *const Result, id: LIR.LoweringModuleId) checked.ModuleId {
-        const raw = @intFromEnum(id);
+        const raw = @backingInt(id);
         if (raw >= self.lowering_modules.items.len) {
-            @panic("LIR program invariant violated: lowering module id has no published checked module");
+            base.invariant("{s}", .{"LIR program invariant violated: lowering module id has no published checked module"});
         }
         return self.lowering_modules.items[raw];
     }
@@ -1130,7 +1166,7 @@ pub const Result = struct {
     /// part of its lowering input.
     pub fn loweringModuleId(self: *const Result, key: checked.ModuleId) ?LIR.LoweringModuleId {
         for (self.lowering_modules.items, 0..) |candidate, index| {
-            if (std.mem.eql(u8, &candidate.bytes, &key.bytes)) return @enumFromInt(@as(u32, @intCast(index)));
+            if (std.mem.eql(u8, &candidate.bytes, &key.bytes)) return @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         }
         return null;
     }
@@ -1141,7 +1177,7 @@ pub const Result = struct {
         const entry = try self.expect_site_ids.getOrPut(self.store.allocator, key);
         if (entry.found_existing) return entry.value_ptr.*;
         errdefer _ = self.expect_site_ids.remove(key);
-        const id: LIR.ExpectSiteId = @enumFromInt(@as(u32, @intCast(self.expect_sites.items.len)));
+        const id: LIR.ExpectSiteId = @fromBackingInt(@intCast(@as(u32, @intCast(self.expect_sites.items.len))));
         try self.expect_sites.append(self.store.allocator, .{ .loc = loc, .region = region });
         entry.value_ptr.* = id;
         return id;
@@ -1166,7 +1202,7 @@ pub const Result = struct {
         for (descs) |desc| {
             var refs = self.boxyDescRefIterator(desc);
             while (refs.next()) |ref| switch (ref) {
-                .static => |child| edge_starts[@intFromEnum(child) + 1] += 1,
+                .static => |child| edge_starts[@backingInt(child) + 1] += 1,
                 .local, .runtime, .dict_method_arg, .dict_method_hidden => {},
             };
         }
@@ -1183,10 +1219,10 @@ pub const Result = struct {
             var refs = self.boxyDescRefIterator(desc.*);
             while (refs.next()) |ref| switch (ref) {
                 .static => |child| {
-                    parents[fill[@intFromEnum(child)]] = @intCast(desc_index);
-                    fill[@intFromEnum(child)] += 1;
+                    parents[fill[@backingInt(child)]] = @intCast(desc_index);
+                    fill[@backingInt(child)] += 1;
                 },
-                .local => class = @enumFromInt(@max(@intFromEnum(class), @intFromEnum(BoxyDescClosure.captures))),
+                .local => class = @fromBackingInt(@intCast(@max(@backingInt(class), @backingInt(BoxyDescClosure.captures)))),
                 .runtime, .dict_method_arg, .dict_method_hidden => class = .context,
             };
             desc.closure = class;
@@ -1196,7 +1232,7 @@ pub const Result = struct {
         while (worklist.pop()) |child| {
             const class = descs[child].closure;
             for (parents[edge_starts[child]..edge_starts[child + 1]]) |parent| {
-                if (@intFromEnum(descs[parent].closure) >= @intFromEnum(class)) continue;
+                if (@backingInt(descs[parent].closure) >= @backingInt(class)) continue;
                 descs[parent].closure = class;
                 try worklist.append(allocator, parent);
             }
@@ -1245,6 +1281,10 @@ pub const Result = struct {
                             }
                         }
                     },
+                    7 => if (spanRef(r.boxy_desc_refs.items, self.desc.eq_hidden_descs, &self.index)) |ref| return ref,
+                    8 => if (spanRef(r.boxy_desc_refs.items, self.desc.eq_arg_descs, &self.index)) |ref| return ref,
+                    9 => if (spanRef(r.boxy_desc_refs.items, self.desc.hash_hidden_descs, &self.index)) |ref| return ref,
+                    10 => if (spanRef(r.boxy_desc_refs.items, self.desc.hash_arg_descs, &self.index)) |ref| return ref,
                     else => return null,
                 }
                 self.section += 1;
@@ -1341,7 +1381,7 @@ test "lowering module table resolves checked module provenance both ways" {
     try result.setLoweringModules(&keys);
 
     for (keys, 0..) |key, index| {
-        const id: LIR.LoweringModuleId = @enumFromInt(@as(u32, @intCast(index)));
+        const id: LIR.LoweringModuleId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         try std.testing.expectEqualSlices(u8, &key.bytes, &result.loweringModuleKey(id).bytes);
         try std.testing.expectEqual(id, result.loweringModuleId(key).?);
     }
@@ -1351,11 +1391,11 @@ test "lowering module table resolves checked module provenance both ways" {
     try std.testing.expectEqual(@as(?LIR.LoweringModuleId, null), result.loweringModuleId(absent));
 
     // A site keeps the owner its producer recorded, not the procedure's owner.
-    const owner: LIR.LoweringModuleId = @enumFromInt(2);
-    const site = try result.addComptimeSite(.destructure, owner, base.Region.zero(), @enumFromInt(41), .first, &.{});
-    const stored = result.comptime_sites.items[@intFromEnum(site)];
+    const owner: LIR.LoweringModuleId = @fromBackingInt(@intCast(2));
+    const site = try result.addComptimeSite(.destructure, owner, base.Region.zero(), @fromBackingInt(@intCast(41)), .first, &.{});
+    const stored = result.comptime_sites.items[@backingInt(site)];
     try std.testing.expectEqual(owner, stored.owner);
-    try std.testing.expectEqual(@as(?LIR.CheckedExhaustivenessSiteId, @enumFromInt(41)), stored.checked_site);
+    try std.testing.expectEqual(@as(?LIR.CheckedExhaustivenessSiteId, @fromBackingInt(@intCast(41))), stored.checked_site);
     try std.testing.expectEqualSlices(u8, &keys[2].bytes, &result.loweringModuleKey(stored.owner).bytes);
 }
 
@@ -1376,13 +1416,13 @@ test "boxy side tables initialize empty and use flat pools" {
     try std.testing.expectEqual(@as(usize, 0), result.boxy_method_hidden_desc_sources.items.len);
 
     const desc_refs_start = result.boxy_desc_refs.items.len;
-    try result.boxy_desc_refs.append(allocator, .{ .static = @enumFromInt(fixtureTableIndex(0)) });
+    try result.boxy_desc_refs.append(allocator, .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) });
     const desc_refs = BoxySpan{ .start = @intCast(desc_refs_start), .len = 1 };
 
     const copy_plan_start = result.boxy_payload_steps.items.len;
     try result.boxy_payload_steps.append(allocator, .{ .dynamic = .{
         .op = .copy,
-        .desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
+        .desc = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     } });
     const copy_plan = BoxySpan{ .start = @intCast(copy_plan_start), .len = 1 };
 
@@ -1407,11 +1447,11 @@ test "boxy side tables initialize empty and use flat pools" {
     const arg_layouts = BoxySpan{ .start = @intCast(arg_layouts_start), .len = 1 };
 
     const arg_descs_start = result.boxy_desc_refs.items.len;
-    try result.boxy_desc_refs.append(allocator, .{ .static = @enumFromInt(fixtureTableIndex(0)) });
+    try result.boxy_desc_refs.append(allocator, .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) });
     const arg_descs = BoxySpan{ .start = @intCast(arg_descs_start), .len = 1 };
 
     const nested_dicts_start = result.boxy_dict_refs.items.len;
-    try result.boxy_dict_refs.append(allocator, .{ .static = @enumFromInt(fixtureTableIndex(0)) });
+    try result.boxy_dict_refs.append(allocator, .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) });
     const nested_dicts = BoxySpan{ .start = @intCast(nested_dicts_start), .len = 1 };
 
     const hidden_desc_sources_start = result.boxy_method_hidden_desc_sources.items.len;
@@ -1420,8 +1460,8 @@ test "boxy side tables initialize empty and use flat pools" {
 
     const method_slots_start = result.boxy_method_slots.items.len;
     try result.boxy_method_slots.append(allocator, .{
-        .method = @enumFromInt(fixtureTableIndex(0)),
-        .proc = @enumFromInt(fixtureTableIndex(0)),
+        .method = @fromBackingInt(@intCast(fixtureTableIndex(0))),
+        .proc = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .adapter = .{
             .arg_layouts = arg_layouts,
             .arg_descs = arg_descs,
@@ -1431,7 +1471,7 @@ test "boxy side tables initialize empty and use flat pools" {
     });
     const method_slots = BoxySpan{ .start = @intCast(method_slots_start), .len = 1 };
 
-    try result.boxy_desc_refs.append(allocator, .{ .static = @enumFromInt(fixtureTableIndex(0)) });
+    try result.boxy_desc_refs.append(allocator, .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) });
 
     try result.boxy_dicts.append(allocator, .{
         .method_slots = method_slots,
@@ -1441,8 +1481,8 @@ test "boxy side tables initialize empty and use flat pools" {
     try result.boxy_adapt_steps.append(allocator, .{ .dynamic_payload = .{
         .source_offset = 0,
         .target_offset = 8,
-        .source_desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
-        .target_desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
+        .source_desc = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
+        .target_desc = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
         .mode = .copy,
     } });
     const adapt_steps = BoxySpan{ .start = @intCast(adapt_steps_start), .len = 1 };

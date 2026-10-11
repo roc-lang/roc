@@ -83,14 +83,17 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "bad_function"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-lambda
+			(args
+				(p-assign (ident "msg")))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
 				(ty-record))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-call (constraint-fn-var 252)
+		(e-call (constraint-fn-var 253)
 			(e-lookup-local
 				(p-assign (ident "bad_function")))
 			(e-string

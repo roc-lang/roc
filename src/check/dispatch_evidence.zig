@@ -528,7 +528,7 @@ fn walkRowContinuation(
 }
 
 fn step(kind: PathStep.Kind, data: u32) PathStep {
-    return .{ .kind = @intFromEnum(kind), .data = data };
+    return .{ .kind = @backingInt(kind), .data = data };
 }
 
 fn child(var_: Var, path_step: PathStep) Scratch.Child {

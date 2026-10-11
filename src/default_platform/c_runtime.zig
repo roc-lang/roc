@@ -11,6 +11,10 @@ const RocStr = @import("roc_str_view").RocStr;
 const RocList = @import("roc_str_view").RocList;
 const roc_args = @import("roc_args");
 const shim_symbols = @import("shim_symbols");
+const runtime_shared = @import("runtime_shared.zig");
+const SourceFrame = runtime_shared.SourceFrame;
+const normalizedAlignment = runtime_shared.normalizedAlignment;
+const alignForward = runtime_shared.alignForward;
 
 const c = switch (builtin.os.tag) {
     .windows => struct {
@@ -18,6 +22,11 @@ const c = switch (builtin.os.tag) {
         extern fn free(ptr: ?*anyopaque) void;
         extern fn exit(code: i32) noreturn;
         extern fn _write(fd: i32, buf: [*]const u8, len: u32) i32;
+        extern fn _setmode(fd: i32, mode: i32) i32;
+
+        /// `_setmode` flag that writes bytes as given, with no `\n` to
+        /// `\r\n` translation.
+        const O_BINARY: i32 = 0x8000;
 
         fn write(fd: i32, buf: [*]const u8, len: usize) isize {
             const chunk_len: u32 = @intCast(@min(len, 0x7fff_ffff));
@@ -50,6 +59,12 @@ const c = switch (builtin.os.tag) {
     .watchos,
     .uefi,
     .@"3ds",
+    .wiiu,
+    .@"switch",
+    .gba,
+    .psx,
+    .tios,
+    .ashetos,
     .ps3,
     .ps4,
     .ps5,
@@ -76,15 +91,6 @@ const c = switch (builtin.os.tag) {
 const AllocationHeader = extern struct {
     raw: [*]u8,
     len: usize,
-};
-
-const SourceFrame = extern struct {
-    name_ptr: [*]const u8,
-    name_len: usize,
-    file_ptr: [*]const u8,
-    file_len: usize,
-    line: u32,
-    column: u32,
 };
 
 const windows = if (builtin.os.tag == .windows) struct {
@@ -147,7 +153,15 @@ fn windowsArgs() ?RocList {
     return roc_args.fromWindowsArgv(@intCast(@max(argc, 0)), argv, &rocAlloc);
 }
 
-fn runtimeInit() callconv(.c) void {}
+/// The CRT opens stdout and stderr in text mode, which turns every `\n` a
+/// program writes into `\r\n`. A Roc program's output is exactly the bytes it
+/// writes, so both are switched to binary mode before any Roc code runs.
+fn runtimeInit() callconv(.c) void {
+    if (comptime builtin.os.tag == .windows) {
+        _ = c._setmode(1, c.O_BINARY);
+        _ = c._setmode(2, c.O_BINARY);
+    }
+}
 
 fn defaultExit(code: u8) callconv(.c) noreturn {
     if (code == 0 and inline_expect_failed) c.exit(1);
@@ -230,14 +244,6 @@ fn rocDealloc(ptr: *anyopaque, _: usize) callconv(.c) void {
 
 fn allocationHeader(user: [*]u8) *AllocationHeader {
     return @ptrCast(@alignCast(user - @sizeOf(AllocationHeader)));
-}
-
-fn normalizedAlignment(alignment: usize) usize {
-    return @max(alignment, @alignOf(usize));
-}
-
-fn alignForward(value: usize, alignment: usize) usize {
-    return (value + alignment - 1) & ~(alignment - 1);
 }
 
 fn writeAll(fd: i32, bytes: []const u8) void {

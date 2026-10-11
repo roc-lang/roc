@@ -36,11 +36,11 @@ const Adapter = struct {
             .builtin => .builtin,
             .local => |local| declarationReference(.{ .owner = owner, .statement = local.decl_idx }),
             .external => |external| blk: {
-                const import_name = owner.common.getString(owner.imports.imports.items.items[@intFromEnum(external.module_idx)]);
+                const import_name = owner.common.getString(owner.imports.imports.items.items[@backingInt(external.module_idx)]);
                 if (CIR.Import.isCompilerBuiltinImportName(import_name)) {
                     break :blk declarationReference(.{
                         .owner = self.resolver.builtin_owner orelse unreachable,
-                        .statement = @enumFromInt(external.target_node_idx),
+                        .statement = @fromBackingInt(@intCast(external.target_node_idx)),
                     });
                 }
                 const identity = owner.importIdentity(external.module_idx) orelse {
@@ -51,12 +51,12 @@ const Adapter = struct {
                 };
                 break :blk declarationReference(.{
                     .owner = self.resolver.resolve(self.resolver.context, owner, identity),
-                    .statement = @enumFromInt(external.target_node_idx),
+                    .statement = @fromBackingInt(@intCast(external.target_node_idx)),
                 });
             },
             .external_identity => |external| declarationReference(.{
                 .owner = self.resolver.resolve(self.resolver.context, owner, external.module_identity),
-                .statement = @enumFromInt(external.target_node_idx),
+                .statement = @fromBackingInt(@intCast(external.target_node_idx)),
             }),
             .pending => .invalid,
         };

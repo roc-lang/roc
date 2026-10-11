@@ -43,14 +43,14 @@ pub fn rebuild(allocator: Allocator, result: *Program.Result, frozen: *const Pro
         if (root.role != .value) continue;
         const construction = values.constructionFor(root.module, root.root, entry.layout_idx) orelse continue;
         if (!scalar_values.requiresOwnedCapacity(construction)) continue;
-        try rebuildConstruction(allocator, result, @enumFromInt(index), accessor, construction);
+        try rebuildConstruction(allocator, result, @fromBackingInt(@intCast(index)), accessor, construction);
     }
 }
 
 /// Successful publication reconstructs only its declared materializer before
 /// dependent ordinary code executes. It never revisits the whole slot table.
 pub fn rebuildPublishedSlot(allocator: Allocator, result: *Program.Result, slot: LIR.StaticDataId, exports: []Program.StaticDataExport) Allocator.Error!void {
-    const entry = result.static_data_values.items[@intFromEnum(slot)];
+    const entry = result.static_data_values.items[@backingInt(slot)];
     if (entry.accessor_rebuilt) return;
     const accessor = entry.accessor orelse return;
     if (result.store.getProcSpec(accessor).root_materialization == null)
@@ -65,7 +65,7 @@ pub fn rebuildPublishedSlot(allocator: Allocator, result: *Program.Result, slot:
 /// A completed checked value uses the producer's indexed export and graph,
 /// rather than searching unrelated slots or rebuilding its initializer.
 pub fn rebuildExportedSlot(allocator: Allocator, result: *Program.Result, slot: LIR.StaticDataId, exported: Program.StaticDataExport, frozen: *const Program.FrozenStaticData) Allocator.Error!void {
-    const entry = result.static_data_values.items[@intFromEnum(slot)];
+    const entry = result.static_data_values.items[@backingInt(slot)];
     if (entry.accessor_rebuilt) return;
     const accessor = entry.accessor orelse return;
     if (result.store.getProcSpec(accessor).root_materialization == null)
@@ -79,7 +79,7 @@ pub fn rebuildExportedSlot(allocator: Allocator, result: *Program.Result, slot: 
 
 fn rebuildConstruction(allocator: Allocator, result: *Program.Result, slot: LIR.StaticDataId, accessor: LIR.LirProcSpecId, construction: scalar_values.Construction) Allocator.Error!void {
     const store = &result.store;
-    const entry = &result.static_data_values.items[@intFromEnum(slot)];
+    const entry = &result.static_data_values.items[@backingInt(slot)];
     var new_locals: std.ArrayList(LIR.LocalId) = .empty;
     defer new_locals.deinit(allocator);
     const context = EmitContext{ .store = store, .new_locals = &new_locals };
@@ -125,28 +125,28 @@ fn testRebuild(allocator: Allocator) (Allocator.Error || error{ TestExpectedEqua
     const failed_offset = program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0);
     const message_offset = program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1);
     const list_layout = try program.layouts.insertList(.u32);
-    const scalar_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    const scalar_plan: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
     try program.const_plans.append(allocator, .scalar);
-    const list_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    const list_plan: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
     try program.const_plans.append(allocator, .{ .list = scalar_plan });
-    const failure_slot: LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
+    const failure_slot: LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
     try program.static_data_values.append(allocator, .{
         .initializer = null,
         .layout_idx = failure_layout,
         .compile_time_root = .{
             .module = .{},
-            .root = .{ .checked = @enumFromInt(1) },
+            .root = .{ .checked = @fromBackingInt(@intCast(1)) },
             .const_locator = null,
             .role = .{ .failure_message = .{ .failed_field = 0, .message_field = 1, .failed_offset = failed_offset, .message_offset = message_offset } },
         },
     });
-    const value_slot: LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
+    const value_slot: LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
     try program.static_data_values.append(allocator, .{
         .initializer = null,
         .layout_idx = list_layout,
         .compile_time_root = .{
             .module = .{},
-            .root = .{ .checked = @enumFromInt(1) },
+            .root = .{ .checked = @fromBackingInt(@intCast(1)) },
             .const_locator = null,
             .role = .{ .value = .{ .failure_slot = failure_slot, .plan = list_plan } },
         },
@@ -163,11 +163,11 @@ fn testRebuild(allocator: Allocator) (Allocator.Error || error{ TestExpectedEqua
         .body = body,
         .ret_layout = list_layout,
     }, .none);
-    program.static_data_values.items[@intFromEnum(value_slot)].accessor = accessor;
+    program.static_data_values.items[@backingInt(value_slot)].accessor = accessor;
     try @import("comptime_value_guards.zig").insert(allocator, &program, null);
-    var failure_record = [_]u8{0} ** 32;
+    var failure_record = @as([32]u8, @splat(0));
     failure_record[failed_offset] = 1;
-    const descriptor = [_]u8{0} ** 24;
+    const descriptor = @as([24]u8, @splat(0));
     var exports = [_]Program.StaticDataExport{
         .{ .symbol_name = "failure", .value_id = failure_slot, .bytes = &failure_record, .alignment = 8 },
         .{ .symbol_name = "value", .value_id = value_slot, .bytes = &descriptor, .alignment = 8, .empty_list_capacities = &.{.{ .offset = 0, .capacity = 16 }} },

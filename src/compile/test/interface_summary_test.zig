@@ -139,8 +139,8 @@ test "interface summaries stay verified for mutually recursive methods of an imp
     defer tmp_dir.cleanup();
     try tmp_dir.dir.writeFile(io, .{ .sub_path = "Index.roc", .data =
         \\Index(a) :: [Empty, Branch(List(Box(Index(a)))), Value(U64, a)].{
-        \\    empty : Index(a)
-        \\    empty = Empty
+        \\    empty : {} -> Index(a)
+        \\    empty = |{}| Empty
         \\    get : Index(a), U64 -> Try(a, [Missing])
         \\    get = |index, key| match index {
         \\        Empty => Err(Missing)
@@ -184,7 +184,7 @@ test "interface summaries stay verified for mutually recursive methods of an imp
         \\main! = |args| {
         \\    key = List.len(args)
         \\    counts : Index(Route({ count : U64 }))
-        \\    counts = register!([{ id: key, fire: |model| Update({ count: model.count + 1.U64 }) }, { id: key + 16, fire: |_| Done }], Index.empty)
+        \\    counts = register!([{ id: key, fire: |model| Update({ count: model.count + 1.U64 }) }, { id: key + 16, fire: |_| Done }], Index.empty({}))
         \\    if Index.get(counts, key).is_ok() Ok({}) else Err(Exit(1))
         \\}
     });
@@ -207,4 +207,50 @@ test "interface summaries stay verified for mutually recursive methods of an imp
     try harness.expectAppPathLowersToLirWithOptions(app_path, .{ .monotype_only = true, .monotype_diagnostics_out = &diagnostics });
     try std.testing.expect(diagnostics.specialization.interface_parametric_requests >= 2);
     try std.testing.expectEqual(std.debug.runtime_safety, diagnostics.specialization.interface_summary_verifications > 0);
+}
+
+// `run`'s `Ok` payload is a checked variable nothing constrains, whose
+// recorded default is the empty tag union. Every call after the first relates
+// `outer`'s and `middle`'s interfaces from completed summaries, so a replay
+// that closed the request's open leaf to that default early would change what
+// dispatch evidence, reachability, and specialization identity read.
+const open_leaf_forwarding =
+    \\outer = |hooks| {
+    \\    _ = hooks.get
+    \\    middle(hooks)
+    \\}
+    \\middle = |hooks| {
+    \\    get = hooks.get
+    \\    _ = get("name")
+    \\    run = hooks.run
+    \\    output = run()?
+    \\    parse(output.trim())
+    \\}
+    \\parse : Str -> Try(I32, _)
+    \\parse = |_s| Ok(1)
+    \\
+;
+
+test "interface summary replay of an open request leaf lowers like a fresh expansion within one body" {
+    try harness.expectInterfaceSummaryReplayFaithfulLir(open_leaf_forwarding ++
+        \\main! = |_args| {
+        \\    hooks = { run: || Err(CommandNotFound), get: |_name| "x" }
+        \\    _ = outer(hooks)
+        \\    _ = outer(hooks)
+        \\    Ok({})
+        \\}
+    );
+}
+
+test "interface summary replay of an open request leaf lowers like a fresh expansion across bodies" {
+    try harness.expectInterfaceSummaryReplayFaithfulLir(open_leaf_forwarding ++
+        \\first = |hooks| outer(hooks)
+        \\second = |hooks| outer(hooks)
+        \\main! = |_args| {
+        \\    hooks = { run: || Err(CommandNotFound), get: |_name| "x" }
+        \\    _ = first(hooks)
+        \\    _ = second(hooks)
+        \\    Ok({})
+        \\}
+    );
 }

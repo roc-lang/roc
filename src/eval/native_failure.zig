@@ -35,7 +35,7 @@ pub const Site = struct {
 };
 
 pub fn site(result: *const lir.Program.Result, id: lir.LIR.ComptimeSiteId) Site {
-    const original = result.comptime_sites.items[@intFromEnum(id)];
+    const original = result.comptime_sites.items[@backingInt(id)];
     return .{
         .owner = original.owner,
         .checked_site = original.checked_site,
@@ -48,7 +48,7 @@ pub fn site(result: *const lir.Program.Result, id: lir.LIR.ComptimeSiteId) Site 
 
 pub fn captureSites(allocator: std.mem.Allocator, result: *const lir.Program.Result) std.mem.Allocator.Error![]Site {
     const sites = try allocator.alloc(Site, result.comptime_sites.items.len);
-    for (sites, 0..) |*entry, index| entry.* = site(result, @enumFromInt(index));
+    for (sites, 0..) |*entry, index| entry.* = site(result, @fromBackingInt(@intCast(index)));
     return sites;
 }
 
@@ -86,7 +86,7 @@ pub const Registry = struct {
 
     pub fn get(self: *const Registry, id: u32) Observation {
         if (id >= self.prefix) return self.bound.items[id - self.prefix];
-        return self.sourceStatement(@enumFromInt(id));
+        return self.sourceStatement(@fromBackingInt(@intCast(id)));
     }
 
     /// Producer statement IDs and consumer failure rows are distinct domains.
@@ -98,7 +98,7 @@ pub const Registry = struct {
             .literal_rejection = if (data == .crash) data.crash.literal_rejection else null,
         };
         if (self.guards.get(statement)) |slot| {
-            const root = self.result.static_data_values.items[@intFromEnum(slot)].compile_time_root orelse unreachable;
+            const root = self.result.static_data_values.items[@backingInt(slot)].compile_time_root orelse unreachable;
             observation.guard_producer = .{ .module = root.module, .root = root.root };
             observation.origin_statement = statement;
         }

@@ -31,13 +31,7 @@ pub fn generateObjectFile(
 }
 
 /// DWARF debug sections to include in the object file.
-pub const DebugSections = struct {
-    line: []const u8,
-    abbrev: []const u8,
-    info: []const u8,
-    line_relocs: []const object.DebugReloc,
-    info_relocs: []const object.DebugReloc,
-};
+pub const DebugSections = object.DebugSections;
 
 /// Like `generateObjectFile`, with DWARF debug sections. COFF objects carry
 /// them as `.debug_*` sections the way MinGW toolchains do; lld-link keeps
@@ -58,7 +52,7 @@ pub fn generateObjectFileWithDebug(
     defer table.deinit(allocator);
     for (symbols, 0..) |symbol, ordinal| {
         const id = try table.internEmitted(allocator, symbol.name);
-        std.debug.assert(@intFromEnum(id) == ordinal);
+        std.debug.assert(@backingInt(id) == ordinal);
     }
     var indexed = try std.ArrayList(IndexedRelocation).initCapacity(allocator, relocations.len);
     defer indexed.deinit(allocator);
@@ -122,7 +116,7 @@ pub fn generateIndexedObjectFileWithDebug(
             elf.setCode(code);
             elf.setRodata(rodata);
             elf.setZeroFill(zero_fill_size);
-            if (debug) |d| elf.setDebugSections(d.line, d.abbrev, d.info, d.line_relocs, d.info_relocs);
+            if (debug) |d| elf.debug = d;
 
             // Add symbols
             for ([_]bool{ false, true }) |global| {
@@ -143,12 +137,12 @@ pub fn generateIndexedObjectFileWithDebug(
             }
             for (relocations) |rel| {
                 switch (rel) {
-                    .linked_function => |f| try elf.addTextRelocation(rel.getOffset(), target_indices[@intFromEnum(f.symbol)], if (cpu_arch == .x86_64) -4 else 0),
-                    .linked_data => |d| try elf.addTextDataRelocation(rel.getOffset(), target_indices[@intFromEnum(d.symbol)], d.kind),
+                    .linked_function => |f| try elf.addTextRelocation(rel.getOffset(), target_indices[@backingInt(f.symbol)], if (cpu_arch == .x86_64) -4 else 0),
+                    .linked_data => |d| try elf.addTextDataRelocation(rel.getOffset(), target_indices[@backingInt(d.symbol)], d.kind),
                     .local_data, .jmp_to_return, .retired => {},
                 }
             }
-            for (rodata_relocations) |rel| try elf.addRodataRelocation(rel.offset, target_indices[@intFromEnum(rel.symbol)], rel.addend);
+            for (rodata_relocations) |rel| try elf.addRodataRelocation(rel.offset, target_indices[@backingInt(rel.symbol)], rel.addend);
 
             try elf.write(output);
         },
@@ -165,21 +159,21 @@ pub fn generateIndexedObjectFileWithDebug(
             macho.setCode(code);
             macho.setRodata(rodata);
             macho.setZeroFill(zero_fill_size);
-            if (debug) |d| macho.setDebugSections(d.line, d.abbrev, d.info, d.line_relocs, d.info_relocs);
+            if (debug) |d| macho.debug = d;
 
             const referenced = try allocator.alloc(bool, symbols.len);
             defer allocator.free(referenced);
             @memset(referenced, false);
             for (relocations) |rel| switch (rel) {
                 .linked_function => |f| {
-                    referenced[@intFromEnum(f.symbol)] = true;
+                    referenced[@backingInt(f.symbol)] = true;
                 },
                 .linked_data => |d| {
-                    referenced[@intFromEnum(d.symbol)] = true;
+                    referenced[@backingInt(d.symbol)] = true;
                 },
                 .local_data, .jmp_to_return, .retired => {},
             };
-            for (rodata_relocations) |rel| referenced[@intFromEnum(rel.symbol)] = true;
+            for (rodata_relocations) |rel| referenced[@backingInt(rel.symbol)] = true;
 
             // Add symbols (underscore prefix for C ABI is added in MachOWriter.write())
             for (symbols, 0..) |sym, ordinal| {
@@ -195,12 +189,12 @@ pub fn generateIndexedObjectFileWithDebug(
             }
             for (relocations) |rel| {
                 switch (rel) {
-                    .linked_function => |f| try macho.addTextRelocation(@intCast(rel.getOffset()), target_indices[@intFromEnum(f.symbol)], true),
-                    .linked_data => |d| try macho.addTextDataRelocation(@intCast(rel.getOffset()), target_indices[@intFromEnum(d.symbol)], true, d.kind),
+                    .linked_function => |f| try macho.addTextRelocation(@intCast(rel.getOffset()), target_indices[@backingInt(f.symbol)], true),
+                    .linked_data => |d| try macho.addTextDataRelocation(@intCast(rel.getOffset()), target_indices[@backingInt(d.symbol)], true, d.kind),
                     .local_data, .jmp_to_return, .retired => {},
                 }
             }
-            for (rodata_relocations) |rel| try macho.addRodataRelocation(@intCast(rel.offset), target_indices[@intFromEnum(rel.symbol)], true, rel.addend);
+            for (rodata_relocations) |rel| try macho.addRodataRelocation(@intCast(rel.offset), target_indices[@backingInt(rel.symbol)], true, rel.addend);
 
             try macho.write(output);
         },
@@ -217,7 +211,7 @@ pub fn generateIndexedObjectFileWithDebug(
             coff_writer.setCode(code);
             coff_writer.setRodata(rodata);
             coff_writer.setZeroFill(zero_fill_size);
-            if (debug) |d| coff_writer.setDebugSections(d.line, d.abbrev, d.info, d.line_relocs, d.info_relocs);
+            if (debug) |d| coff_writer.debug = d;
 
             // Ranges the published symbols already describe, so recorded
             // ranges below are not emitted twice.
@@ -270,12 +264,12 @@ pub fn generateIndexedObjectFileWithDebug(
             }
             for (relocations) |rel| {
                 switch (rel) {
-                    .linked_function => |f| try coff_writer.addTextRelocation(@intCast(rel.getOffset()), target_indices[@intFromEnum(f.symbol)]),
-                    .linked_data => |d| try coff_writer.addTextDataRelocation(@intCast(rel.getOffset()), target_indices[@intFromEnum(d.symbol)], d.kind),
+                    .linked_function => |f| try coff_writer.addTextRelocation(@intCast(rel.getOffset()), target_indices[@backingInt(f.symbol)]),
+                    .linked_data => |d| try coff_writer.addTextDataRelocation(@intCast(rel.getOffset()), target_indices[@backingInt(d.symbol)], d.kind),
                     .local_data, .jmp_to_return, .retired => {},
                 }
             }
-            for (rodata_relocations) |rel| try coff_writer.addRdataRelocation(@intCast(rel.offset), target_indices[@intFromEnum(rel.symbol)], rel.addend);
+            for (rodata_relocations) |rel| try coff_writer.addRdataRelocation(@intCast(rel.offset), target_indices[@backingInt(rel.symbol)], rel.addend);
 
             try coff_writer.write(output);
         },
@@ -991,7 +985,7 @@ test "indexed object relocations preserve targets through format symbol ordering
         };
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(allocator);
-        try generateIndexedObjectFileWithDebug(allocator, target, &([_]u8{0} ** 32), &([_]u8{0} ** 32), 0, &symbols, &relocations, &data_relocations, &.{}, null, &output);
+        try generateIndexedObjectFileWithDebug(allocator, target, &(@as([32]u8, @splat(0))), &(@as([32]u8, @splat(0))), 0, &symbols, &relocations, &data_relocations, &.{}, null, &output);
         const decoded = try TestObjectTables.read(target, output.items);
         const expected = [_][]const u8{ "local_data", "external_function", "local_data", "global_data" };
         try std.testing.expectEqual(@as(usize, 4), decoded.text.len / decoded.relocation_size);
@@ -1118,11 +1112,11 @@ test "separate static data objects expose private backing symbols to code object
     const relocations = [_]Compiler.StaticDataRelocation{.{
         .offset = 0,
         .target_symbol_name = "private_backing",
-        .target = .{ .data_symbol = @enumFromInt(private_export_index) },
+        .target = .{ .data_symbol = @fromBackingInt(@intCast(private_export_index)) },
     }};
     const exports = [_]Compiler.StaticDataExport{
-        .{ .symbol_name = "private_backing", .bytes = &([_]u8{0} ** 8), .alignment = 8, .is_global = false, .is_exported = false },
-        .{ .symbol_name = "public_root", .bytes = &([_]u8{0} ** 8), .alignment = 8, .relocations = &relocations },
+        .{ .symbol_name = "private_backing", .bytes = &(@as([8]u8, @splat(0))), .alignment = 8, .is_global = false, .is_exported = false },
+        .{ .symbol_name = "public_root", .bytes = &(@as([8]u8, @splat(0))), .alignment = 8, .relocations = &relocations },
     };
     var compiler = Compiler.ObjectFileCompiler.init(allocator);
     var result = try compiler.compileStaticDataObject(&exports, .x64linux);
@@ -1147,15 +1141,15 @@ test "separate static data objects expose private backing symbols to code object
 test "all-zero static data without relocations is declared as zero-fill, not stored" {
     const allocator = std.testing.allocator;
     const Compiler = @import("ObjectFileCompiler.zig");
-    const zeros = [_]u8{0} ** 65536;
+    const zeros = @as([65536]u8, @splat(0));
     var exports: std.ArrayList(Compiler.StaticDataExport) = .empty;
     defer exports.deinit(allocator);
     // Capture the table's actual export index before adding its descriptor.
     const table_id = exports.items.len;
     try exports.append(allocator, .{ .symbol_name = "table", .bytes = &zeros, .symbol_offset = 8, .alignment = 8, .is_exported = false });
-    const relocations = [_]Compiler.StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "table", .target = .{ .data_symbol = @enumFromInt(table_id) }, .addend = 8 }};
+    const relocations = [_]Compiler.StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "table", .target = .{ .data_symbol = @fromBackingInt(@intCast(table_id)) }, .addend = 8 }};
     // The descriptor is zeroed too, but its relocation requires stored data.
-    try exports.append(allocator, .{ .symbol_name = "descriptor", .bytes = &([_]u8{0} ** 24), .alignment = 8, .is_exported = false, .relocations = &relocations });
+    try exports.append(allocator, .{ .symbol_name = "descriptor", .bytes = &(@as([24]u8, @splat(0))), .alignment = 8, .is_exported = false, .relocations = &relocations });
     try exports.append(allocator, .{ .symbol_name = "filled", .bytes = &.{ 1, 2, 3, 4, 5, 6, 7, 8 }, .alignment = 8, .is_exported = false });
     for ([_]RocTarget{ .x64linux, .x64mac, .x64win }) |target| {
         var compiler = Compiler.ObjectFileCompiler.init(allocator);
@@ -1281,7 +1275,7 @@ fn fastestStaticObjectNs(allocator: Allocator, count: usize) (@import("ObjectFil
     defer allocator.free(names);
     for (exports, names, 0..) |*data_export, *name, i| data_export.* = .{
         .symbol_name = try std.fmt.bufPrint(name, "static_target_{d:0>7}", .{i}),
-        .bytes = &([_]u8{0} ** 8),
+        .bytes = &(@as([8]u8, @splat(0))),
         .alignment = 8,
         .is_global = i % 2 == 0,
     };
@@ -1290,7 +1284,7 @@ fn fastestStaticObjectNs(allocator: Allocator, count: usize) (@import("ObjectFil
         relocation.* = .{
             .offset = 0,
             .target_symbol_name = exports[next].symbol_name,
-            .target = .{ .data_symbol = @enumFromInt(next) },
+            .target = .{ .data_symbol = @fromBackingInt(@intCast(next)) },
             .addend = @intCast(i % 8),
         };
         data_export.relocations = relocations[i..][0..1];
@@ -1321,10 +1315,10 @@ test "object encoding preserves borrowed sections through addend patches and all
 
 fn exerciseBorrowedObjectSections(allocator: Allocator) (Allocator.Error || error{ UnsupportedTarget, InvalidObjectFile, SectionNotFound, TestExpectedEqual })!void {
     for ([_]RocTarget{ .x64linux, .arm64linux, .x64mac, .arm64mac, .x64win, .arm64win }) |target| {
-        var code = [_]u8{0} ** 16;
-        var data = [_]u8{0} ** 16;
-        var debug_line = [_]u8{0} ** 16;
-        var debug_info = [_]u8{0} ** 16;
+        var code = @as([16]u8, @splat(0));
+        var data = @as([16]u8, @splat(0));
+        var debug_line = @as([16]u8, @splat(0));
+        var debug_info = @as([16]u8, @splat(0));
         const symbols = [_]Symbol{.{ .name = "local_target", .section = .rodata, .offset = 8, .size = 8, .is_global = false, .is_function = false, .is_external = false }};
         const data_relocations = [_]DataRelocation{.{ .offset = 0, .target_symbol_name = "local_target", .addend = 7 }};
         const debug: DebugSections = .{
@@ -1340,10 +1334,10 @@ fn exerciseBorrowedObjectSections(allocator: Allocator) (Allocator.Error || erro
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(allocator);
         try generateObjectFileWithDebug(allocator, target, &code, &data, &symbols, &.{}, &data_relocations, debug, &output);
-        try std.testing.expectEqualSlices(u8, &([_]u8{0} ** 16), &code);
-        try std.testing.expectEqualSlices(u8, &([_]u8{0} ** 16), &data);
-        try std.testing.expectEqualSlices(u8, &([_]u8{0} ** 16), &debug_line);
-        try std.testing.expectEqualSlices(u8, &([_]u8{0} ** 16), &debug_info);
+        try std.testing.expectEqualSlices(u8, &(@as([16]u8, @splat(0))), &code);
+        try std.testing.expectEqualSlices(u8, &(@as([16]u8, @splat(0))), &data);
+        try std.testing.expectEqualSlices(u8, &(@as([16]u8, @splat(0))), &debug_line);
+        try std.testing.expectEqualSlices(u8, &(@as([16]u8, @splat(0))), &debug_info);
         const section = try readonlySection(target, output.items);
         const expected_addend: u64 = if (target.toOsTag() == .linux) 0 else 7;
         try std.testing.expectEqual(expected_addend, std.mem.readInt(u64, section[0..8], .little));

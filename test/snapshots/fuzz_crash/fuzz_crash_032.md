@@ -504,8 +504,7 @@ olor = |color| {
 			(args
 				(p-assign (ident "color")))
 			(e-block
-				(s-expr
-					(e-runtime-error (tag "undeclared_type")))
+				(s-runtime-error (tag "undeclared_type"))
 				(e-runtime-error (tag "erroneous_value_expr"))))
 		(annotation
 			(ty-fn (effectful false)

@@ -80,14 +80,15 @@ const TestEnv = struct {
 
     /// Deinit the test env, including deallocing the module_env from the heap
     fn deinit(self: *Self) void {
-        self.nominal_decl_statements.deinit(self.module_env.gpa);
-        self.module_env.deinit();
-        self.module_env.gpa.destroy(self.module_env);
+        const gpa = self.module_env.gpa;
+        self.nominal_decl_statements.deinit(gpa);
         self.snapshots.deinit();
-        self.problems.deinit(self.module_env.gpa);
+        self.problems.deinit(gpa);
         self.type_writer.deinit();
         self.scratch.deinit();
         self.occurs_scratch.deinit();
+        self.module_env.deinit();
+        gpa.destroy(self.module_env);
     }
 
     /// Helper function to call unify with args from TestEnv
@@ -179,7 +180,7 @@ const TestEnv = struct {
     // helpers - alias //
 
     fn mkAlias(self: *Self, name: []const u8, backing_var: Var, args: []const Var) std.mem.Allocator.Error!Content {
-        const module_identity = try self.module_env.internModuleIdentity(&([_]u8{0x22} ** 32), Ident.Idx.NONE);
+        const module_identity = try self.module_env.internModuleIdentity(&(@as([32]u8, @splat(0x22))), Ident.Idx.NONE);
         return try self.module_env.types.mkAlias(try self.mkTypeIdent(name), backing_var, args, module_identity);
     }
 
@@ -1236,7 +1237,7 @@ test "unify - distinct concrete builtin numeric nominals never unify" {
     // `mkNumberTypeContent` in src/check/Check.zig). Mirror that shape for
     // U8 and I64 with distinct source decls.
     const origin_module = try env.module_env.internModuleIdentity(
-        &([_]u8{0x33} ** 32),
+        &(@as([32]u8, @splat(0x33))),
         Ident.Idx.NONE,
     );
 
@@ -2698,7 +2699,7 @@ test "unify order - deferred constraint origin var depends on operand order" {
             try std.testing.expectEqual(.unified, result);
             try std.testing.expectEqual(@as(usize, 1), env.scratch.deferred_constraints.len());
             const origin = env.scratch.deferred_constraints.items.items[0].var_;
-            return @intFromEnum(ts.resolveVar(origin).var_);
+            return @backingInt(ts.resolveVar(origin).var_);
         }
     };
     // The constraint lands on a different surviving root depending on order.
@@ -2842,7 +2843,7 @@ test "cross-module copy substitutes every application of an explicit alias decla
             source_decl,
         ),
     );
-    const other_origin = try source.module_env.internModuleIdentity(&([_]u8{0xA5} ** 32), Ident.Idx.NONE);
+    const other_origin = try source.module_env.internModuleIdentity(&(@as([32]u8, @splat(0xA5))), Ident.Idx.NONE);
     const unrelated_application = try source.module_env.types.freshFromContent(
         try source.module_env.types.mkAliasWithSourceDecl(
             .{ .ident_idx = alias_ident },

@@ -201,8 +201,25 @@ pub const ConstNodeId = enum(u32) { _ };
 pub const FnSetId = enum(u32) { _ };
 /// Stage-local erased callable entry set id.
 pub const ErasedFnsId = enum(u32) { _ };
-/// Stage-local capture slot id.
-pub const CaptureSlotId = enum(u32) { _ };
+/// `Bool` is the builtin tag union `[False, True]`, and a tag union numbers its
+/// tags in `Ident.textOrder` of their names. Each Bool tag's discriminant is
+/// therefore the number of Bool tags ordered before it.
+pub const bool_false_discriminant: u32 = @intFromBool(base.Ident.textLessThan("True", "False"));
+/// See `bool_false_discriminant`.
+pub const bool_true_discriminant: u32 = @intFromBool(base.Ident.textLessThan("False", "True"));
+
+/// The discriminant a `Bool` value is represented by.
+pub fn boolDiscriminant(value: bool) u32 {
+    return if (value) bool_true_discriminant else bool_false_discriminant;
+}
+
+/// The discriminant of the `Bool` tag named `tag_name`, or null when Bool has
+/// no such tag.
+pub fn boolTagDiscriminant(tag_name: []const u8) ?u32 {
+    if (std.mem.eql(u8, tag_name, "False")) return bool_false_discriminant;
+    if (std.mem.eql(u8, tag_name, "True")) return bool_true_discriminant;
+    return null;
+}
 
 /// The storage layout of a primitive. This is the single source of truth
 /// shared by every post-check layout producer; call it rather than writing a
@@ -295,16 +312,16 @@ pub fn hasherWriteOp(primitive: checked.CheckedPrimitive) LIR.LowLevel {
 
 /// Panic in debug builds for a violated post-check invariant.
 pub fn invariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .Debug) {
-        std.debug.panic("postcheck invariant violated: {s}", .{message});
+    if (@import("builtin").mode == .debug) {
+        base.invariant("postcheck invariant violated: {s}", .{message});
     }
     unreachable;
 }
 
 /// `invariant` with runtime context formatted into the panic message.
 pub fn invariantFmt(comptime fmt: []const u8, args: anytype) noreturn {
-    if (@import("builtin").mode == .Debug) {
-        std.debug.panic("postcheck invariant violated: " ++ fmt, args);
+    if (@import("builtin").mode == .debug) {
+        base.invariant("postcheck invariant violated: " ++ fmt, args);
     }
     unreachable;
 }
@@ -319,7 +336,7 @@ pub fn invariantFmt(comptime fmt: []const u8, args: anytype) noreturn {
 /// no crash. That check has to hold in release builds too, so this one reports
 /// and aborts instead of becoming undefined behavior.
 pub fn compilerBug(message: []const u8) noreturn {
-    std.debug.panic("compiler bug: {s}", .{message});
+    base.invariant("compiler bug: {s}", .{message});
 }
 
 /// Monotonic symbol id generator for post-check stages.
@@ -327,7 +344,7 @@ pub const SymbolGen = struct {
     next: u32 = 0,
 
     pub fn fresh(self: *SymbolGen) Symbol {
-        const symbol: Symbol = @enumFromInt(self.next);
+        const symbol: Symbol = @fromBackingInt(@intCast(self.next));
         self.next += 1;
         return symbol;
     }
@@ -335,6 +352,21 @@ pub const SymbolGen = struct {
 
 test "common declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+test "Bool discriminants are the positions of its tags in canonical tag order" {
+    var tags = [_][]const u8{ "True", "False" };
+    std.mem.sort([]const u8, &tags, {}, struct {
+        fn lessThan(_: void, lhs: []const u8, rhs: []const u8) bool {
+            return base.Ident.textLessThan(lhs, rhs);
+        }
+    }.lessThan);
+    for (tags, 0..) |tag, position| {
+        try std.testing.expectEqual(@as(?u32, @intCast(position)), boolTagDiscriminant(tag));
+    }
+    try std.testing.expectEqual(boolTagDiscriminant("True").?, boolDiscriminant(true));
+    try std.testing.expectEqual(boolTagDiscriminant("False").?, boolDiscriminant(false));
+    try std.testing.expectEqual(@as(?u32, null), boolTagDiscriminant("Maybe"));
 }
 
 test "string storage metadata applies the target threshold only at layout lowering" {

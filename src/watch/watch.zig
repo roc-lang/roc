@@ -57,7 +57,7 @@ const active_watcher_backend_is_stub = builtin.os.tag == .macos and use_stubs;
 
 fn bumpEventCount(comptime Global: type) void {
     const previous = Global.event_count.fetchAdd(1, .seq_cst);
-    if (comptime builtin.mode == .Debug) {
+    if (comptime builtin.mode == .debug) {
         std.debug.assert(previous != std.math.maxInt(u32));
     } else if (previous == std.math.maxInt(u32)) {
         unreachable;
@@ -302,6 +302,12 @@ const watcher_os: WatcherOs = switch (builtin.os.tag) {
     .watchos,
     .uefi,
     .@"3ds",
+    .wiiu,
+    .@"switch",
+    .gba,
+    .psx,
+    .tios,
+    .ashetos,
     .ps3,
     .ps4,
     .ps5,
@@ -790,7 +796,7 @@ pub const Watcher = struct {
         defer self.allocator.free(cf_strings);
 
         for (watch_paths, 0..) |path, i| {
-            const path_z = self.allocator.dupeZ(u8, path) catch {
+            const path_z = self.allocator.dupeSentinel(u8, path, 0) catch {
                 std.log.warn("Failed to create null-terminated path", .{});
                 self.markStartupFailed();
                 return;
@@ -870,7 +876,7 @@ pub const Watcher = struct {
         while (!self.should_stop.load(.seq_cst)) {
             // Run for 0.1 seconds at a time to check should_stop periodically
             const run_result = CFRunLoopRunInMode(getKCFRunLoopDefaultMode(), 0.1, false);
-            if (comptime builtin.mode == .Debug) {
+            if (comptime builtin.mode == .debug) {
                 std.debug.assert(run_result >= 0);
             } else if (run_result < 0) {
                 unreachable;
@@ -1123,7 +1129,7 @@ pub const Watcher = struct {
             std.os.linux.IN.MOVED_TO | std.os.linux.IN.CLOSE_WRITE |
             std.os.linux.IN.ATTRIB | std.os.linux.IN.DELETE_SELF | std.os.linux.IN.MOVE_SELF;
 
-        const path_z = try self.allocator.dupeZ(u8, path);
+        const path_z = try self.allocator.dupeSentinel(u8, path, 0);
         defer self.allocator.free(path_z);
 
         const add_result = std.os.linux.inotify_add_watch(self.impl.inotify_fd, path_z, flags);
@@ -1402,7 +1408,7 @@ pub const Watcher = struct {
         path: []const u8,
         is_dir: bool,
     ) (Allocator.Error || error{ WatchOpenFailed, KeventFailed })!void {
-        const path_z = try self.allocator.dupeZ(u8, path);
+        const path_z = try self.allocator.dupeSentinel(u8, path, 0);
         defer self.allocator.free(path_z);
 
         var open_flags: std.posix.O = .{ .ACCMODE = .RDONLY, .CLOEXEC = true };
@@ -2781,7 +2787,10 @@ test "Linux watching does not register watches for unrelated build, cache, and V
     try std.testing.expect(watch_descriptors.len >= 1);
 
     for (watch_descriptors) |watch| {
-        var components = std.mem.splitScalar(u8, watch.path, std.fs.path.sep);
+        // Only components below the watched root are checked: the root's own
+        // ancestors may legitimately be named like one of the unrelated trees.
+        try std.testing.expect(std.mem.startsWith(u8, watch.path, temp_path));
+        var components = std.mem.splitScalar(u8, watch.path[temp_path.len..], std.fs.path.sep);
         while (components.next()) |component| {
             for (unrelated_trees) |tree| {
                 try std.testing.expect(!std.mem.eql(u8, component, tree));

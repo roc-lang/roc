@@ -74,47 +74,37 @@ match shape {
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "times") (constraint-fn-var 246)
-						(receiver
-							(e-dispatch-call (method "times") (constraint-fn-var 244)
-								(receiver
-									(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14")))
-								(args
-									(e-lookup-local
-										(p-assign (ident "radius"))))))
-						(args
+					(e-binop (op "mul")
+						(e-binop (op "mul")
+							(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14"))
 							(e-lookup-local
-								(p-assign (ident "radius")))))))
+								(p-assign (ident "radius"))))
+						(e-lookup-local
+							(p-assign (ident "radius"))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "times") (constraint-fn-var 252)
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "width"))))
-						(args
-							(e-lookup-local
-								(p-assign (ident "height")))))))
+					(e-binop (op "mul")
+						(e-lookup-local
+							(p-assign (ident "width")))
+						(e-lookup-local
+							(p-assign (ident "height"))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "times") (constraint-fn-var 267)
-						(receiver
-							(e-dispatch-call (method "times") (constraint-fn-var 265)
-								(receiver
-									(e-dec-small (numerator "5") (denominator-power-of-ten "1") (value "0.5")))
-								(args
-									(e-lookup-local
-										(p-assign (ident "base"))))))
-						(args
+					(e-binop (op "mul")
+						(e-binop (op "mul")
+							(e-dec-small (numerator "5") (denominator-power-of-ten "1") (value "0.5"))
 							(e-lookup-local
-								(p-assign (ident "height"))))))))))
+								(p-assign (ident "base"))))
+						(e-lookup-local
+							(p-assign (ident "height")))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Dec"))
+(expr (type "_a"))
 ~~~

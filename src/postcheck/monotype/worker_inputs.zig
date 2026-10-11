@@ -138,7 +138,7 @@ pub const ProgramInputs = struct {
     }
 
     pub fn deinit(self: *ProgramInputs, allocator: Allocator) void {
-        inline for (std.meta.fields(ProgramInputs)) |field| @field(self, field.name).deinit(allocator);
+        inline for (@typeInfo(ProgramInputs).@"struct".field_names) |field_name| @field(self, field_name).deinit(allocator);
     }
 };
 

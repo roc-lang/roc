@@ -25,6 +25,20 @@ match foo {
 
 Roc does not have a concept of "truthiness" (where values can be "truthy" or "falsy"); `if` accepts only `Bool` values.
 
+## `Bool`
+
+[`Bool`](../Bool) is a [nominal tag union](tag-unions#nominal-tag-unions) with two tags:
+
+```roc
+Bool := [False, True]
+```
+
+Since `True` and `False` are tags, you can [pattern match](pattern-matching) on them like any other
+tags, as in the `match` above. And since a tag union with two tags and no payloads only needs a
+[1-byte discriminant](tag-unions#memory-layout), a `Bool` takes up 1 byte of memory. (So a
+`List(Bool)` with a million elements takes up a megabyte; Roc doesn't pack booleans into individual
+bits.)
+
 ## `else if`
 
 Roc does not have a separate `else if` concept like some languages do, but you can write `else` followed immediately by `if` to achieve that functionality. This code...

@@ -175,7 +175,7 @@ const MonoTestEnv = struct {
                 const type_ident = other_env.module_env.common.findIdent(other_module_name);
                 if (type_ident) |ident| {
                     if (other_env.module_env.getExposedTypeNodeIndexById(ident)) |node_idx| {
-                        break :blk @as(CIR.Statement.Idx, @enumFromInt(node_idx));
+                        break :blk @as(CIR.Statement.Idx, @fromBackingInt(@intCast(node_idx)));
                     }
                 }
             }
@@ -293,7 +293,7 @@ const MonoTestEnv = struct {
                     const type_ident = imp.env.module_env.common.findIdent(imp.name);
                     if (type_ident) |ident| {
                         if (imp.env.module_env.getExposedTypeNodeIndexById(ident)) |node_idx| {
-                            break :blk @as(CIR.Statement.Idx, @enumFromInt(node_idx));
+                            break :blk @as(CIR.Statement.Idx, @fromBackingInt(@intCast(node_idx)));
                         }
                     }
                 }

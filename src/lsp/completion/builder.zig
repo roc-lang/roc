@@ -37,9 +37,7 @@ const MethodOwnerLookup = struct {
 
 fn patternIdent(pattern: CIR.Pattern) ?base.Ident.Idx {
     return switch (pattern) {
-        .assign => |p| p.ident,
-        .var_assign => |p| p.ident,
-        .as => |p| p.ident,
+        inline .assign, .var_assign, .as => |p| p.ident,
         .applied_tag,
         .nominal,
         .nominal_external,
@@ -57,42 +55,13 @@ fn patternIdent(pattern: CIR.Pattern) ?base.Ident.Idx {
         .underscore,
         .runtime_error,
         => null,
-        .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
-    };
-}
-
-fn statementPattern(statement: CIR.Statement) ?CIR.Pattern.Idx {
-    return switch (statement) {
-        .s_decl => |decl| decl.pattern,
-        .s_var => |var_stmt| var_stmt.pattern_idx,
-        .s_var_uninitialized => |var_stmt| var_stmt.pattern_idx,
-        .s_reassign,
-        .s_crash,
-        .s_dbg,
-        .s_expr,
-        .s_expect,
-        .s_for,
-        .s_while,
-        .s_infinite_loop,
-        .s_breakable_loop,
-        .s_break,
-        .s_return,
-        .s_import,
-        .s_alias_decl,
-        .s_nominal_decl,
-        .s_where_alias_decl,
-        .s_type_anno,
-        .s_type_var_alias,
-        .s_runtime_error,
-        => null,
+        .deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
     };
 }
 
 fn statementTypeHeader(statement: CIR.Statement) ?CIR.TypeHeader.Idx {
     return switch (statement) {
-        .s_alias_decl => |alias| alias.header,
-        .s_nominal_decl => |nominal| nominal.header,
-        .s_where_alias_decl => |where_alias| where_alias.header,
+        inline .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => |alias| alias.header,
         .s_decl,
         .s_var,
         .s_var_uninitialized,
@@ -118,9 +87,9 @@ fn statementTypeHeader(statement: CIR.Statement) ?CIR.TypeHeader.Idx {
 fn completionKindForExpr(expr: CIR.Expr) u32 {
     const tag = std.meta.activeTag(expr);
     return if (tag == .e_closure or tag == .e_lambda or tag == .e_hosted_lambda)
-        @intFromEnum(CompletionItemKind.function)
+        @backingInt(CompletionItemKind.function)
     else
-        @intFromEnum(CompletionItemKind.variable);
+        @backingInt(CompletionItemKind.variable);
 }
 
 /// Builder for constructing completion item lists.
@@ -269,7 +238,7 @@ pub const CompletionBuilder = struct {
 
                 _ = try self.addItem(.{
                     .label = name,
-                    .kind = @intFromEnum(CompletionItemKind.module),
+                    .kind = @backingInt(CompletionItemKind.module),
                     .detail = null,
                 });
             }
@@ -291,7 +260,7 @@ pub const CompletionBuilder = struct {
                 if (name.len > 0) {
                     _ = try self.addItem(.{
                         .label = name,
-                        .kind = @intFromEnum(CompletionItemKind.module),
+                        .kind = @backingInt(CompletionItemKind.module),
                         .detail = null,
                     });
                 }
@@ -337,7 +306,7 @@ pub const CompletionBuilder = struct {
         for (builtin_completion.BUILTIN_TYPES) |builtin_name| {
             _ = try self.addItem(.{
                 .label = builtin_name,
-                .kind = @intFromEnum(CompletionItemKind.module),
+                .kind = @backingInt(CompletionItemKind.module),
                 .detail = null,
             });
         }
@@ -379,16 +348,16 @@ pub const CompletionBuilder = struct {
             if (label.len == 0) continue;
 
             const kind: u32 = if (label.len > 0 and std.ascii.isUpper(label[0]))
-                @intFromEnum(CompletionItemKind.class)
+                @backingInt(CompletionItemKind.class)
             else
-                @intFromEnum(CompletionItemKind.function);
+                @backingInt(CompletionItemKind.function);
 
             var detail: ?[]const u8 = null;
             var documentation: ?[]const u8 = null;
             if (type_writer) |*tw| {
                 if (module_env.common.getValueNodeIndexById(self.allocator, ident_idx)) |node_idx| {
                     if (module_env.store.isDefNode(node_idx)) {
-                        const def_idx: CIR.Def.Idx = @enumFromInt(node_idx);
+                        const def_idx: CIR.Def.Idx = @fromBackingInt(@intCast(node_idx));
                         const def = module_env.store.getDef(def_idx);
                         const type_var = ModuleEnv.varFrom(def.pattern);
                         // Type formatting is best-effort; missing type info is acceptable
@@ -444,9 +413,9 @@ pub const CompletionBuilder = struct {
             if (label.len == 0) continue;
 
             const kind: u32 = if (std.ascii.isUpper(label[0]))
-                @intFromEnum(CompletionItemKind.class)
+                @backingInt(CompletionItemKind.class)
             else
-                @intFromEnum(CompletionItemKind.field);
+                @backingInt(CompletionItemKind.field);
 
             if (try self.addItem(.{ .label = label, .kind = kind, .detail = null })) {
                 added_any = true;
@@ -465,9 +434,9 @@ pub const CompletionBuilder = struct {
             if (label.len == 0) continue;
 
             const kind: u32 = if (std.ascii.isUpper(label[0]))
-                @intFromEnum(CompletionItemKind.class)
+                @backingInt(CompletionItemKind.class)
             else
-                @intFromEnum(CompletionItemKind.field);
+                @backingInt(CompletionItemKind.field);
 
             if (try self.addItem(.{ .label = label, .kind = kind, .detail = null })) {
                 added_any = true;
@@ -518,7 +487,7 @@ pub const CompletionBuilder = struct {
 
             _ = try self.addItem(.{
                 .label = name,
-                .kind = @intFromEnum(CompletionItemKind.class),
+                .kind = @backingInt(CompletionItemKind.class),
                 .detail = null,
                 .documentation = documentation,
             });
@@ -546,7 +515,7 @@ pub const CompletionBuilder = struct {
             if (label.len == 0) continue;
 
             // Determine kind - parameters and local variables
-            const kind: u32 = @intFromEnum(CompletionItemKind.variable);
+            const kind: u32 = @backingInt(CompletionItemKind.variable);
 
             // Get type information for the binding
             var detail: ?[]const u8 = null;
@@ -641,7 +610,7 @@ pub const CompletionBuilder = struct {
                 if (std.mem.findScalar(u8, name, '.') != null) continue;
 
                 // Determine completion kind
-                var kind: u32 = @intFromEnum(CompletionItemKind.variable);
+                var kind: u32 = @backingInt(CompletionItemKind.variable);
                 if (stmt_parts.expr) |expr_idx| {
                     const expr = module_env.store.getSourceExpr(expr_idx);
                     kind = completionKindForExpr(expr);
@@ -725,7 +694,7 @@ pub const CompletionBuilder = struct {
         self.logDebug("addRecordFieldCompletions: checking {d} statements", .{statements_slice.len});
         for (statements_slice) |stmt_idx| {
             const stmt = module_env.store.getSourceStatement(stmt_idx);
-            const pattern_idx = statementPattern(stmt) orelse continue;
+            const pattern_idx = module_lookup.getDeclarationPattern(stmt) orelse continue;
 
             const pattern = module_env.store.getSourcePattern(pattern_idx);
             const ident_idx = patternIdent(pattern) orelse continue;
@@ -824,7 +793,7 @@ pub const CompletionBuilder = struct {
                         const label = std.fmt.bufPrint(&label_buf, "{d}", .{i}) catch continue;
                         const added = try self.addItem(.{
                             .label = label,
-                            .kind = @intFromEnum(CompletionItemKind.field),
+                            .kind = @backingInt(CompletionItemKind.field),
                             .detail = detail,
                         });
                         if (added) {} else {}
@@ -853,21 +822,6 @@ pub const CompletionBuilder = struct {
             }
             break;
         }
-    }
-
-    /// Add record field completions for a named definition in a specific module.
-    ///
-    /// This is used for module member accesses (e.g., Module.value.) where the
-    /// member is a record. We resolve the member's type from the module's
-    /// definition table, then extract its record fields.
-    pub fn addRecordFieldsForModuleMember(self: *CompletionBuilder, module_env: *ModuleEnv, member_name: []const u8) Allocator.Error!bool {
-        if (module_lookup.findDefinitionByName(module_env, member_name)) |def_info| {
-            const type_var = ModuleEnv.varFrom(def_info.pattern_idx);
-            try self.addFieldsFromTypeVar(module_env, type_var);
-            return true;
-        }
-
-        return false;
     }
 
     /// Resolve a record field's type variable from a receiver type.
@@ -998,7 +952,7 @@ pub const CompletionBuilder = struct {
 
             _ = try self.addItem(.{
                 .label = field_name,
-                .kind = @intFromEnum(CompletionItemKind.field),
+                .kind = @backingInt(CompletionItemKind.field),
                 .detail = detail,
                 .insertText = insert_text,
             });
@@ -1087,7 +1041,7 @@ pub const CompletionBuilder = struct {
             self.logDebug("addMethodCompletions: checking {d} statements", .{statements_slice.len});
             for (statements_slice) |stmt_idx| {
                 const stmt = module_env.store.getSourceStatement(stmt_idx);
-                const pattern_idx = statementPattern(stmt) orelse continue;
+                const pattern_idx = module_lookup.getDeclarationPattern(stmt) orelse continue;
 
                 const pattern = module_env.store.getSourcePattern(pattern_idx);
                 const ident_idx = patternIdent(pattern) orelse continue;
@@ -1132,13 +1086,13 @@ pub const CompletionBuilder = struct {
 
             const method_owner_opt: ?MethodOwnerLookup = if (std.meta.activeTag(content) == .alias)
                 if (content.alias.source_decl.toOptional()) |source_decl| .{
-                    .owner = @enumFromInt(source_decl),
+                    .owner = @fromBackingInt(@intCast(source_decl)),
                     .type_name = module_env.getIdentText(content.alias.ident.ident_idx),
                     .builtin_origin = content.alias.source_decl.originIsBuiltin(),
                 } else null
             else if (std.meta.activeTag(content) == .structure and std.meta.activeTag(content.structure) == .nominal_type)
                 if (content.structure.nominal_type.sourceDeclOptional()) |source_decl| .{
-                    .owner = @enumFromInt(source_decl),
+                    .owner = @fromBackingInt(@intCast(source_decl)),
                     .type_name = module_env.getIdentText(content.structure.nominal_type.ident.ident_idx),
                     .builtin_origin = content.structure.nominal_type.originIsBuiltin(),
                 } else null
@@ -1162,16 +1116,10 @@ pub const CompletionBuilder = struct {
             }
 
             switch (content) {
-                .flex => |flex| {
+                inline .flex, .rigid => |flex| {
                     self.logDebug("addMethodsFromTypeVar: flex constraints", .{});
                     // Extract method names from flex constraints
                     try self.addMethodsFromConstraints(module_env, flex.constraints);
-                    break;
-                },
-                .rigid => |rigid| {
-                    self.logDebug("addMethodsFromTypeVar: rigid constraints", .{});
-                    // Extract method names from rigid constraints
-                    try self.addMethodsFromConstraints(module_env, rigid.constraints);
                     break;
                 },
                 .alias => |alias| {
@@ -1224,7 +1172,7 @@ pub const CompletionBuilder = struct {
 
             const added = try self.addItem(.{
                 .label = method_name,
-                .kind = @intFromEnum(CompletionItemKind.method),
+                .kind = @backingInt(CompletionItemKind.method),
                 .detail = detail,
             });
             if (added) {} else {}
@@ -1310,7 +1258,7 @@ pub const CompletionBuilder = struct {
 
                 const added = try self.addItem(.{
                     .label = method_name,
-                    .kind = @intFromEnum(CompletionItemKind.method),
+                    .kind = @backingInt(CompletionItemKind.method),
                     .detail = detail,
                     .documentation = documentation,
                 });
@@ -1346,7 +1294,7 @@ pub const CompletionBuilder = struct {
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
             const stmt = module_env.store.getSourceStatement(stmt_idx);
-            const pattern_idx = statementPattern(stmt) orelse continue;
+            const pattern_idx = module_lookup.getDeclarationPattern(stmt) orelse continue;
 
             const pattern = module_env.store.getSourcePattern(pattern_idx);
             const ident_idx = patternIdent(pattern) orelse continue;
@@ -1384,7 +1332,7 @@ pub const CompletionBuilder = struct {
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
             const stmt = module_env.store.getSourceStatement(stmt_idx);
-            const pattern_idx = statementPattern(stmt) orelse continue;
+            const pattern_idx = module_lookup.getDeclarationPattern(stmt) orelse continue;
 
             const pattern = module_env.store.getSourcePattern(pattern_idx);
             const ident_idx = patternIdent(pattern) orelse continue;
@@ -1454,7 +1402,7 @@ pub const CompletionBuilder = struct {
 
             _ = try self.addItem(.{
                 .label = tag_name,
-                .kind = @intFromEnum(CompletionItemKind.enum_member),
+                .kind = @backingInt(CompletionItemKind.enum_member),
                 .detail = detail,
             });
         }
@@ -1595,7 +1543,7 @@ pub const CompletionBuilder = struct {
 
             _ = try self.addItem(.{
                 .label = tag_name,
-                .kind = @intFromEnum(CompletionItemKind.enum_member),
+                .kind = @backingInt(CompletionItemKind.enum_member),
                 .detail = null,
             });
         }

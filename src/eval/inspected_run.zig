@@ -88,8 +88,6 @@ pub const ExecutionHost = union(enum) {
 
 /// Module name a REPL imports to emit one-way effects.
 pub const repl_effect_module_name = "Repl";
-/// Hosted symbol backing `Repl.emit!`.
-pub const repl_effect_hosted_symbol = "roc_repl_emit!";
 /// Source of the in-memory `Repl` module, served to REPL sessions that opt in
 /// to effects so no file on disk is required.
 pub const repl_effect_module_source =
@@ -99,60 +97,6 @@ pub const repl_effect_module_source =
     \\    emit! = |request| Repl.roc_repl_emit!(request)
     \\}
 ;
-
-/// The dedicated REPL's explicit one-way-effect dependency. Callers opt into
-/// it; ordinary inspected evaluation always passes `.reject`.
-pub fn replEffectHost() ExecutionHost {
-    return .{ .hosted_calls = .{ .dispatch = dispatchReplEffect } };
-}
-
-fn dispatchReplEffect(runtime_env: *RuntimeHostEnv, call: Interpreter.HostedCall) Interpreter.Error!void {
-    if (!std.mem.eql(u8, call.symbol, repl_effect_hosted_symbol)) {
-        return error.UnsupportedHostedFunction;
-    }
-    if (call.arg_layouts.len != 1 or call.arg_offsets.len != 1) {
-        return error.InvalidHostedFunctionSignature;
-    }
-
-    const arg_layout_idx = call.layouts.runtimeRepresentationLayoutIdx(call.arg_layouts[0]);
-    const arg_layout = call.layouts.getLayout(arg_layout_idx);
-    if (arg_layout.tag != .struct_) return error.InvalidHostedFunctionSignature;
-    const struct_idx = arg_layout.getStruct().idx;
-    if (call.layouts.getStructData(struct_idx).fields.count != 2) {
-        return error.InvalidHostedFunctionSignature;
-    }
-    if (call.layouts.runtimeRepresentationLayoutIdx(call.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, 0)) != .str or
-        call.layouts.runtimeRepresentationLayoutIdx(call.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, 1)) != .str or
-        call.layouts.layoutSizeAlign(call.layouts.getLayout(call.ret_layout)).size != 0)
-    {
-        return error.InvalidHostedFunctionSignature;
-    }
-
-    const record_offset: usize = call.arg_offsets[0];
-    const name_offset = std.math.add(
-        usize,
-        record_offset,
-        call.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0),
-    ) catch return error.InvalidHostedFunctionSignature;
-    const payload_offset = std.math.add(
-        usize,
-        record_offset,
-        call.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1),
-    ) catch return error.InvalidHostedFunctionSignature;
-    if (name_offset > call.args.len or call.args.len - name_offset < @sizeOf(RocStr) or
-        payload_offset > call.args.len or call.args.len - payload_offset < @sizeOf(RocStr))
-    {
-        return error.InvalidHostedFunctionSignature;
-    }
-    const name_ptr: *align(1) const RocStr = @ptrCast(call.args.ptr + name_offset);
-    const payload_ptr: *align(1) const RocStr = @ptrCast(call.args.ptr + payload_offset);
-    const name = name_ptr.*;
-    const payload = payload_ptr.*;
-    const roc_ops = runtime_env.get_ops();
-    defer name.decref(roc_ops);
-    defer payload.decref(roc_ops);
-    try runtime_env.recordEffect(name.asSlice(), payload.asSlice());
-}
 
 /// Semantic result of executing a Roc root. The caller owns the byte slice in
 /// either variant and must call `deinit` when it is no longer needed.
@@ -229,7 +173,6 @@ const LlvmError = Allocator.Error || std.DynLib.Error || error{
     ModuleLinkFailed,
     UnsupportedLowLevel,
     UnsupportedTarget,
-    WindowsSDKNotFound,
 };
 
 fn BackendError(comptime backend_kind: Backend) type {
@@ -367,6 +310,7 @@ fn runInterpreter(allocator: Allocator, program: Program, execution_host: Execut
     );
     defer interp.deinit();
     static_data.install(&interp);
+    static_data.ownByInterpreter(&interp);
 
     const arg_layouts = try mainProcArgLayouts(allocator, program);
     defer allocator.free(arg_layouts);
@@ -405,7 +349,7 @@ test "native inspected image returns through shared ordinary code and readonly h
     defer layouts.deinit();
     const value = try store.addLocal(.{ .layout_idx = .str });
     const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
-    const load = try store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = @enumFromInt(0) }, .next = ret } }, .test_fixture);
+    const load = try store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = @fromBackingInt(@intCast(0)) }, .next = ret } }, .test_fixture);
     const root = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = lir.ProcIdentity.forTest(741), .args = .empty(), .body = load, .ret_layout = .str }, .none);
     var header: [24]u8 = @splat(0);
     std.mem.writeInt(u64, header[8..16], text.len << 1, .little);
@@ -413,7 +357,7 @@ test "native inspected image returns through shared ordinary code and readonly h
     var backing: [16 + text.len]u8 = @splat(0);
     @memcpy(backing[16..], text);
     const exports = [_]backend.StaticDataExport{
-        .{ .symbol_name = "inspected_semantic_header", .symbol_identity = @splat(74), .value_id = @enumFromInt(0), .bytes = &header, .alignment = 8, .relocations = &.{.{ .offset = 0, .target_symbol_name = "inspected_semantic_backing", .target = .{ .data_symbol = @enumFromInt(1) }, .addend = 8 }} },
+        .{ .symbol_name = "inspected_semantic_header", .symbol_identity = @splat(74), .value_id = @fromBackingInt(@intCast(0)), .bytes = &header, .alignment = 8, .relocations = &.{.{ .offset = 0, .target_symbol_name = "inspected_semantic_backing", .target = .{ .data_symbol = @fromBackingInt(@intCast(1)) }, .addend = 8 }} },
         .{ .symbol_name = "inspected_semantic_backing", .bytes = &backing, .symbol_offset = 8, .alignment = 8 },
     };
     const result = try run(allocator, .dev, .{
@@ -436,7 +380,7 @@ test "native inspected exhaustion uses common crash semantics and restores the o
     defer store.deinit();
     var layouts = try LayoutStore.init(allocator, base.target.TargetUsize.native);
     defer layouts.deinit();
-    const failed = try store.addCFStmt(.{ .comptime_exhaustiveness_failed = .{ .site = @enumFromInt(0) } }, .test_fixture);
+    const failed = try store.addCFStmt(.{ .comptime_exhaustiveness_failed = .{ .site = @fromBackingInt(@intCast(0)) } }, .test_fixture);
     const identity = lir.ProcIdentity.forTest(742);
     const root = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = identity, .args = .empty(), .body = failed, .ret_layout = .str }, .none);
     const Recorder = struct {
@@ -468,7 +412,7 @@ test "native inspected exhaustion uses common crash semantics and restores the o
     defer result.deinit(allocator);
     try std.testing.expectEqualStrings("compile-time exhaustiveness failure reached runtime code", result.outcome.crashed);
     try std.testing.expectEqual(@as(u32, 0), recorder.count);
-    const event: Events.Descriptor = .{ .header = .{ .kind = @intFromEnum(Events.Kind.call_exit) } };
+    const event: Events.Descriptor = .{ .header = .{ .kind = @backingInt(Events.Kind.call_exit) } };
     Events.roc_source_event(&event.header);
     try std.testing.expectEqual(@as(u32, 1), recorder.count);
 }
@@ -508,7 +452,7 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
         var demand: std.ArrayList(LirProcSpecId) = .empty;
         defer demand.deinit(allocator);
         for (program.store.getProcSpecs(), 0..) |procedure, index| {
-            if (!procedure.is_static_initializer and !procedure.external) try demand.append(allocator, @enumFromInt(index));
+            if (!procedure.is_static_initializer and !procedure.external) try demand.append(allocator, @fromBackingInt(@intCast(index)));
         }
         const helpers = try backend.collectRequiredRcHelpers(allocator, program.static_data);
         defer allocator.free(helpers);
@@ -676,7 +620,7 @@ fn llvmCompileOptions(allocator: Allocator, target_usize: base.target.TargetUsiz
     const native_roc_target = roc_target.host_cpu.nativeTarget();
     const resolved_target = std.zig.system.resolveTargetQuery(std.Options.debug_io, native_roc_target.llvmTargetQuery()) catch
         return error.UnsupportedTarget;
-    const cpu = try allocator.dupeZ(u8, roc_target.llvmCpuName(resolved_target));
+    const cpu = try allocator.dupeSentinel(u8, roc_target.llvmCpuName(resolved_target), 0);
     errdefer allocator.free(cpu);
     const features = try roc_target.llvmFeatureString(allocator, resolved_target);
     errdefer allocator.free(features);
@@ -861,7 +805,7 @@ fn entrypointParamSlotSize(layouts: *const LayoutStore, layout_idx: LayoutIdx) u
     if (runtime_layout_idx == .str) return 24;
     if (runtime_layout_idx == .i128 or runtime_layout_idx == .u128 or runtime_layout_idx == .dec) return 16;
 
-    if (@intFromEnum(runtime_layout_idx) < layouts.layouts.len()) {
+    if (@backingInt(runtime_layout_idx) < layouts.layouts.len()) {
         const layout_val = layouts.getLayout(runtime_layout_idx);
         const size = layouts.layoutSizeAlign(layout_val).size;
         if (layout_val.tag == .zst or size == 0) return 0;
@@ -939,7 +883,7 @@ fn copyReturnedRocStr(
     const is_str = ret_layout == .str or
         (layout_val.tag == .scalar and layout_val.getScalar().tag == .str);
     if (!is_str) {
-        std.debug.panic(
+        base.invariant(
             "eval inspect invariant violated: expected Str return layout, found {s}",
             .{@tagName(layout_val.tag)},
         );

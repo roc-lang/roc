@@ -86,16 +86,14 @@ match data {
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 260)
-						(receiver
+					(e-binop (op "add")
+						(e-lookup-local
+							(p-assign (ident "x")))
+						(e-call
+							(e-lookup-external
+								(builtin))
 							(e-lookup-local
-								(p-assign (ident "x"))))
-						(args
-							(e-call (constraint-fn-var 259)
-								(e-lookup-external
-									(builtin))
-								(e-lookup-local
-									(p-assign (ident "rest"))))))))
+								(p-assign (ident "rest")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -107,13 +105,11 @@ match data {
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 283)
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "value"))))
-						(args
-							(e-lookup-local
-								(p-assign (ident "y")))))))
+					(e-binop (op "add")
+						(e-lookup-local
+							(p-assign (ident "value")))
+						(e-lookup-local
+							(p-assign (ident "y"))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -124,5 +120,5 @@ match data {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "U64"))
+(expr (type "Dec"))
 ~~~

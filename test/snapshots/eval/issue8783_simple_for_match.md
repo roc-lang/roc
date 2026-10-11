@@ -212,7 +212,7 @@ NO CHANGE
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-dispatch-call (method "plus") (constraint-fn-var 389)
+								(e-dispatch-call (method "plus") (constraint-fn-var 363)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "acc"))))
@@ -223,7 +223,7 @@ NO CHANGE
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-dispatch-call (method "plus") (constraint-fn-var 404)
+								(e-dispatch-call (method "plus") (constraint-fn-var 378)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "acc"))))
@@ -236,7 +236,7 @@ NO CHANGE
 				(ty-lookup (name "I64") (builtin)))))
 	(d-let
 		(p-assign (ident "count"))
-		(e-call (constraint-fn-var 441)
+		(e-call (constraint-fn-var 406)
 			(e-lookup-external
 				(builtin))
 			(e-lookup-local

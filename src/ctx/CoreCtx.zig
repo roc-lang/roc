@@ -11,6 +11,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
+const private_dir_permissions: std.Io.Dir.Permissions = if (@hasDecl(std.Io.Dir.Permissions, "fromMode")) .fromMode(0o700) else .default_dir;
+const private_file_permissions: std.Io.Dir.Permissions = if (@hasDecl(std.Io.Dir.Permissions, "fromMode")) .fromMode(0o600) else .default_file;
 
 const Self = @This();
 
@@ -54,6 +56,9 @@ pub const VTable = struct {
     /// Caller owns the returned path and file. Failure removes only this
     /// operation's file; collisions never truncate or delete another file.
     writeTempFile: *const fn (?*anyopaque, std.Io, Allocator, []const u8, []const u8) (Allocator.Error || WriteError)![]u8 = &testingWriteTempFile,
+    /// Produce a file incrementally. Implementations must consume the stream
+    /// before returning; no producer or buffer pointers escape this call.
+    writeFileStream: *const fn (?*anyopaque, std.Io, []const u8, FileStream) WriteError!void = &missingWriteFileStream,
 
     /// Return `true` if a file or directory exists at `path`.
     fileExists: *const fn (?*anyopaque, std.Io, []const u8) bool,
@@ -205,6 +210,17 @@ pub fn writeTempFile(self: Self, allocator: Allocator, path: []const u8, data: [
     return self.vtable.writeTempFile(self.ctx, self.std_io, allocator, path, data);
 }
 
+/// A borrowed producer for a file's complete contents.
+pub const FileStream = struct {
+    context: *const anyopaque,
+    write: *const fn (*const anyopaque, *std.Io.Writer) std.Io.Writer.Error!void,
+};
+
+/// Write a producer's bytes without allocating a complete file-sized buffer.
+pub fn writeFileStream(self: Self, path: []const u8, stream: FileStream) WriteError!void {
+    return self.vtable.writeFileStream(self.ctx, self.std_io, path, stream);
+}
+
 /// Return `true` if a file (or directory) exists at `path`.
 pub fn fileExists(self: Self, path: []const u8) bool {
     return self.vtable.fileExists(self.ctx, self.std_io, path);
@@ -219,11 +235,6 @@ pub fn stat(self: Self, path: []const u8) StatError!FileInfo {
 /// this context or target cannot map it. Release with `MappedFile.unmap`.
 pub fn mapFilePrivate(self: Self, path: []const u8) ?MappedFile {
     return self.vtable.mapFilePrivate(self.ctx, self.std_io, path);
-}
-
-/// Backward-compat alias for `stat`.
-pub fn getFileInfo(self: Self, path: []const u8) StatError!FileInfo {
-    return self.vtable.stat(self.ctx, self.std_io, path);
 }
 
 /// List all entries under `path` recursively. Caller owns the returned slice
@@ -379,9 +390,6 @@ pub const StatError = error{
     IoError,
 };
 
-/// Backward-compat alias.
-pub const GetFileInfoError = StatError;
-
 /// Errors that can occur when listing directory contents.
 pub const ListError = error{
     FileNotFound,
@@ -524,6 +532,7 @@ const os_vtable = VTable{
     .readFileInto = &osReadFileInto,
     .writeFile = &osWriteFile,
     .writeTempFile = &osWriteTempFile,
+    .writeFileStream = &osWriteFileStream,
     .fileExists = &osFileExists,
     .stat = &osStat,
     .listDir = &osListDir,
@@ -740,12 +749,16 @@ fn fileWriteRequestLimit(comptime os_tag: std.Target.Os.Tag, page_size: usize) u
         .wasi => if (builtin.link_libc) @min(std.math.maxInt(u32), std.math.maxInt(isize)) else std.math.maxInt(u32),
         // POSIX writev limits the total iovec length to SSIZE_MAX.
         .freebsd, .openbsd, .netbsd, .dragonfly, .illumos, .haiku, .hurd => std.math.maxInt(isize),
-        .freestanding, .other, .contiki, .fuchsia, .hermit, .managarm, .plan9, .rtems, .serenity, .uefi, .@"3ds", .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => @compileError("file-write request limit is not defined for this OS"),
+        .freestanding, .other, .wiiu, .@"switch", .gba, .psx, .tios, .ashetos, .contiki, .fuchsia, .hermit, .managarm, .plan9, .rtems, .serenity, .uefi, .@"3ds", .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => @compileError("file-write request limit is not defined for this OS"),
     };
 }
 
+fn hostFileWriteRequestLimit() usize {
+    return fileWriteRequestLimit(builtin.os.tag, if (builtin.os.tag == .linux) std.heap.pageSize() else 0);
+}
+
 fn osWriteFile(_: ?*anyopaque, std_io: std.Io, path: []const u8, data: []const u8) WriteError!void {
-    const file = try std.Io.Dir.cwd().createFile(std_io, path, .{});
+    const file = try std.Io.Dir.cwd().createFile(std_io, path, .{ .permissions = private_file_permissions });
     defer file.close(std_io);
 
     try writeFileContents(std_io, file, data);
@@ -757,7 +770,7 @@ fn osWriteTempFile(_: ?*anyopaque, io: std.Io, allocator: Allocator, path: []con
         io.random(&nonce);
         const staging = try std.fmt.allocPrint(allocator, "{s}.{s}.tmp", .{ path, std.fmt.bytesToHex(nonce, .lower) });
         errdefer allocator.free(staging);
-        const file = std.Io.Dir.cwd().createFile(io, staging, .{ .exclusive = true }) catch |err| switch (err) {
+        const file = std.Io.Dir.cwd().createFile(io, staging, .{ .exclusive = true, .permissions = private_file_permissions }) catch |err| switch (err) {
             error.PathAlreadyExists => {
                 allocator.free(staging);
                 continue;
@@ -775,7 +788,7 @@ fn osWriteTempFile(_: ?*anyopaque, io: std.Io, allocator: Allocator, path: []con
 }
 
 fn writeFileContents(std_io: std.Io, file: std.Io.File, data: []const u8) WriteError!void {
-    const limit = fileWriteRequestLimit(builtin.os.tag, if (builtin.os.tag == .linux) std.heap.pageSize() else 0);
+    const limit = hostFileWriteRequestLimit();
     // Bound each submission to the host limit; writeStreamingAll still handles
     // partial progress below that limit. No copying or repeated truncation.
     var remaining = data;
@@ -784,6 +797,60 @@ fn writeFileContents(std_io: std.Io, file: std.Io.File, data: []const u8) WriteE
         try file.writeStreamingAll(std_io, remaining[0..count]);
         remaining = remaining[count..];
     }
+}
+
+fn missingWriteFileStream(_: ?*anyopaque, _: std.Io, _: []const u8, _: FileStream) WriteError!void {
+    return error.IoError;
+}
+
+/// A buffered file writer whose every submission respects the host's
+/// per-request limit, so a producer may hand it a borrowed slice of any size.
+const BoundedFileWriter = struct {
+    file: std.Io.File,
+    io: std.Io,
+    limit: usize,
+    err: ?std.Io.File.Writer.Error = null,
+    interface: std.Io.Writer,
+
+    fn init(file: std.Io.File, io: std.Io, buffer: []u8) BoundedFileWriter {
+        return .{
+            .file = file,
+            .io = io,
+            .limit = hostFileWriteRequestLimit(),
+            .interface = .{ .vtable = &.{ .drain = drain }, .buffer = buffer },
+        };
+    }
+
+    fn drain(interface: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
+        const self: *BoundedFileWriter = @alignCast(@fieldParentPtr("interface", interface));
+        // The buffer is far below every host limit, so it is one submission.
+        self.file.writeStreamingAll(self.io, interface.buffered()) catch |err| return self.fail(err);
+        interface.end = 0;
+        // Submit one bounded prefix of the first non-empty slice; the caller
+        // resubmits the remainder, exactly as after a short write.
+        for (data, 0..) |bytes, index| {
+            if (bytes.len == 0) continue;
+            if (index == data.len - 1 and splat == 0) break;
+            return self.file.writeStreaming(self.io, &.{}, &.{bytes[0..@min(bytes.len, self.limit)]}, 1) catch |err| return self.fail(err);
+        }
+        return 0;
+    }
+
+    fn fail(self: *BoundedFileWriter, err: std.Io.File.Writer.Error) std.Io.Writer.Error {
+        self.err = err;
+        return error.WriteFailed;
+    }
+};
+
+fn osWriteFileStream(_: ?*anyopaque, std_io: std.Io, path: []const u8, stream: FileStream) WriteError!void {
+    const file = try std.Io.Dir.cwd().createFile(std_io, path, .{ .permissions = private_file_permissions });
+    defer file.close(std_io);
+
+    var buffer: [8192]u8 = undefined;
+    var writer = BoundedFileWriter.init(file, std_io, &buffer);
+    // A producer that fails without a file error has no native cause to preserve.
+    stream.write(stream.context, &writer.interface) catch return writer.err orelse error.IoError;
+    writer.interface.flush() catch return writer.err orelse error.IoError;
 }
 
 fn osFileExists(_: ?*anyopaque, std_io: std.Io, path: []const u8) bool {
@@ -940,7 +1007,7 @@ fn osCanonicalize(_: ?*anyopaque, std_io: std.Io, path: []const u8, allocator: A
         return osCanonicalizeLibc(path, allocator);
     }
 
-    var buffer: [std.Io.Dir.max_path_bytes]u8 = [_]u8{0} ** std.Io.Dir.max_path_bytes;
+    var buffer: [std.Io.Dir.max_path_bytes]u8 = @as([std.Io.Dir.max_path_bytes]u8, @splat(0));
     const len = std.Io.Dir.cwd().realPathFile(std_io, path, &buffer) catch |err| return switch (err) {
         error.FileNotFound => error.FileNotFound,
         error.AccessDenied => error.AccessDenied,
@@ -953,11 +1020,11 @@ fn osCanonicalizeLibc(path: []const u8, allocator: Allocator) CanonicalizeError!
     if (std.mem.findScalar(u8, path, 0) != null) return error.IoError;
     if (path.len >= std.posix.PATH_MAX) return error.IoError;
 
-    var path_buffer: [std.posix.PATH_MAX]u8 = [_]u8{0} ** std.posix.PATH_MAX;
+    var path_buffer: [std.posix.PATH_MAX]u8 = @as([std.posix.PATH_MAX]u8, @splat(0));
     @memcpy(path_buffer[0..path.len], path);
     const path_z = path_buffer[0..path.len :0];
 
-    var resolved_buffer: [std.posix.PATH_MAX]u8 = [_]u8{0} ** std.posix.PATH_MAX;
+    var resolved_buffer: [std.posix.PATH_MAX]u8 = @as([std.posix.PATH_MAX]u8, @splat(0));
     while (true) {
         if (std.c.realpath(path_z, resolved_buffer[0..].ptr)) |resolved| {
             std.debug.assert(resolved == resolved_buffer[0..].ptr);
@@ -965,7 +1032,7 @@ fn osCanonicalizeLibc(path: []const u8, allocator: Allocator) CanonicalizeError!
             return allocator.dupe(u8, resolved_buffer[0..len]) catch error.OutOfMemory;
         }
 
-        const err = @as(std.posix.E, @enumFromInt(std.c._errno().*));
+        const err = @as(std.posix.E, @fromBackingInt(@intCast(std.c._errno().*)));
         if (err == .INTR) continue;
         if (err == .NOENT or err == .NOTDIR) return error.FileNotFound;
         if (err == .ACCES) return error.AccessDenied;
@@ -974,7 +1041,7 @@ fn osCanonicalizeLibc(path: []const u8, allocator: Allocator) CanonicalizeError!
 }
 
 fn osMakePath(_: ?*anyopaque, std_io: std.Io, path: []const u8) MakePathError!void {
-    return std.Io.Dir.cwd().createDirPath(std_io, path);
+    _ = try std.Io.Dir.cwd().createDirPathStatus(std_io, path, private_dir_permissions);
 }
 
 fn osRename(_: ?*anyopaque, std_io: std.Io, old_path: []const u8, new_path: []const u8) RenameError!void {
@@ -982,7 +1049,7 @@ fn osRename(_: ?*anyopaque, std_io: std.Io, old_path: []const u8, new_path: []co
 }
 
 fn osGetEnvVar(_: ?*anyopaque, _: std.Io, key: []const u8, allocator: Allocator) GetEnvVarError![]u8 {
-    const key_z = allocator.dupeZ(u8, key) catch return error.OutOfMemory;
+    const key_z = allocator.dupeSentinel(u8, key, 0) catch return error.OutOfMemory;
     defer allocator.free(key_z);
     const value = std.c.getenv(key_z) orelse return error.EnvironmentVariableMissing;
     return allocator.dupe(u8, std.mem.span(value)) catch return error.OutOfMemory;
@@ -1014,29 +1081,15 @@ fn osFetchUrl(_: ?*anyopaque, _: std.Io, _: Allocator, _: []const u8, _: []const
 }
 
 fn osWriteStdout(_: ?*anyopaque, std_io: std.Io, data: []const u8) StdioError!void {
-    std.Io.File.stdout().writeStreamingAll(std_io, data) catch |err| return switch (err) {
-        error.AccessDenied,
-        error.Canceled,
-        error.DeviceBusy,
-        error.DiskQuota,
-        error.FileBusy,
-        error.FileTooBig,
-        error.InputOutput,
-        error.LockViolation,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotOpenForWriting,
-        error.PermissionDenied,
-        error.SystemResources,
-        error.Unexpected,
-        error.WouldBlock,
-        => error.IoError,
-        error.BrokenPipe => error.BrokenPipe,
-    };
+    return osWriteStream(std.Io.File.stdout(), std_io, data);
 }
 
 fn osWriteStderr(_: ?*anyopaque, std_io: std.Io, data: []const u8) StdioError!void {
-    std.Io.File.stderr().writeStreamingAll(std_io, data) catch |err| return switch (err) {
+    return osWriteStream(std.Io.File.stderr(), std_io, data);
+}
+
+fn osWriteStream(file: std.Io.File, std_io: std.Io, data: []const u8) StdioError!void {
+    file.writeStreamingAll(std_io, data) catch |err| return switch (err) {
         error.AccessDenied,
         error.Canceled,
         error.DeviceBusy,
@@ -1068,7 +1121,7 @@ fn osIsTty(_: ?*anyopaque, std_io: std.Io) bool {
 fn osTerminalWidth(_: ?*anyopaque, std_io: std.Io) ?u16 {
     return switch (builtin.os.tag) {
         .windows => winTerminalWidth(std_io),
-        .wasi, .freestanding => null,
+        .wasi, .freestanding, .wiiu, .@"switch", .gba, .psx, .tios, .ashetos => null,
         .other,
         .contiki,
         .fuchsia,
@@ -1195,7 +1248,7 @@ fn osDeleteTree(_: ?*anyopaque, std_io: std.Io, path: []const u8) DeleteError!vo
 }
 
 fn osCreateDir(_: ?*anyopaque, std_io: std.Io, path: []const u8) MakePathError!void {
-    std.Io.Dir.cwd().createDir(std_io, path, .default_dir) catch |err| return switch (err) {
+    std.Io.Dir.cwd().createDir(std_io, path, private_dir_permissions) catch |err| return switch (err) {
         error.BadPathName,
         error.Canceled,
         error.DiskQuota,
@@ -1594,7 +1647,7 @@ const BoundedWriteTestIo = struct {
         const self: *@This() = @ptrCast(@alignCast(context.?));
         const request = switch (operation) {
             .file_write_streaming => |request| request,
-            .file_read_streaming, .device_io_control, .net_receive => unreachable,
+            .file_read_streaming, .device_io_control, .net_receive, .net_send, .net_read, .net_write => unreachable,
         };
         std.debug.assert(request.header.len == 0 and request.data.len == 1 and request.splat == 1);
         const bytes = request.data[0];
@@ -1727,6 +1780,33 @@ test "OS writeFile propagates a later chunk error and closes the file" {
     var mock = BoundedWriteTestIo{ .data = bytes, .limit = limit, .fail_on_call = 2 };
     try std.testing.expectError(error.DiskQuota, mock.run());
     try std.testing.expectEqual(limit, mock.written);
+    try std.testing.expectEqual(@as(usize, 2), mock.calls);
+    try std.testing.expectEqual(@as(usize, 1), mock.creates);
+    try std.testing.expectEqual(@as(usize, 1), mock.closes);
+}
+
+test "OS writeFileStream bounds a producer's large borrowed slice" {
+    if (comptime (builtin.os.tag != .linux and !builtin.os.tag.isDarwin()) or @bitSizeOf(usize) < 64) return error.SkipZigTest;
+    const limit = fileWriteRequestLimit(builtin.os.tag, std.heap.pageSize());
+    const bytes = try std.posix.mmap(null, 2 * limit, .{}, .{ .TYPE = .PRIVATE, .ANONYMOUS = true }, -1, 0);
+    defer std.posix.munmap(bytes);
+    const Producer = struct {
+        fn write(raw: *const anyopaque, destination: *std.Io.Writer) std.Io.Writer.Error!void {
+            const data: *const []const u8 = @ptrCast(@alignCast(raw));
+            try destination.writeAll(data.*);
+        }
+    };
+    // Both submissions exceed the writer's buffer, so the reserved bytes are
+    // never read and each request is the producer's own borrowed memory.
+    var mock = BoundedWriteTestIo{ .data = bytes, .limit = limit };
+    var vtable = std.testing.io.vtable.*;
+    vtable.dirCreateFile = BoundedWriteTestIo.createFile;
+    vtable.fileClose = BoundedWriteTestIo.close;
+    vtable.operate = BoundedWriteTestIo.operate;
+    const fs = os(std.testing.allocator, std.testing.allocator, .{ .userdata = &mock, .vtable = &vtable });
+    const data: []const u8 = bytes;
+    try fs.writeFileStream("bounded-stream", .{ .context = @ptrCast(&data), .write = Producer.write });
+    try std.testing.expectEqual(bytes.len, mock.written);
     try std.testing.expectEqual(@as(usize, 2), mock.calls);
     try std.testing.expectEqual(@as(usize, 1), mock.creates);
     try std.testing.expectEqual(@as(usize, 1), mock.closes);

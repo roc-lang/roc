@@ -1,11 +1,9 @@
-//! Doc Comment Extraction Utility
+//! Doc comments for hover and completion.
 //!
-//! This module provides utilities for extracting documentation comments from Roc source code.
-//! In Roc, doc comments use the `##` prefix (not `###` which is a section header comment).
-//! Multiple consecutive doc comment lines are joined together.
-//!
-//! Since the tokenizer strips all comments, this module extracts doc comments on-demand
-//! from the preserved source text using region information.
+//! The tokenizer drops comments, so documentation is read on demand from the
+//! preserved source text. What counts as a definition's doc block is decided
+//! by `base.doc_comment.gatherBlockBefore`, the same gatherer the documentation
+//! generator uses.
 
 const std = @import("std");
 const base = @import("base");
@@ -14,89 +12,57 @@ const CIR = can.CIR;
 const NodeStore = can.NodeStore;
 const Allocator = std.mem.Allocator;
 
-/// Extracts doc comments preceding a given byte offset in source code.
-/// Returns an allocated string containing the doc comment text (with `## ` prefixes stripped),
-/// or null if no doc comments are found.
+/// The doc comment block of the definition at `offset`, joined with newlines
+/// and with bidirectional control characters made visible, or null if the
+/// definition has none.
 ///
-/// Doc comments in Roc use `##` prefix (not `###` which is just a section header comment).
-/// Multiple consecutive doc comment lines are joined with newlines.
+/// `offset` may be where the definition's pattern starts even when a type
+/// annotation line sits between the doc block and the pattern.
 ///
 /// The caller owns the returned memory and must free it with the provided allocator.
 pub fn extractDocCommentBefore(allocator: Allocator, source: []const u8, offset: u32) Allocator.Error!?[]const u8 {
-    if (source.len == 0 or offset == 0) return null;
+    const def_start = aboveAnnotationLines(source, @min(offset, @as(u32, @intCast(source.len))));
+    const block = (try base.doc_comment.gatherBlockBefore(allocator, source, def_start)) orelse return null;
+    defer block.deinit(allocator);
 
-    // Clamp offset to source bounds
-    const safe_offset = @min(offset, @as(u32, @intCast(source.len)));
-
-    // Find the start of the line containing the definition
-    const def_line_start = findLineStart(source, safe_offset);
-
-    // Now scan backwards from the definition line to find doc comments
-    // We need to find lines that start with `##` (but not `###`)
-    var doc_lines: std.ArrayListUnmanaged([]const u8) = .empty;
-    defer doc_lines.deinit(allocator);
-
-    var current_pos = def_line_start;
-
-    // Skip backwards through any blank lines or whitespace-only lines between
-    // the definition and doc comments
-    while (current_pos > 0) {
-        // Find the start of the previous line
-        const prev_line_end = skipBackwardsToNewline(source, current_pos);
-        if (prev_line_end == 0) break;
-
-        const prev_line_start = findLineStart(source, prev_line_end - 1);
-        const prev_line = source[prev_line_start..current_pos];
-
-        // Check if this line is a doc comment, whitespace-only, or something else
-        const trimmed = std.mem.trim(u8, prev_line, " \t\r\n");
-
-        if (trimmed.len == 0) {
-            // Empty/whitespace line - continue scanning backwards
-            // But only allow one blank line gap between doc comments and definition
-            current_pos = prev_line_start;
-            continue;
-        }
-
-        if (isDocCommentLine(trimmed)) {
-            // Found a doc comment line - extract the content
-            const content = extractDocContent(trimmed);
-            try doc_lines.append(allocator, content);
-            current_pos = prev_line_start;
-        } else if (isRegularComment(trimmed)) {
-            // Regular comment (single #) or section header (###) - stop searching
-            break;
-        } else if (isTypeAnnotation(trimmed)) {
-            // Type annotation line - skip over it and continue scanning backwards
-            // This handles cases like:
-            //   ## Doc comment
-            //   add : I64, I64 -> I64
-            //   add = |a, b| a + b
-            current_pos = prev_line_start;
-        } else {
-            // Non-comment, non-whitespace content - stop searching
-            break;
-        }
-    }
-
-    if (doc_lines.items.len == 0) return null;
-
-    // Reverse the lines (we collected them bottom-to-top)
-    std.mem.reverse([]const u8, doc_lines.items);
-
-    // Join all doc comment lines with newlines
     var visible = std.Io.Writer.Allocating.init(allocator);
     defer visible.deinit();
-    for (doc_lines.items, 0..) |line, i| {
+    for (block.lines, 0..) |line, i| {
         if (i != 0) visible.writer.writeByte('\n') catch return error.OutOfMemory;
-        @import("base").bidi.writeVisible(&visible.writer, line) catch return error.OutOfMemory;
+        base.bidi.writeVisible(&visible.writer, line) catch return error.OutOfMemory;
     }
     return try visible.toOwnedSlice();
+}
+
+/// Move `offset` up over the type annotation lines directly above its line.
+///
+/// Hover and completion sometimes know only where a binding's pattern starts,
+/// not whether the binding is annotated:
+///
+///     ## Doc comment
+///     add : I64, I64 -> I64
+///     add = |a, b| a + b
+///
+/// The doc block of `add` sits above the annotation, so that is where
+/// gathering has to start.
+fn aboveAnnotationLines(source: []const u8, offset: u32) u32 {
+    var current = offset;
+    while (true) {
+        const line_start = findLineStart(source, current);
+        if (line_start == 0) return current;
+        const above_start = findLineStart(source, line_start - 1);
+        const above = std.mem.trim(u8, source[above_start .. line_start - 1], " \t\r");
+        if (!isTypeAnnotation(above)) return current;
+        current = above_start;
+    }
 }
 
 /// Checks if a trimmed line is a type annotation (has ':' but no '=')
 /// Type annotations in Roc look like: `add : I64, I64 -> I64`
 fn isTypeAnnotation(trimmed: []const u8) bool {
+    // A comment that mentions a colon is not an annotation.
+    if (trimmed.len == 0 or trimmed[0] == '#') return false;
+
     // Look for ':' character
     const colon_pos = std.mem.findScalar(u8, trimmed, ':') orelse return false;
 
@@ -105,32 +71,8 @@ fn isTypeAnnotation(trimmed: []const u8) bool {
     return equals_pos == null;
 }
 
-/// Checks if a trimmed line is a doc comment (starts with ## but not ###)
-fn isDocCommentLine(trimmed: []const u8) bool {
-    return base.doc_comment.isDocCommentLine(trimmed);
-}
-
-/// Checks if a line is a regular comment (single #) or section header (###)
-fn isRegularComment(trimmed: []const u8) bool {
-    if (trimmed.len == 0) return false;
-    if (trimmed[0] != '#') return false;
-    // Single # is regular comment
-    if (trimmed.len == 1) return true;
-    if (trimmed[1] != '#') return true;
-    // ### is section header
-    if (trimmed.len >= 3 and trimmed[2] == '#') return true;
-    return false;
-}
-
-/// Extracts the content from a doc comment line, stripping the ## prefix
-fn extractDocContent(line: []const u8) []const u8 {
-    return base.doc_comment.stripPrefix(line);
-}
-
 /// Finds the start of the line containing the given position
 fn findLineStart(source: []const u8, pos: u32) u32 {
-    if (pos == 0) return 0;
-
     var i = pos;
     while (i > 0) {
         if (source[i - 1] == '\n') {
@@ -139,19 +81,6 @@ fn findLineStart(source: []const u8, pos: u32) u32 {
         i -= 1;
     }
     return 0;
-}
-
-/// Skips backwards from a position to find the newline before the current line
-/// Returns the position just before the newline, or 0 if at start of file
-fn skipBackwardsToNewline(source: []const u8, pos: u32) u32 {
-    if (pos == 0) return 0;
-
-    var i = pos;
-    // Skip any trailing whitespace/newlines at current position
-    while (i > 0 and (source[i - 1] == '\n' or source[i - 1] == '\r')) {
-        i -= 1;
-    }
-    return i;
 }
 
 // CIR-aware doc offset helpers
@@ -369,23 +298,22 @@ test "extractDocCommentBefore: complex multi-line with formatting" {
     try std.testing.expectEqualStrings(expected, result.?);
 }
 
-test "isDocCommentLine: various cases" {
-    try std.testing.expect(isDocCommentLine("## doc"));
-    try std.testing.expect(isDocCommentLine("##"));
-    try std.testing.expect(isDocCommentLine("##doc"));
-    try std.testing.expect(!isDocCommentLine("# comment"));
-    try std.testing.expect(!isDocCommentLine("### header"));
-    try std.testing.expect(!isDocCommentLine(""));
-    try std.testing.expect(!isDocCommentLine("#"));
+test "extractDocCommentBefore: agrees with the documentation generator about section headers" {
+    const allocator = std.testing.allocator;
+    const source = "## a\n### b\n## c\nfoo = 42";
+    const result = try extractDocCommentBefore(allocator, source, @intCast(std.mem.find(u8, source, "foo").?));
+    defer if (result) |r| allocator.free(r);
+
+    try std.testing.expectEqualStrings("c", result.?);
 }
 
-test "isRegularComment: various cases" {
-    try std.testing.expect(isRegularComment("# comment"));
-    try std.testing.expect(isRegularComment("#"));
-    try std.testing.expect(isRegularComment("### header"));
-    try std.testing.expect(!isRegularComment("## doc"));
-    try std.testing.expect(!isRegularComment("code"));
-    try std.testing.expect(!isRegularComment(""));
+test "extractDocCommentBefore: a blank line ends the doc block" {
+    const allocator = std.testing.allocator;
+    const source = "## About something else.\n\n## Doc comment\nfoo = 42";
+    const result = try extractDocCommentBefore(allocator, source, @intCast(std.mem.find(u8, source, "foo").?));
+    defer if (result) |r| allocator.free(r);
+
+    try std.testing.expectEqualStrings("Doc comment", result.?);
 }
 
 test "isTypeAnnotation: various cases" {

@@ -1016,7 +1016,7 @@ fn hostTreeClonePayload(tree: *const HostTree, ops: *builtins.host_abi.RocOps) H
         0 => .{
             .payload = .{ .leaf = tree.payload.leaf },
             .discriminant = 0,
-            .padding = [_]u8{0} ** 7,
+            .padding = @as([7]u8, @splat(0)),
         },
         1 => .{
             .payload = .{ .node = .{
@@ -1024,7 +1024,7 @@ fn hostTreeClonePayload(tree: *const HostTree, ops: *builtins.host_abi.RocOps) H
                 .right = hostTreeCloneBox(capturePtrAs(HostTree, tree.payload.node.right), ops),
             } },
             .discriminant = 1,
-            .padding = [_]u8{0} ** 7,
+            .padding = @as([7]u8, @splat(0)),
         },
         else => ops.crash("host boxed recursive tree capture had invalid discriminant"),
     };

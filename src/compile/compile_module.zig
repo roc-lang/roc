@@ -13,7 +13,6 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const parse = @import("parse");
 const can = @import("can");
-const CoreCtx = @import("ctx").CoreCtx;
 
 pub const AST = parse.AST;
 pub const ModuleEnv = can.ModuleEnv;
@@ -98,43 +97,6 @@ pub fn parseSingleModule(
     ast.store.emptyScratch();
 
     return ast;
-}
-
-/// Canonicalize a parsed module.
-///
-/// This function canonicalizes the AST into Canonical IR (CIR), performing:
-/// 1. Scope resolution
-/// 2. Desugaring
-/// 3. Semantic analysis
-/// 4. Validation for type checking
-///
-/// Results are stored in module_env (all_defs, all_statements, diagnostics, etc).
-///
-/// Memory ownership:
-/// - roc_ctx: Caller provides the Roc compiler context (allocators + I/O)
-/// - module_env: Caller provides; results stored here
-/// - parse_ast: Caller provides and manages
-/// - context: Builtin type context plus optional explicit imported module environments
-///
-/// Example:
-/// ```zig
-/// var module_env = try ModuleEnv.init(gpa, source);
-/// defer module_env.deinit();
-///
-/// const ast = try parseSingleModule(gpa, &module_env, .file, .{});
-/// defer ast.deinit();
-///
-/// try canonicalizeSingleModule(roc_ctx, &module_env, ast, context);
-///
-/// // Results are now in module_env
-/// ```
-pub fn canonicalizeSingleModule(
-    roc_ctx: CoreCtx,
-    module_env: *ModuleEnv,
-    parse_ast: *AST,
-    context: can.Can.ModuleInitContext,
-) Allocator.Error!void {
-    try can.canonicalizeModule(roc_ctx, module_env, parse_ast, context);
 }
 
 // Tests

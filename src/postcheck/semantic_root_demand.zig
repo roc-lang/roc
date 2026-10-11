@@ -44,7 +44,7 @@ pub const Plan = struct {
         var count: usize = 0;
         for (plan.modules.items) |module| {
             for (module.checked_procedure_templates.templates.items) |template| {
-                try plan.index.put(.{ .module = module.key.bytes, .template = @intFromEnum(template.template_id) }, count);
+                try plan.index.put(.{ .module = module.key.bytes, .template = @backingInt(template.template_id) }, count);
                 count += 1;
             }
         }
@@ -56,9 +56,9 @@ pub const Plan = struct {
         defer allocator.free(addresses);
         for (plan.modules.items, 0..) |module, module_index| {
             for (module.checked_procedure_templates.templates.items) |template| {
-                addresses[plan.node(module.key.bytes, @intFromEnum(template.template_id))] = .{
+                addresses[plan.node(module.key.bytes, @backingInt(template.template_id))] = .{
                     .module = module_index,
-                    .template = @intFromEnum(template.template_id),
+                    .template = @backingInt(template.template_id),
                 };
             }
         }
@@ -85,7 +85,7 @@ pub const Plan = struct {
             const caller = queue[read];
             const address = addresses[caller];
             const module = plan.modules.items[address.module];
-            const template = module.checked_procedure_templates.get(@enumFromInt(address.template));
+            const template = module.checked_procedure_templates.get(@fromBackingInt(@intCast(address.template)));
             if (template.semantic_preparation == .type_callable_solution_required or
                 template.evidence_params.len != 0 or
                 template.static_dispatch_plans.len != 0 or
@@ -96,7 +96,7 @@ pub const Plan = struct {
             }
             const refs = template.resolved_value_refs;
             for (module.resolved_value_refs.template_refs[refs.start .. refs.start + refs.len]) |ref| {
-                const record = module.resolved_value_refs.records[@intFromEnum(ref)];
+                const record = module.resolved_value_refs.records[@backingInt(ref)];
                 const procedure: ?checked.ProcedureUseTemplate = switch (record.ref) {
                     .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |procedure| procedure,
                     .platform_required_proc => |required| required.procedure,
@@ -186,7 +186,7 @@ pub const Plan = struct {
     }
 
     fn templateNode(self: *const Plan, template: canonical.ProcTemplate) usize {
-        return self.node(canonical.procTemplateModuleDigest(template).bytes, @intFromEnum(template.template));
+        return self.node(canonical.procTemplateModuleDigest(template).bytes, @backingInt(template.template));
     }
 
     fn templateForUse(self: *const Plan, use: checked.ProcedureUseTemplate) ?canonical.ProcTemplate {
@@ -290,7 +290,7 @@ test "semantic demand preserves a transitive obligation inside recursive direct 
 
 test "semantic demand only omits proved runtime roots never observations or pairing" {
     const allocator = std.testing.allocator;
-    const module_key = checked.ModuleId{ .bytes = [_]u8{0x71} ** 32 };
+    const module_key = checked.ModuleId{ .bytes = @as([32]u8, @splat(0x71)) };
     var plan = Plan{
         .allocator = allocator,
         .modules = .empty,
@@ -304,14 +304,14 @@ test "semantic demand only omits proved runtime roots never observations or pair
         .order = 0,
         .module_idx = 0,
         .kind = .runtime_entrypoint,
-        .source = .{ .def = @enumFromInt(0) },
-        .checked_type = @enumFromInt(0),
+        .source = .{ .def = @fromBackingInt(@intCast(0)) },
+        .checked_type = @fromBackingInt(@intCast(0)),
         .abi = .roc,
         .exposure = .private,
         .procedure_template = .{
             .artifact = .{ .bytes = module_key.bytes },
-            .proc_base = @enumFromInt(0),
-            .template = @enumFromInt(0),
+            .proc_base = @fromBackingInt(@intCast(0)),
+            .template = @fromBackingInt(@intCast(0)),
         },
     };
     try std.testing.expectEqual(Proof.complete_data_only_subtree, plan.rootProof(request, module_key));

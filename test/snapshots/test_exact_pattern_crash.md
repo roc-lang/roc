@@ -316,7 +316,7 @@ main = {
 			(s-let
 				(p-assign (ident "p2"))
 				(e-runtime-error (tag "erroneous_value_expr")))
-			(e-runtime-error (tag "erroneous_value_use"))))
+			(e-runtime-error (tag "erroneous_value_expr"))))
 	(s-alias-decl
 		(ty-header (name "Pair")
 			(ty-args

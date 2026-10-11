@@ -88,11 +88,6 @@ pub const TestSyntaxDriver = struct {
         return try self.allocator.alloc(Diagnostics.PublishDiagnostics, 0);
     }
 
-    pub fn getImportedModuleEnvs(self: *TestSyntaxDriver, _: []const u8) std.mem.Allocator.Error!?[]*can.ModuleEnv {
-        self.imported_module_calls += 1;
-        return null;
-    }
-
     pub fn getCheckedModuleForDocument(_: *TestSyntaxDriver, _: []const u8, _: []const u8) std.mem.Allocator.Error!?CheckedModule {
         return null;
     }

@@ -20,12 +20,12 @@ interner: base.SerialStringInterner = .{},
 
 /// Intern a spelling once in this program's Boxy identity domain.
 pub fn insert(self: *Self, allocator: std.mem.Allocator, text: []const u8) std.mem.Allocator.Error!Id {
-    return @enumFromInt(try self.interner.insert(allocator, text));
+    return @fromBackingInt(@intCast(try self.interner.insert(allocator, text)));
 }
 
 /// Resolve the text used by inspection and invariant diagnostics.
 pub fn get(self: *const Self, id: Id) []const u8 {
-    return self.interner.getText(@intFromEnum(id));
+    return self.interner.getText(@backingInt(id));
 }
 
 /// Number of assigned dense identities.

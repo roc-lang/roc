@@ -35,18 +35,6 @@ pub const RenderBuffer = struct {
     }
 };
 
-/// Render a type annotation index to a newly allocated Roc syntax string.
-pub fn renderTypeAnnoToString(
-    gpa: Allocator,
-    module_env: *const ModuleEnv,
-    type_anno_idx: TypeAnno.Idx,
-) Allocator.Error![]u8 {
-    var buf = RenderBuffer.init();
-    errdefer buf.deinit(gpa);
-    try renderTypeAnno(&buf, gpa, module_env, type_anno_idx, false);
-    return buf.toOwnedSlice(gpa);
-}
-
 /// Render a type annotation to Roc syntax into a buffer.
 ///
 /// `needs_parens` indicates whether compound types (like functions) should be

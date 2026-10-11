@@ -134,7 +134,7 @@ pub const Plan = struct {
 
     pub fn demand(self: *const Plan, instance: InstanceId) Demand {
         if (self.failed) @panic("failed evaluation demand plan cannot be observed");
-        const index = @intFromEnum(instance);
+        const index = @backingInt(instance);
         if (index >= self.demands.len) @panic("evaluation demand referenced an unpublished instance");
         return self.demands[index];
     }
@@ -147,7 +147,7 @@ pub const Plan = struct {
         defer pending.deinit(self.allocator);
         for (roots) |instance| try pending.append(self.allocator, .{ .instance = instance, .lane = lane });
         while (pending.pop()) |item| {
-            const index = @intFromEnum(item.instance);
+            const index = @backingInt(item.instance);
             if (index >= self.graph.instances.len) @panic("complete demand summary referenced an unpublished instance");
             const state = &self.demands[index];
             const visited = switch (item.lane) {
@@ -194,11 +194,11 @@ pub const Plan = struct {
 };
 
 test "evaluation demand discovers obligations without executing runtime procedures" {
-    const edge = [_]Dependency{.{ .instance = @enumFromInt(1), .kind = .direct_call }};
+    const edge = [_]Dependency{.{ .instance = @fromBackingInt(@intCast(1)), .kind = .direct_call }};
     const obligations = [_]Obligation{.{
-        .id = @enumFromInt(0),
+        .id = @fromBackingInt(@intCast(0)),
         .kind = .literal_conversion,
-        .execution = @enumFromInt(2),
+        .execution = @fromBackingInt(@intCast(2)),
     }};
     const graph = [_]CompleteSummary{
         .{ .dependencies = &edge, .obligations = &.{} },
@@ -206,14 +206,14 @@ test "evaluation demand discovers obligations without executing runtime procedur
         .{ .dependencies = &.{}, .obligations = &.{} },
         .{ .dependencies = &.{}, .obligations = &.{} },
     };
-    var plan = try Plan.init(std.testing.allocator, .{ .instances = &graph }, &.{@enumFromInt(0)}, &.{});
+    var plan = try Plan.init(std.testing.allocator, .{ .instances = &graph }, &.{@fromBackingInt(@intCast(0))}, &.{});
     defer plan.deinit();
-    try std.testing.expect(plan.demand(@enumFromInt(0)).semantic);
-    try std.testing.expect(!plan.demand(@enumFromInt(0)).evaluation);
-    try std.testing.expect(plan.demand(@enumFromInt(1)).semantic);
-    try std.testing.expect(!plan.demand(@enumFromInt(1)).evaluation);
-    try std.testing.expect(plan.demand(@enumFromInt(2)).evaluation);
-    try std.testing.expect(!plan.demand(@enumFromInt(3)).semantic);
+    try std.testing.expect(plan.demand(@fromBackingInt(@intCast(0))).semantic);
+    try std.testing.expect(!plan.demand(@fromBackingInt(@intCast(0))).evaluation);
+    try std.testing.expect(plan.demand(@fromBackingInt(@intCast(1))).semantic);
+    try std.testing.expect(!plan.demand(@fromBackingInt(@intCast(1))).evaluation);
+    try std.testing.expect(plan.demand(@fromBackingInt(@intCast(2))).evaluation);
+    try std.testing.expect(!plan.demand(@fromBackingInt(@intCast(3))).semantic);
     try std.testing.expectEqual(@as(usize, 1), plan.obligations.items.len);
 }
 
@@ -222,17 +222,17 @@ test "evaluation demand preserves every exact callable transfer and recursive ob
     var dependencies: [kinds.len][1]Dependency = undefined;
     var graph: [kinds.len + 1]CompleteSummary = undefined;
     for (kinds, 0..) |kind, index| {
-        dependencies[index][0] = .{ .instance = @enumFromInt(index + 1), .kind = kind };
+        dependencies[index][0] = .{ .instance = @fromBackingInt(@intCast(index + 1)), .kind = kind };
         graph[index] = .{ .dependencies = &dependencies[index], .obligations = &.{} };
     }
-    const recursion = [_]Dependency{.{ .instance = @enumFromInt(0), .kind = .direct_call }};
+    const recursion = [_]Dependency{.{ .instance = @fromBackingInt(@intCast(0)), .kind = .direct_call }};
     const obligations = [_]Obligation{.{
-        .id = @enumFromInt(0),
+        .id = @fromBackingInt(@intCast(0)),
         .kind = .empirical_destructure,
-        .execution = @enumFromInt(kinds.len),
+        .execution = @fromBackingInt(@intCast(kinds.len)),
     }};
     graph[kinds.len] = .{ .dependencies = &recursion, .obligations = &obligations };
-    var plan = try Plan.init(std.testing.allocator, .{ .instances = &graph }, &.{@enumFromInt(0)}, &.{});
+    var plan = try Plan.init(std.testing.allocator, .{ .instances = &graph }, &.{@fromBackingInt(@intCast(0))}, &.{});
     defer plan.deinit();
     try std.testing.expectEqual(graph.len, plan.metrics.semantic_instances);
     try std.testing.expectEqual(graph.len, plan.metrics.evaluation_instances);
@@ -240,21 +240,21 @@ test "evaluation demand preserves every exact callable transfer and recursive ob
 }
 
 test "evaluation demand runtime continuation does not repeat discovery" {
-    const edge = [_]Dependency{.{ .instance = @enumFromInt(1), .kind = .capture }};
+    const edge = [_]Dependency{.{ .instance = @fromBackingInt(@intCast(1)), .kind = .capture }};
     const obligations = [_]Obligation{.{
-        .id = @enumFromInt(0),
+        .id = @fromBackingInt(@intCast(0)),
         .kind = .pairing,
-        .execution = @enumFromInt(1),
+        .execution = @fromBackingInt(@intCast(1)),
     }};
     const graph = [_]CompleteSummary{
         .{ .dependencies = &edge, .obligations = &obligations },
         .{ .dependencies = &.{}, .obligations = &.{} },
     };
-    var plan = try Plan.init(std.testing.allocator, .{ .instances = &graph }, &.{@enumFromInt(0)}, &.{});
+    var plan = try Plan.init(std.testing.allocator, .{ .instances = &graph }, &.{@fromBackingInt(@intCast(0))}, &.{});
     defer plan.deinit();
     const before = plan.metrics;
-    try plan.continueRuntime(&.{@enumFromInt(0)});
-    try plan.continueRuntime(&.{@enumFromInt(0)});
+    try plan.continueRuntime(&.{@fromBackingInt(@intCast(0))});
+    try plan.continueRuntime(&.{@fromBackingInt(@intCast(0))});
     try std.testing.expectEqual(before.semantic_instances, plan.metrics.semantic_instances);
     try std.testing.expectEqual(before.evaluation_instances, plan.metrics.evaluation_instances);
     try std.testing.expectEqual(before.obligation_instances, plan.metrics.obligation_instances);
@@ -264,19 +264,19 @@ test "evaluation demand runtime continuation does not repeat discovery" {
 test "evaluation demand releases every failed producer session" {
     const Case = struct {
         fn run(allocator: Allocator) !void {
-            const edge = [_]Dependency{.{ .instance = @enumFromInt(1), .kind = .result }};
+            const edge = [_]Dependency{.{ .instance = @fromBackingInt(@intCast(1)), .kind = .result }};
             const obligations = [_]Obligation{.{
-                .id = @enumFromInt(0),
+                .id = @fromBackingInt(@intCast(0)),
                 .kind = .literal_conversion,
-                .execution = @enumFromInt(1),
+                .execution = @fromBackingInt(@intCast(1)),
             }};
             const graph = [_]CompleteSummary{
                 .{ .dependencies = &edge, .obligations = &obligations },
                 .{ .dependencies = &.{}, .obligations = &.{} },
             };
-            var plan = try Plan.init(allocator, .{ .instances = &graph }, &.{@enumFromInt(0)}, &.{});
+            var plan = try Plan.init(allocator, .{ .instances = &graph }, &.{@fromBackingInt(@intCast(0))}, &.{});
             defer plan.deinit();
-            try plan.continueRuntime(&.{@enumFromInt(0)});
+            try plan.continueRuntime(&.{@fromBackingInt(@intCast(0))});
             try std.testing.expectEqual(@as(usize, 2), plan.metrics.semantic_instances);
             try std.testing.expectEqual(@as(usize, 1), plan.metrics.evaluation_instances);
         }

@@ -163,7 +163,7 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 306)
+								(e-call (constraint-fn-var 299)
 									(e-lookup-local
 										(p-assign (ident "save")))
 									(e-empty_record)))
@@ -196,7 +196,7 @@ NO CHANGE
 						(e-empty_record))))))
 	(d-let
 		(p-assign (ident "use"))
-		(e-call (constraint-fn-var 369)
+		(e-call (constraint-fn-var 352)
 			(e-lookup-local
 				(p-assign (ident "run")))
 			(e-lambda

@@ -7,7 +7,7 @@ type=snippet
 ~~~roc
 process : a, b -> c
 	where [a.convert : a -> c, b.transform : b -> c]
-process = ...
+process = |_, _| ...
 ~~~
 # EXPECTED
 NIL
@@ -17,7 +17,7 @@ NIL
 ~~~zig
 LowerIdent,OpColon,LowerIdent,Comma,LowerIdent,OpArrow,LowerIdent,
 KwWhere,OpenSquare,LowerIdent,NoSpaceDotLowerIdent,OpColon,LowerIdent,OpArrow,LowerIdent,Comma,LowerIdent,NoSpaceDotLowerIdent,OpColon,LowerIdent,OpArrow,LowerIdent,CloseSquare,
-LowerIdent,OpAssign,TripleDot,
+LowerIdent,OpAssign,OpBar,Underscore,Comma,Underscore,OpBar,TripleDot,
 EndOfFile,
 ~~~
 # PARSE
@@ -41,7 +41,11 @@ EndOfFile,
 						(ty-var (raw "c"))))))
 		(s-decl
 			(p-ident (raw "process"))
-			(e-ellipsis))))
+			(e-lambda
+				(args
+					(p-underscore)
+					(p-underscore))
+				(e-ellipsis)))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -52,7 +56,11 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "process"))
-		(e-not-implemented)
+		(e-lambda
+			(args
+				(p-underscore)
+				(p-underscore))
+			(e-not-implemented))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "a"))

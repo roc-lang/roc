@@ -54,9 +54,8 @@ pub const HostEvent = union(enum) {
 
     pub fn bytes(self: HostEvent) []const u8 {
         return switch (self) {
-            .dbg => |msg| msg,
+            inline .dbg, .crashed => |msg| msg,
             .expect_failed => |event| event.message,
-            .crashed => |msg| msg,
         };
     }
 };
@@ -258,7 +257,7 @@ fn handleSourceEvent(self: *CompileTimeHost, event: SourceEvents.Event) void {
             std.debug.assert((observation.guard_producer != null) == (descriptor.failure.has_guard_root == 1));
             self.failed_observation = observation;
             self.failed_stmt = null;
-            const statement: ?u32 = if (observation.origin_statement) |id| @intFromEnum(id) else null;
+            const statement: ?u32 = if (observation.origin_statement) |id| @backingInt(id) else null;
             if (self.applyFailureOrigin(statement)) return;
             self.failed_region = null;
             self.failed_loc = null;
@@ -354,7 +353,7 @@ pub fn finishDemandTiming(self: *CompileTimeHost, started: i128) void {
 /// Read storage explicitly published ready by the scheduler. This host API
 /// does not execute a producer and is not a generated-code runtime service.
 pub fn staticSlotAddress(self: *const CompileTimeHost, slot: lir.LIR.StaticDataId) usize {
-    const index = @intFromEnum(slot);
+    const index = @backingInt(slot);
     std.debug.assert(index < self.static_slot_ready.len);
     std.debug.assert(index < self.static_slot_addresses.len);
     std.debug.assert(self.static_slot_ready[index]);
@@ -365,8 +364,8 @@ pub fn staticSlotAddress(self: *const CompileTimeHost, slot: lir.LIR.StaticDataI
 fn applyFailureOrigin(self: *CompileTimeHost, origin_statement: ?u32) bool {
     if (self.failed_observation) |observation| {
         if (observation.origin_slot) |slot| {
-            std.debug.assert(@intFromEnum(slot) < self.slot_failure_origins.len);
-            if (self.slot_failure_origins[@intFromEnum(slot)]) |origin| {
+            std.debug.assert(@backingInt(slot) < self.slot_failure_origins.len);
+            if (self.slot_failure_origins[@backingInt(slot)]) |origin| {
                 self.failed_region = origin.region;
                 self.failed_loc = origin.loc;
                 return true;
@@ -439,7 +438,7 @@ fn jump(self: *CompileTimeHost, termination: Termination) noreturn {
             longjmp(active_jmp_buf, 1);
         }
     }
-    @panic("compile-time host failure escaped without an active crash boundary");
+    base.invariant("{s}", .{"compile-time host failure escaped without an active crash boundary"});
 }
 
 fn rocAlloc(roc_ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
@@ -458,14 +457,14 @@ fn rocAlloc(roc_ops: *RocOps, length: usize, alignment: usize) callconv(.c) *any
 fn rocDealloc(roc_ops: *RocOps, ptr: *anyopaque, _: usize) callconv(.c) void {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
     _ = self.allocations.fetchRemove(@intFromPtr(ptr)) orelse {
-        @panic("compile-time RocOps deallocated unknown pointer");
+        base.invariant("{s}", .{"compile-time RocOps deallocated unknown pointer"});
     };
 }
 
 fn rocRealloc(roc_ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
     const old_info = self.allocations.get(@intFromPtr(ptr)) orelse {
-        @panic("compile-time RocOps reallocated unknown pointer");
+        base.invariant("{s}", .{"compile-time RocOps reallocated unknown pointer"});
     };
     const alloc_len = @max(new_length, 1);
     const arena_allocator = self.arena.allocator();
@@ -508,16 +507,16 @@ test "ready static storage returns published addresses with displaced slot IDs" 
     const ready = [_]bool{ false, false, false, true };
     host.static_slot_addresses = &addresses;
     host.static_slot_ready = &ready;
-    const address = host.staticSlotAddress(@enumFromInt(3));
+    const address = host.staticSlotAddress(@fromBackingInt(@intCast(3)));
     try std.testing.expectEqual(@intFromPtr(&current_value), address);
     try std.testing.expectEqual(@as(u64, 42), @as(*const u64, @ptrFromInt(address)).*);
-    try std.testing.expectEqual(address, host.staticSlotAddress(@enumFromInt(3)));
+    try std.testing.expectEqual(address, host.staticSlotAddress(@fromBackingInt(@intCast(3))));
 }
 
 test "cached guard failure uses current slot publication origin and producer" {
     const producer = NativeFailure.GuardProducer{
-        .module = .{ .bytes = [_]u8{17} ** 32 },
-        .root = .{ .checked = @enumFromInt(8) },
+        .module = .{ .bytes = @as([32]u8, @splat(17)) },
+        .root = .{ .checked = @fromBackingInt(@intCast(8)) },
     };
     var host = CompileTimeHost.init(std.testing.allocator);
     defer host.deinit();
@@ -527,19 +526,19 @@ test "cached guard failure uses current slot publication origin and producer" {
     };
     host.slot_failure_origins = &.{ null, null, origin };
     const binding: TestEventResolver = .{
-        .observation = .{ .checked_error = false, .guard_producer = producer, .origin_slot = @enumFromInt(2) },
+        .observation = .{ .checked_error = false, .guard_producer = producer, .origin_slot = @fromBackingInt(@intCast(2)) },
     };
     host.source_event_resolver = binding.resolver();
     const descriptor: SourceEvents.Descriptor = .{
-        .header = .{ .kind = @intFromEnum(SourceEvents.Kind.failure) },
+        .header = .{ .kind = @backingInt(SourceEvents.Kind.failure) },
         .source = .{ .has_location = 1, .region = .{ .start = 1, .end = 2 }, .line = 1, .column = 1 },
         .failure = .{
             .has_guard_root = 1,
             .guard_root = .{
                 .module = @splat(17),
-                .producer_kind = @intFromEnum(SourceEvents.ProducerKind.checked),
+                .producer_kind = @backingInt(SourceEvents.ProducerKind.checked),
                 .checked_expr = 8,
-                .role = @intFromEnum(SourceEvents.RootRole.value),
+                .role = @backingInt(SourceEvents.RootRole.value),
             },
         },
     };
@@ -557,8 +556,8 @@ test "native expect consumes both live and bound pending failure context" {
     const loc: base.SourceLoc = .{ .file = 3, .line = 2, .column = 5 };
     host.failed_region = region;
     host.failed_loc = loc;
-    host.failed_stmt = @as(lir.LIR.CFStmtId, @enumFromInt(8));
-    host.failed_observation = .{ .checked_error = true, .origin_statement = @as(lir.LIR.CFStmtId, @enumFromInt(9)) };
+    host.failed_stmt = @as(lir.LIR.CFStmtId, @fromBackingInt(@intCast(8)));
+    host.failed_observation = .{ .checked_error = true, .origin_statement = @as(lir.LIR.CFStmtId, @fromBackingInt(@intCast(9))) };
     const message = "fixture expect failure";
     rocExpectFailed(host.ops(), message.ptr, message.len);
     try std.testing.expectEqual(@as(usize, 1), host.events.items.len);
@@ -590,7 +589,7 @@ const TestEventResolver = struct {
         std.debug.assert(std.mem.eql(u8, &descriptor.checked_module, &@as([32]u8, @splat(3))));
         std.debug.assert(std.mem.eql(u8, &descriptor.procedure_identity, &@as([32]u8, @splat(4))));
         std.debug.assert(branches.len == 1 and branches[0].start == 32 and branches[0].end == 39);
-        return @enumFromInt(21);
+        return @fromBackingInt(@intCast(21));
     }
 
     fn failure(context: *const anyopaque, descriptor: *const SourceEvents.Descriptor) NativeFailure.Observation {
@@ -607,13 +606,13 @@ const TestSiteEvent = extern struct {
     fn init(kind: SourceEvents.Kind) TestSiteEvent {
         return .{
             .descriptor = .{
-                .header = .{ .kind = @intFromEnum(kind), .byte_size = @sizeOf(TestSiteEvent) },
+                .header = .{ .kind = @backingInt(kind), .byte_size = @sizeOf(TestSiteEvent) },
                 .site = .{
                     .checked_module = @splat(3),
                     .procedure_identity = @splat(4),
                     .has_checked_site = 1,
                     .checked_site = 41,
-                    .kind = @intFromEnum(SourceEvents.SiteKind.match),
+                    .kind = @backingInt(SourceEvents.SiteKind.match),
                     .region = .{ .start = 1, .end = 8 },
                     .branches_offset = @sizeOf(SourceEvents.Descriptor),
                     .branch_count = 1,
@@ -634,11 +633,11 @@ test "source event adapter preserves absent nested frames and ignores ordinary R
     const ops_saved = builtins.in_process_host.enter(other_host.ops(), null);
     defer builtins.in_process_host.leave(ops_saved);
     const present: SourceEvents.Descriptor = .{
-        .header = .{ .kind = @intFromEnum(SourceEvents.Kind.call_enter) },
+        .header = .{ .kind = @backingInt(SourceEvents.Kind.call_enter) },
         .source = .{ .has_location = 1, .region = .{ .start = 12, .end = 24 }, .line = 7, .column = 9 },
     };
-    const absent: SourceEvents.Descriptor = .{ .header = .{ .kind = @intFromEnum(SourceEvents.Kind.call_enter) } };
-    const exit: SourceEvents.Descriptor = .{ .header = .{ .kind = @intFromEnum(SourceEvents.Kind.call_exit) } };
+    const absent: SourceEvents.Descriptor = .{ .header = .{ .kind = @backingInt(SourceEvents.Kind.call_enter) } };
+    const exit: SourceEvents.Descriptor = .{ .header = .{ .kind = @backingInt(SourceEvents.Kind.call_exit) } };
     {
         var boundary = host.enterCrashBoundary();
         defer boundary.deinit();
@@ -671,29 +670,29 @@ test "source event adapter binds semantic branches and guarded literal failure o
     defer host.deinit();
     const producer: NativeFailure.GuardProducer = .{
         .module = .{ .bytes = @splat(17) },
-        .root = .{ .checked = @enumFromInt(8) },
+        .root = .{ .checked = @fromBackingInt(@intCast(8)) },
     };
-    const literal: lir.LIR.LiteralRejectionSite = .{ .owner = @enumFromInt(12), .checked_expr = 33, .kind = .quote };
+    const literal: lir.LIR.LiteralRejectionSite = .{ .owner = @fromBackingInt(@intCast(12)), .checked_expr = 33, .kind = .quote };
     const failure: SourceEvents.Descriptor = .{
-        .header = .{ .kind = @intFromEnum(SourceEvents.Kind.failure) },
+        .header = .{ .kind = @backingInt(SourceEvents.Kind.failure) },
         .source = .{ .has_location = 1, .region = .{ .start = 1, .end = 2 }, .line = 1, .column = 1 },
         .procedure_identity = @splat(9),
         .failure = .{
             .checked_error = 1,
             .has_literal_rejection = 1,
-            .literal_rejection = .{ .checked_module = @splat(7), .checked_expr = 33, .kind = @intFromEnum(SourceEvents.LiteralKind.quote) },
+            .literal_rejection = .{ .checked_module = @splat(7), .checked_expr = 33, .kind = @backingInt(SourceEvents.LiteralKind.quote) },
             .has_guard_root = 1,
             .guard_root = .{
                 .module = @splat(17),
-                .producer_kind = @intFromEnum(SourceEvents.ProducerKind.checked),
+                .producer_kind = @backingInt(SourceEvents.ProducerKind.checked),
                 .checked_expr = 8,
-                .role = @intFromEnum(SourceEvents.RootRole.value),
+                .role = @backingInt(SourceEvents.RootRole.value),
             },
         },
     };
     const binding: TestEventResolver = .{
         .expected_failure = &failure,
-        .observation = .{ .checked_error = true, .literal_rejection = literal, .guard_producer = producer, .origin_slot = @enumFromInt(2) },
+        .observation = .{ .checked_error = true, .literal_rejection = literal, .guard_producer = producer, .origin_slot = @fromBackingInt(@intCast(2)) },
     };
     host.source_event_resolver = binding.resolver();
     const origin: lir.LIR.ComptimeFailureOrigin = .{
@@ -706,9 +705,9 @@ test "source event adapter binds semantic branches and guarded literal failure o
     defer boundary.deinit();
     SourceEvents.roc_source_event(&branch.descriptor.header);
     try std.testing.expectEqual(@as(usize, 1), host.comptime_branch_hits.items.len);
-    try std.testing.expectEqual(@as(u32, 21), @intFromEnum(host.comptime_branch_hits.items[0].site));
+    try std.testing.expectEqual(@as(u32, 21), @backingInt(host.comptime_branch_hits.items[0].site));
     try std.testing.expectEqual(@as(u32, 0), host.comptime_branch_hits.items[0].branch_index);
-    host.failed_stmt = @enumFromInt(3);
+    host.failed_stmt = @fromBackingInt(@intCast(3));
     SourceEvents.roc_source_event(&failure.header);
     try std.testing.expect(host.failed_stmt == null);
     try std.testing.expectEqualDeep(binding.observation, host.failed_observation.?);
@@ -722,7 +721,7 @@ test "source event adapter preserves original failure location and explicit abse
     const binding: TestEventResolver = .{};
     host.source_event_resolver = binding.resolver();
     var failure: SourceEvents.Descriptor = .{
-        .header = .{ .kind = @intFromEnum(SourceEvents.Kind.failure) },
+        .header = .{ .kind = @backingInt(SourceEvents.Kind.failure) },
         .source = .{ .has_location = 1, .region = .{ .start = 12, .end = 24 }, .line = 7, .column = 9 },
     };
     try host.observeSourceEvent(&failure.header);
@@ -756,7 +755,7 @@ test "source event adapter restores observer after exhaustiveness longjmp before
     var counter: Counter = .{};
     const original_count = SourceEvents.activeObserverCount();
     const descriptor = TestSiteEvent.init(.exhaustiveness_failed);
-    const plain: SourceEvents.Descriptor = .{ .header = .{ .kind = @intFromEnum(SourceEvents.Kind.call_exit) } };
+    const plain: SourceEvents.Descriptor = .{ .header = .{ .kind = @backingInt(SourceEvents.Kind.call_exit) } };
     {
         const saved = SourceEvents.enter(.{ .context = &counter, .on_event = Counter.record, .on_invalid = Counter.invalid });
         defer SourceEvents.leave(saved);
@@ -768,7 +767,7 @@ test "source event adapter restores observer after exhaustiveness longjmp before
                 return error.TestUnexpectedResult;
             }
             try std.testing.expectEqual(Termination.comptime_exhaustiveness, host.termination);
-            try std.testing.expectEqual(@as(u32, 21), @intFromEnum(host.comptime_failed_site.?));
+            try std.testing.expectEqual(@as(u32, 21), @backingInt(host.comptime_failed_site.?));
         }
         try std.testing.expectEqual(original_count + 1, SourceEvents.activeObserverCount());
         host.resetForRun();
@@ -786,7 +785,7 @@ test "source event adapter preserves stack provenance and restores after Roc cra
     const binding: TestEventResolver = .{};
     host.source_event_resolver = binding.resolver();
     const frame: SourceEvents.Descriptor = .{
-        .header = .{ .kind = @intFromEnum(SourceEvents.Kind.call_enter) },
+        .header = .{ .kind = @backingInt(SourceEvents.Kind.call_enter) },
         .source = .{ .has_location = 1, .region = .{ .start = 12, .end = 24 }, .line = 7, .column = 9 },
     };
     const message = "native root crashed";
@@ -834,7 +833,7 @@ test "source event adapter runtime rejects invalid metadata before the shared ha
     defer host.deinit();
     const binding: TestEventResolver = .{};
     host.source_event_resolver = binding.resolver();
-    host.failed_stmt = @enumFromInt(13);
+    host.failed_stmt = @fromBackingInt(@intCast(13));
     host.failed_observation = .{ .checked_error = true };
     const InvalidCapture = struct {
         threadlocal var tag: u32 = 0;
@@ -848,14 +847,14 @@ test "source event adapter runtime rejects invalid metadata before the shared ha
     const saved = SourceEvents.enter(observer);
     defer SourceEvents.leave(saved);
     const descriptor: SourceEvents.Descriptor = .{
-        .header = .{ .version = 2, .kind = @intFromEnum(SourceEvents.Kind.failure) },
+        .header = .{ .version = 2, .kind = @backingInt(SourceEvents.Kind.failure) },
     };
     SourceEvents.roc_source_event(&descriptor.header);
-    try std.testing.expectEqual(@intFromEnum(SourceEvents.InvalidTag.UnsupportedVersion), InvalidCapture.tag);
-    try std.testing.expectEqual(@as(?lir.LIR.CFStmtId, @enumFromInt(13)), host.failed_stmt);
+    try std.testing.expectEqual(@backingInt(SourceEvents.InvalidTag.UnsupportedVersion), InvalidCapture.tag);
+    try std.testing.expectEqual(@as(?lir.LIR.CFStmtId, @fromBackingInt(@intCast(13))), host.failed_stmt);
     try std.testing.expect(host.failed_observation.?.checked_error);
     try std.testing.expectError(error.UnsupportedVersion, host.observeSourceEvent(&descriptor.header));
-    try std.testing.expectEqual(@as(?lir.LIR.CFStmtId, @enumFromInt(13)), host.failed_stmt);
+    try std.testing.expectEqual(@as(?lir.LIR.CFStmtId, @fromBackingInt(@intCast(13))), host.failed_stmt);
     try std.testing.expectEqual(@as(usize, 0), host.events.items.len);
 }
 
@@ -870,10 +869,10 @@ test "source event adapter resets partial frame state after known frame allocati
     var presence_storage: [1]bool = undefined;
     host.source_event_frames = .{ .items = presence_storage[0..0], .capacity = presence_storage.len };
     const frame: SourceEvents.Descriptor = .{
-        .header = .{ .kind = @intFromEnum(SourceEvents.Kind.call_enter) },
+        .header = .{ .kind = @backingInt(SourceEvents.Kind.call_enter) },
         .source = .{ .has_location = 1, .region = .{ .start = 12, .end = 24 }, .line = 7, .column = 9 },
     };
-    const exit: SourceEvents.Descriptor = .{ .header = .{ .kind = @intFromEnum(SourceEvents.Kind.call_exit) } };
+    const exit: SourceEvents.Descriptor = .{ .header = .{ .kind = @backingInt(SourceEvents.Kind.call_exit) } };
     const original_count = SourceEvents.activeObserverCount();
     {
         var boundary = host.enterCrashBoundary();
@@ -923,13 +922,19 @@ fn allocateBytes(allocator: Allocator, len: usize, alignment: usize) ?[*]u8 {
         4 => (allocator.alignedAlloc(u8, .@"4", len) catch return null).ptr,
         8 => (allocator.alignedAlloc(u8, .@"8", len) catch return null).ptr,
         16 => (allocator.alignedAlloc(u8, .@"16", len) catch return null).ptr,
-        else => @panic("unsupported compile-time RocOps allocation alignment"),
+        else => base.invariant("{s}", .{"unsupported compile-time RocOps allocation alignment"}),
     };
 }
 
 fn hostBytesAllocator(allocator: Allocator) Allocator {
     return switch (@import("builtin").target.os.tag) {
         .freestanding => std.heap.wasm_allocator,
+        .wiiu,
+        .@"switch",
+        .gba,
+        .psx,
+        .tios,
+        .ashetos,
         .other,
         .contiki,
         .fuchsia,
