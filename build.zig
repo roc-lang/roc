@@ -1,6 +1,7 @@
 const std = @import("std");
 const stack_budget = @import("src/base/stack_budget.zig");
 const builtin = @import("builtin");
+const downstream_package = @import("src/build/downstream_package.zig");
 const modules = @import("src/build/modules.zig");
 const glibc_stub_build = @import("src/build/glibc_stub.zig");
 const ci_steps = @import("src/build/ci_steps.zig");
@@ -108,6 +109,114 @@ fn copyMingwRuntimeToTestPlatform(
         );
     }
     return &copy.step;
+}
+
+/// MSVC-ABI runtime files that a `*win` target must find next to `host.lib`.
+///
+/// An MSVC link passes `/nodefaultlib` and then only the inputs the platform
+/// declares (see `src/cli/linker.zig`), exactly like a MinGW one, so nothing
+/// comes from a Visual Studio or Windows SDK install. The import libraries
+/// carry no compiled code, so they are the checked-in files of the matching
+/// `*mingw` target; the startup archive is built from
+/// `src/default_platform/msvc_runtime/`.
+const msvc_runtime = @import("src/echo_platform/msvc_runtime.zig");
+
+/// One startup archive per architecture, shared by every platform it is copied to.
+var msvc_runtime_libs: [2]?*Step.Compile = .{ null, null };
+
+/// The MSVC-ABI startup archive for `target_name` (`x64win` or `arm64win`):
+/// process and DLL entry points, the TLS directory, and compiler-rt, each in
+/// its own archive member so a link pulls only what it references.
+fn msvcRuntimeLib(b: *std.Build, target_name: []const u8) *Step.Compile {
+    const is_arm64 = std.mem.startsWith(u8, target_name, "arm64");
+    const slot = &msvc_runtime_libs[@intFromBool(is_arm64)];
+    if (slot.*) |lib| return lib;
+
+    const target = b.resolveTargetQuery(.{
+        .cpu_arch = if (is_arm64) .aarch64 else .x86_64,
+        .os_tag = .windows,
+        .abi = .msvc,
+    });
+    const arch_name = if (is_arm64) "arm64" else "x64";
+    const lib = b.addLibrary(.{
+        .name = b.fmt("msvc_runtime_{s}", .{arch_name}),
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/default_platform/msvc_runtime/exe_startup.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .strip = true,
+            .stack_check = false,
+            .link_libc = false,
+        }),
+    });
+    const Member = struct { name: []const u8, source: std.Build.LazyPath };
+    for ([_]Member{
+        .{ .name = "dll_startup", .source = b.path("src/default_platform/msvc_runtime/dll_startup.zig") },
+        .{ .name = "tls", .source = b.path("src/default_platform/msvc_runtime/tls.zig") },
+    }) |member| {
+        const obj = b.addObject(.{
+            .name = b.fmt("msvc_runtime_{s}_{s}", .{ member.name, arch_name }),
+            .root_module = b.createModule(.{
+                .root_source_file = member.source,
+                .target = target,
+                .optimize = .ReleaseFast,
+                .strip = true,
+                .stack_check = false,
+                .link_libc = false,
+            }),
+        });
+        lib.root_module.addObject(obj);
+    }
+    // Without libc, compiler-rt also defines `__chkstk` and `_fltused`.
+    lib.bundle_compiler_rt = true;
+
+    slot.* = lib;
+    return lib;
+}
+
+/// Adds every MSVC runtime file for `target_name` to `copy`, landing in
+/// `dest_dir`.
+fn addMsvcRuntimeCopies(
+    b: *std.Build,
+    copy: *Step.WriteFile,
+    dest_dir: []const u8,
+    target_name: []const u8,
+) void {
+    test_fixtures.copy(
+        copy,
+        msvcRuntimeLib(b, target_name).getEmittedBin(),
+        b.pathJoin(&.{ dest_dir, msvc_runtime.runtime_archive }),
+    );
+    const import_source = msvc_runtime.importLibrarySourceTarget(target_name);
+    for (msvc_runtime.import_libraries) |filename| {
+        test_fixtures.copy(
+            copy,
+            b.path(b.pathJoin(&.{ "test/fx/platform/targets", import_source, filename })),
+            b.pathJoin(&.{ dest_dir, filename }),
+        );
+    }
+}
+
+/// Puts the C runtime a Windows link needs into a test platform's
+/// `platform/targets/<target_name>/` directory. Returns null when the target
+/// needs no copy: it is not a Windows target, or it is fx's own checked-in
+/// MinGW runtime.
+fn copyWindowsRuntimeToTestPlatform(
+    b: *std.Build,
+    platform_dir: []const u8,
+    target_name: []const u8,
+) ?*Step {
+    if (std.mem.endsWith(u8, target_name, "mingw")) {
+        if (std.mem.eql(u8, platform_dir, "fx")) return null;
+        return copyMingwRuntimeToTestPlatform(b, platform_dir, target_name);
+    }
+    if (std.mem.endsWith(u8, target_name, "win")) {
+        const copy = b.addWriteFiles();
+        addMsvcRuntimeCopies(b, copy, b.pathJoin(&.{ "test", platform_dir, "platform/targets", target_name }), target_name);
+        return &copy.step;
+    }
+    return null;
 }
 
 /// BSD cross-compile targets
@@ -1414,11 +1523,10 @@ fn setupTestPlatforms(
             );
             prepared_hosts_step.dependOn(copy_step);
 
-            // MinGW targets link only what the platform declares, so each one
-            // needs fx's checked-in C runtime alongside its host library.
-            // test/fx is the source of those files, so it needs no copy.
-            if (std.mem.endsWith(u8, cross_target.name, "mingw") and !std.mem.eql(u8, platform_dir, "fx")) {
-                prepared_hosts_step.dependOn(copyMingwRuntimeToTestPlatform(b, platform_dir, cross_target.name));
+            // Windows targets link only what the platform declares, so each
+            // one needs its C runtime alongside its host library.
+            if (copyWindowsRuntimeToTestPlatform(b, platform_dir, cross_target.name)) |copy_runtime| {
+                prepared_hosts_step.dependOn(copy_runtime);
             }
         }
     }
@@ -2661,6 +2769,7 @@ pub fn build(b: *std.Build) void {
                     .{ .name = "builtins", .module = roc_modules.builtins },
                     .{ .name = "bytebox", .module = bytebox.module("bytebox") },
                     .{ .name = "build_options", .module = roc_modules.build_options },
+                    .{ .name = "msvc_runtime", .module = b.createModule(.{ .root_source_file = b.path("src/echo_platform/msvc_runtime.zig") }) },
                 },
             }),
         });
@@ -4439,6 +4548,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "builtins", .module = roc_modules.builtins },
                 .{ .name = "bytebox", .module = bytebox.module("bytebox") },
                 .{ .name = "build_options", .module = roc_modules.build_options },
+                .{ .name = "msvc_runtime", .module = b.createModule(.{ .root_source_file = b.path("src/echo_platform/msvc_runtime.zig") }) },
             },
         }),
         .filters = test_filters,
@@ -5113,6 +5223,7 @@ pub fn build(b: *std.Build) void {
         const unsupported_step = buildChecksRun(b, "coverage-unsupported");
         run_coverage_parser_step.dependOn(&unsupported_step.step);
     }
+    build_ci_step.dependOn(downstream_package.create(b, hostToolTarget(b, .debug)));
     build_ci_step.dependOn(build_roc_step);
     build_ci_step.dependOn(build_check_tools_step);
     build_ci_step.dependOn(build_check_glue_abi_step);
@@ -5201,6 +5312,13 @@ pub fn build(b: *std.Build) void {
 
         const final_fx_host_step = &copy_test_fx_host.step;
 
+        // A Windows link uses only what the platform declares, so the C
+        // runtime has to sit next to the host library.
+        if (fx_host_target_dir) |target_dir| {
+            if (copyWindowsRuntimeToTestPlatform(b, "fx", target_dir)) |copy_runtime| {
+                final_fx_host_step.dependOn(copy_runtime);
+            }
+        }
         b.getInstallStep().dependOn(final_fx_host_step);
 
         const static_data_host_target_dir = fx_host_target_dir orelse native_fx_target_dir;
@@ -5230,10 +5348,9 @@ pub fn build(b: *std.Build) void {
             );
             copy_musl_runtime.step.dependOn(final_static_data_host_step);
             break :blk &copy_musl_runtime.step;
-        } else if (std.mem.endsWith(u8, static_data_host_target_dir, "mingw")) blk: {
-            const copy_mingw_runtime = copyMingwRuntimeToTestPlatform(b, "static-data-host", static_data_host_target_dir);
-            copy_mingw_runtime.dependOn(final_static_data_host_step);
-            break :blk copy_mingw_runtime;
+        } else if (copyWindowsRuntimeToTestPlatform(b, "static-data-host", static_data_host_target_dir)) |copy_windows_runtime| blk: {
+            copy_windows_runtime.dependOn(final_static_data_host_step);
+            break :blk copy_windows_runtime;
         } else final_static_data_host_step;
         b.getInstallStep().dependOn(final_static_data_platform_step);
 
@@ -5263,10 +5380,9 @@ pub fn build(b: *std.Build) void {
             );
             copy_musl_runtime.step.dependOn(final_provided_callable_host_step);
             break :blk &copy_musl_runtime.step;
-        } else if (std.mem.endsWith(u8, static_data_host_target_dir, "mingw")) blk: {
-            const copy_mingw_runtime = copyMingwRuntimeToTestPlatform(b, "provided-callable-host", static_data_host_target_dir);
-            copy_mingw_runtime.dependOn(final_provided_callable_host_step);
-            break :blk copy_mingw_runtime;
+        } else if (copyWindowsRuntimeToTestPlatform(b, "provided-callable-host", static_data_host_target_dir)) |copy_windows_runtime| blk: {
+            copy_windows_runtime.dependOn(final_provided_callable_host_step);
+            break :blk copy_windows_runtime;
         } else final_provided_callable_host_step;
         b.getInstallStep().dependOn(final_provided_callable_platform_step);
 
@@ -5327,10 +5443,10 @@ pub fn build(b: *std.Build) void {
             );
             b.getInstallStep().dependOn(final_http_host_step);
 
-            // A MinGW link uses only what the platform declares, so the C
+            // A Windows link uses only what the platform declares, so the C
             // runtime has to sit next to the host library.
-            if (std.mem.endsWith(u8, target_dir, "mingw")) {
-                final_http_host_step.dependOn(copyMingwRuntimeToTestPlatform(b, "http-headers", target_dir));
+            if (copyWindowsRuntimeToTestPlatform(b, "http-headers", target_dir)) |copy_runtime| {
+                final_http_host_step.dependOn(copy_runtime);
             }
 
             const http_app_exe_name = if (http_host_target.result.os.tag == .windows)
@@ -5393,10 +5509,10 @@ pub fn build(b: *std.Build) void {
             );
             b.getInstallStep().dependOn(final_json_host_step);
 
-            // A MinGW link uses only what the platform declares, so the C
+            // A Windows link uses only what the platform declares, so the C
             // runtime has to sit next to the host library.
-            if (std.mem.endsWith(u8, target_dir, "mingw")) {
-                final_json_host_step.dependOn(copyMingwRuntimeToTestPlatform(b, "json-decoder", target_dir));
+            if (copyWindowsRuntimeToTestPlatform(b, "json-decoder", target_dir)) |copy_runtime| {
+                final_json_host_step.dependOn(copy_runtime);
             }
 
             const json_exe_ext = if (http_host_target.result.os.tag == .windows) ".exe" else "";
@@ -5631,8 +5747,10 @@ fn collectTestRuns(
 fn discoverBuiltinRocFiles(b: *std.Build) ![]const []const u8 {
     const io = b.graph.io;
     b.dependOnDirectoryContents(b.path("src/build/roc"));
-    const builtin_roc_path = b.root.joinString(b.allocator, "src/build/roc") catch @panic("OOM");
-    var builtin_roc_dir = try std.Io.Dir.openDirAbsolute(io, builtin_roc_path, .{ .iterate = true });
+    // The build root is only absolute for the top-level package: a fetched
+    // dependency's root is relative to the consumer's, so open it through
+    // `b.root` rather than as an absolute path.
+    var builtin_roc_dir = try b.root.openDir(io, "src/build/roc", .{ .iterate = true });
     defer builtin_roc_dir.close(io);
 
     var roc_files = std.ArrayList([]const u8).empty;
@@ -6809,6 +6927,20 @@ fn addMainExe(
         for (mingw_runtime_files) |filename| {
             _ = copy_default_mingw_runtime.addCopyFile(
                 b.path(b.pathJoin(&.{ "test/fx/platform/targets", target_name, filename })),
+                b.pathJoin(&.{ "targets", target_name, filename }),
+            );
+        }
+    }
+
+    for ([_][]const u8{ "x64win", "arm64win" }) |target_name| {
+        _ = embedded_assets.addCopyFile(
+            msvcRuntimeLib(b, target_name).getEmittedBin(),
+            b.pathJoin(&.{ "targets", target_name, msvc_runtime.runtime_archive }),
+        );
+        const import_source = msvc_runtime.importLibrarySourceTarget(target_name);
+        for (msvc_runtime.import_libraries) |filename| {
+            _ = embedded_assets.addCopyFile(
+                b.path(b.pathJoin(&.{ "test/fx/platform/targets", import_source, filename })),
                 b.pathJoin(&.{ "targets", target_name, filename }),
             );
         }

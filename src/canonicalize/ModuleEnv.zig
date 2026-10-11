@@ -904,6 +904,9 @@ top_level_value_defs: CIR.Def.Span,
 value_binding_defs: CIR.Def.Span,
 /// Exact definitions rewritten from annotation-only declarations to hosted lambdas.
 hosted_defs: CIR.Def.Span,
+/// Diagnostic-only host origins of callable results, indexed by definition node.
+/// Names are owned by this module; NONE means no established origin.
+diagnostic_hosted_returns: collections.SafeList(Ident.Idx),
 /// All the top-level statements in the module (populated by canonicalization)
 all_statements: CIR.Statement.Span,
 /// All canonical type-declaration statements in the module.
@@ -1426,6 +1429,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .top_level_value_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .value_binding_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .hosted_defs = .{ .span = .{ .start = 0, .len = 0 } },
+        .diagnostic_hosted_returns = .{},
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .type_decls = .{ .span = .{ .start = 0, .len = 0 } },
         .forward_type_decls = .{ .span = .{ .start = 0, .len = 0 } },
@@ -1485,6 +1489,7 @@ pub fn deinit(self: *Self) void {
     self.for_clause_aliases.deinit(self.gpa);
     self.provides_entries.deinit(self.gpa);
     self.hosted_entries.deinit(self.gpa);
+    self.diagnostic_hosted_returns.deinit(self.gpa);
     self.imports.deinit(self.gpa);
     self.file_dependencies.deinit(self.gpa);
     self.deferred_import_refs.deinit(self.gpa);
@@ -3797,6 +3802,7 @@ pub const Serialized = extern struct {
     top_level_value_defs: CIR.Def.Span,
     value_binding_defs: CIR.Def.Span,
     hosted_defs: CIR.Def.Span,
+    diagnostic_hosted_returns: collections.SafeList(Ident.Idx).Serialized,
     all_statements: CIR.Statement.Span,
     type_decls: CIR.Statement.Span,
     forward_type_decls: CIR.Statement.Span,
@@ -3899,6 +3905,7 @@ pub const Serialized = extern struct {
         self.top_level_value_defs = env.top_level_value_defs;
         self.value_binding_defs = env.value_binding_defs;
         self.hosted_defs = env.hosted_defs;
+        try self.diagnostic_hosted_returns.serialize(&env.diagnostic_hosted_returns, allocator, writer);
         self.all_statements = env.all_statements;
         self.type_decls = env.type_decls;
         self.forward_type_decls = env.forward_type_decls;
@@ -3997,6 +4004,7 @@ pub const Serialized = extern struct {
             .top_level_value_defs = self.top_level_value_defs,
             .value_binding_defs = self.value_binding_defs,
             .hosted_defs = self.hosted_defs,
+            .diagnostic_hosted_returns = self.diagnostic_hosted_returns.deserializeInto(base_addr),
             .all_statements = self.all_statements,
             .type_decls = self.type_decls,
             .forward_type_decls = self.forward_type_decls,
@@ -4075,6 +4083,7 @@ pub const Serialized = extern struct {
             .top_level_value_defs = self.top_level_value_defs,
             .value_binding_defs = self.value_binding_defs,
             .hosted_defs = self.hosted_defs,
+            .diagnostic_hosted_returns = self.diagnostic_hosted_returns.deserializeInto(base_addr),
             .all_statements = self.all_statements,
             .type_decls = self.type_decls,
             .forward_type_decls = self.forward_type_decls,
@@ -4169,6 +4178,7 @@ pub const Serialized = extern struct {
             .top_level_value_defs = self.top_level_value_defs,
             .value_binding_defs = self.value_binding_defs,
             .hosted_defs = self.hosted_defs,
+            .diagnostic_hosted_returns = try self.diagnostic_hosted_returns.deserializeWithCopy(base_addr, gpa),
             .all_statements = self.all_statements,
             .type_decls = self.type_decls,
             .forward_type_decls = self.forward_type_decls,
@@ -5702,4 +5712,22 @@ test "NumeralLiteral: serialized bytes are a function of the recorded literals" 
         try std.testing.expectEqual(@as(u64, i), literal.after_decimal_digit_count);
         try std.testing.expect(literal.isMaterialized());
     }
+}
+
+/// Diagnostic origin summaries cross imports without requiring private modules
+/// to become visible to their callers.
+pub fn diagnosticHostedReturn(self: *const Self, def: CIR.Def.Idx) ?Ident.Idx {
+    const index = @backingInt(def);
+    if (index >= self.diagnostic_hosted_returns.len()) return null;
+    const origin = self.diagnostic_hosted_returns.items.items[index];
+    return if (origin.isNone()) null else origin;
+}
+
+/// Record the diagnostic-only hosted origin of an unchanged forwarded return.
+pub fn setDiagnosticHostedReturn(self: *Self, def: CIR.Def.Idx, origin: Ident.Idx) Allocator.Error!void {
+    const index = @backingInt(def);
+    while (self.diagnostic_hosted_returns.len() <= index) {
+        _ = try self.diagnostic_hosted_returns.append(self.gpa, Ident.Idx.NONE);
+    }
+    self.diagnostic_hosted_returns.items.items[index] = origin;
 }

@@ -1005,7 +1005,7 @@ pub const Program = struct {
                     self.shapes.loop_tuple_result = true;
                 }
             },
-            .local, .int_lit, .dec_lit, .str_lit, .bytes_lit, .typed_boundary, .let_, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .join_point, .jump, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .literal_rejected, .expect, .@"unreachable", .unit, .frac_f32_lit, .frac_f64_lit, .uninitialized => {},
+            .local, .int_lit, .dec_lit, .str_lit, .bytes_lit, .typed_boundary, .row_widen, .let_, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .join_point, .jump, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .literal_rejected, .expect, .@"unreachable", .unit, .frac_f32_lit, .frac_f64_lit, .uninitialized => {},
         }
     }
 
@@ -1490,6 +1490,7 @@ pub const Program = struct {
         binder: ?check.CheckedModule.PatternBinderId,
         capture_id: check.CheckedModule.CaptureId,
         checked_capture_id: ?check.CheckedModule.CaptureId,
+        capture_kind: check.CheckedModule.ConstCaptureKind,
     ) std.mem.Allocator.Error!LocalId {
         if (checked_capture_id) |checked_id| {
             if (checked_id.isCanonical()) {
@@ -1514,6 +1515,7 @@ pub const Program = struct {
             .binder = binder,
             .capture_id = capture_id,
             .checked_capture_id = checked_capture_id,
+            .capture_kind = capture_kind,
         });
         try self.local_names.append(self.allocator, "");
         return id;
@@ -1901,6 +1903,7 @@ pub fn appendChildren(allocator: std.mem.Allocator, program: *const Program, exp
         .static_data_candidate => |candidate| try sink.one(candidate.runtime_expr),
         .comptime_value => |value| try sink.one(value.initializer),
         .typed_boundary => |boundary| try sink.one(boundary.value),
+        .row_widen => |widen| try sink.one(widen.value),
         .nominal, .dbg, .expect => |child| try sink.one(child),
         .return_ => |ret| try sink.one(ret.value),
         .expect_err => |expect_err| try sink.one(expect_err.msg),

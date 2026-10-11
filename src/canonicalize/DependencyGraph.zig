@@ -1196,7 +1196,7 @@ const DemandAnalyzer = struct {
             .custom_dispatch, .specialization_dispatch => {},
             .unresolved, .builtin_direct, .checked_error => return,
         }
-        try self.applyLiteralRequirement(walk, current, @fromBackingInt(@intCast(plan.fn_var)), null);
+        try self.applyLiteralRequirement(walk, current, plan.fnVar().?, null);
     }
 
     fn applyLiteralRequirement(
