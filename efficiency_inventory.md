@@ -394,6 +394,17 @@ stages it touches; the instruction-count effect is reported in "Results".
     worklists on the stack. Generated code is byte-identical and counts are
     flat.
 
+65. CLI and coordinator: the splice closure's `seen` set is a bitset over the
+    artifact set, cleared through the indices it reached; the layout
+    fingerprint's `seen` map is a dense map; the pack conditions arena is
+    single-threaded; a pack path is one join over its components; and a
+    module path's relative part is built in a stack-first buffer. Along the
+    way, test steps outside the regular rotation were fixed: the LLVM
+    backend test module gained its `collections` dependency, the CLI tests
+    build `ProcArtifact.Set` arenas of the right type, and the JSON and HTTP
+    platform tests resolve prebuilt app paths against the build root (they
+    run from a fixture directory, so a relative cache path missed them).
+
 ## Findings from profiling
 
 These were found by profiling the ReleaseFast compiler with
@@ -3144,7 +3155,7 @@ X: widen the packed `Layout` so its indices are 32 bits (a 64-bit packed layout,
 - category A/D; runs once per build (store) and once per build (load); impact low; risk low
 - Finding: `storePlatformPairingInCache` creates `std.heap.ArenaAllocator` (atomics per alloc) and `tryLoadCachedPlatformPairing` (3487-3497) `gpa.create`s a heap `std.heap.ArenaAllocator`, then `alignedAlloc` + `@memcpy` the artifact body out of the mapping.
 - Fix: Use `base.SingleThreadArena`; alias the mapping as in the previous finding. Low frequency.
-- Status: open
+- Status: partly fixed (fix 15): the arenas are single-threaded; the loaded body is still copied out of the mapping
 
 ### src/compile/coordinator.zig:3305: checkedModuleCacheKey builds a full CheckedModules view per module just to hash a key
 - category A/E; runs per module reaching type check (cache probe) and again inside `typeCheckModule`; impact medium (per module on every build); risk low
@@ -3156,7 +3167,7 @@ X: widen the packed `Layout` so its indices are 32 bits (a 64-bit packed layout,
 - category D; runs per local import discovered (per import edge, per parse task) and per module path resolution; impact low-medium; risk low
 - Finding: Appends segments into an `ArrayList(u8)`, `toOwnedSlice`, then `std.fs.path.join(alloc, &.{ root_dir, rel })`, freeing the intermediate: three allocations and two copies for one path. `module_discovery.resolveLocalImportLogicalPath` (module_discovery.zig:190-226) feeding it also builds a `segments` ArrayList and `std.mem.join`s, so a single import costs five allocations before the `dupe`s at coordinator 5509/5530.
 - Fix: Compute the final length (`root_dir.len + 1 + mod_name.len + ".roc".len`) and write directly into one `alloc`, replacing `/` with the path separator in place; make `resolveLocalImportLogicalPath` write into a caller-provided scratch buffer (the parse task has a `scratch` arena) instead of allocating segments.
-- Status: open
+- Status: fixed (fix 65): the relative path is built in a stack-first buffer and the join is the one heap allocation
 
 ### src/compile/coordinator.zig:5074: added_module_indices hashes dense resolved module indices
 - category B; runs per module type-check preparation; impact low; risk low
@@ -3184,7 +3195,7 @@ X: widen the packed `Layout` so its indices are 32 bits (a 64-bit packed layout,
 - category B/C; runs per package (lookups per import); impact low; risk low
 - Finding: `module_names`, `public_module_targets`, `physical_module_paths`, `shorthands` are `StringHashMap`s initialized with `thread_safe_allocator` (smp allocator) even though the coordinator thread is their only mutator; `getPublicModuleId` is called per external import probe (see package id finding).
 - Fix: Once external imports are resolved to ids at discovery time these maps are only hit at registration; keep them but use the coordinator's gpa. Fold into the package-id finding.
-- Status: open
+- Status: no change: the per-package maps are shared coordinator buffers that workers reach in multi-threaded mode, which is why they use the thread-safe allocator
 
 ### src/compile/coordinator.zig:662: ModuleState carries five ArrayLists and owned dupes of every import name
 - category C/F/D; runs per module; impact low-medium (memory per module; fewer allocations per import); risk low
@@ -3232,19 +3243,19 @@ X: widen the packed `Layout` so its indices are 32 bits (a 64-bit packed layout,
 - category B; runs per offered specialization in `packFileBytes` (`closure.of(artifact)` per spec proc, per pack written); impact low-medium (object-cache writes run once per build per …; risk low
 - Finding: `seen: std.AutoHashMap(u32, void)` keyed by the artifact index into `set.artifacts` (dense); `of` clears it and `getOrPut`s per reached artifact, so the closure walk hashes every edge.
 - Fix: `std.DynamicBitSetUnmanaged` sized `set.artifacts.len`, cleared with `setRangeValue`/`unsetAll` (proportional to the set, or track touched indices in `order` and unset only those).
-- Status: open
+- Status: fixed (fix 65)
 
 ### src/cli/main.zig:8746: packFileBytes uses std.heap.ArenaAllocator and two ProcIdentity hash maps per pack
 - category A/B; runs per pack written (per module per build when the object cache is cold); impact low; risk low
 - Finding: `conditions_arena = std.heap.ArenaAllocator.init(allocator)` (atomics); `artifact_by_identity: AutoHashMap(ProcIdentity, u32)` and `literal_converters: AutoHashMap(ProcIdentity, void)` hash 32-byte identities, and `SpliceClosure.init` builds `procs`/`thunks`/`helpers` maps over the same artifacts again (three more maps per pack).
 - Fix: `base.SingleThreadArena`; `literal_converters` can be a `[]bool`/bitset indexed by proc spec index (`converting` already is one, line 8750: index the spec's proc index instead of its identity); share one `identity -> artifact index` map between `packFileBytes` and `SpliceClosure`.
-- Status: open
+- Status: partly fixed (fix 65): the conditions arena is single-threaded; the identity maps remain
 
 ### src/cli/main.zig:2210: LayoutHashContext.seen hashes dense layout.Idx
 - category B; runs per layout node hashed when computing host-callable identity (per build, per entrypoint layout); impact low; risk low
 - Finding: `seen: std.AutoHashMap(layout.Idx, u32)` maps a dense layout index to a visit ordinal; `updateLayoutFingerprint` creates and destroys the map per root layout.
 - Fix: `collections.DenseMap(layout.Idx, u32)` or a `[]u32` column sized by the layout store (`layouts.count()`), reused across the roots of one fingerprint.
-- Status: open
+- Status: fixed (fix 65)
 
 ### src/cli/pack_store.zig:432: Every object-cache pack is read fully into memory then decoded into a second copy
 - category D; runs per `.rpk` file loaded (per module in view, per build with a warm object cache); impact medium for warm `roc build` with many module packs; risk low-medium (PackFile.read is in …
@@ -3256,7 +3267,7 @@ X: widen the packed `Layout` so its indices are 32 bits (a 64-bit packed layout,
 - category D; runs per visible artifact per build (`store.has` in `writePacksToStore` loops over all visible artifacts, main.zig 8700-8720); impact low; risk low
 - Finding: `packPath` = `identityDir` (join) + `allocPrint(".rpk")` + join; `has` then frees it; `write` repeats `identityDir` and `packPath`.
 - Fix: Format into a `[std.fs.max_path_bytes]u8` stack buffer with `bufPrint` (root + "/" + origin + "/" + 64 hex + "/" + 64 hex + ".rpk" is bounded).
-- Status: open
+- Status: fixed (fix 65): one join over all path components
 
 ### src/cli/main.zig:12269: One sentinel-terminated symbol name allocated per test root
 - category A/D; runs per test root in `roc test` (hundreds to thousands per run); impact low; risk low
@@ -3274,7 +3285,7 @@ X: widen the packed `Layout` so its indices are 32 bits (a 64-bit packed layout,
 - category D; runs per module with reports, per check/build (four copies of this pattern at 18077, 18127, 18219, 18256); impact low; risk low
 - Finding: `reports[i].file_path = try ctx.gpa.dupe(u8, mod.abs_path)` then `build_env.freeDrainedReportsPathsOnly(drained)` frees the originals: an owned path is copied and the original freed for no reason.
 - Fix: Transfer ownership of `mod.abs_path` into `DrainedReport` (skip the free), or make `DrainedReport.file_path` borrow since `drained` outlives the render.
-- Status: open
+- Status: no change: the drained paths belong to the build env's allocator and the rendered reports to the CLI context's, so the copy is what moves the path between owners, once per module per run
 
 ### src/cli/main.zig:2191: checkedHostedTable dupes every external symbol name after building the table
 - category D; runs per build (per hosted function); impact low; risk low

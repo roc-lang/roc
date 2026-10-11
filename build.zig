@@ -4496,6 +4496,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
             .imports = &.{
                 .{ .name = "base", .module = roc_modules.base },
+                .{ .name = "collections", .module = roc_modules.collections },
                 .{ .name = "backend", .module = roc_modules.backend },
                 .{ .name = "layout", .module = roc_modules.layout },
                 .{ .name = "lir", .module = roc_modules.lir },

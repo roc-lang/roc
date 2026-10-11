@@ -5448,21 +5448,22 @@ pub const Coordinator = struct {
 
     /// Resolve a module name to a path using a specific allocator
     fn resolveModulePathWithAllocator(_: *Coordinator, root_dir: []const u8, mod_name: []const u8, alloc: Allocator) Allocator.Error![]const u8 {
-        var buffer = std.ArrayList(u8).empty;
-        defer buffer.deinit(alloc);
+        // The relative path is a temporary of the join, so it starts on the stack.
+        var rel_buffer: [256]u8 = undefined;
+        var rel_state = std.heap.BufferFirstAllocator.init(&rel_buffer, alloc);
+        const rel_alloc = rel_state.allocator();
+        var rel = std.ArrayList(u8).empty;
+        defer rel.deinit(rel_alloc);
 
         var it = std.mem.splitScalar(u8, mod_name, '/');
         var first = true;
         while (it.next()) |part| {
-            if (!first) try buffer.appendSlice(alloc, std.fs.path.sep_str) else first = false;
-            try buffer.appendSlice(alloc, part);
+            if (!first) try rel.appendSlice(rel_alloc, std.fs.path.sep_str) else first = false;
+            try rel.appendSlice(rel_alloc, part);
         }
-        try buffer.appendSlice(alloc, ".roc");
+        try rel.appendSlice(rel_alloc, ".roc");
 
-        const rel = try buffer.toOwnedSlice(alloc);
-        defer alloc.free(rel);
-
-        return try std.fs.path.join(alloc, &.{ root_dir, rel });
+        return try std.fs.path.join(alloc, &.{ root_dir, rel.items });
     }
 
     /// Execute a parse task (pure function)
