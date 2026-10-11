@@ -40,7 +40,7 @@ const Mode = compile_package.Mode;
 const Allocator = std.mem.Allocator;
 
 /// The set of errors that can occur during a build (including `roc check`).
-pub const BuildError = Allocator.Error || std.Thread.SpawnError || error{ ExpectedPlatformString, ExpectedString, FileNotFound, AccessDenied, StreamTooLong, IoError, InvalidNullByteInPath, PathOutsideWorkspace, UnsupportedHeader, Internal, DownloadFailed, FileError, InvalidUrl, NoCacheDir, NoPackageSource, UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound, InvalidDependency, MissingFilesDirectory, MissingTargetFile };
+pub const BuildError = Allocator.Error || std.Thread.SpawnError || error{ ExpectedPlatformString, ExpectedString, FileNotFound, AccessDenied, StreamTooLong, IoError, InvalidNullByteInPath, PathOutsideWorkspace, UnsupportedHeader, Internal, DownloadFailed, FileError, InvalidUrl, NoCacheDir, NoPackageSource, UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound, InvalidDependency, MissingFilesDirectory, MissingTargetFile, InvalidTargetConfiguration };
 /// Errors that can occur while initializing build inputs.
 pub const InitError = Allocator.Error || BuiltinModules.InitError;
 /// Errors that can occur while compiling discovered modules.
@@ -1723,6 +1723,7 @@ pub const BuildEnv = struct {
                 error.LowLevelOperationsNotFound,
                 error.MissingFilesDirectory,
                 error.MissingTargetFile,
+                error.InvalidTargetConfiguration,
                 error.NoCacheDir,
                 error.NoPackageSource,
                 error.PathOutsideWorkspace,
@@ -2056,7 +2057,11 @@ pub const BuildEnv = struct {
         try self.sink.emitReport("workspace", "root", report);
     }
 
-    fn resolvePlatformTargetConfigConstants(self: *BuildEnv) Allocator.Error!void {
+    /// Resolve the platform's target configuration fields that name
+    /// top-level values. A field that does not resolve to a usable constant is
+    /// reported and stops the build: linking without it would silently drop
+    /// what the platform asked for.
+    fn resolvePlatformTargetConfigConstants(self: *BuildEnv) (Allocator.Error || error{InvalidTargetConfiguration})!void {
         const semantic = self.getPlatformSemanticData() orelse return;
         const checked_module = semantic.checked_artifact orelse return;
 
@@ -2068,7 +2073,8 @@ pub const BuildEnv = struct {
             targets_config.resolveCheckedConstants(self.gpa, checked_module, &diagnostic) catch |err| switch (err) {
                 error.TargetConfigInvalid => {
                     try self.emitTargetConfigResolveError(diagnostic);
-                    return;
+                    try self.makeWorkspaceReportsDrainable();
+                    return error.InvalidTargetConfiguration;
                 },
             };
         }

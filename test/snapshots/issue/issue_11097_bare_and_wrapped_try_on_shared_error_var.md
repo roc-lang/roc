@@ -167,8 +167,8 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "(a -> Try(ok, err)) -> Try({}, [PersistFailed(err), ..err]) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]"))
-		(patt (type "Try({}, [PersistFailed(err), ..err])")))
+		(patt (type "Try({}, [PersistFailed([])])")))
 	(expressions
 		(expr (type "(a -> Try(ok, err)) -> Try({}, [PersistFailed(err), ..err]) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]"))
-		(expr (type "Try({}, [PersistFailed(err), ..err])"))))
+		(expr (type "Try({}, [PersistFailed([])])"))))
 ~~~

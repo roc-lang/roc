@@ -6824,6 +6824,7 @@ fn lowerLirWithBuildEnv(
             error.LowLevelOperationsNotFound,
             error.MissingFilesDirectory,
             error.MissingTargetFile,
+            error.InvalidTargetConfiguration,
             error.NoCacheDir,
             error.NoPackageSource,
             error.PathOutsideWorkspace,
@@ -8499,7 +8500,7 @@ fn defaultBuildTarget(args: cli_args.BuildArgs) RocTarget {
 /// module's closed exports as a pack program and write one object and one
 /// manifest per module next to the output (`<output>.pack.<module>.o` and
 /// `.manifest`). This is the pack-program gate for the object cache
-/// (`projects/big/package-object-cache.md`); no build reads these files.
+/// (https://github.com/roc-lang/roc/issues/12167); no build reads these files.
 fn writePackObjects(
     ctx: *CliCtx,
     build_env: *BuildEnv,
@@ -17681,6 +17682,7 @@ fn handleProcessFileError(err: ProcessFileError, stderr: anytype, path: []const 
         error.LowLevelOperationsNotFound,
         error.MissingFilesDirectory,
         error.MissingTargetFile,
+        error.InvalidTargetConfiguration,
         error.MmapFailed,
         error.MprotectFailed,
         error.NameTooLong,
@@ -17978,6 +17980,7 @@ fn requireReportableCheckFailure(err: CheckFileWithBuildEnvPreservedError) error
         error.LowLevelOperationsNotFound,
         error.MissingFilesDirectory,
         error.MissingTargetFile,
+        error.InvalidTargetConfiguration,
         error.MmapFailed,
         error.MprotectFailed,
         error.NameTooLong,
