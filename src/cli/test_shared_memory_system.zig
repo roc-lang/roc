@@ -1,4 +1,4 @@
-//! Tests for the LIR images the CLI shares with run shims through shared memory
+//! Tests for LIR images published through shared memory
 
 const std = @import("std");
 const testing = std.testing;

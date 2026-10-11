@@ -194,11 +194,6 @@ pub const CliProblem = union(enum) {
         module_chain: []const []const u8,
     },
 
-    /// Platform validation failed (wraps targets_validator result)
-    platform_validation_failed: struct {
-        message: []const u8,
-    },
-
     /// Invalid app header - missing platform package declaration
     invalid_app_header: struct {
         app_path: []const u8,
@@ -367,6 +362,11 @@ pub const CliProblem = union(enum) {
         found: []const u8,
     },
 
+    /// Expected platform string in app header
+    expected_platform_string: struct {
+        path: []const u8,
+    },
+
     /// Module initialization failed
     module_init_failed: struct {
         path: []const u8,
@@ -407,7 +407,6 @@ pub const CliProblem = union(enum) {
             .missing_platform_module,
             .missing_type_in_module,
             .circular_platform_dependency,
-            .platform_validation_failed,
             .invalid_app_header,
             .object_compilation_failed,
             .shim_generation_failed,
@@ -428,6 +427,7 @@ pub const CliProblem = union(enum) {
             .child_process_wait_failed,
             .shared_memory_failed,
             .expected_app_header,
+            .expected_platform_string,
             .module_init_failed,
             .no_exports_found,
             => .runtime_error,
@@ -450,7 +450,6 @@ pub const CliProblem = union(enum) {
             .missing_platform_module => |info| try createMissingPlatformModuleReport(allocator, info),
             .missing_type_in_module => |info| try createMissingTypeInModuleReport(allocator, info),
             .circular_platform_dependency => |info| try createCircularPlatformDependencyReport(allocator, info),
-            .platform_validation_failed => |info| try createPlatformValidationFailedReport(allocator, info),
             .invalid_app_header => |info| try createInvalidAppHeaderReport(allocator, info),
             .build_not_supported_for_headerless => |info| try createBuildNotSupportedForHeaderlessReport(allocator, info),
             .unsupported_default_platform_target => |info| try createUnsupportedDefaultPlatformTargetReport(allocator, info),
@@ -478,6 +477,7 @@ pub const CliProblem = union(enum) {
             .child_process_wait_failed => |info| try createChildProcessWaitFailedReport(allocator, info),
             .shared_memory_failed => |info| try createSharedMemoryFailedReport(allocator, info),
             .expected_app_header => |info| try createExpectedAppHeaderReport(allocator, info),
+            .expected_platform_string => |info| try createExpectedPlatformStringReport(allocator, info),
             .module_init_failed => |info| try createModuleInitFailedReport(allocator, info),
             .no_exports_found => |info| try createNoExportsFoundReport(allocator, info),
         };
@@ -648,14 +648,6 @@ fn createCircularPlatformDependencyReport(allocator: Allocator, info: anytype) A
         try report.document.addText(" -> ");
     }
     try report.document.addText("(cycle)");
-
-    return report;
-}
-
-fn createPlatformValidationFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "{s}.", .{info.message});
-    defer allocator.free(headline);
-    const report = try Report.init(allocator, "Platform Validation Failed", headline, .runtime_error);
 
     return report;
 }
@@ -1163,6 +1155,20 @@ fn createExpectedAppHeaderReport(allocator: Allocator, info: anytype) Allocator.
     try report.document.addText(" or ");
     try report.document.addAnnotated("roc check", .emphasized);
     try report.document.addText("?");
+
+    return report;
+}
+
+fn createExpectedPlatformStringReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "Expected a platform string in the app header of {s}.", .{info.path});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Expected Platform String", headline, .runtime_error);
+
+    try report.document.addText("Example:");
+    try report.document.addLineBreak();
+    try report.document.addCodeBlock(
+        \\app [main] { pf: platform "path/to/platform" }
+    );
 
     return report;
 }

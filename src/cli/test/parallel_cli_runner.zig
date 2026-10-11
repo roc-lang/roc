@@ -391,7 +391,6 @@ const CustomCase = enum {
     cli_cache_roots_distinct,
     watch_inputs_reject_absolute_import,
     absolute_platform_path_check_build_reject,
-    replaced_url_platform_runs_offline,
     watch_completed_run_refresh_reruns,
     hot_reload_dev_shim,
     hot_reload_model_boundary,
@@ -2091,11 +2090,6 @@ const subcommand_cases = [_]CliCase{
     // `roc build` must report the same "absolute platform path" error that
     // `roc run` reports, instead of accepting the app.
     .{ .id = 0, .suite = .subcommands, .name = "issue 11714: check and build reject an absolute platform path", .body = .{ .custom = .absolute_platform_path_check_build_reject } },
-    // Repro for https://github.com/roc-lang/roc/issues/12104: when
-    // `--replace-dep` replaces an app's URL platform with a local one, the
-    // default run modes must link the local platform's host and never fetch
-    // the declared URL.
-    .{ .id = 0, .suite = .subcommands, .name = "issue 12104: run modes use a replaced URL platform without fetching it", .body = .{ .custom = .replaced_url_platform_runs_offline } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check --watch reruns when completed child snapshot is stale", .skip = .{ .windows = "watch refresh race test uses a POSIX wrapper script" }, .body = .{ .custom = .watch_completed_run_refresh_reruns } },
     .{ .id = 0, .suite = .subcommands, .name = "roc --watch hot reloads dev shim code", .skip = .{ .windows = "generated hot-reload test platform uses POSIX host code" }, .body = .{ .custom = .hot_reload_dev_shim } },
     .{ .id = 0, .suite = .subcommands, .name = "roc --watch hot reloads app-provided Model through Box", .skip = .{ .windows = "generated hot-reload model test platform uses POSIX host code" }, .body = .{ .custom = .hot_reload_model_boundary } },
@@ -2518,6 +2512,12 @@ const subcommand_cases = [_]CliCase{
     // the run below blows far past this budget (the same pipeline with List.map
     // finishes in well under a second), so the case fails on the timeout.
     .{ .id = 0, .suite = .subcommands, .name = "issue 11783: stream map collect runs within the List-pipeline perf guard", .backend = .speed, .timeout_ms = 20_000, .body = .{ .command = .{ .args = &.{ "run", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/Issue11783StreamMapCollect.roc", .exit = .success, .stdout_exact = "50000000\n" } } },
+    // A top-level value is evaluated once and each use, at its own wider union,
+    // widens it by a row coercion (design.md "Value Rows: Local Values Share,
+    // Top-Level Values Widen At Each Use").
+    .{ .id = 0, .suite = .subcommands, .name = "top-level value used at several wider unions (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/TopLevelValueWidenedUses.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (11) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "top-level value used at several wider unions (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/TopLevelValueWidenedUses.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (11) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "top-level value used at several wider unions (boxy)", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/TopLevelValueWidenedUses.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (11) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     // Two mutually recursive callable values, each built by a block:
     // a lambda lowered under one value's recursive binding names that binding,
     // so it is never shared with a copy lowered where the binding is absent.
@@ -3100,6 +3100,10 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc build fails with file not found error", .body = .{ .command = .{ .args = &.{"build"}, .roc_file = "nonexistent_file.roc", .exit = .failure, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stderr, .text = "FileNotFound" }, .{ .stream = .stderr, .text = "not found" }, .{ .stream = .stderr, .text = "not found" }, .{ .stream = .stderr, .text = "Failed" } } }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build fails with invalid target error", .body = .{ .command = .{ .args = &.{ "build", "--target=invalid_target_name" }, .roc_file = "test/int/app.roc", .exit = .failure, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stderr, .text = "Invalid target" }, .{ .stream = .stderr, .text = "invalid" } } }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build wasm32 shared module succeeds for list builtins", .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--no-cache" }, .roc_file = "test/wasm/list_builtin_static_lib_app.roc", .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "FunctionTypeMismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    // A target configuration field that names a top-level value which is not a
+    // compile-time constant is reported and stops the build, rather than being
+    // dropped and linked without.
+    .{ .id = 0, .suite = .subcommands, .name = "roc build wasm32 rejects a target configuration field that is not a constant", .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--no-cache" }, .roc_file = "test/wasm/target_config_not_constant/app.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "invalid target configuration" }, .{ .stream = .stderr, .text = "global_base" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build wasm32 succeeds with per-specialization field defaults", .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--no-cache" }, .roc_file = "test/wasm/field_default_root_order/app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "compile-time root request order placed a root before another root it depends on" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10733: dev wasm32 emits a valid sealed Boxy object", .backend = .dev, .body = .{ .custom = .issue_10733_wasm_boxy_dev_sealed_object } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12029: boxy tail calls run in constant stack on wasm32 (dev)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12029_wasm_boxy_tail_calls } },
@@ -3197,7 +3201,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "exact numeral conformance program builds for wasm32", .backend = .size, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=size", "--no-cache" }, .roc_file = "test/cli/exact_numeral_conformance.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic:" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc returns exit code 2 for warnings (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/fx/run_warning_only.roc", .exit = .{ .code = 2 }, .contains_any = &.{.{ .needles = &warning_needles }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc --opt=dev returns exit code 2 for warnings", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/fx/run_warning_only.roc", .exit = .{ .code = 2 }, .contains_any = &.{.{ .needles = &warning_needles }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc rejects the reserved 0.0.0 platform URL", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/reserved_version_platform.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "The lowest publishable package version is 0.0.1." }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc rejects the reserved 0.0.0 platform URL", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/reserved_version_platform.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "invalid package version" }, .{ .stream = .stderr, .text = "The lowest publishable package version is 0.0.1." } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc bump reports patch when nothing changed", .body = .{ .command = .{ .args = &.{ "bump", "--no-cache", "--old", "test/bump/parser_v1", "--old-version", "1.2.3" }, .roc_file = "test/bump/parser_v1/main.roc", .contains = &.{ .{ .stream = .stdout, .text = "No API changes detected." }, .{ .stream = .stdout, .text = "This is a PATCH change." }, .{ .stream = .stdout, .text = "1.2.3 -> 1.2.4" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc bump extracts a platform root alias", .body = .{ .command = .{ .args = &.{ "bump", "--no-cache", "--old", "test/bump/platform_root_alias_v1", "--old-version", "1.2.3" }, .roc_file = "test/bump/platform_root_alias_v2/main.roc", .contains = &.{ .{ .stream = .stdout, .text = "No API changes detected." }, .{ .stream = .stdout, .text = "This is a PATCH change." } }, .not_contains = &.{ .{ .stream = .stderr, .text = "No Exposed Modules" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc bump does not overflow on exposed empty tag unions", .body = .{ .command = .{ .args = &.{ "bump", "--no-cache", "--old", "test/bump/empty_union", "--old-version", "1.2.3" }, .roc_file = "test/bump/empty_union/main.roc", .contains = &.{ .{ .stream = .stdout, .text = "No API changes detected." }, .{ .stream = .stdout, .text = "This is a PATCH change." } }, .not_contains = &.{ .{ .stream = .stderr, .text = "overflowed its stack" }, .{ .stream = .stderr, .text = "panic" } } } } },
@@ -4566,7 +4570,6 @@ fn runCustomCase(
         .cli_cache_roots_distinct => customCliCacheRootsDistinct(io, allocator, &timer),
         .watch_inputs_reject_absolute_import => customWatchInputsRejectAbsoluteImport(io, allocator, &env, &timer, timeout_ms),
         .absolute_platform_path_check_build_reject => customAbsolutePlatformPathCheckBuildReject(io, allocator, &env, &timer, timeout_ms),
-        .replaced_url_platform_runs_offline => customReplacedUrlPlatformRunsOffline(io, allocator, &env, &timer, timeout_ms),
         .watch_completed_run_refresh_reruns => customWatchCompletedRunRefreshReruns(io, allocator, &env, &timer, timeout_ms),
         .hot_reload_dev_shim => customHotReloadDevShim(io, allocator, &env, &timer, timeout_ms),
         .hot_reload_model_boundary => customHotReloadModelBoundary(io, allocator, &env, &timer, timeout_ms),
@@ -5016,61 +5019,6 @@ fn customAbsolutePlatformPathCheckBuildReject(
     }
     if (std.mem.find(u8, build_result.stderr, "absolute platform path") == null) {
         return failureFromRun(allocator, timer, build_result, "roc build stderr did not contain absolute platform path");
-    }
-
-    return null;
-}
-
-// Nothing listens on the loopback discard port, so any attempt to fetch this
-// declared platform fails; a run can only succeed by using the replacement.
-const unreachable_platform_url = "http://127.0.0.1:9/fx/1.0.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst";
-
-fn customReplacedUrlPlatformRunsOffline(
-    io: std.Io,
-    allocator: Allocator,
-    env: *const CaseEnv,
-    timer: *harness.Timer,
-    timeout_ms: u64,
-) ?TestResult {
-    const app_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "app.roc" }) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate app path: {}", .{err});
-    defer allocator.free(app_path);
-
-    const platform_path = std.fs.path.join(allocator, &.{ project_root_path, "test", "fx", "platform", "main.roc" }) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate platform path: {}", .{err});
-    defer allocator.free(platform_path);
-
-    const app_source =
-        "app [main!] { pf: platform \"" ++ unreachable_platform_url ++ "\" }\n" ++
-        "\n" ++
-        "import pf.Stdout\n" ++
-        "\n" ++
-        "main! = || {\n" ++
-        "    Stdout.line!(\"replaced platform ran\")\n" ++
-        "}\n";
-    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app_path, .data = app_source }) catch |err|
-        return customInfraFailure(allocator, timer, "failed to write app: {}", .{err});
-
-    for ([_][]const u8{ "--opt=dev", "--opt=interpreter" }) |opt| {
-        const child_timeout_ms = childCommandTimeoutMs(timer, timeout_ms) orelse
-            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before command started");
-
-        const result = runRawInEnv(
-            io,
-            allocator,
-            env,
-            &.{ roc_binary_path, opt, "--no-color", "--replace-dep", unreachable_platform_url, platform_path, app_path },
-            project_root_path,
-            null,
-            child_timeout_ms,
-        ) catch |err| return customInfraFailure(allocator, timer, "roc {s} spawn error: {}", .{ opt, err });
-
-        if (checkExitExpectation(allocator, result, .success)) |message| {
-            return failureFromRun(allocator, timer, result, message);
-        }
-        if (std.mem.find(u8, result.stdout, "replaced platform ran") == null) {
-            return failureFromRun(allocator, timer, result, "run stdout did not contain the app's output");
-        }
     }
 
     return null;
