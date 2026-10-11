@@ -46,7 +46,7 @@ median of six alternating runs: 2.25 GB on the baseline, 1.94 GB on this
 branch (-14%).
 
 Validation: every `run-test-zig-*` step except MiniCI's, the snapshot check,
-the lint gates, and all CLI suites (platforms, echo, subcommands, glue: 2198
+the lint gates, and all CLI suites (platforms, echo, subcommands, glue: 2228
 tests) pass; generated `.text` is byte-identical to the baseline's for both
 backends.
 
