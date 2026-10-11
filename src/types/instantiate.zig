@@ -505,8 +505,13 @@ pub const Instantiator = struct {
     /// A formal's rigid name and the argument it stands for.
     pub const RigidSub = struct { name: Ident.Idx, var_: Var };
 
+    /// The argument for `name`; a later entry for the same name wins.
     fn rigidSub(subs: []const RigidSub, name: Ident.Idx) ?Var {
-        for (subs) |sub| if (sub.name == name) return sub.var_;
+        var index = subs.len;
+        while (index > 0) {
+            index -= 1;
+            if (subs[index].name == name) return subs[index].var_;
+        }
         return null;
     }
 
@@ -533,7 +538,7 @@ pub const Instantiator = struct {
 
         /// Expected shape context substitutes declaration parameters with
         /// owned context copies while flexing other rigid leaves.
-        substitute_rigids_flex: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
+        substitute_rigids_flex: []const RigidSub,
     };
 
     /// How to instantiate polarity vars: the marker rigids (named
@@ -1158,7 +1163,7 @@ pub const Instantiator = struct {
                             break :blk .rigid;
                         },
                         .substitute_rigids_flex => |rigid_subs| {
-                            if (rigid_subs.get(rigid.name)) |existing_var| {
+                            if (rigidSub(rigid_subs, rigid.name)) |existing_var| {
                                 try self.var_map.put(resolved_var, existing_var);
                                 try machine.value_stack.append(self.store.gpa, existing_var);
                                 return true;

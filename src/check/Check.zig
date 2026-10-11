@@ -258,6 +258,10 @@ expr_kernel_pool: std.ArrayList(*ExprKernelActivity),
 /// capacity for the next run. Each run takes its own stack, so a nested run
 /// never moves the activity an outer step is still working on.
 check_activity_pool: std.ArrayList(std.ArrayList(CheckActivity)),
+/// Frame stacks of finished `checkPattern` calls, kept with their capacity
+/// for the next call. Each call takes its own stack, so a nested call never
+/// moves a frame an outer step is still working on.
+pattern_frame_pool: std.ArrayList(std.ArrayList(PatternCheckFrame)),
 /// A map from one var to another. Used to apply type arguments in instantiation
 rigid_var_substitutions: std.AutoHashMapUnmanaged(Ident.Idx, Var),
 /// Header rigid vars for the currently-processed type declaration.
@@ -3679,6 +3683,7 @@ fn initAssumePrepared(
         .alias_row_name_set = .empty,
         .expr_kernel_pool = .empty,
         .check_activity_pool = .empty,
+        .pattern_frame_pool = .empty,
         .rigid_var_substitutions = std.AutoHashMapUnmanaged(Ident.Idx, Var){},
         .type_decl_rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, Var){},
         .pending_default_checks = .empty,
@@ -3850,6 +3855,8 @@ pub fn deinit(self: *Self) void {
     self.expr_kernel_pool.deinit(self.gpa);
     for (self.check_activity_pool.items) |*activities| activities.deinit(self.gpa);
     self.check_activity_pool.deinit(self.gpa);
+    for (self.pattern_frame_pool.items) |*frames| frames.deinit(self.gpa);
+    self.pattern_frame_pool.deinit(self.gpa);
     self.canonical_key_writer.deinit();
     self.owner_envs_by_identity.deinit(self.gpa);
     self.regions.deinit(self.gpa);
@@ -18205,8 +18212,7 @@ fn abortCheckActivity(self: *Self, activity: *CheckActivity, env: *Env) void {
             }
             self.releaseExprKernelActivity(state);
         },
-        .boundary => |*state| if (state.owns_roots) self.gpa.free(state.roots),
-        .ensure_group, .pending_targets, .predeclared_uses => {},
+        .boundary, .ensure_group, .pending_targets, .predeclared_uses => {},
     }
 }
 
@@ -18558,9 +18564,9 @@ fn finishGroup(self: *Self, state: *GroupActivity, env: *Env) std.mem.Allocator.
 /// defaulting to a fixpoint, since a defaulting round can pin a receiver and
 /// surface a new obligation.
 const BoundaryActivity = struct {
+    /// Borrowed from the activity that pushed this one, which stays
+    /// suspended until this one completes.
     roots: []const BoundaryRoot,
-    /// Whether `roots` is owned by this activity.
-    owns_roots: bool = false,
     stage: enum { start, targets_resolved, replayed_before_capture, replayed_after_capture } = .start,
     owns_fixpoint: bool = false,
     pending_before: usize = 0,
@@ -18608,7 +18614,6 @@ fn stepBoundary(self: *Self, state: *BoundaryActivity, input: ?CheckActivityResu
                 // checked def, an annotated scheme, or a still-flex receiver.
                 std.debug.assert(self.pending_dispatch_targets.items.len == self.currentFramePendingTargetsTop());
                 std.debug.assert(self.pending_predeclared_scheme_uses.items.len == self.currentFramePendingPredeclaredUsesTop());
-                if (state.owns_roots) self.gpa.free(state.roots);
                 state.roots = &.{};
                 return checkActivityDone(.none);
             }
@@ -23386,8 +23391,11 @@ fn checkPattern(
     defer trace.end();
 
     var valid = true;
-    var frames: std.ArrayList(PatternCheckFrame) = .empty;
-    defer frames.deinit(self.gpa);
+    var frames = self.pattern_frame_pool.pop() orelse std.ArrayList(PatternCheckFrame).empty;
+    defer {
+        frames.clearRetainingCapacity();
+        self.pattern_frame_pool.append(self.gpa, frames) catch frames.deinit(self.gpa);
+    }
     const records_top = self.scratch_record_fields.top();
     errdefer self.scratch_record_fields.clearFrom(records_top);
 
@@ -24410,14 +24418,24 @@ fn projectExpectedTagPayload(
         .purpose = .expected_shape,
         .preserve_annotation_tag_ext = true,
     };
-    var substitutions: std.AutoHashMapUnmanaged(Ident.Idx, Var) = .empty;
-    defer substitutions.deinit(self.gpa);
+    // Declarations have a handful of formals; their substitutions live on
+    // the stack when they fit.
+    var inline_substitutions: [16]Instantiator.RigidSub = undefined;
+    var heap_substitutions: []Instantiator.RigidSub = &.{};
+    defer self.gpa.free(heap_substitutions);
     const scratch_top = self.scratch_vars.top();
     defer self.scratch_vars.clearFrom(scratch_top);
     if (payload.nominal) |nominal| {
         const decl = self.types.getNominalDecl(self.types.lookupNominalDecl(nominal).?);
         const actuals = types_mod.Store.getNominalArgsRange(nominal);
         std.debug.assert(decl.formals.len() == actuals.len());
+        const substitutions = if (decl.formals.len() <= inline_substitutions.len)
+            inline_substitutions[0..decl.formals.len()]
+        else blk: {
+            heap_substitutions = try self.gpa.alloc(Instantiator.RigidSub, decl.formals.len());
+            break :blk heap_substitutions;
+        };
+        var substitution_count: usize = 0;
         // Copy all actuals before seeding template roots: actual arguments
         // belong to the caller's scope, not the declaration's rigid namespace.
         for (0..actuals.len()) |index| {
@@ -24429,11 +24447,12 @@ fn projectExpectedTagPayload(
             const actual = self.scratch_vars.sliceFromStart(scratch_top)[index];
             try self.var_map.put(formal.var_, actual);
             if (formal.desc.content == .rigid) {
-                try substitutions.put(self.gpa, formal.desc.content.rigid.name, actual);
+                substitutions[substitution_count] = .{ .name = formal.desc.content.rigid.name, .var_ = actual };
+                substitution_count += 1;
             }
         }
         self.scratch_vars.clearFrom(scratch_top);
-        copier.rigid_behavior = .{ .substitute_rigids_flex = &substitutions };
+        copier.rigid_behavior = .{ .substitute_rigids_flex = substitutions[0..substitution_count] };
     }
     for (0..arity) |index| {
         const slot = self.types.getVarAt(payload.args, @intCast(index));
@@ -25046,6 +25065,9 @@ const ExprKernelActivity = struct {
     child_does_fx: ?bool = null,
     /// A finished frame suspended at its group's generalization boundary.
     finishing: ?struct { frame: ExprCheckFrame, does_fx: bool } = null,
+    /// The suspended frame's boundary root. The boundary activity borrows it;
+    /// this kernel stays suspended until that activity completes.
+    boundary_root: BoundaryRoot = undefined,
 };
 
 fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected, function_owner: CIR.Expr.Idx) std.mem.Allocator.Error!bool {
@@ -25151,13 +25173,12 @@ fn finishExprFrame(self: *Self, state: *ExprKernelActivity, frame: *ExprCheckFra
         .boundary => {
             state.finishing = .{ .frame = frame.*, .does_fx = does_fx };
             frame.active = false;
-            const roots = try self.gpa.alloc(BoundaryRoot, 1);
-            roots[0] = .{
+            state.boundary_root = .{
                 .owner = state.finishing.?.frame.expr_var_raw,
                 .interface = state.finishing.?.frame.expr_var,
                 .annotation = state.finishing.?.frame.annotation,
             };
-            return .{ .push = .{ .boundary = .{ .roots = roots, .owns_roots = true } } };
+            return .{ .push = .{ .boundary = .{ .roots = (&state.boundary_root)[0..1] } } };
         },
     }
 }
@@ -30652,29 +30673,30 @@ const ErroneousValueCrashes = enum { erroneous_values_crash, only_explicit_crash
 fn exprAlwaysCrashes(self: *const Self, expr_idx: CIR.Expr.Idx, erroneous_values: ErroneousValueCrashes) Allocator.Error!bool {
     // Every result position must crash: a block's final expression, and
     // each branch of an `if`.
+    // A block continues at its final expression and an `if` at its `else`,
+    // so only the other branches of an `if` wait on the list.
     var pending: std.ArrayList(CIR.Expr.Idx) = .empty;
     defer pending.deinit(self.gpa);
-    try pending.append(self.gpa, expr_idx);
-    while (pending.pop()) |current| {
+    var current = expr_idx;
+    while (true) {
         const expr = self.cir.store.getExpr(current);
-        if (expr == .e_crash or expr == .e_ellipsis or expr == .e_expect_err or expr == .e_break) continue;
-        if (erroneous_values == .erroneous_values_crash and self.branchValueIsErroneous(current)) continue;
-        if (expr == .e_run_low_level and expr.e_run_low_level.op == .crash) continue;
-        if (expr == .e_block) {
-            try pending.append(self.gpa, expr.e_block.final_expr);
-            continue;
-        }
-        if (expr == .e_if) {
-            const if_expr = expr.e_if;
-            try pending.append(self.gpa, if_expr.final_else);
-            for (self.cir.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
+        const crashes = expr == .e_crash or expr == .e_ellipsis or expr == .e_expect_err or expr == .e_break or
+            (erroneous_values == .erroneous_values_crash and self.branchValueIsErroneous(current)) or
+            (expr == .e_run_low_level and expr.e_run_low_level.op == .crash);
+        if (!crashes) {
+            if (expr == .e_block) {
+                current = expr.e_block.final_expr;
+                continue;
+            }
+            if (expr != .e_if) return false;
+            for (self.cir.store.sliceIfBranches(expr.e_if.branches)) |branch_idx| {
                 try pending.append(self.gpa, self.cir.store.getIfBranch(branch_idx).body);
             }
+            current = expr.e_if.final_else;
             continue;
         }
-        return false;
+        current = pending.pop() orelse return true;
     }
-    return true;
 }
 
 fn exprIsAllCrashConditional(self: *const Self, expr_idx: CIR.Expr.Idx) Allocator.Error!bool {

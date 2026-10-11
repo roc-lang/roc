@@ -218,6 +218,13 @@ stages it touches; the instruction-count effect is reported in "Results".
     are a stack slice searched linearly, and `detachOccurrence` reuses store
     scratch instead of reserving a whole-store-sized buffer per detach.
 
+40. `src/check/Check.zig`: an expected tag payload's rigid substitutions are
+    a stack slice instead of a hash map; `checkPattern` frame stacks are
+    pooled with their capacity; `exprAlwaysCrashes` follows blocks and `else`
+    branches without a worklist entry, so a plain expression allocates
+    nothing; and a generalization boundary borrows its single root from the
+    suspended kernel activity instead of allocating a one-element slice.
+
 ## Findings from profiling
 
 These were found by profiling the ReleaseFast compiler with
@@ -348,7 +355,7 @@ reading code, and were not in the audit above.
 - category A, B; runs per polarized ground instance lookup (`instantiateVarPolarized` -> `groundExpectedInstance` at 9353-9356: once per hash computation and once per cache …; impact medium; risk low
 - Finding: both functions build a `std.AutoHashMap(Var, u32)` / `AutoHashMap(Pair, void)` and an `ArrayListUnmanaged` on entry and `deinit` on exit; the walk itself is over a ground type that is usually small, so allocation dominates.
 - Fix: reuse `self.var_map` (DenseMap(Var,Var)) / `self.var_set` or add a `scratch_ground_hash_seen: DenseMap(Var, u32)` and `scratch_type_pairs: ArrayListUnmanaged(Pair)` to `Self`; for the pair set use a `DenseMap(Var, Var)` keyed by left var when the mapping is 1:1 (it is for identical ground types) with a fallback bitset for repeats.
-- Status: open
+- Status: fixed (fix 23)
 
 ### src/check/Check.zig:9067: `GroundMarks.parents: ArrayListUnmanaged(ArrayListUnmanaged(u32))` + `index_of: AutoHashMapUnmanaged(Var, u32)`
 - category F, B; runs `computeGroundMarks`/`computeGroundMarksKnowing` is called per polarized instance (`maximalGroundSubtreeCopies` 9184, `groundSubtreeEntries` 9208), per …; impact medium; risk low
@@ -378,7 +385,7 @@ reading code, and were not in the audit above.
 - category A; runs per `e_tag` checked against an expected nominal (line 26598), i.e. per constructor application in a position with a known type; impact medium (tags are everywhere); risk low-medium
 - Finding: `substitutions` (formal rigid name -> actual) is created, filled with `decl.formals.len()` entries (typically 0-3), handed to the instantiator, and destroyed.
 - Fix: as above: reusable scratch; better, pass the `formals`/`actuals` slices and let the instantiator substitute by resolved root via the `var_map` DenseMap that is already seeded two lines earlier (the rigid-name route is only needed for associated-type rigids; verify with the nominal payload projection tests at 24402-24470).
-- Status: open
+- Status: fixed (fix 40)
 
 ### src/check/Check.zig:21359: `beginAliasDeclBody` `gpa.create(ArrayListUnmanaged(Var))` per alias declaration
 - category A, F; runs per type alias declaration (`hidden_exts` boxed so `alias_hidden_exts: ?*ArrayListUnmanaged(Var)` can point at it; destroyed at 21116); impact low; risk low
@@ -420,7 +427,7 @@ reading code, and were not in the audit above.
 - category A; runs per `match` and per destructuring pattern (29602, 30900); impact medium; risk medium (must respect the cache's read …
 - Finding: a fresh open-cache per analysis site; the cache's purpose is to avoid re-opening nominal backings, but a per-site lifetime means the same `Try`/`List` opening is redone at every match in the module.
 - Fix: one cache on `Self`, invalidated only when the type store mutates in a way that changes a cached opening (the cache's `reader`/`finishRead` protocol already brackets uses). Verify `backfillRegionsForAnalysisVars` still covers vars minted by shared openings.
-- Status: open
+- Status: no change: `NominalOpenCache.init` allocates nothing; its type view and memo are created on the first read
 
 ### src/check/Check.zig:35395: `defaultMaterializationIsRecursive` allocates seven containers (five hash sets) per pending default check
 - category A, B; runs per record-field default expression pending a recursion check (35068, once per default per module); impact low-medium (defaults are rare, but each walk can reach a …; risk low
@@ -1042,7 +1049,7 @@ reading code, and were not in the audit above.
 - category A; runs once per group boundary reached through an expression frame (every singleton def RHS that generalizes: every top-level function, every annotated value in a …; impact low-medium (one alloc/free per generalizing def); risk low
 - Finding: `const roots = try self.gpa.alloc(BoundaryRoot, 1); ... .boundary = .{ .roots = roots, .owns_roots = true }` creates a 1-element heap slice so `BoundaryActivity` can own it; the sibling path (`GroupActivity`) passes borrowed slices. The frame is also copied by value into `state.finishing` (an `ExprCheckFrame` of ~200+ bytes) and then read back through `state.finishing.?.frame.*` three times.
 - Fix: give `BoundaryActivity` an inline `single: BoundaryRoot` + `roots: []const BoundaryRoot` pointing at it (or a `union { inline: BoundaryRoot, slice: []const BoundaryRoot }`) so a singleton root never allocates; build the root from the local `frame` before the copy.
-- Status: open
+- Status: fixed (fix 40)
 
 ### src/check/Check.zig:24687-24691, 24662, 24706: `varContainsError` walks the finished expression's type up to three times per frame
 - category E; runs per finishing expression frame in any module whose type store `mayContainErrorState()` (i.e. any module with at least one type error or invalid declaration: …; impact medium for LSP / erroring builds, zero for clean builds; risk low
@@ -1216,7 +1223,7 @@ reading code, and were not in the audit above.
 - category A; runs per pattern root: every def pattern, every lambda parameter (27919), every `for` pattern (27584), every match branch pattern, every local `s_decl`/`s_var` …; impact medium (one malloc/free per binder-introducing construct); risk low
 - Finding: `var frames: std.ArrayList(PatternCheckFrame) = .empty; defer frames.deinit(self.gpa);`: the first `append` mallocs, and the list is freed on return. `PatternCheckFrame` is ~40 bytes. Patterns are shallow, so the whole cost is the malloc/free pair.
 - Fix: `self.pattern_check_frames: ArrayListUnmanaged(PatternCheckFrame)` with a base index (`checkPattern` can recurse only through `checkNominalTypeUsage`?: verify it does not; if it can nest, use the base-offset discipline that `type_visit_stack` uses).
-- Status: open
+- Status: fixed (fix 40)
 
 ### src/check/Check.zig:23443-23447 + 23696-23705: `stepPatternCheck` re-decodes the pattern node at every resume, and a record destructure decodes each `RecordDestruct` twice
 - category E; runs per child of a compound pattern (one extra decode per child); per record destructure field (two decodes); impact low; risk low
@@ -1240,7 +1247,7 @@ reading code, and were not in the audit above.
 - category A; runs per unannotated top-level value def (17117, 17121) and per `exprIsAllCrashConditional` query; impact low; risk low
 - Finding: a pending stack is created/freed per call; the two calls at 17117/17121 walk the same expression with different `erroneous_values` modes.
 - Fix: reuse `self.scratch_exprs` (a `base.Scratch(CIR.Expr.Idx)`-style stack already exists for operands: `retired_operand_pool`); fold the two modes into one walk returning both answers.
-- Status: open
+- Status: fixed (fix 40)
 
 ### src/check/Check.zig:17064-17066, 17093, 17110-17114, 17129, 17135, 17142, 17157: `finishDef` re-decodes the def's pattern and expression 4-6 times
 - category E; runs per top-level def; impact low; risk low
