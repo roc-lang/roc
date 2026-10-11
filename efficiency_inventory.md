@@ -30,9 +30,9 @@ measured with every fix below applied:
 
 | Workload | Baseline | This branch | Change |
 | --- | ---: | ---: | ---: |
-| `roc check -j1 package/main.roc` (roc-pg) | 266.28 G | 220.38 G | -17.2% |
+| `roc check -j1 package/main.roc` (roc-pg) | 266.28 G | 218.60 G | -17.9% |
 | `roc build --opt=dev examples/query.roc` | 244.83 G | 223.30 G | -8.8% |
-| `roc build examples/query.roc` (LLVM) | 524.75 G | 351.18 G | -33.1% |
+| `roc build examples/query.roc` (LLVM) | 524.75 G | 345.53 G | -34.2% |
 | `roc test test/fx/issue8826_full.roc` | 141.4 M | 139.9 M | -1.1% |
 
 Validation: the module unit tests of every touched module, the lint gates,
@@ -234,6 +234,12 @@ stages it touches; the instruction-count effect is reported in "Results".
     list per digest; and record and tag rows already in label order are
     appended without a sorting copy. Together with fixes 39 and 40 this is
     about 1 G instructions on each roc-pg workload.
+
+42. `src/lir/arc_dismantle.zig` take flow walk: a store-wide column holds the
+    one successor of every straight-line statement, so a candidate's walk
+    decodes only branching and rebinding statements instead of loading every
+    144-byte statement it passes. The LLVM build of `query.roc` drops from
+    351.2 G to 345.5 G instructions and `roc check` from 220.4 G to 218.6 G.
 
 ## Findings from profiling
 

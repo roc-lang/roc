@@ -2293,6 +2293,33 @@ pub fn compute(
     var join_scan_stack = std.ArrayList(LIR.CFStmtId).empty;
     defer join_scan_stack.deinit(gpa);
     var join_scan_epoch: u32 = 0;
+    // The one successor of every statement the take flow walk passes straight
+    // through, or `no_index` for a statement it must decode. Each candidate's
+    // walk reads this column instead of loading every statement it passes.
+    const straight_next = try gpa.alloc(u32, store.cfStmtCount());
+    defer gpa.free(straight_next);
+    for (straight_next, 0..) |*next, stmt_index| {
+        next.* = switch (store.getCFStmtImmediate(@fromBackingInt(@intCast(stmt_index))).*) {
+            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| @backingInt(stmt.next),
+            .set_local,
+            .join,
+            .switch_stmt,
+            .jump,
+            .switch_initialized_payload,
+            .str_match,
+            .boxy_tag_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .ret,
+            .crash,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            => no_index,
+        };
+    }
+
     // Join identities belong to a procedure. The candidate's defining CFG
     // statement identifies that procedure explicitly, including dismantle
     // temporaries that are deliberately absent from a specialization frame.
@@ -2673,6 +2700,11 @@ pub fn compute(
                         // taker's mutation instead of the original field.
                         poison |= state.may & kind.bit;
                     }
+                }
+                const straight = straight_next[@backingInt(cursor)];
+                if (straight != no_index) {
+                    cursor = @fromBackingInt(straight);
+                    continue :chain;
                 }
                 switch (store.getCFStmtImmediate(cursor).*) {
                     inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
