@@ -206,7 +206,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     errdefer checker.deinit();
 
     try checker.checkFile();
-    _ = try checker.problems.flushAllPendingStaticExhaustiveness(gpa);
+    _ = try checker.problems.flushAllPendingStaticExhaustiveness();
 
     var type_writer = try module_env.initTypeWriter();
     errdefer type_writer.deinit();
@@ -338,7 +338,7 @@ pub fn initWithExecutableRootNames(module_name: []const u8, source: []const u8, 
     errdefer checker.deinit();
 
     try checker.checkFile();
-    _ = try checker.problems.flushAllPendingStaticExhaustiveness(gpa);
+    _ = try checker.problems.flushAllPendingStaticExhaustiveness();
 
     var type_writer = try module_env.initTypeWriter();
     errdefer type_writer.deinit();

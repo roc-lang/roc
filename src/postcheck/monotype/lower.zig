@@ -28921,38 +28921,25 @@ const BodyContext = struct {
         return self.source_region_override orelse expr.source_region;
     }
 
-    const DivergentExprContext = union(enum) {
-        uncontextual,
-        mono_type: Type.TypeId,
-        type_cell: DraftTypeCell,
-    };
-
-    /// Lower a producer-marked divergent expression before any value
-    /// representation or type relation is requested for it. The continuation's
-    /// context is the result cell for a value that can never materialize.
-    fn divergentExprInContextStep(
-        self: *BodyContext,
-        expr_id: checked.CheckedExprId,
-        context: DivergentExprContext,
-    ) Allocator.Error!?LowerStep {
+    /// Lower a producer-marked divergent expression whose value nothing
+    /// consumes, for its effect alone, before any value representation or type
+    /// relation is requested for it. It lowers at its own type, never at its
+    /// consumer's: a consumer of a value that never materializes continues at
+    /// its own type, and a control-flow expression's branches still produce
+    /// values of the expression's own type up to wherever it diverges.
+    fn divergentEffectExprStep(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!?LowerStep {
         if (!self.checkedExprDivergesInLoweredRuntime(expr_id)) return null;
 
-        return switch (context) {
-            .uncontextual => blk: {
-                const expr = self.view.bodies.expr(expr_id);
-                // A runtime error produces no value, and its checked type can
-                // contain the error it was retired for. Every other divergent
-                // expression retains its checked result variable as an
-                // unobservable continuation cell; asking for expression value
-                // evidence here would instantiate a rejected dispatch.
-                if (expr.data == .runtime_error or self.view.types.payload(expr.ty) == .err) {
-                    break :blk divergentStep(self, expr_id, .{ .at_type = try self.unitType() });
-                }
-                break :blk divergentStep(self, expr_id, .{ .at_cell = DraftTypeCell.fromGraphNode(try self.instNode(expr.ty)) });
-            },
-            .mono_type => |ty| divergentStep(self, expr_id, .{ .at_type = ty }),
-            .type_cell => |cell| divergentStep(self, expr_id, .{ .at_cell = cell }),
-        };
+        const expr = self.view.bodies.expr(expr_id);
+        // A runtime error produces no value, and its checked type can contain
+        // the error it was retired for. Every other divergent expression
+        // retains its checked result variable as an unobservable continuation
+        // cell; asking for expression value evidence here would instantiate a
+        // rejected dispatch.
+        if (expr.data == .runtime_error or self.view.types.payload(expr.ty) == .err) {
+            return divergentStep(self, expr_id, .{ .at_type = try self.unitType() });
+        }
+        return divergentStep(self, expr_id, .{ .at_cell = DraftTypeCell.fromGraphNode(try self.instNode(expr.ty)) });
     }
     // Expression lowering //
     //
@@ -29585,7 +29572,7 @@ const BodyContext = struct {
                 // pattern to a scrutinee that always crashes, so those patterns
                 // need not even agree with each other and must not be
                 // instantiated here.
-                if (try self.divergentExprInContextStep(match.cond, .{ .type_cell = task.result_cell })) |step| {
+                if (try self.divergentEffectExprStep(match.cond)) |step| {
                     task.stage = .divergent;
                     return step;
                 }
@@ -29614,7 +29601,13 @@ const BodyContext = struct {
             },
             .body => try self.finishMatchBranchBody(task, input.?.exprValue()),
             .scrutinee => return self.finishMatch(task, input.?.exprValue()),
-            .divergent => return .{ .ret = input.? },
+            .divergent => {
+                const stmt = try self.addStmt(.{ .expr = input.?.exprValue() });
+                return loweredExprStep(try self.addExprWithTypeCell(task.result_cell, .{ .block = .{
+                    .statements = try self.addStmtSpan(&.{stmt}),
+                    .final_expr = try self.addExprWithTypeCell(task.result_cell, .@"unreachable"),
+                } }));
+            },
         }
 
         // All checked pattern evidence must reach the shared scrutinee before
@@ -30034,7 +30027,7 @@ const BodyContext = struct {
         // statement. Its value type is never requested: a checked runtime
         // error has a deliberately erroneous type, and value evidence for a
         // divergent call could instantiate a rejected dispatch.
-        if (try self.divergentExprInContextStep(expr_id, .uncontextual)) |step| {
+        if (try self.divergentEffectExprStep(expr_id)) |step| {
             task.stage = .divergent;
             return step;
         }
@@ -30193,8 +30186,8 @@ const BodyContext = struct {
 
     /// A pattern statement's value lowers as a child: a divergent initializer
     /// for its effect alone, since it never produces a value to bind and
-    /// emitting a pattern or reading its dead checked type would invent a
-    /// relation for a value that cannot exist.
+    /// emitting a pattern would invent a relation for a value that cannot
+    /// exist.
     fn beginPatternStatementStep(
         self: *BodyContext,
         task: *StatementTask,
@@ -30203,7 +30196,8 @@ const BodyContext = struct {
     ) Allocator.Error!LowerStep {
         if (task.diverges) {
             task.stage = .divergent_value;
-            return divergentStep(self, expr, .{ .at_type = try self.unitType() });
+            return (try self.divergentEffectExprStep(expr)) orelse
+                Common.invariant("a divergent pattern statement's initializer did not diverge");
         }
         task.requested_cell = try self.beginPatternStatementValue(pattern, expr);
         task.stage = .pattern_value;
@@ -30379,10 +30373,18 @@ const BodyContext = struct {
         const expr_id = task.expr;
         const checked_expr = self.view.bodies.expr(expr_id);
         switch (task.form) {
+            // A control-flow expression produces values of its own type on
+            // every path that does not diverge, so it lowers at its cell;
+            // every other expression lowers its operands for their effects.
             .at_cell => |cell| switch (checked_expr.data) {
                 .match_ => |match| return requestLowerTask(self, .{ .match_task = .{ .expr_id = expr_id, .match = match, .result_cell = cell } }),
                 .if_ => |if_| return requestLowerTask(self, .{ .if_task = .{ .expr_id = expr_id, .if_ = if_, .result_cell = cell } }),
-                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {
+                .block => |block| return requestLowerTask(self, .{ .block = try self.boxLowerTask(BlockTask, .{
+                    .statements = block.statements,
+                    .final_expr = block.final_expr,
+                    .result_cell = cell,
+                }) }),
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {
                     task.finish = .{ .effect_at_cell = cell };
                     return divergentStep(self, expr_id, .{ .at_type = try self.unitType() });
                 },
@@ -30409,17 +30411,12 @@ const BodyContext = struct {
                 return divergentStep(self, expr_id, .{ .data = ty });
             },
             .effect_data => |ty| {
-                // A divergent expression never returns a value, so its checked result
-                // variable can legitimately remain unconstrained; the continuation's
-                // explicit type stands in for a result that cannot exist. An explicit
-                // checked runtime error lowers its crash path at unit because its
-                // deliberately erroneous source type has no monotype.
-                const effect_ty = if (checked_expr.data == .runtime_error)
-                    try self.unitType()
-                else
-                    ty;
+                // The operand is evaluated only for its effect, so it lowers at
+                // its own type, and the continuation's explicit type stands in
+                // for the consumer's result, which cannot exist.
                 task.finish = .{ .effect_data = ty };
-                return divergentStep(self, expr_id, .{ .at_type = effect_ty });
+                return (try self.divergentEffectExprStep(expr_id)) orelse
+                    Common.invariant("an operand evaluated only for its divergence did not diverge");
             },
             .data => |ty| return self.divergentDataStep(task, checked_expr, ty),
         }
@@ -32236,7 +32233,7 @@ const BodyContext = struct {
             return .{ .ret = input.? };
         }
         task.saved = try self.saveSourceLocation(expr);
-        if (try self.divergentExprInContextStep(expr_id, .uncontextual)) |step| {
+        if (try self.divergentEffectExprStep(expr_id)) |step| {
             frame.cursor = 1;
             return step;
         }

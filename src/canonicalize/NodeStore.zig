@@ -2475,16 +2475,24 @@ pub fn settleDeferredExprAsRuntimeError(
 }
 
 /// Settle a deferred import reference pattern that resolves to nothing as a
-/// runtime error. Like `settleDeferredExprAsRuntimeError`, nothing is kept.
+/// runtime error. The deferred node is a placeholder for the nominal pattern,
+/// but its backing pattern is source structure whose binders the program
+/// wrote, so the runtime error keeps the backing pattern as its source.
 pub fn settleDeferredPatternAsRuntimeError(
     store: *NodeStore,
     pattern_idx: CIR.Pattern.Idx,
     diagnostic_idx: CIR.Diagnostic.Idx,
-) void {
+) Allocator.Error!void {
     const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(pattern_idx)));
     std.debug.assert(store.nodes.get(node_idx).tag == .pattern_deferred_import_ref);
+    const backing_pattern = store.getPattern(pattern_idx).deferred_import_ref.backing_pattern;
+    const backing_node = store.nodes.get(@fromBackingInt(@intCast(@backingInt(backing_pattern))));
+    const source_node_plus_one = @backingInt(try store.replaced_source_nodes.append(store.gpa, backing_node)) + 1;
     var node = Node.init(.malformed);
-    node.setPayload(.{ .malformed = .{ .diagnostic = @backingInt(diagnostic_idx) } });
+    node.setPayload(.{ .malformed = .{
+        .diagnostic = @backingInt(diagnostic_idx),
+        .source_node_plus_one = source_node_plus_one,
+    } });
     store.nodes.set(node_idx, node);
 }
 
