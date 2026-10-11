@@ -15,10 +15,21 @@ const builtin = @import("builtin");
 /// The child's exit code when the trigger returns instead of panicking.
 const trigger_returned_exit_code = 86;
 
+/// Failures to start or observe a death-test child.
+pub const ChildError = std.mem.Allocator.Error ||
+    std.process.ExecutablePathAllocError ||
+    std.process.Environ.CreateMapError ||
+    std.process.RunError ||
+    error{SkipZigTest};
+
+/// A death test's failures: the child could not run, or it did not panic as
+/// expected.
+pub const Error = ChildError || error{ DeathTestDidNotPanic, DeathTestWrongPanic };
+
 /// Runs `trigger` with `args` in a child copy of the calling test and expects
 /// it to panic with a message containing `expected_message`. Call it at most
 /// once per test: the child re-runs the whole test up to this call.
-pub fn expectPanic(expected_message: []const u8, comptime trigger: anytype, args: anytype) !void {
+pub fn expectPanic(expected_message: []const u8, comptime trigger: anytype, args: anytype) Error!void {
     const gpa = std.testing.allocator;
     var outcome = try runInChild(gpa, trigger, args);
     defer outcome.deinit(gpa);
@@ -41,14 +52,14 @@ const Outcome = union(enum) {
 
     fn deinit(self: *Outcome, gpa: std.mem.Allocator) void {
         switch (self.*) {
-            inline else => |stderr| gpa.free(stderr),
+            .returned, .panicked => |stderr| gpa.free(stderr),
         }
     }
 };
 
 /// In the parent, runs the calling test in a child and reports how it ended.
 /// In the child, calls `trigger` and exits if it returns.
-fn runInChild(gpa: std.mem.Allocator, comptime trigger: anytype, args: anytype) !Outcome {
+fn runInChild(gpa: std.mem.Allocator, comptime trigger: anytype, args: anytype) ChildError!Outcome {
     if (comptime !builtin.is_test) @compileError("death tests run only in test binaries");
     if (comptime !std.debug.runtime_safety or !std.process.can_spawn) return error.SkipZigTest;
     const runner = @import("root");
@@ -57,8 +68,11 @@ fn runInChild(gpa: std.mem.Allocator, comptime trigger: anytype, args: anytype) 
     }
 
     if (runner.isDeathTestChild()) {
-        try @call(.auto, trigger, args);
-        std.debug.print("death test trigger returned without panicking\n", .{});
+        if (@call(.auto, trigger, args)) {
+            std.debug.print("death test trigger returned without panicking\n", .{});
+        } else |err| {
+            std.debug.print("death test trigger returned error.{t} without panicking\n", .{err});
+        }
         std.process.exit(trigger_returned_exit_code);
     }
 
@@ -87,11 +101,11 @@ fn runInChild(gpa: std.mem.Allocator, comptime trigger: anytype, args: anytype) 
     };
 }
 
-fn violateInvariant(value: u32) !void {
+fn violateInvariant(value: u32) error{}!void {
     if (value != 0) @import("invariant.zig").invariant("death test sample invariant saw {d}", .{value});
 }
 
-fn returnNormally(value: u32) !void {
+fn returnNormally(value: u32) error{}!void {
     _ = value;
 }
 

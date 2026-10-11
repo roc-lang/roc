@@ -4988,7 +4988,7 @@ test "a merge of sets sharing a lambda keeps that lambda's one capture span" {
     try std.testing.expectEqual(shared_captures, members[1].captures);
 }
 
-fn unifyOneLambdaWithTwoCaptureSpans() !void {
+fn unifyOneLambdaWithTwoCaptureSpans() Allocator.Error!void {
     const allocator = std.testing.allocator;
     var program = Ast.Program.init(allocator, emptyLiftedProgramForTest(allocator));
     defer program.deinit();
@@ -5009,7 +5009,7 @@ test "unifying one lambda carrying two capture spans fails its invariant" {
     try @import("base").death_test.expectPanic("one lambda reached Lambda Solved unification with two capture spans", unifyOneLambdaWithTwoCaptureSpans, .{});
 }
 
-fn canonicalizeLambdaSetWithRepeatedMember() !void {
+fn canonicalizeLambdaSetWithRepeatedMember() Allocator.Error!void {
     const allocator = std.testing.allocator;
     var program = Ast.Program.init(allocator, emptyLiftedProgramForTest(allocator));
     defer program.deinit();

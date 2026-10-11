@@ -55842,7 +55842,7 @@ test "closing a nested return frame drains only that frame's return-flow entries
     try std.testing.expect(checker.openFrameState() == null);
 }
 
-fn leaveReturnFrameOpen() !void {
+fn leaveReturnFrameOpen() @import("test/TestEnv.zig").TestEnvError!void {
     const TestEnv = @import("test/TestEnv.zig");
     var test_env = try TestEnv.initExpr("ReturnFrames", "1.I64");
     defer test_env.deinit();
@@ -55857,7 +55857,7 @@ test "a return frame left open fails the checker's frame-balance invariant" {
     try base.death_test.expectPanic("frame-owned `return_constraints` still holds 1 entries after checking returned", leaveReturnFrameOpen, .{});
 }
 
-fn abortHoistFrameWithNoneOpen() !void {
+fn abortHoistFrameWithNoneOpen() @import("test/TestEnv.zig").TestEnvError!void {
     const TestEnv = @import("test/TestEnv.zig");
     var test_env = try TestEnv.initExpr("HoistFrames", "1.I64");
     defer test_env.deinit();

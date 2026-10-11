@@ -22660,7 +22660,7 @@ test "a frame left open in canonicalizer state is named by the frame-balance che
     try std.testing.expect(can.openFrameState() == null);
 }
 
-fn leaveTypeVarScopeOpen() !void {
+fn leaveTypeVarScopeOpen() Allocator.Error!void {
     const CanTestEnv = @import("test/TestEnv.zig");
     var test_env = try CanTestEnv.init("1");
     defer test_env.deinit();

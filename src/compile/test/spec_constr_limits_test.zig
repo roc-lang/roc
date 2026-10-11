@@ -4,7 +4,7 @@ const std = @import("std");
 const lir = @import("lir");
 const harness = @import("lower_to_lir_harness.zig");
 
-fn lowerWithSpecConstrMetrics(app_body: []const u8) !lir.CheckedPipeline.SpecConstrParallelMetrics {
+fn lowerWithSpecConstrMetrics(app_body: []const u8) harness.LowerToLirHarnessError!lir.CheckedPipeline.SpecConstrParallelMetrics {
     var metrics: lir.CheckedPipeline.SpecConstrParallelMetrics = .{};
     try harness.expectLowersToLirWithOptions(app_body, .{
         .inline_mode = .wrappers,
