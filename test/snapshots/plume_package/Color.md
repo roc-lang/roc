@@ -1238,7 +1238,7 @@ is_named_color = |str| {
 		(e-method-eq (negated "false")
 			(lhs
 				(e-runtime-error (tag "erroneous_value_expr")
-					(e-call (constraint-fn-var 1156)
+					(e-call (constraint-fn-var 1135)
 						(e-lookup-local
 							(p-assign (ident "rgb")))
 						(e-num (value "124"))
@@ -1251,7 +1251,7 @@ is_named_color = |str| {
 		(e-method-eq (negated "false")
 			(lhs
 				(e-runtime-error (tag "erroneous_value_expr")
-					(e-call (constraint-fn-var 1206)
+					(e-call (constraint-fn-var 1157)
 						(e-lookup-local
 							(p-assign (ident "rgba")))
 						(e-num (value "124"))
@@ -1264,9 +1264,9 @@ is_named_color = |str| {
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-dispatch-call (method "map_ok") (constraint-fn-var 1237)
+				(e-dispatch-call (method "map_ok") (constraint-fn-var 1188)
 					(receiver
-						(e-call (constraint-fn-var 1234)
+						(e-call (constraint-fn-var 1185)
 							(e-lookup-local
 								(p-assign (ident "hex")))
 							(e-string

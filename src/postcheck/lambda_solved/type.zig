@@ -56,6 +56,7 @@ pub const Capture = struct {
     binder: ?check.CheckedModule.PatternBinderId,
     capture_id: ?check.CheckedModule.CaptureId = null,
     checked_capture_id: ?check.CheckedModule.CaptureId = null,
+    capture_kind: check.CheckedModule.ConstCaptureKind = .lexical,
     ty: TypeVarId,
 };
 

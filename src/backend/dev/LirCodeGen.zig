@@ -824,28 +824,6 @@ const LirProcSpec = lir.LirProcSpec;
 
 const Allocator = std.mem.Allocator;
 
-/// Maps a stack plan builds for one procedure, reused across the procedures
-/// one executor lane compiles. A procedure's statement and join ids span from
-/// where its body was first lowered to wherever later passes appended its
-/// rewritten statements, which can be most of the program's id range; a fresh
-/// map per procedure would allocate and clear a chunk table for that span.
-pub const StackPlanMaps = struct {
-    nodes: collections.DenseMapPool(CFStmtId, u32),
-    joins: collections.DenseMapPool(LIR.JoinPointId, CFStmtId),
-
-    pub fn init(allocator: Allocator) StackPlanMaps {
-        return .{
-            .nodes = collections.DenseMapPool(CFStmtId, u32).init(allocator),
-            .joins = collections.DenseMapPool(LIR.JoinPointId, CFStmtId).init(allocator),
-        };
-    }
-
-    pub fn deinit(self: *StackPlanMaps) void {
-        self.nodes.deinit();
-        self.joins.deinit();
-    }
-};
-
 /// Code generator for statement-only LIR procs
 /// Parameterized by RocTarget for cross-compilation support
 pub fn LirCodeGen(comptime target: RocTarget) type {
@@ -976,6 +954,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Map from LIR local id to value location (register or stack slot)
         local_locations: std.AutoHashMap(u32, ValueLocation),
         stack_alloca_slots: collections.DenseMap(LocalId, i32),
+        /// Indexes `ensureStableLocationsForStmtLocals` plans through: borrowed
+        /// from the worker running this generator when it lends them (see
+        /// `borrowStackPlanIndexes`), otherwise this generator's own.
+        stack_plan_indexes: ?*StackPlan.Indexes = null,
+        owns_stack_plan_indexes: bool = false,
         local_location_undo: std.ArrayList(LocalLocationUndo),
 
         /// Exact reverse index for locals which currently live in vector registers.
@@ -1199,9 +1182,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Compiler-internal hooks enabled only for native compile-time
         /// evaluation. Normal dev backend output leaves these null.
         comptime_hooks: ?ComptimeHooks = null,
-        /// The executor lane's reusable stack-plan maps, when this generator
-        /// compiles on a lane that keeps them.
-        stack_plan_maps: ?*StackPlanMaps = null,
 
         /// Independent emission borrows global LIR metadata but owns only the
         /// requested body's machine-code state. Helpers remain coordinator work.
@@ -1672,6 +1652,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.hosted_symbols.deinit();
             self.local_locations.deinit();
             self.stack_alloca_slots.deinit();
+            if (self.owns_stack_plan_indexes) {
+                self.stack_plan_indexes.?.deinit();
+                self.allocator.destroy(self.stack_plan_indexes.?);
+            }
             self.local_location_undo.deinit(self.allocator);
             self.join_points.deinit();
             self.stmt_locations.deinit();
@@ -9806,11 +9790,28 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return if (ref) |r| r.desc else null;
         }
 
-        fn stackPlanNode(self: *Self, plan: *StackPlan, nodes: *collections.DenseMap(CFStmtId, u32), work: *std.ArrayList(CFStmtId), stmt: CFStmtId) Allocator.Error!u32 {
-            if (nodes.get(stmt)) |index| return index;
+        /// Plan stack storage through `indexes`, which a worker keeps for
+        /// every procedure it generates, instead of this generator's own.
+        pub fn borrowStackPlanIndexes(self: *Self, indexes: *StackPlan.Indexes) void {
+            std.debug.assert(self.stack_plan_indexes == null);
+            self.stack_plan_indexes = indexes;
+        }
+
+        fn stackPlanIndexes(self: *Self) Allocator.Error!*StackPlan.Indexes {
+            if (self.stack_plan_indexes) |indexes| return indexes;
+            const indexes = try self.allocator.create(StackPlan.Indexes);
+            indexes.* = StackPlan.Indexes.init(self.allocator);
+            self.stack_plan_indexes = indexes;
+            self.owns_stack_plan_indexes = true;
+            return indexes;
+        }
+
+        fn stackPlanNode(self: *Self, plan: *StackPlan, indexes: *StackPlan.Indexes, work: *std.ArrayList(CFStmtId), stmt: CFStmtId) Allocator.Error!u32 {
+            if (indexes.nodeOf(stmt)) |index| return index;
+            try work.ensureUnusedCapacity(self.allocator, 1);
             const index = try plan.node();
-            try nodes.put(stmt, index);
-            try work.append(self.allocator, stmt);
+            try indexes.setNode(stmt, index);
+            work.appendAssumeCapacity(stmt);
             return index;
         }
 
@@ -9830,21 +9831,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn ensureStableLocationsForStmtLocals(self: *Self, root: CFStmtId) Allocator.Error!void {
-            var plan = StackPlan.init(self.allocator);
-            defer plan.deinit();
-            var nodes = if (self.stack_plan_maps) |maps| maps.nodes.acquire() else collections.DenseMap(CFStmtId, u32).init(self.allocator);
-            defer if (self.stack_plan_maps) |maps| maps.nodes.release(&nodes) else nodes.deinit();
+            const indexes = try self.stackPlanIndexes();
+            var plan = StackPlan.initWithLocalIndices(indexes.allocator, indexes.local_indices);
+            indexes.local_indices = .empty;
+            defer indexes.local_indices = plan.deinitKeepingLocalIndices();
+            // Every planned statement is in `work`, so it empties the indexes.
             var work: std.ArrayList(CFStmtId) = .empty;
-            defer work.deinit(self.allocator);
+            defer {
+                indexes.clear(work.items);
+                work.deinit(self.allocator);
+            }
             var successors: std.ArrayList(CFStmtId) = .empty;
             defer successors.deinit(self.allocator);
-            var joins = if (self.stack_plan_maps) |maps| maps.joins.acquire() else collections.DenseMap(LIR.JoinPointId, CFStmtId).init(self.allocator);
-            defer if (self.stack_plan_maps) |maps| maps.joins.release(&joins) else joins.deinit();
-            _ = try self.stackPlanNode(&plan, &nodes, &work, root);
+            const joins = &indexes.joins;
+            std.debug.assert(joins.count() == 0);
+            _ = try self.stackPlanNode(&plan, indexes, &work, root);
             var cursor: usize = 0;
             while (cursor < work.items.len) : (cursor += 1) {
                 const id = work.items[cursor];
-                const at = nodes.get(id).?;
+                const at = indexes.nodeOf(id).?;
                 const stmt = self.store.getCFStmt(id);
                 var ctx = StackAccessContext{ .owner = self, .plan = &plan, .at = at };
                 lir.BodyClone.forEachStmtRead(self.store, stmt, &ctx, StackAccessContext.read);
@@ -9969,7 +9974,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 successors.clearRetainingCapacity();
                 switch (stmt) {
                     .join => |j| {
-                        _ = try self.stackPlanNode(&plan, &nodes, &work, j.body);
+                        _ = try self.stackPlanNode(&plan, indexes, &work, j.body);
                         try successors.append(self.allocator, j.remainder);
                     },
                     .switch_stmt => |s| {
@@ -9979,7 +9984,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     },
                     .str_match => |s| {
                         const capture = try self.stackPlanCaptures(&plan, at, s.source, s.steps);
-                        const next = try self.stackPlanNode(&plan, &nodes, &work, s.on_match);
+                        const next = try self.stackPlanNode(&plan, indexes, &work, s.on_match);
                         try plan.edge(capture, next);
                         try successors.append(self.allocator, s.on_miss);
                     },
@@ -9988,7 +9993,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         for (0..arms.len) |i| {
                             const arm = GuardedList.at(arms, i);
                             const capture = try self.stackPlanCaptures(&plan, at, s.source, arm.steps);
-                            const next = try self.stackPlanNode(&plan, &nodes, &work, arm.on_match);
+                            const next = try self.stackPlanNode(&plan, indexes, &work, arm.on_match);
                             try plan.edge(capture, next);
                         }
                         try successors.append(self.allocator, s.on_miss);
@@ -10038,30 +10043,30 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     => try lir.BodyClone.appendSuccessors(self.store, &successors, id, self.allocator),
                 }
                 for (successors.items) |next| {
-                    const to = try self.stackPlanNode(&plan, &nodes, &work, next);
+                    const to = try self.stackPlanNode(&plan, indexes, &work, next);
                     try plan.edge(at, to);
                 }
             }
             for (work.items) |id| {
                 const stmt = self.store.getCFStmt(id);
-                const at = nodes.get(id).?;
+                const at = indexes.nodeOf(id).?;
                 if (stmt == .join) {
                     // A declaration alone needs no storage. Mark only locals
                     // present in the completed read/write inventory as mutable.
                     const params = self.store.getLocalSpan(stmt.join.params);
                     for (0..params.len) |i| {
-                        if (plan.locals.get(GuardedList.at(params, i))) |index| plan.values.items[index].mutable = true;
+                        if (plan.localIndex(GuardedList.at(params, i))) |index| plan.values.items[index].mutable = true;
                     }
                 }
                 if (stmt == .jump) {
-                    try plan.edge(at, nodes.get(joins.get(stmt.jump.target).?).?);
+                    try plan.edge(at, indexes.nodeOf(joins.get(stmt.jump.target).?).?);
                 }
                 if (stmt == .assign_low_level) {
                     if (OverflowFusion.findResultConsumer(self.store, id)) |fusion| {
                         // The producer emits the consumer's result early. Keep
                         // those bytes live through its nominal definition site.
                         try plan.access(at, fusion.result_target, false, true);
-                        try plan.access(nodes.get(fusion.consumer_stmt).?, fusion.result_target, true, false);
+                        try plan.access(indexes.nodeOf(fusion.consumer_stmt).?, fusion.result_target, true, false);
                     }
                 }
             }
@@ -10072,8 +10077,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const stmt = self.store.getCFStmt(id);
                 if (stmt != .assign_ref or stmt.assign_ref.op != .local) continue;
                 const assign = stmt.assign_ref;
-                const target_index = plan.locals.get(assign.target).?;
-                const source = plan.locals.get(assign.op.local).?;
+                const target_index = plan.localIndex(assign.target).?;
+                const source = plan.localIndex(assign.op.local).?;
                 const t = plan.values.items[target_index];
                 const s = plan.values.items[source];
                 if (t.definitions != 1 or s.definitions > 1 or t.mutable or s.mutable) continue;
