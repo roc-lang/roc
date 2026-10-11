@@ -4517,18 +4517,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const list_loc = try self.emitValueLocal(list_local);
                     return try self.callListReleaseExcessCapOp(list_local, list_loc, ll);
                 },
-                .list_split_first => {
-                    // list_split_first(list) -> {first: elem, rest: List}
-                    if (args.len != 1) unreachable;
-                    const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
-                    return try self.callListSplitOp(ll, list_loc, .first);
-                },
-                .list_split_last => {
-                    // list_split_last(list) -> {rest: List, last: elem}
-                    if (args.len != 1) unreachable;
-                    const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
-                    return try self.callListSplitOp(ll, list_loc, .last);
-                },
 
                 // ── Integer-to-integer try conversions ──
                 // Returns a tag union: Ok(To) | Err({}).
@@ -7279,8 +7267,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_set,
                 .list_set_in_place_unsafe,
                 .list_slack_unique,
-                .list_split_first,
-                .list_split_last,
                 .list_sublist,
                 .list_sublist_borrowed,
                 .list_swap,
@@ -8789,138 +8775,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
-        }
-
-        /// Helper for list_split_first and list_split_last.
-        /// Returns a record {element, List} with fields at layout-determined offsets.
-        fn callListSplitOp(self: *Self, ll: anytype, list_loc: ValueLocation, mode: enum { first, last }) Allocator.Error!ValueLocation {
-            const ls = self.layout_store;
-
-            // Get the return record layout
-            const ret_layout = ls.getLayout(ll.ret_layout);
-            if (ret_layout.tag != .struct_) unreachable;
-            const record_idx = ret_layout.getStruct().idx;
-            const record_data = ls.getStructData(record_idx);
-            const result_size: u32 = record_data.size.get(ls.targetUsize());
-
-            // Find which field is the list and which is the element.
-            // The record has exactly 2 fields.
-            const field0_layout_idx = ls.getStructFieldLayout(record_idx, 0);
-            const field0_layout = ls.getLayout(field0_layout_idx);
-            const field0_offset: i32 = @intCast(ls.getStructFieldOffset(record_idx, 0));
-            const field1_layout_idx = ls.getStructFieldLayout(record_idx, 1);
-            const field1_layout = ls.getLayout(field1_layout_idx);
-            const field1_offset: i32 = @intCast(ls.getStructFieldOffset(record_idx, 1));
-
-            const field0_is_list = field0_layout.tag == .list or field0_layout.tag == .list_of_zst;
-            const list_field_offset: i32 = if (field0_is_list) field0_offset else field1_offset;
-            const elem_field_offset: i32 = if (field0_is_list) field1_offset else field0_offset;
-            const elem_layout = if (field0_is_list) field1_layout else field0_layout;
-            const list_field_layout_idx = if (field0_is_list) field0_layout_idx else field1_layout_idx;
-            const list_abi = builtinInternalListAbi(ls, "dev.callListSplitOp.builtin_list_abi", list_field_layout_idx);
-
-            const elem_size_align = ls.layoutSizeAlign(elem_layout);
-            const elem_size: u32 = elem_size_align.size;
-
-            // Ensure list is on stack
-            const list_off = try self.ensureOnStack(list_loc, roc_list_size);
-
-            // Allocate result struct
-            const result_offset = self.codegen.allocStackSlot(result_size);
-
-            // Load list length
-            const len_reg = try self.allocTempGeneral();
-            try self.emitLoad(.w64, len_reg, frame_ptr, list_off + 8);
-
-            // Copy the element from the list into the result struct
-            if (elem_size > 0) {
-                // Load list pointer
-                const ptr_reg = try self.allocTempGeneral();
-                try self.emitLoad(.w64, ptr_reg, frame_ptr, list_off);
-
-                if (mode == .last) {
-                    // Element is at ptr + (len-1) * elem_size
-                    const idx_reg = try self.allocTempGeneral();
-                    try self.codegen.emit.movRegReg(.w64, idx_reg, len_reg);
-                    try self.emitSubImm(.w64, idx_reg, idx_reg, 1);
-                    if (elem_size != 1) {
-                        const size_reg = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(size_reg, elem_size);
-                        try self.emitMulRegs(.w64, idx_reg, idx_reg, size_reg);
-                        self.codegen.freeGeneral(size_reg);
-                    }
-                    try self.emitAddRegs(.w64, ptr_reg, ptr_reg, idx_reg);
-                    self.codegen.freeGeneral(idx_reg);
-                }
-
-                // Copy element from ptr_reg+0 to result+elem_field_offset
-                const elem_dst = result_offset + elem_field_offset;
-                const temp_reg = try self.allocTempGeneral();
-                if (elem_size <= 8) {
-                    const vs = ValueSize.fromByteCount(@intCast(elem_size));
-                    try self.emitSizedLoadMem(temp_reg, ptr_reg, 0, vs);
-                    try self.emitSizedStoreMem(frame_ptr, elem_dst, temp_reg, vs);
-                } else {
-                    try self.copyChunked(temp_reg, ptr_reg, 0, frame_ptr, elem_dst, elem_size);
-                }
-                self.freeGenerals(.{ temp_reg, ptr_reg });
-            }
-
-            // Build rest list via roc_builtins_list_sublist, writing directly into result+list_field_offset
-            // For split_first: start=1, len=len-1
-            // For split_last: start=0, len=len-1
-            const start_slot = self.codegen.allocStackSlot(8);
-            const sublist_len_slot = self.codegen.allocStackSlot(8);
-
-            const one_tmp = try self.allocTempGeneral();
-            try self.codegen.emitLoadImm(one_tmp, 1);
-            const new_len_reg = try self.allocTempGeneral();
-            try self.emitSaturatingSub(new_len_reg, len_reg, one_tmp);
-            self.codegen.freeGeneral(one_tmp);
-            try self.emitStore(.w64, frame_ptr, sublist_len_slot, new_len_reg);
-            self.codegen.freeGeneral(new_len_reg);
-
-            switch (mode) {
-                .first => {
-                    // start = 1
-                    const one_reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(one_reg, 1);
-                    try self.emitStore(.w64, frame_ptr, start_slot, one_reg);
-                    self.codegen.freeGeneral(one_reg);
-                },
-                .last => {
-                    // start = 0
-                    const zero_reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(zero_reg, 0);
-                    try self.emitStore(.w64, frame_ptr, start_slot, zero_reg);
-                    self.codegen.freeGeneral(zero_reg);
-                },
-            }
-            self.codegen.freeGeneral(len_reg);
-
-            const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
-            defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
-
-            {
-                // roc_builtins_list_sublist(out, list_bytes, list_len, list_cap,
-                // alignment, element_width, start, len, elements_refcounted, element_decref, update_mode, roc_ops)
-                const list_dst_offset = result_offset + list_field_offset;
-                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                defer builder.deinit();
-                try builder.addLeaArg(frame_ptr, list_dst_offset);
-                try builder.addThreeWordMemArg(frame_ptr, list_off);
-                try builder.addImmArg(@intCast(list_abi.alignment_bytes));
-                try builder.addImmArg(@intCast(elem_size));
-                try builder.addMemArg(frame_ptr, start_slot);
-                try builder.addMemArg(frame_ptr, sublist_len_slot);
-                try builder.addImmArg(if (list_abi.elements_refcounted) 1 else 0);
-                if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
-                try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
-                try self.callBuiltin(&builder, LowLevelBuiltins.listOp(.list_sublist));
-            }
-
-            // Return the record as a stack value
-            return .{ .stack = .{ .offset = result_offset } };
         }
 
         /// Get element at constant index 0 from a list
