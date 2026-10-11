@@ -203,6 +203,7 @@ pub const Inventory = struct {
                         .static_data_candidate,
                         .comptime_value,
                         .typed_boundary,
+                        .row_widen,
                         .fn_ref,
                         .call_value,
                         .call_proc,

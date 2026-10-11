@@ -32,6 +32,7 @@ const base = @import("base");
 const TestPackFile = @import("backend").dev.PackFile;
 const bytebox = @import("bytebox");
 const builtins = @import("builtins");
+const msvc_runtime = @import("msvc_runtime");
 const BuiltinFn = builtins.builtin_registry.BuiltinFn;
 const shim_symbols = builtins.shim_symbols;
 
@@ -421,6 +422,7 @@ const CustomCase = enum {
     native_build_pack_objects,
     native_build_pack_hits,
     early_ctfe_cache,
+    check_compile_time_pack,
     literal_root_rejected_every_build,
     issue_11673_callable_cache,
     issue_11678_recursive_callback_cache,
@@ -1120,6 +1122,8 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "echo platform: exit ok (dev backend)", .backend = .dev, .body = .{ .command = .{ .args = &.{"--opt=dev"}, .roc_file = "test/echo/exit_ok.roc", .stdout_exact = "success" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: exit code (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/echo/exit_code.roc", .exit = .{ .code = 255 } } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: exit code (dev backend)", .backend = .dev, .body = .{ .command = .{ .args = &.{"--opt=dev"}, .roc_file = "test/echo/exit_code.roc", .exit = .{ .code = 255 } } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: mutually recursive callable values built by blocks (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/echo/mixed_value_recursion.roc", .stdout_exact = "odd odd\n" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: mutually recursive callable values built by blocks (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/echo/mixed_value_recursion.roc", .stdout_exact = "odd odd\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: exit error renders custom to_inspect (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/echo/exit_custom_inspect.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stdout, .text = "Program exited with error: CustomError(Color::Red)" }} } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: exit error renders record payload (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/echo/exit_error_payload.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stdout, .text = "Program exited with error: SomeOtherError({ code: \"foo\", name: \"bar\", type: 32.0 })" }} } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: custom error issue 9255 repro (dev backend)", .backend = .dev, .body = .{ .command = .{ .args = &.{"--opt=dev"}, .roc_file = "test/echo/exit_custom_error.roc", .exit = .{ .code = 1 }, .stdout_exact = "Program exited with error: SomeCustomError(41.0)\n" } } },
@@ -2509,6 +2513,15 @@ const subcommand_cases = [_]CliCase{
     // the run below blows far past this budget (the same pipeline with List.map
     // finishes in well under a second), so the case fails on the timeout.
     .{ .id = 0, .suite = .subcommands, .name = "issue 11783: stream map collect runs within the List-pipeline perf guard", .backend = .speed, .timeout_ms = 20_000, .body = .{ .command = .{ .args = &.{ "run", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/Issue11783StreamMapCollect.roc", .exit = .success, .stdout_exact = "50000000\n" } } },
+    // Two mutually recursive callable values, each built by a block:
+    // a lambda lowered under one value's recursive binding names that binding,
+    // so it is never shared with a copy lowered where the binding is absent.
+    .{ .id = 0, .suite = .subcommands, .name = "boxy roc test supports mutually recursive callable values built by blocks", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/MixedValueRecursion.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (4) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test supports mutually recursive callable values built by blocks (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/MixedValueRecursion.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (4) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test supports mutually recursive callable values built by blocks (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/MixedValueRecursion.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (4) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "boxy roc test supports repeated same-type uses of a recursive callable value under one owner", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/RecursiveValueRepeatedUses.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (3) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test supports repeated same-type uses of a recursive callable value under one owner (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/RecursiveValueRepeatedUses.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (3) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test supports repeated same-type uses of a recursive callable value under one owner (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/RecursiveValueRepeatedUses.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (3) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10015: macOS roc test imported package expect passes on LLVM size backend", .backend = .size, .body = .{ .custom = .issue_10015_url_random_test_size } },
     // Repro for https://github.com/roc-lang/roc/issues/10620: optimized
     // inlining must preserve explicitly keyed closure capture operands.
@@ -2607,6 +2620,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 10238: unresolved synthetic dispatch target reports its undetermined type once without naming the default or panicking", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/issue_10238_checked_synthetic_dispatch_arity.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "type not determined" }, .{ .stream = .stderr, .text = "a where [a.d : I64 -> a, a.encode : a -> I64, a.plus : a, b -> a]" }, .{ .stream = .stderr, .text = "Add a type annotation saying which type it should be." }, .{ .stream = .stderr, .text = "1 error and 0 warnings" }, .{ .stream = .stderr, .text = "Roc application crashed with this message:" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "Dec" }, .{ .stream = .stderr, .text = "missing method" }, .{ .stream = .stderr, .text = "checked synthetic dispatch target arity differs from its function type" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 9864: platform methods dispatch on package-owned nominal receivers", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_9864_static_dispatch_package_nominal/app.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }}, .not_contains = &.{ .{ .stream = .stderr, .text = "missing method" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "receiver declaration takes precedence over namespace extension", .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/ReceiverMethodDeclarationPrecedence.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (4) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "duplicate key reached unique finalization" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12194: imported receiver declaration takes precedence over namespace extension", .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/issue_12194_imported_receiver_method_precedence/Main.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (6) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10161: checking platform main succeeds", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_9864_static_dispatch_package_nominal/platform/main.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }}, .not_contains = &.{ .{ .stream = .stderr, .text = "module not found" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10161: checking platform child resolves package aliases from owning main", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_9864_static_dispatch_package_nominal/platform/ThingFx.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }}, .not_contains = &.{ .{ .stream = .stderr, .text = "module not found" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 9858: default app args.get value times reports missing method without panic", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/issue_9858_default_app_args_get_times.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "missing method" }, .{ .stream = .stderr, .text = "times" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "checked method registry is missing resolved dispatch target" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
@@ -2747,6 +2761,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11627: cached procedure keeps its own constant after the app is edited", .timeout_ms = 600_000, .body = .{ .custom = .issue_11627_static_data_names_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev serves closed specializations from a previous build's packs", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_hits } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build early CTFE cache skips Monotype bodies on an app-only rebuild", .timeout_ms = 600_000, .body = .{ .custom = .early_ctfe_cache } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc check reuses the compile-time pack an earlier check published", .timeout_ms = 600_000, .body = .{ .custom = .check_compile_time_pack } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build reports a specialization's rejected literal on every build, cached or not", .timeout_ms = 600_000, .body = .{ .custom = .literal_root_rejected_every_build } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build reports a rejected literal whose type holds a callable", .body = .{ .command = .{ .args = &.{ "build", "--no-cache" }, .roc_file = "test/cli/literal_root_rejected/CallableLiteral.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "invalid string" }}, .occurrences = &.{.{ .stream = .stderr, .text = "invalid string", .count = 1 }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build macOS output basename does not affect bytes", .body = .{ .custom = .macos_output_basename_reproducible } },
@@ -2915,6 +2930,15 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "boxy roc test reports generic missing field", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/ParserRequiredFieldError.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "boxy roc test supports custom parser_for on records with optional fields", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/ParserCustomOptionalField.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "boxy roc test restores stored parser FieldNames metadata", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/ParserStoredTryFieldCaseless.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    // A recursive callable value's stored closure also captures the recursive
+    // binding it refers back to, which a Boxy worker reaches as a top-level
+    // reference.
+    .{ .id = 0, .suite = .subcommands, .name = "boxy roc test supports a self-recursive callable value built by a block", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/BoxyRecursiveCallableValue.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (8) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test supports a self-recursive callable value built by a block (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/BoxyRecursiveCallableValue.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (8) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test supports a self-recursive callable value built by a block (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/BoxyRecursiveCallableValue.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (8) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "boxy roc test supports a destructured callable value recursing through its binder", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/BoxyRecursiveDestructuredValue.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test supports a destructured callable value recursing through its binder (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/BoxyRecursiveDestructuredValue.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test supports a destructured callable value recursing through its binder (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/BoxyRecursiveDestructuredValue.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "boxy roc test supports stored top-level parser value", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/ParserTopLevelStoredParser.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "boxy roc test supports a stored top-level parser over an optional field", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/ParserTopLevelStoredOptionalField.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "boxy roc test uses block-local parser_for inside derived record", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/ParserLocalCustomNominalField.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
@@ -3282,7 +3306,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "integer SIMD runtime smoke passes (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/runtime_simd_smoke.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "Mismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "integer SIMD runtime smoke passes (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/runtime_simd_smoke.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "Mismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "integer SIMD runtime smoke passes (LLVM speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/cli/runtime_simd_smoke.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "Mismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "integer SIMD Windows cross-build reaches the linker without an LLVM panic", .backend = .speed, .body = .{ .command = .{ .args = &.{ "build", "--opt=speed", "--no-cache", "--target=x64win" }, .roc_file = "test/cli/runtime_simd_smoke.roc", .exit = .not_panic, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stdout, .text = "successfully building" }, .{ .stream = .stderr, .text = "WindowsSDKNotFound" } } }}, .not_contains = &.{ .{ .stream = .stderr, .text = "reached unreachable code" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "integer SIMD Windows cross-build links without an LLVM panic", .backend = .speed, .body = .{ .command = .{ .args = &.{ "build", "--opt=speed", "--no-cache", "--target=x64win" }, .roc_file = "test/cli/runtime_simd_smoke.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "reached unreachable code" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "match extension fixture runs (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/match_extension_codegen.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "match extension fixture runs (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/match_extension_codegen.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "match extension fixture runs (LLVM speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/cli/match_extension_codegen.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
@@ -4576,6 +4600,7 @@ fn runCustomCase(
         .issue_11627_static_data_names_cache => customIssue11627StaticDataNamesCache(io, allocator, &env, &timer, timeout_ms),
         .native_build_pack_hits => customNativeBuildPackHits(io, allocator, &env, &timer, timeout_ms),
         .early_ctfe_cache => customEarlyCtfeCache(io, allocator, &env, &timer, timeout_ms),
+        .check_compile_time_pack => customCheckCompileTimePack(io, allocator, &env, &timer, timeout_ms),
         .literal_root_rejected_every_build => customLiteralRootRejectedEveryBuild(io, allocator, &env, &timer, timeout_ms),
         .issue_10733_wasm_boxy_dev_sealed_object => customIssue10733WasmBoxyDevSealedObject(io, allocator, &env, &timer, timeout_ms),
         .issue_12029_wasm_boxy_tail_calls => customIssue12029WasmBoxyTailCalls(io, allocator, &env, &timer, timeout_ms),
@@ -5741,7 +5766,19 @@ fn copyNativeMuslTargetFile(
     filename: []const u8,
     dest_dir: []const u8,
 ) CliRunnerError!void {
-    const src = try std.fs.path.join(allocator, &.{ project_root_path, "test", "fx", "platform", "targets", target.roc_target, filename });
+    return copyFxTargetFile(io, allocator, target.roc_target, filename, dest_dir);
+}
+
+/// Copies one of the fx platform's link inputs for `roc_target` into
+/// `dest_dir`, for a staged platform that declares the same input.
+fn copyFxTargetFile(
+    io: std.Io,
+    allocator: Allocator,
+    roc_target: []const u8,
+    filename: []const u8,
+    dest_dir: []const u8,
+) CliRunnerError!void {
+    const src = try std.fs.path.join(allocator, &.{ project_root_path, "test", "fx", "platform", "targets", roc_target, filename });
     defer allocator.free(src);
     const dest = try std.fs.path.join(allocator, &.{ dest_dir, filename });
     defer allocator.free(dest);
@@ -8395,6 +8432,81 @@ const EditableApp = struct {
 
 /// Copies an app into the case's work directory, with its platform path
 /// pointing back at the repository, so the case can edit it between builds.
+/// `roc check` publishes the code its compile-time evaluation compiled. A
+/// later check that must evaluate the app's roots again, after an app-only
+/// edit and with no build ever run, splices that code: its Monotype skips the
+/// cached bodies, and both checks report the same compile-time debug output.
+fn customCheckCompileTimePack(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    var app: []const u8 = undefined;
+    if (stageEditableApp(io, allocator, env, timer, .{
+        .dir_name = "check_compile_time_pack",
+        .platform = "test/fx/platform/main.roc",
+        .platform_spelling = "../../fx/platform/main.roc",
+        .sources = &.{ "test/cli/pack_comptime/Shapes.roc", "test/cli/pack_comptime/PackComptime.roc" },
+        .app_name = "PackComptime.roc",
+    }, &app)) |failure| return failure;
+    const source = std.Io.Dir.cwd().readFileAlloc(io, app, allocator, .limited(1024 * 1024)) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read CTFE app: {}", .{err});
+    const with_debug = std.fmt.allocPrint(
+        allocator,
+        "{s}\nreplayed = {{\n    dbg \"check pack replay\"\n    hexagon_sides\n}}\nexpect replayed == hexagon_sides\n",
+        .{source},
+    ) catch |err| return customInfraFailure(allocator, timer, "failed to allocate CTFE app: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app, .data = with_debug }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write CTFE app: {}", .{err});
+
+    var trace_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone the pack trace environment: {}", .{err}),
+    };
+    defer trace_env.env_map.deinit();
+    trace_env.env_map.put("ROC_PACK_TRACE", "1") catch |err|
+        return customInfraFailure(allocator, timer, "failed to enable the pack trace: {}", .{err});
+
+    var cold_body_contexts: u64 = 0;
+    for (0..2) |index| {
+        if (index == 1) {
+            const edited = std.fmt.allocPrint(allocator, "{s}\n# Edited between checks, so this check evaluates the app again.\n", .{with_debug}) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate the edited app: {}", .{err});
+            std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app, .data = edited }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to write {s}: {}", .{ app, err });
+        }
+        const check_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a check");
+        const checked = runRocInEnv(io, allocator, &trace_env, &.{ "check", "--timings" }, app, .relative, &.{}, null, check_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "check spawn error: {}", .{err});
+        if (!processSucceeded(checked.term) or std.mem.find(u8, checked.stderr, "panic") != null) {
+            return failureFromRun(allocator, timer, checked, "check did not succeed");
+        }
+        if (std.mem.count(u8, checked.stderr, "[dbg] \"check pack replay\"") != 1) {
+            return failureFromRun(allocator, timer, checked, "compile-time debug output was not reported exactly once");
+        }
+        const contexts = timingCounter(checked.stderr, "Shared Monotype body + dispatch", "Body contexts created") orelse
+            return failureFromRun(allocator, timer, checked, "check did not report Monotype body work");
+        const hits = timingCounter(checked.stderr, "Shared Monotype specialization", "Object specialization cache hits") orelse
+            return failureFromRun(allocator, timer, checked, "check did not report Monotype object-cache hits");
+        if (index == 0) {
+            if (std.mem.find(u8, checked.stderr, "compile-time pack ") == null) {
+                return failureFromRun(allocator, timer, checked, "the first check published no compile-time pack");
+            }
+            cold_body_contexts = contexts;
+            continue;
+        }
+        if (hits == 0) return failureFromRun(allocator, timer, checked, "the second check served no specialization from the compile-time pack");
+        if (cold_body_contexts == 0 or contexts >= cold_body_contexts) {
+            return failureFromRun(allocator, timer, checked, "the compile-time pack did not reduce Monotype body work");
+        }
+    }
+    return null;
+}
+
 fn stageEditableApp(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, app: EditableApp, staged_app: *[]const u8) ?TestResult {
     const staged_dir = std.fs.path.join(allocator, &.{ env.dirs.work_dir, app.dir_name }) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate staged app dir: {}", .{err});
@@ -9872,8 +9984,8 @@ fn customGlibcTargetNonLinux(io: std.Io, allocator: Allocator, env: *const CaseE
 
 /// Shared output on COFF: link the dylib test app and its host into one DLL.
 /// lld-link resolves the app/host symbol references in a single pass, the
-/// same as the ELF and Mach-O shared-library links. Windows-only: the link
-/// needs the native Windows SDK.
+/// same as the ELF and Mach-O shared-library links. Windows-only: it builds
+/// for the native target.
 fn customWindowsSharedLibrary(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     if (builtin.os.tag != .windows) return null;
 
@@ -12661,6 +12773,15 @@ fn runGlueRuntimeCase(
                     return addPreservedWorkDirMessage(allocator, customInfraFailure(allocator, &timer, "failed to copy glue runtime crt1.o: {}", .{err}), env.dirs.work_dir);
                 copyNativeMuslTargetFile(io, allocator, musl_target, "libc.a", target_dir) catch |err|
                     return addPreservedWorkDirMessage(allocator, customInfraFailure(allocator, &timer, "failed to copy glue runtime libc.a: {}", .{err}), env.dirs.work_dir);
+            }
+            if (target.kind == .windows) {
+                // An MSVC link uses only the inputs the platform declares, so
+                // the startup archive and import libraries the build prepared
+                // for fx sit beside the host library built below.
+                for (msvc_runtime.files) |filename| {
+                    copyFxTargetFile(io, allocator, target.roc_target, filename, target_dir) catch |err|
+                        return addPreservedWorkDirMessage(allocator, customInfraFailure(allocator, &timer, "failed to copy glue runtime {s}: {}", .{ filename, err }), env.dirs.work_dir);
+                }
             }
         },
         .wasm32 => {},

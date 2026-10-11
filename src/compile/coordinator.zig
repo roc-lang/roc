@@ -3512,13 +3512,9 @@ pub const Coordinator = struct {
         };
         defer manager.allocator.free(entries_dir);
 
-        // Serialize the env and artifact into scatter-gather writers, then gather both
-        // directly into a single cache-entry buffer laid out as
-        // [header][env blob][artifact blob]. Gathering straight into the final buffer
-        // avoids materializing each body in its own allocation and then concatenating
-        // header + bodies into a third buffer. The writers' iovecs alias the arena
-        // (relocation headers) and the live artifact/env, both of which outlive the
-        // gather below.
+        // The writers borrow live columns and retain only relocation headers.
+        // Stream canonical bytes to the staging file before atomic publication;
+        // no complete cache entry or scrubbed column is materialized in memory.
         var arena = base.SingleThreadArena.init(manager.allocator);
         defer arena.deinit();
         const arena_alloc = arena.allocator();
@@ -3538,23 +3534,34 @@ pub const Coordinator = struct {
         const env_len = env_writer.total_bytes;
         const artifact_len = artifact_writer.total_bytes;
 
-        const entry = manager.allocator.alloc(u8, checked_module_cache_header_len + env_len + artifact_len) catch {
-            manager.recordStoreFailure();
-            return;
-        };
-        defer manager.allocator.free(entry);
-
+        var header: [checked_module_cache_header_len]u8 = undefined;
         writeCheckedModuleCacheHeader(
-            entry[0..checked_module_cache_header_len],
+            &header,
             artifact.key,
             env_len,
             artifact_len,
             canonicalized_cache_entry.pinValidationHash(has_source_version_pin, self.source_pin_version),
         );
-        _ = env_writer.writeToBuffer(entry[checked_module_cache_header_len..][0..env_len]) catch unreachable;
-        _ = artifact_writer.writeToBuffer(entry[checked_module_cache_header_len + env_len ..][0..artifact_len]) catch unreachable;
+        const Entry = struct {
+            header: []const u8,
+            env: *const CompactWriter,
+            artifact: *const CompactWriter,
 
-        manager.storeRawBytes(artifact.key.bytes, entry, entries_dir, artifact.moduleEnvConst().module_name);
+            fn write(raw: *const anyopaque, destination: *std.Io.Writer) std.Io.Writer.Error!void {
+                const entry: *const @This() = @ptrCast(@alignCast(raw));
+                try destination.writeAll(entry.header);
+                try entry.env.writeTo(destination);
+                try entry.artifact.writeTo(destination);
+            }
+        };
+        const entry = Entry{ .header = &header, .env = &env_writer, .artifact = &artifact_writer };
+        manager.storeStream(
+            artifact.key.bytes,
+            .{ .context = &entry, .write = Entry.write },
+            header.len + env_len + artifact_len,
+            entries_dir,
+            artifact.moduleEnvConst().module_name,
+        );
     }
 
     fn tryLoadCachedCheckedModule(

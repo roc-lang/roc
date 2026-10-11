@@ -221,10 +221,44 @@ pub const ConstType = union(enum) {
     zst,
 };
 
-/// Checked capture identity, type, and stored value for a compile-time
+/// The recursive binding of one top-level compile-time root: the module that
+/// owns the root and the root's id within that module.
+pub const ConstRecursiveBinding = struct {
+    module: names.CheckedModuleDigest,
+    root: checked_ids.ComptimeRootId,
+};
+
+/// What a stored closure capture holds, recorded where the captured local was
+/// bound rather than derived from the capture's binder.
+pub const ConstCaptureKind = union(enum(u8)) {
+    /// A lexical capture: a checked binder or a synthesized local of the
+    /// closure's enclosing scope. A restored worker fills a capture slot from
+    /// it.
+    lexical,
+    /// The recursive binding reserved for a top-level compile-time root while
+    /// its body was lowered (a callable-eval binding or an active constant
+    /// binding, including a hoisted extraction's result binding). A closure
+    /// whose body refers back to that root captures it; a restored worker
+    /// reaches the root through its own top-level reference instead, so this
+    /// capture fills no slot.
+    recursive_binding: ConstRecursiveBinding,
+
+    pub fn eql(left: ConstCaptureKind, right: ConstCaptureKind) bool {
+        return switch (left) {
+            .lexical => right == .lexical,
+            .recursive_binding => |a| switch (right) {
+                .lexical => false,
+                .recursive_binding => |b| std.meta.eql(a.module, b.module) and a.root == b.root,
+            },
+        };
+    }
+};
+
+/// Checked capture identity, kind, type, and stored value for a compile-time
 /// function value.
 pub const ConstCapture = struct {
     id: CaptureId,
+    kind: ConstCaptureKind,
     ty: ConstTypeId,
     value: ConstNodeId,
 };
@@ -1441,9 +1475,12 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
             .authority = .generated_private,
         },
     } });
+    var recursive_module: names.CheckedModuleDigest = .{};
+    recursive_module.bytes[0] = 0x5A;
+    const recursive_kind = ConstCaptureKind{ .recursive_binding = .{ .module = recursive_module, .root = @fromBackingInt(@intCast(7)) } };
     const caps = try gpa.dupe(ConstCapture, &.{
-        .{ .id = CaptureId.fromBinder(@fromBackingInt(@intCast(1))), .ty = capture_ty, .value = a },
-        .{ .id = CaptureId.fromBinder(@fromBackingInt(@intCast(2))), .ty = capture_ty, .value = a },
+        .{ .id = CaptureId.fromBinder(@fromBackingInt(@intCast(1))), .kind = .lexical, .ty = capture_ty, .value = a },
+        .{ .id = CaptureId.fromBinder(@fromBackingInt(@intCast(2))), .kind = recursive_kind, .ty = capture_ty, .value = a },
     });
     defer gpa.free(caps);
     var target_view: names.CheckedModuleDigest = .{};
@@ -1540,6 +1577,8 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     try std.testing.expectEqual(TypeBackingAuthority.generated_private, loaded.type_store.get(private_named_ty).named.backing.?.authority);
     try std.testing.expectEqual(a, loaded_fn.captures[0].value);
     try std.testing.expectEqual(a, loaded_fn.captures[1].value);
+    try std.testing.expect(loaded_fn.captures[0].kind.eql(.lexical));
+    try std.testing.expect(loaded_fn.captures[1].kind.eql(recursive_kind));
     try loaded.verifyComplete();
     try std.testing.expectEqual(evidence.len, loaded_fn.evidence.len);
     const loaded_target = loaded_fn.evidence[0].target;
@@ -1616,6 +1655,7 @@ test "ConstStore: exact function capture back-edge survives serialization" {
     const fn_node = try store.reserve();
     const captures = [_]ConstCapture{.{
         .id = CaptureId.fromBinder(@fromBackingInt(@intCast(1))),
+        .kind = .lexical,
         .ty = fn_ty,
         .value = fn_node,
     }};
@@ -1665,8 +1705,8 @@ test "ConstStore.appendFn: no leak or double-free under allocation failure" {
             const a = try store.append(.{ .scalar = .{ .u64 = 7 } });
             const capture_ty = try store.type_store.append(.{ .primitive = .u64 });
             const caps = try allocator.dupe(ConstCapture, &.{
-                .{ .id = CaptureId.fromBinder(@fromBackingInt(@intCast(1))), .ty = capture_ty, .value = a },
-                .{ .id = CaptureId.fromBinder(@fromBackingInt(@intCast(2))), .ty = capture_ty, .value = a },
+                .{ .id = CaptureId.fromBinder(@fromBackingInt(@intCast(1))), .kind = .lexical, .ty = capture_ty, .value = a },
+                .{ .id = CaptureId.fromBinder(@fromBackingInt(@intCast(2))), .kind = .lexical, .ty = capture_ty, .value = a },
             });
             defer allocator.free(caps);
             const evidence_frames = [_]ConstFnEvidenceFrame{

@@ -9,6 +9,7 @@ const base = @import("base");
 const collections = @import("collections");
 
 const Common = @import("../common.zig");
+const LiteralDemand = @import("../literal_demand.zig");
 const AnyAll = collections.AnyAll;
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
@@ -308,6 +309,8 @@ pub const Options = struct {
     post_check_executor: ?base.post_check_task_executor.Executor = null,
     /// Optional phase timings for the work owned by Monotype lowering.
     timing: ?*Timing = null,
+    /// Receives the demand-driven decisions this run made.
+    demand_counters_out: ?*DemandCounters = null,
 };
 
 /// Aggregate execution measurements for executor-backed Monotype work.
@@ -687,6 +690,10 @@ pub fn run(
 
     var builder = Builder.init(allocator, modules, &program, options);
     defer builder.deinit();
+    if ((roots.discovery_start == null) != (roots.literal_demand == null)) {
+        Common.invariant("Monotype discovery roots arrived without their literal demand");
+    }
+    builder.literal_demand = roots.literal_demand;
     try builder.seedProgramModuleTables();
     // Cache admission must know the current app filling before any body is
     // skipped. Checked bindings are immutable throughout this producer.
@@ -709,7 +716,7 @@ pub fn run(
         defer procedure_timing_scope.end();
         if (options.timing) |timing| timing.startProcedureBreakdown();
         defer if (options.timing) |timing| timing.finishProcedureBreakdown();
-        try builder.lowerIsolatedRoots(roots.requests, roots.source_modules);
+        try builder.lowerIsolatedRoots(roots.requests, roots.source_modules, roots.discovery_start);
         try builder.drainPendingSpecJobs();
     }
 
@@ -733,7 +740,9 @@ pub fn run(
             try builder.lowerStaticDataRequest(request);
         }
         try builder.drainPendingSpecJobs();
+        try builder.completeParkedSpecJobsAsStubs();
     }
+    if (options.demand_counters_out) |out| out.* = builder.demand_counters;
 
     {
         var finalization_timing_scope = TimingPhaseScope.begin(options.timing, .finalization);
@@ -3355,6 +3364,34 @@ const TemplateReservation = struct {
 /// coordinator-owned path.
 const TemplateBodyScheduling = enum { immediate, queued };
 
+/// Why a specialization's body is lowered (design.md "Demand-Driven
+/// Compile-Time Specialization"). A body lowered for `evaluation` runs, or
+/// may run, during compile-time evaluation, so everything it requests has a
+/// body too. A body lowered for `discovery` belongs to a runtime root that
+/// the compile-time consumer never runs; it is lowered only so that its
+/// instances' literal conversions become literal roots, and a request it
+/// makes whose specialization can register no literal root is parked
+/// rather than lowered. An `evaluation` request reaching a parked or
+/// discovery specialization upgrades it, and everything it requested, to
+/// `evaluation`.
+const Demand = enum { evaluation, discovery };
+
+/// Explicit counts of the demand-driven decisions one Monotype run made.
+pub const DemandCounters = struct {
+    /// Discovery roots lowered.
+    discovery_roots: u64 = 0,
+    /// Specialization bodies lowered for discovery.
+    discovery_bodies: u64 = 0,
+    /// Discovery requests parked instead of lowered.
+    parked: u64 = 0,
+    /// Parked specializations an evaluation request unparked.
+    unparked: u64 = 0,
+    /// Discovery specializations an evaluation request upgraded.
+    upgraded: u64 = 0,
+    /// Parked specializations completed as never-run stubs.
+    stubs: u64 = 0,
+};
+
 /// Bound running plus completed-but-unaccepted jobs. Extra slots let free
 /// lanes continue working when an earlier dispatch delays ordered acceptance.
 pub const parallel_spec_jobs_per_lane: usize = 64;
@@ -3391,6 +3428,9 @@ const PendingSpecJob = struct {
     /// requested one. Completion mints a widening adapter exactly when this is
     /// set (design.md "Result-Row Widening Adapter").
     widened_result_row: bool,
+    /// Why the body is lowered. The coordinator restates it when it hands the
+    /// job to a lane, since an upgrade may arrive while the job is queued.
+    demand: Demand = .evaluation,
 };
 
 /// One reserved template body lowered into graph-local and draft-local state,
@@ -3826,6 +3866,7 @@ const ProcedureRootTaskContext = struct {
     source_module: checked.ModuleId,
     inputs: *const SpecJobWorkerInputs,
     request: checked.RootRequest,
+    demand: Demand = .evaluation,
     shard: ?CompletedProcedureRootShard = null,
     failed: bool = false,
     completed: bool = false,
@@ -4173,6 +4214,23 @@ const Builder = struct {
     /// append new entries, which the same drain then reaches.
     pending_spec_jobs: collections.RingQueue(PendingSpecJob) = .empty,
     next_spec_dispatch_index: u64 = 0,
+    /// Which runtime specializations can register a literal root; present
+    /// exactly when the program has discovery roots.
+    literal_demand: ?*const LiteralDemand.LiteralDemand = null,
+    /// The demand of a root being lowered, and of the requests made outside
+    /// any body draft while it lowers.
+    root_demand: Demand = .evaluation,
+    /// Discovery requests whose specialization can register no literal
+    /// root: reserved with no body, in reservation order. An evaluation
+    /// request unparks one; the rest complete as never-run stubs once every
+    /// body has lowered.
+    parked_spec_jobs: collections.DenseMapUnmanaged(Ast.FnId, PendingSpecJob) = .empty,
+    /// Specializations whose bodies are lowered for discovery.
+    discovery_specs: collections.DenseMapUnmanaged(Ast.FnId, void) = .empty,
+    /// The specializations each committed discovery body requested for
+    /// discovery, so an upgrade reaches them.
+    discovery_callees: collections.DenseMapUnmanaged(Ast.FnId, std.ArrayListUnmanaged(Ast.FnId)) = .empty,
+    demand_counters: DemandCounters = .{},
     /// Next logical queue entry the coordinator may accept. This first boundary
     /// validates FIFO accounting; later worker results also buffer ordinary
     /// body appends behind this index.
@@ -4675,6 +4733,13 @@ const Builder = struct {
         self.interface_summaries.deinit();
         self.spec_store.deinit();
         self.pending_spec_jobs.deinit(self.allocator);
+        self.parked_spec_jobs.deinit(self.allocator);
+        self.discovery_specs.deinit(self.allocator);
+        {
+            var callees = self.discovery_callees.valueIterator();
+            while (callees.next()) |list| list.deinit(self.allocator);
+            self.discovery_callees.deinit(self.allocator);
+        }
         self.type_cache.deinit();
         self.const_evidence_memo.deinit();
         self.const_evidence_by_content.deinit();
@@ -5252,7 +5317,7 @@ const Builder = struct {
 
     /// Procedure-use runs are the only isolated roots without an ordered
     /// coordinator dependency; every other root kind remains a serial barrier.
-    fn lowerIsolatedRoots(self: *Builder, requests: []const checked.RootRequest, source_modules: []const checked.ModuleId) Allocator.Error!void {
+    fn lowerIsolatedRoots(self: *Builder, requests: []const checked.RootRequest, source_modules: []const checked.ModuleId, discovery_start: ?usize) Allocator.Error!void {
         if (source_modules.len != 0 and source_modules.len != requests.len) {
             Common.invariant("root source module count differs from explicit request count");
         }
@@ -5275,28 +5340,43 @@ const Builder = struct {
                 entry.value_ptr.* = fn_id;
             }
         }
+        defer self.root_demand = .evaluation;
         const executor = self.post_check_executor orelse {
-            for (requests, 0..) |request, i| try self.lowerRoot(request, self.rootSourceModule(source_modules, i));
+            for (requests, 0..) |request, i| try self.lowerRootWithDemand(request, self.rootSourceModule(source_modules, i), rootDemand(discovery_start, i));
             return;
         };
         if (executor.worker_count <= 1) {
-            for (requests, 0..) |request, i| try self.lowerRoot(request, self.rootSourceModule(source_modules, i));
+            for (requests, 0..) |request, i| try self.lowerRootWithDemand(request, self.rootSourceModule(source_modules, i), rootDemand(discovery_start, i));
             return;
         }
         var index: usize = 0;
         while (index < requests.len) {
             if (requests[index].procedure_use == null) {
-                try self.lowerRoot(requests[index], self.rootSourceModule(source_modules, index));
+                try self.lowerRootWithDemand(requests[index], self.rootSourceModule(source_modules, index), rootDemand(discovery_start, index));
                 index += 1;
                 continue;
             }
             const start = index;
+            const demand = rootDemand(discovery_start, index);
             while (index < requests.len and
                 requests[index].procedure_use != null and
+                rootDemand(discovery_start, index) == demand and
                 index - start < executor.worker_count) : (index += 1)
             {}
+            self.root_demand = demand;
             try self.lowerProcedureRootBatch(executor, requests[start..index], if (source_modules.len == 0) &.{} else source_modules[start..index]);
         }
+    }
+
+    fn rootDemand(discovery_start: ?usize, index: usize) Demand {
+        const start = discovery_start orelse return .evaluation;
+        return if (index >= start) .discovery else .evaluation;
+    }
+
+    fn lowerRootWithDemand(self: *Builder, request: checked.RootRequest, source_module: checked.ModuleId, demand: Demand) Allocator.Error!void {
+        self.root_demand = demand;
+        if (demand == .discovery) self.demand_counters.discovery_roots += 1;
+        try self.lowerRoot(request, source_module);
     }
 
     fn captureSpecJobInputs(self: *Builder) Allocator.Error!WorkerInputs.Snapshot {
@@ -5354,7 +5434,9 @@ const Builder = struct {
                 .inputs = &inputs,
                 .request = request,
                 .source_module = self.rootSourceModule(source_modules, task_id),
+                .demand = self.root_demand,
             };
+            if (self.root_demand == .discovery) self.demand_counters.discovery_roots += 1;
             tasks[task_id] = .{ .id = task_id, .context = &contexts[task_id], .run = runProcedureRootTask };
         }
         defer for (contexts) |*context| {
@@ -5594,6 +5676,7 @@ const Builder = struct {
             request,
             procedure,
             source_module,
+            self.root_demand,
         );
         defer shard.deinit();
         return self.commitCompletedProcedureRootShard(&shard);
@@ -5608,6 +5691,7 @@ const Builder = struct {
         request: checked.RootRequest,
         procedure: checked.ProcedureUseTemplate,
         source_module: checked.ModuleId,
+        demand: Demand,
     ) Allocator.Error!CompletedProcedureRootShard {
         if (self.symbols.active != .coordinator) {
             Common.compilerBug("procedure root shard entered with a worker-local symbol domain active");
@@ -5659,6 +5743,7 @@ const Builder = struct {
         errdefer body_draft.deinit();
         body_draft.spec_job_workspace = workspace;
         body_draft.mutable_graph_names = &workspace.name_store;
+        body_draft.demand = demand;
         self.active_body_draft = &body_draft;
         defer self.active_body_draft = saved_body_draft;
         var ctx = try BodyContext.init(self.allocator, self, view, template_ref, graph, &body_draft);
@@ -6089,6 +6174,7 @@ const Builder = struct {
             .queued,
             null,
             false,
+            self.root_demand,
         );
     }
 
@@ -6385,6 +6471,7 @@ const Builder = struct {
         body_scheduling: TemplateBodyScheduling,
         codec_contract: ?SealedCodecContractContext,
         widened_result_row: bool,
+        demand: Demand,
     ) Allocator.Error!Ast.DefId {
         var lookup_timing_scope = ProcedureTimingScope.begin(self.timing, .lookup_reservation);
         defer lookup_timing_scope.end();
@@ -6438,6 +6525,7 @@ const Builder = struct {
                     Common.invariant("Monotype specialization hit disagreed on lexical evidence topology");
                 }
             }
+            if (demand == .evaluation) try self.upgradeDiscoverySpec(hit.fn_id);
             switch (hit.status) {
                 .ready,
                 .lowering,
@@ -6449,15 +6537,17 @@ const Builder = struct {
                     self.promoteFnSignatureRelation(hit.fn_id, signature_relation);
                     switch (body_scheduling) {
                         // A queued request reuses the reserved id; the body
-                        // is already owned by the queue.
+                        // is already owned by the queue, or parked.
                         .queued => return existing.def,
                         // An immediate caller consumes the callee's solved
                         // representation, so it claims the queued body and
                         // lowers it now with the reservation's own winning
                         // seed. The queued job later observes the ready
-                        // record and is skipped instead of re-lowered.
+                        // record and is skipped instead of re-lowered. A
+                        // parked body is claimed for the caller's discovery.
                         .immediate => {
                             const job = self.pendingSpecJobFor(hit.fn_id) orelse
+                                try self.claimParkedSpecJob(hit.fn_id) orelse
                                 Common.invariant("reserved Monotype specialization had no queued body to claim");
                             self.spec_store.markLowering(job.spec);
                             try self.completeTemplateReservation(
@@ -6568,14 +6658,13 @@ const Builder = struct {
         const reservation = reserved.reservation;
 
         switch (body_scheduling) {
-            .immediate => {},
+            .immediate => if (demand == .discovery) try self.beginDiscoverySpec(reservation.fn_id),
             .queued => {
                 if (retained_topology != null) {
                     Common.invariant("queued Monotype specialization request cannot carry a retained lexical topology");
                 }
-                const dispatch_index = self.next_spec_dispatch_index;
-                try self.pending_spec_jobs.append(self.allocator, .{
-                    .dispatch_index = dispatch_index,
+                const job: PendingSpecJob = .{
+                    .dispatch_index = undefined,
                     .spec = reserved.spec,
                     .reservation = reservation,
                     .fn_template = fn_template,
@@ -6589,8 +6678,22 @@ const Builder = struct {
                     .signature_relation = signature_relation,
                     .codec_contract = codec_contract,
                     .widened_result_row = widened_result_row,
-                });
-                self.next_spec_dispatch_index += 1;
+                    .demand = demand,
+                };
+                if (demand == .discovery) {
+                    // A hosted procedure and an object-cache entry have no
+                    // body to lower, so there is nothing to leave unlowered.
+                    if (template.target != .hosted and fn_template.cached == null and
+                        try self.discoveryRequestReachesNoLiteralRoot(template_ref, lower_fn_ty, subst, spec_evidence))
+                    {
+                        try self.parked_spec_jobs.put(self.allocator, reservation.fn_id, job);
+                        self.demand_counters.parked += 1;
+                        self.traceDemand("park", reservation.fn_id);
+                        return reservation.def;
+                    }
+                    try self.beginDiscoverySpec(reservation.fn_id);
+                }
+                try self.enqueueSpecJob(job);
                 self.countCoordinatorBodyDiagnostic("spec_jobs_enqueued");
                 self.recordPendingSpecJobPeak();
                 return reservation.def;
@@ -6976,6 +7079,7 @@ const Builder = struct {
             // The adapter's own source is requested at the DECLARED row, the
             // fixpoint `resultRowWideningAdapterOrNull` asserts.
             false,
+            self.specDemand(reservation.fn_id),
         );
         const adapter_template = Ast.FnTemplate{
             .fn_def = .{ .checked_generated = template_ref },
@@ -7146,6 +7250,8 @@ const Builder = struct {
         var body_draft_storage = BodyDraftStore.init(self.allocator);
         defer body_draft_storage.deinit();
         const body_draft = &body_draft_storage;
+        body_draft.demand = self.specDemand(reservation.fn_id);
+        body_draft.demand_owner = reservation.fn_id;
         const draft = FinalBodyOutputGuard.begin(self);
         const pending = try self.lowerReservedTemplateBodyIntoDraft(
             graph,
@@ -7192,6 +7298,299 @@ const Builder = struct {
             if (job.reservation.fn_id == fn_id) return job;
         }
         return null;
+    }
+
+    fn enqueueSpecJob(self: *Builder, job: PendingSpecJob) Allocator.Error!void {
+        var queued = job;
+        queued.dispatch_index = self.next_spec_dispatch_index;
+        try self.pending_spec_jobs.append(self.allocator, queued);
+        self.next_spec_dispatch_index += 1;
+    }
+
+    fn traceLink(comptime how: []const u8, body_draft: *const BodyDraftStore, demand: Demand, callee: Ast.FnId) void {
+        if (!LiteralDemand.traceEnabled()) return;
+        std.debug.print("ctfe-demand link {s} owner={d} draft={s} demand={s} -> fn#{d}\n", .{
+            how,
+            if (body_draft.demand_owner) |owner| @backingInt(owner) else std.math.maxInt(u32),
+            @tagName(body_draft.demand),
+            @tagName(demand),
+            @backingInt(callee),
+        });
+    }
+
+    /// A procedure lowered only for discovery is no specialization's code: it
+    /// offers no object-cache entry, shares no layout-keyed procedure, and
+    /// its identity differs from the evaluation procedure of the same
+    /// template and types.
+    fn discoveryTemplate(template: Ast.FnTemplate) Ast.FnTemplate {
+        var marked = template;
+        marked.discovery = true;
+        marked.spec_key = null;
+        marked.procedure_keyed_by_layout = false;
+        return marked;
+    }
+
+    /// Program extents before a body draft commits, so the procedures it
+    /// adds can be found afterwards.
+    const CommitExtent = struct { fns: usize, defs: usize, nested_defs: usize };
+
+    fn commitExtent(self: *const Builder) CommitExtent {
+        return .{
+            .fns = self.program.fnCount(),
+            .defs = self.program.defCount(),
+            .nested_defs = self.program.nestedDefCount(),
+        };
+    }
+
+    /// Mark every procedure a discovery body draft committed, with the
+    /// definitions that carry their templates. The draft's own
+    /// specialization is marked where its body is finished.
+    fn markDiscoveryFns(self: *Builder, body_draft: *const BodyDraftStore, before: CommitExtent) void {
+        if (self.draftEvaluates(body_draft)) return;
+        for (before.fns..self.program.fnCount()) |raw| {
+            const fn_id: Ast.FnId = @fromBackingInt(@intCast(raw));
+            self.program.setFnSource(fn_id, discoveryTemplate(self.program.fnSource(fn_id)));
+        }
+        for (before.defs..self.program.defCount()) |raw| {
+            const def_id: Ast.DefId = @fromBackingInt(@intCast(raw));
+            var def = self.program.getDef(def_id);
+            const fn_id = def.fn_id orelse continue;
+            if (@backingInt(fn_id) < before.fns) continue;
+            def.fn_def = discoveryTemplate(def.fn_def.?);
+            self.program.setDef(def_id, def);
+        }
+        for (before.nested_defs..self.program.nestedDefCount()) |raw| {
+            const def_id: Ast.NestedDefId = @fromBackingInt(@intCast(raw));
+            const def = self.program.getNestedDef(def_id);
+            if (@backingInt(def.fn_id) < before.fns) continue;
+            self.program.setNestedDefSource(def_id, discoveryTemplate(def.fn_def));
+        }
+    }
+
+    /// Record a specialization a discovery body requested, so a later
+    /// upgrade of that body reaches it.
+    fn recordDiscoveryCallee(self: *Builder, body_draft: *const BodyDraftStore, callee: Ast.FnId) Allocator.Error!void {
+        const owner = body_draft.demand_owner orelse return;
+        const entry = try self.discovery_callees.getOrPut(self.allocator, owner);
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        try entry.value_ptr.append(self.allocator, callee);
+    }
+
+    /// Whether every request of a committing body draft is an evaluation
+    /// request: it was lowered for evaluation, an evaluation request reused a
+    /// body it lowered for discovery, or its specialization was upgraded
+    /// while it lowered.
+    fn draftEvaluates(self: *const Builder, body_draft: *const BodyDraftStore) bool {
+        if (body_draft.demand == .evaluation or body_draft.upgrade_all) return true;
+        const owner = body_draft.demand_owner orelse return false;
+        return !self.discovery_specs.contains(owner);
+    }
+
+    /// Why a specialization's body is lowered, as the coordinator knows it now.
+    fn specDemand(self: *const Builder, fn_id: Ast.FnId) Demand {
+        return if (self.discovery_specs.contains(fn_id)) .discovery else .evaluation;
+    }
+
+    fn beginDiscoverySpec(self: *Builder, fn_id: Ast.FnId) Allocator.Error!void {
+        try self.discovery_specs.put(self.allocator, fn_id, {});
+        self.demand_counters.discovery_bodies += 1;
+        self.traceDemand("discover", fn_id);
+    }
+
+    /// `ROC_CTFE_DEMAND_TRACE`: one line per demand decision, naming the
+    /// specialization's procedure and its module.
+    fn traceDemand(self: *Builder, comptime decision: []const u8, fn_id: Ast.FnId) void {
+        if (!LiteralDemand.traceEnabled()) return;
+        const template_ref = switch (self.program.fnSource(fn_id).fn_def) {
+            .local_template, .imported_template, .checked_generated => |template| template,
+            .local_hosted, .imported_hosted => |hosted| hosted.template,
+            .nested, .parser_runtime, .encoder_for_runtime => {
+                std.debug.print("ctfe-demand {s} fn#{d}\n", .{ decision, @backingInt(fn_id) });
+                return;
+            },
+        };
+        const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
+        const proc_base = view.names.procBase(template_ref.proc_base);
+        const name: []const u8 = if (proc_base.export_name) |export_name| view.names.exportNameText(export_name) else "?";
+        std.debug.print("ctfe-demand {s} {s}.{s} fn#{d}\n", .{
+            decision,
+            view.names.moduleNameText(view.module_identity.module_name),
+            name,
+            @backingInt(fn_id),
+        });
+    }
+
+    /// Claim a parked body for an immediate discovery request.
+    fn claimParkedSpecJob(self: *Builder, fn_id: Ast.FnId) Allocator.Error!?PendingSpecJob {
+        const entry = self.parked_spec_jobs.fetchRemove(fn_id) orelse return null;
+        try self.beginDiscoverySpec(fn_id);
+        self.demand_counters.unparked += 1;
+        return entry.value;
+    }
+
+    /// An evaluation request reached a specialization: it and everything it
+    /// requested for discovery are evaluation demand from now on. A parked
+    /// body is queued; a discovery body already committed passes the upgrade
+    /// to the requests it made, and one still queued or lowering commits its
+    /// requests as evaluation requests.
+    fn upgradeDiscoverySpec(self: *Builder, fn_id: Ast.FnId) Allocator.Error!void {
+        if (self.parked_spec_jobs.count() == 0 and self.discovery_specs.count() == 0) return;
+        var pending = std.ArrayList(Ast.FnId).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, fn_id);
+        while (pending.pop()) |id| {
+            if (self.parked_spec_jobs.fetchRemove(id)) |entry| {
+                var job = entry.value;
+                job.demand = .evaluation;
+                try self.enqueueSpecJob(job);
+                self.countCoordinatorBodyDiagnostic("spec_jobs_enqueued");
+                self.recordPendingSpecJobPeak();
+                self.demand_counters.unparked += 1;
+                self.traceDemand("unpark", id);
+                continue;
+            }
+            if (!self.discovery_specs.remove(id)) continue;
+            self.demand_counters.upgraded += 1;
+            self.traceDemand("upgrade", id);
+            if (self.discovery_callees.fetchRemove(id)) |entry| {
+                var callees = entry.value;
+                defer callees.deinit(self.allocator);
+                try pending.appendSlice(self.allocator, callees.items);
+            }
+        }
+    }
+
+    /// Whether a discovery request reaches no literal root
+    /// (`LiteralDemand`): its procedure's module reaches none, its types name
+    /// no reaching nominal, and its evidence selects no reaching procedure.
+    fn discoveryRequestReachesNoLiteralRoot(
+        self: *Builder,
+        template_ref: names.ProcTemplate,
+        fn_ty: Type.TypeId,
+        subst: ?SealedSubstitution,
+        evidence: []const SpecEvidence,
+    ) Allocator.Error!bool {
+        const demand = self.literal_demand orelse
+            Common.invariant("discovery request reached Monotype without its literal demand");
+        var flags = demand.templateFlags(template_ref);
+        flags = flags.merge(try self.monoTypeLiteralFlags(demand, fn_ty));
+        if (subst) |slots| for (slots) |slot| switch (slot) {
+            .ty => |ty| flags = flags.merge(try self.monoTypeLiteralFlags(demand, ty)),
+            .checked_error => {},
+        };
+        flags = flags.merge(try self.specEvidenceLiteralFlags(demand, evidence));
+        return !flags.reachesLiteralRoot();
+    }
+
+    /// The reach flags of the nominals and builtin types a request type
+    /// names (`LiteralDemand`).
+    fn monoTypeLiteralFlags(self: *Builder, demand: *const LiteralDemand.LiteralDemand, root: Type.TypeId) Allocator.Error!LiteralDemand.Flags {
+        var flags: LiteralDemand.Flags = .{};
+        const types = self.program.types.view();
+        var pending = std.ArrayList(Type.TypeId).empty;
+        defer pending.deinit(self.allocator);
+        var seen = collections.DenseMap(Type.TypeId, void).init(self.allocator);
+        defer seen.deinit();
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |ty| {
+            if ((try seen.getOrPut(ty)).found_existing) continue;
+            switch (types.get(ty)) {
+                .zst, .erased => {},
+                .primitive => flags = flags.merge(demand.builtinFlags()),
+                .named => |named| {
+                    flags = flags.merge(demand.nominalFlags(
+                        self.program.names.moduleIdentityBytes(named.def.module),
+                        self.program.names.typeNameText(named.def.type_name),
+                        named.def.source_decl,
+                    ));
+                    if (named.builtin_owner != null) flags = flags.merge(demand.builtinFlags());
+                    for (types.span(named.args)) |arg| try pending.append(self.allocator, arg);
+                    if (named.backing) |backing| try pending.append(self.allocator, backing.ty);
+                },
+                .record => |fields| for (types.fieldSpan(fields)) |field| try pending.append(self.allocator, field.ty),
+                .tuple => |elems| for (types.span(elems)) |elem| try pending.append(self.allocator, elem),
+                .tag_union => |tags| for (types.tagSpan(tags)) |tag| {
+                    for (types.span(tag.payloads)) |payload| try pending.append(self.allocator, payload);
+                },
+                .list, .box => |elem| {
+                    flags = flags.merge(demand.builtinFlags());
+                    try pending.append(self.allocator, elem);
+                },
+                .func => |func| {
+                    for (types.span(func.args)) |arg| try pending.append(self.allocator, arg);
+                    try pending.append(self.allocator, func.ret);
+                },
+            }
+        }
+        return flags;
+    }
+
+    /// Complete every body still parked once every body has lowered. Only
+    /// discovery bodies request one, and the program's compile-time consumer
+    /// never runs a discovery body, so none of these is ever called: each is
+    /// a `crash` at its requested signature, which keeps every later stage's
+    /// view of the program total without lowering the procedure.
+    fn completeParkedSpecJobsAsStubs(self: *Builder) Allocator.Error!void {
+        if (self.parked_spec_jobs.count() == 0) return;
+        const shared_message = try self.program.addStringLiteral("discovery-only specialization reached at compile time");
+        var parked = self.parked_spec_jobs.valueIterator();
+        while (parked.next()) |parked_job| {
+            const job = parked_job.*;
+            self.traceDemand("stub", job.reservation.fn_id);
+            const message = if (LiteralDemand.traceEnabled()) message: {
+                var buffer: [96]u8 = undefined;
+                const text = std.fmt.bufPrint(&buffer, "discovery-only specialization fn#{d} reached at compile time", .{@backingInt(job.reservation.fn_id)}) catch unreachable;
+                break :message try self.program.addStringLiteral(text);
+            } else shared_message;
+            self.spec_store.markLowering(job.spec);
+            const fn_data = self.programFunctionShape(job.fn_ty, "parked procedure specialization type was not a function");
+            const args = try self.typedLocalsForArgs(self.program.types.span(fn_data.args));
+            const body = try self.program.addExpr(.{ .ty = fn_data.ret, .data = .{ .crash = message } });
+            const stub_template = discoveryTemplate(job.fn_template);
+            self.program.setDef(job.reservation.def, .{
+                .symbol = job.reservation.symbol,
+                .fn_def = stub_template,
+                .fn_id = job.reservation.fn_id,
+                .args = args,
+                .body = .{ .roc = body },
+                .ret = fn_data.ret,
+            });
+            self.program.setFnSource(job.reservation.fn_id, stub_template);
+            try self.markTemplateReady(job.reservation.fn_id, job.fn_ty);
+            self.demand_counters.stubs += 1;
+        }
+        self.parked_spec_jobs.clearRetainingCapacity();
+    }
+
+    /// The reach flags of the procedures dispatch evidence selects. A local
+    /// procedure or abstract scheme evidence is not bounded by checked data.
+    fn specEvidenceLiteralFlags(self: *Builder, demand: *const LiteralDemand.LiteralDemand, evidence: []const SpecEvidence) Allocator.Error!LiteralDemand.Flags {
+        var flags: LiteralDemand.Flags = .{};
+        const unbounded: LiteralDemand.Flags = .{ .strict = true };
+        var pending = std.ArrayList(SpecEvidence).empty;
+        defer pending.deinit(self.allocator);
+        try pending.appendSlice(self.allocator, evidence);
+        while (pending.pop()) |entry| switch (entry) {
+            .target => |target| {
+                switch (target.target.kind) {
+                    .procedure => |procedure| flags = flags.merge(demand.templateFlags(procedure.template)),
+                    .local_proc => return unbounded,
+                    .structural => {},
+                }
+                switch (target.nested) {
+                    .resolved => |nested| try pending.appendSlice(self.allocator, nested),
+                    // Synthesized from the target's instantiation, whose
+                    // types the request's own types already decided.
+                    .synthesize => {},
+                }
+                try pending.appendSlice(self.allocator, target.callable_contracts);
+            },
+            .structural => |structural| try pending.appendSlice(self.allocator, structural.callable_contracts),
+            .from_callable => |from_callable| try pending.appendSlice(self.allocator, from_callable.callable_contracts),
+            .from_scheme => return unbounded,
+            .unreachable_value, .checked_error => {},
+        };
+        return flags;
     }
 
     /// Whether a queued specialization completes on the coordinator instead
@@ -7257,7 +7656,8 @@ const Builder = struct {
             if (running < executor.worker_count and submitted - accepted < capacity and
                 self.pending_spec_jobs.len != 0)
             {
-                const job = self.pending_spec_jobs.get(0);
+                var job = self.pending_spec_jobs.get(0);
+                job.demand = self.specDemand(job.reservation.fn_id);
                 if (job.dispatch_index != self.next_spec_accept_index + submitted - accepted) {
                     Common.compilerBug("Monotype streaming dispatch was not contiguous");
                 }
@@ -7506,6 +7906,7 @@ const Builder = struct {
             context.request.procedure_use orelse
                 Common.compilerBug("procedure root task lost its procedure use"),
             context.source_module,
+            context.demand,
         ) catch {
             context.failed = true;
             return context;
@@ -7524,7 +7925,9 @@ const Builder = struct {
         }
     }
 
-    fn executePendingSpecJob(self: *Builder, job: PendingSpecJob) Allocator.Error!void {
+    fn executePendingSpecJob(self: *Builder, queued_job: PendingSpecJob) Allocator.Error!void {
+        var job = queued_job;
+        job.demand = self.specDemand(job.reservation.fn_id);
         if (self.active_graph != null) {
             Common.invariant("Monotype specialization job executed during an active body draft");
         }
@@ -7722,6 +8125,8 @@ const Builder = struct {
         errdefer body_draft.deinit();
         body_draft.spec_job_workspace = workspace;
         body_draft.mutable_graph_names = &workspace.name_store;
+        body_draft.demand = job.demand;
+        body_draft.demand_owner = job.reservation.fn_id;
         const saved_graph = self.active_graph;
         const saved_body_draft = self.active_body_draft;
         self.active_graph = graph;
@@ -8029,6 +8434,7 @@ const Builder = struct {
             .exact_graph => pending.fn_template.mono_fn_ty,
             .independent_roots => final_fn_ty,
         };
+        if (self.specDemand(pending.reservation.fn_id) == .discovery) def_template = discoveryTemplate(def_template);
         self.program.setFnSource(pending.reservation.fn_id, def_template);
         const sealed_fn_data = self.programFunctionShape(final_fn_ty, "checked procedure template root type was not a function");
         self.program.setDef(pending.reservation.def, .{
@@ -8121,6 +8527,7 @@ const Builder = struct {
                     }
                     self.promoteFnSignatureRelation(active_root.fn_id, signature_relation);
                     self.count("template_hits");
+                    source_ctx.draft.reuseOwnBody();
                     return .{ .local = .{ .final = active_root.fn_id } };
                 }
             }
@@ -8257,6 +8664,7 @@ const Builder = struct {
             // so join the complete request before returning the in-progress
             // definition. Completed specializations reach here through exact
             // resolved identity, never through a partial interface overlap.
+            source_ctx.draft.reuseTemplateSpec(raw_spec);
             const spec = &source_ctx.draft.template_specs.items[raw_spec];
             self.count("template_hits");
             const request_owner = source_ctx.draft.current_owner;
@@ -8380,6 +8788,7 @@ const Builder = struct {
             .lexical_context_key = lexical_context_key,
             .codec_contract = codec_contract,
             .fn_id = fn_id,
+            .demand = source_ctx.draft.currentDemand(),
         });
         lexical_needs_cleanup = false;
         const template_chain = try source_ctx.draft.template_specs_by_template.getOrPut(template_ref);
@@ -8519,7 +8928,11 @@ const Builder = struct {
             request_fn_node
         else
             root_node;
-        const lowered = try body_ctx.lowerTemplateBodyAtNode(template_ref, template, body_fn_node);
+        try source_ctx.draft.lowerInDraftWithDemand(self.allocator, source_ctx.draft.template_specs.items[spec_index].demand);
+        const lowered = lowered: {
+            defer _ = source_ctx.draft.demand_overrides.pop();
+            break :lowered try body_ctx.lowerTemplateBodyAtNode(template_ref, template, body_fn_node);
+        };
         const completed_fn_node = try body_ctx.completedFunctionNodeForLoweredRet(
             body_fn_node,
             lowered.ret,
@@ -8652,7 +9065,11 @@ const Builder = struct {
             spec.request_fn_node
         else
             root_node;
-        const lowered = try body_ctx.lowerTemplateBodyAtNode(spec.template_ref, template, body_fn_node);
+        try source_ctx.draft.lowerInDraftWithDemand(self.allocator, spec.demand);
+        const lowered = lowered: {
+            defer _ = source_ctx.draft.demand_overrides.pop();
+            break :lowered try body_ctx.lowerTemplateBodyAtNode(spec.template_ref, template, body_fn_node);
+        };
         const completed_fn_node = try body_ctx.completedFunctionNodeForLoweredRet(
             body_fn_node,
             lowered.ret,
@@ -10438,6 +10855,7 @@ const Builder = struct {
             .queued,
             null,
             false,
+            self.root_demand,
         );
         return .{ .local = self.defFnId(def) };
     }
@@ -10548,6 +10966,9 @@ const Builder = struct {
                     .immediate,
                     null,
                     false,
+                    // A restored constant function is the value an
+                    // evaluation produced; it keeps evaluation demand.
+                    .evaluation,
                 );
                 return self.defFnId(def);
             },
@@ -10703,6 +11124,12 @@ const Builder = struct {
         codec_contract_selection: CodecContractSelection,
     ) Allocator.Error!DraftNestedBegin {
         self.count("nested_requests");
+        // A nested procedure body lowers in this draft, under whatever demand
+        // is current when its task runs. One requested by an evaluation
+        // request makes every request of the draft an evaluation request.
+        if (source_ctx.draft.currentDemand() == .evaluation and source_ctx.draft.demand == .discovery) {
+            source_ctx.draft.upgrade_all = true;
+        }
         const request_fn_node = try source_ctx.graph.functionRequestRoot(raw_request_fn_node);
         const codec_contract: ?DraftCodecContractContext = switch (codec_contract_selection) {
             .inherit => source_ctx.activeCodecContractContext(),
@@ -10759,6 +11186,7 @@ const Builder = struct {
                     if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
                     if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
                     if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
+                    if (!nestedSpecReusableAt(source_ctx.draft, spec, request_owner)) continue;
                     const spec_request = try draftNestedSpecRequestNode(source_ctx.draft, source_ctx.graph, spec);
                     if (!try source_ctx.graph.typeIsResolved(spec_request)) continue;
                     const spec_fn_ty = try source_ctx.activeTypeFromNode(spec_request);
@@ -10780,6 +11208,7 @@ const Builder = struct {
                         if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
                         if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
                         if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
+                        if (!nestedSpecReusableAt(source_ctx.draft, spec, request_owner)) continue;
                         if (signature_relation == .exact_graph and
                             source_ctx.draft.fns.items[@backingInt(spec.fn_id)].signature_relation != .exact_graph)
                         {
@@ -10817,6 +11246,7 @@ const Builder = struct {
                             if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
                             if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
                             if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
+                            if (!nestedSpecReusableAt(source_ctx.draft, spec, request_owner)) continue;
                             if (signature_relation == .exact_graph and
                                 source_ctx.draft.fns.items[@backingInt(spec.fn_id)].signature_relation != .exact_graph)
                             {
@@ -12025,6 +12455,7 @@ const Builder = struct {
         coordinator_subst: SealedSubstitution,
         body_scheduling: TemplateBodyScheduling,
         codec_contract: ?SealedCodecContractContext,
+        demand: Demand,
     ) Allocator.Error!Ast.FnSlot {
         const draft_fn = &body_draft.fns.items[@backingInt(spec.fn_id)];
         draft_fn.source.mono_fn_ty = .{ .sealed = draft_fn_ty };
@@ -12067,6 +12498,7 @@ const Builder = struct {
                 body_scheduling,
                 codec_contract,
                 spec.widened_result_row,
+                demand,
             );
             break :blk .{ .local = self.defFnId(def) };
         };
@@ -12082,6 +12514,7 @@ const Builder = struct {
         coordinator_subst: SealedSubstitution,
         body_scheduling: TemplateBodyScheduling,
         codec_contract: ?SealedCodecContractContext,
+        demand: Demand,
     ) Allocator.Error!void {
         if (spec_index >= body_draft.sealed_template_specs.items.len) {
             Common.invariant("sealed template specialization index was outside the intent table");
@@ -12096,6 +12529,7 @@ const Builder = struct {
             coordinator_subst,
             body_scheduling,
             codec_contract,
+            demand,
         );
         body_draft.sealed_template_specs.items[spec_index].resolved_slot = resolved_slot;
         body_draft.sealed_template_specs.items[spec_index].state = .resolved;
@@ -12110,10 +12544,17 @@ const Builder = struct {
         body_draft: *BodyDraftStore,
         committed_types: *CommittedGraphTypes,
     ) Allocator.Error!void {
+        // An upgrade that reached this body's specialization while it lowered
+        // makes every request of the body an evaluation request.
+        if (body_draft.upgrade_owner) {
+            if (body_draft.demand_owner) |owner| try self.upgradeDiscoverySpec(owner);
+        }
+        const draft_evaluates = self.draftEvaluates(body_draft);
         var spec_index: usize = 0;
         while (spec_index < body_draft.sealed_template_specs.items.len) : (spec_index += 1) {
             const state = body_draft.sealed_template_specs.items[spec_index].state;
             if (state != .deferred) continue;
+            const demand: Demand = if (draft_evaluates) .evaluation else body_draft.sealed_template_specs.items[spec_index].demand;
             const spec = &body_draft.sealed_template_specs.items[spec_index];
             const draft_fn_ty = spec.request_fn_ty;
             const coordinator_fn_ty = try committed_types.commitType(draft_fn_ty);
@@ -12135,7 +12576,18 @@ const Builder = struct {
                 coordinator_subst,
                 .queued,
                 codec_contract,
+                demand,
             );
+            switch (body_draft.sealed_template_specs.items[spec_index].resolved_slot.?) {
+                .local => |fn_id| traceLink("resolve", body_draft, demand, fn_id),
+            }
+            if (demand == .discovery) {
+                const callee = switch (body_draft.sealed_template_specs.items[spec_index].resolved_slot orelse
+                    Common.invariant("resolved discovery request had no coordinator slot")) {
+                    .local => |fn_id| fn_id,
+                };
+                try self.recordDiscoveryCallee(body_draft, callee);
+            }
         }
     }
 
@@ -12376,6 +12828,16 @@ const Builder = struct {
                     else
                         null;
                     if (committed) |hit| {
+                        // This body is discarded for the committed one, so an
+                        // evaluation request it served now reaches that one.
+                        const merged_demand: Demand = if (self.draftEvaluates(body_draft))
+                            .evaluation
+                        else if (template_spec) |spec| spec.demand else .discovery;
+                        switch (merged_demand) {
+                            .evaluation => try self.upgradeDiscoverySpec(hit.local.fn_id),
+                            .discovery => try self.recordDiscoveryCallee(body_draft, hit.local.fn_id),
+                        }
+                        traceLink("merge", body_draft, merged_demand, hit.local.fn_id);
                         if (fn_.signature_relation == .exact_graph) {
                             self.promoteFnSignatureRelation(hit.local.fn_id, .exact_graph);
                         }
@@ -12571,6 +13033,7 @@ const Builder = struct {
                 .def_id = spec.def_id,
                 .subst = try sealSubstitutionWithSealer(body_draft.allocator, sealer, spec.subst),
                 .resolved_slot = spec.resolved_slot,
+                .demand = if (body_draft.upgrade_all) .evaluation else spec.demand,
             });
         }
         try body_draft.sealed_nested_specs.ensureTotalCapacity(
@@ -12709,6 +13172,7 @@ const Builder = struct {
         defer commit_map.deinit(self.allocator);
         const body_ids = commit_map.ids;
         const output_before = FinalBodyOutputCounts.fromProgram(self.program);
+        const commit_extent = self.commitExtent();
         try body_draft.sealCoreIntoProgramWithMap(
             self.program,
             &committed_types,
@@ -12726,6 +13190,7 @@ const Builder = struct {
         try self.finalizeDraftTemplateSpecs(body_draft, body_ids);
         verifyDraftTemplateSpecsResolved(body_draft);
         try self.finalizeDraftNestedSpecs(body_draft, body_ids);
+        self.markDiscoveryFns(body_draft, commit_extent);
         var returned_ids = body_ids;
         returned_ids.fn_slots = &.{};
         returned_ids.def_ids = &.{};
@@ -12768,6 +13233,7 @@ const Builder = struct {
         defer commit_map.deinit(self.allocator);
         const body_ids = commit_map.ids;
         const output_before = FinalBodyOutputCounts.fromProgram(self.program);
+        const commit_extent = self.commitExtent();
         try body_draft.sealCoreIntoProgramWithMap(
             self.program,
             committed_types,
@@ -12782,6 +13248,7 @@ const Builder = struct {
         try self.finalizeDraftTemplateSpecs(body_draft, body_ids);
         verifyDraftTemplateSpecsResolved(body_draft);
         try self.finalizeDraftNestedSpecs(body_draft, body_ids);
+        self.markDiscoveryFns(body_draft, commit_extent);
         var returned_ids = body_ids;
         returned_ids.fn_slots = &.{};
         returned_ids.def_ids = &.{};
@@ -13070,6 +13537,7 @@ const Builder = struct {
             const binder = capture.id.binder();
             const lowered_ty = try fn_ctx.lowerConstCaptureType(store_view, capture.ty);
             const local = try fn_ctx.addFreshLocalWithBinder(self.symbols.fresh(), lowered_ty, binder);
+            fn_ctx.draft.locals.items[@backingInt(local)].capture_kind = capture.kind;
             try fn_ctx.bindLocalName(local, binder);
             const previous = fn_ctx.binders.get(binder);
             try fn_ctx.binders.put(binder, local);
@@ -13282,6 +13750,7 @@ const Builder = struct {
             const lowered_ty = try fn_ctx.lowerConstCaptureType(store_view, capture.ty);
             const capture_cell = try fn_ctx.draftTypeCell(lowered_ty);
             const local = try fn_ctx.addFreshLocalWithBinderCell(self.symbols.fresh(), capture_cell, binder);
+            fn_ctx.draft.locals.items[@backingInt(local)].capture_kind = capture.kind;
             try fn_ctx.bindLocalName(local, binder);
             const previous = fn_ctx.binders.get(binder);
             try fn_ctx.binders.put(binder, local);
@@ -14446,6 +14915,10 @@ const DraftLocal = struct {
     binder: ?checked.PatternBinderId = null,
     capture_id: ?checked.CaptureId = null,
     checked_capture_id: ?checked.CaptureId = null,
+    /// Whether this local, when captured, is a lexical value or the recursive
+    /// binding reserved for a top-level compile-time root. Set where the
+    /// binding is reserved and carried to the stored closure's captures.
+    capture_kind: checked.ConstCaptureKind = .lexical,
 };
 
 const DraftTypedLocal = struct {
@@ -14804,6 +15277,9 @@ const DraftExprData = union(enum(u8)) {
     join_point: DraftJoinPointExpr,
     jump: DraftJumpExpr,
     return_: DraftReturn,
+    /// Draft form of `Ast.RowWiden`: the child at its own closed row, this
+    /// expression's cell at the wider row it is used at.
+    row_widen: struct { value: DraftExprId },
     crash: DraftStringLiteralId,
     /// Code that checking rejected and already reported. It crashes with its
     /// message; compile-time evaluation that reaches it discards the result
@@ -15510,6 +15986,9 @@ const DraftTemplateSpec = struct {
     /// graph's final seal. Commit re-seals this retained request and proves the
     /// specialization key did not move afterward.
     eager_resolution: ?EagerTemplateResolution = null,
+    /// Why the requested body is lowered: `evaluation` once any request in
+    /// this draft that reuses it is an evaluation request.
+    demand: Demand = .evaluation,
 };
 
 /// Coordinator intent retained after the request graph is destroyed.
@@ -15538,6 +16017,7 @@ const SealedTemplateSpec = struct {
     resolved_slot: ?Ast.FnSlot,
     committed_request_fn_ty: ?Type.TypeId = null,
     committed_codec_contract: ?Ast.CodecContractIdentity = null,
+    demand: Demand = .evaluation,
 };
 
 /// Seal a draft request's substitution with the graph sealer that seals its
@@ -15604,6 +16084,10 @@ const ActiveCallableEvalBinding = struct {
     root: checked.ComptimeRootId,
     request_node: NodeId,
     local: DraftLocalId,
+    /// Owner whose body the reserved local is bound in. A read from deeper
+    /// in the ownership chain makes every function between them lexically
+    /// dependent (`BodyDraftStore.markRecursiveBindingRead`).
+    owner: DraftOwner,
     used: bool = false,
 };
 
@@ -16417,6 +16901,17 @@ const DraftStructuralEqMethodCall = struct {
     callee: DraftFnSlot,
 };
 
+/// Whether a request lowered in `request_owner` may reuse nested
+/// specialization `spec` of the same lexical owner. A body that reads an
+/// enclosing expansion's recursive-binding local names that local directly
+/// (it is not a checked capture), and a second expansion under the same owner
+/// reserves a different local; only a request inside `spec`'s own body is
+/// lowered where the local it names is in scope.
+fn nestedSpecReusableAt(draft: *const BodyDraftStore, spec: *const DraftNestedSpec, request_owner: DraftOwner) bool {
+    if (!spec.reads_recursive_binding) return true;
+    return draft.ownerDescendsFromDraftFn(request_owner, spec.fn_id);
+}
+
 const DraftNestedSpec = struct {
     state: DraftSpecState,
     nested: Ast.NestedFn,
@@ -16439,6 +16934,11 @@ const DraftNestedSpec = struct {
     lexical_owner: DraftOwner,
     requires_local: bool,
     local_context_dependent: bool,
+    /// Whether this body reads a recursive-binding local reserved by an
+    /// enclosing expansion (`BodyDraftStore.markRecursiveBindingRead`). That
+    /// local belongs to one expansion, so this body is reused only by a
+    /// request lowered inside its own body, where the same local is in scope.
+    reads_recursive_binding: bool = false,
     symbol: Common.Symbol,
     fn_id: DraftFnId,
     /// Exact alpha-normalized shape of the unresolved request before this nested
@@ -16762,6 +17262,63 @@ const BodyDraftStore = struct {
     /// this draft's graph. Active entries own live input cells and completed
     /// entries own immutable constraints; both are discarded with the graph.
     interface_replay: InterfaceReplayState,
+    /// Why this draft's body is lowered.
+    demand: Demand = .evaluation,
+    /// The coordinator specialization whose body this draft is, when it is
+    /// one; a commit after that specialization was upgraded treats the whole
+    /// draft as evaluation demand.
+    demand_owner: ?Ast.FnId = null,
+    /// Depth of the literal-conversion lowerings in progress. A literal
+    /// root's conversion runs during compile-time evaluation, so every
+    /// request made while lowering it is an evaluation request.
+    evaluation_depth: u32 = 0,
+    /// The demand of each in-draft specialization body being lowered.
+    demand_overrides: std.ArrayListUnmanaged(Demand) = .empty,
+    /// Set when an evaluation request reuses a body this draft already
+    /// lowered for discovery: every request of the draft becomes an
+    /// evaluation request.
+    upgrade_all: bool = false,
+    /// Set when an evaluation request reuses this draft's own body: the
+    /// coordinator upgrades the draft's owner at commit.
+    upgrade_owner: bool = false,
+
+    /// The demand a request made at this point of the draft carries.
+    fn currentDemand(self: *const BodyDraftStore) Demand {
+        if (self.evaluation_depth != 0) return .evaluation;
+        if (self.demand_overrides.items.len != 0) return self.demand_overrides.items[self.demand_overrides.items.len - 1];
+        return self.demand;
+    }
+
+    /// Record that a request with the current demand reuses a draft
+    /// specialization.
+    fn reuseTemplateSpec(self: *BodyDraftStore, raw_spec: u32) void {
+        if (self.currentDemand() != .evaluation) return;
+        const spec = &self.template_specs.items[raw_spec];
+        if (spec.demand == .evaluation) return;
+        switch (spec.state) {
+            .deferred => spec.demand = .evaluation,
+            // Its body is already lowered in this draft, and so are the
+            // demands of the requests it made.
+            .lowering, .lowered, .resolved => self.upgrade_all = true,
+        }
+    }
+
+    /// Enter an in-draft specialization body lowered for `demand`. Commit may
+    /// merge an in-draft body with an equal one of this draft or of the
+    /// program, so a body lowered here for evaluation makes every request of
+    /// the draft an evaluation request.
+    fn lowerInDraftWithDemand(self: *BodyDraftStore, allocator: Allocator, demand: Demand) Allocator.Error!void {
+        if (demand == .evaluation and self.demand == .discovery) self.upgrade_all = true;
+        try self.demand_overrides.append(allocator, demand);
+    }
+
+    /// Record that a request with the current demand reuses the body this
+    /// draft is lowering for its own coordinator specialization.
+    fn reuseOwnBody(self: *BodyDraftStore) void {
+        if (self.currentDemand() != .evaluation or self.demand == .evaluation) return;
+        self.upgrade_all = true;
+        self.upgrade_owner = true;
+    }
 
     fn init(allocator: Allocator) BodyDraftStore {
         return .{
@@ -16977,6 +17534,7 @@ const BodyDraftStore = struct {
 
     fn deinit(self: *BodyDraftStore) void {
         self.interface_replay.deinit(self.allocator);
+        self.demand_overrides.deinit(self.allocator);
         for (self.template_specs.items) |*spec| {
             if (spec.lexical) |lexical| {
                 self.allocator.free(lexical.binders);
@@ -17224,6 +17782,58 @@ const BodyDraftStore = struct {
         stored.parent_owner = self.current_owner;
         try self.fns.append(self.allocator, stored);
         return id;
+    }
+
+    /// Record that the body being lowered reads a recursive-binding local
+    /// reserved in `binding_owner`'s body: a callable-eval binding, an active
+    /// constant binding, or an active ConstStore node binding.
+    ///
+    /// Such a local is not a checked capture. Whether a body names it depends
+    /// on the context the body was lowered in, so every function between
+    /// the read and `binding_owner` is lexically dependent: its specialization
+    /// identity omits the local, so it must never be merged with, or
+    /// committed as, an equal-looking specialization lowered elsewhere,
+    /// where that local is not in scope.
+    fn markRecursiveBindingRead(self: *BodyDraftStore, binding_owner: DraftOwner) void {
+        var cursor = self.current_owner;
+        var remaining = self.fns.items.len + 1;
+        while (remaining > 0) : (remaining -= 1) {
+            if (std.meta.eql(cursor, binding_owner)) return;
+            switch (cursor) {
+                .root, .reserved_fn => Common.invariant("recursive binding read was outside the ownership chain of its binding"),
+                .draft_fn => |fn_id| {
+                    const raw = @backingInt(fn_id);
+                    if (raw >= self.fns.items.len) {
+                        Common.invariant("draft owner ancestry referenced an unknown function");
+                    }
+                    self.markDraftFnLexicallyDependent(fn_id);
+                    cursor = self.fns.items[raw].parent_owner;
+                },
+            }
+        }
+        Common.invariant("draft function ownership ancestry contained a cycle");
+    }
+
+    fn markDraftFnLexicallyDependent(self: *BodyDraftStore, fn_id: DraftFnId) void {
+        for (self.nested_specs.items) |*spec| {
+            if (spec.fn_id != fn_id) continue;
+            spec.requires_local = true;
+            spec.local_context_dependent = true;
+            spec.reads_recursive_binding = true;
+            return;
+        }
+        for (self.template_specs.items) |*spec| {
+            if (spec.fn_id != fn_id) continue;
+            // Only a lexically dependent procedure body stays inside its
+            // owner; a context-free one becomes a top-level definition, which
+            // can name no enclosing local.
+            if (!spec.local_context_dependent) {
+                Common.invariant("context-free procedure body read an enclosing recursive binding");
+            }
+            spec.requires_local = true;
+            return;
+        }
+        Common.invariant("draft function had no owning nested or template specialization");
     }
 
     /// Return whether `owner` is currently lowering inside `ancestor`'s body.
@@ -17594,6 +18204,15 @@ const BodyDraftStore = struct {
     fn setLocalName(self: *BodyDraftStore, id: DraftLocalId, name: []const u8) Allocator.Error!void {
         if (name.len == 0) return;
         self.local_names.items[@backingInt(id)] = try self.addSourceText(name);
+    }
+
+    /// Mark `id` as the recursive binding reserved for top-level root `root`
+    /// of `module`, so a closure capturing it stores that capture kind.
+    fn setLocalRecursiveBinding(self: *BodyDraftStore, id: DraftLocalId, module: checked.ModuleId, root: checked.ComptimeRootId) void {
+        self.locals.items[@backingInt(id)].capture_kind = .{ .recursive_binding = .{
+            .module = .{ .bytes = module.bytes },
+            .root = root,
+        } };
     }
 
     fn setLocalCaptureId(self: *BodyDraftStore, id: DraftLocalId, capture_id: u32) void {
@@ -17976,6 +18595,7 @@ const BodyDraftStore = struct {
                 .binder = local.binder,
                 .capture_id = durable_capture_id,
                 .checked_capture_id = local.checked_capture_id,
+                .capture_kind = local.capture_kind,
             });
             const local_name = self.sourceText(self.local_names.items[index]);
             program.local_names.appendAssumeCapacity(if (local_name.len == 0) "" else try program.allocator.dupe(u8, local_name));
@@ -18300,6 +18920,7 @@ const BodyDraftStore = struct {
             .static_data_candidate,
             .comptime_value,
             .typed_boundary,
+            .row_widen,
             .list,
             .record_update,
             .nominal,
@@ -18393,6 +19014,7 @@ const BodyDraftStore = struct {
                 .local => |local| local,
                 .unit,
                 .pending_deferred,
+                .row_widen,
                 .@"unreachable",
                 .int_lit,
                 .frac_f32_lit,
@@ -18623,6 +19245,7 @@ const BodyDraftStore = struct {
                 .loop_values = ids.exprSpan(jump.loop_values),
             } },
             .return_ => |ret| .{ .return_ = try BodyDraftStore.sealCoreReturn(ids, committed_types, ret) },
+            .row_widen => |widen| .{ .row_widen = .{ .value = ids.expr(widen.value) } },
             .crash => |literal| .{ .crash = ids.stringLiteral(literal) },
             .checked_error => |literal| .{ .checked_error = ids.stringLiteral(literal) },
             .comptime_branch_taken => |taken| .{ .comptime_branch_taken = .{
@@ -21017,6 +21640,7 @@ const BodyContext = struct {
             .join_point => null,
             .comptime_branch_taken => |branch| self.exprImpossibilityProof(branch.body),
             .dbg => |child| self.exprImpossibilityProof(child),
+            .row_widen => |widen| self.exprImpossibilityProof(widen.value),
             .expect_err => |expect_err| self.exprImpossibilityProof(expect_err.msg),
             .literal_rejected => |rejected| self.exprImpossibilityProof(rejected.msg),
             .expect => |child| if (self.builder.inline_expects == .shared) null else self.exprImpossibilityProof(child),
@@ -21356,11 +21980,15 @@ const BodyContext = struct {
         }
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .draft_ir);
         defer timing_scope.end();
-        const inherited_capture_id = if (binder) |source_binder| blk: {
-            const existing = self.binders.get(source_binder) orelse break :blk null;
-            break :blk self.draft.locals.items[@backingInt(existing)].capture_id;
-        } else null;
-        return try self.draft.addLocal(symbol, ty, binder, inherited_capture_id);
+        const existing = if (binder) |source_binder| self.binders.get(source_binder) else null;
+        const inherited_capture_id = if (existing) |local| self.draft.locals.items[@backingInt(local)].capture_id else null;
+        const id = try self.draft.addLocal(symbol, ty, binder, inherited_capture_id);
+        // A new version of a binding keeps that binding's capture identity,
+        // including whether it is a root's recursive binding.
+        if (existing) |local| {
+            self.draft.locals.items[@backingInt(id)].capture_kind = self.draft.locals.items[@backingInt(local)].capture_kind;
+        }
+        return id;
     }
 
     /// Materialize a new runtime binding from checked capture provenance even
@@ -22909,6 +23537,7 @@ const BodyContext = struct {
                 .record => |fields| for (self.fieldExprSpan(fields)) |field| try pending.append(self.allocator, field.value),
                 .tag => |tag| try pending.appendSlice(self.allocator, self.exprSpan(tag.payloads)),
                 .nominal => |backing| try pending.append(self.allocator, backing),
+                .row_widen => |widen| try pending.append(self.allocator, widen.value),
                 .let_ => |let_| {
                     try pending.append(self.allocator, let_.value);
                     try pending.append(self.allocator, let_.rest);
@@ -23184,6 +23813,7 @@ const BodyContext = struct {
                 .expect,
                 => |child| try search.push(.{ .expr = child }),
                 .return_ => |ret| try search.push(.{ .expr = ret.value }),
+                .row_widen => |widen| try search.push(.{ .expr = widen.value }),
                 .expect_err => |expect_err| try search.push(.{ .expr = expect_err.msg }),
                 .literal_rejected => |rejected| try search.push(.{ .expr = rejected.msg }),
                 .comptime_branch_taken => |taken| try search.push(.{ .expr = taken.body }),
@@ -24729,6 +25359,7 @@ const BodyContext = struct {
                     .anno_only,
                     .break_,
                     .return_,
+                    .row_coerce,
                     .for_,
                     .run_low_level,
                     => .{
@@ -26813,7 +27444,7 @@ const BodyContext = struct {
                 if (lambda_expr.data != .lambda) Common.invariant("checked closure did not point at a lambda expression");
                 break :blk .{ closure.lambda, lambda_expr.data.lambda };
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("local procedure site did not point at a lambda or closure"),
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("local procedure site did not point at a lambda or closure"),
         };
 
         var saved = std.ArrayList(BinderRestore).empty;
@@ -27205,7 +27836,7 @@ const BodyContext = struct {
                             if (lambda.data != .lambda) Common.invariant("checked closure did not point at a lambda expression");
                             break :ty lambda.ty;
                         },
-                        .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("nested callable draft named a non-callable expression"),
+                        .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("nested callable draft named a non-callable expression"),
                     },
                     .value => if (task.closure) |closure| ty: {
                         task.capture_span = try self.lowerClosureCaptureExprSpan(closure.captures);
@@ -27662,7 +28293,7 @@ const BodyContext = struct {
     fn isDispatchExpr(expr: checked.CheckedExpr) bool {
         return switch (expr.data) {
             .dispatch_call, .interpolation, .type_dispatch_call, .method_eq => true,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => false,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => false,
         };
     }
 
@@ -27697,7 +28328,7 @@ const BodyContext = struct {
             .lookup_external, .lookup_required => |resolved| return try self.finishTypeNodeLeaf(task, try self.lookupExprTypeNode(expr.ty, resolved)),
             .lambda => |lambda| return try self.finishTypeNodeLeaf(task, try self.lambdaFunctionNode(expr.ty, lambda)),
             .closure => |closure| return try self.finishTypeNodeLeaf(task, try self.closureFunctionNode(closure)),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return try self.finishTypeNodeLeaf(task, try self.lowerTypeNode(expr.ty)),
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return try self.finishTypeNodeLeaf(task, try self.lowerTypeNode(expr.ty)),
         };
         return evidenceCall(self, next);
     }
@@ -27783,7 +28414,7 @@ const BodyContext = struct {
             },
             .lookup_local => |lookup| return .{ .ret = .{ .maybe_node = try self.lookupCallArgumentEvidenceNode(expr.ty, lookup.resolved, expected_ty) } },
             .lookup_external, .lookup_required => |resolved| return .{ .ret = .{ .maybe_node = try self.lookupCallArgumentEvidenceNode(expr.ty, resolved, expected_ty) } },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
         if (expected_ty) |ty| {
             try self.constrainTypeToMono(expr.ty, ty);
@@ -27805,7 +28436,7 @@ const BodyContext = struct {
                 const expr = self.view.bodies.expr(task.expr);
                 switch (expr.data) {
                     .tuple, .record, .tag, .nominal, .list => {},
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return .{ .ret = .{ .maybe_node = null } },
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return .{ .ret = .{ .maybe_node = null } },
                 }
                 task.argument_node = try self.freshInstNode(expr.ty);
                 frame.cursor = 2;
@@ -27870,7 +28501,7 @@ const BodyContext = struct {
                         task.current_child_node = backing.node;
                         return evidenceCall(self, .{ .produced_value = .{ .expr = nominal.backing_expr, .request_node = backing.node } });
                     },
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return .{ .ret = .{ .maybe_node = null } },
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return .{ .ret = .{ .maybe_node = null } },
                 }
                 return try self.nextProducedValueChild(task, expr);
             },
@@ -27946,7 +28577,7 @@ const BodyContext = struct {
                         const witness = try self.graph.namedValueNodeWithBacking(representation_node, backing_witness.slot);
                         return .{ .ret = .{ .maybe_node = try self.relateCheckedNodeToProducedValue(representation_node, witness) } };
                     },
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => unreachable,
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => unreachable,
                 }
                 task.index += 1;
                 return try self.nextProducedValueChild(task, expr);
@@ -28019,7 +28650,7 @@ const BodyContext = struct {
                 const witness = try self.constructorWitnessWithStructuralNode(request_node, structural_node);
                 return .{ .ret = .{ .maybe_node = try self.relateCheckedNodeToProducedValue(request_node, witness) } };
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .nominal => unreachable,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level, .nominal => unreachable,
         }
     }
 
@@ -28647,7 +29278,7 @@ const BodyContext = struct {
                     const key = RelatedConstructor{ .expr = checked_expr, .node = self.graph.rootNode(expected_node) };
                     if ((try self.related_constructors.getOrPut(self.allocator, key)).found_existing) return self.finishRelate(task);
                 },
-                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .call, .empty_record, .block, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .call, .empty_record, .block, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
             }
             frame.cursor = 1;
             switch (expr.data) {
@@ -28697,7 +29328,7 @@ const BodyContext = struct {
                 // branches.
                 .block, .match_, .if_, .runtime_error => {},
                 .lambda, .closure => _ = try self.graph.functionNodes(expected_node),
-                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return evidenceCall(self, .{ .type_node = .{ .expr = checked_expr } }),
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return evidenceCall(self, .{ .type_node = .{ .expr = checked_expr } }),
             }
             return self.finishRelate(task);
         }
@@ -28707,7 +29338,7 @@ const BodyContext = struct {
                 try relateRequestComponent(self.graph, input.?.nodeValue(), expected_node);
                 return self.finishRelate(task);
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {
                 try self.graph.unify(expected_node, input.?.nodeValue());
                 return self.finishRelate(task);
             },
@@ -28758,7 +29389,7 @@ const BodyContext = struct {
                     } });
                 }
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .nominal => unreachable,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level, .nominal => unreachable,
         }
         return self.finishRelate(task);
     }
@@ -28865,7 +29496,7 @@ const BodyContext = struct {
             .closure => |closure| try self.closureFunctionType(closure),
             .field_access => |field| try self.activeTypeFromNode(try self.fieldAccessTypeNode(expr.ty, field, null)),
             .tuple_access => |access| try self.activeTypeFromNode(try self.tupleAccessTypeNode(expr.ty, access.tuple, access.elem_index, null)),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => try self.lowerTypeView(expr.ty),
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => try self.lowerTypeView(expr.ty),
         };
     }
 
@@ -29798,7 +30429,7 @@ const BodyContext = struct {
                         .result_cell = state.state_cell,
                         .tail = .{ .state_result = .{ .state = state, .result_node = result_node } },
                     }) }),
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
                 }
                 if (try self.nodeIsProvenUninhabited(result_node)) {
                     task.zero_branch_cell = state.state_cell;
@@ -29833,7 +30464,7 @@ const BodyContext = struct {
                 .result_cell = result_cell,
                 .tail = tail,
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => .{
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => .{
                 .statements = &.{},
                 .final_expr = body,
                 .result_cell = result_cell,
@@ -29913,7 +30544,7 @@ const BodyContext = struct {
                 };
                 return self.controlFlowOutputStep(body, task.result_cell, output);
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .hosted_lambda, .run_low_level => {
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .hosted_lambda, .run_low_level => {
                 task.stage = .value;
                 return branchBodyStep(self, body, .{ .value = task.result_cell });
             },
@@ -29938,7 +30569,7 @@ const BodyContext = struct {
                 .output = output,
                 .select = false,
             } }),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => unreachable,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => unreachable,
         };
     }
 
@@ -29998,7 +30629,7 @@ const BodyContext = struct {
                     } });
                 }
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
 
         // A divergent discarded expression never yields the value this
@@ -30127,7 +30758,7 @@ const BodyContext = struct {
                 } };
                 return switch (self.view.bodies.expr(child).data) {
                     .if_, .match_ => self.controlFlowOutputStep(child, task.state_cell, output),
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => branchBodyStep(self, child, output),
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => branchBodyStep(self, child, output),
                 };
             },
             .expect => |child| {
@@ -30354,7 +30985,7 @@ const BodyContext = struct {
             .at_cell => |cell| switch (checked_expr.data) {
                 .match_ => |match| return requestLowerTask(self, .{ .match_task = .{ .expr_id = expr_id, .match = match, .result_cell = cell } }),
                 .if_ => |if_| return requestLowerTask(self, .{ .if_task = .{ .expr_id = expr_id, .if_ = if_, .result_cell = cell } }),
-                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {
                     task.finish = .{ .effect_at_cell = cell };
                     return divergentStep(self, expr_id, .{ .at_type = try self.unitType() });
                 },
@@ -30375,7 +31006,7 @@ const BodyContext = struct {
                         }
                         return requestLowerTask(self, .{ .if_task = .{ .expr_id = expr_id, .if_ = if_, .result_cell = .{ .sealed = ty } } });
                     },
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
                 }
                 task.finish = .{ .add_expr = ty };
                 return divergentStep(self, expr_id, .{ .data = ty });
@@ -30458,7 +31089,7 @@ const BodyContext = struct {
             .generated_interpolation_segments => |expr| {
                 const interpolation = switch (self.view.bodies.expr(expr).data) {
                     .interpolation => |value| value,
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("dispatch interpolation segments referenced a non-interpolation expression"),
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => Common.invariant("dispatch interpolation segments referenced a non-interpolation expression"),
                 };
                 try appendInterpolationOperands(self.allocator, &exprs, interpolation);
             },
@@ -30571,6 +31202,7 @@ const BodyContext = struct {
             },
             .tag => |tag| return try self.divergentOperandsStep(tag.args, ty),
             .nominal => |nominal| return self.divergentEffectStep(nominal.backing_expr, ty),
+            .row_coerce => |coerce| return self.divergentEffectStep(coerce.value, ty),
             .binop => |binop| return try self.divergentOperandsStep(&.{ binop.lhs, binop.rhs }, ty),
             .unary_minus,
             .unary_not,
@@ -31448,6 +32080,15 @@ const BodyContext = struct {
 
     fn stepConstructor(self: *BodyContext, frame: *LowerFrame, task: *ConstructorTask, input: ?LowerResult) Allocator.Error!LowerStep {
         if (frame.cursor == 0) {
+            if (task.kind == .list) {
+                const element_node = try self.graph.listElementNode(task.node);
+                const element_content = try self.graph.content(try self.constructorRepresentationNode(element_node));
+                if (element_content == .primitive) {
+                    if (try self.lowerPackedNumeralList(task.children, element_content.primitive)) |data| {
+                        return loweredExprStep(try self.addConstructorExprAtNode(task.node, data));
+                    }
+                }
+            }
             const drafts = try self.beginConstructor(task);
             if (drafts.len != 0) {
                 frame.cursor = constructor_drafts_cursor;
@@ -31839,12 +32480,16 @@ const BodyContext = struct {
                 };
                 const interpolation = switch (self.view.bodies.expr(task.expr).data) {
                     .interpolation => |value| value,
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("interpolation lowering referenced a non-interpolation expression"),
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => Common.invariant("interpolation lowering referenced a non-interpolation expression"),
                 };
                 for (interpolation.values) |value| {
                     try relateRequestComponent(self.graph, item_node, try self.lowerExprTypeNode(value));
                 }
                 frame.cursor = 1;
+                // The conversion runs during compile-time evaluation; see
+                // `lowerLiteralConversionDispatch`. Its operands are the
+                // literal segments, so nothing else lowers before cursor 1.
+                self.draft.evaluation_depth += 1;
                 return requestLowerTask(self, .{ .dispatch = .{
                     .checked_ret_ty = try_ty,
                     .maybe_plan = task.maybe_plan,
@@ -31852,6 +32497,7 @@ const BodyContext = struct {
                 } });
             },
             1 => {
+                self.draft.evaluation_depth -= 1;
                 const site = self.literalRejectionSite(task.expr);
                 const assembler = try self.unwrapLiteralConversionAtNode(input.?.exprValue(), task.try_node, task.assembler_node, site);
                 task.assembler = if (self.builder.literal_roots)
@@ -31860,7 +32506,7 @@ const BodyContext = struct {
                     assembler;
                 const interpolation = switch (self.view.bodies.expr(task.expr).data) {
                     .interpolation => |value| value,
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("interpolation lowering referenced a non-interpolation expression"),
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => Common.invariant("interpolation lowering referenced a non-interpolation expression"),
                 };
                 task.values_ty = try self.activeTypeFromNode((try self.graph.functionNodes(task.assembler_node)).args[0]);
                 frame.cursor = 2;
@@ -32042,7 +32688,10 @@ const BodyContext = struct {
                 return loweredExprStep(try self.addExprWithTypeCell(cell, .{ .checked_error = try self.addStringLiteral("runtime error") }));
             },
             .anno_only => Common.invariant("non-runtime checked expression reached Monotype lowering"),
-            .pending, .str_segment, .str, .bytes_literal, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+            // A row coercion takes the `?` return's path below: the
+            // demanded node relates to the widen node's own type, and
+            // `lowerExprInner` lowers the child with no expected node.
+            .pending, .str_segment, .str, .bytes_literal, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
         switch (expr.data) {
             .tuple_access => |access| {
@@ -32053,7 +32702,7 @@ const BodyContext = struct {
                     return loweredExprStep(try self.addExprWithTypeCell(cell, .{ .checked_error = try self.addStringLiteral("runtime error") }));
                 }
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
         try relateRequestComponent(
             self.graph,
@@ -32075,7 +32724,7 @@ const BodyContext = struct {
                 frame.cursor = 3;
                 return requestLowerTask(self, .{ .span = .{ .exprs = low_level.args } });
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda => {},
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda => {},
         }
         frame.cursor = 4;
         return requestLowerTask(self, .{ .expr_inner = .{ .expr = checked_expr } });
@@ -32113,7 +32762,7 @@ const BodyContext = struct {
                 if (!self.sameType(ty, try self.exprType(lowered))) {
                     switch (expr.data) {
                         .lambda, .closure => Common.invariant("checked function expression lowered at a type different from its context type"),
-                        .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("checked expression lowered at a type different from its call operand type"),
+                        .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("checked expression lowered at a type different from its call operand type"),
                     }
                 }
                 return loweredExprStep(lowered);
@@ -32129,7 +32778,7 @@ const BodyContext = struct {
                 frame.cursor = 3;
                 return step;
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
         if (try self.restoredHoistedExprAtType(checked_expr, ty)) |restored| return loweredExprStep(restored);
         switch (expr.data) {
@@ -32198,7 +32847,7 @@ const BodyContext = struct {
                 } });
             },
             .lambda, .closure => {},
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => try self.constrainKnownType(expr.ty, ty),
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => try self.constrainKnownType(expr.ty, ty),
         }
         frame.cursor = 4;
         return requestLowerTask(self, .{ .with_type = .{ .expr = checked_expr, .ty = ty } });
@@ -32234,7 +32883,7 @@ const BodyContext = struct {
                 if (runtime_error.evaluated.len != 0) return divergentStep(self, expr_id, .{ .at_type = try self.unitType() });
                 return requestLowerTask(self, .{ .with_type = .{ .expr = expr_id, .ty = try self.unitType() } });
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
         switch (expr.data) {
             .call => |call| {
@@ -32245,7 +32894,7 @@ const BodyContext = struct {
                 frame.cursor = 1;
                 return requestLowerTask(self, .{ .call_expr = .{ .expr = expr_id, .checked_ret_ty = expr.ty, .call = call } });
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
         if (self.view.hoisted_constants.lookupByExpr(expr_id) != null) {
             const expr_node = try self.lowerExprTypeNode(expr_id);
@@ -32359,7 +33008,7 @@ const BodyContext = struct {
                 frame.cursor = 1;
                 return requestLowerTask(self, .{ .field_access = .{ .expr = expr_id, .target = .{ .node = expr_node } } });
             },
-            .pending, .str_segment, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .match_, .if_, .call, .block, .closure, .lambda, .binop, .unary_minus, .unary_not, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+            .pending, .str_segment, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .match_, .if_, .call, .block, .closure, .lambda, .binop, .unary_minus, .unary_not, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
         const expr_node = try self.lowerExprTypeNode(expr_id);
         switch (expr.data) {
@@ -32383,7 +33032,7 @@ const BodyContext = struct {
                 frame.cursor = 1;
                 return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_cell = DraftTypeCell.fromGraphNode(expr_node) } });
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
         const expr_ty = try self.lowerExprType(expr_id);
         if (try self.restoredHoistedExprAtType(expr_id, expr_ty)) |restored| return self.exprInnerDone(task, restored);
@@ -32392,7 +33041,7 @@ const BodyContext = struct {
                 frame.cursor = 1;
                 return requestLowerTask(self, .{ .direct_structural = .{ .expr = expr_id, .ret = .{ .checked = expr.ty } } });
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
         frame.cursor = 1;
         return requestLowerTask(self, .{ .with_type = .{ .expr = expr_id, .ty = expr_ty } });
@@ -32446,6 +33095,7 @@ const BodyContext = struct {
                 } }),
                 .expect => try self.withTypeData(task, .{ .expect = child.exprValue() }),
                 .dbg => try self.withTypeData(task, .{ .dbg = child.exprValue() }),
+                .row_coerce => try self.withTypeData(task, .{ .row_widen = .{ .value = child.exprValue() } }),
                 .expect_err => try self.withTypeData(task, .{ .expect_err = .{
                     .msg = child.exprValue(),
                     .region = expr.source_region,
@@ -32606,6 +33256,10 @@ const BodyContext = struct {
                 return requestLowerTask(self, .{ .expr = .{ .expr = child } }),
             .break_ => try self.breakCurrentLoopExprData(),
             .return_ => |ret| return requestLowerTask(self, .{ .return_value = .{ .expr = ret.expr, .lambda = ret.lambda, .context = ret.context } }),
+            // The coerced value is lowered at its own checked type, exactly
+            // like a `?` return's value; the widen node carries the demanded
+            // type and Lambda Solved relates the two without unifying them.
+            .row_coerce => |coerce| return requestLowerTask(self, .{ .expr = .{ .expr = coerce.value } }),
             .for_ => |for_| return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .for_ = checkedForLoop(for_) } }) }),
             .hosted_lambda => Common.invariant("hosted lambda expression reached ordinary Monotype expression lowering"),
             .run_low_level => |low_level| return requestLowerTask(self, .{ .span = .{ .exprs = low_level.args } }),
@@ -33128,10 +33782,15 @@ const BodyContext = struct {
             .method_scope = self.method_scope.key,
         };
         const slot = if (self.draft.closed_direct_specializations.get(direct_key)) |existing| blk: {
+            switch (existing.slot.local) {
+                .draft => {},
+                .final => self.draft.reuseOwnBody(),
+            }
             if (existing.draft_spec) |raw_spec| {
                 if (raw_spec >= self.draft.template_specs.items.len) {
                     Common.invariant("closed direct call cache referenced a missing draft specialization");
                 }
+                self.draft.reuseTemplateSpec(raw_spec);
                 const spec = &self.draft.template_specs.items[raw_spec];
                 if (spec.state != .deferred and !runtimeDemandGuardFrameSetsEql(
                     spec.runtime_demand_guard_frames,
@@ -33705,7 +34364,7 @@ const BodyContext = struct {
         const expr = self.view.bodies.expr(checked_expr);
         const call = switch (expr.data) {
             .call => |call| call,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("call-at-node lowering received a non-call expression"),
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("call-at-node lowering received a non-call expression"),
         };
         switch (frame.cursor) {
             0 => {},
@@ -34037,7 +34696,7 @@ const BodyContext = struct {
         if (demand != .runtime_value) return lowered;
         switch (expr.data) {
             .runtime_error, .crash, .ellipsis => return lowered,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .dbg, .expect_err, .expect, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .dbg, .expect_err, .expect, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
         const expr_proof = self.exprImpossibilityProof(lowered);
         const entry_guard_proof = if (self.function_entry_demand_guards.len != 0)
@@ -34473,7 +35132,7 @@ const BodyContext = struct {
         const maybe_ref: ?checked.ResolvedValueId = switch (expr.data) {
             .lookup_local => |lookup| lookup.resolved,
             .lookup_external, .lookup_required => |ref_id| ref_id,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => null,
         };
         if (maybe_ref) |ref_id| {
             if (try self.currentLocalForResolvedValue(ref_id)) |local_id| {
@@ -34698,6 +35357,7 @@ const BodyContext = struct {
 
             try relateRequestComponent(self.graph, active.request_node, request_fn_node);
             self.draft.active_callable_eval_bindings.items[index].used = true;
+            self.draft.markRecursiveBindingRead(active.owner);
             return try self.addExprWithTypeCell(
                 DraftTypeCell.fromGraphNode(request_fn_node),
                 .{ .local = active.local },
@@ -34724,11 +35384,13 @@ const BodyContext = struct {
             DraftTypeCell.fromGraphNode(request_fn_node),
             binder,
         );
+        self.draft.setLocalRecursiveBinding(local, view.key, root_id);
         try self.draft.active_callable_eval_bindings.append(self.allocator, .{
             .module = view.key,
             .root = root_id,
             .request_node = request_fn_node,
             .local = local,
+            .owner = self.draft.current_owner,
         });
         return local;
     }
@@ -34785,6 +35447,7 @@ const BodyContext = struct {
                 break :blk reserved;
             };
             self.draft.active_const_node_bindings.items[index].used = true;
+            self.draft.markRecursiveBindingRead(active.owner);
             return try self.addExprWithTypeCell(request_cell, .{ .local = local });
         }
 
@@ -36487,7 +37150,7 @@ const BodyContext = struct {
         return switch (expr.data) {
             .closure => |closure| try self.closureArgumentEvidenceDigest(expr_id, closure),
             .lambda => |lambda| self.lambdaArgumentEvidenceDigest(expr_id, lambda.args.len),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => null,
         };
     }
 
@@ -41764,7 +42427,7 @@ const BodyContext = struct {
             .lookup_external,
             .lookup_required,
             => try self.localCalleeMonoType(checked_func, checked_args, expected_ret_ty),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => null,
         };
     }
 
@@ -41778,7 +42441,7 @@ const BodyContext = struct {
         const maybe_ref = switch (expr.data) {
             .lookup_local => |lookup| lookup.resolved,
             .lookup_external, .lookup_required => |resolved| resolved,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return null,
         };
         const ref_id = maybe_ref orelse Common.invariant("checked callee lookup reached Monotype without resolved value ref");
         const local_id = (try self.currentLocalForResolvedValue(ref_id)) orelse return null;
@@ -42853,6 +43516,7 @@ const BodyContext = struct {
             const active = self.draft.active_const_bindings.items[index];
             if (constUseEql(active.const_use, const_use.const_ref)) {
                 self.draft.active_const_bindings.items[index].used = true;
+                self.draft.markRecursiveBindingRead(active.owner);
                 try self.materializeActiveConstBinding(id);
                 return active.local;
             }
@@ -42868,6 +43532,7 @@ const BodyContext = struct {
             const active = self.draft.active_const_bindings.items[index];
             if (moduleBytesEqual(checked.constModuleId(active.const_use).bytes, self.view.key.bytes) and active.binder == binder) {
                 self.draft.active_const_bindings.items[index].used = true;
+                self.draft.markRecursiveBindingRead(active.owner);
                 try self.materializeActiveConstBinding(id);
                 return;
             }
@@ -42875,7 +43540,14 @@ const BodyContext = struct {
         }
     }
 
-    fn topLevelConstBinderForUse(store_view: ModuleView, const_use: checked.ConstLocator) ?checked.PatternBinderId {
+    /// The binder a top-level constant's recursive binding is keyed by, and the
+    /// compile-time root that binding belongs to.
+    const TopLevelConstBinding = struct {
+        binder: checked.PatternBinderId,
+        root: checked.ComptimeRootId,
+    };
+
+    fn topLevelConstBinderForUse(store_view: ModuleView, const_use: checked.ConstLocator) ?TopLevelConstBinding {
         const owner = switch (const_use.owner) {
             .top_level_binding => |owner| owner,
             // A hoisted extraction root binds its result pattern. A reference
@@ -42892,7 +43564,8 @@ const BodyContext = struct {
                 if (raw_pattern >= store_view.bodies.pattern_binder_by_pattern.len) {
                     Common.invariant("hoisted const result pattern was outside the binder index");
                 }
-                return store_view.bodies.pattern_binder_by_pattern[raw_pattern];
+                const binder = store_view.bodies.pattern_binder_by_pattern[raw_pattern] orelse return null;
+                return .{ .binder = binder, .root = entry.root };
             },
         };
         if (!moduleBytesEqual(checked.constModuleId(const_use).bytes, store_view.key.bytes)) {
@@ -42913,7 +43586,7 @@ const BodyContext = struct {
             Common.invariant("top-level const template root had a mismatched checked pattern");
         }
         return switch (store_view.bodies.pattern(pattern).data) {
-            .assign => |binder| binder,
+            .assign => |binder| .{ .binder = binder, .root = root_id },
             .pending, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => Common.invariant("top-level const root pattern was not a binder"),
         };
     }
@@ -42947,12 +43620,14 @@ const BodyContext = struct {
         cell: DraftTypeCell,
         scope: *ActiveConstBindingScope,
     ) Allocator.Error!bool {
-        const binder = topLevelConstBinderForUse(store_view, const_use) orelse return false;
+        const binding = topLevelConstBinderForUse(store_view, const_use) orelse return false;
+        const binder = binding.binder;
         const local = try self.addFreshLocalWithBinderCell(
             self.builder.symbols.fresh(),
             cell,
             binder,
         );
+        self.draft.setLocalRecursiveBinding(local, checked.constModuleId(const_use), binding.root);
         try self.bindLocalNameFromView(store_view, local, binder);
         const reservation = try self.addExprWithTypeCell(cell, .pending_deferred);
         const active_id: ActiveConstBindingId = @fromBackingInt(@intCast(@as(u32, @intCast(self.draft.active_const_bindings.items.len))));
@@ -45203,6 +45878,7 @@ const BodyContext = struct {
             const capture_node = try self.graph.importMono(lowered_ty);
             const capture_cell = DraftTypeCell.fromGraphNode(capture_node);
             const local = try fn_ctx.addFreshLocalWithBinderCell(self.builder.symbols.fresh(), capture_cell, binder);
+            fn_ctx.draft.locals.items[@backingInt(local)].capture_kind = capture.kind;
             try fn_ctx.bindLocalName(local, binder);
             const previous = fn_ctx.binders.get(binder);
             try fn_ctx.binders.put(binder, local);
@@ -45265,7 +45941,7 @@ const BodyContext = struct {
                 .exact_graph,
                 .inherit,
             ),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("stored capturing function did not reference a checked lambda"),
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("stored capturing function did not reference a checked lambda"),
         };
 
         const capture_values = try self.allocator.alloc(DraftFnDefCapture, captures.len);
@@ -45371,6 +46047,7 @@ const BodyContext = struct {
             const lowered_ty = try fn_ctx.lowerConstCaptureType(store_view, capture.ty);
             const capture_cell = try fn_ctx.draftTypeCell(lowered_ty);
             const local = try fn_ctx.addFreshLocalWithBinderCell(self.builder.symbols.fresh(), capture_cell, binder);
+            fn_ctx.draft.locals.items[@backingInt(local)].capture_kind = capture.kind;
             try fn_ctx.bindLocalName(local, binder);
             const previous = fn_ctx.binders.get(binder);
             try fn_ctx.binders.put(binder, local);
@@ -45421,7 +46098,7 @@ const BodyContext = struct {
                 .exact_graph,
                 .inherit,
             ),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("stored capturing function did not reference a checked lambda"),
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("stored capturing function did not reference a checked lambda"),
         };
 
         const capture_values = try self.allocator.alloc(DraftFnDefCapture, captures.len);
@@ -47903,6 +48580,7 @@ const BodyContext = struct {
                 .fn_ref,
                 => {},
                 .nominal => |backing| try work.append(self.allocator, backing),
+                .row_widen => |widen| try work.append(self.allocator, widen.value),
                 .tag => |tag| try work.appendSlice(self.allocator, self.exprSpan(tag.payloads)),
                 .tuple => |items| try work.appendSlice(self.allocator, self.exprSpan(items)),
                 .record => |fields| for (self.fieldExprSpan(fields)) |field| {
@@ -48104,7 +48782,7 @@ const BodyContext = struct {
         self.builder.countBodyDiagnostic("nested_callable_checks");
         return switch (self.view.bodies.expr(expr_id).data) {
             .lambda, .closure => true,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => false,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => false,
         };
     }
 
@@ -48122,7 +48800,7 @@ const BodyContext = struct {
                 self.builder.countBodyDiagnostic("nested_closures_prepared");
                 _ = try self.ensureClosureAtNode(expr_id, closure, request_fn_node, try self.closureCaptureEntryNodes(closure));
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
     }
 
@@ -48320,7 +48998,7 @@ const BodyContext = struct {
         const plan = self.literalConversionPlan(expr_id);
         const try_ty = self.literalConversionTryType(plan);
         const try_node = try self.instNode(try_ty);
-        const try_value = try self.lowerDispatchExprAtType(try_ty, plan, DraftTypeCell.fromGraphNode(try_node));
+        const try_value = try self.lowerLiteralConversionDispatch(try_ty, plan, try_node);
         const site = self.literalRejectionSite(expr_id);
         const value = try self.unwrapLiteralConversionAtNode(try_value, try_node, value_node, site);
         if (!self.builder.literal_roots) return value;
@@ -48328,6 +49006,21 @@ const BodyContext = struct {
         // context runs where that context exists: in place, at runtime.
         if (self.dispatchPlanSelectsLocalProc(plan)) return value;
         return try self.literalRootRead(expr_id, site, value, value_node);
+    }
+
+    /// Lower a literal's conversion call. A program that evaluates its
+    /// literal roots runs this call during compile-time evaluation, so every
+    /// specialization it requests is evaluation demand, whatever demand the
+    /// surrounding body was lowered for.
+    fn lowerLiteralConversionDispatch(
+        self: *BodyContext,
+        try_ty: checked.CheckedTypeId,
+        plan: ?static_dispatch.StaticDispatchPlanId,
+        try_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        self.draft.evaluation_depth += 1;
+        defer self.draft.evaluation_depth -= 1;
+        return try self.lowerDispatchExprAtType(try_ty, plan, DraftTypeCell.fromGraphNode(try_node));
     }
 
     /// Whether a dispatch plan's resolution in this body selects a local
@@ -48420,7 +49113,7 @@ const BodyContext = struct {
                 .numeral => .numeral,
                 .str_from_quote => .quote,
                 .interpolation => .interpolation,
-                .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("literal rejection site did not point at a literal conversion expression"),
+                .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => Common.invariant("literal rejection site did not point at a literal conversion expression"),
             },
         };
     }
@@ -48430,7 +49123,7 @@ const BodyContext = struct {
         return switch (self.view.bodies.expr(expr_id).data) {
             .numeral => |numeral| numeral.plan,
             .str_from_quote => |quote| quote.plan,
-            .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("literal conversion did not point at a conversion expression"),
+            .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("literal conversion did not point at a conversion expression"),
         };
     }
 
@@ -48484,7 +49177,7 @@ const BodyContext = struct {
         const plan = self.literalConversionPlan(expr_id);
         const try_ty = self.literalConversionTryType(plan);
         const try_node = try self.instNode(try_ty);
-        const try_value = try self.lowerDispatchExprAtType(try_ty, plan, DraftTypeCell.fromGraphNode(try_node));
+        const try_value = try self.lowerLiteralConversionDispatch(try_ty, plan, try_node);
         const site = self.literalRejectionSite(expr_id);
         const expected_kind: Common.LiteralRejectionKind = switch (kind) {
             .numeral => .numeral,
@@ -48655,6 +49348,56 @@ const BodyContext = struct {
         };
     }
 
+    /// A list of checked builtin numerals is already literal data. Preserve
+    /// that fact before allocating per-element IR, using the same exact scalar
+    /// conversion as ordinary numeral lowering. Custom conversion roots and
+    /// dispatch plans remain computations and are not consumed here.
+    fn lowerPackedNumeralList(self: *BodyContext, items: []const checked.CheckedExprId, primitive: Type.Primitive) Allocator.Error!?BodyExprData {
+        if (items.len == 0) return null;
+        const scalar: check.ConstStore.ConstPackedScalar = switch (primitive) {
+            .u8 => .u8,
+            .u16 => .u16,
+            .u32 => .u32,
+            .u64 => .u64,
+            .u128 => .u128,
+            .i8 => .i8,
+            .i16 => .i16,
+            .i32 => .i32,
+            .i64 => .i64,
+            .i128 => .i128,
+            .f32 => .f32,
+            .f64 => .f64,
+            .dec => .dec,
+            .bool, .str, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return null,
+        };
+        for (items) |item| {
+            const expr = self.view.bodies.expr(item);
+            if (expr.data != .numeral) return null;
+            if (expr.data.numeral.plan != null or expr.data.numeral.conversion_root != null) return null;
+        }
+
+        const width = scalar.byteWidth();
+        const bytes = try self.allocator.alloc(u8, items.len * width);
+        defer self.allocator.free(bytes);
+        for (items, 0..) |item, index| {
+            const numeral = self.view.bodies.expr(item).data.numeral;
+            const bits = (try self.numeralScalarBits(numeral.literal, primitive)) orelse return null;
+            var encoded: [16]u8 = undefined;
+            switch (bits) {
+                .int => |value| std.mem.writeInt(i128, &encoded, value.toI128(), .little),
+                .f32 => |value| std.mem.writeInt(u32, encoded[0..4], @bitCast(value), .little),
+                .f64 => |value| std.mem.writeInt(u64, encoded[0..8], @bitCast(value), .little),
+                .dec => |value| std.mem.writeInt(i128, &encoded, value.num, .little),
+            }
+            @memcpy(bytes[index * width ..][0..width], encoded[0..width]);
+        }
+        return .{ .bytes_lit = .{
+            .literal = try self.addStringLiteral(bytes),
+            .len = @intCast(items.len),
+            .element = scalar,
+        } };
+    }
+
     /// The expression flavor of `numeralScalarBits`; null passes through for
     /// the caller's crash-node mapping.
     fn numeralBits(
@@ -48682,7 +49425,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const interpolation = switch (self.view.bodies.expr(expr_id).data) {
             .interpolation => |value| value,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("interpolation segments operand referenced a non-interpolation expression"),
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => Common.invariant("interpolation segments operand referenced a non-interpolation expression"),
         };
         const str_ty = switch (self.shapeContent(list_ty)) {
             .list => |elem| elem,
@@ -48703,7 +49446,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         return switch (self.view.bodies.expr(expr_id).data) {
             .str_segment => |literal| try self.lowerQuoteValue(literal, str_ty),
-            .pending, .numeral, .str_from_quote, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("interpolation segment was not a checked string segment"),
+            .pending, .numeral, .str_from_quote, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => Common.invariant("interpolation segment was not a checked string segment"),
         };
     }
 
@@ -49176,7 +49919,7 @@ const BodyContext = struct {
             .dispatch_call => |plan| plan,
             .type_dispatch_call, .method_eq => |plan| plan,
             // An interpolation's value is its conversion result's `Ok` payload.
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .interpolation, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .interpolation, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return null,
         } orelse return null;
         const plan = self.view.static_dispatch_plans.plans[@backingInt(plan_id)];
         return try self.closedDirectGraphFreeResultType(expr.ty, plan);
@@ -57882,7 +58625,7 @@ const BodyContext = struct {
                         task.stage = .hash_value;
                         return requestLowerChild(self, h.value, self.directStructuralOperandCell(task));
                     },
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("direct structural task reached a non-structural expression"),
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("direct structural task reached a non-structural expression"),
                 }
             },
             .discriminant => {
@@ -58109,7 +58852,7 @@ const BodyContext = struct {
             .lookup_local => |lookup| try self.lookupExprTypeNode(expr.ty, lookup.resolved),
             .lookup_external, .lookup_required => |resolved| try self.lookupExprTypeNode(expr.ty, resolved),
             .field_access => |field| try self.fieldAccessTypeNode(expr.ty, field, null),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => null,
         };
     }
 
@@ -60015,7 +60758,7 @@ const BodyContext = struct {
             .method_eq,
             => (try self.exprCallResultEvidenceNode(checked_expr, null)) orelse
                 try self.lowerExprTypeNode(checked_expr),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => try self.lowerExprTypeNode(checked_expr),
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => try self.lowerExprTypeNode(checked_expr),
         };
     }
 
@@ -60427,7 +61170,7 @@ const BodyContext = struct {
                     checked_value = block.final_expr;
                     continue;
                 },
-                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
             }
             break;
         }
@@ -60487,7 +61230,7 @@ const BodyContext = struct {
                 try self.exprProducedValueEvidenceNode(checked_value, expected_node)
             else
                 null,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .empty_list, .match_, .if_, .empty_record, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .empty_list, .match_, .if_, .empty_record, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => null,
         };
     }
 
@@ -61092,7 +61835,7 @@ const BodyContext = struct {
         self.builder.current_region = statement.source_region;
         const merge_binders: []MergeBinder = switch (self.view.bodies.expr(decl.expr).data) {
             .if_, .match_, .for_ => try self.stateMergeBinders(decl.expr),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .hosted_lambda, .run_low_level => try self.allocator.alloc(MergeBinder, 0),
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .hosted_lambda, .run_low_level, .row_coerce => try self.allocator.alloc(MergeBinder, 0),
         };
         defer self.allocator.free(merge_binders);
         if (merge_binders.len == 0 and self.view.bodies.pattern(decl.pattern).data == .assign) {
@@ -61248,7 +61991,7 @@ const BodyContext = struct {
     ) Allocator.Error!?LowerStep {
         switch (self.view.bodies.expr(expr_id).data) {
             .if_, .match_, .for_ => {},
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .hosted_lambda, .run_low_level => return null,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .hosted_lambda, .run_low_level => return null,
         }
 
         task.expanded_merge_binders = try self.stateMergeBinders(expr_id);
@@ -61459,7 +62202,7 @@ const BodyContext = struct {
                 // information but has no runtime value to bind.
                 .anno_only => false,
                 .pending => Common.invariant("pending checked declaration reached Monotype runtime statement filter"),
-                .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .break_, .return_, .for_, .hosted_lambda, .run_low_level => !self.hoistedBindingRestored(decl.pattern) and
+                .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => !self.hoistedBindingRestored(decl.pattern) and
                     !self.view.compile_time_roots.validationResolvedByPattern(decl.pattern),
             },
             .var_,
@@ -62071,6 +62814,7 @@ const BodyContext = struct {
             },
             .tag => |tag| for (tag.args) |arg| try pending.append(gpa, .{ .expr = arg }),
             .nominal => |nominal| try pending.append(gpa, .{ .expr = nominal.backing_expr }),
+            .row_coerce => |coerce| try pending.append(gpa, .{ .expr = coerce.value }),
             .binop => |binop| {
                 try pending.append(gpa, .{ .expr = binop.lhs });
                 try pending.append(gpa, .{ .expr = binop.rhs });
@@ -62558,7 +63302,7 @@ const BodyContext = struct {
         if (!self.view.bodies.patternBinder(binder).reassignable) return false;
         const captures = switch (self.view.bodies.expr(expr).data) {
             .closure => |closure| closure.captures,
-            .lambda, .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return false,
+            .lambda, .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => return false,
         };
         for (captures) |capture| {
             if (checkedCaptureBinder(self.view, capture.pattern) == binder) return true;
@@ -62722,7 +63466,7 @@ const BodyContext = struct {
         if (self.view.bodies.patternBinder(pattern.data.assign).is_scheme_alias) return true;
         return switch (self.view.bodies.expr(expr_id).data) {
             .lambda, .closure => true,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => false,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => false,
         };
     }
 
@@ -64259,6 +65003,7 @@ test "queued specialization skips a body claimed immediately before dispatch" {
     builder.post_check_executor = null;
     builder.pending_spec_jobs = .empty;
     defer builder.pending_spec_jobs.deinit(allocator);
+    builder.discovery_specs = .empty;
     builder.next_spec_dispatch_index = 0;
     builder.next_spec_accept_index = 0;
     builder.counters = null;
@@ -66084,7 +66829,7 @@ fn checkedLambdaExprIdForConstFn(view: ModuleView, fn_def: anytype) checked.Chec
             break :blk switch (expr.data) {
                 .lambda => expr_id,
                 .closure => |closure| closure.lambda,
-                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("stored nested function site did not point at a lambda or closure"),
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("stored nested function site did not point at a lambda or closure"),
             };
         },
         .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => Common.invariant("capturing stored function must reference a checked nested function"),
@@ -66231,7 +66976,7 @@ fn dispatchPlanIdForRuntimeExpr(view: ModuleView, expr_id: checked.CheckedExprId
     const plan_id = switch (expr.data) {
         .dispatch_call => |maybe| maybe orelse Common.invariant("stored serialization dispatch expression had no dispatch plan"),
         .type_dispatch_call => |maybe| maybe orelse Common.invariant("stored serialization type dispatch expression had no dispatch plan"),
-        .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .interpolation, .structural_eq, .structural_hash, .method_eq, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("stored serialization runtime function did not reference a dispatch expression"),
+        .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .interpolation, .structural_eq, .structural_hash, .method_eq, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("stored serialization runtime function did not reference a dispatch expression"),
     };
     const plan_raw = @backingInt(plan_id);
     if (plan_raw >= view.static_dispatch_plans.plans.len) Common.invariant("stored serialization dispatch plan is outside plan table");

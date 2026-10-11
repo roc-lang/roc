@@ -78,7 +78,6 @@ pub const Error = Allocator.Error || lir.CheckedPipeline.LowerResourceError || s
     MprotectFailed,
     VirtualProtectFailed,
     InvalidHandle,
-    WindowsSDKNotFound,
     CompilationFailed,
     NoBitcodeModules,
     UnsupportedLlvmTriple,

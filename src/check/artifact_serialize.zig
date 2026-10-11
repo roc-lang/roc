@@ -971,8 +971,8 @@ test "SerializedSlice.serialize: padding-free elements are iovec'd verbatim (no 
     try pod_hdr.items.serialize(pod_data[0..], aa, &pod_writer);
     try testing.expectEqual(pod_before, pod_writer.allocated_memory.items.len);
 
-    // A padded element type (1-byte field + 8-byte field → inter-field gap) DOES need a
-    // zeroed copy, so the copy path registers exactly one buffer.
+    // Padded elements also remain borrowed: their canonicalization is deferred
+    // to destination writes, without a full-column owned buffer.
     const Padded = struct { a: u8, b: u64 };
     const PaddedHolder = extern struct { items: SerializedSlice(Padded) = .{} };
     var padded_writer = CompactWriter.init();
@@ -980,7 +980,7 @@ test "SerializedSlice.serialize: padding-free elements are iovec'd verbatim (no 
     const padded_data = [_]Padded{ .{ .a = 1, .b = 2 }, .{ .a = 3, .b = 4 } };
     const padded_before = padded_writer.allocated_memory.items.len;
     try padded_hdr.items.serialize(padded_data[0..], aa, &padded_writer);
-    try testing.expectEqual(padded_before + 1, padded_writer.allocated_memory.items.len);
+    try testing.expectEqual(padded_before, padded_writer.allocated_memory.items.len);
 }
 
 fn serializeHolderToBuffer(

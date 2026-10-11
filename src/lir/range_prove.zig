@@ -100,7 +100,10 @@ const query_visit_cap: usize = 64;
 pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!void {
     var analysis = BodyClone.AnalysisScratch.init(store.allocator);
     defer analysis.deinit();
-    var pass = try Pass.init(store, layouts, store.allocator, &analysis);
+    var joins = BodyClone.JoinParamIndex.init(store.allocator);
+    defer joins.deinit();
+    joins.next_join_point = BodyClone.firstFreshJoinPoint(store);
+    var pass = try Pass.init(store, layouts, store.allocator, &analysis, &joins);
     defer pass.deinit();
 
     const proc_count = store.procSpecCount();
@@ -114,12 +117,18 @@ pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!voi
 pub fn runProc(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch_allocator: Allocator) ResourceError!void {
     var analysis = BodyClone.AnalysisScratch.init(scratch_allocator);
     defer analysis.deinit();
-    try runProcWithScratch(store, layouts, proc_id, scratch_allocator, &analysis);
+    var joins = BodyClone.JoinParamIndex.init(scratch_allocator);
+    defer joins.deinit();
+    joins.next_join_point = BodyClone.firstFreshJoinPoint(store);
+    try runProcWithScratch(store, layouts, proc_id, scratch_allocator, &analysis, &joins);
 }
 
 /// Retain counting and traversal capacity across procedures and proof rounds.
-pub fn runProcWithScratch(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch_allocator: Allocator, analysis: *BodyClone.AnalysisScratch) ResourceError!void {
-    var pass = try Pass.init(store, layouts, scratch_allocator, analysis);
+/// Joins split by Bool-flag threading take their identities from `joins`,
+/// which the caller starts above every join id in the store: a join nested in
+/// a body the prover never enters still occupies its id.
+pub fn runProcWithScratch(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch_allocator: Allocator, analysis: *BodyClone.AnalysisScratch, joins: *BodyClone.JoinParamIndex) ResourceError!void {
+    var pass = try Pass.init(store, layouts, scratch_allocator, analysis, joins);
     defer pass.deinit();
     try pass.transformProc(proc_id);
 }
@@ -252,6 +261,86 @@ test "range prove retargets jumps inside unreached join bodies when threading a 
     }
     try testing.expect(!join_ids.contains(bool_join));
     for (jump_targets.items) |target| try testing.expect(join_ids.contains(target));
+}
+
+test "range prove gives threaded Bool joins identities unused by joins in unreached bodies" {
+    const testing = std.testing;
+    var store = LirStore.init(testing.allocator);
+    defer store.deinit();
+    var layouts = try layout_mod.Store.init(testing.allocator, .u64);
+    defer layouts.deinit();
+    const flag = try store.addLocal(.{ .layout_idx = .bool });
+    const result = try store.addLocal(.{ .layout_idx = .u64 });
+    var fixture_join_ids = BodyClone.JoinParamIndex.init(testing.allocator);
+    defer fixture_join_ids.deinit();
+    const bool_join = fixture_join_ids.freshJoinPoint();
+    const unreached_join = fixture_join_ids.freshJoinPoint();
+    // The highest id lives where the prescan never looks: inside the body of
+    // a join nothing jumps to. The split joins must not reuse it.
+    const nested_join = fixture_join_ids.freshJoinPoint();
+
+    // join 0(flag) = switch flag { 1 => ret, _ => ret }
+    const ret_true = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+    const ret_false = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+    const bool_body = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = flag,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = ret_true }}),
+        .default_branch = ret_false,
+    } }, .test_fixture);
+    // join 1() = (join 2() = ret in jump 0), with no jump to join 1.
+    const nested_body = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+    const nested_remainder = try store.addCFStmt(.{ .jump = .{ .target = bool_join } }, .test_fixture);
+    const nested = try store.addCFStmt(.{ .join = .{
+        .id = nested_join,
+        .params = try store.addLocalSpan(&.{}),
+        .body = nested_body,
+        .remainder = nested_remainder,
+    } }, .test_fixture);
+    const reached_jump = try store.addCFStmt(.{ .jump = .{ .target = bool_join } }, .test_fixture);
+    const unreached = try store.addCFStmt(.{ .join = .{
+        .id = unreached_join,
+        .params = try store.addLocalSpan(&.{}),
+        .body = nested,
+        .remainder = reached_jump,
+    } }, .test_fixture);
+    const set_result = try store.addCFStmt(.{ .assign_literal = .{
+        .target = result,
+        .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } },
+        .next = unreached,
+    } }, .test_fixture);
+    const body = try store.addCFStmt(.{ .join = .{
+        .id = bool_join,
+        .params = try store.addLocalSpan(&.{flag}),
+        .body = bool_body,
+        .remainder = set_result,
+    } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .identity = LIR.ProcIdentity.forTest(0),
+        .name = store.freshSyntheticSymbol(),
+        .args = try store.addLocalSpan(&.{flag}),
+        .body = body,
+        .ret_layout = .u64,
+    }, .none);
+
+    var scratch = std.heap.ArenaAllocator.init(testing.allocator);
+    defer scratch.deinit();
+    try runProc(&store, &layouts, proc, scratch.allocator());
+
+    // The bool join was split, and every join in the procedure, entered or
+    // not, has its own identity.
+    var join_ids = collections.DenseMap(LIR.JoinPointId, CFStmtId).init(testing.allocator);
+    defer join_ids.deinit();
+    var walk = try BodyClone.ReachableStmts.initWithAllocator(&store, store.getProcSpec(proc).body.?, testing.allocator);
+    defer walk.deinit();
+    while (try walk.next()) |stmt| {
+        const cf = store.getCFStmt(stmt);
+        if (cf != .join) continue;
+        const entry = try join_ids.getOrPut(cf.join.id);
+        if (entry.found_existing) try testing.expectEqual(entry.value_ptr.*, stmt);
+        entry.value_ptr.* = stmt;
+    }
+    try testing.expect(!join_ids.contains(bool_join));
+    try testing.expect(join_ids.contains(nested_join));
 }
 
 /// One symbolic value. A node is either a root (its own `root`, carrying
@@ -941,7 +1030,6 @@ const Pass = struct {
     /// persisted new bounds, so a failed invariant can tell whether the
     /// facts have grown since it failed.
     progress_epoch: u32,
-    max_join_id: u32,
     scratch: std.ArrayList(CFStmtId),
     /// Reachable statements and predecessors for the loop-cycle scans.
     loop_scan: LoopScan,
@@ -1001,8 +1089,10 @@ const Pass = struct {
     last_claim: ?ProofClaim,
     read_counts: ?BodyClone.ReadCounts,
     analysis: *BodyClone.AnalysisScratch,
+    /// Identity source for the joins Bool-flag threading splits off.
+    joins: *BodyClone.JoinParamIndex,
 
-    fn init(store: *LirStore, layouts: *const layout_mod.Store, allocator: Allocator, analysis: *BodyClone.AnalysisScratch) ResourceError!Pass {
+    fn init(store: *LirStore, layouts: *const layout_mod.Store, allocator: Allocator, analysis: *BodyClone.AnalysisScratch, joins: *BodyClone.JoinParamIndex) ResourceError!Pass {
         const stable_scratch = try allocator.create(LoopFacts);
         errdefer allocator.destroy(stable_scratch);
         stable_scratch.* = .{};
@@ -1080,7 +1170,6 @@ const Pass = struct {
             .live_pending = false,
             .deferred_rewrites = false,
             .progress_epoch = 0,
-            .max_join_id = 0,
             .scratch = .empty,
             .loop_scan = LoopScan.init(allocator),
             .query_best = collections.DenseMap(NodeId, QueryBest).init(allocator),
@@ -1106,6 +1195,7 @@ const Pass = struct {
             .last_claim = null,
             .read_counts = null,
             .analysis = analysis,
+            .joins = joins,
         };
     }
 
@@ -1227,7 +1317,6 @@ const Pass = struct {
         self.back_jumps.clearRetainingCapacity();
         self.len_roots.clearRetainingCapacity();
         self.value_roots.clearRetainingCapacity();
-        self.max_join_id = 0;
         self.scratch.clearRetainingCapacity();
         self.proof_records.clearRetainingCapacity();
         self.proof_facts.clearRetainingCapacity();
@@ -2116,9 +2205,6 @@ const Pass = struct {
                 .join => |s| {
                     try self.join_stmts.put(s.id, current);
                     try self.joins_in_order.append(self.allocator, current);
-                    if (@backingInt(s.id) + 1 > self.max_join_id) {
-                        self.max_join_id = @backingInt(s.id) + 1;
-                    }
                     try self.edgeTo(s.remainder);
                     // The body is only entered through jumps, so it is only
                     // scanned once a reachable jump to it appears. Scanning it
@@ -4288,9 +4374,8 @@ const Pass = struct {
                 structural_jumps_ready = true;
             }
 
-            const true_id: JoinPointId = @fromBackingInt(@intCast(self.max_join_id));
-            const false_id: JoinPointId = @fromBackingInt(@intCast(self.max_join_id + 1));
-            self.max_join_id += 2;
+            const true_id = self.joins.freshJoinPoint();
+            const false_id = self.joins.freshJoinPoint();
 
             const empty_params = try self.store.addLocalSpan(&.{});
             const join_origin = self.store.stmtOrigin(join_stmt);

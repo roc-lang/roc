@@ -424,7 +424,7 @@ expect fizz_buzz(1) == "other"
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 514)
+				(e-call (constraint-fn-var 507)
 					(e-lookup-local
 						(p-assign (ident "identity")))
 					(e-num (value "42"))))
@@ -433,7 +433,7 @@ expect fizz_buzz(1) == "other"
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 536)
+				(e-call (constraint-fn-var 522)
 					(e-lookup-local
 						(p-assign (ident "sign_label")))
 					(e-num (value "-1"))))
@@ -443,7 +443,7 @@ expect fizz_buzz(1) == "other"
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 565)
+				(e-call (constraint-fn-var 544)
 					(e-lookup-local
 						(p-assign (ident "sign_label")))
 					(e-num (value "1"))))
@@ -453,7 +453,7 @@ expect fizz_buzz(1) == "other"
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 591)
+				(e-call (constraint-fn-var 563)
 					(e-lookup-local
 						(p-assign (ident "fizz_buzz")))
 					(e-num (value "15"))))
@@ -463,7 +463,7 @@ expect fizz_buzz(1) == "other"
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 617)
+				(e-call (constraint-fn-var 582)
 					(e-lookup-local
 						(p-assign (ident "fizz_buzz")))
 					(e-num (value "3"))))
@@ -473,7 +473,7 @@ expect fizz_buzz(1) == "other"
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 640)
+				(e-call (constraint-fn-var 598)
 					(e-lookup-local
 						(p-assign (ident "fizz_buzz")))
 					(e-num (value "5"))))
@@ -483,7 +483,7 @@ expect fizz_buzz(1) == "other"
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 663)
+				(e-call (constraint-fn-var 614)
 					(e-lookup-local
 						(p-assign (ident "fizz_buzz")))
 					(e-num (value "1"))))

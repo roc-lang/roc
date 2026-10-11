@@ -172,7 +172,6 @@ const LlvmError = Allocator.Error || std.DynLib.Error || error{
     ModuleLinkFailed,
     UnsupportedLowLevel,
     UnsupportedTarget,
-    WindowsSDKNotFound,
 };
 
 fn BackendError(comptime backend_kind: Backend) type {
