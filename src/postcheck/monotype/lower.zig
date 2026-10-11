@@ -3961,6 +3961,26 @@ const SpecJobTaskBuffers = struct {
 
 /// Caller-owned root task storage lets unordered executor completion be
 /// validated before any ordered coordinator commit begins.
+/// One template root's function type, sealed in its lane's workspace epoch.
+const RootTypeShard = struct {
+    worker_id: SpecJobWorkerId,
+    commit_domain: *SpecJobCommitDomain,
+    store_epoch: SpecJobStoreEpoch,
+    fn_ty: Type.TypeId,
+};
+
+const RootTypeTaskContext = struct {
+    inputs: *const SpecJobWorkerInputs,
+    source_module: checked.ModuleId,
+    template: names.ProcTemplate,
+    checked_ty: checked.CheckedTypeId,
+    request_index: usize,
+    shard: ?RootTypeShard = null,
+    failed: bool = false,
+    completed: bool = false,
+    worker_work_ns: u64 = 0,
+};
+
 const ProcedureRootTaskContext = struct {
     source_module: checked.ModuleId,
     inputs: *const SpecJobWorkerInputs,
@@ -5339,12 +5359,17 @@ const Builder = struct {
         return moduleDigestFromId(nominal.owner_module);
     }
 
-    fn lowerRoot(self: *Builder, request: checked.RootRequest, source_module: checked.ModuleId) Allocator.Error!void {
+    fn lowerRoot(
+        self: *Builder,
+        request: checked.RootRequest,
+        source_module: checked.ModuleId,
+        fn_ty_slot: *?Type.TypeId,
+    ) Allocator.Error!void {
         const source_view = self.moduleForId(source_module);
         const def = if (request.procedure_binding) |binding|
             try self.lowerProcedureBindingRoot(request, binding, source_view)
         else if (request.procedure_template) |template|
-            try self.lowerTemplate(template, source_view, request.checked_type, request.root_evidence)
+            try self.lowerTemplate(template, source_view, request.checked_type, request.root_evidence, fn_ty_slot)
         else if (request.procedure_use) |procedure|
             try self.lowerProcedureUseRoot(request, procedure, source_module)
         else
@@ -5359,6 +5384,15 @@ const Builder = struct {
         if (source_modules.len != 0 and source_modules.len != requests.len) {
             Common.invariant("root source module count differs from explicit request count");
         }
+        // A template root's function type is a function of its checked type
+        // alone. Compile-time roots reach `lowerTemplate` twice, so each
+        // request lowers its type once, and on the lanes when there are any.
+        const fn_tys = try self.allocator.alloc(?Type.TypeId, requests.len);
+        defer self.allocator.free(fn_tys);
+        @memset(fn_tys, null);
+        if (self.post_check_executor) |executor| {
+            if (executor.worker_count > 1) try self.lowerTemplateRootTypes(executor, requests, source_modules, fn_tys);
+        }
         if (self.comptime_value_reads) {
             for (requests, 0..) |request, i| {
                 if (request.abi != .compile_time) continue;
@@ -5368,7 +5402,7 @@ const Builder = struct {
                 const source_view = self.moduleForId(source_module);
                 const template = request.procedure_template orelse
                     Common.invariant("shared compile-time root lacked its declared entry template");
-                const def = try self.lowerTemplate(template, source_view, request.checked_type, request.root_evidence);
+                const def = try self.lowerTemplate(template, source_view, request.checked_type, request.root_evidence, &fn_tys[i]);
                 const key = EntryRoot{ .module = source_module, .root = root_id };
                 const entry = try self.declared_comptime_root_functions.getOrPut(key);
                 const fn_id = self.defFnId(def);
@@ -5379,17 +5413,17 @@ const Builder = struct {
             }
         }
         const executor = self.post_check_executor orelse {
-            for (requests, 0..) |request, i| try self.lowerRoot(request, self.rootSourceModule(source_modules, i));
+            for (requests, 0..) |request, i| try self.lowerRoot(request, self.rootSourceModule(source_modules, i), &fn_tys[i]);
             return;
         };
         if (executor.worker_count <= 1) {
-            for (requests, 0..) |request, i| try self.lowerRoot(request, self.rootSourceModule(source_modules, i));
+            for (requests, 0..) |request, i| try self.lowerRoot(request, self.rootSourceModule(source_modules, i), &fn_tys[i]);
             return;
         }
         var index: usize = 0;
         while (index < requests.len) {
             if (requests[index].procedure_use == null) {
-                try self.lowerRoot(requests[index], self.rootSourceModule(source_modules, index));
+                try self.lowerRoot(requests[index], self.rootSourceModule(source_modules, index), &fn_tys[index]);
                 index += 1;
                 continue;
             }
@@ -5400,6 +5434,207 @@ const Builder = struct {
             {}
             try self.lowerProcedureRootBatch(executor, requests[start..index], if (source_modules.len == 0) &.{} else source_modules[start..index]);
         }
+    }
+
+    /// Whether `lowerIsolatedRoots` lowers `request` through `lowerTemplate`
+    /// when lanes are available: a procedure-use root lowers in a root batch
+    /// instead, and a binding root through its binding.
+    fn rootLowersTemplate(self: *const Builder, request: checked.RootRequest) bool {
+        if (request.procedure_template == null) return false;
+        if (self.comptime_value_reads and request.abi == .compile_time) return true;
+        return request.procedure_binding == null and request.procedure_use == null;
+    }
+
+    /// Lower every template root's function type on the lanes, then relocate
+    /// each one into the program store in request order. Each lane seals its
+    /// types into its own cumulative workspace, so the relocations absorb lane
+    /// epochs in the order each lane produced them.
+    fn lowerTemplateRootTypes(
+        self: *Builder,
+        executor: base.post_check_task_executor.Executor,
+        requests: []const checked.RootRequest,
+        source_modules: []const checked.ModuleId,
+        fn_tys: []?Type.TypeId,
+    ) Allocator.Error!void {
+        var task_count: usize = 0;
+        for (requests) |request| {
+            if (self.rootLowersTemplate(request)) task_count += 1;
+        }
+        if (task_count == 0) return;
+        const contexts = try self.allocator.alloc(RootTypeTaskContext, task_count);
+        defer self.allocator.free(contexts);
+        const tasks = try self.allocator.alloc(base.post_check_task_executor.Task, task_count);
+        defer self.allocator.free(tasks);
+        const completions = try self.allocator.alloc(base.post_check_task_executor.Completion, task_count);
+        defer self.allocator.free(completions);
+        const snapshot = try self.captureSpecJobInputs();
+        const inputs = SpecJobWorkerInputs{
+            .run_id = self.spec_job_run_id,
+            .modules = self.modules,
+            .module_views = self.moduleViews(),
+            .source_file_ids = self.sourceFileIds(),
+            .lowering_module_ids = self.loweringModuleIds(),
+            .snapshot = &snapshot,
+            .proc_debug_names = self.proc_debug_names,
+            .interface_summaries = &self.shared_summaries.?,
+            .interface_summary_end = self.shared_summaries.?.count,
+            .collect_counters = self.counters != null,
+            .collect_diagnostics = self.diagnostics != null,
+            .inline_expects = self.inline_expects,
+            .static_data_literals = self.static_data_literals,
+            .comptime_value_reads = self.comptime_value_reads,
+            .literal_roots = self.literal_roots,
+            .declared_comptime_root_functions = self.borrowed_comptime_root_functions orelse &self.declared_comptime_root_functions,
+            .hosted_catalog = self.hosted_catalog,
+            .current_loc = self.current_loc,
+            .current_region = self.current_region,
+            .timing_std_io = if (self.timing) |timing| timing.std_io else null,
+        };
+        var task_id: usize = 0;
+        for (requests, 0..) |request, index| {
+            if (!self.rootLowersTemplate(request)) continue;
+            contexts[task_id] = .{
+                .inputs = &inputs,
+                .source_module = self.rootSourceModule(source_modules, index),
+                .template = request.procedure_template.?,
+                .checked_ty = request.checked_type,
+                .request_index = index,
+            };
+            tasks[task_id] = .{ .id = task_id, .context = &contexts[task_id], .run = runRootTypeTask };
+            task_id += 1;
+        }
+        defer for (contexts) |*context| {
+            if (context.shard) |*shard| shard.store_epoch.deinit();
+        };
+        var run_error: ?Allocator.Error = null;
+        {
+            var wait_timing_scope = ProcedureTimingScope.begin(self.timing, .parallel_wait);
+            defer wait_timing_scope.end();
+            executor.run(tasks, completions) catch |err| {
+                run_error = err;
+            };
+        }
+        if (self.timing) |timing| {
+            for (contexts) |context| timing.parallel.worker_work_ns +%= context.worker_work_ns;
+        }
+        if (run_error) |err| return err;
+
+        var commit_timing_scope = ParallelCoordinatorTimingScope.begin(self.timing);
+        defer commit_timing_scope.end();
+        for (completions) |completion| {
+            if (completion.id >= contexts.len) Common.compilerBug("post-check executor returned an unknown root type task");
+            const context = &contexts[completion.id];
+            if (context.completed or completion.value != @as(?*anyopaque, @ptrCast(context))) {
+                Common.compilerBug("post-check executor returned an invalid root type completion");
+            }
+            context.completed = true;
+            if (context.shard) |*shard| {
+                if (@backingInt(shard.worker_id) != completion.worker_id) {
+                    Common.compilerBug("post-check executor changed root type worker ownership");
+                }
+            }
+        }
+        for (contexts) |*context| {
+            if (!context.completed) Common.compilerBug("post-check executor omitted a root type completion");
+            if (context.failed) return error.OutOfMemory;
+        }
+        for (contexts) |*context| {
+            const shard = &context.shard.?;
+            const commit_domain = shard.commit_domain;
+            try commit_domain.absorb(&shard.store_epoch);
+            var committed_types = CommittedGraphTypes.relocatedStore(
+                &commit_domain.types,
+                &commit_domain.name_store,
+                &self.program.types,
+                &self.program.names,
+                commit_domain.committedTypeRelocation(self.program),
+            );
+            fn_tys[context.request_index] = try committed_types.commitType(shard.fn_ty);
+            shard.store_epoch.deinit();
+            context.shard = null;
+        }
+    }
+
+    fn runRootTypeTask(
+        opaque_context: *anyopaque,
+        executor_worker: base.post_check_task_executor.Worker,
+    ) ?*anyopaque {
+        const context: *RootTypeTaskContext = @ptrCast(@alignCast(opaque_context));
+        const task_started_ns = if (context.inputs.timing_std_io) |std_io| timingNowNs(std_io) else 0;
+        defer if (context.inputs.timing_std_io) |std_io| {
+            const finished_ns = timingNowNs(std_io);
+            context.worker_work_ns = @intCast(@max(0, finished_ns - task_started_ns));
+        };
+        if (executor_worker.id >= std.math.maxInt(u32)) {
+            Common.compilerBug("post-check executor returned an invalid root type worker id");
+        }
+        const lane = Builder.ensureSpecJobLaneState(executor_worker, context.inputs) catch {
+            context.failed = true;
+            return context;
+        };
+        const builder = Builder.ensureSpecJobWorkerBuilder(&lane.worker, context.inputs) catch {
+            context.failed = true;
+            return context;
+        };
+        builder.current_loc = context.inputs.current_loc;
+        builder.current_region = context.inputs.current_region;
+        builder.spec_job_parallel_callback = true;
+        defer builder.spec_job_parallel_callback = false;
+        context.shard = builder.lowerRootTypeToShard(
+            &lane.worker,
+            &lane.commit_domain,
+            context.source_module,
+            context.template,
+            context.checked_ty,
+        ) catch {
+            context.failed = true;
+            return context;
+        };
+        return context;
+    }
+
+    /// Seal one template root's function type into the lane's workspace and
+    /// hand over the workspace epoch that holds it.
+    fn lowerRootTypeToShard(
+        self: *Builder,
+        worker: *SpecJobWorkerState,
+        commit_domain: *SpecJobCommitDomain,
+        source_module: checked.ModuleId,
+        template_ref: names.ProcTemplate,
+        checked_ty: checked.CheckedTypeId,
+    ) Allocator.Error!RootTypeShard {
+        const workspace = &worker.workspace;
+        const epoch = workspace.beginEpoch(self.program);
+        errdefer workspace.finishEpoch(epoch);
+        const summaries_before = workspace.interface_summaries.entries.items.len;
+        const program_types_before = self.program.types.epochBoundary();
+        const graph = try self.acquireSpecJobGraph(worker);
+        var body_draft = BodyDraftStore.init(self.allocator);
+        defer body_draft.deinit();
+        body_draft.spec_job_workspace = workspace;
+        body_draft.mutable_graph_names = &workspace.name_store;
+        const saved_graph = self.active_graph;
+        const saved_body_draft = self.active_body_draft;
+        self.active_graph = graph;
+        self.active_body_draft = &body_draft;
+        defer self.active_graph = saved_graph;
+        defer self.active_body_draft = saved_body_draft;
+        const fn_ty = try self.lowerContextFreeSpecializationType(self.moduleForId(source_module), template_ref, checked_ty);
+        if (workspace.interface_summaries.entries.items.len != summaries_before) {
+            Common.invariant("root type lowering produced an interface summary");
+        }
+        if (!std.meta.eql(program_types_before, self.program.types.epochBoundary())) {
+            Common.compilerBug("parallel root type lowering mutated the coordinator type store");
+        }
+        var store_epoch = try workspace.captureStoreEpoch(epoch);
+        errdefer store_epoch.deinit();
+        workspace.finishEpoch(epoch);
+        return .{
+            .worker_id = worker.worker_id,
+            .commit_domain = commit_domain,
+            .store_epoch = store_epoch,
+            .fn_ty = fn_ty,
+        };
     }
 
     fn captureSpecJobInputs(self: *Builder) Allocator.Error!WorkerInputs.Snapshot {
@@ -6151,12 +6386,17 @@ const Builder = struct {
         source_ty_view: ModuleView,
         source_fn_ty: checked.CheckedTypeId,
         root_evidence: ?checked.CheckedEvidenceSpan,
+        fn_ty_slot: *?Type.TypeId,
     ) Allocator.Error!Ast.DefId {
-        const fn_ty = try self.lowerContextFreeSpecializationType(
-            source_ty_view,
-            template_ref,
-            source_fn_ty,
-        );
+        const fn_ty = fn_ty_slot.* orelse lowered: {
+            const lowered = try self.lowerContextFreeSpecializationType(
+                source_ty_view,
+                template_ref,
+                source_fn_ty,
+            );
+            fn_ty_slot.* = lowered;
+            break :lowered lowered;
+        };
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const fn_template = self.fnDefForTemplate(
             view,
