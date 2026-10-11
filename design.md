@@ -5695,7 +5695,17 @@ the same operand record and leave the erroneous iterable expression in
 recovery, so the checker mints the plan's callable shapes without attaching
 constraints, marks both callable classes rejected, and records the required
 plan. CheckedModule construction consumes those rejection markers to seal
-both calls with explicit `checked_error` resolutions.
+both calls with explicit `checked_error` resolutions. An iterable can also be
+rejected after its loop was checked (`for c in "a"..="z" { echo!(c) }` decides
+the bounds are `Str`, which has no `range_inclusive_to`, only once the body
+relates the item type), when the loop's `iter` and `next` plans were already
+resolved against its type. The checker records every loop whose iterable was
+not erroneous when the loop was checked (`late_rejectable_for_loops`), and the
+erroneous-value sweep retires each one whose iterable has become erroneous: a
+statement loop becomes an expression statement of the iterable's runtime
+error, and a `for` expression becomes a runtime error that evaluates its
+iterable, so the loop binds nothing and never iterates, exactly as when the
+rejection was known while the loop was checked.
 
 A retired expression still evaluates strictly. When an expression is retired
 because an operand is erroneous (here or by the error-typed-value rule), the
