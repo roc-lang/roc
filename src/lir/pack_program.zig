@@ -329,8 +329,8 @@ pub fn literalConvertingProcs(allocator: Allocator, store: *const LirStore) Allo
             if (seen[@backingInt(stmt_id)]) continue;
             seen[@backingInt(stmt_id)] = true;
             try visited.append(allocator, stmt_id);
-            const stmt = store.getCFStmt(stmt_id);
-            if (stmt == .crash and stmt.crash.literal_rejection != null) {
+            const stmt = store.getCFStmtImmediate(stmt_id);
+            if (stmt.* == .crash and stmt.crash.literal_rejection != null) {
                 result.* = true;
                 break;
             }

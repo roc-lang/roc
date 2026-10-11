@@ -1221,8 +1221,8 @@ fn computeEmissionContainsRefcounted(
     defer stack.deinit(allocator);
     for (0..store.cfStmtCount()) |stmt_index| {
         const stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(stmt_index))));
-        const stmt = store.getCFStmt(stmt_id);
-        if (stmt == .assign_low_level and stmt.assign_low_level.op == .erased_capture_load) {
+        const stmt = store.getCFStmtImmediate(stmt_id);
+        if (stmt.* == .assign_low_level and stmt.assign_low_level.op == .erased_capture_load) {
             const target = stmt.assign_low_level.target;
             const target_layout = store.getLocal(target).layout_idx;
             if (try arc_dismantle.layoutMayContainBoxyDynamic(allocator, layouts, target_layout, &visited, &stack)) {

@@ -123,8 +123,8 @@ pub const AnalysisScratch = struct {
 pub fn firstFreshJoinPoint(store: *const LirStore) u32 {
     var next: u32 = 0;
     for (0..store.cfStmtCount()) |index| {
-        const stmt = store.getCFStmt(@fromBackingInt(@intCast(index)));
-        if (stmt != .join) continue;
+        const stmt = store.getCFStmtImmediate(@fromBackingInt(@intCast(index)));
+        if (stmt.* != .join) continue;
         const raw = @backingInt(stmt.join.id);
         if (raw == std.math.maxInt(u32)) base.invariant("{s}", .{"join-point id space exhausted"});
         next = @max(next, raw + 1);
@@ -216,8 +216,8 @@ fn forwardLocalAliasChainImpl(
     var value = source;
     var current = first_stmt;
     while (true) {
-        const stmt_node = store.getCFStmt(current);
-        if (stmt_node != .assign_ref) return .{ .value = value, .next = current };
+        const stmt_node = store.getCFStmtImmediate(current);
+        if (stmt_node.* != .assign_ref) return .{ .value = value, .next = current };
         const stmt = stmt_node.assign_ref;
         if (stmt.op == .local) {
             const local = stmt.op.local;

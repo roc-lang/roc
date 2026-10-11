@@ -316,18 +316,18 @@ fn forwardsToJoin(
     target: LIR.LocalId,
     join_id: LIR.JoinPointId,
 ) bool {
-    const first = store.getCFStmt(body);
-    if (first == .assign_ref) {
+    const first = store.getCFStmtImmediate(body);
+    if (first.* == .assign_ref) {
         const assign = first.assign_ref;
         if (assign.target != target or assign.op != .local or assign.op.local != source) return false;
-        const terminal = store.getCFStmt(assign.next);
-        return terminal == .jump and terminal.jump.target == join_id;
+        const terminal = store.getCFStmtImmediate(assign.next);
+        return terminal.* == .jump and terminal.jump.target == join_id;
     }
-    if (first == .set_local) {
+    if (first.* == .set_local) {
         const set = first.set_local;
         if (set.target != target or set.value != source or set.mode != .initialize_join_param) return false;
-        const terminal = store.getCFStmt(set.next);
-        return terminal == .jump and terminal.jump.target == join_id;
+        const terminal = store.getCFStmtImmediate(set.next);
+        return terminal.* == .jump and terminal.jump.target == join_id;
     }
     return false;
 }

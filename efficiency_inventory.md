@@ -247,6 +247,8 @@ stages it touches; the instruction-count effect is reported in "Results".
     677 sites across the LIR passes, Boxy lowering, solved-to-LIR lowering,
     and their tests. Switch captures still copy their payloads, so a prong
     that grows the store reads nothing through the pointer.
+    Read-only helpers over a `*const LirStore` also bind statement locals by
+    pointer (23 more sites).
 
 ## Findings from profiling
 

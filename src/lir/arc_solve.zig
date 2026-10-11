@@ -1326,8 +1326,8 @@ fn computeOutcomeRestitution(
         var returned_local: ?LIR.LocalId = null;
         var return_shape_valid = true;
         for (proc_stmts) |stmt_id| {
-            const stmt = store.getCFStmt(stmt_id);
-            if (stmt != .ret) continue;
+            const stmt = store.getCFStmtImmediate(stmt_id);
+            if (stmt.* != .ret) continue;
             const local = stmt.ret.value;
             if (returned_local) |expected| {
                 if (local != expected) {
@@ -1372,8 +1372,8 @@ fn computeOutcomeRestitution(
         var joins = collections.DenseMap(LIR.JoinPointId, LIR.CFStmtId).init(allocator);
         defer joins.deinit();
         for (proc_stmts) |stmt_id| {
-            const stmt = store.getCFStmt(stmt_id);
-            if (stmt != .join) continue;
+            const stmt = store.getCFStmtImmediate(stmt_id);
+            if (stmt.* != .join) continue;
             const join_point = stmt.join;
             const entry = try joins.getOrPut(join_point.id);
             if (entry.found_existing) solveInvariant("ARC outcome solve saw duplicate join ids");
@@ -1407,9 +1407,9 @@ fn computeOutcomeRestitution(
                 if (seen_entry.found_existing) continue;
                 if (@import("builtin").mode == .debug) outcome_solver_iterations += 1;
                 const current: LIR.CFStmtId = @fromBackingInt(@intCast(walk.stmt));
-                const stmt = store.getCFStmt(current);
+                const stmt = store.getCFStmtImmediate(current);
                 var next_state = walk;
-                if (outcomeBindingTarget(stmt)) |target| {
+                if (outcomeBindingTarget(stmt.*)) |target| {
                     if (target == ret_local) next_state.discriminant = no_local;
                 }
 
@@ -1421,7 +1421,7 @@ fn computeOutcomeRestitution(
                     }
                 }.go;
 
-                switch (stmt) {
+                switch (stmt.*) {
                     inline .assign_ref, .init_uninitialized => |assign| {
                         if (assign.target == active_param) {
                             valid = false;
@@ -3282,10 +3282,10 @@ pub fn computePinnedProcs(
     defer reachable.deinit(allocator);
     var iter = reachable.iterator(.{});
     while (iter.next()) |stmt_index| {
-        const stmt = store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
-        if (stmt == .assign_literal and stmt.assign_literal.value == .proc_ref) {
+        const stmt = store.getCFStmtImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
+        if (stmt.* == .assign_literal and stmt.assign_literal.value == .proc_ref) {
             pinned.set(@backingInt(stmt.assign_literal.value.proc_ref));
-        } else if (stmt == .assign_packed_erased_fn) {
+        } else if (stmt.* == .assign_packed_erased_fn) {
             pinned.set(@backingInt(stmt.assign_packed_erased_fn.proc));
         }
     }
@@ -4744,11 +4744,11 @@ const UniquenessStructure = struct {
             for (proc_stmts[proc_index].items) |stmt_id| {
                 const raw = @backingInt(stmt_id);
                 if (stmt_owner[raw] == no_local) stmt_owner[raw] = @intCast(proc_index) else partition.unite(@intCast(proc_index), stmt_owner[raw]);
-                const stmt = store.getCFStmt(stmt_id);
-                body_clone.forEachStmtRead(store, stmt, &partition, UniquenessPartition.local);
-                body_clone.forEachStmtDef(store, stmt, &partition, UniquenessPartition.local);
-                if (stmt == .ret) try returns[proc_index].append(arena, stmt.ret.value);
-                if (stmt == .assign_call) try callers[@backingInt(stmt.assign_call.proc)].append(arena, @intCast(proc_index));
+                const stmt = store.getCFStmtImmediate(stmt_id);
+                body_clone.forEachStmtRead(store, stmt.*, &partition, UniquenessPartition.local);
+                body_clone.forEachStmtDef(store, stmt.*, &partition, UniquenessPartition.local);
+                if (stmt.* == .ret) try returns[proc_index].append(arena, stmt.ret.value);
+                if (stmt.* == .assign_call) try callers[@backingInt(stmt.assign_call.proc)].append(arena, @intCast(proc_index));
             }
         }
         const proc_component = try arena.alloc(u32, proc_count);
@@ -5290,8 +5290,8 @@ fn settleUniquenessOracle(
         const body = proc.body orelse continue;
         try collectProcStatements(allocator, store, body, &proc_stmts[proc_index]);
         for (proc_stmts[proc_index].items) |stmt| {
-            const node = store.getCFStmt(stmt);
-            if (node == .ret) try returns[proc_index].append(allocator, node.ret.value);
+            const node = store.getCFStmtImmediate(stmt);
+            if (node.* == .ret) try returns[proc_index].append(allocator, node.ret.value);
         }
     }
 
@@ -5398,8 +5398,8 @@ fn settleUniquenessOracle(
         @memset(seed_scratch, 0);
         for (proc_stmts, 0..) |stmts, proc_index| {
             for (stmts.items) |stmt| {
-                const node = store.getCFStmt(stmt);
-                if (node == .assign_low_level) {
+                const node = store.getCFStmtImmediate(stmt);
+                if (node.* == .assign_low_level) {
                     const assign = node.assign_low_level;
                     const rc_effect = if (!consume_dead_boxes and assign.op == .box_unbox)
                         assign.op.arcBorrowedResultVariant().?.rcEffect()
@@ -5415,7 +5415,7 @@ fn settleUniquenessOracle(
                         if (!uniqueness.born_unique.isSet(raw) or uniqueness.destroyed.isSet(raw)) continue;
                         seed_scratch[proc_index] |= uniqueness.conds[raw];
                     }
-                } else if (node == .assign_call) {
+                } else if (node.* == .assign_call) {
                     const assign = node.assign_call;
                     const callee_seeds = solution.unique_seed_masks[@backingInt(assign.proc)];
                     if (callee_seeds == 0) continue;

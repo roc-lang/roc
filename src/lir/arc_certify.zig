@@ -410,14 +410,14 @@ fn certifyRcAtomicity(
     defer visible.deinit(allocator);
 
     for (0..store.cfStmtCount()) |stmt_index| {
-        const stmt = store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
-        const checked: struct { value: LIR.LocalId, atomicity: LIR.RcAtomicity } = if (stmt == .incref)
+        const stmt = store.getCFStmtImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
+        const checked: struct { value: LIR.LocalId, atomicity: LIR.RcAtomicity } = if (stmt.* == .incref)
             .{ .value = stmt.incref.value, .atomicity = stmt.incref.atomicity }
-        else if (stmt == .decref)
+        else if (stmt.* == .decref)
             .{ .value = stmt.decref.value, .atomicity = stmt.decref.atomicity }
-        else if (stmt == .decref_if_initialized)
+        else if (stmt.* == .decref_if_initialized)
             .{ .value = stmt.decref_if_initialized.value, .atomicity = stmt.decref_if_initialized.atomicity }
-        else if (stmt == .free)
+        else if (stmt.* == .free)
             .{ .value = stmt.free.value, .atomicity = stmt.free.atomicity }
         else
             continue;
@@ -681,10 +681,10 @@ fn writeFailureContext(
 
     for (0..store.cfStmtCount()) |index| {
         if (!reachable.contains(@fromBackingInt(@intCast(@as(u32, @intCast(index)))))) continue;
-        const stmt = store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
-        var mentions = if (local) |l| stmtMentionsLocal(store, stmt, l) else false;
+        const stmt = store.getCFStmtImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
+        var mentions = if (local) |l| stmtMentionsLocal(store, stmt.*, l) else false;
         if (local) |l| {
-            if (stmt == .join) {
+            if (stmt.* == .join) {
                 const jp = store.getLocalSpan(stmt.join.params);
                 for (0..GuardedList.borrowLen(jp)) |jpi| {
                     if (GuardedList.at(jp, jpi) == l) mentions = true;
@@ -692,7 +692,7 @@ fn writeFailureContext(
             }
         }
         for (extra_locals) |extra| {
-            mentions = mentions or stmtMentionsLocal(store, stmt, extra);
+            mentions = mentions or stmtMentionsLocal(store, stmt.*, extra);
         }
         const structural = false;
         const nearby = if (stmt_id) |focus_stmt| if (index > @backingInt(focus_stmt))
@@ -700,8 +700,8 @@ fn writeFailureContext(
         else
             @backingInt(focus_stmt) - index <= 50 else false;
         if (!mentions and !structural and !nearby) continue;
-        context.append("  stmt {d}: {s}", .{ index, @tagName(stmt) });
-        switch (stmt) {
+        context.append("  stmt {d}: {s}", .{ index, @tagName(stmt.*) });
+        switch (stmt.*) {
             .join => |j| {
                 context.append(" id={d} body={d} remainder={d} params=[", .{
                     @backingInt(j.id), @backingInt(j.body), @backingInt(j.remainder),
@@ -1128,8 +1128,8 @@ const MaybeUninitializedConditions = struct {
 
         for (0..store.cfStmtCount()) |stmt_index| {
             const stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(stmt_index))));
-            const stmt = store.getCFStmt(stmt_id);
-            if (stmt != .join) continue;
+            const stmt = store.getCFStmtImmediate(stmt_id);
+            if (stmt.* != .join) continue;
 
             const params = store.getLocalSpan(stmt.join.maybe_uninitialized_params);
             const conditions = store.getLocalSpan(stmt.join.maybe_uninitialized_conditions);

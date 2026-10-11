@@ -6248,14 +6248,14 @@ const RangeProveCertify = struct {
     /// Verify that the recorded edge is the False arm of the recorded
     /// overflow predicate's Bool switch.
     fn isFalseOverflowEdge(store: *const LirStore, fact: NoOverflowFact) bool {
-        const predicate_stmt = store.getCFStmt(fact.predicate.predicate_stmt);
-        if (std.meta.activeTag(predicate_stmt) != .assign_low_level) return false;
+        const predicate_stmt = store.getCFStmtImmediate(fact.predicate.predicate_stmt);
+        if (std.meta.activeTag(predicate_stmt.*) != .assign_low_level) return false;
         const predicate = predicate_stmt.assign_low_level;
         const entry = CheckedArithmetic.classify(predicate.op) orelse return false;
         if (entry.mode != .overflows or entry.operation != fact.predicate.operation) return false;
 
-        const switch_stmt = store.getCFStmt(fact.switch_stmt);
-        if (std.meta.activeTag(switch_stmt) != .switch_stmt) return false;
+        const switch_stmt = store.getCFStmtImmediate(fact.switch_stmt);
+        if (std.meta.activeTag(switch_stmt.*) != .switch_stmt) return false;
         const bool_switch = switch_stmt.switch_stmt;
         if (bool_switch.cond != predicate.target) return false;
 
