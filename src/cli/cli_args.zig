@@ -1889,6 +1889,31 @@ test "roc test" {
     }
 }
 
+test "roc test --main help matches accepted syntax" {
+    const gpa = testing.allocator;
+    // Regression coverage for https://github.com/roc-lang/roc/issues/12133.
+    {
+        const result = try parse(gpa, testing.io, &.{ "test", "--help" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.help, std.meta.activeTag(result));
+        try testing.expect(std.mem.find(u8, result.help, "--main=<main>") != null);
+        try testing.expect(std.mem.find(u8, result.help, "--main <main>") == null);
+    }
+    {
+        const result = try parse(gpa, testing.io, &.{ "test", "--main=main.roc", "foo.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.test_cmd, std.meta.activeTag(result));
+        try testing.expectEqualStrings("main.roc", result.test_cmd.main.?);
+        try testing.expectEqualStrings("foo.roc", result.test_cmd.path);
+    }
+    {
+        const result = try parse(gpa, testing.io, &.{ "test", "--main", "main.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.problem, std.meta.activeTag(result));
+        try testing.expectEqualStrings("--main", result.problem.missing_flag_value.flag);
+    }
+}
+
 test "roc check" {
     const gpa = testing.allocator;
     {

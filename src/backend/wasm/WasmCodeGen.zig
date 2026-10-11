@@ -748,6 +748,16 @@ fn emitStrConcatLowLevel(self: *Self, args: anytype, unique_args: u64) Allocator
     try self.emitFpOffset(result_offset);
 }
 
+/// Store a U64 argument in a new i64 local. The builtins take the full value;
+/// wrapping it to i32 would silently turn an impossible count into a small one.
+fn emitU64ArgToNewLocal(self: *Self, arg: ProcLocalId) Allocator.Error!u32 {
+    try self.emitProcLocal(arg);
+    if (try self.procLocalValType(arg) == .i32) {
+        self.currentCode().append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
+    }
+    return self.emitSetNewLocal(.i64);
+}
+
 fn emitStrCountedResultCall(
     self: *Self,
     str_ptr: u32,
@@ -760,7 +770,6 @@ fn emitStrCountedResultCall(
     try self.emitFpOffset(result_offset);
     try self.emitRocStrFields(fields);
     try self.emitLocalGet(count);
-    self.currentCode().append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
     if (update_mode) |mode| try self.emitI32Const(mode);
     try self.emitBuiltinCall(kind);
 }
@@ -772,12 +781,7 @@ fn emitStrCountedLowLevel(
     update_mode: ?i32,
 ) Allocator.Error!void {
     const str_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
-    try self.emitProcLocal(GuardedList.at(args, 1));
-    const int_vt = try self.procLocalValType(GuardedList.at(args, 1));
-    if (int_vt == .i64) {
-        self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-    }
-    const int_local = try self.emitSetNewLocal(.i32);
+    const int_local = try self.emitU64ArgToNewLocal(GuardedList.at(args, 1));
     const result_offset = try self.allocStackMemory(12, 4);
     try self.emitStrCountedResultCall(str_local, int_local, result_offset, kind, update_mode);
     try self.emitFpOffset(result_offset);
@@ -11889,16 +11893,10 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .str_repeat => try self.emitStrCountedLowLevel(args, BuiltinSignatures.kindOf(comptime LowLevelBuiltins.strOp(.str_repeat)), null),
         .str_reserve => try self.emitStrCountedLowLevel(args, BuiltinSignatures.kindOf(comptime LowLevelBuiltins.strOp(.str_reserve)), updateModeImmForArg(ll.unique_args, 0)),
         .str_with_capacity => {
-            try self.emitProcLocal(GuardedList.at(args, 0));
-            const int_vt = try self.procLocalValType(GuardedList.at(args, 0));
-            if (int_vt == .i64) {
-                self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-            }
-            const int_local = try self.emitSetNewLocal(.i32);
+            const int_local = try self.emitU64ArgToNewLocal(GuardedList.at(args, 0));
             const result_offset = try self.allocStackMemory(12, 4);
             try self.emitFpOffset(result_offset);
             try self.emitLocalGet(int_local);
-            self.currentCode().append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
             try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.strOp(.str_with_capacity)));
             try self.emitFpOffset(result_offset);
         },
@@ -17566,9 +17564,17 @@ fn generateLLListWithCapacity(self: *Self, args: anytype, ret_layout: layout.Idx
 
     const elem_align = list_abi.elem_align;
 
-    // Generate capacity arg (may be i64 from MonoIR layout; convert to i32 for wasm32)
-    try self.emitProcLocal(GuardedList.at(args, 0));
-    try self.emitConversion(try self.procLocalValType(GuardedList.at(args, 0)), .i32);
+    // Crash on a capacity whose bytes plus header do not fit wasm32's address
+    // space, so the i32 arithmetic below cannot wrap to a smaller allocation.
+    const data_offset = rcAllocationLayout(elem_align, list_abi.elements_refcounted).data_offset;
+    const max_capacity = (std.math.maxInt(u32) - data_offset) / elem_size;
+    const cap64 = try self.emitU64ArgToNewLocal(GuardedList.at(args, 0));
+    try self.emitLocalGet(cap64);
+    try self.emitI64Const(max_capacity);
+    self.currentCode().append(self.allocator, Op.i64_gt_u) catch return error.OutOfMemory;
+    try self.emitCrashIfStackBool(builtins.utils.allocation_too_large_message);
+    try self.emitLocalGet(cap64);
+    self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
     const cap = try self.emitSetNewLocal(.i32);
 
     const new_data = try self.emitI32ConstToNewLocal(0);

@@ -157,6 +157,6 @@ peak-RSS check on a large corpus program rather than assuming.
 - [hoist-consumes-dispatch-evidence.md](hoist-consumes-dispatch-evidence.md)—
   the same "consume the recorded decision instead of re-deriving it"
   cure at the checker boundary.
-- [../big/one-value-semantics-layer.md](../big/one-value-semantics-layer.md)—
+- [#12166](https://github.com/roc-lang/roc/issues/12166)—
   step 3 here needs boxy's erased-callable representation understood;
   that project touches the same ground.

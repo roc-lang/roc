@@ -158,6 +158,34 @@ pub const CacheManager = struct {
         entries_dir: []const u8,
         source_name: []const u8,
     ) void {
+        self.storeEntry(allocator, kind, cache_key, .{ .bytes = data }, data.len, entries_dir, source_name);
+    }
+
+    /// Atomically persist a known-size entry emitted incrementally by its producer.
+    /// The source name is diagnostic context only, as in `storeRawBytesIn`.
+    pub fn storeStream(
+        self: *Self,
+        cache_key: [32]u8,
+        stream: CoreCtx.FileStream,
+        size: usize,
+        entries_dir: []const u8,
+        source_name: []const u8,
+    ) void {
+        self.storeEntry(self.allocator, .checked, cache_key, .{ .stream = stream }, size, entries_dir, source_name);
+    }
+
+    const EntrySource = union(enum) { bytes: []const u8, stream: CoreCtx.FileStream };
+
+    fn storeEntry(
+        self: *Self,
+        allocator: Allocator,
+        kind: Kind,
+        cache_key: [32]u8,
+        source: EntrySource,
+        size: usize,
+        entries_dir: []const u8,
+        source_name: []const u8,
+    ) void {
         if (!self.config.enabled) return;
 
         self.ensureCacheSubdirWith(allocator, cache_key, entries_dir) catch |err| {
@@ -184,21 +212,25 @@ pub const CacheManager = struct {
         };
         defer allocator.free(temp_path);
 
-        self.roc_ctx.writeFile(temp_path, data) catch |err| {
-            self.verboseLog(allocator, "Failed to write {s} cache temp file {s} for {s} ({d} bytes): {}\n", .{ @tagName(kind), temp_path, source_name, data.len, err });
+        const write_result = switch (source) {
+            .bytes => |data| self.roc_ctx.writeFile(temp_path, data),
+            .stream => |stream| self.roc_ctx.writeFileStream(temp_path, stream),
+        };
+        write_result catch |err| {
+            self.verboseLog(allocator, "Failed to write {s} cache temp file {s} for {s} ({d} bytes): {}\n", .{ @tagName(kind), temp_path, source_name, size, err });
             self.removeFailedTempFile(allocator, temp_path);
             self.recordStoreFailureFor(kind);
             return;
         };
 
         self.roc_ctx.rename(temp_path, cache_path) catch |err| {
-            self.verboseLog(allocator, "Failed to rename {s} cache file {s} -> {s} for {s} ({d} bytes): {}\n", .{ @tagName(kind), temp_path, cache_path, source_name, data.len, err });
+            self.verboseLog(allocator, "Failed to rename {s} cache file {s} -> {s} for {s} ({d} bytes): {}\n", .{ @tagName(kind), temp_path, cache_path, source_name, size, err });
             self.removeFailedTempFile(allocator, temp_path);
             self.recordStoreFailureFor(kind);
             return;
         };
 
-        self.recordStoreFor(kind, data.len);
+        self.recordStoreFor(kind, size);
     }
 
     fn removeFailedTempFile(self: *Self, allocator: Allocator, path: []const u8) void {
