@@ -66,7 +66,8 @@ pub const Inventory = struct {
     }
 
     pub fn hasSelection(self: *const Inventory) bool {
-        for (self.plans.values.items) |plan| if (plan.selected()) return true;
+        var plans = self.plans.constIterator();
+        while (plans.next()) |entry| if (entry.value_ptr.*.selected()) return true;
         return false;
     }
 

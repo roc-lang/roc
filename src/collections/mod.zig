@@ -34,6 +34,8 @@ pub const GuardedList = @import("GuardedList.zig");
 pub const IndexedStack = @import("IndexedStack.zig").IndexedStack;
 
 pub const DenseMap = @import("DenseMap.zig").DenseMap;
+/// A direct-indexed map over dense IDs that takes its allocator per call.
+pub const DenseMapUnmanaged = @import("DenseMap.zig").DenseMapUnmanaged;
 pub const RingQueue = @import("RingQueue.zig").RingQueue;
 pub const VersionedDenseMap = @import("VersionedMap.zig").VersionedDenseMap;
 pub const VersionedHashMap = @import("VersionedMap.zig").VersionedHashMap;

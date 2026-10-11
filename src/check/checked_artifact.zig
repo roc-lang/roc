@@ -4109,11 +4109,11 @@ pub const CheckedTypeStore = struct {
     /// leaves unsubstituted (`reserveDistinctSyntheticTypeRoot`), so a
     /// consumer relating an instantiated callable's variables back to the
     /// scheme that quantifies them reads through `identityOrigin`.
-    identity_origins: std.AutoHashMapUnmanaged(CheckedTypeId, CheckedTypeId) = .empty,
+    identity_origins: collections.DenseMapUnmanaged(CheckedTypeId, CheckedTypeId) = .empty,
     /// Build-only set of every variable root filled through the synthetic
     /// path (`fillSyntheticTypeRoot`). Each must declare its origin in
     /// `identity_origins`; `identityOrigin` refuses one that has not.
-    synthetic_variable_roots: std.AutoHashMapUnmanaged(CheckedTypeId, void) = .empty,
+    synthetic_variable_roots: collections.DenseMapUnmanaged(CheckedTypeId, void) = .empty,
     roots: std.ArrayList(CheckedTypeRoot) = .empty,
     schemes: std.ArrayList(CheckedTypeScheme) = .empty,
     /// Serialized probing buckets contain scheme IDs, with zero denoting an
@@ -24165,7 +24165,7 @@ const NestedProcSiteBuilder = struct {
     /// its own body does not bind.
     fn publishRuntimeCaptures(self: *NestedProcSiteBuilder, sites: []NestedProcSite) Allocator.Error![]CheckedCapture {
         const allocator = self.allocator;
-        var site_by_expr = std.AutoHashMapUnmanaged(CheckedExprId, u32){};
+        var site_by_expr = collections.DenseMapUnmanaged(CheckedExprId, u32){};
         defer site_by_expr.deinit(allocator);
         for (sites, 0..) |site, index| {
             const expr_id = site.checked_expr orelse continue;

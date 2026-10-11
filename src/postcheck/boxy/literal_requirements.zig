@@ -5,6 +5,7 @@
 //! Requirements name a literal site and a type term, never a call path.
 
 const std = @import("std");
+const collections = @import("collections");
 const Allocator = std.mem.Allocator;
 
 /// Index of a hash-consed type term in `Terms`.
@@ -105,7 +106,7 @@ pub const Terms = struct {
         self: *Terms,
         root: TermId,
         bindings: []const Binding,
-        memo: *std.AutoHashMapUnmanaged(TermId, TermId),
+        memo: *collections.DenseMapUnmanaged(TermId, TermId),
     ) Allocator.Error!TermId {
         const Frame = struct { term: TermId, args: []TermId, next: usize = 0 };
         var frames: std.ArrayList(Frame) = .empty;
@@ -220,7 +221,7 @@ pub const Abi = struct {
 
 const Worker = struct {
     incoming: std.ArrayList(EdgeId) = .empty,
-    requirements: std.AutoHashMapUnmanaged(RequirementId, void) = .empty,
+    requirements: collections.DenseMapUnmanaged(RequirementId, void) = .empty,
 };
 
 const Edge = struct {
@@ -230,8 +231,8 @@ const Edge = struct {
     bindings_ready: bool = true,
     /// Freeze-environment bindings instantiate runtime literal sites only.
     site_limit: ?u32 = null,
-    memo: std.AutoHashMapUnmanaged(TermId, TermId) = .empty,
-    args: std.AutoHashMapUnmanaged(RequirementId, Source) = .empty,
+    memo: collections.DenseMapUnmanaged(TermId, TermId) = .empty,
+    args: collections.DenseMapUnmanaged(RequirementId, Source) = .empty,
 };
 
 const Pending = struct { edge: EdgeId, requirement: RequirementId };
@@ -249,7 +250,7 @@ pub const Graph = struct {
     pending: std.ArrayList(Pending) = .empty,
     cursor: usize = 0,
     site_count: u32 = 0,
-    observations: std.AutoHashMapUnmanaged(SiteId, void) = .empty,
+    observations: collections.DenseMapUnmanaged(SiteId, void) = .empty,
 
     pub fn init(allocator: Allocator) Graph {
         return .{ .allocator = allocator, .terms = Terms.init(allocator) };
@@ -432,11 +433,11 @@ pub const Graph = struct {
         }
         for (self.workers.items, workers, 0..) |worker, *span, index| {
             span.* = .{ .start = @intCast(parameters.items.len) };
-            var required = worker.requirements.keyIterator();
+            var required = worker.requirements.constKeyIterator();
             while (required.next()) |requirement| {
-                if (self.observations.contains(self.requirements.items[@backingInt(requirement.*)].site)) continue;
-                if (active_sites) |active| if (!active[@backingInt(self.requirements.items[@backingInt(requirement.*)].site)]) continue;
-                try parameters.append(allocator, requirement.*);
+                if (self.observations.contains(self.requirements.items[@backingInt(requirement)].site)) continue;
+                if (active_sites) |active| if (!active[@backingInt(self.requirements.items[@backingInt(requirement)].site)]) continue;
+                try parameters.append(allocator, requirement);
             }
             span.len = @intCast(parameters.items.len - span.start);
             const params = parameters.items[span.start..][0..span.len];

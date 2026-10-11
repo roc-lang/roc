@@ -943,7 +943,7 @@ const EmissionOwner = struct {
     retain_arg_scratch: std.ArrayList(LIR.LocalId) = .empty,
     dismantle_temps: std.ArrayList(LIR.LocalId) = .empty,
     arc_plans: ArcPlans = .{},
-    restitution_switches: std.AutoHashMapUnmanaged(LIR.CFStmtId, RestitutionSwitch) = .empty,
+    restitution_switches: collections.DenseMapUnmanaged(LIR.CFStmtId, RestitutionSwitch) = .empty,
     loop_liveness_caches: std.ArrayList(LoopLivenessCache) = .empty,
     owned_binding_override: OwnedSet = undefined,
     root: LIR.CFStmtId = undefined,
@@ -2073,7 +2073,7 @@ const Inserter = struct {
     arc_plans: *ArcPlans = undefined,
     /// Exact call-result refinements registered while solving this emission.
     /// Keys are ownership-neutral switch statement ids.
-    restitution_switches: *std.AutoHashMapUnmanaged(LIR.CFStmtId, RestitutionSwitch) = undefined,
+    restitution_switches: *collections.DenseMapUnmanaged(LIR.CFStmtId, RestitutionSwitch) = undefined,
     materialized_plans: []?LIR.CFStmtId = &.{},
     materialized_joins: []?LIR.CFStmtId = &.{},
     /// Reused planning buffers. Their contents are ephemeral; every slice
@@ -6644,7 +6644,7 @@ const Inserter = struct {
     fn walkOwnershipPlaceUsedInPath(self: *Inserter, start: LIR.CFStmtId, root: LIR.LocalId) ResourceError!bool {
         const allocator = self.emission_allocator;
         const place = self.ownershipPlaceLeader(root);
-        var seen = std.AutoHashMapUnmanaged(LIR.CFStmtId, void).empty;
+        var seen = collections.DenseMapUnmanaged(LIR.CFStmtId, void).empty;
         defer seen.deinit(allocator);
         var stack = std.ArrayList(LIR.CFStmtId).empty;
         defer stack.deinit(allocator);

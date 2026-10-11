@@ -6,6 +6,7 @@
 //! returns; the returned exports then own every reachable byte independently.
 
 const std = @import("std");
+const collections = @import("collections");
 const compilerInvariant = @import("base").invariant;
 const builtins = @import("builtins");
 const layout = @import("layout");
@@ -149,7 +150,7 @@ const Builder = struct {
     nodes: std.ArrayList(Node) = .empty,
     jobs: std.ArrayList(Job) = .empty,
     allocations: std.AutoHashMapUnmanaged(AllocationKey, Destination) = .empty,
-    frozen_descriptors: std.AutoHashMapUnmanaged(Program.BoxyTypeDescId, Destination) = .empty,
+    frozen_descriptors: collections.DenseMapUnmanaged(Program.BoxyTypeDescId, Destination) = .empty,
 
     fn size(self: *const Builder, idx: layout.Idx) usize {
         return self.program.layouts.layoutSize(self.program.layouts.getLayout(idx));

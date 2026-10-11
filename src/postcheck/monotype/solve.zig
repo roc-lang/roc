@@ -365,6 +365,9 @@ pub const InterfaceConstraints = struct {
         spare_capture_items: std.ArrayList(std.ArrayList(Capture.CaptureItem)) = .empty,
         neutral_scan: Capture.NeutralScan.Eval.Scratch = .{},
         shareability_scan: Capture.Shareability.Eval.Scratch = .{},
+        /// A capture's hole positions by class, when it has enough holes to
+        /// index; emptied after each capture with its pages kept.
+        hole_positions: collections.DenseMapUnmanaged(NodeId, u32) = .empty,
 
         pub fn init(allocator: Allocator) CaptureScratch {
             return .{
@@ -392,6 +395,7 @@ pub const InterfaceConstraints = struct {
             self.settled_sealed_types.deinit();
             self.retained_sealed.deinit();
             self.retained_sealed_types.deinit();
+            self.hole_positions.deinit(allocator);
             self.nodes.deinit(allocator);
             self.open_nodes.deinit(allocator);
             self.kinds.deinit(allocator);
@@ -426,12 +430,12 @@ pub const InterfaceConstraints = struct {
         for (holes, hole_roots) |hole, *root| root.* = graph.find(hole);
         // Every captured class asks whether it is a hole, so a request with
         // many holes indexes them; the first position of a class answers.
-        var hole_positions: std.AutoHashMapUnmanaged(NodeId, u32) = .empty;
-        defer hole_positions.deinit(allocator);
+        const hole_positions = &graph.capture_scratch.hole_positions;
+        defer hole_positions.clearRetainingCapacity();
         if (hole_roots.len > Capture.hole_scan_limit) {
-            try hole_positions.ensureTotalCapacity(allocator, @intCast(hole_roots.len));
+            try hole_positions.ensureTotalCapacity(graph.allocator, @intCast(hole_roots.len));
             for (hole_roots, 0..) |root, index| {
-                const entry = hole_positions.getOrPutAssumeCapacity(root);
+                const entry = try hole_positions.getOrPut(graph.allocator, root);
                 if (!entry.found_existing) entry.value_ptr.* = @intCast(index);
             }
         }
@@ -451,7 +455,7 @@ pub const InterfaceConstraints = struct {
             .allocator = allocator,
             .scratch = scratch,
             .holes = hole_roots,
-            .hole_positions = &hole_positions,
+            .hole_positions = hole_positions,
             .hole_classes = hole_classes,
             .node_ids = scratch.node_ids,
             .kind_ids = scratch.kind_ids,
@@ -644,10 +648,10 @@ pub const InterfaceConstraints = struct {
         types: *Type.Store,
         name_store: *const names.NameStore,
         allocator: Allocator,
-        settled: std.AutoHashMapUnmanaged(NodeId, Type.TypeId) = .empty,
-        node_ids: std.AutoHashMapUnmanaged(NodeId, NodeId) = .empty,
+        settled: collections.DenseMapUnmanaged(NodeId, Type.TypeId) = .empty,
+        node_ids: collections.DenseMapUnmanaged(NodeId, NodeId) = .empty,
         node_order: std.ArrayList(NodeId) = .empty,
-        kind_ids: std.AutoHashMapUnmanaged(FieldKindId, FieldKindId) = .empty,
+        kind_ids: collections.DenseMapUnmanaged(FieldKindId, FieldKindId) = .empty,
         kind_order: std.ArrayList(FieldKindId) = .empty,
         group_ids: std.AutoHashMapUnmanaged(u32, u32) = .empty,
         group_sizes: std.AutoHashMapUnmanaged(u32, u32) = .empty,
@@ -763,7 +767,7 @@ pub const InterfaceConstraints = struct {
         /// writing its cache.
         fn containsIterator(self: *EquivalenceRenumberer, root: Type.TypeId) Allocator.Error!bool {
             var pending: std.ArrayList(Type.TypeId) = .empty;
-            var visited: std.AutoHashMapUnmanaged(Type.TypeId, void) = .empty;
+            var visited: collections.DenseMapUnmanaged(Type.TypeId, void) = .empty;
             try pending.append(self.allocator, root);
             while (pending.pop()) |ty| {
                 if ((try visited.getOrPut(self.allocator, ty)).found_existing) continue;
@@ -987,7 +991,7 @@ pub const InterfaceConstraints = struct {
         holes: []const NodeId = &.{},
         /// `holes` indexed by class when there are more than
         /// `hole_scan_limit` of them.
-        hole_positions: ?*const std.AutoHashMapUnmanaged(NodeId, u32) = null,
+        hole_positions: ?*const collections.DenseMapUnmanaged(NodeId, u32) = null,
         hole_classes: []?NodeId = &.{},
 
         const hole_scan_limit = 16;
@@ -2161,7 +2165,7 @@ pub const InstGraph = struct {
     /// Proven-uninhabited answers for finished types, one map per
     /// `UninhabitedPolicy`. Store types are immutable, so entries outlive
     /// every reset.
-    proven_uninhabited_types: [3]std.AutoHashMapUnmanaged(Type.TypeId, bool) = .{ .empty, .empty, .empty },
+    proven_uninhabited_types: [3]collections.DenseMapUnmanaged(Type.TypeId, bool) = .{ .empty, .empty, .empty },
     type_uninhabited_scratch: TypeUninhabitedScan.Eval.Scratch = .{},
     /// At least how many times a node received a generated-private backing.
     /// While zero, no class can reach one and the containment query answers
@@ -7881,7 +7885,7 @@ const TypeUninhabitedScan = struct {
     policy: UninhabitedPolicy,
     /// Each type being expanded, with the number of cycle hits seen before
     /// it was entered.
-    visiting: std.AutoHashMapUnmanaged(Type.TypeId, usize) = .empty,
+    visiting: collections.DenseMapUnmanaged(Type.TypeId, usize) = .empty,
     /// Re-entries of a type still being expanded. A type whose expansion saw
     /// none answers independently of the types enclosing it, so its answer
     /// is cached for every later scan.
@@ -7889,7 +7893,7 @@ const TypeUninhabitedScan = struct {
 
     const Eval = AnyAll.Evaluation(Type.TypeId, TypeUninhabitedScan);
 
-    fn answers(self: *TypeUninhabitedScan) *std.AutoHashMapUnmanaged(Type.TypeId, bool) {
+    fn answers(self: *TypeUninhabitedScan) *collections.DenseMapUnmanaged(Type.TypeId, bool) {
         return &self.graph.proven_uninhabited_types[@backingInt(self.policy)];
     }
 

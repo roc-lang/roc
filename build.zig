@@ -5856,6 +5856,7 @@ fn buildBoxyRuntimeObject(
     boxy_eval_module.addImport("base", roc_modules.base);
     boxy_eval_module.addImport("layout", roc_modules.layout);
     boxy_eval_module.addImport("lir", roc_modules.lir);
+    boxy_eval_module.addImport("collections", roc_modules.collections);
     boxy_eval_module.addImport("builtins", roc_modules.builtins);
     boxy_eval_module.addImport("build_options", roc_modules.build_options);
 

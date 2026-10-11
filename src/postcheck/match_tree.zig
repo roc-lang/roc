@@ -1177,7 +1177,7 @@ pub fn Compiler(comptime Ctx: type) type {
             /// so a nested scope records each local it adds or changes and
             /// restores them all before its enclosing scope continues.
             const Env = struct {
-                locals: std.AutoHashMapUnmanaged(OccId, EmitLocals),
+                locals: collections.DenseMapUnmanaged(OccId, EmitLocals),
                 undo: std.ArrayList(EnvUndo) = .empty,
 
                 const EnvUndo = struct { occ: OccId, previous: ?EmitLocals };

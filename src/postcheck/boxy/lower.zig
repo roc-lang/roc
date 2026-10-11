@@ -817,7 +817,7 @@ fn procedureModuleByKey(modules: Common.CheckedModules, key: checked.CheckedModu
 /// own module match by id; labels from another module match by text.
 const RecordLabelPositions = struct {
     same_module: bool,
-    by_id: std.AutoHashMapUnmanaged(names.RecordFieldLabelId, usize) = .empty,
+    by_id: collections.DenseMapUnmanaged(names.RecordFieldLabelId, usize) = .empty,
     by_text: std.StringHashMapUnmanaged(usize) = .empty,
 
     fn init(same_module: bool) RecordLabelPositions {
@@ -15616,7 +15616,7 @@ const ProcBodyBuilder = struct {
     runtime_initialized_descriptor_locals: std.ArrayList(LIR.LocalId),
     descriptor_local_templates: std.ArrayList(DescriptorLocalTemplate),
     /// Each templated local's position in `descriptor_local_templates`.
-    descriptor_local_template_positions: std.AutoHashMapUnmanaged(LIR.LocalId, u32) = .empty,
+    descriptor_local_template_positions: collections.DenseMapUnmanaged(LIR.LocalId, u32) = .empty,
     nominal_formal_bindings: std.ArrayList(NominalFormalBinding) = .empty,
     scoped_descriptor_locals: std.ArrayList(ScopedDescriptorLocal) = .empty,
     /// First scoped descriptor local of the innermost active scope.
@@ -15647,7 +15647,7 @@ const ProcBodyBuilder = struct {
     erased_capture_locals: std.ArrayList(LIR.LocalId),
     /// Boxed slot of each recursive value binder in scope: reserved with the
     /// declaring block, or received as an erased capture.
-    recursive_value_slots: std.AutoHashMapUnmanaged(checked.PatternBinderId, LIR.LocalId),
+    recursive_value_slots: collections.DenseMapUnmanaged(checked.PatternBinderId, LIR.LocalId),
     worker_argument_desc_initializers: std.ArrayList(DescriptorArgLocal),
     erased_capture_value_desc_initializers: std.ArrayList(DescriptorArgLocal),
     stored_capture_initializers: std.ArrayList(StoredCaptureInitializer),
@@ -34464,12 +34464,12 @@ const ProcBodyBuilder = struct {
 
         // Each materialized descriptor local's first argument position, so
         // dependencies resolve in constant time.
-        var positions: std.AutoHashMapUnmanaged(LIR.LocalId, usize) = .empty;
+        var positions: collections.DenseMapUnmanaged(LIR.LocalId, usize) = .empty;
         defer positions.deinit(self.parent.allocator);
         try positions.ensureTotalCapacity(self.parent.allocator, @intCast(hidden_args.len));
         for (hidden_args, 0..) |hidden, index| {
             if (hidden.materialize == null) continue;
-            const entry = positions.getOrPutAssumeCapacity(hidden.local);
+            const entry = try positions.getOrPut(self.parent.allocator, hidden.local);
             if (!entry.found_existing) entry.value_ptr.* = index;
         }
 
@@ -34589,7 +34589,7 @@ const ProcBodyBuilder = struct {
     fn appendHiddenDescriptorMaterializationOrder(
         self: *ProcBodyBuilder,
         hidden_args: []const DescriptorArgLocal,
-        positions: *const std.AutoHashMapUnmanaged(LIR.LocalId, usize),
+        positions: *const collections.DenseMapUnmanaged(LIR.LocalId, usize),
         root: usize,
         visit: []DescriptorMaterializationVisit,
         order: *std.ArrayList(usize),

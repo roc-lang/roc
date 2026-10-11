@@ -3096,7 +3096,7 @@ const Solver = struct {
     /// for a repeated name.
     const TagRowIndex = struct {
         len: u32,
-        by_name: std.AutoHashMapUnmanaged(Type.names.TagNameId, usize),
+        by_name: collections.DenseMapUnmanaged(Type.names.TagNameId, usize),
     };
 
     fn tagRowIndex(self: *Solver, span: Type.Span) Allocator.Error!*const TagRowIndex {
@@ -3107,7 +3107,7 @@ const Solver = struct {
         gop.value_ptr.by_name.clearRetainingCapacity();
         try gop.value_ptr.by_name.ensureTotalCapacity(self.allocator, span.len);
         for (0..span.count()) |index| {
-            const entry = gop.value_ptr.by_name.getOrPutAssumeCapacity(self.program.types.tagItem(span, index).name);
+            const entry = try gop.value_ptr.by_name.getOrPut(self.allocator, self.program.types.tagItem(span, index).name);
             if (!entry.found_existing) entry.value_ptr.* = index;
         }
         return gop.value_ptr;
@@ -3115,7 +3115,7 @@ const Solver = struct {
 
     const RecordRowIndex = struct {
         len: u32,
-        by_name: std.AutoHashMapUnmanaged(Type.names.RecordFieldNameId, usize),
+        by_name: collections.DenseMapUnmanaged(Type.names.RecordFieldNameId, usize),
     };
 
     fn recordRowIndex(self: *Solver, span: Type.Span) Allocator.Error!*const RecordRowIndex {
@@ -3126,7 +3126,7 @@ const Solver = struct {
         gop.value_ptr.by_name.clearRetainingCapacity();
         try gop.value_ptr.by_name.ensureTotalCapacity(self.allocator, span.len);
         for (0..span.count()) |index| {
-            const entry = gop.value_ptr.by_name.getOrPutAssumeCapacity(self.program.types.fieldItem(span, index).name);
+            const entry = try gop.value_ptr.by_name.getOrPut(self.allocator, self.program.types.fieldItem(span, index).name);
             if (!entry.found_existing) entry.value_ptr.* = index;
         }
         return gop.value_ptr;
@@ -3162,13 +3162,13 @@ const Solver = struct {
 
         var merged = std.ArrayList(Type.Tag).empty;
         defer merged.deinit(self.allocator);
-        var left_names = std.AutoHashMapUnmanaged(Type.names.TagNameId, void).empty;
+        var left_names = collections.DenseMapUnmanaged(Type.names.TagNameId, void).empty;
         defer left_names.deinit(self.allocator);
         try left_names.ensureTotalCapacity(self.allocator, @intCast(lhs.count()));
         for (0..lhs.count()) |left_index| {
             const left_tag = self.program.types.tagItem(lhs, left_index);
             try merged.append(self.allocator, left_tag);
-            left_names.putAssumeCapacity(left_tag.name, {});
+            try left_names.put(self.allocator, left_tag.name, {});
         }
         for (0..rhs.count()) |right_position| {
             const right_tag = self.program.types.tagItem(rhs, right_position);

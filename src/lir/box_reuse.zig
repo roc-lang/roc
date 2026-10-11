@@ -565,7 +565,7 @@ const Transform = struct {
 
         var work = std.ArrayList(CFStmtId).empty;
         defer work.deinit(self.scratch_allocator);
-        var visited = std.AutoHashMapUnmanaged(CFStmtId, void).empty;
+        var visited = collections.DenseMapUnmanaged(CFStmtId, void).empty;
         defer visited.deinit(self.scratch_allocator);
 
         var count: usize = 0;

@@ -6,6 +6,7 @@
 //! same semantics back both the LIR interpreter and machine-code output.
 
 const std = @import("std");
+const collections = @import("collections");
 const builtin = @import("builtin");
 const base = @import("base");
 const layout_mod = @import("layout");
@@ -1761,8 +1762,8 @@ pub const BoxyRuntime = struct {
         self: *const BoxyRuntime,
         hooks: anytype,
         desc: *const LirProgram.BoxyTypeDesc,
-    ) Error!std.AutoHashMapUnmanaged(LIR.BoxyNameId, LirProgram.BoxyTagVariant) {
-        var variants: std.AutoHashMapUnmanaged(LIR.BoxyNameId, LirProgram.BoxyTagVariant) = .empty;
+    ) Error!collections.DenseMapUnmanaged(LIR.BoxyNameId, LirProgram.BoxyTagVariant) {
+        var variants: collections.DenseMapUnmanaged(LIR.BoxyNameId, LirProgram.BoxyTagVariant) = .empty;
         errdefer variants.deinit(self.scratch);
         // Brent's cycle detection: `anchor` jumps to the walk position at
         // each power-of-two step count, so a cyclic chain meets it again.

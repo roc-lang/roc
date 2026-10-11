@@ -1946,11 +1946,11 @@ fn deferredTemplateTypeArgumentsStep(
         },
         .record => |checked_record| switch (request_content) {
             .record => |request_record| {
-                var request_index: std.AutoHashMapUnmanaged(names.RecordFieldNameId, usize) = .empty;
+                var request_index: collections.DenseMapUnmanaged(names.RecordFieldNameId, usize) = .empty;
                 defer request_index.deinit(graph.allocator);
                 try request_index.ensureTotalCapacity(graph.allocator, @intCast(request_record.fields.len));
                 for (request_record.fields, 0..) |request_field, index| {
-                    request_index.putAssumeCapacity(request_field.name, index);
+                    try request_index.put(graph.allocator, request_field.name, index);
                 }
                 for (checked_record.fields) |checked_field| {
                     const index = request_index.get(checked_field.name) orelse continue;
@@ -4219,7 +4219,7 @@ const Builder = struct {
     /// Each scheme's quantified variables by slot, keyed by the scheme's
     /// variable list, for resolving an enclosing variable to its evidence
     /// frame's substitution.
-    scheme_var_slots: std.AutoHashMapUnmanaged(SchemeVarsAddress, std.AutoHashMapUnmanaged(checked.CheckedTypeId, u32)) = .empty,
+    scheme_var_slots: std.AutoHashMapUnmanaged(SchemeVarsAddress, collections.DenseMapUnmanaged(checked.CheckedTypeId, u32)) = .empty,
     reassigned_binder_pool: std.ArrayList(checked.PatternBinderId) = .empty,
     const_expr_cache: std.AutoHashMap(ConstExprAddress, Ast.ExprId),
     static_data_ids: std.AutoHashMap(StaticDataUse, Common.StaticDataId),
@@ -4709,7 +4709,7 @@ const Builder = struct {
             var slot = scheme_vars.len;
             while (slot > 0) {
                 slot -= 1;
-                entry.value_ptr.putAssumeCapacity(scheme_vars[slot], @intCast(slot));
+                try entry.value_ptr.put(self.allocator, scheme_vars[slot], @intCast(slot));
             }
         }
         return entry.value_ptr.get(variable);
@@ -19434,11 +19434,11 @@ const BodyContext = struct {
     inhabitation_visiting: std.bit_set.DynamicBitSetUnmanaged,
     /// Each node being expanded by the running uninhabitedness scan, with the
     /// scan's count of unsettled encounters when it was entered.
-    inhabitation_entered: std.AutoHashMapUnmanaged(NodeId, usize) = .empty,
+    inhabitation_entered: collections.DenseMapUnmanaged(NodeId, usize) = .empty,
     /// Uninhabitedness of graph roots whose whole reachable structure was
     /// settled when scanned, per backing access. Nothing can change such an
     /// answer.
-    settled_node_uninhabited: [2]std.AutoHashMapUnmanaged(NodeId, bool) = .{ .empty, .empty },
+    settled_node_uninhabited: [2]collections.DenseMapUnmanaged(NodeId, bool) = .{ .empty, .empty },
     /// The stacks the uninhabitedness scans run on, kept between scans.
     node_uninhabited_scratch: NodeUninhabitedScan.Evaluation.Scratch = .{},
     pattern_uninhabited_scratch: PatternUninhabitedScan.Evaluation.Scratch = .{},
@@ -19482,7 +19482,7 @@ const BodyContext = struct {
     propagate_constructor_value_evidence: bool = false,
     /// One shared request interface per direct call expression of this body;
     /// see `DirectCallRequest`.
-    direct_call_requests: std.AutoHashMapUnmanaged(checked.CheckedExprId, DirectCallRequest) = .empty,
+    direct_call_requests: collections.DenseMapUnmanaged(checked.CheckedExprId, DirectCallRequest) = .empty,
     /// Constructor expressions already related to a request node, keyed by
     /// the node's class root at the time. A constructor's relation only
     /// unifies its children with the node's component slots, so relating it
@@ -19500,7 +19500,7 @@ const BodyContext = struct {
     reuse_pre_registered_pattern_binders: bool = false,
     /// `patternNeedsExplicitBinding` answers, memoized per pattern: pattern
     /// lowering asks it at every level of a pattern tree.
-    explicit_binding_memo: std.AutoHashMapUnmanaged(checked.CheckedPatternId, bool) = .empty,
+    explicit_binding_memo: collections.DenseMapUnmanaged(checked.CheckedPatternId, bool) = .empty,
     /// Match branches have their own complete pattern engine. Other callers
     /// must route recursive materialization through the shell/plan lowering.
     allow_recursive_pattern_lowering_for_match: bool = false,
@@ -46013,13 +46013,13 @@ const BodyContext = struct {
     };
 
     /// Pre-lowered constructor children by their checked expression.
-    const PreLoweredIndex = std.AutoHashMapUnmanaged(checked.CheckedExprId, DraftExprId);
+    const PreLoweredIndex = collections.DenseMapUnmanaged(checked.CheckedExprId, DraftExprId);
 
     fn preLoweredIndex(self: *BodyContext, children: []const PreLoweredChild) Allocator.Error!PreLoweredIndex {
         var index: PreLoweredIndex = .empty;
         errdefer index.deinit(self.allocator);
         try index.ensureTotalCapacity(self.allocator, @intCast(children.len));
-        for (children) |child| index.putAssumeCapacity(child.checked_expr, child.expr);
+        for (children) |child| try index.put(self.allocator, child.checked_expr, child.expr);
         return index;
     }
 
@@ -46027,7 +46027,7 @@ const BodyContext = struct {
     /// any width resolves each field in constant time.
     const ConstructionFields = struct {
         fields: []const InstField,
-        by_name: std.AutoHashMapUnmanaged(names.RecordFieldNameId, u32),
+        by_name: collections.DenseMapUnmanaged(names.RecordFieldNameId, u32),
 
         fn deinit(self: *ConstructionFields, allocator: Allocator) void {
             self.by_name.deinit(allocator);
@@ -46042,10 +46042,10 @@ const BodyContext = struct {
 
     fn constructionFields(self: *BodyContext, record_node: NodeId) Allocator.Error!ConstructionFields {
         const fields = (try self.graph.recordConstructionNodes(record_node)).fields;
-        var by_name: std.AutoHashMapUnmanaged(names.RecordFieldNameId, u32) = .empty;
+        var by_name: collections.DenseMapUnmanaged(names.RecordFieldNameId, u32) = .empty;
         errdefer by_name.deinit(self.allocator);
         try by_name.ensureTotalCapacity(self.allocator, @intCast(fields.len));
-        for (fields, 0..) |field, index| by_name.putAssumeCapacity(field.name, @intCast(index));
+        for (fields, 0..) |field, index| try by_name.put(self.allocator, field.name, @intCast(index));
         return .{ .fields = fields, .by_name = by_name };
     }
 
@@ -46054,8 +46054,8 @@ const BodyContext = struct {
     const RecordExprLabels = struct {
         /// The graph-owned name of each supplied field, in `record.fields` order.
         field_names: []names.RecordFieldNameId,
-        values: std.AutoHashMapUnmanaged(names.RecordFieldNameId, checked.CheckedExprId),
-        unsets: std.AutoHashMapUnmanaged(names.RecordFieldNameId, void),
+        values: collections.DenseMapUnmanaged(names.RecordFieldNameId, checked.CheckedExprId),
+        unsets: collections.DenseMapUnmanaged(names.RecordFieldNameId, void),
 
         fn deinit(self: *RecordExprLabels, allocator: Allocator) void {
             allocator.free(self.field_names);
@@ -46067,14 +46067,14 @@ const BodyContext = struct {
     fn recordExprLabels(self: *BodyContext, record: anytype) Allocator.Error!RecordExprLabels {
         const field_names = try self.allocator.alloc(names.RecordFieldNameId, record.fields.len);
         errdefer self.allocator.free(field_names);
-        var values: std.AutoHashMapUnmanaged(names.RecordFieldNameId, checked.CheckedExprId) = .empty;
+        var values: collections.DenseMapUnmanaged(names.RecordFieldNameId, checked.CheckedExprId) = .empty;
         errdefer values.deinit(self.allocator);
-        var unsets: std.AutoHashMapUnmanaged(names.RecordFieldNameId, void) = .empty;
+        var unsets: collections.DenseMapUnmanaged(names.RecordFieldNameId, void) = .empty;
         errdefer unsets.deinit(self.allocator);
         try values.ensureTotalCapacity(self.allocator, @intCast(record.fields.len));
         for (record.fields, field_names) |field, *name| {
             name.* = try self.recordFieldName(self.view, field.label);
-            const entry = values.getOrPutAssumeCapacity(name.*);
+            const entry = try values.getOrPut(self.allocator, name.*);
             if (!entry.found_existing) entry.value_ptr.* = field.value;
         }
         try unsets.ensureTotalCapacity(self.allocator, @intCast(record.unsets.len));
@@ -66192,7 +66192,7 @@ const NodeUninhabitedScan = struct {
 
     const Evaluation = AnyAll.Evaluation(NodeId, NodeUninhabitedScan);
 
-    fn settled(self: *NodeUninhabitedScan) *std.AutoHashMapUnmanaged(NodeId, bool) {
+    fn settled(self: *NodeUninhabitedScan) *collections.DenseMapUnmanaged(NodeId, bool) {
         return &self.body.settled_node_uninhabited[@backingInt(self.backing_access)];
     }
 

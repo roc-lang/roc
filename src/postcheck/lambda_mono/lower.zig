@@ -270,7 +270,7 @@ const Lowerer = struct {
     /// Replays the match resolutions direct LIR lowering recorded, so the
     /// debug verifier sees the same set of demanded functions. Keyed by the
     /// match's scrutinee expression.
-    folded_matches: std.AutoHashMapUnmanaged(Lifted.ExprId, Lifted.ExprId) = .empty,
+    folded_matches: collections.DenseMapUnmanaged(Lifted.ExprId, Lifted.ExprId) = .empty,
 
     fn init(
         allocator: Allocator,

@@ -330,6 +330,20 @@ stages it touches; the instruction-count effect is reported in "Results".
     dependency graph's Tarjan state, pattern-to-def map, def positions, and
     def-to-group map are `DenseMap`s.
 
+57. `collections.DenseMapUnmanaged`: a `DenseMap` that holds no allocator,
+    with the standard unmanaged surface (`.empty`, allocator arguments on
+    calls that allocate or free). Every unmanaged hash map keyed by a dense
+    `...Id` (85 sites across postcheck, LIR, eval, bump, glue, and the
+    checker) uses it, and the ID-keyed hash-map lint now also matches
+    `HashMapUnmanaged(` (skipping anonymous struct keys), so the rule is
+    enforced for both forms. The unmanaged map wraps the managed one and
+    lends it the caller's allocator per call: a single implementation that
+    takes the allocator as a parameter measured 1.7% slower on `roc check`
+    than the managed map that reads it from a field. Generated code is
+    byte-identical; `roc check` on roc-pg is 0.2% above the commit before,
+    from short-lived maps over large id domains that design.md says should
+    become reusable scratch.
+
 ## Findings from profiling
 
 These were found by profiling the ReleaseFast compiler with
@@ -1740,7 +1754,7 @@ reading code, and were not in the audit above.
 - category B; runs 68 declarations across postcheck, most of them per-procedure or per-specialization scratch maps (NodeId, TypeId, TypeRepId, LocalId, ExprId, TermId, …; impact medium (many are on hot per-node paths; see individual …; risk low
 - Finding: `ci/zig_lints.zig:508` searches for the literal `"HashMap("`, so `std.AutoHashMapUnmanaged(NodeId, usize)` (lower.zig:19428), `AutoHashMapUnmanaged(checked.CheckedExprId, DirectCallRequest)` (lower.zig:19476), `AutoHashMapUnmanaged(TypeRepId, ...)` (boxy/plan.zig x20), `AutoHashMapUnmanaged(LIR.LocalId, ...)` (boxy/lower.zig:15617, 34468, 34593), `AutoHashMapUnmanaged(Ast.LocalId, std.ArrayList(...))` …
 - Fix: convert each to `collections.DenseMap(K, V)` (same `get/put/getOrPut/remove/iterator` surface) or to a column on the owning store; for the `void`-valued sets use `collections.ScopedBitSet`/`DynamicBitSetUnmanaged` with an epoch. Also extend the lint to match `HashMapUnmanaged(` so the contract is enforced. Semantics are unchanged as long as iteration order is not observable (check each `iterator()` consumer; …
-- Status: open (lint gap noted; converted case by case)
+- Status: fixed (fix 57)
 
 ### src/collections/VersionedMap.zig:17-30 (used by every BodyContext via BinderMap/TypedBinders/LocalProcContexts): 72-byte change records and usize slots for u32 payloads
 - category C; runs one `Change` per `BinderMap.put`/`restore` (per pattern binder bound, per child context fork), one `Slot` per distinct key; impact medium; risk low

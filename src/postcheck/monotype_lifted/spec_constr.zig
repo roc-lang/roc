@@ -1354,7 +1354,7 @@ const Pass = struct {
     /// What each frozen source loop body contains, keyed by the body. One
     /// walk of an outer loop records every loop nested in it, so nested
     /// loops never rescan their bodies.
-    loop_body_contents: std.AutoHashMapUnmanaged(Ast.ExprId, LoopBodyContents) = .empty,
+    loop_body_contents: collections.DenseMapUnmanaged(Ast.ExprId, LoopBodyContents) = .empty,
 
     const PatternRequest = struct { fn_id: Ast.FnId, pattern: CallPattern };
     const RequestSink = struct {
@@ -15242,7 +15242,7 @@ fn walkLoopBodyContents(pass: *Pass, root_body: Ast.ExprId, root_uses: []Initial
     defer children.deinit(allocator);
     var open: std.ArrayList(OpenLoop) = .empty;
     defer open.deinit(allocator);
-    var registered: std.AutoHashMapUnmanaged(Ast.LocalId, std.ArrayList(LocalRegistration)) = .empty;
+    var registered: collections.DenseMapUnmanaged(Ast.LocalId, std.ArrayList(LocalRegistration)) = .empty;
     defer {
         var lists = registered.valueIterator();
         while (lists.next()) |list| list.deinit(allocator);
@@ -15343,7 +15343,7 @@ fn markOpenLoopsReturn(open: []OpenLoop) void {
 /// registration is marked once, then dropped.
 fn markLocalReferenced(
     open: []OpenLoop,
-    registered: *std.AutoHashMapUnmanaged(Ast.LocalId, std.ArrayList(LocalRegistration)),
+    registered: *collections.DenseMapUnmanaged(Ast.LocalId, std.ArrayList(LocalRegistration)),
     local: Ast.LocalId,
 ) void {
     const list = registered.getPtr(local) orelse return;
