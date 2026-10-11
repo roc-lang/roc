@@ -5030,17 +5030,17 @@ const Builder = struct {
         checked_type: CheckedTypeIdentity,
         root_request: ?checked.RootRequest,
     ) Allocator.Error!void {
-        const selected_source = switch (source) {
-            .generated_codec => |codec| WorkerSource{ .generated_codec = self.generatedCodecSourceAtIdentity(codec, checked_type) },
+        const selected: SharedGeneratedCodec = switch (source) {
+            .generated_codec => |codec| self.generatedCodecAtIdentity(codec, checked_type),
             .procedure_template,
             .procedure_binding,
             .procedure_use,
             .nested_expr,
             .generated_field_iterator,
-            => self.workerSourceForCallableEvalSource(source),
+            => .{ .source = self.workerSourceForCallableEvalSource(source), .checked_type = checked_type },
         };
-        if (!workerSourceEql(selected_source, source)) {
-            return try actions.append(self.allocator, .{ .ensure_worker = .{ .source = selected_source, .checked_type = checked_type, .root_request = root_request } });
+        if (!workerSourceEql(selected.source, source) or !typeRefEql(selected.checked_type, checked_type)) {
+            return try actions.append(self.allocator, .{ .ensure_worker = .{ .source = selected.source, .checked_type = selected.checked_type, .root_request = root_request } });
         }
         const worker_type = if (source == .nested_expr)
             self.workerCheckedTypeForSource(source, checked_type)
@@ -20966,26 +20966,53 @@ const Builder = struct {
         return typeRef(view, template.checked_fn_root);
     }
 
-    /// The source a generated codec worker is shared under. The checker
-    /// interns proof-equivalent contracts to one identity, and checked types
-    /// are interned by key, so every use of an equivalent contract selects the
-    /// identity's worker. A stored runtime keeps its own contract: its checked
-    /// expression names the value it captures.
-    fn generatedCodecSourceAtIdentity(
+    /// A worker source with the checked type it is planned at.
+    const SharedGeneratedCodec = struct {
+        source: WorkerSource,
+        checked_type: CheckedTypeIdentity,
+    };
+
+    /// The source and type a generated codec worker is shared under. The
+    /// checker interns proof-equivalent contracts to one identity, so every
+    /// use of an equivalent contract selects the identity's worker. A
+    /// constructor worker is keyed by its contract's source shape and
+    /// constructor type (`structuralCodecWorkerSource`), so a constructor
+    /// shared under the identity takes the identity contract's shape and type
+    /// as well; an equivalent contract's own types can be distinct checked
+    /// types. A stored runtime keeps its own contract: its checked expression
+    /// names the value it captures.
+    fn generatedCodecAtIdentity(
         self: *Builder,
         codec: GeneratedCodecSource,
         checked_type: CheckedTypeIdentity,
-    ) GeneratedCodecSource {
-        if (codec.contract_expr != null) return codec;
-        const derivation_id = codec.contract_derivation orelse return codec;
-        const derivations = self.moduleForId(checked_type.module).static_dispatch_plans.generated_codec_derivations;
+    ) SharedGeneratedCodec {
+        const unchanged: SharedGeneratedCodec = .{ .source = .{ .generated_codec = codec }, .checked_type = checked_type };
+        if (codec.contract_expr != null) return unchanged;
+        const derivation_id = codec.contract_derivation orelse return unchanged;
+        const view = self.moduleForId(checked_type.module);
+        const derivations = view.static_dispatch_plans.generated_codec_derivations;
         const identity = derivations[@backingInt(derivation_id)].identity;
-        if (derivations[@backingInt(identity)].kind != derivations[@backingInt(derivation_id)].kind) {
+        const identity_contract = derivations[@backingInt(identity)];
+        if (identity_contract.kind != derivations[@backingInt(derivation_id)].kind) {
             boxyPlanInvariant("generated codec contract identity named a contract of another kind");
         }
         var shared = codec;
         shared.contract_derivation = identity;
-        return shared;
+        switch (codec.kind) {
+            .parser_constructor, .encoder_constructor => {
+                shared.shape = typeRef(view, identity_contract.source_shape_ty);
+                return .{ .source = .{ .generated_codec = shared }, .checked_type = typeRef(view, identity_contract.source_constructor_ty) };
+            },
+            .parser_runtime,
+            .encoder_runtime,
+            .encoder_record_fields,
+            .encoder_dict_fields,
+            .encoder_sequence_elements,
+            .encoder_tag_payload_elements,
+            .encoder_value_thunk,
+            .encoder_dict_key_thunk,
+            => return .{ .source = .{ .generated_codec = shared }, .checked_type = checked_type },
+        }
     }
 
     fn workerSourceForCallableEvalSource(self: *Builder, source: WorkerSource) WorkerSource {
