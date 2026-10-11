@@ -491,6 +491,13 @@ stages it touches; the instruction-count effect is reported in "Results".
     same peak-memory median (2.67 GB) and instruction counts are flat. Peak
     memory measurements vary by about 50 MB between runs of one binary.
 
+76. Exhaustiveness: `checkMatch` and `checkDestructure` allocate their
+    analysis and result in a checker-owned arena that is reset after each
+    check, keeping at most 1 MiB, instead of creating and freeing an arena
+    per match (an invariant guards against nested use); the extension sets
+    and the tag and field name maps are dense maps. Generated code and
+    snapshots are unchanged; counts are flat.
+
 ## Findings from profiling
 
 These were found by profiling the ReleaseFast compiler with
@@ -878,7 +885,7 @@ reading code, and were not in the audit above.
 - category A, B; runs per tag union gathered during a match analysis (`gatherTagUnion` 1031: per column resolution), per payload scan; impact low-medium; risk low
 - Finding: `seen_exts = std.AutoHashMap(Var, void).init(allocator)` created and destroyed per gather; extension chains are 1-3 long so the map is pure overhead; the arena allocator at least makes `deinit` cheap but `init`+growth still cost.
 - Fix: a linear scan over a small `ArrayList(Var)` on the arena (chains are bounded by the store's extension depth and in practice tiny), or a bitset over `types.len()` reused across the analysis.
-- Status: open
+- Status: fixed (fix 76): the extension sets are dense maps
 
 ### src/check/exhaustive.zig:1226-1259: `InhabitedGraph` nodes own `parents: ArrayList(usize)` each; `roots`/`known_empty` keyed by `Var`; `rows` keyed by `RowKey{root, role}`
 - category F, B; runs per inhabitedness query (per match column with a possibly-uninhabited type; memoized by `inhabitedness_memo` but each miss builds a graph); impact low-medium; risk low
@@ -902,13 +909,13 @@ reading code, and were not in the audit above.
 - category A; runs per `match` expression; impact low-medium; risk low
 - Finding: a new arena (first chunk malloc) per match; the result struct owns it so the capacity cannot be reused by the next match in the module.
 - Fix: copy the (small) result out into checker-owned storage and reset the arena with `retain_capacity` for the next match; one arena per checker.
-- Status: open
+- Status: fixed (fix 76)
 
 ### src/check/exhaustive.zig:2023, 2041, 2715: `AutoHashMapUnmanaged(u29, ...)` keyed by raw `Ident.Idx.idx`
 - category B; runs per tag-union constructor gather / per record-field alternative gather; impact low; risk low
 - Finding: tag ids keyed by the 29-bit dense ident index through hash maps (`TagIdsByName`, `seen`, `pat_positions`).
 - Fix: `DenseMap(Ident.Idx, TagId)` or an arena `[]u32` indexed by ident (sized `idents.len()`: too big per gather) -> use `DenseMap`.
-- Status: open
+- Status: fixed (fix 76)
 
 ### src/check/dispatch_evidence.zig:227-246: `Scratch.visited: AutoHashMapUnmanaged(Var, void)`, `emitted_methods: AutoHashMapUnmanaged(Ident.Idx, u32)`, `contract_classes: AutoHashMapUnmanaged({param,callable:Var}, void)`
 - category B; runs per evidence enumeration (per dispatch edge whose evidence is minted; `scratch_method_mint_evidence` on the checker); impact medium; risk low

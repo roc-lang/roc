@@ -340,6 +340,12 @@ type_decl_dependencies: std.ArrayListUnmanaged(TypeDeclDependency) = .empty,
 /// declarations are poisoned, so an annotation generated from here on
 /// resolves each reference to one as the error type.
 type_decl_validity_final: bool = false,
+/// Holds one match's exhaustiveness analysis and result; reset after each
+/// match, keeping a bounded chunk for the next one.
+exhaustiveness_arena: base.SingleThreadArena,
+/// Whether a check's result still lives in `exhaustiveness_arena`; checks
+/// never nest, so a second one never starts while it is set.
+exhaustiveness_arena_in_use: bool = false,
 /// scratch vars used to build up intermediate lists, used for various things
 scratch_vars: base.Scratch(Var),
 /// scratch (parameter name, instantiated flex copy) pairs for the default
@@ -3697,6 +3703,7 @@ fn initAssumePrepared(
         .type_decl_statements = .empty,
         .type_decl_invalid = .empty,
         .type_decl_dependencies = .empty,
+        .exhaustiveness_arena = base.SingleThreadArena.init(gpa),
         .scratch_vars = try base.Scratch(types_mod.Var).init(gpa),
         .scratch_tags = try base.Scratch(types_mod.Tag).init(gpa),
         .scratch_record_fields = try base.Scratch(types_mod.RecordField).init(gpa),
@@ -4019,6 +4026,7 @@ pub fn deinit(self: *Self) void {
     self.type_decl_statements.deinit(self.gpa);
     self.type_decl_invalid.deinit(self.gpa);
     self.type_decl_dependencies.deinit(self.gpa);
+    self.exhaustiveness_arena.deinit();
     self.scratch_vars.deinit();
     self.scratch_tags.deinit();
     self.scratch_record_fields.deinit();
@@ -29690,8 +29698,10 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
 
         var open_cache = exhaustive.NominalOpenCache.init(self.gpa);
         defer open_cache.deinit();
+        self.beginExhaustivenessArena();
+        defer self.endExhaustivenessArena();
         const result_or_err = exhaustive.checkMatch(
-            self.cir.gpa,
+            &self.exhaustiveness_arena,
             self.types,
             self.cir,
             &self.cir.store,
@@ -29712,7 +29722,6 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
                 return .done;
             },
         };
-        defer result.deinit();
 
         try self.closeExhaustiveVars(result, env, match_region);
 
@@ -30748,6 +30757,20 @@ fn exhaustiveBuiltinIdents(self: *const Self, open_cache: *exhaustive.NominalOpe
     };
 }
 
+/// Claim the exhaustiveness arena for one check's analysis and result.
+fn beginExhaustivenessArena(self: *Self) void {
+    if (self.exhaustiveness_arena_in_use) base.invariant("check invariant violated: an exhaustiveness check started inside another", .{});
+    self.exhaustiveness_arena_in_use = true;
+}
+
+/// Release the exhaustiveness arena once a check's result is consumed. Analysis
+/// memory past a bounded chunk goes back to the allocator instead of staying
+/// with the checker.
+fn endExhaustivenessArena(self: *Self) void {
+    self.exhaustiveness_arena_in_use = false;
+    _ = self.exhaustiveness_arena.reset(.{ .retain_with_limit = 1 << 20 });
+}
+
 fn closeExhaustiveVars(
     self: *Self,
     result: exhaustive.CheckResult,
@@ -30990,8 +31013,10 @@ fn checkPatternExhaustiveness(
 
     var open_cache = exhaustive.NominalOpenCache.init(self.gpa);
     defer open_cache.deinit();
+    self.beginExhaustivenessArena();
+    defer self.endExhaustivenessArena();
     const result_or_err = exhaustive.checkDestructure(
-        self.cir.gpa,
+        &self.exhaustiveness_arena,
         self.types,
         self.cir,
         &self.cir.store,
@@ -31006,7 +31031,6 @@ fn checkPatternExhaustiveness(
         error.OutOfMemory => return error.OutOfMemory,
         error.TypeError => return false,
     };
-    defer result.deinit();
 
     try self.closeExhaustiveVars(result, env, region);
 

@@ -1028,7 +1028,7 @@ fn buildUnionFromTagUnion(
     var current_ext = tag_union.ext;
 
     // Track seen extension variables to detect cycles
-    var seen_exts = std.AutoHashMap(Var, void).init(allocator);
+    var seen_exts = collections.DenseMap(Var, void).init(allocator);
     defer seen_exts.deinit();
 
     // Follow extension chain to collect all tags
@@ -1733,7 +1733,7 @@ fn collectCtorPayloadTagUnionBlockers(
     out: *std.ArrayList(Var),
     seen: *std.AutoHashMapUnmanaged(Var, void),
 ) error{OutOfMemory}!void {
-    var seen_exts: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    var seen_exts: collections.DenseMapUnmanaged(Var, void) = .empty;
     defer seen_exts.deinit(type_store.gpa);
 
     var current_tags = initial_tag_union.tags;
@@ -2062,14 +2062,14 @@ fn findTagId(union_info: Union, tag_name: Ident.Idx) ?TagId {
 
 /// Constructor ids of a union by constructor name, so a constructor pattern
 /// resolves its id in constant time however wide the union is.
-const TagIdsByName = std.AutoHashMapUnmanaged(u29, TagId);
+const TagIdsByName = collections.DenseMapUnmanaged(u29, TagId);
 
 fn tagIdsByName(allocator: std.mem.Allocator, union_info: Union) error{OutOfMemory}!TagIdsByName {
     var tag_ids: TagIdsByName = .empty;
     try tag_ids.ensureTotalCapacity(allocator, @intCast(union_info.alternatives.len));
     for (union_info.alternatives) |alt| {
         const alt_ident = ctorNameIdent(alt.name) orelse continue;
-        const gop = tag_ids.getOrPutAssumeCapacity(alt_ident.idx);
+        const gop = try tag_ids.getOrPut(allocator, alt_ident.idx);
         if (!gop.found_existing) gop.value_ptr.* = alt.tag_id;
     }
     return tag_ids;
@@ -2080,7 +2080,7 @@ fn tagIdsByName(allocator: std.mem.Allocator, union_info: Union) error{OutOfMemo
 const RecordFieldUnion = struct {
     names: std.ArrayList(Ident.Idx) = .empty,
     types: std.ArrayList(Var) = .empty,
-    seen: std.AutoHashMapUnmanaged(u29, void) = .empty,
+    seen: collections.DenseMapUnmanaged(u29, void) = .empty,
 
     fn add(self: *RecordFieldUnion, allocator: std.mem.Allocator, name: Ident.Idx, ty: Var) error{OutOfMemory}!void {
         const gop = try self.seen.getOrPut(allocator, name.idx);
@@ -2194,7 +2194,7 @@ fn getCtorArgTypes(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_v
             const target_idx = @backingInt(tag_id);
 
             // Track seen extension variables to detect cycles
-            var seen_exts = std.AutoHashMap(Var, void).init(type_store.gpa);
+            var seen_exts = collections.DenseMap(Var, void).init(type_store.gpa);
             defer seen_exts.deinit();
 
             while (true) {
@@ -2754,11 +2754,11 @@ fn specializeByConstructorSketched(
                         // Build the new row with fields aligned to target order
                         const new_row = try allocator.alloc(UnresolvedPattern, arity + rest.len);
 
-                        var pat_positions: std.AutoHashMapUnmanaged(u29, usize) = .empty;
+                        var pat_positions: collections.DenseMapUnmanaged(u29, usize) = .empty;
                         defer pat_positions.deinit(allocator);
                         try pat_positions.ensureTotalCapacity(allocator, @intCast(pat_fields.len));
                         for (pat_fields, 0..) |pat_field, j| {
-                            const gop = pat_positions.getOrPutAssumeCapacity(pat_field.idx);
+                            const gop = try pat_positions.getOrPut(allocator, pat_field.idx);
                             if (!gop.found_existing) gop.value_ptr.* = j;
                         }
                         for (targets, 0..) |target_field, i| {
@@ -3950,10 +3950,10 @@ pub fn checkRedundancySketched(
 //
 // These functions provide a simpler interface for the type checker to call.
 
-/// Result of exhaustiveness and redundancy checking
+/// Result of exhaustiveness and redundancy checking. Every slice below, and
+/// every pattern the missing patterns nest, lives in the arena `checkMatch`
+/// was given.
 pub const CheckResult = struct {
-    /// Owns every slice below, and every pattern the missing patterns nest.
-    arena: base.SingleThreadArena,
     /// Whether the match is exhaustive
     is_exhaustive: bool,
     /// Diagnostic-only missing patterns. Analysis type
@@ -3975,11 +3975,6 @@ pub const CheckResult = struct {
     /// empty_tag_union. Exhaustiveness relied on these payloads being
     /// unconstructible.
     payload_vars_to_close: []const Var,
-
-    /// Free all allocated memory in the result
-    pub fn deinit(self: CheckResult) void {
-        self.arena.deinit();
-    }
 };
 
 /// Perform full exhaustiveness and redundancy checking on a match expression.
@@ -3992,7 +3987,7 @@ pub const CheckResult = struct {
 /// (e.g., polymorphic types, type mismatches). The caller should handle this by
 /// skipping exhaustiveness error reporting for that match expression.
 pub fn checkMatch(
-    allocator: std.mem.Allocator,
+    arena: *base.SingleThreadArena,
     source_store: *types.Store,
     module_env: *const Can.ModuleEnv,
     node_store: *const NodeStore,
@@ -4005,10 +4000,7 @@ pub fn checkMatch(
 ) PatternResolveError!CheckResult {
     const type_store = builtin_idents.open_cache.reader(source_store);
     defer builtin_idents.open_cache.finishRead();
-    // Every allocation, results included, lives in one arena that the result
-    // owns.
-    var arena = base.SingleThreadArena.init(allocator);
-    errdefer arena.deinit();
+    // Every allocation, results included, lives in the caller's arena.
     const arena_alloc = arena.allocator();
 
     // Phase 1: Convert CIR patterns to sketched (unresolved) patterns
@@ -4085,7 +4077,6 @@ pub fn checkMatch(
     exportBlockers(type_store, &payload_vars_to_close);
     for (@constCast(missing)) |*pattern| try pattern.detachAnalysisTypes(arena_alloc);
     return .{
-        .arena = arena,
         .is_exhaustive = missing.len == 0,
         .missing_patterns = missing,
         .redundant_indices = redundancy.redundant_indices,
@@ -4102,7 +4093,7 @@ pub fn checkMatch(
 /// This uses the same matrix algorithm as match expressions, with a single row
 /// corresponding to the destructure pattern.
 pub fn checkDestructure(
-    allocator: std.mem.Allocator,
+    arena: *base.SingleThreadArena,
     source_store: *types.Store,
     module_env: *const Can.ModuleEnv,
     node_store: *const NodeStore,
@@ -4114,8 +4105,7 @@ pub fn checkDestructure(
 ) PatternResolveError!CheckResult {
     const type_store = builtin_idents.open_cache.reader(source_store);
     defer builtin_idents.open_cache.finishRead();
-    var arena = base.SingleThreadArena.init(allocator);
-    errdefer arena.deinit();
+    // Every allocation, results included, lives in the caller's arena.
     const arena_alloc = arena.allocator();
 
     var numeral_keys = NumeralKeyInterner{ .module_env = module_env };
@@ -4187,7 +4177,6 @@ pub fn checkDestructure(
     exportBlockers(type_store, &payload_vars_to_close);
     for (@constCast(missing)) |*pattern| try pattern.detachAnalysisTypes(arena_alloc);
     return .{
-        .arena = arena,
         .is_exhaustive = missing.len == 0,
         .missing_patterns = missing,
         .redundant_indices = redundancy.redundant_indices,
@@ -4418,8 +4407,7 @@ fn resultAllocationFailureCase(gpa: Allocator) (Allocator.Error || Ident.Error |
     const name = try idents.insert(std.testing.allocator, try Ident.from_bytes("field"));
     const vars = [_]Var{@fromBackingInt(1)};
     var arena = base.SingleThreadArena.init(gpa);
-    var transferred = false;
-    defer if (!transferred) arena.deinit();
+    defer arena.deinit();
     const arena_alloc = arena.allocator();
     const args = try arena_alloc.dupe(Pattern, &.{.{ .anything = vars[0] }});
     const alternatives = [_]CtorInfo{.{ .name = .{ .tag = name }, .tag_id = .only, .arity = 1 }};
@@ -4432,8 +4420,7 @@ fn resultAllocationFailureCase(gpa: Allocator) (Allocator.Error || Ident.Error |
         .args = args,
     } }});
     for (missing) |*pattern| try pattern.detachAnalysisTypes(arena_alloc);
-    var result: CheckResult = .{
-        .arena = undefined,
+    const result: CheckResult = .{
         .is_exhaustive = false,
         .missing_patterns = missing,
         .redundant_indices = try arena_alloc.dupe(u32, &.{1}),
@@ -4443,9 +4430,6 @@ fn resultAllocationFailureCase(gpa: Allocator) (Allocator.Error || Ident.Error |
         .ext_vars_to_close = try arena_alloc.dupe(Var, &vars),
         .payload_vars_to_close = try arena_alloc.dupe(Var, &vars),
     };
-    result.arena = arena;
-    transferred = true;
-    defer result.deinit();
     try std.testing.expectEqual(@as(?Var, null), result.missing_patterns[0].ctor.args[0].anything);
     try std.testing.expectEqual(@as(usize, 0), result.missing_patterns[0].ctor.union_info.render_as.record.types.len);
 }
