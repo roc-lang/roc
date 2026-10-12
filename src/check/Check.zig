@@ -1576,6 +1576,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .nonlocal_value_lookups = .settled,
     .erroneous_value_exprs = .settled,
     .erroneous_statements = .settled,
+    .late_rejectable_for_loops = .settled,
     .rejected_destructure_defs = .settled,
     .call_operand_type_error_exprs = .keyed,
     .retired_operand_sequences = .keyed,
