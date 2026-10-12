@@ -22736,6 +22736,9 @@ const BodyContext = struct {
         return relation_base;
     }
 
+    /// The lexical binder environment a context set aside to lower a closed
+    /// expression. `nested_relation_base` relates exactly these binders in
+    /// the view they belong to, so it is set aside and restored with them.
     const SavedBinderEnvironment = struct {
         binders: BinderMap,
         typed_binders: TypedBinders,
