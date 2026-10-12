@@ -256,7 +256,7 @@ test "CTFE schedule crosses modules and literal roots dependency first" {
     try std.testing.expectEqualSlices(bool, &.{ false, false, false }, schedule.cyclic);
 }
 
-test "CTFE schedule classifies cycles before execution and ignores address captures" {
+test "CTFE schedule classifies cycles before execution" {
     const a: LIR.ComptimeProducer = .{ .checked = @fromBackingInt(@intCast(2)) };
     const b: LIR.ComptimeProducer = .{ .checked = @fromBackingInt(@intCast(1)) };
     var nodes = [_]Node{
@@ -264,7 +264,6 @@ test "CTFE schedule classifies cycles before execution and ignores address captu
         testNode(1, b, &.{testRead(1, a)}),
         testNode(2, a, &.{}),
     };
-    nodes[2].demand.address_captures = &.{ 0, 1 };
     var schedule = try Schedule.build(std.testing.allocator, &nodes, &.{});
     defer schedule.deinit();
     try std.testing.expectEqualSlices(bool, &.{ true, false }, schedule.cyclic);

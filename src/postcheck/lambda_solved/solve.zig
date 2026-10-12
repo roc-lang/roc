@@ -470,7 +470,6 @@ const Solver = struct {
                 if (source.cached) |cached| {
                     if (cached.demand) |demand| {
                         if (!demand.permitsRetirement()) Common.invariant("cached callable retired without complete CTFE demand");
-                        try self.program.ctfe_demand.addContract(.{ .node = self.demandFn(fn_id), .demand = demand });
                         for (demand.eager_reads) |read| {
                             try self.program.ctfe_demand.addRead(.{
                                 .node = self.demandFn(fn_id),

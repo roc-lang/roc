@@ -540,19 +540,15 @@ pub const CtfeDemandRead = struct {
     completed: bool = false,
 };
 
-/// Address captures name callable producers but never schedule their bodies.
+/// A root's eager reads; function-address captures never schedule bodies.
 pub const CtfeDemandFacts = struct {
     reads: []const CtfeDemandRead = &.{},
-    address_captures: []const u32 = &.{},
-    cached_address_captures: []const [32]u8 = &.{},
     complete: bool = false,
     origin_region: ?base.Region = null,
     origin_loc: ?base.SourceLoc = null,
 
     pub fn deinit(self: CtfeDemandFacts, allocator: Allocator) void {
         allocator.free(self.reads);
-        allocator.free(self.address_captures);
-        allocator.free(self.cached_address_captures);
     }
 };
 
@@ -711,7 +707,6 @@ pub const CachedCtfeDemand = struct {
     complete: bool,
     eager_reads: []const CachedCtfeRead = &.{},
     literal_reads: []const CachedLiteralRead = &.{},
-    address_captures: []const [32]u8 = &.{},
 
     pub fn permitsRetirement(self: CachedCtfeDemand) bool {
         if (self.version != current_version or !self.complete) return false;
@@ -723,7 +718,6 @@ pub const CachedCtfeDemand = struct {
         allocator.free(self.eager_reads);
         for (self.literal_reads) |read| read.recipe.deinit(allocator);
         allocator.free(self.literal_reads);
-        allocator.free(self.address_captures);
     }
 };
 

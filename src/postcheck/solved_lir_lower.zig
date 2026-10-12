@@ -4612,18 +4612,8 @@ const Lowerer = struct {
             const read = self.solved.ctfe_demand.reads.items[index];
             out.* = .{ .module = read.root.module, .producer = read.root.root, .region = read.region, .loc = read.loc, .completed = read.root.completion != .pending };
         }
-        const captures = try self.allocator.alloc(u32, summary.address_captures.len);
-        errdefer self.allocator.free(captures);
-        for (summary.address_captures, captures) |index, *out| out.* = @backingInt(self.solved.ctfe_demand.edges.items[index].to);
-        var cached_captures = std.ArrayList([32]u8).empty;
-        errdefer cached_captures.deinit(self.allocator);
-        for (summary.cached_contracts) |index| {
-            try cached_captures.appendSlice(self.allocator, self.solved.ctfe_demand.contracts.items[index].demand.address_captures);
-        }
         return .{
             .reads = reads,
-            .address_captures = captures,
-            .cached_address_captures = try cached_captures.toOwnedSlice(self.allocator),
             .complete = summary.complete,
             .origin_region = switch (self.solved.lifted.getFn(source).body) {
                 .roc => |body| self.solved.lifted.exprRegion(body),
@@ -4646,8 +4636,6 @@ const Lowerer = struct {
             for (literal_reads.items) |read| read.recipe.deinit(self.allocator);
             literal_reads.deinit(self.allocator);
         }
-        var captures = std.ArrayList([32]u8).empty;
-        errdefer captures.deinit(self.allocator);
         var complete = summary.complete;
         for (summary.reads) |index| {
             const read = self.solved.ctfe_demand.reads.items[index];
@@ -4710,19 +4698,6 @@ const Lowerer = struct {
                 .cause = cause,
             });
         }
-        const fn_offset = self.solved.lifted.exprsView().len + self.solved.lifted.stmtsView().len;
-        for (summary.address_captures) |index| {
-            const target = @backingInt(self.solved.ctfe_demand.edges.items[index].to);
-            if (target < fn_offset) Common.invariant("CTFE address capture did not name a callable producer");
-            const fn_ = self.solved.lifted.getFn(@fromBackingInt(@intCast(target - fn_offset)));
-            const key = if (fn_.source) |template| template.spec_key else fn_.root_identity;
-            if (key) |identity| {
-                try captures.append(self.allocator, identity.bytes);
-            } else complete = false;
-        }
-        for (summary.cached_contracts) |index| {
-            try captures.appendSlice(self.allocator, self.solved.ctfe_demand.contracts.items[index].demand.address_captures);
-        }
         const owned_reads = try reads.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(owned_reads);
         const owned_literals = try literal_reads.toOwnedSlice(self.allocator);
@@ -4730,7 +4705,7 @@ const Lowerer = struct {
             for (owned_literals) |read| read.recipe.deinit(self.allocator);
             self.allocator.free(owned_literals);
         }
-        return .{ .complete = complete, .eager_reads = owned_reads, .literal_reads = owned_literals, .address_captures = try captures.toOwnedSlice(self.allocator) };
+        return .{ .complete = complete, .eager_reads = owned_reads, .literal_reads = owned_literals };
     }
 
     fn cachedLiteralLocalContexts(self: *const Lowerer, declaration: Mono.LiteralRecipe) Allocator.Error![]const LirProgram.CachedLiteralLocalContext {

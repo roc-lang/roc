@@ -17,6 +17,9 @@ Static := [].{
         $sum
     }
 
+    scaled : I64 -> I64
+    scaled = |factor| values.fold(0.I64, |sum, value| sum + value * factor)
+
     guarded : U64 -> I64
     guarded = |index| {
         var $round = 0.U64

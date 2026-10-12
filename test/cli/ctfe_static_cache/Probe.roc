@@ -7,10 +7,14 @@ Probe := [].{
     guarded_value : I64
     guarded_value = Static.guarded(1) + Static.guarded(2)
 
+    scaled_value : I64
+    scaled_value = Static.scaled(2)
+
     validated : {}
     validated = {
         expect Probe.value == 233.I64
         expect Probe.guarded_value == 705.I64
+        expect Probe.scaled_value == 116.I64
         {}
     }
 }
@@ -18,5 +22,7 @@ Probe := [].{
 expect Probe.value == 233.I64
 
 expect Probe.guarded_value == 705.I64
+
+expect Probe.scaled_value == 116.I64
 
 validation = Probe.validated

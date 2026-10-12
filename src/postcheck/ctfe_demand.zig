@@ -44,12 +44,6 @@ pub const LateApplication = struct {
     boxed: bool = false,
 };
 
-/// The published demand summary that stands in for a node whose cached body is retired.
-pub const Contract = struct {
-    node: NodeId,
-    demand: @import("lir_core").Program.CachedCtfeDemand,
-};
-
 /// Only touched keys are enumerated. An empty component never scans the
 /// capacity retained from a previous broad component.
 const ScratchSet = struct {
@@ -116,7 +110,6 @@ pub const Graph = struct {
     read_starts: []u32 = &.{},
     components: []u32 = &.{},
     summaries: std.ArrayList(Summary) = .empty,
-    contracts: std.ArrayList(Contract) = .empty,
     closure_scratch_work: u64 = 0,
 
     pub fn init(allocator: std.mem.Allocator, node_count: u32) Graph {
@@ -133,7 +126,6 @@ pub const Graph = struct {
         self.allocator.free(self.components);
         for (self.summaries.items) |*summary| summary.deinit(self.allocator);
         self.summaries.deinit(self.allocator);
-        self.contracts.deinit(self.allocator);
         self.* = undefined;
     }
 
@@ -147,19 +139,12 @@ pub const Graph = struct {
         result.edge_starts = try allocator.dupe(u32, self.edge_starts);
         result.read_starts = try allocator.dupe(u32, self.read_starts);
         result.components = try allocator.dupe(u32, self.components);
-        try result.contracts.appendSlice(allocator, self.contracts.items);
         result.closure_scratch_work = self.closure_scratch_work;
         for (self.summaries.items) |summary| {
             const reads = try allocator.dupe(u32, summary.reads);
             errdefer allocator.free(reads);
-            const captures = try allocator.dupe(u32, summary.address_captures);
-            errdefer allocator.free(captures);
-            const contracts = try allocator.dupe(u32, summary.cached_contracts);
-            errdefer allocator.free(contracts);
             try result.summaries.append(allocator, .{
                 .reads = reads,
-                .address_captures = captures,
-                .cached_contracts = contracts,
                 .complete = summary.complete,
             });
         }
@@ -205,12 +190,6 @@ pub const Graph = struct {
         try self.unavailable.append(self.allocator, node);
     }
 
-    pub fn addContract(self: *Graph, contract: Contract) std.mem.Allocator.Error!void {
-        self.requireOpen();
-        self.validate(contract.node);
-        try self.contracts.append(self.allocator, contract);
-    }
-
     pub fn seal(self: *Graph) std.mem.Allocator.Error!void {
         self.requireOpen();
         const edge_starts = try self.allocator.alloc(u32, @as(usize, self.node_count) + 1);
@@ -251,16 +230,10 @@ pub const Graph = struct {
     pub const Summary = struct {
         /// Every retained read cause, not merely a root-deduplicated set.
         reads: []u32,
-        /// Address-only edges reached during execution, without entering
-        /// their target's body. These are not eager root dependencies.
-        address_captures: []u32,
-        cached_contracts: []u32,
         complete: bool,
 
         pub fn deinit(self: *Summary, allocator: std.mem.Allocator) void {
             allocator.free(self.reads);
-            allocator.free(self.address_captures);
-            allocator.free(self.cached_contracts);
             self.* = undefined;
         }
     };
@@ -271,14 +244,8 @@ pub const Graph = struct {
         self.validate(owner);
         if (self.edge_starts.len == 0) Common.invariant("CTFE demand summary requested before producer seal");
         const summary = self.summaries.items[self.components[@backingInt(owner)]];
-        const reads = try allocator.dupe(u32, summary.reads);
-        errdefer allocator.free(reads);
-        const captures = try allocator.dupe(u32, summary.address_captures);
-        errdefer allocator.free(captures);
         return .{
-            .reads = reads,
-            .address_captures = captures,
-            .cached_contracts = try allocator.dupe(u32, summary.cached_contracts),
+            .reads = try allocator.dupe(u32, summary.reads),
             .complete = summary.complete,
         };
     }
@@ -289,15 +256,12 @@ pub const Graph = struct {
     /// repeated walks of fact-free chains.
     fn buildSharedSummaries(self: *Graph) std.mem.Allocator.Error!void {
         const unseen = std.math.maxInt(u32);
-        const State = struct { index: u32 = unseen, low: u32 = unseen, on_stack: bool = false, unavailable: bool = false, contract: ?u32 = null };
+        const State = struct { index: u32 = unseen, low: u32 = unseen, on_stack: bool = false, unavailable: bool = false };
         const Frame = struct { node: u32, edge: u32 };
         const states = try self.allocator.alloc(State, self.node_count);
         defer self.allocator.free(states);
         @memset(states, .{});
         for (self.unavailable.items) |node| states[@backingInt(node)].unavailable = true;
-        for (self.contracts.items, 0..) |contract, index| {
-            states[@backingInt(contract.node)].contract = @intCast(index);
-        }
         const components = try self.allocator.alloc(u32, self.node_count);
         errdefer self.allocator.free(components);
         @memset(components, unseen);
@@ -314,12 +278,8 @@ pub const Graph = struct {
         defer members.deinit(self.allocator);
         var read_set = try ScratchSet.init(self.allocator, self.reads.items.len);
         defer read_set.deinit();
-        var capture_set = try ScratchSet.init(self.allocator, self.edges.items.len);
-        defer capture_set.deinit();
         var dependency_set = try ScratchSet.init(self.allocator, self.node_count);
         defer dependency_set.deinit();
-        var contract_set = try ScratchSet.init(self.allocator, self.contracts.items.len);
-        defer contract_set.deinit();
         var next_index: u32 = 0;
         for (0..self.node_count) |start_index| {
             const start: u32 = @intCast(start_index);
@@ -366,19 +326,15 @@ pub const Graph = struct {
                     if (member == node) break;
                 }
                 read_set.reset(component);
-                capture_set.reset(component);
                 dependency_set.reset(component);
-                contract_set.reset(component);
                 var complete = true;
                 for (members.items) |member| {
                     if (states[member].unavailable) complete = false;
-                    if (states[member].contract) |contract| try contract_set.put(contract);
                     for (self.read_starts[member]..self.read_starts[member + 1]) |read| try read_set.put(@intCast(read));
                     for (self.edge_starts[member]..self.edge_starts[member + 1]) |edge_index| {
                         const edge = self.edges.items[edge_index];
                         switch (edge.relation) {
-                            .address_capture => try capture_set.put(@intCast(edge_index)),
-                            .representation => {},
+                            .address_capture, .representation => {},
                             .evaluation, .application => {
                                 const dependency = components[@backingInt(edge.to)];
                                 if (dependency == unseen) Common.invariant("CTFE demand component consumed an unfinished predecessor");
@@ -392,21 +348,15 @@ pub const Graph = struct {
                     const summary = summaries.items[dependency];
                     complete = complete and summary.complete;
                     for (summary.reads) |read| try read_set.put(read);
-                    for (summary.address_captures) |capture| try capture_set.put(capture);
-                    for (summary.cached_contracts) |contract| try contract_set.put(contract);
                 }
                 const reads = try read_set.sortedKeys();
                 errdefer self.allocator.free(reads);
-                const captures = try capture_set.sortedKeys();
-                errdefer self.allocator.free(captures);
-                const contracts = try contract_set.sortedKeys();
-                errdefer self.allocator.free(contracts);
-                try summaries.append(self.allocator, .{ .reads = reads, .address_captures = captures, .cached_contracts = contracts, .complete = complete });
+                try summaries.append(self.allocator, .{ .reads = reads, .complete = complete });
             }
         }
         self.components = components;
         self.summaries = summaries;
-        self.closure_scratch_work = read_set.work + capture_set.work + dependency_set.work + contract_set.work;
+        self.closure_scratch_work = read_set.work + dependency_set.work;
     }
 
     fn requireOpen(self: *const Graph) void {
@@ -476,8 +426,6 @@ test "CTFE demand retired comparator propagates incompleteness only through appl
     defer box.deinit(allocator);
     try std.testing.expect(!sort.complete);
     try std.testing.expect(box.complete);
-    try std.testing.expectEqual(@as(usize, 1), sort.address_captures.len);
-    try std.testing.expectEqualSlices(u32, sort.address_captures, box.address_captures);
 }
 
 test "CTFE demand shares component closure facts along long sorted chains" {
@@ -522,9 +470,9 @@ test "CTFE demand scratch work stays linear after fanout followed by isolated no
             try graph.addEdge(hub, @fromBackingInt(@intCast(@backingInt(first_target) + offset)), .application);
         }
         try graph.seal();
-        // Four generation resets per component, domain initialization, and
+        // Two generation resets per component, domain initialization, and
         // one insertion plus one dense visit per outgoing dependency.
-        try std.testing.expectEqual(@as(u64, 13) * width + 5, graph.closure_scratch_work);
+        try std.testing.expectEqual(@as(u64, 8) * width + 3, graph.closure_scratch_work);
     }
 }
 

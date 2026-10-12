@@ -66,6 +66,14 @@ offers = re.findall(
     flags=re.MULTILINE,
 )
 assert offers, "Seed trace did not establish a published Static.read specialization"
+# A helper that passes a local closure captures that closure's address. The
+# capture adds no eager read, so the helper's demand is complete and offered.
+scaled_offers = re.findall(
+    r"^offer ([0-9a-f]{64}) [0-9a-f]+ Static\.scaled\s*$",
+    seed.stderr,
+    flags=re.MULTILINE,
+)
+assert scaled_offers, "Seed trace did not publish the closure-passing Static.scaled specialization"
 
 probe = source / "Probe.roc"
 text = probe.read_text()
@@ -79,6 +87,9 @@ consumer = run("edited-consumer", "Probe.roc", trace=True)
 hit_keys = set(re.findall(r"lookup monotype key=([0-9a-f]+) hit", consumer.stderr))
 assert any(key[:16] in hit_keys for key in offers), (
     "Edited consumer did not establish reuse of the published Static.read offer"
+)
+assert any(key[:16] in hit_keys for key in scaled_offers), (
+    "Edited consumer did not reuse the published Static.scaled offer"
 )
 
 # The same unchanged helper must preserve both ordinary crashes and failure
