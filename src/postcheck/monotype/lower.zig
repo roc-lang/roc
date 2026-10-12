@@ -22736,6 +22736,36 @@ const BodyContext = struct {
         return relation_base;
     }
 
+    /// The lexical binder environment a context set aside to lower a closed
+    /// expression. `nested_relation_base` relates exactly these binders in
+    /// the view they belong to, so it is set aside and restored with them.
+    const SavedBinderEnvironment = struct {
+        binders: BinderMap,
+        typed_binders: TypedBinders,
+        nested_relation_base: ?*NestedRelationBase,
+    };
+
+    fn enterFreshBinderEnvironment(self: *BodyContext, binder_count: usize) Allocator.Error!SavedBinderEnvironment {
+        const saved: SavedBinderEnvironment = .{
+            .binders = self.binders,
+            .typed_binders = self.typed_binders,
+            .nested_relation_base = self.nested_relation_base,
+        };
+        self.binders = try BinderMap.init(self.allocator, binder_count);
+        self.typed_binders = TypedBinders.init(self.allocator);
+        self.nested_relation_base = null;
+        return saved;
+    }
+
+    fn restoreBinderEnvironment(self: *BodyContext, saved: SavedBinderEnvironment) void {
+        self.destroyNestedRelationBase();
+        self.binders.deinit();
+        self.typed_binders.deinit();
+        self.binders = saved.binders;
+        self.typed_binders = saved.typed_binders;
+        self.nested_relation_base = saved.nested_relation_base;
+    }
+
     fn destroyNestedRelationBase(self: *BodyContext) void {
         const relation_base = self.nested_relation_base orelse return;
         self.nested_relation_base = null;
@@ -42939,18 +42969,11 @@ const BodyContext = struct {
             self.source_file_id = previous_source_file_id;
         }
         const crosses_module = !moduleBytesEqual(previous_view.key.bytes, local_view.key.bytes);
-        const previous_binders = self.binders;
-        const previous_typed_binders = self.typed_binders;
-        if (crosses_module) {
-            self.binders = try BinderMap.init(self.allocator, local_view.bodies.patternBinderCount());
-            self.typed_binders = TypedBinders.init(self.allocator);
-        }
-        defer if (crosses_module) {
-            self.binders.deinit();
-            self.typed_binders.deinit();
-            self.binders = previous_binders;
-            self.typed_binders = previous_typed_binders;
-        };
+        const saved_binders = if (crosses_module)
+            try self.enterFreshBinderEnvironment(local_view.bodies.patternBinderCount())
+        else
+            null;
+        defer if (saved_binders) |saved| self.restoreBinderEnvironment(saved);
         var installed_context = try self.installLocalProcContext(context);
         defer installed_context.deinit();
         const previous_owner_template = self.owner_template;
@@ -47031,15 +47054,9 @@ const BodyContext = struct {
             // one body would capture the first's (or the consuming body's)
             // lexical binder entries into its local-procedure declaration
             // contexts and trip the one-context-per-binder invariant.
-            const previous_binders = self.binders;
-            const previous_typed_binders = self.typed_binders;
-            self.binders = try BinderMap.init(self.allocator, self.view.bodies.patternBinderCount());
-            self.typed_binders = TypedBinders.init(self.allocator);
+            const saved_binders = try self.enterFreshBinderEnvironment(self.view.bodies.patternBinderCount());
             defer {
-                self.binders.deinit();
-                self.typed_binders.deinit();
-                self.binders = previous_binders;
-                self.typed_binders = previous_typed_binders;
+                self.restoreBinderEnvironment(saved_binders);
                 self.in_default_expr = previous_in_default_expr;
                 self.instantiation.deinit();
                 self.instantiation = previous_instantiation;
@@ -47069,18 +47086,12 @@ const BodyContext = struct {
         // The default is a closed expression: it binds nothing from the
         // consuming body, so foreign lowering gets fresh binder state
         // exactly like a cross-module local procedure.
-        const previous_binders = self.binders;
-        const previous_typed_binders = self.typed_binders;
-        self.binders = try BinderMap.init(self.allocator, declaring_view.bodies.patternBinderCount());
-        self.typed_binders = TypedBinders.init(self.allocator);
+        const saved_binders = try self.enterFreshBinderEnvironment(declaring_view.bodies.patternBinderCount());
         const previous_in_default_expr = self.in_default_expr;
         self.in_default_expr = true;
         defer {
             self.in_default_expr = previous_in_default_expr;
-            self.binders.deinit();
-            self.typed_binders.deinit();
-            self.binders = previous_binders;
-            self.typed_binders = previous_typed_binders;
+            self.restoreBinderEnvironment(saved_binders);
         }
         return try self.lowerExprAtTypeCell(default_expr, field_cell);
     }
