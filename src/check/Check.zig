@@ -28502,7 +28502,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
             // the statement without poisoning that class.
             const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, stmt_region);
             if (try self.discardedVarUpdate(expr.expr, empty_rec)) |var_ident| {
-                _ = try self.problems.appendProblem(self.gpa, .{ .discarded_var_update = .{
+                _ = try self.problems.appendProblem(.{ .discarded_var_update = .{
                     .expr_region = self.cir.store.getExprRegion(expr.expr),
                     .var_ident = var_ident,
                 } });
