@@ -16978,8 +16978,10 @@ test "post-check diagnostics preserve labeled SpecConstr counts" {
     for (specConstrParallelCounters(.{})) |row| try std.testing.expectEqual(@as(u64, 0), row.count);
 }
 
-fn arcParallelCounters(parallel: lir.CheckedPipeline.ArcParallelMetrics) [17]progress.Counter {
+fn arcParallelCounters(parallel: lir.CheckedPipeline.ArcParallelMetrics) [19]progress.Counter {
     return .{
+        .{ .name = "Dismantle tasks submitted", .count = parallel.dismantle_tasks_submitted },
+        .{ .name = "Dismantle tasks committed", .count = parallel.dismantle_tasks_committed },
         .{ .name = "Source tasks submitted", .count = parallel.source_tasks_submitted },
         .{ .name = "Source tasks committed", .count = parallel.source_tasks_committed },
         .{ .name = "Planning tasks submitted", .count = parallel.planning_tasks_submitted },
@@ -17002,27 +17004,31 @@ fn arcParallelCounters(parallel: lir.CheckedPipeline.ArcParallelMetrics) [17]pro
 
 test "post-check diagnostics preserve labeled ARC counts" {
     const rows = arcParallelCounters(.{
-        .source_tasks_submitted = 1,
-        .source_tasks_committed = 2,
-        .planning_tasks_submitted = 3,
-        .planning_tasks_committed = 4,
-        .emission_tasks_submitted = 5,
-        .emission_tasks_committed = 6,
-        .waves = 7,
-        .variants_reserved = 8,
+        .dismantle_tasks_submitted = 1,
+        .dismantle_tasks_committed = 2,
+        .source_tasks_submitted = 3,
+        .source_tasks_committed = 4,
+        .planning_tasks_submitted = 5,
+        .planning_tasks_committed = 6,
+        .emission_tasks_submitted = 7,
+        .emission_tasks_committed = 8,
+        .waves = 9,
+        .variants_reserved = 10,
         .uniqueness = .{
-            .settlements = 9,
-            .components = 10,
-            .component_runs = 11,
-            .task_submitted = 12,
-            .task_committed = 13,
-            .signature_waves = 14,
-            .signature_changes = 15,
-            .statement_visits = 16,
-            .local_visits = 17,
+            .settlements = 11,
+            .components = 12,
+            .component_runs = 13,
+            .task_submitted = 14,
+            .task_committed = 15,
+            .signature_waves = 16,
+            .signature_changes = 17,
+            .statement_visits = 18,
+            .local_visits = 19,
         },
     });
     const names = [_][]const u8{
+        "Dismantle tasks submitted",
+        "Dismantle tasks committed",
         "Source tasks submitted",
         "Source tasks committed",
         "Planning tasks submitted",

@@ -4,6 +4,8 @@
 //! reject specific ops that should have been lowered away earlier, but there is
 //! no separate semantic/backend enum pair.
 
+const std = @import("std");
+
 /// Canonical primitive operations shared across canonicalization and LIR/codegen.
 pub const LowLevel = enum(u16) {
     // String operations
@@ -108,8 +110,6 @@ pub const LowLevel = enum(u16) {
     /// runs it as a zero-length sublist from index zero, whose result is
     /// never a slice, so unlike `list_sublist` the result is born unique.
     list_clear,
-    list_split_first,
-    list_split_last,
     list_map_prepare_reuse,
     list_map_can_reuse,
     list_map_cast_unsafe,
@@ -982,8 +982,6 @@ pub const LowLevel = enum(u16) {
             .list_clear,
             .list_reverse,
             .list_sort_with,
-            .list_split_first,
-            .list_split_last,
             .list_map_can_reuse,
             .bool_not,
             .bool_likely,
@@ -1511,8 +1509,6 @@ pub const LowLevel = enum(u16) {
             .list_drop_last,
             .list_take_first,
             .list_take_last,
-            .list_split_first,
-            .list_split_last,
             => RcEffect.runtimeUniquenessMaybeSharedResult(argMask(&.{0})),
 
             .list_sublist_borrowed => RcEffect.retainsResultBorrowingArgs(argMask(&.{0})),
@@ -2135,3 +2131,12 @@ pub const LowLevel = enum(u16) {
         return mask;
     }
 };
+
+// Regression test for https://github.com/roc-lang/roc/issues/12204
+// No builtin produces a single-element list split, and the LLVM backend has no
+// lowering for one, so `LowLevel` must not declare `list_split_first` or
+// `list_split_last`.
+test "LowLevel declares no list_split_first or list_split_last op" {
+    try std.testing.expect(!@hasField(LowLevel, "list_split_first"));
+    try std.testing.expect(!@hasField(LowLevel, "list_split_last"));
+}

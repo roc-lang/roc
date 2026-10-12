@@ -30634,9 +30634,24 @@ const BodyContext = struct {
             // A control-flow expression produces values of its own type on
             // every path that does not diverge, so it lowers at its cell;
             // every other expression lowers its operands for their effects.
+            // A conditional whose scrutinee or first condition diverges runs
+            // nothing else, so only that operand lowers; its branches may not
+            // even have the continuation's shape.
             .at_cell => |cell| switch (checked_expr.data) {
-                .match_ => |match| return requestLowerTask(self, .{ .match_task = .{ .expr_id = expr_id, .match = match, .result_cell = cell } }),
-                .if_ => |if_| return requestLowerTask(self, .{ .if_task = .{ .expr_id = expr_id, .if_ = if_, .result_cell = cell } }),
+                .match_ => |match| {
+                    if (self.checkedExprDivergesInLoweredRuntime(match.cond)) {
+                        task.finish = .{ .effect_at_cell = cell };
+                        return divergentStep(self, match.cond, .{ .at_type = try self.unitType() });
+                    }
+                    return requestLowerTask(self, .{ .match_task = .{ .expr_id = expr_id, .match = match, .result_cell = cell } });
+                },
+                .if_ => |if_| {
+                    if (if_.branches.len > 0 and self.checkedExprDivergesInLoweredRuntime(if_.branches[0].cond)) {
+                        task.finish = .{ .effect_at_cell = cell };
+                        return divergentStep(self, if_.branches[0].cond, .{ .at_type = try self.unitType() });
+                    }
+                    return requestLowerTask(self, .{ .if_task = .{ .expr_id = expr_id, .if_ = if_, .result_cell = cell } });
+                },
                 .block => |block| return requestLowerTask(self, .{ .block = try self.boxLowerTask(BlockTask, .{
                     .statements = block.statements,
                     .final_expr = block.final_expr,
@@ -35314,10 +35329,13 @@ const BodyContext = struct {
     }
 
     /// Function rendering does not consume the function value, but the
-    /// source expression must still run: it lowers normally, the produced
-    /// callable is discarded, and the representation is the result.
+    /// source expression must still run: it lowers at its own type node, the
+    /// produced callable is discarded, and the representation is the result.
+    /// Nothing ever calls that callable, so its parameter types may have no
+    /// evidence; they settle with the rest of the body rather than being
+    /// demanded as an active type before the expression lowers.
     fn stepInspectOnly(self: *BodyContext, task: *InspectOnlyTask, input: ?LowerResult) Allocator.Error!LowerStep {
-        const evaluated = if (input) |lowered| lowered.exprValue() else return requestLowerTask(self, .{ .expr = .{ .expr = task.arg } });
+        const evaluated = if (input) |lowered| lowered.exprValue() else return requestLowerChild(self, task.arg, DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(task.arg)));
         const evaluation = try self.addStmt(.{ .expr = evaluated });
         return loweredExprStep(try self.addExpr(.{ .ty = task.str_ty, .data = .{ .block = .{
             .statements = try self.addStmtSpan(&.{evaluation}),

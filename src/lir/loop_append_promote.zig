@@ -175,12 +175,20 @@ const AppendSite = struct {
 };
 
 /// One promoted list parameter of a loop that may version on slack: its
-/// fill limit and how many appends one iteration of the loop performs on it
-/// at most.
+/// fill limit and how many appends the rest of the loop can perform on it.
+/// Entered with `remaining` iterations left, the body runs at most
+/// `remaining` passes that end in a back edge and then one pass that leaves
+/// the loop, and each pass runs each append site at most once, so at most
+/// `back_appends * remaining + exit_appends` appends follow.
 const SlackChain = struct {
     list_param: LocalId,
     limit_param: LocalId,
-    appends_per_iteration: u32,
+    /// The chain's append sites in the body.
+    sites: u32,
+    /// Sites from which the loop's back edge is reachable.
+    back_appends: u32,
+    /// Sites from which a statement leaving the loop is reachable.
+    exit_appends: u32,
 };
 
 /// Slack-versioning bookkeeping for one promoted loop.
@@ -2184,11 +2192,11 @@ const Pass = struct {
     }
 
     /// Record what slack versioning needs about the chain just promoted, for
-    /// every loop the chain passes through: the loop's limit parameter and
-    /// how many of the chain's append sites its body holds, which is how
-    /// many appends one iteration performs on the chain at most, since each
-    /// site runs at most once per iteration unless it sits in a nested loop,
-    /// which the versioning checks for itself. A loop is unbounded when its
+    /// every loop the chain passes through: the loop's limit parameter, how
+    /// many of the chain's append sites its body holds, and how many of them
+    /// can run on a pass that returns to the loop's head and on a pass that
+    /// leaves the loop. Each site runs at most once per pass unless it sits
+    /// in a nested loop, which the versioning checks for itself. A loop is unbounded when its
     /// body holds any other chain operation, or a list entering the chain,
     /// since neither keeps the limit the head measured; a chain with element
     /// overwrites carries owned flags and versions on those instead.
@@ -2214,12 +2222,17 @@ const Pass = struct {
                 defer stmts.deinit();
                 while (try stmts.next()) |stmt_id| try body_stmts.put(stmt_id, {});
             }
-            var appends: u32 = 0;
+            var sites: u32 = 0;
+            var back_appends: u32 = 0;
+            var exit_appends: u32 = 0;
             for (scan.edges.items) |edge| {
                 if (edge.flow == .outside or !body_stmts.contains(edge.stmt)) continue;
                 switch (edge.kind) {
                     .append_call => if (edge.flow == .carried) {
-                        appends += 1;
+                        sites += 1;
+                        const ends = try self.loopPassEnds(loop_stmt, edge.stmt);
+                        if (ends.back_edge) back_appends += 1;
+                        if (ends.exit) exit_appends += 1;
                     } else {
                         loop.unbounded = true;
                     },
@@ -2230,13 +2243,65 @@ const Pass = struct {
                     .param_write => {},
                 }
             }
-            if (appends == 0) continue;
+            if (sites == 0) continue;
             try loop.chains.append(self.allocator, .{
                 .list_param = entry.key_ptr.*,
                 .limit_param = slack_params.get(entry.key_ptr.*).?,
-                .appends_per_iteration = appends,
+                .sites = sites,
+                .back_appends = back_appends,
+                .exit_appends = exit_appends,
             });
         }
+    }
+
+    const PassEnds = struct {
+        back_edge: bool = false,
+        exit: bool = false,
+    };
+
+    /// How a pass through the loop's body can end once it has run `site`:
+    /// by jumping back to the loop's head, by leaving the loop (returning,
+    /// jumping to an enclosing join, or stopping), or either. Jumps to joins
+    /// declared inside the body continue into their bodies.
+    fn loopPassEnds(self: *Pass, loop_stmt: CFStmtId, site: CFStmtId) ResourceError!PassEnds {
+        const allocator = self.allocator;
+        const join = self.store.getCFStmt(loop_stmt).join;
+        var inner_joins = collections.DenseMap(LIR.JoinPointId, CFStmtId).init(allocator);
+        defer inner_joins.deinit();
+        {
+            var stmts = try body_clone.ReachableStmts.initWithScratch(self.store, join.body, self.analysis);
+            defer stmts.deinit();
+            while (try stmts.next()) |stmt_id| switch (self.store.getCFStmt(stmt_id)) {
+                .join => |inner| try inner_joins.put(inner.id, inner.body),
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_call_dict, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .jump, .ret, .crash, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match => {},
+            };
+        }
+
+        var ends: PassEnds = .{};
+        var work = std.ArrayList(CFStmtId).empty;
+        defer work.deinit(allocator);
+        var visited = collections.DenseMap(CFStmtId, void).init(allocator);
+        defer visited.deinit();
+        try body_clone.appendSuccessors(self.store, &work, site, allocator);
+        while (work.pop()) |stmt_id| {
+            if ((try visited.getOrPut(stmt_id)).found_existing) continue;
+            switch (self.store.getCFStmt(stmt_id)) {
+                .jump => |jump| {
+                    if (jump.target == join.id) {
+                        ends.back_edge = true;
+                    } else if (inner_joins.get(jump.target)) |inner_body| {
+                        try work.append(allocator, inner_body);
+                    } else {
+                        ends.exit = true;
+                    }
+                },
+                // A join's body runs only when something jumps to it.
+                .join => |inner| try work.append(allocator, inner.remainder),
+                .ret, .crash, .runtime_error, .comptime_exhaustiveness_failed, .expect_err, .loop_continue, .loop_break => ends.exit = true,
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_call_dict, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match => try body_clone.appendSuccessors(self.store, &work, stmt_id, allocator),
+            }
+        }
+        return ends;
     }
 
     /// Body-local definitions the copy of a loop body may rename: locals
@@ -2325,7 +2390,7 @@ const Pass = struct {
     fn slackVersionable(self: *Pass, loop_stmt: CFStmtId, promoted: []const CFStmtId) ResourceError!bool {
         const join = self.store.getCFStmt(loop_stmt).join;
         var checked_sites: u32 = 0;
-        for (self.slack_loops.get(loop_stmt).?.chains.items) |chain| checked_sites += chain.appends_per_iteration;
+        for (self.slack_loops.get(loop_stmt).?.chains.items) |chain| checked_sites += chain.sites;
         if (checked_sites != try self.bodyAppendSites(loop_stmt)) return false;
         var stmts = try body_clone.ReachableStmts.initWithScratch(self.store, join.body, self.analysis);
         defer stmts.deinit();
@@ -2654,24 +2719,14 @@ const Pass = struct {
             .literal => try self.freshLocal(.u64, new_locals),
         };
 
-        // Dispatch, innermost chain first: every chain's remaining slack,
-        // divided by the appends one iteration performs on it, must cover
-        // the remaining iterations. A chain that does not fit takes the
-        // body as promoted.
+        // Dispatch, innermost chain first: every chain's remaining slack must
+        // cover the appends the rest of the loop can perform on it. A chain
+        // that does not fit takes the body as promoted.
         var head = fast_loop;
         var index = chains.len;
         while (index > 0) {
             index -= 1;
-            const fits = try self.freshLocal(.bool, new_locals);
-            const branches = try self.store.addCFSwitchBranches(&.{.{ .value = 1, .body = head }});
-            head = try self.store.addCFStmt(.{ .switch_stmt = .{
-                .cond = fits,
-                .branches = branches,
-                .default_branch = join.body,
-                .default_is_cold = true,
-                .continuation = null,
-            } }, origin);
-            head = try self.emitChainFits(chains[index], fits, remaining, head, new_locals, origin);
+            head = try self.emitChainFits(chains[index], remaining, head, join.body, new_locals, origin);
         }
         const operands: [2]LocalId = switch (bound.direction) {
             .down => .{ bound.counter, limit_local },
@@ -2694,29 +2749,69 @@ const Pass = struct {
         self.store.getCFStmtPtr(loop_stmt).join.body = head;
     }
 
-    /// Emit `fits = (limit - len(list)) / appends >= remaining` ending at
-    /// `next`, returning the head statement. The division is left out when
-    /// one iteration appends once.
-    fn emitChainFits(self: *Pass, chain: SlackChain, fits: LocalId, remaining: LocalId, next: CFStmtId, new_locals: *std.ArrayList(LocalId), origin: LIR.StmtOrigin) ResourceError!CFStmtId {
+    /// Emit the dispatch for one chain, continuing at `fits` when its spare
+    /// capacity covers the appends the rest of the loop can perform on it
+    /// and at `slow` otherwise, returning the head statement:
+    ///
+    /// ```text
+    /// spare = limit - len(list)
+    /// if spare >= exit_appends and (spare - exit_appends) / back_appends >= remaining { fits } else { slow }
+    /// ```
+    ///
+    /// A comparison, subtraction, or division that cannot change the outcome
+    /// is left out.
+    fn emitChainFits(self: *Pass, chain: SlackChain, remaining: LocalId, fits: CFStmtId, slow: CFStmtId, new_locals: *std.ArrayList(LocalId), origin: LIR.StmtOrigin) ResourceError!CFStmtId {
         const len = try self.freshLocal(.u64, new_locals);
         const spare = try self.freshLocal(.u64, new_locals);
-        var covered = spare;
-        var head = next;
-        if (chain.appends_per_iteration > 1) {
-            covered = try self.freshLocal(.u64, new_locals);
-            const divisor = try self.freshLocal(.u64, new_locals);
-            head = try self.store.addLowLevelStmt(fits, .num_is_gte, &.{ covered, remaining }, head, origin);
-            head = try self.store.addLowLevelStmt(covered, .num_div_trunc_by, &.{ spare, divisor }, head, origin);
-            head = try self.store.addCFStmt(.{ .assign_literal = .{
-                .target = divisor,
-                .value = .{ .i128_literal = .{ .value = chain.appends_per_iteration, .layout_idx = .u64 } },
-                .next = head,
-            } }, origin);
-        } else {
-            head = try self.store.addLowLevelStmt(fits, .num_is_gte, &.{ covered, remaining }, head, origin);
+        var head = fits;
+        if (chain.back_appends != 0) {
+            const after_exits = if (chain.exit_appends != 0) try self.freshLocal(.u64, new_locals) else spare;
+            const covers = try self.freshLocal(.bool, new_locals);
+            head = try self.switchOn(covers, head, slow, origin);
+            if (chain.back_appends > 1) {
+                const covered = try self.freshLocal(.u64, new_locals);
+                const divisor = try self.freshLocal(.u64, new_locals);
+                head = try self.store.addLowLevelStmt(covers, .num_is_gte, &.{ covered, remaining }, head, origin);
+                head = try self.store.addLowLevelStmt(covered, .num_div_trunc_by, &.{ after_exits, divisor }, head, origin);
+                head = try self.literalU64(divisor, chain.back_appends, head, origin);
+            } else {
+                head = try self.store.addLowLevelStmt(covers, .num_is_gte, &.{ after_exits, remaining }, head, origin);
+            }
+            if (chain.exit_appends != 0) {
+                const exits = try self.freshLocal(.u64, new_locals);
+                head = try self.store.addLowLevelStmt(after_exits, .num_int_sub_wrap, &.{ spare, exits }, head, origin);
+                head = try self.literalU64(exits, chain.exit_appends, head, origin);
+            }
+        }
+        if (chain.exit_appends != 0) {
+            // Checked first, so the subtraction above cannot wrap.
+            const exits = try self.freshLocal(.u64, new_locals);
+            const holds_exits = try self.freshLocal(.bool, new_locals);
+            head = try self.switchOn(holds_exits, head, slow, origin);
+            head = try self.store.addLowLevelStmt(holds_exits, .num_is_gte, &.{ spare, exits }, head, origin);
+            head = try self.literalU64(exits, chain.exit_appends, head, origin);
         }
         head = try self.store.addLowLevelStmt(spare, .num_int_sub_wrap, &.{ chain.limit_param, len }, head, origin);
         return try self.store.addLowLevelStmt(len, .list_len, &.{chain.list_param}, head, origin);
+    }
+
+    fn switchOn(self: *Pass, cond: LocalId, on_true: CFStmtId, on_false: CFStmtId, origin: LIR.StmtOrigin) ResourceError!CFStmtId {
+        const branches = try self.store.addCFSwitchBranches(&.{.{ .value = 1, .body = on_true }});
+        return try self.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = cond,
+            .branches = branches,
+            .default_branch = on_false,
+            .default_is_cold = true,
+            .continuation = null,
+        } }, origin);
+    }
+
+    fn literalU64(self: *Pass, target: LocalId, value: u32, next: CFStmtId, origin: LIR.StmtOrigin) ResourceError!CFStmtId {
+        return try self.store.addCFStmt(.{ .assign_literal = .{
+            .target = target,
+            .value = .{ .i128_literal = .{ .value = value, .layout_idx = .u64 } },
+            .next = next,
+        } }, origin);
     }
 
     fn containsLocal(locals: []const LocalId, local: LocalId) bool {

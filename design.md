@@ -447,6 +447,9 @@ its exact runtime expression, never on its symbolic structure, so both fields
 are exact at any depth and reading them costs constant time. Substitution
 requires a substitutable value and admits it only when its expanded size is
 within an explicit code-growth limit; a larger value keeps its named binding.
+A compile-time value read is not a substitutable read: its value guard crashes
+where the program evaluates the read when that value's evaluation failed, so
+substitution may neither drop a discarded read nor move one to a later use.
 Making a value reusable is decided by substitutability alone, never by that
 limit: a substitutable value of any size is already reusable and is kept whole,
 so reuse never walks or copies its structure. A long interpolation binds one
@@ -5709,7 +5712,17 @@ the same operand record and leave the erroneous iterable expression in
 recovery, so the checker mints the plan's callable shapes without attaching
 constraints, marks both callable classes rejected, and records the required
 plan. CheckedModule construction consumes those rejection markers to seal
-both calls with explicit `checked_error` resolutions.
+both calls with explicit `checked_error` resolutions. An iterable can also be
+rejected after its loop was checked (`for c in "a"..="z" { echo!(c) }` decides
+the bounds are `Str`, which has no `range_inclusive_to`, only once the body
+relates the item type), when the loop's `iter` and `next` plans were already
+resolved against its type. The checker records every loop whose iterable was
+not erroneous when the loop was checked (`late_rejectable_for_loops`), and the
+erroneous-value sweep retires each one whose iterable has become erroneous: a
+statement loop becomes an expression statement of the iterable's runtime
+error, and a `for` expression becomes a runtime error that evaluates its
+iterable, so the loop binds nothing and never iterates, exactly as when the
+rejection was known while the loop was checked.
 
 A retired expression still evaluates strictly. When an expression is retired
 because an operand is erroneous (here or by the error-typed-value rule), the
@@ -19598,11 +19611,29 @@ is a proper part of its root's layout, so the order is acyclic and each
 deferred read is settled exactly once.
 A root therefore never commits a take on a read that is emitted as an alias of
 a container already holding the root's unit.
-Dominance is computed once from the explicit statement-successor graph with a
-synthetic entry for all procedure roots. Immediate dominators settle in reverse
+Dominance is computed from the explicit statement-successor graph with a
+synthetic entry for all procedure roots. Every path from that entry to a
+statement starts at the body of a procedure that reaches the statement and
+stays among statements that procedure reaches, so a statement dominates only
+statements of procedures that transitively share statements with its own.
+Each such component's graph is solved once, on its first query, and answers
+exactly as the whole store's graph would. Immediate dominators settle in reverse
 postorder, and dominator-tree intervals answer field-read and tag-payload-read
 dominance queries without re-walking procedure bodies. Read comparisons are indexed by their
 explicit ownership root rather than scanning unrelated locals.
+The analysis is a deterministic function of the store, whatever the schedule.
+Reachability and each statement's procedure come from the uniqueness solve's
+per-procedure statement lists, which list each procedure's statements in the
+order of its structural depth-first walk. The classification scan visits those
+lists, last procedure first, skipping statements it has already classified,
+which is exactly the order of one depth-first walk from every procedure body.
+Every per-statement input of the whole-store passes (explicit join-cell
+initializations, projection and ownership-place edges, and direct calls)
+depends only on its own statement. These inputs are gathered
+in fixed-width statement-id ranges as executor tasks and concatenated in range
+order, so the coordinator sees them in ascending statement order. The place
+edge of a read that materialization rewrites into an alias is recomputed from
+the rewritten read.
 Divergent reads remain separate places. This canonicalization is justified only
 by the committed field or tag-payload operation and explicit CFG dominance; it
 never equates layouts or values heuristically. A borrowed struct produced by
