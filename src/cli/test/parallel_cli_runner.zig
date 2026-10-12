@@ -474,9 +474,9 @@ const CustomCase = enum {
     issue_11389_check_after_test_shared_cache,
     issue_11495_paired_body_types,
     issue_11065_duplicate_module_name_across_packages,
-    cache_ignores_optimized_mode,
+    cache_is_per_execution_mode,
     cache_replays_optimized_dbg_transcript,
-    cache_replays_dbg_transcript_across_backends,
+    dbg_transcript_same_across_backends,
     optimized_transcript_deterministic_before_summary,
     optimized_failure_transcript_deterministic_before_summary,
     optimized_color_mode_cache_replay,
@@ -3209,9 +3209,9 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc test cache invalidated by source change (dev)", .backend = .dev, .body = .{ .custom = .cache_invalidated_by_source_change } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11389: roc check succeeds on a cache roc test wrote", .body = .{ .custom = .issue_11389_check_after_test_shared_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11495: Boxy pairing keeps app body types across shared platform cache hits", .body = .{ .custom = .issue_11495_paired_body_types } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc test result cache ignores optimized mode", .backend = .speed, .body = .{ .custom = .cache_ignores_optimized_mode } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test result cache is per execution mode", .backend = .speed, .body = .{ .custom = .cache_is_per_execution_mode } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test optimized result cache replays dbg transcript", .backend = .speed, .body = .{ .custom = .cache_replays_optimized_dbg_transcript } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc test result cache replays dbg transcript across backends", .backend = .speed, .body = .{ .custom = .cache_replays_dbg_transcript_across_backends } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test dbg transcript is the same across backends and cached replays", .backend = .speed, .body = .{ .custom = .dbg_transcript_same_across_backends } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test optimized transcript is deterministic before summary", .backend = .speed, .body = .{ .custom = .optimized_transcript_deterministic_before_summary } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test optimized failure transcript is deterministic before summary", .backend = .speed, .body = .{ .custom = .optimized_failure_transcript_deterministic_before_summary } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test optimized color mode re-renders cached failure facts", .backend = .speed, .body = .{ .custom = .optimized_color_mode_cache_replay } },
@@ -4738,9 +4738,9 @@ fn runCustomCase(
         .issue_11389_check_after_test_shared_cache => customIssue11389CheckAfterTestSharedCache(io, allocator, &env, &timer, timeout_ms),
         .issue_11495_paired_body_types => customIssue11495PairedBodyTypes(io, allocator, &env, &timer, timeout_ms),
         .issue_11065_duplicate_module_name_across_packages => customIssue11065DuplicateModuleNameAcrossPackages(io, allocator, &env, &timer, timeout_ms),
-        .cache_ignores_optimized_mode => customCacheIgnoresOptimizedMode(io, allocator, &env, &timer, timeout_ms),
+        .cache_is_per_execution_mode => customCacheIsPerExecutionMode(io, allocator, &env, &timer, timeout_ms),
         .cache_replays_optimized_dbg_transcript => customCacheReplaysOptimizedDbgTranscript(io, allocator, &env, &timer, timeout_ms),
-        .cache_replays_dbg_transcript_across_backends => customCacheReplaysDbgTranscriptAcrossBackends(io, allocator, &env, &timer, timeout_ms),
+        .dbg_transcript_same_across_backends => customDbgTranscriptSameAcrossBackends(io, allocator, &env, &timer, timeout_ms),
         .optimized_transcript_deterministic_before_summary => customOptimizedTranscriptDeterministicBeforeSummary(io, allocator, &env, &timer, timeout_ms),
         .optimized_failure_transcript_deterministic_before_summary => customOptimizedFailureTranscriptDeterministicBeforeSummary(io, allocator, &env, &timer, timeout_ms),
         .optimized_color_mode_cache_replay => customOptimizedColorModeCacheReplay(io, allocator, &env, &timer, timeout_ms),
@@ -10620,19 +10620,28 @@ fn customIssue11065DuplicateModuleNameAcrossPackages(io: std.Io, allocator: Allo
     return null;
 }
 
-fn customCacheIgnoresOptimizedMode(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
-    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
-        .args = &.{ "test", "--opt=size" },
-        .roc_file = "test/cli/AllPassTests.roc",
-        .contains = &.{.{ .stream = .stdout, .text = "All (3) tests passed" }},
-        .not_contains = &.{.{ .stream = .stdout, .text = "(cached)" }},
-    })) |failure| return failure;
+fn customCacheIsPerExecutionMode(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    const fresh = [_]OutputNeedle{.{ .stream = .stdout, .text = "(cached)" }};
+    const passed = OutputNeedle{ .stream = .stdout, .text = "All (3) tests passed" };
+    const cached = [_]OutputNeedle{ passed, .{ .stream = .stdout, .text = "(cached)" } };
 
-    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
-        .args = &.{ "test", "--opt=speed" },
-        .roc_file = "test/cli/AllPassTests.roc",
-        .contains = &.{ .{ .stream = .stdout, .text = "All (3) tests passed" }, .{ .stream = .stdout, .text = "(cached)" } },
-    })) |failure| return failure;
+    // Each execution mode keeps its own results, so a size run does not
+    // answer a speed run; a repeat in either mode is answered from the cache.
+    for ([_][]const u8{ "--opt=size", "--opt=speed" }) |opt| {
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "test", opt },
+            .roc_file = "test/cli/AllPassTests.roc",
+            .contains = &.{passed},
+            .not_contains = &fresh,
+        })) |failure| return failure;
+    }
+    for ([_][]const u8{ "--opt=speed", "--opt=size" }) |opt| {
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "test", opt },
+            .roc_file = "test/cli/AllPassTests.roc",
+            .contains = &cached,
+        })) |failure| return failure;
+    }
 
     return null;
 }
@@ -10665,12 +10674,13 @@ fn customCacheReplaysOptimizedDbgTranscript(io: std.Io, allocator: Allocator, en
     return null;
 }
 
-fn customCacheReplaysDbgTranscriptAcrossBackends(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+fn customDbgTranscriptSameAcrossBackends(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     const roc_file = "test/cli/OptimizedTestDbgTranscript.roc";
     const expected_transcript = [_]OutputNeedle{
         .{ .stream = .stderr, .text = "[dbg] \"first transcript event\"" },
         .{ .stream = .stderr, .text = "[dbg] \"second transcript event\"" },
     };
+    const replayed_transcript = expected_transcript ++ [_]OutputNeedle{.{ .stream = .stdout, .text = "(cached)" }};
 
     const interpreter_fill = switch (captureRocRun(io, allocator, env, timer, timeout_ms, .{
         .args = &.{ "test", "--opt=interpreter" },
@@ -10682,78 +10692,33 @@ fn customCacheReplaysDbgTranscriptAcrossBackends(io: std.Io, allocator: Allocato
         .failure => |failure| return failure,
     };
 
-    const optimized_cached = switch (captureRocRun(io, allocator, env, timer, timeout_ms, .{
-        .args = &.{ "test", "--opt=speed" },
-        .roc_file = roc_file,
-        .contains = &.{
-            .{ .stream = .stdout, .text = "(cached)" },
-            .{ .stream = .stderr, .text = "[dbg] \"first transcript event\"" },
-            .{ .stream = .stderr, .text = "[dbg] \"second transcript event\"" },
-        },
-    })) {
-        .result => |result| result,
-        .failure => |failure| return failure,
-    };
+    // Each execution mode runs the tests itself and prints the same
+    // transcript the interpreter did.
+    for ([_][]const u8{ "--opt=dev", "--opt=speed" }) |opt| {
+        const fill = switch (captureRocRun(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "test", opt },
+            .roc_file = roc_file,
+            .contains = &expected_transcript,
+            .not_contains = &.{.{ .stream = .stdout, .text = "(cached)" }},
+        })) {
+            .result => |result| result,
+            .failure => |failure| return failure,
+        };
+        if (expectSamePreSummaryBytes(allocator, timer, "interpreter run", interpreter_fill, opt, fill)) |failure| return failure;
+    }
 
-    if (expectSamePreSummaryBytes(allocator, timer, "interpreter cache fill", interpreter_fill, "optimized cached replay", optimized_cached)) |failure| return failure;
-
-    var reverse_env = buildCaseEnv(io, allocator) catch |err|
-        return customInfraFailure(allocator, timer, "failed to create reverse backend cache environment: {}", .{err});
-    defer reverse_env.deinit(allocator);
-
-    const optimized_fill = switch (captureRocRun(io, allocator, &reverse_env, timer, timeout_ms, .{
-        .args = &.{ "test", "--opt=speed" },
-        .roc_file = roc_file,
-        .contains = &expected_transcript,
-        .not_contains = &.{.{ .stream = .stdout, .text = "(cached)" }},
-    })) {
-        .result => |result| result,
-        .failure => |failure| return failure,
-    };
-
-    const interpreter_cached = switch (captureRocRun(io, allocator, &reverse_env, timer, timeout_ms, .{
-        .args = &.{ "test", "--opt=interpreter" },
-        .roc_file = roc_file,
-        .contains = &.{
-            .{ .stream = .stdout, .text = "(cached)" },
-            .{ .stream = .stderr, .text = "[dbg] \"first transcript event\"" },
-            .{ .stream = .stderr, .text = "[dbg] \"second transcript event\"" },
-        },
-    })) {
-        .result => |result| result,
-        .failure => |failure| return failure,
-    };
-
-    if (expectSamePreSummaryBytes(allocator, timer, "optimized cache fill", optimized_fill, "interpreter cached replay", interpreter_cached)) |failure| return failure;
-
-    var dev_env = buildCaseEnv(io, allocator) catch |err|
-        return customInfraFailure(allocator, timer, "failed to create dev backend cache environment: {}", .{err});
-    defer dev_env.deinit(allocator);
-
-    const dev_fill = switch (captureRocRun(io, allocator, &dev_env, timer, timeout_ms, .{
-        .args = &.{ "test", "--opt=dev" },
-        .roc_file = roc_file,
-        .contains = &expected_transcript,
-        .not_contains = &.{.{ .stream = .stdout, .text = "(cached)" }},
-    })) {
-        .result => |result| result,
-        .failure => |failure| return failure,
-    };
-
-    const optimized_after_dev = switch (captureRocRun(io, allocator, &dev_env, timer, timeout_ms, .{
-        .args = &.{ "test", "--opt=speed" },
-        .roc_file = roc_file,
-        .contains = &.{
-            .{ .stream = .stdout, .text = "(cached)" },
-            .{ .stream = .stderr, .text = "[dbg] \"first transcript event\"" },
-            .{ .stream = .stderr, .text = "[dbg] \"second transcript event\"" },
-        },
-    })) {
-        .result => |result| result,
-        .failure => |failure| return failure,
-    };
-
-    if (expectSamePreSummaryBytes(allocator, timer, "dev cache fill", dev_fill, "optimized cached replay after dev", optimized_after_dev)) |failure| return failure;
+    // A repeat in any mode replays that transcript from the cache.
+    for ([_][]const u8{ "--opt=interpreter", "--opt=dev", "--opt=speed" }) |opt| {
+        const replay = switch (captureRocRun(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "test", opt },
+            .roc_file = roc_file,
+            .contains = &replayed_transcript,
+        })) {
+            .result => |result| result,
+            .failure => |failure| return failure,
+        };
+        if (expectSamePreSummaryBytes(allocator, timer, "interpreter run", interpreter_fill, opt, replay)) |failure| return failure;
+    }
 
     return null;
 }
