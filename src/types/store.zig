@@ -956,6 +956,20 @@ pub const Store = struct {
         try self.setDesc(resolved.desc_idx, desc);
     }
 
+    /// Show `target_var`'s whole class with `content` until the active
+    /// savepoint rolls back: a diagnostic's view of a class as it stood
+    /// before a decision. The view is of the class itself, so a frozen class
+    /// shows it too; the rollback restores the shared descriptor.
+    pub fn setClassContentInSavepoint(self: *Self, target_var: Var, content: Content) Allocator.Error!void {
+        std.debug.assert(self.savepoint_active);
+        const resolved = self.resolveVar(target_var);
+        self.noteContentRewrite(resolved.desc.content);
+        var desc = resolved.desc;
+        desc.content = content;
+        desc.flags.empty_tag_union_is_default = false;
+        try self.setDescUnguarded(resolved.desc_idx, desc);
+    }
+
     /// Whether the solver can still refine or poison what this content
     /// denotes: a variable, a field presence, or an error.
     fn contentIsLeaf(content: Content) bool {
@@ -1096,7 +1110,7 @@ pub const Store = struct {
     /// Bound an annotated definition's implicitly opened row (design.md
     /// "Polarity"). The bound travels with the row's equivalence class.
     pub fn markBoundedRowExt(self: *Self, target_var: Var) Allocator.Error!void {
-        const resolved = self.resolveVar(target_var);
+        const resolved = try self.resolveWriteTarget(target_var);
         var desc = resolved.desc;
         desc.flags.bounded_row_ext = true;
         try self.setDesc(resolved.desc_idx, desc);
@@ -1105,7 +1119,7 @@ pub const Store = struct {
     /// End the bound on a row every use shares: a weak value binding's row is
     /// bounded only while its own right-hand side is checked.
     pub fn clearBoundedRowExt(self: *Self, target_var: Var) Allocator.Error!void {
-        const resolved = self.resolveVar(target_var);
+        const resolved = try self.resolveWriteTarget(target_var);
         var desc = resolved.desc;
         desc.flags.bounded_row_ext = false;
         try self.setDesc(resolved.desc_idx, desc);
@@ -2021,8 +2035,10 @@ pub const Store = struct {
         try self.linkStorageRoots(a, b, b.desc_idx, b.meta.checked_var);
     }
 
-    /// Poison one occurrence the way `poisonOnMismatch` poisons each operand.
-    fn poisonOccurrence(self: *Self, var_: Var) Allocator.Error!void {
+    /// Poison one occurrence the way `poisonOnMismatch` poisons each operand:
+    /// an occurrence that only joined its class (a lookup of a binding) is
+    /// detached and poisoned alone, and the class keeps its type.
+    pub fn poisonOccurrence(self: *Self, var_: Var) Allocator.Error!void {
         const class = self.resolveStorageRoot(var_);
         const err_desc = Desc{
             .content = .err,
@@ -2640,6 +2656,27 @@ test "a content write aimed at a frozen class's member changes only that member"
     try store.setVarContent(member, .err);
 
     try std.testing.expectEqual(Content.err, store.resolveVar(member).desc.content);
+    try expectFrozenEmptyRecord(&store, class.anchor);
+    try expectFrozenEmptyRecord(&store, class.use);
+}
+
+test "a row bound aimed at a frozen class's member changes only that member" {
+    const gpa = std.testing.allocator;
+    var store = try Store.init(gpa);
+    defer store.deinit();
+
+    const class = try frozenClassWithUse(&store);
+    const member = try store.freshRedirect(class.use);
+    try store.markBoundedRowExt(member);
+
+    try std.testing.expect(store.resolveVar(member).desc.flags.bounded_row_ext);
+    try expectFrozenEmptyRecord(&store, class.anchor);
+    try expectFrozenEmptyRecord(&store, class.use);
+    try std.testing.expect(!store.resolveVar(class.use).desc.flags.bounded_row_ext);
+
+    const other = try store.freshRedirect(class.use);
+    try store.clearBoundedRowExt(other);
+    try std.testing.expect(!store.resolveVar(other).desc.flags.bounded_row_ext);
     try expectFrozenEmptyRecord(&store, class.anchor);
     try expectFrozenEmptyRecord(&store, class.use);
 }

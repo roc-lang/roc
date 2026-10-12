@@ -107,7 +107,7 @@ pub fn appendUnfinalizedTypes(
     filename: []const u8,
     other_modules: []const *const ModuleEnv,
 ) Allocator.Error!void {
-    _ = try checker.problems.flushPendingStaticExhaustiveness(checker.gpa);
+    _ = try checker.problems.flushPendingStaticExhaustiveness();
     try appendTypes(gpa, reports, env, checker, filename, other_modules, null);
 }
 

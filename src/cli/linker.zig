@@ -508,6 +508,18 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             // Stamp a build id so stripped copies of the binary can be
             // matched back to their debug info.
             try args.append("--build-id");
+            // Start every loadable segment of an x86-64 executable on its own
+            // page, in the file and in memory. Without this, lld places a
+            // zero-fill segment (e.g. `.bss` in a program with no `.data`)
+            // partway into a page that holds no bytes from the file, and
+            // Rosetta 2's ELF loader rejects that layout with "bss_size
+            // overflow", so the program never starts in an x86-64 Linux
+            // container on Apple Silicon. Padding costs at most one 4 KiB page
+            // per segment.
+            if (target_arch == .x86_64 and !is_shared_lib) {
+                try args.append("-z");
+                try args.append("separate-loadable-segments");
+            }
             // Suppress linker warnings
             if (suppress_linker_warnings) {
                 try args.append("-w");
@@ -1529,6 +1541,35 @@ test "native glibc executables name the canonical program interpreter" {
         const linker_idx = findArg(args.items, "-dynamic-linker") orelse return error.MissingDynamicLinker;
         try std.testing.expect(linker_idx + 1 < args.items.len);
         try std.testing.expectEqualStrings(case.interpreter, args.items[linker_idx + 1]);
+    }
+}
+
+test "x86-64 Linux executables start every loadable segment on its own page" {
+    // repro for https://github.com/roc-lang/roc/issues/9571
+    const abis = [_]TargetAbi{ .musl, .gnu };
+
+    for (abis) |abi| {
+        var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
+        defer arena_instance.deinit();
+
+        var io = Io.create(std.testing.io);
+        var ctx = CliCtx.init(std.testing.allocator, arena_instance.allocator(), &io, .build);
+        ctx.initIo();
+        defer ctx.deinit();
+
+        const config = LinkConfig{
+            .target_format = .elf,
+            .target_os = .linux,
+            .target_abi = abi,
+            .target_arch = .x86_64,
+            .output_path = "test_output",
+            .object_files = &.{"libroc_interpreter_shim.a"},
+        };
+
+        const args = try buildLinkArgs(&ctx, config);
+
+        const z_idx = findArg(args.items, "separate-loadable-segments") orelse return error.MissingSeparateLoadableSegments;
+        try std.testing.expectEqualStrings("-z", args.items[z_idx - 1]);
     }
 }
 
