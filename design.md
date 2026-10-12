@@ -545,6 +545,9 @@ its exact runtime expression, never on its symbolic structure, so both fields
 are exact at any depth and reading them costs constant time. Substitution
 requires a substitutable value and admits it only when its expanded size is
 within an explicit code-growth limit; a larger value keeps its named binding.
+A compile-time value read is not a substitutable read: its value guard crashes
+where the program evaluates the read when that value's evaluation failed, so
+substitution may neither drop a discarded read nor move one to a later use.
 Making a value reusable is decided by substitutability alone, never by that
 limit: a substitutable value of any size is already reusable and is kept whole,
 so reuse never walks or copies its structure. A long interpolation binds one
@@ -5793,7 +5796,17 @@ the same operand record and leave the erroneous iterable expression in
 recovery, so the checker mints the plan's callable shapes without attaching
 constraints, marks both callable classes rejected, and records the required
 plan. CheckedModule construction consumes those rejection markers to seal
-both calls with explicit `checked_error` resolutions.
+both calls with explicit `checked_error` resolutions. An iterable can also be
+rejected after its loop was checked (`for c in "a"..="z" { echo!(c) }` decides
+the bounds are `Str`, which has no `range_inclusive_to`, only once the body
+relates the item type), when the loop's `iter` and `next` plans were already
+resolved against its type. The checker records every loop whose iterable was
+not erroneous when the loop was checked (`late_rejectable_for_loops`), and the
+erroneous-value sweep retires each one whose iterable has become erroneous: a
+statement loop becomes an expression statement of the iterable's runtime
+error, and a `for` expression becomes a runtime error that evaluates its
+iterable, so the loop binds nothing and never iterates, exactly as when the
+rejection was known while the loop was checked.
 
 A retired expression still evaluates strictly. When an expression is retired
 because an operand is erroneous (here or by the error-typed-value rule), the
@@ -8346,11 +8359,18 @@ inconsistent shared type variables and unsupported real dispatches still fail.
 ### Polarity: Output-Position Tag Unions Are Implicitly Open
 
 Every type annotation is walked with a POLARITY: the root is positive
-(output). Each function establishes its own positions: its arguments are
-negative and its return is positive, independently of the surrounding
-position. Type application arguments, record fields, tuple items, and tag
-payloads inherit their enclosing position. Thus `([E] -> Str) -> Str` keeps
-`[E]` closed, while `(Str -> [E]) -> Str` opens the callback result. An extensionless tag union with at least one
+(output), a function's argument positions FLIP the surrounding polarity, and
+its return keeps it. Type application arguments, record fields, tuple items,
+and tag payloads inherit their enclosing position. Polarity says who produces
+a value: a positive position is produced by the annotated definition and
+consumed by its user, a negative one the reverse. A callback the definition
+receives is produced by the caller, so the callback's result is negative (the
+definition consumes it) and the callback's argument is positive (the
+definition produces it). Thus `(Str -> [E]) -> Str` keeps the callback result
+`[E]` closed, so a caller cannot pass a callback returning a tag the
+definition does not handle, while `([E] -> Str) -> Str` opens `[E]`, so a
+caller may pass a callback that accepts more tags than the definition will
+ever hand it. An extensionless tag union with at least one
 tag in a positive position is IMPLICITLY OPEN: it is generated with a fresh
 flex extension; `parse : Str -> Try(U8, [InvalidU8])` is one such signature.
 The same union in a negative position stays closed as written. A union with no
@@ -8507,9 +8527,16 @@ identity, so equal generated names in different declarations never capture
 one another. Every hidden parameter is reachable from the alias backing graph,
 including source argument storage in a nested phantom alias.
 
-Declaration construction collects rows whose position inherits the alias use
-or is a function output. Fixed function inputs are closed. Empty unions and
-explicit named extensions retain their meaning. Each alias use joins all
+Declaration construction gives every extensionless tag union in the alias
+body a hidden marker: whether the row opens depends on where the alias is
+used, and a row one function argument position into the body stands at the
+flip of the use's polarity, so no row's meaning is fixed at declaration
+time. A use resolves each marker by the polarity of the position it occupies
+in the backing, flipping through every function argument position on the
+way. A marker an alias body copies from a nested alias stays deferred when all
+of its occurrences stand at one polarity relative to the enclosing body
+(`PolarityVarBehavior.preserve_one_sided`) and closes when they stand at both.
+Empty unions and explicit named extensions retain their meaning. Each alias use joins all
 backing occurrences of its hidden binders before copying the backing and
 argument bookkeeping. Hidden actuals become fresh flexes, closed rows, or
 ordinary per-use markers under the existing annotation opening policy. A nested alias contributes its
@@ -8517,9 +8544,9 @@ fresh hidden variables to the enclosing declaration. Source formals retain
 ordinary substitution and sharing; independent uses get independent rows.
 
 NOMINAL declarations never acquire hidden row parameters. Their literal tag
-unions are closed, including under function returns. An alias referenced
-inside a nominal declaration instantiates its hidden rows closed as well;
-this as-written policy overrides function-local output positions.
+unions are closed at every polarity. An alias referenced inside a nominal
+declaration instantiates its hidden rows closed as well; this as-written
+policy overrides the polarity those rows would have.
 
 The hidden suffix belongs only to raw checker types and their serialized
 module stores. Checked type output emits SOURCE arguments in
@@ -8550,45 +8577,35 @@ copy takes its own copy first, so the shared one stays pristine.
 A row the reference itself WRITES as a type argument is decided the same way,
 by composition rather than by inheritance. A declaration's formal stands
 wherever the declaration's body puts it, so the argument substituted for it is
-generated according to the formal's position transfer
-(`base.annotation_positions`): `Handler(e) : e -> Str` holds `e` in an input
-position, so the `[A, B]` of `Handler([A, B])` written as an output is
-generated closed, exactly like the `[A, B] -> Str` the reference stands for,
-and `Handler([A, B])` written as an INPUT also stays closed, exactly
-like `([A, B] -> Str) -> Str` does. A formal outside a function inherits the
-reference position (`Identity(e) : e`), whereas a function return forces an
-output position (`Producer(e) : Str -> e`), including at input uses of the
-alias. Combining occurrences preserves opening only where every occurrence
-permits it; an inherited occurrence combined with an output occurrence still
-inherits, and any input occurrence closes the argument. A formal the body
-places on both sides is invariant: one variable cannot be open on the output
-side and closed on the input side, so its argument is generated closed wherever the reference stands.
-Source-formal positions are computed exactly from CIR declaration
-structure. Finite worklists solve occurrence sets (inherited, input, output), including
-recursive nominal declarations and imported owners.
-A first pass records source-formal usedness through all retained source
-arguments before any position equation is solved. Proven-unused formals retain
-their actuals at the reference position; an equation that is temporarily empty
-during iteration does not establish unusedness. Function positions reset the
-context; applications compose formal occurrence sets. Recursive-only formals
-collect the positions encountered through recurring nominal argument flow:
-any input occurrence closes the shared row, outputs alone open it, and a cycle
-without function positions inherits its use site. Transparent aliases introduce
-no recurrence boundary and preserve the function resets of their backing.
+generated according to the formal's positions (`base.annotation_positions`):
+each occurrence stands either at the reference's own polarity (an even number
+of function argument positions into the body) or at its flip (an odd number).
+`Handler(e) : e -> Str` holds `e` in a function argument, so the `[A, B]` of
+`Handler([A, B])` is generated at the flip of the reference's polarity:
+closed when the reference is an output, exactly like the `[A, B] -> Str` it
+stands for, and open when the reference is an input, exactly like
+`([A, B] -> Str) -> Str`. `Identity(e) : e` and `Producer(e) : Str -> e` keep
+the reference's polarity. A formal the body places on both sides is
+invariant: one variable cannot be open on the output side and closed on the
+input side, and every row nested in its argument stands on both sides too, so
+the argument is generated as written at every depth (closing only its top row
+would reopen a row one function argument position further in). A formal with
+no occurrence at all keeps the reference's polarity: an unused formal's
+actual is retained in source argument storage at the reference position, and
+so is a formal carried only through its own recursion, which no value ever
+holds.
 
-Inheritance is first solved as a greatest fixed point. A finite source-formal
-dependency graph then orders strongly connected components before their users;
-unrelated parameters of mutually recursive declarations remain separate. Within
-a component, a least fixed point collects position witnesses at its recurring
-nominal boundaries, with transparent alias transfers recomputed normally.
-Completed dependencies keep their exact transfers. The resulting witness sets
-bound a descending fixed point of ordinary position composition, so a reset
-that was overwritten before recurrence cannot survive solely as a speculative
-position. Retained argument syntax is visited even while its equation is empty,
-so nested functions establish their own positions. Every analysis is over
-finite CIR nodes, source formals, and three position bits; invalid growing
-recursion does not require infinite expansion and retains its existing checker
-diagnostic.
+Source-formal positions are computed exactly from CIR declaration
+structure, including recursive nominal declarations and imported owners. A
+first pass records source-formal usedness, and which declarations reference
+which, through all retained source arguments before any position equation is
+solved, so an equation that is still empty never reads as an unused formal.
+The equations are then solved as a least fixed point over a worklist: a
+function argument position swaps the two sides, an application composes the
+target formal's sides with the reference's, and a declaration is re-solved
+only when a declaration it references gained a side. Each formal has two
+sides to gain, so the solve is finite; invalid growing recursion does not
+require infinite expansion and retains its existing checker diagnostic.
 No depth, arity, node budget,
 unknown-declaration approximation, or builtin covariance exemption chooses a
 row's meaning. This data is transient checking machinery, not persisted
@@ -8596,7 +8613,9 @@ nominal metadata and not hidden nominal parameters.
 
 A WHERE-METHOD signature is a scheme the constrained body instantiates at
 each use, exactly like a call of an annotated function. It is walked like any
-function annotation (arguments closed as written, return an output), but its
+function annotation, as its own root at the output polarity whatever position
+the constrained variable occupies (arguments closed as written, return an
+output), but its
 implicitly opened output rows are generated as polarity MARKERS
 (`AnnotationGenCtx.opening = .per_use`) rather than flex vars. A body use—the
 point where a body dispatch on the constrained rigid is matched by name
@@ -8686,12 +8705,12 @@ function-shaped formals are analyzed from their declarations rather than
 assigned uniform covariance. The parser cannot resolve imports or lexical
 shadowing: uncertain nested references retain explicit row extensions, and
 root candidates must unanimously agree before syntax can be removed. This is
-a parse-only proof boundary, never a checker position policy. Each formal has inherited, function-input, and function-output
-occurrence bits. Applications compose these finite equations to their inheritance and
-function-position fixed points;
-recursive nominal declarations do not require depth or arity bounds. A shared
-formal takes the closed answer if any occurrence is in a function input, or
-inherits a negative reference position. This transient analysis adds no
+a parse-only proof boundary, never a checker position policy. Each formal has a
+usedness bit and two side bits: an occurrence at the reference's own polarity,
+and one at its flip. Applications compose these finite equations to their
+least fixed point; recursive nominal declarations do not require depth or
+arity bounds. A formal on both sides is invariant and its argument is
+generated as written at every depth. This transient analysis adds no
 persisted nominal metadata. Literal rows in nominal declarations remain closed.
 Compiler primitive applications and explicit platform for-clause abstract
 aliases retain their source arguments' inherited position. The reserved builtin
@@ -8714,6 +8733,9 @@ with inherited polarity and no adapter reach. Every reserved rigid in a hidden
 suffix must be reached by this analysis. Nominal actual positions come from the
 same CIR declaration equations, cached only within the checker instance;
 this never traverses or opens nominal literal backing rows during instantiation.
+An actual substituted for an invariant nominal formal is visited at both
+polarities (`Instantiator.NominalArgumentPosition.both`), so every marker in it
+closes at any depth.
 
 `Check.applicationArgumentReaches` follows completed raw declaration backings
 with a visited `(Var, adapter position)` worklist. Alias wrappers are transparent.
@@ -9931,7 +9953,14 @@ scheme-owned argument, result, and literal variables even though traversing the
 root type alone cannot reach them.
 
 Constraint creation records the innermost prospective scheme root as the exact
-owner. At that root's generalization boundary,
+owner. The owner belongs to the relation, keyed by its constraint callable
+where the relation is minted or copied: resolving it (selecting and
+instantiating its method target, or deriving a structural comparison's
+component obligations) runs under that owner, whichever later unification
+grounds its receiver and whichever boundary's checking drains its queue entry.
+Work a relation causes after its owner's boundary has captured belongs to the
+innermost enclosing root still prospective, or to none. At the owner's
+generalization boundary,
 `captureSchemeDispatchRequirements` moves each still-open relation on an
 outer-rank receiver into the scheme. A receiver created at the boundary's own
 rank is undecided until generalization adjusts ranks—it escapes exactly when
@@ -12423,8 +12452,9 @@ storage.
 
 The sort low-level calls its boxed comparator through a planned ABI
 representation: the comparator's arguments keep their worker representation and
-its ordering result is that closed union. Lowering wraps a callback whose result
-row is open in an adapter for that ABI before the call.
+its ordering result is that closed union in its host representation. Lowering
+wraps a comparator whose representation differs from that ABI in an adapter
+before the call.
 
 The host ABI is independent of lowering strategy. `.boxy` changes only private
 Roc implementation procedures. Any LIR root whose checked root metadata has
@@ -12919,7 +12949,18 @@ joined. This keeps memo reuse concurrent without exposing mutable hash-table
 storage or making results depend on completion order. Global identities are still
 assigned solely by ordered coordinator commit. Root kinds
 that reserve durable identities or write directly to the final program remain
-serial barriers until they have the same sealed-draft boundary.
+serial barriers until they have the same sealed-draft boundary. A template
+root's function type is a function of its checked type alone, so before those
+barriers run, every template root's type lowers in one executor batch, each
+lane sealing into its own workspace, and the coordinator relocates the results
+into the program store in request order. Each request lowers its type once,
+however many root passes reach it.
+
+Committing a shard's interface summaries relocates each request into the
+coordinator's domain first, so an equal resident request answers without
+copying its summary; a new summary is relocated once, straight into the
+cache's own storage, and its names cross through the lane's cumulative name
+relocation rather than being interned again by text.
 
 Post-check timing keeps two distinct measures for this boundary. Monotype wall
 time is the elapsed coordinator interval, including worker waits and ordered
@@ -13012,6 +13053,12 @@ root union update producer membership explicitly. Equal keys retain
 independently constructed nodes until an explicit relation joins them. A
 monotone provenance counter lets both iterator finalizers return immediately for
 graphs without generated iterators.
+
+Nominal backing instances are indexed the same way, by declaration and current
+argument roots, and a root union rekeys only the instances that mention its
+loser. An index slot holds just an instance's hash and id: the key lives in the
+instance table, and an instance's arguments change only while it is out of the
+index, so every resident hash is the hash of its instance's current key.
 Generated identity hashes a snapshot of the current graph representation after
 joins, under the equality digest: `typeEql` compares the stamped identity, so
 checked provenance such as `named_type.ty` must not make requests that are
@@ -19690,11 +19737,29 @@ is a proper part of its root's layout, so the order is acyclic and each
 deferred read is settled exactly once.
 A root therefore never commits a take on a read that is emitted as an alias of
 a container already holding the root's unit.
-Dominance is computed once from the explicit statement-successor graph with a
-synthetic entry for all procedure roots. Immediate dominators settle in reverse
+Dominance is computed from the explicit statement-successor graph with a
+synthetic entry for all procedure roots. Every path from that entry to a
+statement starts at the body of a procedure that reaches the statement and
+stays among statements that procedure reaches, so a statement dominates only
+statements of procedures that transitively share statements with its own.
+Each such component's graph is solved once, on its first query, and answers
+exactly as the whole store's graph would. Immediate dominators settle in reverse
 postorder, and dominator-tree intervals answer field-read and tag-payload-read
 dominance queries without re-walking procedure bodies. Read comparisons are indexed by their
 explicit ownership root rather than scanning unrelated locals.
+The analysis is a deterministic function of the store, whatever the schedule.
+Reachability and each statement's procedure come from the uniqueness solve's
+per-procedure statement lists, which list each procedure's statements in the
+order of its structural depth-first walk. The classification scan visits those
+lists, last procedure first, skipping statements it has already classified,
+which is exactly the order of one depth-first walk from every procedure body.
+Every per-statement input of the whole-store passes (explicit join-cell
+initializations, projection and ownership-place edges, and direct calls)
+depends only on its own statement. These inputs are gathered
+in fixed-width statement-id ranges as executor tasks and concatenated in range
+order, so the coordinator sees them in ascending statement order. The place
+edge of a read that materialization rewrites into an alias is recomputed from
+the rewritten read.
 Divergent reads remain separate places. This canonicalization is justified only
 by the committed field or tag-payload operation and explicit CFG dominance; it
 never equates layouts or values heuristically. A borrowed struct produced by
