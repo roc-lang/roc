@@ -2119,10 +2119,9 @@ const Pass = struct {
                         loop.unbounded = true;
                     },
                     .range_append, .set_op, .refresh_op => loop.unbounded = true,
-                    .alias => if (edge.flow == .entry) {
+                    .alias, .param_write => if (edge.flow == .entry) {
                         loop.unbounded = true;
                     },
-                    .param_write => {},
                 }
             }
             if (sites == 0) continue;
@@ -4043,6 +4042,34 @@ test "promote versions a counted append loop on its slack into a check-free copy
         try run(store, &f.layouts);
         try expectSlackVersioned(store, built);
     }
+}
+
+test "promote keeps capacity checks when a back edge supplies an outside list" {
+    var f = try PromoteTest.init(testing.allocator);
+    defer f.deinit();
+    const store = &f.store;
+    const built = try CountedLoop.build(&f, 1, false);
+    const alias = store.getCFStmt(built.append_call).assign_call.next;
+    const back_write = store.getCFStmt(alias).assign_ref.next;
+    const capacity = try store.addLocal(.{ .layout_idx = .u64 });
+    const replacement = try store.addLocal(.{ .layout_idx = f.list });
+    const allocate = try store.addLowLevelStmt(replacement, .list_with_capacity, &.{capacity}, back_write, .test_fixture);
+    const zero = try store.addCFStmt(.{ .assign_literal = .{
+        .target = capacity,
+        .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } },
+        .next = allocate,
+    } }, .test_fixture);
+    store.getCFStmtPtr(alias).assign_ref.next = zero;
+    store.getCFStmtPtr(back_write).set_local.value = replacement;
+
+    // Each iteration replaces the carried list with a fresh empty allocation.
+    // The capacity observed at entry cannot justify unchecked future appends.
+    try run(store, &f.layouts);
+    const head = store.getCFStmt(built.loop).join;
+    const shape = try appendShapeOf(store, head.body, head.id, head.id);
+    try testing.expectEqual(@as(u32, 1), shape.unsafe_appends);
+    try testing.expectEqual(@as(u32, 1), shape.reserves);
+    try testing.expectEqual(@as(u32, 2), shape.switches);
 }
 
 fn expectSlackVersioned(store: *LirStore, built: CountedLoop) (Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {

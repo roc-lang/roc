@@ -338,9 +338,25 @@ test "object cache write failures preserve quiet behavior and report verbose cau
 /// set: the store and the modules in view.
 pub const Pending = struct {
     store: *const Store,
+    /// Packs compile-time evaluation published from its own programs
+    /// (`compileTimePackKey`), offered after the store's packs. Only a
+    /// provider no runtime consumer reads loads them: their code is lowered
+    /// under the compile-time LIR policy, not the runtime one.
+    compile_time_store: ?*const Store = null,
     io: std.Io,
     build_env: *compile.BuildEnv,
 };
+
+/// The file name a program's compile-time pack is filed under, beside the
+/// root module's runtime packs in the compile-time store. It is distinct from
+/// every runtime pack key, so a compile-time pack never stands in for the
+/// root module's runtime pack.
+pub fn compileTimePackKey(code_generation_key: [32]u8) [32]u8 {
+    var hasher = @import("base").Sha256.init(.{});
+    hasher.update("roc.compile-time-pack.v1");
+    hasher.update(&code_generation_key);
+    return hasher.finalResult();
+}
 
 /// Every pack in a directory, indexed by specialization key and by procedure
 /// identity. Files load in name order so the indexes are deterministic when
@@ -529,14 +545,19 @@ pub const LoadedPacks = struct {
     }
 
     fn loadPending(self: *LoadedPacks, pending: Pending, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) LoadError!void {
-        if (pending.build_env.packPlacementForArtifactKey(root_artifact.key)) |placement| {
-            try pending.store.loadIdentity(pending.io, self, placement.origin, placement.identity);
-        }
-        const artifacts = try pending.build_env.collectVisibleArtifacts(self.allocator, root_artifact);
-        defer self.allocator.free(artifacts);
-        for (artifacts) |artifact| {
-            const placement = pending.build_env.packPlacementForArtifactKey(artifact.key) orelse continue;
-            try pending.store.loadIdentity(pending.io, self, placement.origin, placement.identity);
+        // Runtime packs load first, so an entry both offer is served by the
+        // runtime pack.
+        for ([_]?*const Store{ pending.store, pending.compile_time_store }) |maybe_store| {
+            const store = maybe_store orelse continue;
+            if (pending.build_env.packPlacementForArtifactKey(root_artifact.key)) |placement| {
+                try store.loadIdentity(pending.io, self, placement.origin, placement.identity);
+            }
+            const artifacts = try pending.build_env.collectVisibleArtifacts(self.allocator, root_artifact);
+            defer self.allocator.free(artifacts);
+            for (artifacts) |artifact| {
+                const placement = pending.build_env.packPlacementForArtifactKey(artifact.key) orelse continue;
+                try store.loadIdentity(pending.io, self, placement.origin, placement.identity);
+            }
         }
     }
 

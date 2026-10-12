@@ -690,15 +690,54 @@ pub fn finalizeProgram(
         try source_modules.appendNTimes(allocator, entry.module.key, entry.module.root_requests.compile_time_requests.len);
     }
     const compile_time_root_count = requests.items.len;
-    try requests.appendSlice(allocator, program_roots.requests);
-    if (program_roots.source_modules.len == 0) {
-        try source_modules.appendNTimes(allocator, lowering_modules.root.module.key, program_roots.requests.len);
-    } else {
-        if (program_roots.source_modules.len != program_roots.requests.len) finalizationInvariant("program roots omitted their checked owners");
-        try source_modules.appendSlice(allocator, program_roots.source_modules);
-    }
+    if (program_roots.source_modules.len != 0 and program_roots.source_modules.len != program_roots.requests.len)
+        finalizationInvariant("program roots omitted their checked owners");
 
     const lss_runtime = if (runtime_target) |target| target.specialization_strategy == .lss else false;
+    // Without an LSS runtime consumer to continue this specialization, the
+    // program roots are discovery roots: compile-time evaluation specializes
+    // a runtime body only where it can register a literal root, and lowers
+    // none of them for execution (design.md "Demand-Driven Compile-Time
+    // Specialization").
+    var literal_demand: ?lir.CheckedPipeline.LiteralDemand.LiteralDemand = null;
+    defer if (literal_demand) |*demand| demand.deinit();
+    if (lss_runtime) {
+        try requests.appendSlice(allocator, program_roots.requests);
+        if (program_roots.source_modules.len == 0) {
+            try source_modules.appendNTimes(allocator, lowering_modules.root.module.key, program_roots.requests.len);
+        } else {
+            try source_modules.appendSlice(allocator, program_roots.source_modules);
+        }
+    } else if (program_roots.requests.len != 0) {
+        var declared = std.AutoHashMapUnmanaged(lir.CheckedPipeline.LiteralDemand.DeclaredRoot, void).empty;
+        defer declared.deinit(allocator);
+        for (modules) |entry| {
+            for (entry.module.root_requests.compile_time_requests) |request| {
+                try declared.put(allocator, .{ .module = entry.module.key, .root = compileTimeRootForRequest(entry.module, request) }, {});
+            }
+        }
+        const checked_modules: lir.CheckedPipeline.LiteralDemand.CheckedModules = .{ .root = lowering_modules.root, .imports = lowering_modules.imports };
+        literal_demand = try lir.CheckedPipeline.LiteralDemand.compute(allocator, checked_modules, &declared);
+        var selected = std.ArrayList(usize).empty;
+        defer selected.deinit(allocator);
+        try lir.CheckedPipeline.LiteralDemand.selectDiscoveryRoots(allocator, &literal_demand.?, checked_modules, program_roots.requests, program_roots.source_modules, &selected);
+        for (selected.items) |index| {
+            try requests.append(allocator, program_roots.requests[index]);
+            try source_modules.append(allocator, if (program_roots.source_modules.len == 0) lowering_modules.root.module.key else program_roots.source_modules[index]);
+        }
+        if (options.timing) |timing| {
+            const counters = literal_demand.?.counters;
+            timing.lowering.addDemand(.{
+                .program_roots = program_roots.requests.len,
+                .discovery_roots = selected.items.len,
+                .modules = counters.modules,
+                .templates = counters.templates,
+                .source_templates = counters.source_templates,
+                .reaching_templates = counters.reaching_templates,
+                .custom_literal_types = counters.custom_literal_types,
+            });
+        }
+    }
     const runtime_positions = try runtimeRootPositions(allocator, program_roots, runtime_roots, compile_time_root_count, lss_runtime);
     var positions_owned = true;
     errdefer if (positions_owned) allocator.free(runtime_positions);
@@ -718,10 +757,21 @@ pub fn finalizeProgram(
         var union_roots = program_roots;
         union_roots.requests = requests.items;
         union_roots.source_modules = source_modules.items;
-        const union_test_metadata = try allocator.dupe(@typeInfo(@TypeOf(program_roots.test_plan_metadata)).pointer.child, program_roots.test_plan_metadata);
+        const union_test_metadata = try allocator.dupe(@typeInfo(@TypeOf(program_roots.test_plan_metadata)).pointer.child, if (lss_runtime) program_roots.test_plan_metadata else &.{});
         defer allocator.free(union_test_metadata);
         for (union_test_metadata) |*metadata| metadata.request_index += @intCast(compile_time_root_count);
         union_roots.test_plan_metadata = union_test_metadata;
+        if (!lss_runtime) {
+            // Discovery roots materialize nothing for a runtime consumer.
+            union_roots.include_provided_data_exports = false;
+            union_roots.include_internal_static_data = false;
+            union_roots.layout_requests = &.{};
+            union_roots.static_data_requests = &.{};
+            if (literal_demand) |*demand| {
+                union_roots.discovery_start = compile_time_root_count;
+                union_roots.literal_demand = demand;
+            }
+        }
         // An LSS runtime consumer continues this specialization, so it is
         // made under the runtime's Solved policy.
         const solved_policy = if (lss_runtime) lir.CheckedPipeline.SolvedPolicy.fromTarget(runtime_target.?) else check_solved_policy;
@@ -789,7 +839,7 @@ pub fn finalizeProgram(
             try evaluateLoweredRoots(allocator, modules, lowering_modules, &host.?, compile_time_root_count, evaluation_options);
         } else {
             for (modules) |entry| {
-                if (entry.problem_store) |store| try finishPendingExhaustiveness(allocator, entry.module, store);
+                if (entry.problem_store) |store| try finishPendingExhaustiveness(entry.module, store);
                 try entry.module.const_store.verifyComplete();
             }
             if (!shares_solved) {
@@ -803,7 +853,7 @@ pub fn finalizeProgram(
         }
     } else {
         for (modules) |entry| {
-            if (entry.problem_store) |store| try finishPendingExhaustiveness(allocator, entry.module, store);
+            if (entry.problem_store) |store| try finishPendingExhaustiveness(entry.module, store);
             try entry.module.const_store.verifyComplete();
         }
     }
@@ -1198,13 +1248,13 @@ fn finalizeLoweredProgram(
         const entry = maybe_record orelse continue;
         if (embedded) continue;
         switch (entry) {
-            .own => |own| try reportLiteralRootFailure(allocator, &owners, lowered, plan, own.borrow(literal_failures.messages.items)),
+            .own => |own| try reportLiteralRootFailure(&owners, lowered, plan, own.borrow(literal_failures.messages.items)),
             .literal, .checked => {},
         }
     }
     for (modules, states) |entry, *state| {
-        try state.coverage.reportUnusedBranches(allocator, entry.problem_store);
-        if (entry.problem_store) |store| try finishPendingExhaustiveness(allocator, entry.module, store);
+        try state.coverage.reportUnusedBranches(entry.problem_store);
+        if (entry.problem_store) |store| try finishPendingExhaustiveness(entry.module, store);
         try entry.module.const_store.verifyComplete();
     }
 }
@@ -1432,12 +1482,12 @@ const ComptimeCoverage = struct {
         return &self.entries.items[self.entries.items.len - 1];
     }
 
-    fn reportUnusedBranches(self: *const ComptimeCoverage, allocator: Allocator, problem_store: ?*check.problem.Store) Allocator.Error!void {
+    fn reportUnusedBranches(self: *const ComptimeCoverage, problem_store: ?*check.problem.Store) Allocator.Error!void {
         const store = problem_store orelse return;
         for (self.entries.items) |entry| {
             for (entry.hits, 0..) |hit, index| {
                 if (hit) continue;
-                _ = try store.appendProblem(allocator, .{ .comptime_unused_branch = .{
+                _ = try store.appendProblem(.{ .comptime_unused_branch = .{
                     .kind = switch (entry.kind) {
                         .match => .match,
                         .if_ => .if_,
@@ -1539,11 +1589,11 @@ fn finalize(
             );
         }
 
-        try coverage.reportUnusedBranches(allocator, problem_store);
+        try coverage.reportUnusedBranches(problem_store);
     }
 
     if (problem_store) |store| {
-        try finishPendingExhaustiveness(allocator, module, store);
+        try finishPendingExhaustiveness(module, store);
     }
 
     try module.const_store.verifyComplete();
@@ -1978,7 +2028,7 @@ fn evalInterpreterProgramRoots(
                 break :blk stored;
             }
 
-            const eval_result = try evalCompileTimeRoot(allocator, interpreter, problem_store, owners, root.owner, module, compile_time_root, &lowered.lir_result, root.proc, root.ret_layout, &program.demand_error);
+            const eval_result = try evalCompileTimeRoot(interpreter, problem_store, owners, root.owner, module, compile_time_root, &lowered.lir_result, root.proc, root.ret_layout, &program.demand_error);
             try recordComptimeSiteHits(problem_store, coverage, owners, root.owner, compile_time_root, &lowered.lir_result, interpreter.getComptimeBranchHits(), root.proc);
             switch (eval_result) {
                 .value => |value| {
@@ -2004,7 +2054,6 @@ fn evalInterpreterProgramRoots(
         }
 
         if (try reportCompileTimeExpectFailures(
-            allocator,
             problem_store,
             module,
             compile_time_root,
@@ -2247,7 +2296,6 @@ const EmbeddedReport = enum {
 /// cached clean while its result holds the failure; source outside the
 /// module is named as the failure's origin.
 fn reportEmbeddedFailure(
-    allocator: Allocator,
     maybe_problem_store: ?*check.problem.Store,
     module: *const checked.CheckedModuleArtifact,
     root_region: base.Region,
@@ -2292,13 +2340,13 @@ fn reportEmbeddedFailure(
         const message_idx = try store.putExtraString(embedded.message);
         const origin = try comptimeFailureOrigin(store, site);
         switch (kind) {
-            .numeral => _ = try store.appendProblem(allocator, .{ .comptime_invalid_numeral = .{ .message = message_idx, .region = site.region, .origin = origin } }),
-            .quote => _ = try store.appendProblem(allocator, .{ .comptime_invalid_quote = .{ .message = message_idx, .region = site.region, .origin = origin } }),
-            .interpolation => _ = try store.appendProblem(allocator, .{ .comptime_invalid_interpolation = .{ .message = message_idx, .region = site.region, .origin = origin } }),
+            .numeral => _ = try store.appendProblem(.{ .comptime_invalid_numeral = .{ .message = message_idx, .region = site.region, .origin = origin } }),
+            .quote => _ = try store.appendProblem(.{ .comptime_invalid_quote = .{ .message = message_idx, .region = site.region, .origin = origin } }),
+            .interpolation => _ = try store.appendProblem(.{ .comptime_invalid_interpolation = .{ .message = message_idx, .region = site.region, .origin = origin } }),
         }
     } else {
         const message_idx = try store.putExtraString(embedded.message);
-        _ = try store.appendProblem(allocator, .{ .comptime_crash = .{
+        _ = try store.appendProblem(.{ .comptime_crash = .{
             .message = message_idx,
             .region = site.region,
             .origin = try comptimeFailureOrigin(store, site),
@@ -2368,7 +2416,7 @@ fn evalInterpreterLiteralRoot(
     };
     for (program.host.debugMessages()) |message| try emitDebugMessage(allocator, options, false, message);
     for (interpreter.getExpectFailures()) |expect_failure| {
-        try reportLiteralRootExpectFailure(allocator, owners, lowered, plan, expect_failure.message, expect_failure.region, expect_failure.loc);
+        try reportLiteralRootExpectFailure(owners, lowered, plan, expect_failure.message, expect_failure.region, expect_failure.loc);
     }
     const failed = failure orelse return;
     try recordLiteralRootFailure(allocator, owners, lowered, plan, failed);
@@ -2432,7 +2480,7 @@ fn evalDevLiteralRoot(
     };
     for (host.events.items) |event| switch (event) {
         .dbg => |message| try emitDebugMessage(allocator, options, false, message),
-        .expect_failed => |expect_failure| try reportLiteralRootExpectFailure(allocator, owners, lowered, plan, expect_failure.message, expect_failure.region, expect_failure.loc),
+        .expect_failed => |expect_failure| try reportLiteralRootExpectFailure(owners, lowered, plan, expect_failure.message, expect_failure.region, expect_failure.loc),
         .crashed => {},
     };
     const failed = failure orelse {
@@ -2470,7 +2518,6 @@ fn recordLiteralRootFailure(
 /// module: a rejection reports the rejected literal, and any other failure is
 /// a crash of the conversion, reported at the literal.
 fn reportLiteralRootFailure(
-    allocator: Allocator,
     owners: *const ModuleOwners,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     plan: LirProgram.LiteralRootPlan,
@@ -2478,7 +2525,7 @@ fn reportLiteralRootFailure(
 ) FinalizeError!void {
     if (!owners.report_sites) return;
     if (failedLiteralRejection(&lowered.lir_result, failure.stmt)) |site| {
-        return reportLiteralRejection(allocator, owners, site, failure.message);
+        return reportLiteralRejection(owners, site, failure.message);
     }
     var targets = try owners.reportTargets(plan.site.owner);
     while (targets.nextTarget()) |owner| {
@@ -2486,7 +2533,7 @@ fn reportLiteralRootFailure(
         const literal_region = owner.module.checked_bodies.expr(@fromBackingInt(@intCast(plan.site.checked_expr))).source_region;
         const site = comptimeFailureSiteFromLoc(owner.module, &lowered.lir_result.store, literal_region, failure.region, failure.loc);
         const message_idx = try store.putExtraString(failure.message);
-        _ = try store.appendProblem(allocator, .{ .comptime_crash = .{
+        _ = try store.appendProblem(.{ .comptime_crash = .{
             .message = message_idx,
             .region = site.region,
             .origin = try comptimeFailureOrigin(store, site),
@@ -2495,7 +2542,6 @@ fn reportLiteralRootFailure(
 }
 
 fn reportLiteralRootExpectFailure(
-    allocator: Allocator,
     owners: *const ModuleOwners,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     plan: LirProgram.LiteralRootPlan,
@@ -2509,7 +2555,7 @@ fn reportLiteralRootExpectFailure(
         const literal_region = owner.module.checked_bodies.expr(@fromBackingInt(@intCast(plan.site.checked_expr))).source_region;
         const site = comptimeFailureSiteFromLoc(owner.module, &lowered.lir_result.store, literal_region, region, loc);
         const message_idx = try store.putExtraString(message);
-        _ = try store.appendProblem(allocator, .{ .comptime_expect_failed = .{
+        _ = try store.appendProblem(.{ .comptime_expect_failed = .{
             .message = message_idx,
             .region = site.region,
             .origin = try comptimeFailureOrigin(store, site),
@@ -3763,7 +3809,6 @@ fn evalDevProgramRoots(
             .host_oom => return error.OutOfMemory,
             .host_error => return job.host.operational_error orelse finalizationInvariant("native host error omitted its operational cause"),
             .comptime_exhaustiveness => try devComptimeExhaustivenessRootPayload(
-                allocator,
                 problem_store,
                 owners,
                 job.root.owner,
@@ -3776,7 +3821,6 @@ fn evalDevProgramRoots(
                 &had_problem,
             ),
             .crashed => try devCrashedRootPayload(
-                allocator,
                 problem_store,
                 module,
                 job.compile_time_root,
@@ -3941,7 +3985,6 @@ fn validUtf8PrefixLen(bytes: []const u8, max_bytes: usize) usize {
 }
 
 fn devComptimeExhaustivenessRootPayload(
-    allocator: Allocator,
     problem_store: ?*check.problem.Store,
     owners: *const ModuleOwners,
     root_owner: lir.LIR.LoweringModuleId,
@@ -3960,13 +4003,12 @@ fn devComptimeExhaustivenessRootPayload(
     _ = problem_store orelse {
         finalizationInvariant("compile-time root reached an empirical exhaustiveness failure without a checking problem store");
     };
-    try appendCompileTimeExhaustivenessProblem(allocator, owners, root_owner, root, lir_result, root_proc, site_id);
+    try appendCompileTimeExhaustivenessProblem(owners, root_owner, root, lir_result, root_proc, site_id);
     had_problem.* = true;
     return try failedRootPayload(module, root, "compile-time exhaustiveness failure", .crash);
 }
 
 fn devCrashedRootPayload(
-    allocator: Allocator,
     problem_store: ?*check.problem.Store,
     module: *checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
@@ -3980,7 +4022,7 @@ fn devCrashedRootPayload(
     had_problem: *bool,
 ) FinalizeError!checked.CompileTimeRootPayload {
     const lir_store = &lir_result.store;
-    switch (try reportEmbeddedFailure(allocator, problem_store, module, devRootSourceRegion(module, root), owners, lir_result, failed_stmt, message, failed_region, failed_loc)) {
+    switch (try reportEmbeddedFailure(problem_store, module, devRootSourceRegion(module, root), owners, lir_result, failed_stmt, message, failed_region, failed_loc)) {
         .reported => {
             had_problem.* = true;
             return try crashedRootPayload(problem_store, module, root, message, RootFailure.of(lir_result, failed_stmt));
@@ -4003,7 +4045,7 @@ fn devCrashedRootPayload(
         failed_region,
         failed_loc,
     );
-    _ = try store.appendProblem(allocator, .{ .comptime_crash = .{
+    _ = try store.appendProblem(.{ .comptime_crash = .{
         .message = message_idx,
         .region = site.region,
         .origin = try comptimeFailureOrigin(store, site),
@@ -4035,7 +4077,7 @@ fn reportDevHostEvents(
                     failure.region,
                     failure.loc,
                 );
-                _ = try store.appendProblem(allocator, .{ .comptime_expect_failed = .{
+                _ = try store.appendProblem(.{ .comptime_expect_failed = .{
                     .message = message_idx,
                     .region = site.region,
                     .origin = try comptimeFailureOrigin(store, site),
@@ -4094,7 +4136,6 @@ fn failedLiteralRejection(lir_result: *const lir.Program.Result, failed_stmt: ?l
 /// per literal: the report of a literal root whose failure no checked root
 /// embeds.
 fn reportLiteralRejection(
-    allocator: Allocator,
     owners: *const ModuleOwners,
     site: lir.LIR.LiteralRejectionSite,
     message: []const u8,
@@ -4108,17 +4149,17 @@ fn reportLiteralRejection(
         const failure_site = comptimeFailureSiteFrom(owner.module, region, null, null, null);
         const message_idx = try store.putExtraString(message);
         switch (site.kind) {
-            .numeral => _ = try store.appendProblem(allocator, .{ .comptime_invalid_numeral = .{
+            .numeral => _ = try store.appendProblem(.{ .comptime_invalid_numeral = .{
                 .message = message_idx,
                 .region = failure_site.region,
                 .origin = try comptimeFailureOrigin(store, failure_site),
             } }),
-            .quote => _ = try store.appendProblem(allocator, .{ .comptime_invalid_quote = .{
+            .quote => _ = try store.appendProblem(.{ .comptime_invalid_quote = .{
                 .message = message_idx,
                 .region = failure_site.region,
                 .origin = try comptimeFailureOrigin(store, failure_site),
             } }),
-            .interpolation => _ = try store.appendProblem(allocator, .{ .comptime_invalid_interpolation = .{
+            .interpolation => _ = try store.appendProblem(.{ .comptime_invalid_interpolation = .{
                 .message = message_idx,
                 .region = failure_site.region,
                 .origin = try comptimeFailureOrigin(store, failure_site),
@@ -4176,7 +4217,6 @@ fn appendCheckedErrorConst(
 }
 
 fn reportCompileTimeExpectFailures(
-    allocator: Allocator,
     maybe_problem_store: ?*check.problem.Store,
     module: *const checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
@@ -4195,7 +4235,7 @@ fn reportCompileTimeExpectFailures(
             failure.region,
             failure.loc,
         );
-        _ = try problem_store.appendProblem(allocator, .{ .comptime_expect_failed = .{
+        _ = try problem_store.appendProblem(.{ .comptime_expect_failed = .{
             .message = message_idx,
             .region = site.region,
             .origin = try comptimeFailureOrigin(problem_store, site),
@@ -4210,7 +4250,6 @@ const CompileTimeEvalResult = union(enum) {
 };
 
 fn evalCompileTimeRoot(
-    allocator: Allocator,
     interpreter: *Interpreter,
     problem_store: ?*check.problem.Store,
     owners: *const ModuleOwners,
@@ -4231,16 +4270,16 @@ fn evalCompileTimeRoot(
             error.OutOfMemory => return error.OutOfMemory,
             error.RuntimeError => {
                 const message = interpreter.getRuntimeErrorMessage() orelse "compile-time evaluation failed";
-                return .{ .failed = .{ .message = message, .payload = try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, owners, lir_result, message) } };
+                return .{ .failed = .{ .message = message, .payload = try reportCompileTimeCrash(problem_store, module, root, interpreter, owners, lir_result, message) } };
             },
-            error.ComptimeExhaustiveness => return .{ .failed = .{ .message = "compile-time exhaustiveness failure", .payload = try reportCompileTimeExhaustiveness(allocator, problem_store, owners, root_owner, module, root, lir_result, interpreter, proc) } },
+            error.ComptimeExhaustiveness => return .{ .failed = .{ .message = "compile-time exhaustiveness failure", .payload = try reportCompileTimeExhaustiveness(problem_store, owners, root_owner, module, root, lir_result, interpreter, proc) } },
             error.DivisionByZero => {
                 const message = interpreter.getRuntimeErrorMessage() orelse "Division by zero";
-                return .{ .failed = .{ .message = message, .payload = try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, owners, lir_result, message) } };
+                return .{ .failed = .{ .message = message, .payload = try reportCompileTimeCrash(problem_store, module, root, interpreter, owners, lir_result, message) } };
             },
             error.Crash => {
                 const message = interpreter.getCrashMessage();
-                return .{ .failed = .{ .message = message, .payload = try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, owners, lir_result, message) } };
+                return .{ .failed = .{ .message = message, .payload = try reportCompileTimeCrash(problem_store, module, root, interpreter, owners, lir_result, message) } };
             },
             error.ExpectErr => finalizationInvariant("compile-time root reached an expect_err statement"),
             error.UnsupportedHostedFunction => finalizationInvariant("compile-time root reached an unsupported hosted function"),
@@ -4310,7 +4349,6 @@ fn reportsUnusedBranches(kind: checked.CompileTimeRootKind) bool {
 }
 
 fn reportCompileTimeExhaustiveness(
-    allocator: Allocator,
     maybe_problem_store: ?*check.problem.Store,
     owners: *const ModuleOwners,
     root_owner: lir.LIR.LoweringModuleId,
@@ -4326,12 +4364,11 @@ fn reportCompileTimeExhaustiveness(
     const site_id = interpreter.getComptimeFailedSite() orelse {
         finalizationInvariant("compile-time root reported empirical exhaustiveness failure without a site");
     };
-    try appendCompileTimeExhaustivenessProblem(allocator, owners, root_owner, root, lir_result, root_proc, site_id);
+    try appendCompileTimeExhaustivenessProblem(owners, root_owner, root, lir_result, root_proc, site_id);
     return try failedRootPayload(module, root, "compile-time exhaustiveness failure", .crash);
 }
 
 fn appendCompileTimeExhaustivenessProblem(
-    allocator: Allocator,
     owners: *const ModuleOwners,
     root_owner: lir.LIR.LoweringModuleId,
     root: checked.CompileTimeRoot,
@@ -4367,7 +4404,7 @@ fn appendCompileTimeExhaustivenessProblem(
                 => finalizationInvariant("compile-time exhaustiveness failure had an impossible site policy"),
             };
         }
-        const matched = try problem_store.appendEmpiricalExhaustivenessFailureRetaining(allocator, checked_site, owner.module.exhaustiveness_sites.get(checked_site).requires_pairing);
+        const matched = try problem_store.appendEmpiricalExhaustivenessFailureRetaining(checked_site, owner.module.exhaustiveness_sites.get(checked_site).requires_pairing);
         if (!matched) {
             finalizationInvariant("empirical exhaustiveness failure had no pending static diagnostic");
         }
@@ -4408,14 +4445,14 @@ fn discardUnreachedRootComptimeSites(
 
 /// Complete only diagnostics whose checked evaluation context is available.
 /// A generic platform carries the remaining recipes into its cache entry.
-pub fn finishPendingExhaustiveness(allocator: Allocator, module: *const checked.CheckedModuleArtifact, store: *check.problem.Store) Allocator.Error!void {
+pub fn finishPendingExhaustiveness(module: *const checked.CheckedModuleArtifact, store: *check.problem.Store) Allocator.Error!void {
     var retained: usize = 0;
     for (store.pending_static_exhaustiveness.items) |pending| {
         if (pending.site != null and module.exhaustiveness_sites.get(pending.site.?).requires_pairing) {
             store.pending_static_exhaustiveness.items[retained] = pending;
             retained += 1;
         } else if (pending.mode == .static and !pending.reported) {
-            _ = try store.appendProblem(allocator, pending.problem);
+            _ = try store.appendProblem(pending.problem);
         }
     }
     store.pending_static_exhaustiveness.items.len = retained;
@@ -4453,7 +4490,6 @@ fn comptimeSiteEmpiricalKind(
 }
 
 fn reportCompileTimeCrash(
-    allocator: Allocator,
     maybe_problem_store: ?*check.problem.Store,
     module: *checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
@@ -4463,7 +4499,6 @@ fn reportCompileTimeCrash(
     message: []const u8,
 ) FinalizeError!checked.CompileTimeRootPayload {
     switch (try reportEmbeddedFailure(
-        allocator,
         maybe_problem_store,
         module,
         module.checked_bodies.expr(root.expr).source_region,
@@ -4483,7 +4518,7 @@ fn reportCompileTimeCrash(
     };
     const message_idx = try problem_store.putExtraString(message);
     const site = compileTimeCrashSite(module, root, interpreter);
-    _ = try problem_store.appendProblem(allocator, .{ .comptime_crash = .{
+    _ = try problem_store.appendProblem(.{ .comptime_crash = .{
         .message = message_idx,
         .region = site.region,
         .origin = try comptimeFailureOrigin(problem_store, site),

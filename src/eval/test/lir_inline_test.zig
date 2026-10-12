@@ -539,6 +539,103 @@ fn structuralJsonLirStats(
     };
 }
 
+const BoxyJsonParserCounts = struct {
+    calls: usize = 0,
+    releases: usize = 0,
+};
+
+/// Calls and inserted releases in the whole Boxy-lowered program for a `Shape`
+/// of `field_count` string fields that `parse_sites` separate functions each
+/// parse with `Json.parse`.
+fn boxyStructuralJsonParserCounts(allocator: Allocator, field_count: usize, parse_sites: usize) TestError!BoxyJsonParserCounts {
+    var source_buf = std.ArrayList(u8).empty;
+    defer source_buf.deinit(allocator);
+    try source_buf.appendSlice(allocator, "Shape : {\n");
+    for (0..field_count) |field_index| {
+        const field = try std.fmt.allocPrint(allocator, "    f{d} : Str,\n", .{field_index});
+        defer allocator.free(field);
+        try source_buf.appendSlice(allocator, field);
+    }
+    try source_buf.appendSlice(allocator, "}\n");
+    for (0..parse_sites) |site| {
+        const parse_fn = try std.fmt.allocPrint(
+            allocator,
+            "\nparse_shape{d} : Str -> Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])\nparse_shape{d} = |json| Json.parse(json)\n",
+            .{ site, site },
+        );
+        defer allocator.free(parse_fn);
+        try source_buf.appendSlice(allocator, parse_fn);
+    }
+    try source_buf.appendSlice(allocator, "\nmain : Str -> Bool\nmain = |json| ");
+    for (0..parse_sites) |site| {
+        const use = try std.fmt.allocPrint(allocator, "{s}parse_shape{d}(json).is_ok()", .{ if (site == 0) "" else " and ", site });
+        defer allocator.free(use);
+        try source_buf.appendSlice(allocator, use);
+    }
+    try source_buf.appendSlice(allocator, "\n");
+    const source = source_buf.items;
+
+    var compiled = try helpers.compileProgramForTargetWithBuiltinAndContext(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .boxy,
+    );
+    defer compiled.deinit(allocator);
+    var counts = BoxyJsonParserCounts{};
+    for (compiled.lowered.view.store.getCFStmts()) |stmt| {
+        if (stmt == .assign_call or stmt == .assign_call_erased or stmt == .assign_call_dict) counts.calls += 1;
+        if (stmt == .decref or stmt == .decref_if_initialized) counts.releases += 1;
+    }
+    return counts;
+}
+
+/// Increfs in the whole Boxy-lowered program for a `Shape` of `field_count`
+/// string fields that one function encodes with `Json.to_str`.
+fn boxyStructuralJsonEncoderIncrefs(allocator: Allocator, field_count: usize) TestError!usize {
+    var source_buf = std.ArrayList(u8).empty;
+    defer source_buf.deinit(allocator);
+    try source_buf.appendSlice(allocator, "Shape : {\n");
+    for (0..field_count) |field_index| {
+        const field = try std.fmt.allocPrint(allocator, "    f{d} : Str,\n", .{field_index});
+        defer allocator.free(field);
+        try source_buf.appendSlice(allocator, field);
+    }
+    try source_buf.appendSlice(allocator,
+        \\}
+        \\
+        \\encode_shape : Shape -> Str
+        \\encode_shape = |shape| Json.to_str(shape)
+        \\
+        \\main : Shape -> Bool
+        \\main = |shape| encode_shape(shape).is_empty()
+        \\
+    );
+
+    var compiled = try helpers.compileProgramForTargetWithBuiltinAndContext(
+        allocator,
+        std.testing.io,
+        .module,
+        source_buf.items,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .boxy,
+    );
+    defer compiled.deinit(allocator);
+    var increfs: usize = 0;
+    for (compiled.lowered.view.store.getCFStmts()) |stmt| {
+        if (stmt == .incref) increfs += 1;
+    }
+    return increfs;
+}
+
 fn structuralJsonLirPeakBytes(field_count: usize) TestError!usize {
     const source = try structuralJsonSource(std.testing.allocator, field_count, "Str", .parse);
     defer std.testing.allocator.free(source);
@@ -1994,6 +2091,80 @@ test "issue 10979 flat JSON record parser ARC growth is linear in field count" {
     }
     try std.testing.expect(wide_per_field * 2 <= narrow_per_field * 3);
     try std.testing.expect(wide_statements_per_field * 2 <= narrow_statements_per_field * 3);
+}
+
+test "issue 11910 boxy JSON record parser lowers each field's value parser once" {
+    // The `Field`, `TryField`, and `TryFieldCaseless` events all select a
+    // field and then parse its value; each field's value parser is one join
+    // they jump to. A field therefore adds two calls: the parser's
+    // constructor renaming its name, and the one call parsing its value.
+    const allocator = std.testing.allocator;
+    const four = (try boxyStructuralJsonParserCounts(allocator, 4, 1)).calls;
+    const eight = (try boxyStructuralJsonParserCounts(allocator, 8, 1)).calls;
+    try std.testing.expectEqual(@as(usize, 2 * 4), eight - four);
+}
+
+test "issue 11910 boxy JSON parses of one shape share its generated parser" {
+    // The checker interns the two `Json.parse` contracts for `Shape` to one
+    // identity, so both functions call one generated runtime parser. The
+    // second function's parser construction still renames each field, so it
+    // adds one call per field rather than a second value parser per field.
+    const allocator = std.testing.allocator;
+    const narrow_second = (try boxyStructuralJsonParserCounts(allocator, 4, 2)).calls - (try boxyStructuralJsonParserCounts(allocator, 4, 1)).calls;
+    const wide_second = (try boxyStructuralJsonParserCounts(allocator, 8, 2)).calls - (try boxyStructuralJsonParserCounts(allocator, 8, 1)).calls;
+    try std.testing.expectEqual(@as(usize, 4), wide_second - narrow_second);
+}
+
+test "boxy root that parses JSON directly receives its codec evidence" {
+    // `main`'s scheme captures the codec requirement of its `Json.parse`
+    // call. A root has no caller, so its checked root evidence supplies it.
+    const allocator = std.testing.allocator;
+    var compiled = try helpers.compileProgramForTargetWithBuiltinAndContext(
+        allocator,
+        std.testing.io,
+        .module,
+        \\Shape : {
+        \\    f0 : Str,
+        \\    f1 : Str,
+        \\}
+        \\
+        \\main : Str -> Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\main = |json| Json.parse(json)
+    ,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .boxy,
+    );
+    defer compiled.deinit(allocator);
+    try std.testing.expect(compiled.lowered.view.store.getProcSpecs().len != 0);
+}
+
+test "issue 11910 boxy JSON record encoder callbacks capture only the names they use" {
+    // A string field's value thunk captures no field names, so packing the
+    // thunks retains a constant number of values per field rather than every
+    // name of the record.
+    const allocator = std.testing.allocator;
+    const four = try boxyStructuralJsonEncoderIncrefs(allocator, 4);
+    const eight = try boxyStructuralJsonEncoderIncrefs(allocator, 8);
+    const sixteen = try boxyStructuralJsonEncoderIncrefs(allocator, 16);
+    if (2 * (eight - four) != sixteen - eight) {
+        std.debug.print("boxy JSON encoder increfs: 4 fields {d}, 8 fields {d}, 16 fields {d}\n", .{ four, eight, sixteen });
+    }
+    try std.testing.expectEqual(2 * (eight - four), sixteen - eight);
+}
+
+test "issue 11910 boxy JSON record parser releases its fields once on error" {
+    // Every error inside the record loop jumps to one error join that retains
+    // the field names and payload slots, so their releases exist once rather
+    // than at each fallible call: the program's releases grow linearly with
+    // the record's width.
+    const allocator = std.testing.allocator;
+    const four = (try boxyStructuralJsonParserCounts(allocator, 4, 1)).releases;
+    const eight = (try boxyStructuralJsonParserCounts(allocator, 8, 1)).releases;
+    const sixteen = (try boxyStructuralJsonParserCounts(allocator, 16, 1)).releases;
+    try std.testing.expectEqual(2 * (eight - four), sixteen - eight);
 }
 
 test "issue 10979 shared JSON record continuations preserve field semantics" {

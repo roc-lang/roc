@@ -336,7 +336,7 @@ pub const PendingEvaluationState = struct {
     reported_problem_count: usize,
 
     pub fn deinit(self: *PendingEvaluationState) void {
-        self.problems.deinit(self.allocator);
+        self.problems.deinit();
         self.import_mapping.deinit();
         self.allocator.free(self.imported_envs);
         self.allocator.destroy(self);

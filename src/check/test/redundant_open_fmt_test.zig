@@ -77,6 +77,12 @@ test "redundant open rows - function results, arguments and callbacks" {
         \\make : Str -> ([A, ..] -> [B, ..])
         \\make = |_| |_| B
         \\
+        \\drive : ((Str -> [A, ..]) -> Str) -> Str
+        \\drive = |step| step(|_| A)
+        \\
+        \\feed : (([A, ..] -> Str) -> Str) -> Str
+        \\feed = |_| "x"
+        \\
         \\empty : Str -> [..]
         \\empty = |_| crash "x"
         \\

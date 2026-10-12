@@ -306,11 +306,13 @@ pub const Constants = struct {
     ///      the value through a row coercion.
     /// 143: Module environments record row-coerced callees and the definitions
     ///      whose bodies closed an annotated open result row.
-    /// 144: Canonical node payloads are encoded from their payload field types.
-    /// 145: Low-level op numbering covers only ops that lowering produces.
-    /// 146: A stored checked runtime error keeps its evaluated operands in a
+    /// 144: Annotation polarity flips through function argument positions, so a
+    ///      callback's result row is generated closed and its argument row open.
+    /// 145: Canonical node payloads are encoded from their payload field types.
+    /// 146: Low-level op numbering covers only ops that lowering produces.
+    /// 147: A stored checked runtime error keeps its evaluated operands in a
     ///      field of their own.
-    pub const CACHE_VERSION = 146;
+    pub const CACHE_VERSION = 147;
 };
 
 /// Configuration for the Roc cache system.
