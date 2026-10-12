@@ -1,4 +1,10 @@
 //! Host provenance supplements, rather than replaces, closed-row diagnostics.
+//!
+//! A wrapper defined as a function whose body forwards a host's closed error
+//! row closes the open row its annotation states, and a caller's call widens
+//! that row (design.md "Row Subsumption"), so such wrappers are accepted. An
+//! alias of a hosted function is not a function definition and keeps the
+//! host's fixed row, so its mismatch still names the host function.
 const std = @import("std");
 const roc_target = @import("roc_target");
 const compile_build = @import("../compile_build.zig");
@@ -14,40 +20,40 @@ test "host error diagnostic follows imported function aliases" {
     try checkHostErrorDiagnostic("line! = Host.stdout_line!", .hosted);
 }
 
-test "host error diagnostic follows unchanged function results" {
-    try checkHostErrorDiagnostic("line! = |s| Host.stdout_line!(s)", .hosted);
+test "a wrapper returning a host result unchanged is widened at its caller's call" {
+    try checkHostErrorDiagnostic("line! = |s| Host.stdout_line!(s)", .accepted);
 }
 
-test "host error diagnostic follows a question forwarding wrapper" {
+test "a question forwarding wrapper is widened at its caller's call" {
     try checkHostErrorDiagnostic(
         \\line! = |s| {
         \\    Stdout.alias!(s)?
         \\    Ok({})
         \\}
         \\alias! = Host.stdout_line!
-    , .hosted);
+    , .accepted);
 }
 
-test "host error diagnostic rejects implicit widening through a direct hosted question" {
+test "a wrapper forwarding a direct hosted question is widened at its caller's call" {
     try checkHostErrorDiagnostic(
         \\line! = |s| {
         \\    Host.stdout_line!(s)?
         \\    Ok({})
         \\}
-    , .hosted);
+    , .accepted);
 }
 
-test "host error diagnostic follows a saved result in an imported question wrapper" {
+test "a wrapper forwarding a saved host result is widened at its caller's call" {
     try checkHostErrorDiagnostic(
         \\line! = |s| {
         \\    result = Host.stdout_line!(s)
         \\    result?
         \\    Ok({})
         \\}
-    , .hosted);
+    , .accepted);
 }
 
-test "host error diagnostic does not blame a saved unrelated host result" {
+test "a wrapper forwarding an unrelated closed result is widened at its caller's call" {
     try checkHostErrorDiagnostic(
         \\line! = |s| {
         \\    hosted_result = Host.stdout_line!(s)
@@ -58,7 +64,7 @@ test "host error diagnostic does not blame a saved unrelated host result" {
         \\    result?
         \\    Ok({})
         \\}
-    , .ordinary);
+    , .accepted);
 }
 
 test "host error diagnostic stops at explicit reconstruction" {
@@ -70,7 +76,7 @@ test "host error diagnostic stops at explicit reconstruction" {
     , .accepted);
 }
 
-test "host error diagnostic does not blame an unrelated host call" {
+test "a wrapper returning an unrelated closed result is widened at its caller's call" {
     try checkHostErrorDiagnostic(
         \\line! = |s| {
         \\    close : Try({}, [StdoutErr(Str)]) -> Try({}, [StdoutErr(Str)])
@@ -78,7 +84,7 @@ test "host error diagnostic does not blame an unrelated host call" {
         \\    _ = Host.stdout_line!(s)
         \\    close(Err(StdoutErr("local")))
         \\}
-    , .ordinary);
+    , .accepted);
 }
 
 const Expected = enum { hosted, ordinary, accepted };

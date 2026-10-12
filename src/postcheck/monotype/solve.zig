@@ -1832,21 +1832,46 @@ fn nominalBackingDeclarationsEqual(left: NominalBackingDeclaration, right: Nomin
         left.declaration_id == right.declaration_id;
 }
 
+/// The structural key stored in one nominal backing instance: its declaration
+/// and arguments, which live in the instance table, named by that instance.
+const StoredNominalBackingKey = struct { instance: NominalBackingInstanceId };
+
+/// Resident entries name their instance; the key itself lives in the instance
+/// table, so a slot holds only the instance's hash and id. An entry's hash is
+/// taken from the instance's current arguments, which change only while the
+/// entry is out of the index.
+const NominalBackingIndexContext = struct {
+    instances: *const std.ArrayList(NominalBackingInstance),
+
+    pub fn hash(self: NominalBackingIndexContext, key: StoredNominalBackingKey) u64 {
+        const instance = self.instances.items[@backingInt(key.instance)];
+        return hashNominalBackingKey(instance.declaration, instance.args);
+    }
+
+    pub fn eql(_: NominalBackingIndexContext, left: StoredNominalBackingKey, right: StoredNominalBackingKey) bool {
+        return left.instance == right.instance;
+    }
+};
+
+/// Looks up an exact key among resident instances.
 const NominalBackingKeyContext = struct {
+    instances: *const std.ArrayList(NominalBackingInstance),
+
     pub fn hash(_: NominalBackingKeyContext, key: NominalBackingKey) u64 {
         return hashNominalBackingKey(key.declaration, key.args);
     }
 
-    pub fn eql(_: NominalBackingKeyContext, left: NominalBackingKey, right: NominalBackingKey) bool {
-        return nominalBackingDeclarationsEqual(left.declaration, right.declaration) and
-            std.mem.eql(NodeId, left.args, right.args);
+    pub fn eql(self: NominalBackingKeyContext, key: NominalBackingKey, stored: StoredNominalBackingKey) bool {
+        const instance = self.instances.items[@backingInt(stored.instance)];
+        return nominalBackingDeclarationsEqual(key.declaration, instance.declaration) and
+            std.mem.eql(NodeId, key.args, instance.args);
     }
 };
 
 const NominalBackingIndex = collections.RekeyingHashMap(
-    NominalBackingKey,
+    StoredNominalBackingKey,
     NominalBackingInstanceId,
-    NominalBackingKeyContext,
+    NominalBackingIndexContext,
     80,
 );
 
@@ -1879,7 +1904,8 @@ const NominalBackingLookupContext = struct {
         return hasher.state;
     }
 
-    pub fn eql(self: NominalBackingLookupContext, lookup: NominalBackingLookup, stored: NominalBackingKey) bool {
+    pub fn eql(self: NominalBackingLookupContext, lookup: NominalBackingLookup, stored_key: StoredNominalBackingKey) bool {
+        const stored = self.graph.nominal_backing_instances.items[@backingInt(stored_key.instance)];
         if (!nominalBackingDeclarationsEqual(lookup.declaration, stored.declaration) or
             lookup.args.len != stored.args.len)
         {
@@ -2197,7 +2223,7 @@ pub const InstGraph = struct {
             .leaf_alias_origins = collections.DenseMap(NodeId, std.ArrayList(LeafOrigin)).init(allocator),
             .imported_monos = collections.DenseMap(NodeId, Type.TypeId).init(allocator),
             .class_finished_monos = .empty,
-            .nominal_backing_index = NominalBackingIndex.init(allocator, .{}),
+            .nominal_backing_index = NominalBackingIndex.init(allocator, .{ .instances = &graph.nominal_backing_instances }),
             .nominal_backing_instances = .empty,
             .nominal_backings_by_root = collections.DenseMap(NodeId, std.ArrayList(NominalBackingOccurrence)).init(allocator),
             .nominal_backing_affected = .empty,
@@ -3629,7 +3655,7 @@ pub const InstGraph = struct {
             stored.* = self.find(arg);
         }
         const key = NominalBackingKey{ .declaration = declaration, .args = stored_args };
-        if (self.nominal_backing_index.get(key) != null) {
+        if (self.nominalBackingIndexGet(key) != null) {
             Common.invariant("nominal backing insertion duplicated an indexed instantiation");
         }
 
@@ -3641,7 +3667,7 @@ pub const InstGraph = struct {
             .active = true,
         });
         try self.nominal_backing_migration_epochs.append(self.allocator, 0);
-        try self.nominal_backing_index.putNoClobber(key, instance_id);
+        try self.nominal_backing_index.putNoClobber(.{ .instance = instance_id }, instance_id);
         for (stored_args, 0..) |root, arg_index| {
             const occurrences = try self.nominal_backings_by_root.getOrPut(root);
             if (!occurrences.found_existing) occurrences.value_ptr.* = .empty;
@@ -3650,6 +3676,10 @@ pub const InstGraph = struct {
                 .arg_index = @intCast(arg_index),
             });
         }
+    }
+
+    fn nominalBackingIndexGet(self: *const InstGraph, key: NominalBackingKey) ?NominalBackingInstanceId {
+        return self.nominal_backing_index.getAdapted(key, NominalBackingKeyContext{ .instances = &self.nominal_backing_instances });
     }
 
     /// Rewrite every indexed nominal-backing key that mentions `loser`.
@@ -3700,17 +3730,9 @@ pub const InstGraph = struct {
         // Removing every old key first prevents one affected instance from
         // colliding with another instance's stale pre-migration key.
         for (self.nominal_backing_affected.items) |instance_id| {
-            const instance = &self.nominal_backing_instances.items[@backingInt(instance_id)];
-            const old_key = NominalBackingKey{
-                .declaration = instance.declaration,
-                .args = instance.args,
-            };
-            const removed = self.nominal_backing_index.fetchRemove(old_key) orelse
+            _ = self.nominal_backing_index.fetchRemove(.{ .instance = instance_id }) orelse
                 Common.invariant("active nominal backing instance was absent from its index");
             self.countNominalBackingIndexRemoval();
-            if (removed.value != instance_id) {
-                Common.invariant("nominal backing key referenced the wrong instance");
-            }
         }
 
         const current_winner_occurrences = self.nominal_backings_by_root.getPtr(winner).?;
@@ -3730,7 +3752,7 @@ pub const InstGraph = struct {
                 .declaration = instance.declaration,
                 .args = instance.args,
             };
-            if (self.nominal_backing_index.get(new_key)) |existing_id| {
+            if (self.nominalBackingIndexGet(new_key)) |existing_id| {
                 if (existing_id == instance_id) {
                     Common.invariant("nominal backing migration encountered its own indexed key");
                 }
@@ -3747,13 +3769,10 @@ pub const InstGraph = struct {
                 const retained = &self.nominal_backing_instances.items[@backingInt(retained_id)];
                 const retired = &self.nominal_backing_instances.items[@backingInt(retired_id)];
                 if (retained_id == instance_id) {
-                    const removed = self.nominal_backing_index.fetchRemove(new_key) orelse
+                    _ = self.nominal_backing_index.fetchRemove(.{ .instance = existing_id }) orelse
                         Common.invariant("colliding nominal backing key disappeared during migration");
                     self.countNominalBackingIndexRemoval();
-                    if (removed.value != existing_id) {
-                        Common.invariant("colliding nominal backing key referenced the wrong instance");
-                    }
-                    self.nominal_backing_index.putAssumeCapacityNoClobber(new_key, instance_id);
+                    self.nominal_backing_index.putAssumeCapacityNoClobber(.{ .instance = instance_id }, instance_id);
                 }
                 retired.active = false;
                 self.nominal_backing_collisions.appendAssumeCapacity(.{
@@ -3761,7 +3780,7 @@ pub const InstGraph = struct {
                     .right = retired.node,
                 });
             } else {
-                self.nominal_backing_index.putAssumeCapacityNoClobber(new_key, instance_id);
+                self.nominal_backing_index.putAssumeCapacityNoClobber(.{ .instance = instance_id }, instance_id);
             }
         }
     }
@@ -12580,7 +12599,7 @@ fn expectNominalBackingIndexConsistent(graph: *InstGraph) error{ TestExpectedEqu
             .declaration = instance.declaration,
             .args = instance.args,
         };
-        try std.testing.expectEqual(instance_id, graph.nominal_backing_index.get(key).?);
+        try std.testing.expectEqual(instance_id, graph.nominalBackingIndexGet(key).?);
         for (instance.args, 0..) |root, arg_index| {
             const occurrences = graph.nominal_backings_by_root.getPtr(root) orelse return error.TestUnexpectedResult;
             var matching_occurrences: usize = 0;

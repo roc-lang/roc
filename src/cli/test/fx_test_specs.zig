@@ -719,6 +719,16 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "0<abcdefgh|1>hosted bytes: 120 local bytes: 120",
         .description = "Regression test for #10774: a hosted function owns a List(Str) argument whose elements the caller still holds, so the caller's retain must cover the element strings the host's release drops",
     },
+    .{
+        .roc_file = "test/fx/tailcc_stack_args.roc",
+        .io_spec = "0<x x default 41|1>PASS",
+        .description = "Regression test for #12191: an AArch64 spill reload right after a call that passes arguments on the stack reads the right slot",
+    },
+    .{
+        .roc_file = "test/fx/tailcc_stack_args_tail_group.roc",
+        .io_spec = "0<hello world, this is input with some length|1>2503225939316 1919697413816 628263128268 758148411552 197600621265 1918487711129 489016833162 35176166216 2989249644772 5417509158116 5046934489966 1080549464621",
+        .description = "Regression test for #12191: calls into a tail group whose members take more arguments than fit in AArch64 registers keep the caller's values intact",
+    },
 };
 
 /// Get the total number of IO spec tests

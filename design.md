@@ -8333,13 +8333,13 @@ for every caller, which is precisely what identical signatures already
 promise. The body is bounded by the audit, never by which value a particular
 return path constructed.
 
-NOT YET IMPLEMENTED. Today the extension is an ordinary flex during the body
-check, so a closed value CLOSES the row instead of widening into it: a
-definition returning a value from a closed source (an input-position
-parameter, a nominal field, a hosted result) is checked with a closed row,
-and two identically annotated definitions then behave differently for their
-callers. Deferred: Row Subsumption states what that costs, what replaces it,
-and what the replacement deletes.
+The extension is an ordinary flex during the body check, so a closed value
+still CLOSES the row there: a definition returning a value from a closed
+source (an input-position parameter, a nominal field, a hosted result)
+has a closed row in its own type. Each direct call of such a definition widens its own
+copy of the result instead (Row Subsumption), so two identically annotated
+definitions behave the same for a caller that calls them; a definition used
+as a function value keeps its own result row.
 `test/fx-open/issue_9963_hosted_try_question_mark.roc` carries both halves of
 that witness in one platform module. `Fallible.via_match!` and
 `Fallible.via_question!` are annotated `{} => Try(Str, [HostErr(Str)])`
@@ -8348,10 +8348,10 @@ identically. The first reconstructs the hosted error with a `match`, so the
 is never bound, and the function's row stays open. The second forwards the
 hosted error with `?`; the host's row is closed, so unifying it into the
 annotation's extension would bind that extension to `[]` and close the row.
-With the hosted widening exception removed, that forwarding closes the row.
-The fixture remains an acceptance witness for the deferred subsumption design,
-but its question-forwarding case is expected to expose the removed exception's
-compatibility cost. The match-reconstructing case keeps its open row.
+With the hosted widening exception removed, that forwarding closes the
+definition's own result row, and a call of `Fallible.via_question!` widens its
+result at the call (Row Subsumption). The match-reconstructing case keeps its
+open row.
 
 An anonymous `..` in a positive position of an opening annotation means
 exactly what absence means there and is generated the same way (a recorded
@@ -8655,12 +8655,11 @@ Display follows the same polarity: an anonymous, unshared, unconstrained flex
 ext in an output position is not rendered as `..`; rigid extensions are
 always rendered (a marker, which is written closed, is rendered closed).
 
-### Deferred: Row Subsumption
+### Row Subsumption
 
 Row subsumption—a closed row COERCING into an implicitly open one where the
 two meet, instead of binding the open row's extension shut—is the end state
-Polarity is written against. It is NOT implemented. This section states the
-rule it will be, what it replaces, and what it deletes.
+Polarity is written against.
 
 The argument for it is interchangeability. A signature is the whole of what a
 caller reads, so two definitions carrying identical annotations must be usable
@@ -8668,58 +8667,57 @@ identically. Closing-by-body breaks that: a definition that CONSTRUCTS its
 result mints its own open row and never binds the annotation's extension,
 while a definition that FORWARDS a value out of a closed source—an
 input-position parameter, a nominal field, a hosted result—binds that
-extension to `[]`. The bodies differ; the signatures do not, and a caller that
-widens the first is rejected on the second.
+extension to `[]`. The bodies differ; the signatures do not.
 
-Closedness is therefore a property a body leaks rather than one an author
-states. Under subsumption, an author who wants a genuinely closed output row
-writes the closure explicitly, in the shape of `[MyErr, ..[]]`. That spelling
-does not exist today and is not designed.
+The body still closes the row, so such a definition's own type, which it is
+specialized at, has the closed row its body produces. The coercion happens at each
+call. A direct call whose callee names an annotated function whose body closed
+a result row its annotation implicitly opens
+(`Check.defClosedAnnotatedResultRow`; imported through
+`ModuleEnv.ClosedResultBinding`) relates its callee to a copy of the
+function's instantiated type in which each such closed row the row coercion
+reaches in the result is re-opened (`Check.widenedFunctionResultUseVar`). Only
+the result's spine down to a re-opened row is copied: a forwarder's argument
+and result rows can be one class, and its argument row stays closed, so a call
+at a tag the argument does not list is still rejected. Checking records the
+callee with the function's own type and result (`ModuleEnv.RowCoercedCallee`),
+and checked-body construction makes the call at that type and widens its result
+with a `row_coerce` (Row Coercion Primitive, below). A call inside the
+function's own definition relates to the type the body is still producing and
+is not widened.
 
-The change itself is at one unification: where a closed row meets an
-implicitly open annotated output row, coerce rather than bind. An incoming row
-whose tags are a subset of the listed tags coerces and leaves the extension
-open; an incoming row carrying unlisted tags is refused by the bounded row,
-as it is today. The coercion's first instance is
-already built and running: the Result-Row Widening Adapter specializes a
-template at its own declared row and re-tags the result at the requested row.
-That adapter is wired to template completion for dispatch plans; a value
-coerced inside an ordinary body needs a re-tag the adapter does not reach, and
-the Row Coercion Primitive below is that re-tag, built ahead of the rule so the
-rule's only remaining work is in the checker.
+A definition used as a function value rather than called directly keeps its
+own result row: widening it would need an adapter closure around the function,
+which is not built. An author who wants a genuinely closed output row would
+write the closure explicitly, in the shape of `[MyErr, ..[]]`; that spelling
+does not exist and is not designed.
 
-The host-specific checker rewrite has been removed before subsumption is
-implemented (Hosted Try Question Widening Removed). Roc wrappers must explicitly
-reconstruct hosted errors when composing direct calls with wider error rows.
-The general adapter remains for admitted generic dispatch requests, including
-those selecting hosted implementations, and for non-hosted closed implementations
-(`test/cli/WidenClosedImpl.roc` and its siblings).
+The host-specific checker rewrite has been removed (Hosted Try Question
+Widening Removed). A hosted declaration is a host-boundary annotation whose
+rows are generated as written, so a direct hosted call is never widened: Roc
+wrappers reconstruct hosted errors when composing direct calls with wider
+error rows, and the direct hosted forwarding rejection in
+`src/compile/test/hosted_error_diagnostic_test.zig` pins that. The Result-Row
+Widening Adapter remains for admitted generic dispatch requests, including
+those selecting hosted implementations, and for non-hosted closed
+implementations (`test/cli/WidenClosedImpl.roc` and its siblings).
 
-Two questions are settled in the same pass, because each asks what a closed
-row means at a boundary. A bounded row refuses exactly the relations that
-would add a tag to it, so a coercion that changes when an extension gains tags
-changes what the bound refuses with it.
 A top-level value's uses, in its own module and in every importer, widen
-through this same coercion applied to a value rather than to a call result
+through the same coercion applied to a value rather than to a call result
 (Value Rows: Local Values Share, Top-Level Values Widen At Each Use).
+`test/cli/ForwardedClosedRowSubsumption.roc` runs a forwarding and a
+constructing definition with one signature, each called at a wider union.
 
-Future subsumption must accept closed forwarders without requiring source
-reconstruction. The direct hosted forwarding rejection in
-`src/compile/test/hosted_error_diagnostic_test.zig` pins the current limitation;
-non-hosted closed forwarding needs its own subsumption fixture.
+#### Row Coercion Primitive
 
-#### Row Coercion Primitive (no producer yet)
-
-The lowering half of row subsumption exists ahead of the rule, so that the
-rule, when it lands, changes only which programs typecheck. It is a
-checker-stamped expression, `row_coerce { value }` in checked bodies
-(`CheckedExprData.row_coerce`), whose own type is the wider row a value is
-used at and whose child keeps its own closed row. NOTHING EMITS IT YET: no
-checker site records a coercion, and no CIR form lowers to it. It exists so
-the pipeline below the checker is complete before the checker learns to
-coerce, and so that its producer (a top-level value evaluated once at its own
-type and widened at each use; Value Rows: Local Values Share, Top-Level Values
-Widen At Each Use) has a target shape to stamp.
+The lowering half of row widening is a checker-stamped expression,
+`row_coerce { value }` in checked bodies (`CheckedExprData.row_coerce`), whose
+own type is the wider row a value is used at and whose child keeps its own
+closed row. No CIR form lowers to it; checked-body construction stamps it for
+the two checker records that ask for it: a use of a top-level value
+(`ModuleEnv.RowCoercedUse`; Value Rows: Local Values Share, Top-Level Values
+Widen At Each Use) and a call whose function's body closed an annotated open
+result row (`ModuleEnv.RowCoercedCallee`; Row Subsumption).
 
 The coercion has a fixed REACH, which contains every position the Result-Row
 Widening Adapter re-tags (the direct result row and a `Try`'s error row).
@@ -8862,7 +8860,7 @@ unpack each tag and repack it in the wider union, the transformation a user
 would otherwise write by hand as a `match` that rebuilds each tag. When the
 source and target unions have the same runtime representation, the
 conversion is the identity and emits nothing. It is the value form of the
-coercion Deferred: Row Subsumption describes for call results, and its first
+coercion Row Subsumption describes for call results, and its first
 instance, the Result-Row Widening Adapter, re-tags the same way.
 
 Widening never makes a value polymorphic. Only tag rows widen; a value whose
@@ -8950,12 +8948,31 @@ without a backing is outside the reach: every use of the value shares it, and
 a use that needs it at another type is a type mismatch. Roc RFC 0011 likewise
 refines only the levels of a union a re-tag reaches.
 
-NOT YET IMPLEMENTED. Today a top-level value's row is shared by its module's
-uses and closed when the module finishes checking
-(`Check.closeWeakValueImplicitOpenExts`), so every defect listed above is
-present. The implementation replaces that closing with the per-use widening
-above and deletes `closeWeakValueImplicitOpenExts` and
-`weak_value_implicit_open_ext_ranges`.
+Checking implements this at each use of a checked top-level value, in its
+own module (`e_lookup_local`) and in an importer (`e_lookup_external`, for an
+imported value that is not a binding scheme). `Check.computeCoercionReach`
+marks the positions of the value's type the coercion reaches, and
+`Check.widenedValueUseVar` builds the use's copy: every reached tag union, its
+tags' payloads copied through the reach, under a fresh open extension, and
+every other variable shared with the value. A reached alias is copied as its
+widened backing. When the copy differs from the value's type, the use relates
+to the copy and checking records it (`ModuleEnv.RowCoercedUse`: the use and
+the value's own type); checked-body construction lowers each recorded use as a
+`row_coerce` whose child is the lookup at the value's own type, and the
+resolved value reference follows the coercion to that child. A use whose
+value's type has no reached tag union, such as a callable value, relates to
+the value's type itself. Because no use relates to the value's own rows,
+every still-open row the coercion reaches in a top-level value's type closes
+when the module finishes checking, whether or not the value is annotated
+(`Check.closeTopLevelValueRows`, beside the annotation-minted rows
+`Check.closeWeakValueImplicitOpenExts` closes), without any use observing it;
+the closed type is the one the value is evaluated at, so the value stays a
+compile-time root. A value's row can still gain tags after a use copied it (a
+generated codec's validation adds its error tags during finalize), so each
+re-opened row is recorded with the row it copies, and once constraints settle
+`Check.propagateValueRowsToWidenedUses` adds every such tag to the copy; a use
+whose type does not admit it is a type mismatch at the use. A row with no
+tags, which asserts that no value has it, is never re-opened.
 
 ### Hosted Try Question Widening Removed
 
@@ -8963,8 +8980,9 @@ The checker no longer has a special widening rule for `?` on direct hosted
 calls. A hosted result keeps its declared closed error row, and `?` relates
 that row to the enclosing return through ordinary return-row composition and
 unification. Matching rows can still relate; a wider incompatible row is a
-type error. Forwarding into an implicitly open annotation may close that row,
-just as forwarding any other closed value does until row subsumption exists.
+type error. Forwarding into an implicitly open annotation closes that
+definition's own result row, just as forwarding any other closed value does,
+and a call of the definition widens its result (Row Subsumption).
 
 This removes the use-site redirect and its subset/payload probes. There is no
 `RedirectRule` for hosted question widening. Hosted error provenance remains
@@ -9185,7 +9203,7 @@ principal type needs the row inclusion `err ⊆ r` to survive generalization
 between two otherwise free row variables, which no equality-based scheme
 expresses; the checker collapses `r = err`, and a caller that re-tags the
 callback's errors then needs a recursive row. That is a bounded-row question
-for Deferred: Row Subsumption, not a defect of composition.
+for Row Subsumption, not a defect of composition.
 
 The `composed body preserves shared tagged callback errors` checker test pins
 a tail call whose tagged source row is also a wrapper payload.
@@ -9215,7 +9233,7 @@ asserts the ok type is unchanged—and neither is a row nested inside a
 `List`, a record field, a tuple, a tag payload, or a non-`Try` nominal,
 because re-tagging cannot reach into those positions without the general
 row-subsumption coercion this design intends and does not yet implement (see
-Deferred: Row Subsumption).
+Row Subsumption).
 
 The set of positions a use may WIDEN is therefore kept equal to the set
 lowering can ADAPT, and it is kept equal by construction rather than by a
@@ -9807,7 +9825,14 @@ scheme-owned argument, result, and literal variables even though traversing the
 root type alone cannot reach them.
 
 Constraint creation records the innermost prospective scheme root as the exact
-owner. At that root's generalization boundary,
+owner. The owner belongs to the relation, keyed by its constraint callable
+where the relation is minted or copied: resolving it (selecting and
+instantiating its method target, or deriving a structural comparison's
+component obligations) runs under that owner, whichever later unification
+grounds its receiver and whichever boundary's checking drains its queue entry.
+Work a relation causes after its owner's boundary has captured belongs to the
+innermost enclosing root still prospective, or to none. At the owner's
+generalization boundary,
 `captureSchemeDispatchRequirements` moves each still-open relation on an
 outer-rank receiver into the scheme. A receiver created at the boundary's own
 rank is undecided until generalization adjusts ranks—it escapes exactly when
@@ -10045,8 +10070,15 @@ together. Where the callable already has structure the shapes guarantee it is
 the instance's, so it is kept as is; each callable variable is related to the
 frozen subtree at its position, which is what relating the callable to a fresh
 instance would bind it to, so every replayed edge shares one frozen instance
-rather than copying it. A walk that finds the two stored layouts differ at
-some position (equal rows stored in different orders) replays nothing. The
+rather than copying it. A callable function whose effect is still unbound is
+structure whose effect is not yet the instance's: a frozen instance is ground,
+so its function at that position is pure or effectful, and the callable
+function takes that kind in place, exactly as unifying it with the instance
+would give it, while its arguments and result are paired like any other
+children. A walk that finds the two stored layouts differ at some position
+(equal rows stored in different orders), or that finds a pure instance
+function at a callable function with effect dependencies (which the shape does
+not record, and which relating would have to make pure), replays nothing. The
 edge's scheme-use record is an ordinary dispatch-target record whose
 substitution names the callable node at each instance position, or the frozen
 node where the callable had a variable, and whose nested-requirement callables
@@ -10075,13 +10107,15 @@ Checking a module ends by thawing every frozen class, so no later stage,
 serialized store, or import sees the mark. Builds with runtime safety check
 the mechanism against what it replaces: every replay first relates a fresh
 copy of the method's scheme to the edge's callable on a savepoint and requires
-the result to equal the frozen instance exactly; module checking verifies
+the result to equal the frozen instance exactly, and requires the callable the
+replay leaves to equal the callable that relation left; module checking verifies
 before thawing that every frozen instance is still the tree it was frozen as;
 and every in-place descriptor write asserts that its class is not frozen.
 
 The accepted side is pinned by the checker test "concrete dispatch replay
-reuses a settled ground target across uses" and the eval test "replayed method
-chain computes each use's own values"; the rejected sides by "concrete
+reuses a settled ground target across uses", the checker test "the third
+identical use of an effectful method is effectful", and the eval test
+"replayed method chain computes each use's own values"; the rejected sides by "concrete
 dispatch replay keys each call's own argument types", "concrete dispatch
 replay never selects a method whose scheme is still being checked", and "a
 type error in one replayed use leaves the uses sharing its instance intact",
@@ -11631,9 +11665,11 @@ Other solved-graph mutations:
   Dispatch Requirements In Type Schemes, above). A root edge with a ground
   receiver and a final method without explicit requirements relates each
   variable of its callable to the matching subtree of an equal-shaped
-  source's frozen instance instead of a fresh instantiation, and records the
-  source's settled nested requirements as its own; it writes exactly the
-  instance and evidence a fresh instantiation would.
+  source's frozen instance instead of a fresh instantiation, gives each
+  callable function whose effect is unbound the matching instance function's
+  kind in place (`unify.relateFunctionKind`), and records the source's settled
+  nested requirements as its own; it writes exactly the instance and evidence
+  a fresh instantiation would.
 - Frozen classes (`Store.freezeClass`, `Store.thawFrozenClasses`)—mechanism:
   concrete dispatch replay (above). While a module is checked, a merge with a
   frozen class keeps its descriptor, its rank never changes, and every write
@@ -12802,7 +12838,18 @@ joined. This keeps memo reuse concurrent without exposing mutable hash-table
 storage or making results depend on completion order. Global identities are still
 assigned solely by ordered coordinator commit. Root kinds
 that reserve durable identities or write directly to the final program remain
-serial barriers until they have the same sealed-draft boundary.
+serial barriers until they have the same sealed-draft boundary. A template
+root's function type is a function of its checked type alone, so before those
+barriers run, every template root's type lowers in one executor batch, each
+lane sealing into its own workspace, and the coordinator relocates the results
+into the program store in request order. Each request lowers its type once,
+however many root passes reach it.
+
+Committing a shard's interface summaries relocates each request into the
+coordinator's domain first, so an equal resident request answers without
+copying its summary; a new summary is relocated once, straight into the
+cache's own storage, and its names cross through the lane's cumulative name
+relocation rather than being interned again by text.
 
 Post-check timing keeps two distinct measures for this boundary. Monotype wall
 time is the elapsed coordinator interval, including worker waits and ordered
@@ -12895,6 +12942,12 @@ root union update producer membership explicitly. Equal keys retain
 independently constructed nodes until an explicit relation joins them. A
 monotone provenance counter lets both iterator finalizers return immediately for
 graphs without generated iterators.
+
+Nominal backing instances are indexed the same way, by declaration and current
+argument roots, and a root union rekeys only the instances that mention its
+loser. An index slot holds just an instance's hash and id: the key lives in the
+instance table, and an instance's arguments change only while it is out of the
+index, so every resident hash is the hash of its instance's current key.
 Generated identity hashes a snapshot of the current graph representation after
 joins, under the equality digest: `typeEql` compares the stamped identity, so
 checked provenance such as `named_type.ty` must not make requests that are
@@ -12936,6 +12989,16 @@ declaration and callable type only. Draft-local capture contexts are Monotype
 BodyDraft data, are intentionally absent from durable specialization evidence, and
 must be attached when the real dispatch call lowers; declaration-only replay
 evidence can never be consumed by body emission.
+Interface replay is faithful to open leaves. A summary captures an
+unresolved cell as an unresolved cell carrying its recorded numeric and row
+defaults, and replay instantiates it as a fresh unresolved cell with those
+same defaults, never as the Monotype the defaults would produce. Relating a
+replay to a request therefore leaves the request's open cells exactly as
+open as a fresh expansion leaves them, so no reader of live graph state
+during lowering (dispatch evidence resolution, reachability proofs, active
+snapshots, specialization identity) can observe whether a callee's interface
+was replayed or expanded. Defaults are applied only by finalization and by
+read-only provisional views, and neither takes part in replay.
 
 Within the specialization, each body instantiation context has an exact fresh
 scope identity, owns one checked module id, and caches nodes by checked type id
@@ -13128,9 +13191,17 @@ contributed its relations. An active exact request joins its active interface;
 completed independent requests instantiate fresh cells. Returning from a child
 alone is not evidence that a recursive component's constraints are complete.
 
-Completed summaries are retained across bodies. The coordinator and each
-executor lane own cumulative tables. Frozen inputs borrow the coordinator table
-read-only; ordered commit relocates interned type leaves and interned names.
+Completed summaries are retained across bodies. Whether a body finds a
+summary depends on scheduling: which lane completed it and whether it was
+committed before the body's job was captured. Because replay is faithful to
+open leaves, that availability changes only how much relation work a body
+repeats, never what it lowers. The pins are the compile tests "interface
+summary replay of an open request leaf lowers like a fresh expansion within
+one body" and "... across bodies", which lower one program with and without
+summary replay and require identical specialization identities and LIR. The
+coordinator and each executor lane own cumulative tables. Frozen inputs borrow
+the coordinator table read-only; ordered commit relocates interned type leaves
+and interned names.
 Settled leaves across each completed batch share one type import and interning
 transaction. Cache insertion retains worker leaves before their transaction ends;
 coordinator leaves already belong to permanent storage and need no extra sealing.

@@ -708,6 +708,29 @@ host_boundary_annotations: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, void),
 /// `annotation_implicit_open_exts` slices it per annotation for the post-body
 /// audit (`auditImplicitOpenExts`).
 implicit_open_exts: std.ArrayListUnmanaged(ImplicitOpenExt),
+/// Scratch for `computeCoercionReach`: the positions the row coercion
+/// reaches from a value's type, and the positions below one it does not.
+coercion_reach_stack: std.ArrayListUnmanaged(Var) = .empty,
+coercion_reach_seen: std.AutoHashMapUnmanaged(Var, void) = .empty,
+coercion_outside_stack: std.ArrayListUnmanaged(Var) = .empty,
+coercion_outside_seen: std.AutoHashMapUnmanaged(Var, void) = .empty,
+/// Scratch for `widenedValueUseVar`: each reached variable's copy.
+widened_use_copies: std.AutoHashMapUnmanaged(Var, Var) = .empty,
+/// Whether the copy in progress re-opens only rows whose tail is closed
+/// (`widenedFunctionResultUseVar`), leaving every open row shared.
+widen_closed_rows_only: bool = false,
+/// Scratch for `widenedValueUseVar`: one row's tags, gathered along its
+/// extension chain.
+widened_use_tags: std.ArrayListUnmanaged(types_mod.Tag) = .empty,
+/// Every row a use's widening copy re-opened, paired with the value's row it
+/// copies (`WidenedUseRow`). A value's row can still gain tags after a use
+/// copied it (a generated codec's validation adds its error tags during
+/// finalize), so `propagateValueRowsToWidenedUses` carries them into the
+/// copies once constraints settle.
+widened_use_rows: std.ArrayListUnmanaged(WidenedUseRow) = .empty,
+/// Every call recorded as a row-coerced callee, with the range of
+/// `widened_use_rows` its copy re-opened (`settleUnwidenedCallees`).
+widened_callees: std.ArrayListUnmanaged(WidenedCallee) = .empty,
 /// The annotation whose definition's body check is about to generate it; its
 /// implicitly opened rows are bounded for the rest of that body check
 /// (`beginBoundedAnnotationRows`).
@@ -1090,6 +1113,7 @@ scratch_replay_sources: std.ArrayListUnmanaged(u32) = .empty,
 scratch_replay_pairs: std.ArrayListUnmanaged(ModuleEnv.SchemeUsePair) = .empty,
 scratch_replay_nodes: std.AutoHashMapUnmanaged(Var, Var) = .empty,
 scratch_replay_grafts: std.ArrayListUnmanaged(DispatchReplayPair) = .empty,
+scratch_replay_kind_grafts: std.ArrayListUnmanaged(DispatchReplayPair) = .empty,
 scratch_replay_walk: std.ArrayListUnmanaged(DispatchReplayPair) = .empty,
 scratch_replay_walked: std.AutoHashMapUnmanaged(DispatchReplayPair, void) = .empty,
 /// Raw body constraint callable -> its `where_method_use` record. Deferred
@@ -1127,6 +1151,26 @@ scratch_scheme_mint_names: std.ArrayListUnmanaged(MethodNameId) = .empty,
 /// `dispatch_derivations`, whose lineage is a dispatch target's own.
 component_derivations: std.ArrayListUnmanaged(DispatchDerivation) = .empty,
 component_derivation_by_child_fn_var: std.AutoHashMapUnmanaged(Var, Var) = .empty,
+/// The constraint callables of the structural comparisons and hashes whose
+/// component obligations have been derived, in derivation order. A relation's
+/// components are derived exactly once, however many queue entries carry it.
+component_derived_relations: std.ArrayListUnmanaged(Var) = .empty,
+component_derived_relation_set: std.AutoHashMapUnmanaged(Var, void) = .empty,
+/// The scheme that created each dispatch relation, keyed by the relation's
+/// constraint callable: the innermost prospective scheme root active where
+/// the relation was minted or copied, or null outside every scheme. Resolving
+/// a relation runs under this owner, whichever later work grounds its
+/// receiver or drains its queue entry. `dispatch_relation_owner_log` lists the
+/// keys in insertion order so a solver probe can rewind them.
+dispatch_relation_owners: std.AutoHashMapUnmanaged(Var, ?Var) = .empty,
+dispatch_relation_owner_log: std.ArrayListUnmanaged(Var) = .empty,
+/// The scheme root active where each scheme root became active (null at the
+/// top level and in an independently checked group), and the roots whose
+/// boundary has captured their last requirements. A requirement candidate for
+/// a root whose boundary already ran belongs to the innermost enclosing root
+/// still prospective (`prospectiveSchemeOwner`).
+scheme_owner_parents: std.AutoHashMapUnmanaged(Var, ?Var) = .empty,
+captured_scheme_owners: std.AutoHashMapUnmanaged(Var, void) = .empty,
 /// Whether this module declares a method in a function body. Only such a
 /// method can be a local procedure, so no dispatch selects one otherwise.
 module_declares_local_methods: ?bool = null,
@@ -1529,9 +1573,6 @@ const InstantiationDispatcher = struct {
     /// deferred-queue entry carries this instantiation-time group as its
     /// `owner_group_index`, not the enqueuing frame's group.
     owner_group_index: ?u32 = null,
-    /// The scheme whose checking instantiated this relation, independent of
-    /// the frame that later grounds or derives its receiver.
-    owner_scheme_root: ?Var = null,
 
     const Source = enum {
         /// A constraint copied structurally with a generalized flex var. It is
@@ -2011,6 +2052,64 @@ fn constraintIsLiteralConversion(self: *const Self, constraint: StaticDispatchCo
     return literal_defaulting.constraintLiteralKind(self.literalMethodIdents(), constraint) != null;
 }
 
+/// Record the active scheme as the owner of the dispatch relation `fn_var`,
+/// where the relation is minted or copied (`dispatch_relation_owners`). The
+/// first record is the creator's.
+fn recordDispatchRelationOwner(self: *Self, fn_var: Var) Allocator.Error!void {
+    try self.dispatch_relation_owner_log.ensureUnusedCapacity(self.gpa, 1);
+    const entry = try self.dispatch_relation_owners.getOrPut(self.gpa, fn_var);
+    // A relation reached again through a shared callable (an instantiation
+    // shares a leaf rather than copying it) keeps its creator.
+    if (entry.found_existing) return;
+    entry.value_ptr.* = self.active_scheme_root;
+    self.dispatch_relation_owner_log.appendAssumeCapacity(fn_var);
+}
+
+/// Record the active scheme as the owner of a `where` clause's relation, whose
+/// callable is its annotation's own variable. Generating an annotation in
+/// place rebuilds that variable for the scheme being checked (a predeclared
+/// scheme is a disjoint copy of an earlier generation), so the latest
+/// generation owns it.
+fn recordAnnotationDispatchRelationOwner(self: *Self, fn_var: Var) Allocator.Error!void {
+    try self.dispatch_relation_owner_log.ensureUnusedCapacity(self.gpa, 1);
+    const entry = try self.dispatch_relation_owners.getOrPut(self.gpa, fn_var);
+    if (!entry.found_existing) {
+        self.dispatch_relation_owner_log.appendAssumeCapacity(fn_var);
+    } else {
+        // A probe rewinds only the keys it inserted.
+        std.debug.assert(self.probe_depth == 0);
+    }
+    entry.value_ptr.* = self.active_scheme_root;
+}
+
+/// The scheme that created the dispatch relation `fn_var`, or null when it
+/// was created outside every scheme.
+fn dispatchRelationOwner(self: *const Self, fn_var: Var) ?Var {
+    return self.dispatch_relation_owners.get(fn_var) orelse
+        base.invariant("a dispatch relation reached resolution without the owner recorded where it was created", .{});
+}
+
+/// Make `owner` the active scheme root, inside the one active here.
+fn activateSchemeOwner(self: *Self, owner: Var) Allocator.Error!void {
+    if (self.active_scheme_root != owner) {
+        try self.scheme_owner_parents.put(self.gpa, owner, self.active_scheme_root);
+    }
+    _ = self.captured_scheme_owners.remove(owner);
+    self.active_scheme_root = owner;
+}
+
+/// The innermost scheme root at or enclosing `owner` whose boundary has not
+/// yet captured its requirements, or null when there is none.
+fn prospectiveSchemeOwner(self: *const Self, owner: ?Var) ?Var {
+    var current = owner;
+    while (current) |root| {
+        if (!self.captured_scheme_owners.contains(root)) return root;
+        current = self.scheme_owner_parents.get(root) orelse
+            base.invariant("a captured scheme root was never activated", .{});
+    }
+    return null;
+}
+
 fn recordSchemeRequirementCandidate(
     self: *Self,
     receiver_var: Var,
@@ -2019,9 +2118,10 @@ fn recordSchemeRequirementCandidate(
     structural_origin: ?StructuralSchemeRequirementOrigin,
     deferred_generated_codec: bool,
 ) Allocator.Error!void {
+    try self.recordDispatchRelationOwner(constraint.fn_var);
     if (self.constraintIsLiteralConversion(constraint)) return;
     std.debug.assert((source == .creation) == (structural_origin == null));
-    const owner_root = self.active_scheme_root orelse return;
+    const owner_root = self.prospectiveSchemeOwner(self.active_scheme_root) orelse return;
     try self.scheme_requirement_candidates.ensureUnusedCapacity(self.gpa, 1);
     const owner_entry = try self.scheme_requirement_candidate_indices_by_owner.getOrPut(self.gpa, owner_root);
     if (!owner_entry.found_existing) owner_entry.value_ptr.* = .empty;
@@ -2223,7 +2323,6 @@ fn registerInstantiatedSchemeRequirement(
         .source = .scheme_requirement,
         .deferred_enqueued = !receiver_is_flex,
         .owner_group_index = self.currentGroupIndex(),
-        .owner_scheme_root = self.active_scheme_root,
     });
     if (receiver_is_flex) {
         try self.pending_scheme_requirement_dispatchers.append(self.gpa, dispatcher_idx);
@@ -2264,7 +2363,6 @@ fn registerInstantiatedAttachedDispatch(
         .constraints = constraints,
         .instantiation_expr = instantiation_expr,
         .owner_group_index = owner_group_index,
-        .owner_scheme_root = self.active_scheme_root,
     });
     try self.recordAmbiguityCandidate(receiver_var, .instantiation, instantiation_expr);
     // An attached constraint copied by instantiation lives on the fresh
@@ -3877,6 +3975,14 @@ pub fn deinit(self: *Self) void {
     while (position_values.next()) |positions| if (positions.*) |items| self.gpa.free(items);
     self.nominal_positions.deinit(self.gpa);
     self.implicit_open_exts.deinit(self.gpa);
+    self.coercion_reach_stack.deinit(self.gpa);
+    self.coercion_reach_seen.deinit(self.gpa);
+    self.coercion_outside_stack.deinit(self.gpa);
+    self.coercion_outside_seen.deinit(self.gpa);
+    self.widened_use_copies.deinit(self.gpa);
+    self.widened_use_tags.deinit(self.gpa);
+    self.widened_use_rows.deinit(self.gpa);
+    self.widened_callees.deinit(self.gpa);
     self.annotation_implicit_open_exts.deinit(self.gpa);
     self.bounded_row_marks.deinit(self.gpa);
     self.weak_value_implicit_open_ext_ranges.deinit(self.gpa);
@@ -4068,6 +4174,7 @@ pub fn deinit(self: *Self) void {
     self.scratch_replay_pairs.deinit(self.gpa);
     self.scratch_replay_nodes.deinit(self.gpa);
     self.scratch_replay_grafts.deinit(self.gpa);
+    self.scratch_replay_kind_grafts.deinit(self.gpa);
     self.scratch_replay_walk.deinit(self.gpa);
     self.scratch_replay_walked.deinit(self.gpa);
     self.where_method_use_record_by_fn_var.deinit(self.gpa);
@@ -4089,6 +4196,12 @@ pub fn deinit(self: *Self) void {
     self.scratch_scheme_mint_names.deinit(self.gpa);
     self.component_derivations.deinit(self.gpa);
     self.component_derivation_by_child_fn_var.deinit(self.gpa);
+    self.component_derived_relations.deinit(self.gpa);
+    self.component_derived_relation_set.deinit(self.gpa);
+    self.dispatch_relation_owners.deinit(self.gpa);
+    self.dispatch_relation_owner_log.deinit(self.gpa);
+    self.scheme_owner_parents.deinit(self.gpa);
+    self.captured_scheme_owners.deinit(self.gpa);
     self.local_decl_expr_by_pattern.deinit(self.gpa);
     self.local_method_names.deinit(self.gpa);
     self.dispatch_candidate_frames.deinit(self.gpa);
@@ -10155,7 +10268,7 @@ fn enqueueLocalSchemeRequirements(self: *Self, root: Var, env: *Env) Allocator.E
             .var_ = requirement.receiver_var,
             .constraints = range,
             .failure_expr = if (requirement.failure_expr) |expr| .from(@backingInt(expr)) else .none,
-        }, .{ .recorded = .{ .group_index = self.type_schemes.items[scheme_idx].capture_group_index, .scheme_root = self.type_schemes.items[scheme_idx].root_var } });
+        }, .{ .recorded = self.type_schemes.items[scheme_idx].capture_group_index });
     }
 }
 
@@ -10919,6 +11032,7 @@ fn recordOpenLiteralVar(
 ) Allocator.Error!void {
     var has_literal = false;
     for (constraints) |constraint| {
+        try self.recordDispatchRelationOwner(constraint.fn_var);
         if (self.constraintIsLiteralConversion(constraint)) {
             has_literal = true;
         }
@@ -11998,6 +12112,8 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.reportNonExhaustiveForPatterns(&env);
 
     try self.closeWeakValueImplicitOpenExts(&env);
+    try self.closeTopLevelValueRows(&env);
+    try self.recordClosedResultBindings();
 
     try self.pruneSelectedHoistedRootsAfterSolving();
     try self.withdrawProblemsOfVoidRelations();
@@ -15119,7 +15235,7 @@ fn checkInstantiatedStaticDispatchConstraints(
                     .from(@backingInt(expr_idx))
                 else
                     .none,
-            }, .{ .recorded = .{ .group_index = current.owner_group_index, .scheme_root = current.owner_scheme_root } });
+            }, .{ .recorded = current.owner_group_index });
             appended_deferred = true;
         }
 
@@ -16860,6 +16976,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     try self.recheckNominalConstructorBackings(&env);
 
     try self.closeWeakValueImplicitOpenExts(&env);
+    try self.closeTopLevelValueRows(&env);
 
     try self.finalizeExpectEffectSlots();
     // Expression checking suppresses root selection, but constant-condition
@@ -17068,7 +17185,7 @@ fn beginDef(self: *Self, state: *DefActivity, env: *Env) std.mem.Allocator.Error
         ModuleEnv.varFrom(def_expr.e_closure.lambda_idx)
     else
         expr_var;
-    self.active_scheme_root = if (def_is_function or group_prechecked) scheme_owner else state.saved.?.active_scheme_root;
+    if (def_is_function or group_prechecked) try self.activateSchemeOwner(scheme_owner);
     // The annotation bounds the definition's body: a tag it produces beyond
     // an implicitly opened union is an error (design.md "Polarity").
     state.saved.?.bounding_annotation = self.beginBoundedAnnotationRows(self.appliedAnnotation(def.pattern, def.annotation));
@@ -17375,7 +17492,7 @@ fn predeclareAnnotationSchemeHelp(
     const saved_predeclaring = self.predeclaring_annotation;
     const saved_active_scheme_root = self.active_scheme_root;
     self.predeclaring_annotation = true;
-    self.active_scheme_root = ModuleEnv.varFrom(annotation_idx);
+    try self.activateSchemeOwner(ModuleEnv.varFrom(annotation_idx));
     defer {
         self.predeclaring_annotation = saved_predeclaring;
         self.active_scheme_root = saved_active_scheme_root;
@@ -18879,7 +18996,7 @@ const DeferredDispatchObligationOwner = union(enum) {
     current_group,
     /// The creating group captured when the obligation was first recorded,
     /// replayed here from that record.
-    recorded: struct { group_index: ?u32, scheme_root: ?Var },
+    recorded: ?u32,
 };
 
 /// The single door into the deferred dispatch queue, so an obligation's owning
@@ -18898,11 +19015,7 @@ fn enqueueDeferredDispatchConstraint(
     var owned = deferred;
     owned.owner_group_index = switch (owner) {
         .current_group => self.currentGroupIndex(),
-        .recorded => |recorded| recorded.group_index,
-    };
-    owned.owner_scheme_root = switch (owner) {
-        .current_group => self.active_scheme_root,
-        .recorded => |recorded| recorded.scheme_root,
+        .recorded => |group_index| group_index,
     };
     // The relation whose checking queued the obligation owns what its
     // resolution reports.
@@ -19964,6 +20077,557 @@ fn runLateImplicitOpenExtAudit(self: *Self, env: *Env) std.mem.Allocator.Error!v
 
 /// The resolved extension a tag row ends in, through aliases and extension
 /// chains. Rows related by unification share it.
+/// Mark the positions of `root` that the row coercion reaches
+/// (`coercion_reach_seen`) and every position below one it does not
+/// (`coercion_outside_seen`), exactly as the coercion reaches rows (design.md
+/// "Row Coercion Primitive"): a tag union's tags' payloads and its extension,
+/// an alias's backing, and both arguments of `Try`, whose backing
+/// `[Ok(a), Err(e)]` places each in a tag payload. Every other position—a
+/// record field, a tuple item, a function argument or result, an argument of
+/// `List` or of a user nominal—ends the reach.
+///
+/// Reach is a property of POSITIONS, not of variables: a variable at any
+/// position outside the reach is outside it, even when it is also reachable
+/// from a position inside, because the coercion must leave it unchanged at the
+/// outside position.
+fn computeCoercionReach(self: *Self, root: Var) std.mem.Allocator.Error!void {
+    self.coercion_reach_stack.clearRetainingCapacity();
+    self.coercion_reach_seen.clearRetainingCapacity();
+    self.coercion_outside_stack.clearRetainingCapacity();
+    self.coercion_outside_seen.clearRetainingCapacity();
+    try self.coercion_reach_stack.append(self.gpa, root);
+    while (self.coercion_reach_stack.pop()) |var_| {
+        const resolved = self.types.resolveVar(var_);
+        const entry = try self.coercion_reach_seen.getOrPut(self.gpa, resolved.var_);
+        if (entry.found_existing) continue;
+        switch (resolved.desc.content) {
+            .alias => |alias| try self.coercion_reach_stack.append(self.gpa, self.types.getAliasBackingVar(alias)),
+            .structure => |flat| switch (flat) {
+                .tag_union => |union_| {
+                    for (0..union_.tags.count) |index| {
+                        const tag = self.types.getTagAt(union_.tags, @intCast(index));
+                        try self.coercion_reach_stack.appendSlice(self.gpa, self.types.sliceVars(tag.args));
+                    }
+                    try self.coercion_reach_stack.append(self.gpa, union_.ext);
+                },
+                .nominal_type => |nominal| {
+                    if (self.nominalIsBuiltinTry(nominal)) {
+                        try self.coercion_reach_stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal));
+                    } else {
+                        try self.appendCoercionOutsideChildren(flat);
+                    }
+                },
+                .fn_pure, .fn_effectful, .fn_unbound, .tuple, .record => try self.appendCoercionOutsideChildren(flat),
+                .empty_record, .empty_tag_union => {},
+            },
+            .flex, .rigid, .err, .field_presence => {},
+        }
+    }
+    while (self.coercion_outside_stack.pop()) |var_| {
+        const resolved = self.types.resolveVar(var_);
+        const entry = try self.coercion_outside_seen.getOrPut(self.gpa, resolved.var_);
+        if (entry.found_existing) continue;
+        switch (resolved.desc.content) {
+            .alias => |alias| {
+                try self.coercion_outside_stack.appendSlice(self.gpa, self.types.sliceAliasAllArgs(alias));
+                try self.coercion_outside_stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+            },
+            .structure => |flat| try self.appendCoercionOutsideChildren(flat),
+            .flex, .rigid, .err, .field_presence => {},
+        }
+    }
+}
+
+/// Push every child of one structure onto the outside-the-reach worklist of
+/// `computeCoercionReach`.
+fn appendCoercionOutsideChildren(self: *Self, flat: FlatType) std.mem.Allocator.Error!void {
+    switch (flat) {
+        .tag_union => |union_| {
+            for (0..union_.tags.count) |index| {
+                const tag = self.types.getTagAt(union_.tags, @intCast(index));
+                try self.coercion_outside_stack.appendSlice(self.gpa, self.types.sliceVars(tag.args));
+            }
+            try self.coercion_outside_stack.append(self.gpa, union_.ext);
+        },
+        .nominal_type => |nominal| try self.coercion_outside_stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+        .fn_pure, .fn_effectful, .fn_unbound => |func| {
+            try self.coercion_outside_stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+            try self.coercion_outside_stack.append(self.gpa, func.ret);
+            try self.coercion_outside_stack.appendSlice(self.gpa, self.types.sliceVars(func.effect_deps));
+        },
+        .tuple => |tuple| try self.coercion_outside_stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+        .record => |record| {
+            const presences = self.types.getRecordFieldsSlice(record.fields).items(.presence);
+            for (presences) |presence| {
+                try self.coercion_outside_stack.append(self.gpa, presence.typeVar());
+                if (presence.presenceVar()) |presence_var| {
+                    try self.coercion_outside_stack.append(self.gpa, presence_var);
+                }
+            }
+            try self.coercion_outside_stack.append(self.gpa, record.ext);
+        },
+        .empty_record, .empty_tag_union => {},
+    }
+}
+
+fn nominalIsBuiltinTry(self: *const Self, nominal: types_mod.NominalType) bool {
+    return nominal.originIsBuiltin() and nominal.sourceDeclOptional() == self.builtinTrySourceDecl();
+}
+
+/// The type a use of a top-level value relates to (design.md "Value Rows:
+/// Local Values Share, Top-Level Values Widen At Each Use"): a copy of the
+/// value's type in which every tag union the row coercion reaches has a fresh
+/// open extension, whether the value's own row is open or closed, so the use
+/// may need the value at any wider union without changing the value's type.
+/// Every position outside the reach, and every variable that is not a reached
+/// row, is shared with the value, so those stay one type for every use. Null
+/// when the coercion reaches no tag union, so the use relates to the value's
+/// type itself.
+fn widenedValueUseVar(self: *Self, value_var: Var, env: *Env, region: Region) std.mem.Allocator.Error!?Var {
+    try self.computeCoercionReach(value_var);
+    self.widened_use_copies.clearRetainingCapacity();
+    const copy = try self.widenedReachCopy(value_var, env, region);
+    return if (copy == self.types.resolveVar(value_var).var_) null else copy;
+}
+
+/// Whether the row coercion may widen the row at `var_`: a position it
+/// reaches and no position outside it shares.
+fn coercionMayWiden(self: *const Self, var_: Var) bool {
+    const root = self.types.resolveVar(var_).var_;
+    return self.coercion_reach_seen.contains(root) and !self.coercion_outside_seen.contains(root);
+}
+
+/// One reached variable's copy for `widenedValueUseVar`; the variable itself
+/// when nothing under it widens. Copies are shared through
+/// `widened_use_copies`. The walk keeps an explicit stack, since a value's type
+/// can nest tag payloads arbitrarily deep, and builds each copy after its
+/// children's (post-order). The reach never passes through a recursive type
+/// (recursion goes through a nominal, which ends the reach); a variable met
+/// again while its own copy is in progress keeps itself, so the walk is finite
+/// regardless.
+fn widenedReachCopy(self: *Self, root: Var, env: *Env, region: Region) std.mem.Allocator.Error!Var {
+    const Step = struct { var_: Var, expanded: bool };
+    var stack: std.ArrayListUnmanaged(Step) = .empty;
+    defer stack.deinit(self.gpa);
+    var in_progress: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    defer in_progress.deinit(self.gpa);
+    var children: std.ArrayListUnmanaged(Var) = .empty;
+    defer children.deinit(self.gpa);
+    try stack.append(self.gpa, .{ .var_ = root, .expanded = false });
+    while (stack.pop()) |step| {
+        const resolved = self.types.resolveVar(step.var_);
+        if (!self.coercionMayWiden(resolved.var_)) continue;
+        if (self.widened_use_copies.contains(resolved.var_)) continue;
+        if (!step.expanded) {
+            if ((try in_progress.getOrPut(self.gpa, resolved.var_)).found_existing) continue;
+            try stack.append(self.gpa, .{ .var_ = resolved.var_, .expanded = true });
+            children.clearRetainingCapacity();
+            try self.appendWidenedReachChildren(resolved.var_, &children);
+            for (children.items) |child| try stack.append(self.gpa, .{ .var_ = child, .expanded = false });
+            continue;
+        }
+        const copy: Var = switch (resolved.desc.content) {
+            // The copy's union is the alias's backing, widened; the alias's
+            // parameters describe the value's own row, not the widened one.
+            // An alias whose backing widens nothing is the alias itself.
+            .alias => |alias| blk: {
+                const backing = self.types.getAliasBackingVar(alias);
+                const backing_copy = self.widenedCopyOf(backing);
+                break :blk if (backing_copy == self.types.resolveVar(backing).var_) resolved.var_ else backing_copy;
+            },
+            .structure => |flat| switch (flat) {
+                .tag_union => try self.widenedRowCopy(resolved.var_, env, region),
+                .nominal_type => |nominal| blk: {
+                    // Copying appends to the type store, so read the arguments
+                    // out of it first.
+                    const args = try self.gpa.dupe(Var, self.types.sliceNominalArgs(nominal));
+                    defer self.gpa.free(args);
+                    var changed = false;
+                    for (args) |*arg| {
+                        const arg_copy = self.widenedCopyOf(arg.*);
+                        changed = changed or arg_copy != self.types.resolveVar(arg.*).var_;
+                        arg.* = arg_copy;
+                    }
+                    if (!changed) break :blk resolved.var_;
+                    var widened = nominal;
+                    widened.args = try self.types.appendVars(args);
+                    break :blk try self.freshFromContent(.{ .structure = .{ .nominal_type = widened } }, env, region);
+                },
+                .fn_pure, .fn_effectful, .fn_unbound, .tuple, .record, .empty_record, .empty_tag_union => resolved.var_,
+            },
+            .flex, .rigid, .err, .field_presence => resolved.var_,
+        };
+        try self.widened_use_copies.put(self.gpa, resolved.var_, copy);
+    }
+    return self.widenedCopyOf(root);
+}
+
+/// The copy `widenedReachCopy` built for `var_`, or `var_` itself when the
+/// coercion does not widen it.
+fn widenedCopyOf(self: *const Self, var_: Var) Var {
+    const resolved = self.types.resolveVar(var_).var_;
+    return self.widened_use_copies.get(resolved) orelse resolved;
+}
+
+/// The variables a reached variable's copy is built from: an alias's backing,
+/// every payload on a tag union's extension chain, and a `Try`'s arguments.
+fn appendWidenedReachChildren(self: *Self, var_: Var, children: *std.ArrayListUnmanaged(Var)) std.mem.Allocator.Error!void {
+    const resolved = self.types.resolveVar(var_);
+    switch (resolved.desc.content) {
+        .alias => |alias| try children.append(self.gpa, self.types.getAliasBackingVar(alias)),
+        .structure => |flat| switch (flat) {
+            .tag_union => {
+                var current = resolved.var_;
+                while (true) {
+                    const row = self.types.resolveVar(current);
+                    switch (row.desc.content) {
+                        .alias => |alias| current = self.types.getAliasBackingVar(alias),
+                        .structure => |row_flat| switch (row_flat) {
+                            .tag_union => |union_| {
+                                for (0..union_.tags.count) |index| {
+                                    const tag = self.types.getTagAt(union_.tags, @intCast(index));
+                                    try children.appendSlice(self.gpa, self.types.sliceVars(tag.args));
+                                }
+                                current = union_.ext;
+                            },
+                            .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return,
+                        },
+                        .flex, .rigid, .err, .field_presence => return,
+                    }
+                }
+            },
+            .nominal_type => |nominal| try children.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+            .fn_pure, .fn_effectful, .fn_unbound, .tuple, .record, .empty_record, .empty_tag_union => {},
+        },
+        .flex, .rigid, .err, .field_presence => {},
+    }
+}
+
+/// A reached tag union's copy: every tag on its extension chain, each payload
+/// copied through the reach, under a fresh open extension. A row whose chain
+/// ends in a rigid is not the value's to widen and is shared.
+fn widenedRowCopy(self: *Self, row: Var, env: *Env, region: Region) std.mem.Allocator.Error!Var {
+    const tags_start = self.widened_use_tags.items.len;
+    defer self.widened_use_tags.shrinkRetainingCapacity(tags_start);
+    var current = row;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .tag_union => |union_| {
+                    for (0..union_.tags.count) |index| {
+                        try self.widened_use_tags.append(self.gpa, self.types.getTagAt(union_.tags, @intCast(index)));
+                    }
+                    current = union_.ext;
+                },
+                .empty_tag_union => break,
+                .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return self.types.resolveVar(row).var_,
+            },
+            .flex => {
+                // A function result row that is still open is quantified with
+                // the rest of the function's scheme; it stays linked to it.
+                if (self.widen_closed_rows_only) return self.types.resolveVar(row).var_;
+                break;
+            },
+            .rigid, .err, .field_presence => return self.types.resolveVar(row).var_,
+        }
+    }
+    // A row with no tags asserts that no value has it (design.md "Polarity"
+    // exempts `[]` from implicit opening for this reason), so there is no
+    // value to widen and the row stays shared.
+    if (self.widened_use_tags.items.len == tags_start) return self.types.resolveVar(row).var_;
+    // Building the copy appends to the type store and to these scratch lists,
+    // so read the row's tags and each tag's payloads out of them first. Every
+    // payload's own copy was built before this row's (`widenedReachCopy`).
+    const tags = try self.gpa.dupe(types_mod.Tag, self.widened_use_tags.items[tags_start..]);
+    defer self.gpa.free(tags);
+    for (tags) |*tag| {
+        const args = try self.gpa.dupe(Var, self.types.sliceVars(tag.args));
+        defer self.gpa.free(args);
+        for (args) |*arg| arg.* = self.widenedCopyOf(arg.*);
+        tag.* = try self.types.mkTag(tag.name, args);
+    }
+    const ext = try self.freshFromContent(.{ .flex = Flex.init() }, env, region);
+    const copy = try self.freshFromContent(try self.types.mkTagUnion(tags, ext), env, region);
+    try self.widened_use_rows.append(self.gpa, .{ .value_row = self.types.resolveVar(row).var_, .use_row = copy });
+    return copy;
+}
+
+/// The type a use of an annotated function relates to when the function's
+/// body closed a result row its annotation leaves open (design.md "Row
+/// Subsumption"): the instantiated function type with each such closed
+/// row in its result re-opened, its arguments and every still-open row shared.
+/// A forwarder's argument and result rows can be one class, so only the
+/// result's spine down to a re-opened row is copied, and the argument stays
+/// closed. Null when nothing in the result re-opens.
+fn widenedFunctionResultUseVar(self: *Self, fn_var: Var, env: *Env, region: Region) std.mem.Allocator.Error!?Var {
+    const resolved = self.types.resolveVar(fn_var);
+    const flat = switch (resolved.desc.content) {
+        .structure => |flat| flat,
+        .alias, .flex, .rigid, .err, .field_presence => return null,
+    };
+    const func = switch (flat) {
+        .fn_pure, .fn_effectful, .fn_unbound => |func| func,
+        .tag_union, .record, .tuple, .nominal_type, .empty_record, .empty_tag_union => return null,
+    };
+    try self.computeCoercionReach(func.ret);
+    self.widened_use_copies.clearRetainingCapacity();
+    self.widen_closed_rows_only = true;
+    defer self.widen_closed_rows_only = false;
+    const ret_copy = try self.widenedReachCopy(func.ret, env, region);
+    if (ret_copy == self.types.resolveVar(func.ret).var_) return null;
+    var widened = func;
+    widened.ret = ret_copy;
+    const widened_flat: FlatType = switch (flat) {
+        .fn_pure => .{ .fn_pure = widened },
+        .fn_effectful => .{ .fn_effectful = widened },
+        .fn_unbound => .{ .fn_unbound = widened },
+        .tag_union, .record, .tuple, .nominal_type, .empty_record, .empty_tag_union => unreachable,
+    };
+    return try self.freshFromContent(.{ .structure = widened_flat }, env, region);
+}
+
+/// The type the immediate callee of a call relates to when it names an
+/// annotated function whose body closed a result row its annotation leaves open
+/// (design.md "Row Subsumption"): the function's type with that row
+/// re-opened in the result (`widenedFunctionResultUseVar`). Checking records
+/// the function's own type and result for the call (`ModuleEnv.RowCoercedCallee`),
+/// which checked-body construction lowers at that type and widens by a row
+/// coercion. A use that is not a call's callee keeps the function's own type.
+fn widenedCalleeUseVar(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    processing_def: DefProcessed,
+    fn_var: Var,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!?Var {
+    if (!self.instantiation_is_immediate_callee) return null;
+    if (processing_def.status != .processed) return null;
+    if (!try self.defClosedAnnotatedResultRow(processing_def.def_idx)) return null;
+    return try self.widenRecordedCalleeResult(expr_idx, fn_var, env, region);
+}
+
+/// Re-open the closed result rows of the callee `expr_idx`'s function type
+/// `fn_var` and record the call for checked-body construction
+/// (`ModuleEnv.RowCoercedCallee`).
+fn widenRecordedCalleeResult(self: *Self, expr_idx: CIR.Expr.Idx, fn_var: Var, env: *Env, region: Region) std.mem.Allocator.Error!?Var {
+    const rows_start: u32 = @intCast(self.widened_use_rows.items.len);
+    const widened = try self.widenedFunctionResultUseVar(fn_var, env, region) orelse return null;
+    try self.widened_callees.append(self.gpa, .{
+        .expr_idx = expr_idx,
+        .rows_start = rows_start,
+        .rows_end = @intCast(self.widened_use_rows.items.len),
+    });
+    const ret = switch (self.types.resolveVar(fn_var).desc.content) {
+        .structure => |flat| switch (flat) {
+            .fn_pure, .fn_effectful, .fn_unbound => |func| func.ret,
+            .tag_union, .record, .tuple, .nominal_type, .empty_record, .empty_tag_union => unreachable,
+        },
+        .alias, .flex, .rigid, .err, .field_presence => unreachable,
+    };
+    try self.cir.recordRowCoercedCallee(ModuleEnv.nodeIdxFrom(expr_idx), fn_var, ret);
+    return widened;
+}
+
+/// A recorded row-coerced callee and the rows its copy re-opened.
+const WidenedCallee = struct {
+    expr_idx: CIR.Expr.Idx,
+    rows_start: u32,
+    rows_end: u32,
+};
+
+/// A call whose re-opened result rows gained no tag beyond the function's own
+/// rows did not widen anything, so it is an ordinary call: its rows close again
+/// and its record is dropped, leaving no coercion to lower around the call
+/// (and nothing to stand between the call and inlining or fusion).
+fn settleUnwidenedCallees(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    for (self.widened_callees.items) |callee| {
+        const rows = self.widened_use_rows.items[callee.rows_start..callee.rows_end];
+        const widened = for (rows) |pair| {
+            if (try self.useRowListsExtraTag(pair)) break true;
+        } else false;
+        if (widened) continue;
+        for (rows) |pair| {
+            const tail = self.tagRowTail(pair.use_row);
+            const resolved = self.types.resolveVar(tail);
+            if (resolved.desc.content != .flex) continue;
+            const empty = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, self.getRegionAt(pair.use_row));
+            _ = try self.unify(tail, empty, env);
+        }
+        self.cir.removeRowCoercedCallee(ModuleEnv.nodeIdxFrom(callee.expr_idx));
+    }
+}
+
+/// Whether a use's copy of a row lists a tag the value's row does not.
+fn useRowListsExtraTag(self: *Self, pair: WidenedUseRow) std.mem.Allocator.Error!bool {
+    const tags_start = self.widened_use_tags.items.len;
+    defer self.widened_use_tags.shrinkRetainingCapacity(tags_start);
+    try self.appendRowTags(pair.value_row);
+    const value_end = self.widened_use_tags.items.len;
+    try self.appendRowTags(pair.use_row);
+    const value_tags = self.widened_use_tags.items[tags_start..value_end];
+    for (self.widened_use_tags.items[value_end..]) |use_tag| {
+        for (value_tags) |value_tag| {
+            if (value_tag.name.eql(use_tag.name)) break;
+        } else return true;
+    }
+    return false;
+}
+
+/// Whether `var_` resolves to a function type.
+fn isFunctionTypeVar(self: *const Self, var_: Var) bool {
+    return switch (self.types.resolveVar(var_).desc.content) {
+        .structure => |flat| switch (flat) {
+            .fn_pure, .fn_effectful, .fn_unbound => true,
+            .tag_union, .record, .tuple, .nominal_type, .empty_record, .empty_tag_union => false,
+        },
+        .alias, .flex, .rigid, .err, .field_presence => false,
+    };
+}
+
+/// Whether an annotated function definition's body closed a row its
+/// annotation implicitly opens in the function's result: some extension the
+/// annotation's generation minted is now the empty row and sits in the
+/// result within the row coercion's reach. Such a definition publishes the
+/// closed row, and each use re-opens its own copy
+/// (`widenedFunctionResultUseVar`).
+fn defClosedAnnotatedResultRow(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!bool {
+    const def = self.cir.store.getDef(def_idx);
+    const annotation_idx = self.appliedAnnotation(def.pattern, def.annotation) orelse return false;
+    if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr))) return false;
+    const range = self.annotation_implicit_open_exts.get(annotation_idx) orelse return false;
+    if (range.len == 0) return false;
+    const fn_resolved = self.types.resolveVar(ModuleEnv.varFrom(def.pattern));
+    const ret = switch (fn_resolved.desc.content) {
+        .structure => |flat| switch (flat) {
+            .fn_pure, .fn_effectful, .fn_unbound => |func| func.ret,
+            .tag_union, .record, .tuple, .nominal_type, .empty_record, .empty_tag_union => return false,
+        },
+        .alias, .flex, .rigid, .err, .field_presence => return false,
+    };
+    try self.computeCoercionReach(ret);
+    for (self.implicit_open_exts.items[range.start..][0..range.len]) |entry| {
+        const ext = self.types.resolveVar(entry.var_);
+        if (ext.desc.content != .structure or ext.desc.content.structure != .empty_tag_union) continue;
+        if (self.coercionMayWiden(ext.var_)) return true;
+    }
+    return false;
+}
+
+/// One row a use's widening copy re-opened (`widened_use_rows`).
+const WidenedUseRow = struct {
+    /// The value's own row.
+    value_row: Var,
+    /// The use's copy of it.
+    use_row: Var,
+    /// Set once the copy needs nothing more: the use's type was found not to
+    /// admit a tag of the value's row (that mismatch is reported), or the copy
+    /// is no longer a tag row because the use related it to a nominal type,
+    /// whose declared backing that relation already checked.
+    settled: bool = false,
+};
+
+/// Add to every use's widened copy each tag its value's row gained after the
+/// use copied it, with the value's own payloads, so the copy still lists
+/// every tag the value can have (design.md "Value Rows: Local Values Share,
+/// Top-Level Values Widen At Each Use"). A use whose type no longer admits
+/// such a tag is a type mismatch at the use. Returns whether any copy gained
+/// a tag, since unifying one can introduce constraints of its own.
+fn propagateValueRowsToWidenedUses(self: *Self, env: *Env) std.mem.Allocator.Error!bool {
+    var changed = false;
+    var missing: std.ArrayListUnmanaged(types_mod.Tag) = .empty;
+    defer missing.deinit(self.gpa);
+    var index: usize = 0;
+    while (index < self.widened_use_rows.items.len) : (index += 1) {
+        const pair = self.widened_use_rows.items[index];
+        if (pair.settled) continue;
+        if (!self.varIsTagRow(pair.use_row)) {
+            self.widened_use_rows.items[index].settled = true;
+            continue;
+        }
+        try self.collectTagsMissingFromUse(pair, &missing);
+        if (missing.items.len == 0) continue;
+        const region = self.getRegionAt(pair.use_row);
+        const ext = try self.freshFromContent(.{ .flex = Flex.init() }, env, region);
+        const extra = try self.freshFromContent(try self.types.mkTagUnion(missing.items, ext), env, region);
+        // A relation that fails reports its mismatch at the use and settles
+        // the pair. One that succeeds gives the copy every missing tag, which
+        // a second look confirms; a copy the relation did not extend settles
+        // too, so this loop always ends.
+        if ((try self.unify(self.tagRowTail(pair.use_row), extra, env)).isProblem()) {
+            self.widened_use_rows.items[index].settled = true;
+            continue;
+        }
+        try self.collectTagsMissingFromUse(pair, &missing);
+        if (missing.items.len == 0) {
+            changed = true;
+        } else {
+            self.widened_use_rows.items[index].settled = true;
+        }
+    }
+    return changed;
+}
+
+/// The tags of `pair`'s value row that its use's copy does not list, into
+/// `missing`.
+fn collectTagsMissingFromUse(self: *Self, pair: WidenedUseRow, missing: *std.ArrayListUnmanaged(types_mod.Tag)) std.mem.Allocator.Error!void {
+    missing.clearRetainingCapacity();
+    const tags_start = self.widened_use_tags.items.len;
+    defer self.widened_use_tags.shrinkRetainingCapacity(tags_start);
+    try self.appendRowTags(pair.value_row);
+    const value_end = self.widened_use_tags.items.len;
+    try self.appendRowTags(pair.use_row);
+    const value_tags = self.widened_use_tags.items[tags_start..value_end];
+    const use_tags = self.widened_use_tags.items[value_end..];
+    for (value_tags) |value_tag| {
+        for (use_tags) |use_tag| {
+            if (value_tag.name.eql(use_tag.name)) break;
+        } else try missing.append(self.gpa, value_tag);
+    }
+}
+
+/// Whether `var_`'s extension chain is made of tag unions (through aliases),
+/// ending in an open or empty tail.
+fn varIsTagRow(self: *const Self, var_: Var) bool {
+    var current = var_;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .tag_union => |union_| current = union_.ext,
+                .empty_tag_union => return true,
+                .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return false,
+            },
+            .flex => return true,
+            .rigid, .field_presence, .err => return false,
+        }
+    }
+}
+
+/// Append every tag on `row`'s extension chain to `widened_use_tags`.
+fn appendRowTags(self: *Self, row: Var) std.mem.Allocator.Error!void {
+    var current = row;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .tag_union => |union_| {
+                    for (0..union_.tags.count) |tag_index| {
+                        try self.widened_use_tags.append(self.gpa, self.types.getTagAt(union_.tags, @intCast(tag_index)));
+                    }
+                    current = union_.ext;
+                },
+                .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return,
+            },
+            .flex, .rigid, .field_presence, .err => return,
+        }
+    }
+}
+
 fn tagRowTail(self: *const Self, row: Var) Var {
     var current = row;
     while (true) {
@@ -20214,6 +20878,62 @@ fn definitionBodyExpr(self: *const Self, rhs: CIR.Expr.Idx) CIR.Expr.Idx {
 /// Every entry point runs this AFTER `runLateImplicitOpenExtAudit`, for the
 /// reason stated there: grounding an extension empties it, and the late audit
 /// only reads extensions that still carry tags.
+/// Publish every top-level function definition whose body closed an annotated
+/// open result row (`ModuleEnv.ClosedResultBinding`), so an importer's call of
+/// it widens the result too.
+fn recordClosedResultBindings(self: *Self) std.mem.Allocator.Error!void {
+    for (0..self.cir.all_defs.span.len) |def_offset| {
+        const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
+        if (try self.defClosedAnnotatedResultRow(def_idx)) {
+            try self.cir.recordClosedResultBinding(ModuleEnv.nodeIdxFrom(def_idx));
+        }
+    }
+}
+
+/// Close every still-open row a top-level value's type reaches through the
+/// row coercion, annotated or not: the value is evaluated once, at the type
+/// its definition produces (design.md "Value Rows: Local Values Share,
+/// Top-Level Values Widen At Each Use"), and no use relates to these rows,
+/// since each use widens a copy. A row outside the reach is shared by every
+/// use and is sealed by Monotype's row defaults, and a row whose tail carries
+/// a constraint the empty row does not discharge, or that a scheme
+/// quantified, is left alone.
+fn closeTopLevelValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    for (self.cir.store.sliceDefs(self.cir.global_value_defs)) |def_idx| {
+        const def = self.cir.store.getDef(def_idx);
+        if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr))) continue;
+        const pattern_var = ModuleEnv.varFrom(def.pattern);
+        if (self.isBindingSchemeVar(pattern_var)) continue;
+        try self.computeCoercionReach(pattern_var);
+        // Collect first: closing a tail unifies, which must not run while the
+        // reach set is being iterated.
+        var tails: std.ArrayListUnmanaged(Var) = .empty;
+        defer tails.deinit(self.gpa);
+        var reached = self.coercion_reach_seen.keyIterator();
+        while (reached.next()) |row_ptr| {
+            const row = self.types.resolveVar(row_ptr.*);
+            const ext = switch (row.desc.content) {
+                .structure => |flat| switch (flat) {
+                    .tag_union => |union_| union_.ext,
+                    .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => continue,
+                },
+                .alias, .flex, .rigid, .field_presence, .err => continue,
+            };
+            if (self.coercion_outside_seen.contains(row.var_)) continue;
+            const tail = self.types.resolveVar(ext);
+            if (self.coercion_outside_seen.contains(tail.var_)) continue;
+            if (tail.desc.content != .flex) continue;
+            if (tail.desc.rank == .generalized) continue;
+            if (!self.rowDefaultDischargesConstraints(tail.desc.content.flex.constraints)) continue;
+            try tails.append(self.gpa, tail.var_);
+        }
+        for (tails.items) |tail| {
+            const empty_tu_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, self.getRegionAt(tail));
+            _ = try self.unify(tail, empty_tu_var, env);
+        }
+    }
+}
+
 fn closeWeakValueImplicitOpenExts(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     for (self.weak_value_implicit_open_ext_ranges.items) |range| {
         for (self.implicit_open_exts.items[range.start..][0..range.len]) |entry| {
@@ -20754,10 +21474,12 @@ fn declareWhereAliasConstraints(
     // appends to the constraint store, so iterate rather than hold a slice.
     var constraints = self.types.iterStaticDispatchConstraints(receiver_rigid.constraints);
     while (constraints.next()) |constraint| {
+        const instantiated = try self.instantiateWhereAliasConstraint(constraint, &subs, region, env);
+        try self.recordDispatchRelationOwner(instantiated.fn_var);
         try self.scratch_static_dispatch_constraints.append(ScratchStaticDispatchConstraint{
             .where_clause = where_idx,
             .var_ = owner_var,
-            .constraint = try self.instantiateWhereAliasConstraint(constraint, &subs, region, env),
+            .constraint = instantiated,
             .state = .completed,
         });
     }
@@ -21855,6 +22577,7 @@ fn stepRigidAnnoGen(self: *Self, frame: *AnnoGenFrame, rigid: std.meta.fieldInfo
                     // The annotation owns the callable variable. Declare its identity
                     // before generating its type so recursive constraints can refer to it.
                     const func_var = ModuleEnv.varFrom(method.anno);
+                    try self.recordAnnotationDispatchRelationOwner(func_var);
 
                     try self.scratch_static_dispatch_constraints.append(ScratchStaticDispatchConstraint{
                         .where_clause = where_idx,
@@ -24898,7 +25621,7 @@ fn beginExprCheckFrame(
 
     frame.should_generalize = !frame.suppress_group_member_generalize and
         self.shouldGeneralize(expr, frame.is_binding_rhs, frame.is_call_arg, frame.is_forwarded_result);
-    if (frame.should_generalize) self.active_scheme_root = expr_var_raw;
+    if (frame.should_generalize) try self.activateSchemeOwner(expr_var_raw);
 
     if (frame.should_generalize) {
         try env.var_pool.pushRank();
@@ -25781,7 +26504,14 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
             const resolved_pat = self.types.resolveVar(pat_var);
             if (resolved_pat.desc.rank == Rank.generalized or self.isBindingSchemeVar(pat_var)) {
                 const instantiated = try self.instantiateBindingVar(pat_var, env, .use_last_var, .{ .value_use = expr_idx });
-                _ = try self.unify(expr_var, instantiated, env);
+                // A use of an annotated function whose body closed a result
+                // row its annotation leaves open re-opens that row in its own
+                // copy (design.md "Row Subsumption").
+                const widened_fn = if (mb_processing_def) |processing_def|
+                    try self.widenedCalleeUseVar(expr_idx, processing_def, instantiated, env, expr_region)
+                else
+                    null;
+                _ = try self.unify(expr_var, widened_fn orelse instantiated, env);
             } else {
                 // A fully checked top-level definition whose type is ground
                 // is copied at each use. Sharing its var would merge every
@@ -25797,7 +26527,36 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                     try self.instantiateVarOrphan(pat_var, env, env.rank(), .use_last_var)
                 else
                     pat_var;
-                _ = try self.unify(expr_var, use_var, env);
+                // A use of a checked top-level value relates to a widening
+                // copy of the value's type, and reads the value through a
+                // row coercion (design.md "Value Rows: Local Values Share,
+                // Top-Level Values Widen At Each Use").
+                const processed_def: ?CIR.Def.Idx = if (mb_processing_def) |processing_def|
+                    if (processing_def.status == .processed) processing_def.def_idx else null
+                else
+                    null;
+                // An annotated function whose body closed a result row its
+                // annotation leaves open (design.md "Deferred: Row
+                // Subsumption"): the use re-opens that row in its own copy,
+                // and lowering adapts the call's result.
+                const widened_fn_var = if (mb_processing_def) |processing_def|
+                    try self.widenedCalleeUseVar(expr_idx, processing_def, use_var, env, expr_region)
+                else
+                    null;
+                const widened_use_var = if (widened_fn_var != null)
+                    null
+                else if (processed_def != null and !self.isFunctionTypeVar(use_var))
+                    try self.widenedValueUseVar(use_var, env, expr_region)
+                else
+                    null;
+                if (widened_fn_var) |widened| {
+                    _ = try self.unify(expr_var, widened, env);
+                } else if (widened_use_var) |widened| {
+                    _ = try self.unify(expr_var, widened, env);
+                    try self.cir.recordRowCoercedUse(ModuleEnv.nodeIdxFrom(expr_idx), pat_var);
+                } else {
+                    _ = try self.unify(expr_var, use_var, env);
+                }
                 if (mb_processing_def) |processing_def| {
                     try self.recordSharedSchemeUse(
                         @backingInt(expr_idx),
@@ -25838,7 +26597,33 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                         .{ .explicit = expr_region },
                         .{ .value_use = expr_idx },
                     );
-                    _ = try self.unify(expr_var, ext_instantiated_var, env);
+                    // A use of an imported value that is not a binding scheme
+                    // widens exactly as a use in its own module does (design.md
+                    // "Value Rows: Local Values Share, Top-Level Values Widen
+                    // At Each Use"); a scheme's instantiation already has
+                    // fresh rows.
+                    const is_value = !ext_ref.other_cir.nodeIsBindingScheme(ext_ref.other_cir_node_idx);
+                    // A call of an imported function whose body closed an
+                    // annotated open result row widens its result as a call in
+                    // the defining module does (design.md "Deferred: Row
+                    // Subsumption").
+                    const widened_callee_var = if (self.instantiation_is_immediate_callee and
+                        ext_ref.other_cir.nodeIsClosedResultBinding(ext_ref.other_cir_node_idx))
+                        try self.widenRecordedCalleeResult(expr_idx, ext_instantiated_var, env, expr_region)
+                    else
+                        null;
+                    const widened_use_var = if (widened_callee_var == null and is_value and !self.isFunctionTypeVar(ext_instantiated_var))
+                        try self.widenedValueUseVar(ext_instantiated_var, env, expr_region)
+                    else
+                        null;
+                    if (widened_callee_var) |widened| {
+                        _ = try self.unify(expr_var, widened, env);
+                    } else if (widened_use_var) |widened| {
+                        _ = try self.unify(expr_var, widened, env);
+                        try self.cir.recordRowCoercedUse(ModuleEnv.nodeIdxFrom(expr_idx), ext_instantiated_var);
+                    } else {
+                        _ = try self.unify(expr_var, ext_instantiated_var, env);
+                    }
                 }
             } else {
                 try self.markErroneous(expr_var);
@@ -27109,7 +27894,7 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
             if (decl.decl_fn_frame) {
                 std.debug.assert(self.suppress_generalize_expr == null);
                 self.suppress_generalize_expr = decl_stmt.expr;
-                self.active_scheme_root = decl_pattern_var;
+                try self.activateSchemeOwner(decl_pattern_var);
             }
             decl.saved_bounding_annotation = self.beginBoundedAnnotationRows(self.appliedAnnotation(decl_stmt.pattern, decl_stmt.anno));
             return .{ .expr = decl_stmt.expr, .expected = decl.expectation };
@@ -34332,6 +35117,8 @@ const Probe = struct {
     dispatch_target_instantiations_len: usize,
     dispatch_derivations_len: usize,
     component_derivations_len: usize,
+    component_derived_relations_len: usize,
+    dispatch_relation_owner_log_len: usize,
     imported_schemes_len: usize,
     probe_links_len: usize,
     probe_link_copies_len: usize,
@@ -34411,6 +35198,8 @@ const Probe = struct {
         self.check.probe_link_copies.shrinkRetainingCapacity(self.probe_link_copies_len);
         self.check.shrinkDispatchDerivationsTo(self.dispatch_derivations_len);
         self.check.shrinkComponentDerivationsTo(self.component_derivations_len);
+        self.check.shrinkComponentDerivedRelationsTo(self.component_derived_relations_len);
+        self.check.shrinkDispatchRelationOwnersTo(self.dispatch_relation_owner_log_len);
         while (self.check.imported_schemes.items.len > self.imported_schemes_len) {
             const removed = self.check.imported_schemes.pop().?;
             self.check.discardImportedSchemeMetadata(removed.scheme_var);
@@ -34466,6 +35255,8 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
     const dispatch_target_instantiations_len = self.dispatch_target_instantiations.items.len;
     const dispatch_derivations_len = self.dispatch_derivations.items.len;
     const component_derivations_len = self.component_derivations.items.len;
+    const component_derived_relations_len = self.component_derived_relations.items.len;
+    const dispatch_relation_owner_log_len = self.dispatch_relation_owner_log.items.len;
     const imported_schemes_len = self.imported_schemes.items.len;
     const savepoint = try self.types.createSavepoint();
     self.probe_depth += 1;
@@ -34507,6 +35298,8 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .dispatch_target_instantiations_len = dispatch_target_instantiations_len,
         .dispatch_derivations_len = dispatch_derivations_len,
         .component_derivations_len = component_derivations_len,
+        .component_derived_relations_len = component_derived_relations_len,
+        .dispatch_relation_owner_log_len = dispatch_relation_owner_log_len,
         .imported_schemes_len = imported_schemes_len,
         .savepoint = savepoint,
     };
@@ -36104,6 +36897,10 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
     }
     try self.validateResolvedOpenNumeralLiterals(env);
     try self.finalizeGeneratedCodecConstraintsToQuiescence(env, scope == .module);
+    while (try self.propagateValueRowsToWidenedUses(env)) {
+        try self.finalizeGeneratedCodecConstraintsToQuiescence(env, scope == .module);
+    }
+    try self.settleUnwidenedCallees(env);
     try self.resolvePendingTupleAccesses(env, true);
     try self.checkAllConstraints(env);
     try self.checkDefaultRestrictions();
@@ -38143,7 +38940,7 @@ fn captureSchemeDispatchRequirements(
                             .dispatcher_var = candidate.receiver_var,
                             .constraint = candidate.constraint,
                             .failure_expr = if (candidate.failure_expr) |expr| .from(@backingInt(expr)) else .none,
-                            .owner = .{ .recorded = .{ .group_index = self.currentGroupIndex(), .scheme_root = candidate.owner_root } },
+                            .owner = .{ .recorded = self.currentGroupIndex() },
                         });
                         // The exact relation has transferred to this boundary;
                         // duplicate candidates cannot schedule it again.
@@ -38218,6 +39015,7 @@ fn captureEscapedSchemeDispatchRequirements(
 ) Allocator.Error!void {
     try self.captureSchemeDispatchRequirements(roots, env, null);
     self.assertSchemeRequirementBoundaryQuiescent(roots);
+    for (roots) |root| try self.captured_scheme_owners.put(self.gpa, root.owner, {});
 }
 
 fn addSchemeDispatchRequirementsToBoundaryReachability(
@@ -38578,7 +39376,7 @@ fn drainGroundedPendingSchemeRequirementDispatchers(
                 .from(@backingInt(expr_idx))
             else
                 .none,
-        }, .{ .recorded = .{ .group_index = dispatcher.owner_group_index, .scheme_root = dispatcher.owner_scheme_root } });
+        }, .{ .recorded = dispatcher.owner_group_index });
         dispatcher.deferred_enqueued = true;
         appended = true;
     }
@@ -38650,7 +39448,7 @@ fn checkGroundedStoredTypeSchemeRequirementsAtFinalization(
                         .from(@backingInt(expr_idx))
                     else
                         .none,
-                }, .{ .recorded = .{ .group_index = scheme.capture_group_index, .scheme_root = scheme.root_var } });
+                }, .{ .recorded = scheme.capture_group_index });
                 appended = true;
             }
         }
@@ -41153,6 +41951,22 @@ fn shrinkComponentDerivationsTo(self: *Self, new_len: usize) void {
     while (self.component_derivations.items.len > new_len) {
         const derivation = self.component_derivations.pop().?;
         const did_remove = self.component_derivation_by_child_fn_var.remove(derivation.child_fn_var);
+        std.debug.assert(did_remove);
+    }
+}
+
+fn shrinkComponentDerivedRelationsTo(self: *Self, new_len: usize) void {
+    while (self.component_derived_relations.items.len > new_len) {
+        const fn_var = self.component_derived_relations.pop().?;
+        const did_remove = self.component_derived_relation_set.remove(fn_var);
+        std.debug.assert(did_remove);
+    }
+}
+
+fn shrinkDispatchRelationOwnersTo(self: *Self, new_len: usize) void {
+    while (self.dispatch_relation_owner_log.items.len > new_len) {
+        const fn_var = self.dispatch_relation_owner_log.pop().?;
+        const did_remove = self.dispatch_relation_owners.remove(fn_var);
         std.debug.assert(did_remove);
     }
 }
@@ -43910,10 +44724,13 @@ fn replayDispatchTarget(
 
     // Pair the frozen instance with this edge's callable before changing
     // anything: where the callable has structure it is the instance's (the
-    // shapes are equal), and where it has a variable the instance supplies
-    // that subtree.
+    // shapes are equal), except that a function whose effect is unbound takes
+    // the instance function's kind, and where it has a variable the instance
+    // supplies that subtree.
     if (!try self.pairDispatchReplayInstance(replay_source.frozen_root, constraint.fn_var)) return null;
-    if (std.debug.runtime_safety) try self.verifyDispatchReplayAgainstFresh(replay_source.*, constraint, method_lookup);
+    var expected_callable_tree: std.ArrayListUnmanaged(u8) = .empty;
+    defer expected_callable_tree.deinit(self.gpa);
+    if (std.debug.runtime_safety) try self.verifyDispatchReplayAgainstFresh(replay_source.*, constraint, method_lookup, &expected_callable_tree);
 
     try self.dispatch_target_instantiations.ensureUnusedCapacity(self.gpa, 1);
     try self.dispatch_target_instantiation_by_fn_var.ensureUnusedCapacity(self.gpa, 1);
@@ -43923,6 +44740,20 @@ fn replayDispatchTarget(
         const result = try self.unify(graft.source, graft.target, env);
         if (!result.isEstablished()) {
             base.invariant("concrete dispatch replay could not relate a callable variable to its source's ground instance", .{});
+        }
+    }
+    const unify_env = self.unifyEnv();
+    for (self.scratch_replay_kind_grafts.items) |graft| {
+        if (!(try unifier.relateFunctionKind(&unify_env, graft.source, graft.target)).isEstablished()) {
+            base.invariant("concrete dispatch replay could not give a callable function its source instance's effect", .{});
+        }
+    }
+    if (std.debug.runtime_safety) {
+        var actual_callable_tree: std.ArrayListUnmanaged(u8) = .empty;
+        defer actual_callable_tree.deinit(self.gpa);
+        try self.appendReplayTree(constraint.fn_var, &actual_callable_tree);
+        if (!replayShapeEql(expected_callable_tree.items, actual_callable_tree.items)) {
+            base.invariant("concrete dispatch replay left a callable different from what relating it to a fresh instance gives", .{});
         }
     }
     const method_var = constraint.fn_var;
@@ -43965,12 +44796,14 @@ fn replayDispatchTarget(
 /// Builds with runtime safety check every replay against the work it
 /// replaces: a fresh copy of the method's scheme related to this edge's
 /// callable, on a savepoint the check rolls back, must be exactly the frozen
-/// instance the edge is about to share.
+/// instance the edge is about to share. The callable as that relation leaves
+/// it goes in `expected_callable`, for the replay's own result to match.
 fn verifyDispatchReplayAgainstFresh(
     self: *Self,
     replay_source: DispatchReplaySource,
     constraint: StaticDispatchConstraint,
     method_lookup: StaticDispatchMethodBinding,
+    expected_callable: *std.ArrayListUnmanaged(u8),
 ) Allocator.Error!void {
     const scheme_root = if (method_lookup.is_this_module)
         ModuleEnv.varFrom(method_lookup.binding.type_node_idx)
@@ -43989,6 +44822,7 @@ fn verifyDispatchReplayAgainstFresh(
             base.invariant("a replayed dispatch edge's callable does not relate to a fresh instance of its method", .{});
         }
         try self.appendReplayTree(fresh_instance, &fresh_tree);
+        try self.appendReplayTree(constraint.fn_var, expected_callable);
     }
     if (!replayShapeEql(frozen_tree.items, fresh_tree.items)) {
         base.invariant("concrete dispatch replay shared an instance a fresh instantiation would not produce", .{});
@@ -44104,13 +44938,19 @@ fn finishDispatchReplayFreezes(self: *Self) Allocator.Error!void {
 
 /// Walk a replay source's ground instance and a callable together, recording
 /// in `scratch_replay_nodes` a callable node standing at each instance node,
-/// and in `scratch_replay_grafts` each callable variable together with
-/// the instance subtree that a fresh instance would relate it to. False when
-/// the stored layouts differ at some position (two equal rows stored in
-/// different orders), in which case nothing is replayed.
+/// in `scratch_replay_grafts` each callable variable together with the
+/// instance subtree that a fresh instance would relate it to, and in
+/// `scratch_replay_kind_grafts` each callable function whose effect is unbound
+/// together with the instance function whose kind a fresh instance would give
+/// it. False when the stored layouts differ at some position (two equal rows
+/// stored in different orders), or when relating a function's kind could fail
+/// (a pure instance function standing at a callable function with effect
+/// dependencies, which the shape does not record), in which case nothing is
+/// replayed.
 fn pairDispatchReplayInstance(self: *Self, source_var: Var, callable_var: Var) Allocator.Error!bool {
     self.scratch_replay_nodes.clearRetainingCapacity();
     self.scratch_replay_grafts.clearRetainingCapacity();
+    self.scratch_replay_kind_grafts.clearRetainingCapacity();
     self.scratch_replay_walk.clearRetainingCapacity();
     self.scratch_replay_walked.clearRetainingCapacity();
     try self.scratch_replay_walk.append(self.gpa, .{ .source = source_var, .target = callable_var });
@@ -44132,10 +44972,41 @@ fn pairDispatchReplayInstance(self: *Self, source_var: Var, callable_var: Var) A
                 continue;
             },
             .rigid, .err => return false,
-            .field_presence, .alias, .structure => {},
+            .structure => |flat| switch (flat) {
+                .fn_unbound => |func| if (!try self.pairDispatchReplayFunctionKind(source, target.var_, func)) return false,
+                .fn_pure, .fn_effectful, .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => {},
+            },
+            .field_presence, .alias => {},
         }
         if (!try self.pairDispatchReplayChildren(source.desc.content, target.desc.content)) return false;
     }
+    return true;
+}
+
+/// Record that the callable function `target`, whose effect is unbound, takes
+/// the kind of the instance function `source`. A frozen instance is ground, so
+/// `source` is pure or effectful whenever it is a function at all.
+fn pairDispatchReplayFunctionKind(self: *Self, source: types_mod.ResolvedVarDesc, target: Var, target_func: types_mod.Func) Allocator.Error!bool {
+    const source_is_pure = switch (source.desc.content) {
+        .structure => |flat| switch (flat) {
+            .fn_pure => true,
+            .fn_effectful => false,
+            .fn_unbound => base.invariant("a frozen dispatch replay instance holds a function whose effect is unbound", .{}),
+            .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => return false,
+        },
+        .flex, .rigid, .alias, .field_presence, .err => return false,
+    };
+    if (source_is_pure and target_func.effect_deps.len() != 0) return false;
+    for (self.scratch_replay_kind_grafts.items) |graft| {
+        if (graft.target != target) continue;
+        // One callable function standing at two instance functions takes
+        // both kinds, which equal shapes guarantee agree.
+        if ((self.types.resolveVar(graft.source).desc.content.structure == .fn_pure) != source_is_pure) {
+            base.invariant("concrete dispatch replay paired one callable function with instance functions of different kinds", .{});
+        }
+        return true;
+    }
+    try self.scratch_replay_kind_grafts.append(self.gpa, .{ .source = source.var_, .target = target });
     return true;
 }
 
@@ -44522,10 +45393,12 @@ fn deferredDispatchRelationWasRetained(
 /// Whether every relation of a queued entry was already consumed by an entry
 /// attributing its failure to the same use, so consuming it again could
 /// neither decide, record, nor report anything new. On a concrete receiver,
-/// consuming a relation that is not a generated codec selects its method
-/// target and records that target's instantiation; a relation consumed
-/// before its target was selected is not settled for this entry, which
-/// selects it.
+/// a relation that is not a generated codec is settled once it has selected
+/// its method target and recorded that target's instantiation. A structural
+/// comparison's or hash's components are derived once per relation however
+/// often it is consumed, but having derived them does not settle it: the
+/// receiver they were derived for can later ground to a nominal type whose
+/// own method this entry still has to select.
 fn deferredRelationsAlreadySettled(self: *Self, deferred: DeferredConstraintCheck) bool {
     const constraints = self.types.sliceStaticDispatchConstraints(deferred.constraints);
     if (constraints.len == 0) return false;
@@ -44593,7 +45466,7 @@ fn deferGeneratedCodecConstraintToFinalization(
         .dispatcher_var = deferred.var_,
         .constraint = constraint,
         .failure_expr = deferred.failure_expr,
-        .owner = .{ .recorded = .{ .group_index = deferred.owner_group_index, .scheme_root = deferred.owner_scheme_root } },
+        .owner = .{ .recorded = deferred.owner_group_index },
     });
     return true;
 }
@@ -44905,6 +45778,13 @@ inline fn processDeferredDispatchEntry(
     }
     try self.claimRecordedProblems();
     self.relation_owner = deferred_constraint.relation_owner;
+    // Each relation resolves under the scheme that created it, never under
+    // the boundary whose checking runs the drain or the one whose unification
+    // grounded its receiver: the requirements its method target's
+    // instantiation and its component obligations leave behind are that
+    // scheme's. One entry can carry relations several schemes created.
+    const active_scheme_root_before = self.active_scheme_root;
+    defer self.active_scheme_root = active_scheme_root_before;
     const retained_top = self.scratch_deferred_static_dispatch_constraints.top();
     const scheme_owned_codecs_top = self.scratch_scheme_owned_codec_fns.items.len;
     defer self.scratch_scheme_owned_codec_fns.shrinkRetainingCapacity(scheme_owned_codecs_top);
@@ -44950,6 +45830,7 @@ inline fn processDeferredDispatchEntry(
             // even if the unify below appends and reallocates the backing array.
             var constraints_iter = self.types.static_dispatch_constraints.iterRange(deferred_constraint.constraints);
             while (constraints_iter.next()) |constraint| {
+                self.active_scheme_root = self.dispatchRelationOwner(constraint.fn_var);
                 if (constraint.origin == .from_literal) {
                     if (self.cir.idents.numKindFromTypeIdent(rigid.name)) |num_kind| {
                         if (try self.reportInvalidBuiltinFromNumeralLiteral(
@@ -45097,6 +45978,7 @@ inline fn processDeferredDispatchEntry(
                 // Re-fetch by index each iteration because nested unification can append
                 // constraints and reallocate the backing array.
                 const constraint = self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i];
+                self.active_scheme_root = self.dispatchRelationOwner(constraint.fn_var);
                 if (self.staticDispatchConstraintIsInactive(constraint)) continue;
                 const constraint_fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
                 if (constraint_fn_resolved == .err) {
@@ -45171,7 +46053,7 @@ inline fn processDeferredDispatchEntry(
                             );
                             continue;
                         }
-                        try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .equality, constraint, env, .{ .recorded = .{ .group_index = deferred_constraint.owner_group_index, .scheme_root = deferred_constraint.owner_scheme_root } });
+                        try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .equality, constraint, env, .{ .recorded = deferred_constraint.owner_group_index });
                         try self.satisfyDerivedIsEqConstraint(
                             deferred_constraint.var_,
                             constraint,
@@ -45193,7 +46075,7 @@ inline fn processDeferredDispatchEntry(
                             );
                             continue;
                         }
-                        try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .hash, constraint, env, .{ .recorded = .{ .group_index = deferred_constraint.owner_group_index, .scheme_root = deferred_constraint.owner_scheme_root } });
+                        try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .hash, constraint, env, .{ .recorded = deferred_constraint.owner_group_index });
                         try self.satisfyDerivedToHashConstraint(
                             deferred_constraint.var_,
                             constraint,
@@ -45501,6 +46383,7 @@ inline fn processDeferredDispatchEntry(
             var constraint_i: usize = 0;
             while (constraint_i < constraints_len) : (constraint_i += 1) {
                 const constraint = self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i];
+                self.active_scheme_root = self.dispatchRelationOwner(constraint.fn_var);
                 if (self.staticDispatchConstraintIsInactive(constraint)) continue;
                 const constraint_fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
                 if (constraint_fn_resolved == .err) {
@@ -45532,7 +46415,7 @@ inline fn processDeferredDispatchEntry(
                     if (method_lookup == null or staticDispatchBindingIsDerivedMarker(method_lookup.?)) {
                         const backing_var = self.types.getAliasBackingVar(alias);
                         if (try self.varSupportsIsEq(backing_var)) {
-                            try self.deriveStructuralEqHashComponentObligations(backing_var, .equality, constraint, env, .{ .recorded = .{ .group_index = deferred_constraint.owner_group_index, .scheme_root = deferred_constraint.owner_scheme_root } });
+                            try self.deriveStructuralEqHashComponentObligations(backing_var, .equality, constraint, env, .{ .recorded = deferred_constraint.owner_group_index });
                             try self.satisfyDerivedIsEqConstraint(
                                 deferred_constraint.var_,
                                 constraint,
@@ -45562,7 +46445,7 @@ inline fn processDeferredDispatchEntry(
                     if (method_lookup == null or staticDispatchBindingIsDerivedMarker(method_lookup.?)) {
                         const backing_var = self.types.getAliasBackingVar(alias);
                         if (try self.varSupportsToHash(backing_var)) {
-                            try self.deriveStructuralEqHashComponentObligations(backing_var, .hash, constraint, env, .{ .recorded = .{ .group_index = deferred_constraint.owner_group_index, .scheme_root = deferred_constraint.owner_scheme_root } });
+                            try self.deriveStructuralEqHashComponentObligations(backing_var, .hash, constraint, env, .{ .recorded = deferred_constraint.owner_group_index });
                             try self.satisfyDerivedToHashConstraint(
                                 deferred_constraint.var_,
                                 constraint,
@@ -45825,11 +46708,12 @@ inline fn processDeferredDispatchEntry(
             // satisfyDerivedIsEqConstraint appends and reallocates the backing array.
             var constraints_iter = self.types.static_dispatch_constraints.iterRange(deferred_constraint.constraints);
             while (constraints_iter.next()) |constraint| {
+                self.active_scheme_root = self.dispatchRelationOwner(constraint.fn_var);
                 // Check if this is a call to is_eq (anonymous types have derived is_eq)
                 if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
                     // Check if all components of this anonymous type support is_eq
                     if (try self.typeSupportsIsEq(dispatcher_content.structure)) {
-                        try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .equality, constraint, env, .{ .recorded = .{ .group_index = deferred_constraint.owner_group_index, .scheme_root = deferred_constraint.owner_scheme_root } });
+                        try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .equality, constraint, env, .{ .recorded = deferred_constraint.owner_group_index });
                         try self.satisfyDerivedIsEqConstraint(
                             deferred_constraint.var_,
                             constraint,
@@ -45851,7 +46735,7 @@ inline fn processDeferredDispatchEntry(
                     // Anonymous structural types have derived to_hash if all their
                     // components also support to_hash.
                     if (try self.typeSupportsToHash(dispatcher_content.structure)) {
-                        try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .hash, constraint, env, .{ .recorded = .{ .group_index = deferred_constraint.owner_group_index, .scheme_root = deferred_constraint.owner_scheme_root } });
+                        try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .hash, constraint, env, .{ .recorded = deferred_constraint.owner_group_index });
                         try self.satisfyDerivedToHashConstraint(
                             deferred_constraint.var_,
                             constraint,
@@ -46913,11 +47797,15 @@ fn deriveStructuralEqHashComponentObligations(
     env: *Env,
     owner: DeferredDispatchObligationOwner,
 ) Allocator.Error!void {
+    // The components belong to the relation, not to the queue entry carrying
+    // it: a relation queued both by the unification that grounded its
+    // receiver and by its instantiation dispatcher derives them once.
+    try self.component_derived_relations.ensureUnusedCapacity(self.gpa, 1);
+    const derived = try self.component_derived_relation_set.getOrPut(self.gpa, parent_constraint.fn_var);
+    if (derived.found_existing) return;
+    self.component_derived_relations.appendAssumeCapacity(parent_constraint.fn_var);
     const saved_scheme_root = self.active_scheme_root;
-    self.active_scheme_root = switch (owner) {
-        .current_group => self.active_scheme_root,
-        .recorded => |recorded| recorded.scheme_root,
-    };
+    self.active_scheme_root = self.dispatchRelationOwner(parent_constraint.fn_var);
     defer self.active_scheme_root = saved_scheme_root;
     self.var_set.clearRetainingCapacity();
     try self.varDeriveComponentObligations(dispatcher_var, derivation, &self.var_set, env, parent_constraint, false, owner);
@@ -51480,7 +52368,7 @@ fn stepParseSettle(
                     .var_ = dispatcher.dispatcher_var,
                     .constraints = dispatcher.constraints,
                     .failure_expr = failure_expr_idx,
-                }, .{ .recorded = .{ .group_index = dispatcher.owner_group_index, .scheme_root = dispatcher.owner_scheme_root } });
+                }, .{ .recorded = dispatcher.owner_group_index });
                 self.instantiation_dispatchers.items[idx].deferred_enqueued = true;
                 settle.appended = true;
             }
