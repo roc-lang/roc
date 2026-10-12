@@ -88,11 +88,11 @@ pub const Templates = struct {
 
     pub fn instantiate(self: *const Templates, allocator: Allocator) Allocator.Error!problem.Store {
         var result = try problem.Store.init(allocator);
-        errdefer result.deinit(allocator);
+        errdefer result.deinit();
         try result.extra_strings_backing.appendSlice(self.strings);
         try result.missing_patterns_backing.ensureTotalCapacity(self.missing_patterns.len);
         for (self.missing_patterns) |input| result.missing_patterns_backing.appendAssumeCapacity(.{ .start = input.start, .count = input.len });
-        try result.pending_static_exhaustiveness.ensureTotalCapacityPrecise(allocator, self.exhaustiveness.len);
+        try result.pending_static_exhaustiveness.ensureTotalCapacityPrecise(result.gpa, self.exhaustiveness.len);
         for (self.exhaustiveness) |input| {
             result.pending_static_exhaustiveness.appendAssumeCapacity(.{
                 .kind = input.kind,
@@ -143,11 +143,11 @@ test "evaluation diagnostics retain exact checked text across serialization" {
     const allocator = std.testing.allocator;
     var templates = blk: {
         var source = try problem.Store.init(allocator);
-        defer source.deinit(allocator);
+        defer source.deinit();
         const type_text = try source.putExtraString("[Left(Str), Right(U64)]");
         const missing = try source.putExtraString("Right(_)");
         try source.missing_patterns_backing.append(missing);
-        try source.appendPendingStaticExhaustiveness(allocator, .match, .empirical, .{ .match_expr = @fromBackingInt(@intCast(3)) }, base.Region.zero(), .{ .non_exhaustive_match = .{
+        try source.appendPendingStaticExhaustiveness(.match, .empirical, .{ .match_expr = @fromBackingInt(@intCast(3)) }, base.Region.zero(), .{ .non_exhaustive_match = .{
             .match_expr = @fromBackingInt(@intCast(3)),
             .condition_type = type_text,
             .missing_patterns = .{ .start = 0, .count = 1 },
@@ -168,14 +168,14 @@ test "evaluation diagnostics retain exact checked text across serialization" {
     defer restored_names.deinit();
     try std.testing.expectEqual(display, restored_names.get(qualified).?);
     var evaluation = try round_trip.loaded.instantiate(allocator);
-    defer evaluation.deinit(allocator);
-    try std.testing.expect(try evaluation.appendEmpiricalExhaustivenessFailureRetaining(allocator, @fromBackingInt(@intCast(2)), true));
+    defer evaluation.deinit();
+    try std.testing.expect(try evaluation.appendEmpiricalExhaustivenessFailureRetaining(@fromBackingInt(@intCast(2)), true));
     try std.testing.expectEqual(@as(usize, 1), evaluation.pending_static_exhaustiveness.items.len);
     var retained = try Templates.fromStore(allocator, &evaluation);
     defer retained.deinit(allocator);
     var second = try retained.instantiate(allocator);
-    defer second.deinit(allocator);
-    try std.testing.expect(try second.appendEmpiricalExhaustivenessFailure(allocator, @fromBackingInt(@intCast(2))));
+    defer second.deinit();
+    try std.testing.expect(try second.appendEmpiricalExhaustivenessFailure(@fromBackingInt(@intCast(2))));
     try std.testing.expectEqual(@as(usize, 0), second.problems.items.len);
     try std.testing.expectEqual(@as(usize, 0), second.pending_static_exhaustiveness.items.len);
     const diagnostic = evaluation.problems.items[0].non_exhaustive_match;

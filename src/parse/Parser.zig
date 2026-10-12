@@ -4198,7 +4198,7 @@ fn runExprStatementKernel(
                 expr_finish_state = .{ .start = expr_finish_state.start, .min_bp = expr_finish_state.min_bp, .expr = expr_idx };
                 continue :expr_kernel .suffix;
             } else if (tok_int < @backingInt(Token.Tag.OpArrow)) {
-                if (tok == .Dot or tok == .DotStar or tok == .TripleDot) {
+                if (tok == .Dot or tok == .DotStar) {
                     const expr = try self.pushMalformed(AST.Expr.Idx, .expr_dot_suffix_not_allowed, self.pos);
                     expr_finish_state = .{ .start = expr_finish_state.start, .min_bp = expr_finish_state.min_bp, .expr = expr };
                     continue :expr_kernel .suffix;

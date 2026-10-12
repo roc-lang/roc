@@ -4,6 +4,8 @@ const std = @import("std");
 
 /// Shared ids, inputs, and invariants for post-check stages.
 pub const Common = @import("common.zig");
+/// Which runtime specializations compile-time evaluation must lower.
+pub const LiteralDemand = @import("literal_demand.zig");
 /// Closed source-shape IR after checking has removed dispatch syntax.
 pub const Monotype = struct {
     pub const Ast = @import("monotype/ast.zig");
@@ -46,6 +48,7 @@ test "postcheck declarations are referenced" {
     std.testing.refAllDecls(@import("record_fields.zig"));
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(@import("common.zig"));
+    std.testing.refAllDecls(@import("literal_demand.zig"));
     std.testing.refAllDecls(@import("monotype/ast.zig"));
     std.testing.refAllDecls(@import("monotype/type.zig"));
     std.testing.refAllDecls(@import("monotype/lower.zig"));
