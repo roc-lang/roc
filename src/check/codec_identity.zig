@@ -57,15 +57,17 @@ pub fn intern(allocator: Allocator, types: checked.CheckedTypeStoreView, table: 
 
 /// Give each contract the content digest of its proof graph. Contracts that
 /// `intern` placed in one class share the digest of the class's first member.
-/// Must run after `intern`.
+/// `owner` is the artifact recording the table. Must run after `intern`.
 pub fn digestContents(
     allocator: Allocator,
+    owner: checked.ModuleId,
     store: *const checked.CheckedTypeStore,
     names: *const canonical.CanonicalNameStore,
     table: *dispatch.StaticDispatchPlanTable,
 ) Allocator.Error!void {
     var digester = ContentDigester{
         .allocator = allocator,
+        .owner = owner,
         .store = store,
         .names = names,
         .table = table,
@@ -86,9 +88,10 @@ pub fn digestContents(
 /// references encode as back-references. A type encodes as its canonical key
 /// plus the joint first-visit numbers of its variables in key order, so
 /// variables shared between roots stay shared. Methods encode by name and
-/// targets by their owning artifact digests; no module-local id is written.
+/// targets by their owning artifacts; no module-local id is written.
 const ContentDigester = struct {
     allocator: Allocator,
+    owner: checked.ModuleId,
     store: *const checked.CheckedTypeStore,
     names: *const canonical.CanonicalNameStore,
     table: *const dispatch.StaticDispatchPlanTable,
@@ -201,12 +204,14 @@ const ContentDigester = struct {
         }
     }
 
-    /// The target's `callable_ty` is its own declared type, which the target's
-    /// identity already fixes; it is also an id in the target module's store,
-    /// not this one.
+    /// A target is named by what identifies it in every artifact. Its
+    /// `module_idx` and `def_idx` index the module list of whichever artifact
+    /// registered it, and its `callable_ty` is its own declared type in the
+    /// target module's store, so none of them is written. A procedure is named
+    /// by its owning artifact's refs, a local procedure by its lexical site in
+    /// the recording artifact, and a structural target by its kind, which with
+    /// the edge's dispatcher fixes its implementation.
     fn writeTarget(self: *ContentDigester, target: dispatch.MethodTarget) void {
-        self.writeU32(target.module_idx);
-        self.writeU32(@backingInt(target.def_idx));
         self.writeU8(@backingInt(std.meta.activeTag(target.kind)));
         switch (target.kind) {
             .procedure => |procedure| {
@@ -217,6 +222,7 @@ const ContentDigester = struct {
                 self.writeU32(@backingInt(procedure.template.template));
             },
             .local_proc => |local| {
+                self.hasher.update(&self.owner.bytes);
                 self.writeU32(@backingInt(local.binder));
                 self.writeU32(@backingInt(local.expr));
                 self.writeU32(@backingInt(local.context_anchor));
@@ -596,7 +602,7 @@ fn digestTestContract(padding: usize, shared: bool) (Allocator.Error || error{No
         .generated_codec_derivations = &derivations,
         .generated_codec_calls = &calls,
     };
-    try digestContents(gpa, &types, &names, &table);
+    try digestContents(gpa, .{}, &types, &names, &table);
     return derivations[0].content;
 }
 

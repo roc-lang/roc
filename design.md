@@ -6338,9 +6338,12 @@ SHA-256 of a canonical depth-first encoding of the class's first member's proof
 graph. Contracts and evidence nodes are numbered by first visit, so shared and
 cyclic references encode as back-references. Each type encodes as its canonical
 key followed by the joint first-visit numbers of its variables in key order, so
-cross-root sharing is part of the digest. Methods encode by name, and targets
-encode by their owning artifact digests; the encoding writes no module-local id.
-A target's callable type is fixed by the target itself and is not encoded.
+cross-root sharing is part of the digest. Methods encode by name. A procedure
+target encodes by its owning artifact's refs, a local procedure target by its
+lexical site within the recording artifact, and a structural target by its
+kind, which with the edge's dispatcher fixes its implementation. A target's
+module index, definition index, and callable type are relative to whichever
+artifact registered it, so the encoding writes none of them.
 Structural evidence that names a contract identifies it by this digest instead
 of by the module that recorded the edge. A generic codec function that callers
 in several modules use at one record type is therefore one specialization. A

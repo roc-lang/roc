@@ -19522,7 +19522,7 @@ const EvidencePass = struct {
         self.plan_table.site_substitutions = try self.site_substitutions.toOwnedSlice(self.allocator);
         self.plan_table.template_root_evidence = try self.allocator.dupe(?artifact_serialize.Span, self.template_root_evidence);
         try @import("codec_identity.zig").intern(self.allocator, self.checked_types.store.view(), self.plan_table);
-        try @import("codec_identity.zig").digestContents(self.allocator, &self.checked_types.store, self.names, self.plan_table);
+        try @import("codec_identity.zig").digestContents(self.allocator, self.import_views.current_owner, &self.checked_types.store, self.names, self.plan_table);
         if (builtin.mode == .debug) try self.debugVerifyGeneratedCodecRoleAgreement();
     }
 
