@@ -1600,8 +1600,6 @@ pub const Evaluator = struct {
             .list_reserve_for_append,
             .list_release_excess_capacity,
             .list_clear,
-            .list_split_first,
-            .list_split_last,
             .list_map_prepare_reuse,
             .list_map_can_reuse,
             => self.evalListOp(op, args, arg_types, result_ty),
@@ -2884,8 +2882,6 @@ pub const Evaluator = struct {
             list_replace_unsafe,
             list_first,
             list_last,
-            list_split_first,
-            list_split_last,
             list_map_prepare_reuse,
             list_map_can_reuse,
         };
@@ -2989,8 +2985,6 @@ pub const Evaluator = struct {
             .list_replace_unsafe => return try self.listReplaceUnsafe(result_ty, args),
             .list_first => return try self.listFirstLast(result_ty, args[0].list, true),
             .list_last => return try self.listFirstLast(result_ty, args[0].list, false),
-            .list_split_first => return try self.listSplit(result_ty, args[0].list, true),
-            .list_split_last => return try self.listSplit(result_ty, args[0].list, false),
             .list_map_prepare_reuse => return args[0],
             .list_map_can_reuse => {
                 // In-place map reuse is disabled on the compared compile.
@@ -3050,22 +3044,6 @@ pub const Evaluator = struct {
         }
         const elem = if (first) list[0] else list[list.len - 1];
         return .{ .tag = .{ .discriminant = @intCast(ok_index), .payloads = try self.dupeValues(&.{elem}) } };
-    }
-
-    fn listSplit(self: *Evaluator, result_ty: Type.TypeId, list: []const Value, first: bool) EvalError!Value {
-        const ok_index = self.tagIndexByText(result_ty, "Ok") orelse return self.unsupported_("list split Ok tag not found");
-        const err_index = self.tagIndexByText(result_ty, "Err") orelse return self.unsupported_("list split Err tag not found");
-        if (list.len == 0) {
-            return .{ .tag = .{ .discriminant = @intCast(err_index), .payloads = try self.zeroPayloadsForTag(result_ty, err_index) } };
-        }
-        const payload_ty = self.okPayloadType(result_ty, ok_index) orelse return self.unsupported_("list split Ok payload type");
-        const elem = if (first) list[0] else list[list.len - 1];
-        const rest = if (first)
-            try self.sublist(list, 1, std.math.maxInt(usize))
-        else
-            try self.sublist(list, 0, list.len - 1);
-        const record = try self.buildListElemRecord(payload_ty, rest, elem);
-        return .{ .tag = .{ .discriminant = @intCast(ok_index), .payloads = try self.dupeValues(&.{record}) } };
     }
 
     /// Build the payload values for tag `index` of `tag_ty` as type-directed

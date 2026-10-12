@@ -1,5 +1,6 @@
-//! Source URL identity for packages downloaded from URLs: the full URL plus
-//! the span of its url id (the part identifying the package across versions).
+//! Source URL identity for packages downloaded from URLs: the full URL, the
+//! span of its url id (the part identifying the package across versions), and
+//! its verified content hash.
 
 const std = @import("std");
 const base = @import("base");
@@ -10,28 +11,38 @@ const Allocator = std.mem.Allocator;
 pub const UrlSourceView = struct {
     url: []const u8,
     url_id: base.url.UrlId,
+    /// The bundle's content hash: the trailing hash segment of the URL,
+    /// verified on download, which names the package's content-addressed
+    /// directory in the package cache.
+    hash: []const u8,
 };
 
 /// An owned copy of a package's source URL and the span of its url id.
 pub const UrlSource = struct {
     url: []u8,
     url_id: base.url.UrlId,
+    hash: []u8,
 
     pub fn init(gpa: Allocator, source_view: UrlSourceView) Allocator.Error!UrlSource {
+        const url = try gpa.dupe(u8, source_view.url);
+        errdefer gpa.free(url);
         return .{
-            .url = try gpa.dupe(u8, source_view.url),
+            .url = url,
             .url_id = source_view.url_id,
+            .hash = try gpa.dupe(u8, source_view.hash),
         };
     }
 
     pub fn deinit(self: *UrlSource, gpa: Allocator) void {
         gpa.free(self.url);
+        gpa.free(self.hash);
     }
 
     pub fn view(self: *const UrlSource) UrlSourceView {
         return .{
             .url = self.url,
             .url_id = self.url_id,
+            .hash = self.hash,
         };
     }
 
@@ -49,6 +60,7 @@ test "UrlSource returns package URL id spans" {
     var source = try UrlSource.init(std.testing.allocator, .{
         .url = url,
         .url_id = .{ .prefix_start = 8, .prefix_len = 19, .suffix_start = 33, .suffix_len = 1 },
+        .hash = "hash",
     });
     defer source.deinit(std.testing.allocator);
 

@@ -306,9 +306,11 @@ pub const Constants = struct {
     ///      the value through a row coercion.
     /// 143: Module environments record row-coerced callees and the definitions
     ///      whose bodies closed an annotated open result row.
-    /// 144: Checked modules publish compile-time roots no compilation
+    /// 144: Annotation polarity flips through function argument positions, so a
+    ///      callback's result row is generated closed and its argument row open.
+    /// 145: Checked modules publish compile-time roots no compilation
     ///      demanded as unevaluated, with every evaluated root's reads.
-    pub const CACHE_VERSION = 144;
+    pub const CACHE_VERSION = 145;
 };
 
 /// Configuration for the Roc cache system.

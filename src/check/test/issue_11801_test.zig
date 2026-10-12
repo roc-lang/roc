@@ -295,6 +295,92 @@ test "issue 11801: concrete dispatch replay never selects a method whose scheme 
     try std.testing.expectEqual(@as(usize, 0), env.checker.dispatch_replayed_edges.items.len);
 }
 
+test "issue 11801: concrete dispatch replay accepts a scheme row stored split after its source froze" {
+    // `f`'s scheme has no variables, so its result row is the class `v`'s
+    // annotation shares with every fresh instance. `g2`'s call replays `g1`'s
+    // and freezes the row as stored then; `v.r0` then relates that class to an
+    // open `{ r0 }` row, which stores the same row as `{ r0 }` extended by
+    // `{ r3 }`. The replay in `g3` must still match a fresh instance: the
+    // rows are equal however they are stored.
+    const source =
+        \\v : { r0 : Bool, r3 ?: U64 }
+        \\v = { r0: True, r3: 1 }
+        \\
+        \\T := [A, B(U64)].{
+        \\  i : T -> T
+        \\  i = |t| t
+        \\
+        \\  f : T -> { r0 : Bool, r3 ?: U64 }
+        \\  f = |_t| v
+        \\
+        \\  h : { r0 : Bool, r3 ?: U64 } -> { r0 : Bool, r3 ?: U64 }
+        \\  h = |r| r
+        \\
+        \\  g1 : U64 -> { r0 : Bool, r3 ?: U64 }
+        \\  g1 = |n| { ..(T.h(T.i(A).f())), r3: n }
+        \\
+        \\  g2 : U64 -> { r0 : Bool, r3 ?: U64 }
+        \\  g2 = |_n| T.h(T.i(A).f())
+        \\
+        \\  g3 : U64 -> { r0 : Bool, r3 ?: U64 }
+        \\  g3 = |_n| {
+        \\    _y = T.i(A).f()
+        \\    _x = v.r0
+        \\    T.h(T.i(A).f())
+        \\  }
+        \\}
+    ;
+    var env = try TestEnv.init("Test", source);
+    defer env.deinit();
+    try env.assertNoErrors();
+    try std.testing.expect(env.checker.dispatch_replayed_edges.items.len >= 2);
+}
+
+test "issue 11801: concrete dispatch replay accepts a scheme row whose field kinds resolved after its source froze" {
+    // `f`'s scheme has no variables, so its result row is shared with every
+    // fresh instance. The update in `h` probes `r0` and `r1` with kind
+    // variables that resolve to required, which leaves the shared row storing
+    // those fields through their kind variables after the replay in `h` froze
+    // the instance. The last call's replay must still match a fresh instance:
+    // a field whose kind resolved to required is a required field.
+    const source =
+        \\T := [A, B(U64), C(Str), D({ r0 : Bool, r1 : U64, r2 : Str })].{
+        \\  i : T -> T
+        \\  i = |_t| B(78)
+        \\
+        \\  n : T -> U64
+        \\  n = |_t| 1
+        \\
+        \\  f : T -> { r0 : Bool, r1 : U64, r2 : Str }
+        \\  f = |_t| crash "unused"
+        \\
+        \\  g : U64 -> T
+        \\  g = |_x| D(T.i(C("s")).f())
+        \\
+        \\  k : T -> T
+        \\  k = |_t| {
+        \\    _d = D(T.i(T.i(A).i()).f())
+        \\    w : T
+        \\    w = T.i(B(T.i(T.i(B(58)).i()).n())).i()
+        \\    w
+        \\  }
+        \\
+        \\  h : U64 -> T
+        \\  h = |_x| {
+        \\    t : T
+        \\    t = A
+        \\    _d = D(T.i(A).f())
+        \\    _u = { ..(t.f()), r0: True, r1: 32 }
+        \\    D(T.i(A).f())
+        \\  }
+        \\}
+    ;
+    var env = try TestEnv.init("Test", source);
+    defer env.deinit();
+    try env.assertNoErrors();
+    try std.testing.expect(env.checker.dispatch_replayed_edges.items.len >= 2);
+}
+
 test "issue 11801: a type error in one replayed use leaves the uses sharing its instance intact" {
     // The uses of `mk` differ in their unused argument's type, so each
     // settles its own copy of `mk`'s `pair_with` requirement. `first` makes

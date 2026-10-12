@@ -9,6 +9,7 @@ const base = @import("base");
 const collections = @import("collections");
 
 const Common = @import("../common.zig");
+const LiteralDemand = @import("../literal_demand.zig");
 const AnyAll = collections.AnyAll;
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
@@ -326,6 +327,8 @@ pub const Options = struct {
     post_check_executor: ?base.post_check_task_executor.Executor = null,
     /// Optional phase timings for the work owned by Monotype lowering.
     timing: ?*Timing = null,
+    /// Receives the demand-driven decisions this run made.
+    demand_counters_out: ?*DemandCounters = null,
 };
 
 /// What a shared program demands of compile-time evaluation (design.md
@@ -1289,6 +1292,10 @@ pub fn run(
 
     var builder = Builder.init(allocator, modules, &program, options);
     defer builder.deinit();
+    if ((roots.discovery_start == null) != (roots.literal_demand == null)) {
+        Common.invariant("Monotype discovery roots arrived without their literal demand");
+    }
+    builder.literal_demand = roots.literal_demand;
     try builder.seedProgramModuleTables();
     // Cache admission must know the current app filling before any body is
     // skipped. Checked bindings are immutable throughout this producer.
@@ -1311,7 +1318,7 @@ pub fn run(
         defer procedure_timing_scope.end();
         if (options.timing) |timing| timing.startProcedureBreakdown();
         defer if (options.timing) |timing| timing.finishProcedureBreakdown();
-        try builder.lowerIsolatedRoots(roots.requests, roots.source_modules);
+        try builder.lowerIsolatedRoots(roots.requests, roots.source_modules, roots.discovery_start);
         try builder.drainPendingSpecJobs();
     }
 
@@ -1335,10 +1342,12 @@ pub fn run(
             try builder.lowerStaticDataRequest(request);
         }
         try builder.drainPendingSpecJobs();
+        try builder.completeParkedSpecJobsAsStubs();
         // Every body is lowered, so the program's demand is known.
         try builder.orderComptimeRoots();
         try builder.recordSpecComptimeReads();
     }
+    if (options.demand_counters_out) |out| out.* = builder.demand_counters;
 
     {
         var finalization_timing_scope = TimingPhaseScope.begin(options.timing, .finalization);
@@ -3957,6 +3966,34 @@ const TemplateReservation = struct {
 /// coordinator-owned path.
 const TemplateBodyScheduling = enum { immediate, queued };
 
+/// Why a specialization's body is lowered (design.md "Demand-Driven
+/// Compile-Time Specialization"). A body lowered for `evaluation` runs, or
+/// may run, during compile-time evaluation, so everything it requests has a
+/// body too. A body lowered for `discovery` belongs to a runtime root that
+/// the compile-time consumer never runs; it is lowered only so that its
+/// instances' literal conversions become literal roots, and a request it
+/// makes whose specialization can register no literal root is parked
+/// rather than lowered. An `evaluation` request reaching a parked or
+/// discovery specialization upgrades it, and everything it requested, to
+/// `evaluation`.
+const Demand = enum { evaluation, discovery };
+
+/// Explicit counts of the demand-driven decisions one Monotype run made.
+pub const DemandCounters = struct {
+    /// Discovery roots lowered.
+    discovery_roots: u64 = 0,
+    /// Specialization bodies lowered for discovery.
+    discovery_bodies: u64 = 0,
+    /// Discovery requests parked instead of lowered.
+    parked: u64 = 0,
+    /// Parked specializations an evaluation request unparked.
+    unparked: u64 = 0,
+    /// Discovery specializations an evaluation request upgraded.
+    upgraded: u64 = 0,
+    /// Parked specializations completed as never-run stubs.
+    stubs: u64 = 0,
+};
+
 /// Bound running plus completed-but-unaccepted jobs. Extra slots let free
 /// lanes continue working when an earlier dispatch delays ordered acceptance.
 pub const parallel_spec_jobs_per_lane: usize = 64;
@@ -3993,6 +4030,9 @@ const PendingSpecJob = struct {
     /// requested one. Completion mints a widening adapter exactly when this is
     /// set (design.md "Result-Row Widening Adapter").
     widened_result_row: bool,
+    /// Why the body is lowered. The coordinator restates it when it hands the
+    /// job to a lane, since an upgrade may arrive while the job is queued.
+    demand: Demand = .evaluation,
 };
 
 /// One reserved template body lowered into graph-local and draft-local state,
@@ -4449,6 +4489,7 @@ const ProcedureRootTaskContext = struct {
     source_module: checked.ModuleId,
     inputs: *const SpecJobWorkerInputs,
     request: checked.RootRequest,
+    demand: Demand = .evaluation,
     shard: ?CompletedProcedureRootShard = null,
     failed: bool = false,
     completed: bool = false,
@@ -4621,7 +4662,9 @@ const GeneratedTryTypeAddress = struct {
 /// procedure call. `evidence` is an interned producer identity in `module`;
 /// the plan's closed callable type is likewise structurally interned there.
 /// The method scope remains part of specialization identity because imported
-/// bodies resolve compiler-generated method calls in that scope.
+/// bodies resolve compiler-generated method calls in that scope. The key is a
+/// complete identity only for specializations independent of the caller's
+/// local context, so caller-owned specializations are never stored under it.
 const ClosedDirectCallIdentity = struct {
     callable: CheckedTypeAddress,
     evidence: static_dispatch.EvidenceNodeId,
@@ -4800,6 +4843,23 @@ const Builder = struct {
     /// append new entries, which the same drain then reaches.
     pending_spec_jobs: collections.RingQueue(PendingSpecJob) = .empty,
     next_spec_dispatch_index: u64 = 0,
+    /// Which runtime specializations can register a literal root; present
+    /// exactly when the program has discovery roots.
+    literal_demand: ?*const LiteralDemand.LiteralDemand = null,
+    /// The demand of a root being lowered, and of the requests made outside
+    /// any body draft while it lowers.
+    root_demand: Demand = .evaluation,
+    /// Discovery requests whose specialization can register no literal
+    /// root: reserved with no body, in reservation order. An evaluation
+    /// request unparks one; the rest complete as never-run stubs once every
+    /// body has lowered.
+    parked_spec_jobs: std.AutoArrayHashMapUnmanaged(Ast.FnId, PendingSpecJob) = .empty,
+    /// Specializations whose bodies are lowered for discovery.
+    discovery_specs: std.AutoHashMapUnmanaged(Ast.FnId, void) = .empty,
+    /// The specializations each committed discovery body requested for
+    /// discovery, so an upgrade reaches them.
+    discovery_callees: std.AutoHashMapUnmanaged(Ast.FnId, std.ArrayListUnmanaged(Ast.FnId)) = .empty,
+    demand_counters: DemandCounters = .{},
     /// Next logical queue entry the coordinator may accept. This first boundary
     /// validates FIFO accounting; later worker results also buffer ordinary
     /// body appends behind this index.
@@ -5297,6 +5357,13 @@ const Builder = struct {
         self.interface_summaries.deinit();
         self.spec_store.deinit();
         self.pending_spec_jobs.deinit(self.allocator);
+        self.parked_spec_jobs.deinit(self.allocator);
+        self.discovery_specs.deinit(self.allocator);
+        {
+            var callees = self.discovery_callees.valueIterator();
+            while (callees.next()) |list| list.deinit(self.allocator);
+            self.discovery_callees.deinit(self.allocator);
+        }
         self.type_cache.deinit();
         self.const_evidence_memo.deinit();
         self.const_evidence_by_content.deinit();
@@ -6036,7 +6103,7 @@ const Builder = struct {
 
     /// Procedure-use runs are the only isolated roots without an ordered
     /// coordinator dependency; every other root kind remains a serial barrier.
-    fn lowerIsolatedRoots(self: *Builder, all_requests: []const checked.RootRequest, all_source_modules: []const checked.ModuleId) Allocator.Error!void {
+    fn lowerIsolatedRoots(self: *Builder, all_requests: []const checked.RootRequest, all_source_modules: []const checked.ModuleId, discovery_start: ?usize) Allocator.Error!void {
         if (all_source_modules.len != 0 and all_source_modules.len != all_requests.len) {
             Common.invariant("root source module count differs from explicit request count");
         }
@@ -6096,7 +6163,10 @@ const Builder = struct {
             if (self.demand_driven_comptime_roots) {
                 // Declared compile-time roots become program roots once
                 // demand is known (`orderComptimeRoots`); everything else
-                // lowers now.
+                // lowers now. Only a program without an LSS runtime consumer
+                // has discovery roots, and only one with it is demand-driven,
+                // so the filtered positions need no discovery mapping.
+                if (discovery_start != null) Common.invariant("demand-driven compile-time roots received discovery roots");
                 for (all_requests, 0..) |request, i| {
                     if (request.abi == .compile_time) continue;
                     try demanded_later_requests.append(self.allocator, request);
@@ -6108,28 +6178,43 @@ const Builder = struct {
                 root_fn_tys = demanded_later_fn_tys.items;
             }
         }
+        defer self.root_demand = .evaluation;
         const executor = self.post_check_executor orelse {
-            for (requests, 0..) |request, i| try self.lowerRoot(request, self.rootSourceModule(source_modules, i), &root_fn_tys[i]);
+            for (requests, 0..) |request, i| try self.lowerRootWithDemand(request, self.rootSourceModule(source_modules, i), rootDemand(discovery_start, i), &root_fn_tys[i]);
             return;
         };
         if (executor.worker_count <= 1) {
-            for (requests, 0..) |request, i| try self.lowerRoot(request, self.rootSourceModule(source_modules, i), &root_fn_tys[i]);
+            for (requests, 0..) |request, i| try self.lowerRootWithDemand(request, self.rootSourceModule(source_modules, i), rootDemand(discovery_start, i), &root_fn_tys[i]);
             return;
         }
         var index: usize = 0;
         while (index < requests.len) {
             if (requests[index].procedure_use == null) {
-                try self.lowerRoot(requests[index], self.rootSourceModule(source_modules, index), &root_fn_tys[index]);
+                try self.lowerRootWithDemand(requests[index], self.rootSourceModule(source_modules, index), rootDemand(discovery_start, index), &root_fn_tys[index]);
                 index += 1;
                 continue;
             }
             const start = index;
+            const demand = rootDemand(discovery_start, index);
             while (index < requests.len and
                 requests[index].procedure_use != null and
+                rootDemand(discovery_start, index) == demand and
                 index - start < executor.worker_count) : (index += 1)
             {}
+            self.root_demand = demand;
             try self.lowerProcedureRootBatch(executor, requests[start..index], if (source_modules.len == 0) &.{} else source_modules[start..index]);
         }
+    }
+
+    fn rootDemand(discovery_start: ?usize, index: usize) Demand {
+        const start = discovery_start orelse return .evaluation;
+        return if (index >= start) .discovery else .evaluation;
+    }
+
+    fn lowerRootWithDemand(self: *Builder, request: checked.RootRequest, source_module: checked.ModuleId, demand: Demand, fn_ty: *?Type.TypeId) Allocator.Error!void {
+        self.root_demand = demand;
+        if (demand == .discovery) self.demand_counters.discovery_roots += 1;
+        try self.lowerRoot(request, source_module, fn_ty);
     }
 
     /// Whether `lowerIsolatedRoots` lowers `request` through `lowerTemplate`
@@ -6390,7 +6475,9 @@ const Builder = struct {
                 .inputs = &inputs,
                 .request = request,
                 .source_module = self.rootSourceModule(source_modules, task_id),
+                .demand = self.root_demand,
             };
+            if (self.root_demand == .discovery) self.demand_counters.discovery_roots += 1;
             tasks[task_id] = .{ .id = task_id, .context = &contexts[task_id], .run = runProcedureRootTask };
         }
         defer for (contexts) |*context| {
@@ -6639,6 +6726,7 @@ const Builder = struct {
             request,
             procedure,
             source_module,
+            self.root_demand,
         );
         defer shard.deinit();
         return self.commitCompletedProcedureRootShard(&shard);
@@ -6653,6 +6741,7 @@ const Builder = struct {
         request: checked.RootRequest,
         procedure: checked.ProcedureUseTemplate,
         source_module: checked.ModuleId,
+        demand: Demand,
     ) Allocator.Error!CompletedProcedureRootShard {
         if (self.symbols.active != .coordinator) {
             Common.compilerBug("procedure root shard entered with a worker-local symbol domain active");
@@ -6704,6 +6793,7 @@ const Builder = struct {
         errdefer body_draft.deinit();
         body_draft.spec_job_workspace = workspace;
         body_draft.mutable_graph_names = &workspace.name_store;
+        body_draft.demand = demand;
         self.active_body_draft = &body_draft;
         defer self.active_body_draft = saved_body_draft;
         var ctx = try BodyContext.init(self.allocator, self, view, template_ref, graph, &body_draft);
@@ -7143,6 +7233,7 @@ const Builder = struct {
             .queued,
             null,
             false,
+            self.root_demand,
         );
     }
 
@@ -7439,6 +7530,7 @@ const Builder = struct {
         body_scheduling: TemplateBodyScheduling,
         codec_contract: ?SealedCodecContractContext,
         widened_result_row: bool,
+        demand: Demand,
     ) Allocator.Error!Ast.DefId {
         var lookup_timing_scope = ProcedureTimingScope.begin(self.timing, .lookup_reservation);
         defer lookup_timing_scope.end();
@@ -7492,6 +7584,7 @@ const Builder = struct {
                     Common.invariant("Monotype specialization hit disagreed on lexical evidence topology");
                 }
             }
+            if (demand == .evaluation) try self.upgradeDiscoverySpec(hit.fn_id);
             switch (hit.status) {
                 .ready,
                 .lowering,
@@ -7506,15 +7599,17 @@ const Builder = struct {
                     if (!self.parking_root_job) try self.unparkRootJob(hit.fn_id);
                     switch (body_scheduling) {
                         // A queued request reuses the reserved id; the body
-                        // is already owned by the queue.
+                        // is already owned by the queue, or parked.
                         .queued => return existing.def,
                         // An immediate caller consumes the callee's solved
                         // representation, so it claims the queued body and
                         // lowers it now with the reservation's own winning
                         // seed. The queued job later observes the ready
-                        // record and is skipped instead of re-lowered.
+                        // record and is skipped instead of re-lowered. A
+                        // parked body is claimed for the caller's discovery.
                         .immediate => {
                             const job = self.pendingSpecJobFor(hit.fn_id) orelse
+                                try self.claimParkedSpecJob(hit.fn_id) orelse
                                 Common.invariant("reserved Monotype specialization had no queued body to claim");
                             if (self.parking_root_job) Common.invariant("compile-time root declaration claimed an immediate body");
                             self.spec_store.markLowering(job.spec);
@@ -7629,13 +7724,13 @@ const Builder = struct {
         const reservation = reserved.reservation;
 
         switch (body_scheduling) {
-            .immediate => {},
+            .immediate => if (demand == .discovery) try self.beginDiscoverySpec(reservation.fn_id),
             .queued => {
                 if (retained_topology != null) {
                     Common.invariant("queued Monotype specialization request cannot carry a retained lexical topology");
                 }
-                const job = PendingSpecJob{
-                    .dispatch_index = self.next_spec_dispatch_index,
+                const job: PendingSpecJob = .{
+                    .dispatch_index = undefined,
                     .spec = reserved.spec,
                     .reservation = reservation,
                     .fn_template = fn_template,
@@ -7649,6 +7744,7 @@ const Builder = struct {
                     .signature_relation = signature_relation,
                     .codec_contract = codec_contract,
                     .widened_result_row = widened_result_row,
+                    .demand = demand,
                 };
                 if (self.parking_root_job) {
                     // A demand-driven root's body waits until the program
@@ -7657,7 +7753,22 @@ const Builder = struct {
                     self.parked_root_job = job;
                     return reservation.def;
                 }
+                if (demand == .discovery) {
+                    // A hosted procedure and an object-cache entry have no
+                    // body to lower, so there is nothing to leave unlowered.
+                    if (template.target != .hosted and fn_template.cached == null and
+                        try self.discoveryRequestReachesNoLiteralRoot(template_ref, lower_fn_ty, subst, spec_evidence))
+                    {
+                        try self.parked_spec_jobs.put(self.allocator, reservation.fn_id, job);
+                        self.demand_counters.parked += 1;
+                        self.traceDemand("park", reservation.fn_id);
+                        return reservation.def;
+                    }
+                    try self.beginDiscoverySpec(reservation.fn_id);
+                }
                 try self.enqueueSpecJob(job);
+                self.countCoordinatorBodyDiagnostic("spec_jobs_enqueued");
+                self.recordPendingSpecJobPeak();
                 return reservation.def;
             },
         }
@@ -8041,6 +8152,7 @@ const Builder = struct {
             // The adapter's own source is requested at the DECLARED row, the
             // fixpoint `resultRowWideningAdapterOrNull` asserts.
             false,
+            self.specDemand(reservation.fn_id),
         );
         const adapter_template = Ast.FnTemplate{
             .fn_def = .{ .checked_generated = template_ref },
@@ -8211,6 +8323,8 @@ const Builder = struct {
         var body_draft_storage = BodyDraftStore.init(self.allocator);
         defer body_draft_storage.deinit();
         const body_draft = &body_draft_storage;
+        body_draft.demand = self.specDemand(reservation.fn_id);
+        body_draft.demand_owner = reservation.fn_id;
         const draft = FinalBodyOutputGuard.begin(self);
         const pending = try self.lowerReservedTemplateBodyIntoDraft(
             graph,
@@ -8260,20 +8374,19 @@ const Builder = struct {
     }
 
     fn enqueueSpecJob(self: *Builder, job: PendingSpecJob) Allocator.Error!void {
-        std.debug.assert(job.dispatch_index == self.next_spec_dispatch_index);
-        try self.pending_spec_jobs.append(self.allocator, job);
+        var queued = job;
+        queued.dispatch_index = self.next_spec_dispatch_index;
+        try self.pending_spec_jobs.append(self.allocator, queued);
         self.next_spec_dispatch_index += 1;
-        self.countCoordinatorBodyDiagnostic("spec_jobs_enqueued");
-        self.recordPendingSpecJobPeak();
     }
 
     /// Move a parked compile-time root body into the specialization queue,
     /// under the next dispatch index.
     fn unparkRootJob(self: *Builder, fn_id: Ast.FnId) Allocator.Error!void {
         const parked = self.parked_root_jobs.fetchRemove(fn_id) orelse return;
-        var job = parked.value;
-        job.dispatch_index = self.next_spec_dispatch_index;
-        try self.enqueueSpecJob(job);
+        try self.enqueueSpecJob(parked.value);
+        self.countCoordinatorBodyDiagnostic("spec_jobs_enqueued");
+        self.recordPendingSpecJobPeak();
     }
 
     /// After a drain, extend the program's demand over the bodies that drain
@@ -8328,6 +8441,290 @@ const Builder = struct {
             }
         }
         return state.awaiting_bodies.items.len != 0;
+    }
+
+    fn traceLink(comptime how: []const u8, body_draft: *const BodyDraftStore, demand: Demand, callee: Ast.FnId) void {
+        if (!LiteralDemand.traceEnabled()) return;
+        std.debug.print("ctfe-demand link {s} owner={d} draft={s} demand={s} -> fn#{d}\n", .{
+            how,
+            if (body_draft.demand_owner) |owner| @backingInt(owner) else std.math.maxInt(u32),
+            @tagName(body_draft.demand),
+            @tagName(demand),
+            @backingInt(callee),
+        });
+    }
+
+    /// A procedure lowered only for discovery is no specialization's code: it
+    /// offers no object-cache entry, shares no layout-keyed procedure, and
+    /// its identity differs from the evaluation procedure of the same
+    /// template and types.
+    fn discoveryTemplate(template: Ast.FnTemplate) Ast.FnTemplate {
+        var marked = template;
+        marked.discovery = true;
+        marked.spec_key = null;
+        marked.procedure_keyed_by_layout = false;
+        return marked;
+    }
+
+    /// Program extents before a body draft commits, so the procedures it
+    /// adds can be found afterwards.
+    const CommitExtent = struct { fns: usize, defs: usize, nested_defs: usize };
+
+    fn commitExtent(self: *const Builder) CommitExtent {
+        return .{
+            .fns = self.program.fnCount(),
+            .defs = self.program.defCount(),
+            .nested_defs = self.program.nestedDefCount(),
+        };
+    }
+
+    /// Mark every procedure a discovery body draft committed, with the
+    /// definitions that carry their templates. The draft's own
+    /// specialization is marked where its body is finished.
+    fn markDiscoveryFns(self: *Builder, body_draft: *const BodyDraftStore, before: CommitExtent) void {
+        if (self.draftEvaluates(body_draft)) return;
+        for (before.fns..self.program.fnCount()) |raw| {
+            const fn_id: Ast.FnId = @fromBackingInt(@intCast(raw));
+            self.program.setFnSource(fn_id, discoveryTemplate(self.program.fnSource(fn_id)));
+        }
+        for (before.defs..self.program.defCount()) |raw| {
+            const def_id: Ast.DefId = @fromBackingInt(@intCast(raw));
+            var def = self.program.getDef(def_id);
+            const fn_id = def.fn_id orelse continue;
+            if (@backingInt(fn_id) < before.fns) continue;
+            def.fn_def = discoveryTemplate(def.fn_def.?);
+            self.program.setDef(def_id, def);
+        }
+        for (before.nested_defs..self.program.nestedDefCount()) |raw| {
+            const def_id: Ast.NestedDefId = @fromBackingInt(@intCast(raw));
+            const def = self.program.getNestedDef(def_id);
+            if (@backingInt(def.fn_id) < before.fns) continue;
+            self.program.setNestedDefSource(def_id, discoveryTemplate(def.fn_def));
+        }
+    }
+
+    /// Record a specialization a discovery body requested, so a later
+    /// upgrade of that body reaches it.
+    fn recordDiscoveryCallee(self: *Builder, body_draft: *const BodyDraftStore, callee: Ast.FnId) Allocator.Error!void {
+        const owner = body_draft.demand_owner orelse return;
+        const entry = try self.discovery_callees.getOrPut(self.allocator, owner);
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        try entry.value_ptr.append(self.allocator, callee);
+    }
+
+    /// Whether every request of a committing body draft is an evaluation
+    /// request: it was lowered for evaluation, an evaluation request reused a
+    /// body it lowered for discovery, or its specialization was upgraded
+    /// while it lowered.
+    fn draftEvaluates(self: *const Builder, body_draft: *const BodyDraftStore) bool {
+        if (body_draft.demand == .evaluation or body_draft.upgrade_all) return true;
+        const owner = body_draft.demand_owner orelse return false;
+        return !self.discovery_specs.contains(owner);
+    }
+
+    /// Why a specialization's body is lowered, as the coordinator knows it now.
+    fn specDemand(self: *const Builder, fn_id: Ast.FnId) Demand {
+        return if (self.discovery_specs.contains(fn_id)) .discovery else .evaluation;
+    }
+
+    fn beginDiscoverySpec(self: *Builder, fn_id: Ast.FnId) Allocator.Error!void {
+        try self.discovery_specs.put(self.allocator, fn_id, {});
+        self.demand_counters.discovery_bodies += 1;
+        self.traceDemand("discover", fn_id);
+    }
+
+    /// `ROC_CTFE_DEMAND_TRACE`: one line per demand decision, naming the
+    /// specialization's procedure and its module.
+    fn traceDemand(self: *Builder, comptime decision: []const u8, fn_id: Ast.FnId) void {
+        if (!LiteralDemand.traceEnabled()) return;
+        const template_ref = switch (self.program.fnSource(fn_id).fn_def) {
+            .local_template, .imported_template, .checked_generated => |template| template,
+            .local_hosted, .imported_hosted => |hosted| hosted.template,
+            .nested, .parser_runtime, .encoder_for_runtime => {
+                std.debug.print("ctfe-demand {s} fn#{d}\n", .{ decision, @backingInt(fn_id) });
+                return;
+            },
+        };
+        const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
+        const proc_base = view.names.procBase(template_ref.proc_base);
+        const name: []const u8 = if (proc_base.export_name) |export_name| view.names.exportNameText(export_name) else "?";
+        std.debug.print("ctfe-demand {s} {s}.{s} fn#{d}\n", .{
+            decision,
+            view.names.moduleNameText(view.module_identity.module_name),
+            name,
+            @backingInt(fn_id),
+        });
+    }
+
+    /// Claim a parked body for an immediate discovery request.
+    fn claimParkedSpecJob(self: *Builder, fn_id: Ast.FnId) Allocator.Error!?PendingSpecJob {
+        const entry = self.parked_spec_jobs.fetchSwapRemove(fn_id) orelse return null;
+        try self.beginDiscoverySpec(fn_id);
+        self.demand_counters.unparked += 1;
+        return entry.value;
+    }
+
+    /// An evaluation request reached a specialization: it and everything it
+    /// requested for discovery are evaluation demand from now on. A parked
+    /// body is queued; a discovery body already committed passes the upgrade
+    /// to the requests it made, and one still queued or lowering commits its
+    /// requests as evaluation requests.
+    fn upgradeDiscoverySpec(self: *Builder, fn_id: Ast.FnId) Allocator.Error!void {
+        if (self.parked_spec_jobs.count() == 0 and self.discovery_specs.count() == 0) return;
+        var pending = std.ArrayList(Ast.FnId).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, fn_id);
+        while (pending.pop()) |id| {
+            if (self.parked_spec_jobs.fetchSwapRemove(id)) |entry| {
+                var job = entry.value;
+                job.demand = .evaluation;
+                try self.enqueueSpecJob(job);
+                self.countCoordinatorBodyDiagnostic("spec_jobs_enqueued");
+                self.recordPendingSpecJobPeak();
+                self.demand_counters.unparked += 1;
+                self.traceDemand("unpark", id);
+                continue;
+            }
+            if (!self.discovery_specs.remove(id)) continue;
+            self.demand_counters.upgraded += 1;
+            self.traceDemand("upgrade", id);
+            if (self.discovery_callees.fetchRemove(id)) |entry| {
+                var callees = entry.value;
+                defer callees.deinit(self.allocator);
+                try pending.appendSlice(self.allocator, callees.items);
+            }
+        }
+    }
+
+    /// Whether a discovery request reaches no literal root
+    /// (`LiteralDemand`): its procedure's module reaches none, its types name
+    /// no reaching nominal, and its evidence selects no reaching procedure.
+    fn discoveryRequestReachesNoLiteralRoot(
+        self: *Builder,
+        template_ref: names.ProcTemplate,
+        fn_ty: Type.TypeId,
+        subst: ?SealedSubstitution,
+        evidence: []const SpecEvidence,
+    ) Allocator.Error!bool {
+        const demand = self.literal_demand orelse
+            Common.invariant("discovery request reached Monotype without its literal demand");
+        var flags = demand.templateFlags(template_ref);
+        flags = flags.merge(try self.monoTypeLiteralFlags(demand, fn_ty));
+        if (subst) |slots| for (slots) |slot| switch (slot) {
+            .ty => |ty| flags = flags.merge(try self.monoTypeLiteralFlags(demand, ty)),
+            .checked_error => {},
+        };
+        flags = flags.merge(try self.specEvidenceLiteralFlags(demand, evidence));
+        return !flags.reachesLiteralRoot();
+    }
+
+    /// The reach flags of the nominals and builtin types a request type
+    /// names (`LiteralDemand`).
+    fn monoTypeLiteralFlags(self: *Builder, demand: *const LiteralDemand.LiteralDemand, root: Type.TypeId) Allocator.Error!LiteralDemand.Flags {
+        var flags: LiteralDemand.Flags = .{};
+        const types = self.program.types.view();
+        var pending = std.ArrayList(Type.TypeId).empty;
+        defer pending.deinit(self.allocator);
+        var seen = collections.DenseMap(Type.TypeId, void).init(self.allocator);
+        defer seen.deinit();
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |ty| {
+            if ((try seen.getOrPut(ty)).found_existing) continue;
+            switch (types.get(ty)) {
+                .zst, .erased => {},
+                .primitive => flags = flags.merge(demand.builtinFlags()),
+                .named => |named| {
+                    flags = flags.merge(demand.nominalFlags(
+                        self.program.names.moduleIdentityBytes(named.def.module),
+                        self.program.names.typeNameText(named.def.type_name),
+                        named.def.source_decl,
+                    ));
+                    if (named.builtin_owner != null) flags = flags.merge(demand.builtinFlags());
+                    for (types.span(named.args)) |arg| try pending.append(self.allocator, arg);
+                    if (named.backing) |backing| try pending.append(self.allocator, backing.ty);
+                },
+                .record => |fields| for (types.fieldSpan(fields)) |field| try pending.append(self.allocator, field.ty),
+                .tuple => |elems| for (types.span(elems)) |elem| try pending.append(self.allocator, elem),
+                .tag_union => |tags| for (types.tagSpan(tags)) |tag| {
+                    for (types.span(tag.payloads)) |payload| try pending.append(self.allocator, payload);
+                },
+                .list, .box => |elem| {
+                    flags = flags.merge(demand.builtinFlags());
+                    try pending.append(self.allocator, elem);
+                },
+                .func => |func| {
+                    for (types.span(func.args)) |arg| try pending.append(self.allocator, arg);
+                    try pending.append(self.allocator, func.ret);
+                },
+            }
+        }
+        return flags;
+    }
+
+    /// Complete every body still parked once every body has lowered. Only
+    /// discovery bodies request one, and the program's compile-time consumer
+    /// never runs a discovery body, so none of these is ever called: each is
+    /// a `crash` at its requested signature, which keeps every later stage's
+    /// view of the program total without lowering the procedure.
+    fn completeParkedSpecJobsAsStubs(self: *Builder) Allocator.Error!void {
+        if (self.parked_spec_jobs.count() == 0) return;
+        const shared_message = try self.program.addStringLiteral("discovery-only specialization reached at compile time");
+        for (self.parked_spec_jobs.values()) |job| {
+            self.traceDemand("stub", job.reservation.fn_id);
+            const message = if (LiteralDemand.traceEnabled()) message: {
+                var buffer: [96]u8 = undefined;
+                const text = std.fmt.bufPrint(&buffer, "discovery-only specialization fn#{d} reached at compile time", .{@backingInt(job.reservation.fn_id)}) catch unreachable;
+                break :message try self.program.addStringLiteral(text);
+            } else shared_message;
+            self.spec_store.markLowering(job.spec);
+            const fn_data = self.programFunctionShape(job.fn_ty, "parked procedure specialization type was not a function");
+            const args = try self.typedLocalsForArgs(self.program.types.span(fn_data.args));
+            const body = try self.program.addExpr(.{ .ty = fn_data.ret, .data = .{ .crash = message } });
+            const stub_template = discoveryTemplate(job.fn_template);
+            self.program.setDef(job.reservation.def, .{
+                .symbol = job.reservation.symbol,
+                .fn_def = stub_template,
+                .fn_id = job.reservation.fn_id,
+                .args = args,
+                .body = .{ .roc = body },
+                .ret = fn_data.ret,
+            });
+            self.program.setFnSource(job.reservation.fn_id, stub_template);
+            try self.markTemplateReady(job.reservation.fn_id, job.fn_ty);
+            self.demand_counters.stubs += 1;
+        }
+        self.parked_spec_jobs.clearRetainingCapacity();
+    }
+
+    /// The reach flags of the procedures dispatch evidence selects. A local
+    /// procedure or abstract scheme evidence is not bounded by checked data.
+    fn specEvidenceLiteralFlags(self: *Builder, demand: *const LiteralDemand.LiteralDemand, evidence: []const SpecEvidence) Allocator.Error!LiteralDemand.Flags {
+        var flags: LiteralDemand.Flags = .{};
+        const unbounded: LiteralDemand.Flags = .{ .strict = true };
+        var pending = std.ArrayList(SpecEvidence).empty;
+        defer pending.deinit(self.allocator);
+        try pending.appendSlice(self.allocator, evidence);
+        while (pending.pop()) |entry| switch (entry) {
+            .target => |target| {
+                switch (target.target.kind) {
+                    .procedure => |procedure| flags = flags.merge(demand.templateFlags(procedure.template)),
+                    .local_proc => return unbounded,
+                    .structural => {},
+                }
+                switch (target.nested) {
+                    .resolved => |nested| try pending.appendSlice(self.allocator, nested),
+                    // Synthesized from the target's instantiation, whose
+                    // types the request's own types already decided.
+                    .synthesize => {},
+                }
+                try pending.appendSlice(self.allocator, target.callable_contracts);
+            },
+            .structural => |structural| try pending.appendSlice(self.allocator, structural.callable_contracts),
+            .from_callable => |from_callable| try pending.appendSlice(self.allocator, from_callable.callable_contracts),
+            .from_scheme => return unbounded,
+            .unreachable_value, .checked_error => {},
+        };
+        return flags;
     }
 
     /// Whether a queued specialization completes on the coordinator instead
@@ -8402,7 +8799,8 @@ const Builder = struct {
             if (running < executor.worker_count and submitted - accepted < capacity and
                 self.pending_spec_jobs.len != 0)
             {
-                const job = self.pending_spec_jobs.get(0);
+                var job = self.pending_spec_jobs.get(0);
+                job.demand = self.specDemand(job.reservation.fn_id);
                 if (job.dispatch_index != self.next_spec_accept_index + submitted - accepted) {
                     Common.compilerBug("Monotype streaming dispatch was not contiguous");
                 }
@@ -8652,6 +9050,7 @@ const Builder = struct {
             context.request.procedure_use orelse
                 Common.compilerBug("procedure root task lost its procedure use"),
             context.source_module,
+            context.demand,
         ) catch {
             context.failed = true;
             return context;
@@ -8670,7 +9069,9 @@ const Builder = struct {
         }
     }
 
-    fn executePendingSpecJob(self: *Builder, job: PendingSpecJob) Allocator.Error!void {
+    fn executePendingSpecJob(self: *Builder, queued_job: PendingSpecJob) Allocator.Error!void {
+        var job = queued_job;
+        job.demand = self.specDemand(job.reservation.fn_id);
         if (self.active_graph != null) {
             Common.invariant("Monotype specialization job executed during an active body draft");
         }
@@ -8868,6 +9269,8 @@ const Builder = struct {
         errdefer body_draft.deinit();
         body_draft.spec_job_workspace = workspace;
         body_draft.mutable_graph_names = &workspace.name_store;
+        body_draft.demand = job.demand;
+        body_draft.demand_owner = job.reservation.fn_id;
         const saved_graph = self.active_graph;
         const saved_body_draft = self.active_body_draft;
         self.active_graph = graph;
@@ -9175,6 +9578,7 @@ const Builder = struct {
             .exact_graph => pending.fn_template.mono_fn_ty,
             .independent_roots => final_fn_ty,
         };
+        if (self.specDemand(pending.reservation.fn_id) == .discovery) def_template = discoveryTemplate(def_template);
         self.program.setFnSource(pending.reservation.fn_id, def_template);
         const sealed_fn_data = self.programFunctionShape(final_fn_ty, "checked procedure template root type was not a function");
         self.program.setDef(pending.reservation.def, .{
@@ -9267,6 +9671,7 @@ const Builder = struct {
                     }
                     self.promoteFnSignatureRelation(active_root.fn_id, signature_relation);
                     self.count("template_hits");
+                    source_ctx.draft.reuseOwnBody();
                     return .{ .local = .{ .final = active_root.fn_id } };
                 }
             }
@@ -9403,6 +9808,7 @@ const Builder = struct {
             // so join the complete request before returning the in-progress
             // definition. Completed specializations reach here through exact
             // resolved identity, never through a partial interface overlap.
+            source_ctx.draft.reuseTemplateSpec(raw_spec);
             const spec = &source_ctx.draft.template_specs.items[raw_spec];
             self.count("template_hits");
             const request_owner = source_ctx.draft.current_owner;
@@ -9526,6 +9932,7 @@ const Builder = struct {
             .lexical_context_key = lexical_context_key,
             .codec_contract = codec_contract,
             .fn_id = fn_id,
+            .demand = source_ctx.draft.currentDemand(),
         });
         lexical_needs_cleanup = false;
         const template_bucket = try source_ctx.draft.template_specs_by_template.getOrPut(template_ref);
@@ -9661,7 +10068,11 @@ const Builder = struct {
             request_fn_node
         else
             root_node;
-        const lowered = try body_ctx.lowerTemplateBodyAtNode(template_ref, template, body_fn_node);
+        try source_ctx.draft.lowerInDraftWithDemand(self.allocator, source_ctx.draft.template_specs.items[spec_index].demand);
+        const lowered = lowered: {
+            defer _ = source_ctx.draft.demand_overrides.pop();
+            break :lowered try body_ctx.lowerTemplateBodyAtNode(template_ref, template, body_fn_node);
+        };
         const completed_fn_node = try body_ctx.completedFunctionNodeForLoweredRet(
             body_fn_node,
             lowered.ret,
@@ -9794,7 +10205,11 @@ const Builder = struct {
             spec.request_fn_node
         else
             root_node;
-        const lowered = try body_ctx.lowerTemplateBodyAtNode(spec.template_ref, template, body_fn_node);
+        try source_ctx.draft.lowerInDraftWithDemand(self.allocator, spec.demand);
+        const lowered = lowered: {
+            defer _ = source_ctx.draft.demand_overrides.pop();
+            break :lowered try body_ctx.lowerTemplateBodyAtNode(spec.template_ref, template, body_fn_node);
+        };
         const completed_fn_node = try body_ctx.completedFunctionNodeForLoweredRet(
             body_fn_node,
             lowered.ret,
@@ -11580,6 +11995,7 @@ const Builder = struct {
             .queued,
             null,
             false,
+            self.root_demand,
         );
         return .{ .local = self.defFnId(def) };
     }
@@ -11690,6 +12106,9 @@ const Builder = struct {
                     .immediate,
                     null,
                     false,
+                    // A restored constant function is the value an
+                    // evaluation produced; it keeps evaluation demand.
+                    .evaluation,
                 );
                 return self.defFnId(def);
             },
@@ -11845,6 +12264,12 @@ const Builder = struct {
         codec_contract_selection: CodecContractSelection,
     ) Allocator.Error!DraftNestedBegin {
         self.count("nested_requests");
+        // A nested procedure body lowers in this draft, under whatever demand
+        // is current when its task runs. One requested by an evaluation
+        // request makes every request of the draft an evaluation request.
+        if (source_ctx.draft.currentDemand() == .evaluation and source_ctx.draft.demand == .discovery) {
+            source_ctx.draft.upgrade_all = true;
+        }
         const request_fn_node = try source_ctx.graph.functionRequestRoot(raw_request_fn_node);
         const codec_contract: ?DraftCodecContractContext = switch (codec_contract_selection) {
             .inherit => source_ctx.activeCodecContractContext(),
@@ -13181,6 +13606,7 @@ const Builder = struct {
         coordinator_subst: SealedSubstitution,
         body_scheduling: TemplateBodyScheduling,
         codec_contract: ?SealedCodecContractContext,
+        demand: Demand,
     ) Allocator.Error!Ast.FnSlot {
         const draft_fn = &body_draft.fns.items[@backingInt(spec.fn_id)];
         draft_fn.source.mono_fn_ty = .{ .sealed = draft_fn_ty };
@@ -13223,6 +13649,7 @@ const Builder = struct {
                 body_scheduling,
                 codec_contract,
                 spec.widened_result_row,
+                demand,
             );
             break :blk .{ .local = self.defFnId(def) };
         };
@@ -13238,6 +13665,7 @@ const Builder = struct {
         coordinator_subst: SealedSubstitution,
         body_scheduling: TemplateBodyScheduling,
         codec_contract: ?SealedCodecContractContext,
+        demand: Demand,
     ) Allocator.Error!void {
         if (spec_index >= body_draft.sealed_template_specs.items.len) {
             Common.invariant("sealed template specialization index was outside the intent table");
@@ -13252,6 +13680,7 @@ const Builder = struct {
             coordinator_subst,
             body_scheduling,
             codec_contract,
+            demand,
         );
         body_draft.sealed_template_specs.items[spec_index].resolved_slot = resolved_slot;
         body_draft.sealed_template_specs.items[spec_index].state = .resolved;
@@ -13266,10 +13695,17 @@ const Builder = struct {
         body_draft: *BodyDraftStore,
         committed_types: *CommittedGraphTypes,
     ) Allocator.Error!void {
+        // An upgrade that reached this body's specialization while it lowered
+        // makes every request of the body an evaluation request.
+        if (body_draft.upgrade_owner) {
+            if (body_draft.demand_owner) |owner| try self.upgradeDiscoverySpec(owner);
+        }
+        const draft_evaluates = self.draftEvaluates(body_draft);
         var spec_index: usize = 0;
         while (spec_index < body_draft.sealed_template_specs.items.len) : (spec_index += 1) {
             const state = body_draft.sealed_template_specs.items[spec_index].state;
             if (state != .deferred) continue;
+            const demand: Demand = if (draft_evaluates) .evaluation else body_draft.sealed_template_specs.items[spec_index].demand;
             const spec = &body_draft.sealed_template_specs.items[spec_index];
             const draft_fn_ty = spec.request_fn_ty;
             const coordinator_fn_ty = try committed_types.commitType(draft_fn_ty);
@@ -13291,7 +13727,18 @@ const Builder = struct {
                 coordinator_subst,
                 .queued,
                 codec_contract,
+                demand,
             );
+            switch (body_draft.sealed_template_specs.items[spec_index].resolved_slot.?) {
+                .local => |fn_id| traceLink("resolve", body_draft, demand, fn_id),
+            }
+            if (demand == .discovery) {
+                const callee = switch (body_draft.sealed_template_specs.items[spec_index].resolved_slot orelse
+                    Common.invariant("resolved discovery request had no coordinator slot")) {
+                    .local => |fn_id| fn_id,
+                };
+                try self.recordDiscoveryCallee(body_draft, callee);
+            }
         }
     }
 
@@ -13532,6 +13979,16 @@ const Builder = struct {
                     else
                         null;
                     if (committed) |hit| {
+                        // This body is discarded for the committed one, so an
+                        // evaluation request it served now reaches that one.
+                        const merged_demand: Demand = if (self.draftEvaluates(body_draft))
+                            .evaluation
+                        else if (template_spec) |spec| spec.demand else .discovery;
+                        switch (merged_demand) {
+                            .evaluation => try self.upgradeDiscoverySpec(hit.local.fn_id),
+                            .discovery => try self.recordDiscoveryCallee(body_draft, hit.local.fn_id),
+                        }
+                        traceLink("merge", body_draft, merged_demand, hit.local.fn_id);
                         if (fn_.signature_relation == .exact_graph) {
                             self.promoteFnSignatureRelation(hit.local.fn_id, .exact_graph);
                         }
@@ -13733,6 +14190,7 @@ const Builder = struct {
                 .def_id = spec.def_id,
                 .subst = try sealSubstitutionWithSealer(body_draft.allocator, sealer, spec.subst),
                 .resolved_slot = spec.resolved_slot,
+                .demand = if (body_draft.upgrade_all) .evaluation else spec.demand,
             });
         }
         try body_draft.sealed_nested_specs.ensureTotalCapacity(
@@ -13871,6 +14329,7 @@ const Builder = struct {
         defer commit_map.deinit(self.allocator);
         const body_ids = commit_map.ids;
         const output_before = FinalBodyOutputCounts.fromProgram(self.program);
+        const commit_extent = self.commitExtent();
         try body_draft.sealCoreIntoProgramWithMap(
             self.program,
             &committed_types,
@@ -13889,6 +14348,7 @@ const Builder = struct {
         try self.finalizeDraftTemplateSpecs(body_draft, body_ids);
         verifyDraftTemplateSpecsResolved(body_draft);
         try self.finalizeDraftNestedSpecs(body_draft, body_ids);
+        self.markDiscoveryFns(body_draft, commit_extent);
         var returned_ids = body_ids;
         returned_ids.fn_slots = &.{};
         returned_ids.def_ids = &.{};
@@ -13932,6 +14392,7 @@ const Builder = struct {
         defer commit_map.deinit(self.allocator);
         const body_ids = commit_map.ids;
         const output_before = FinalBodyOutputCounts.fromProgram(self.program);
+        const commit_extent = self.commitExtent();
         try body_draft.sealCoreIntoProgramWithMap(
             self.program,
             committed_types,
@@ -13947,6 +14408,7 @@ const Builder = struct {
         try self.finalizeDraftTemplateSpecs(body_draft, body_ids);
         verifyDraftTemplateSpecsResolved(body_draft);
         try self.finalizeDraftNestedSpecs(body_draft, body_ids);
+        self.markDiscoveryFns(body_draft, commit_extent);
         var returned_ids = body_ids;
         returned_ids.fn_slots = &.{};
         returned_ids.def_ids = &.{};
@@ -16685,6 +17147,9 @@ const DraftTemplateSpec = struct {
     /// graph's final seal. Commit re-seals this retained request and proves the
     /// specialization key did not move afterward.
     eager_resolution: ?EagerTemplateResolution = null,
+    /// Why the requested body is lowered: `evaluation` once any request in
+    /// this draft that reuses it is an evaluation request.
+    demand: Demand = .evaluation,
 };
 
 /// Coordinator intent retained after the request graph is destroyed.
@@ -16713,6 +17178,7 @@ const SealedTemplateSpec = struct {
     resolved_slot: ?Ast.FnSlot,
     committed_request_fn_ty: ?Type.TypeId = null,
     committed_codec_contract: ?Ast.CodecContractIdentity = null,
+    demand: Demand = .evaluation,
 };
 
 /// Seal a draft request's substitution with the graph sealer that seals its
@@ -17938,6 +18404,63 @@ const BodyDraftStore = struct {
     /// this draft's graph. Active entries own live input cells and completed
     /// entries own immutable constraints; both are discarded with the graph.
     interface_replay: InterfaceReplayState,
+    /// Why this draft's body is lowered.
+    demand: Demand = .evaluation,
+    /// The coordinator specialization whose body this draft is, when it is
+    /// one; a commit after that specialization was upgraded treats the whole
+    /// draft as evaluation demand.
+    demand_owner: ?Ast.FnId = null,
+    /// Depth of the literal-conversion lowerings in progress. A literal
+    /// root's conversion runs during compile-time evaluation, so every
+    /// request made while lowering it is an evaluation request.
+    evaluation_depth: u32 = 0,
+    /// The demand of each in-draft specialization body being lowered.
+    demand_overrides: std.ArrayListUnmanaged(Demand) = .empty,
+    /// Set when an evaluation request reuses a body this draft already
+    /// lowered for discovery: every request of the draft becomes an
+    /// evaluation request.
+    upgrade_all: bool = false,
+    /// Set when an evaluation request reuses this draft's own body: the
+    /// coordinator upgrades the draft's owner at commit.
+    upgrade_owner: bool = false,
+
+    /// The demand a request made at this point of the draft carries.
+    fn currentDemand(self: *const BodyDraftStore) Demand {
+        if (self.evaluation_depth != 0) return .evaluation;
+        if (self.demand_overrides.items.len != 0) return self.demand_overrides.items[self.demand_overrides.items.len - 1];
+        return self.demand;
+    }
+
+    /// Record that a request with the current demand reuses a draft
+    /// specialization.
+    fn reuseTemplateSpec(self: *BodyDraftStore, raw_spec: u32) void {
+        if (self.currentDemand() != .evaluation) return;
+        const spec = &self.template_specs.items[raw_spec];
+        if (spec.demand == .evaluation) return;
+        switch (spec.state) {
+            .deferred => spec.demand = .evaluation,
+            // Its body is already lowered in this draft, and so are the
+            // demands of the requests it made.
+            .lowering, .lowered, .resolved => self.upgrade_all = true,
+        }
+    }
+
+    /// Enter an in-draft specialization body lowered for `demand`. Commit may
+    /// merge an in-draft body with an equal one of this draft or of the
+    /// program, so a body lowered here for evaluation makes every request of
+    /// the draft an evaluation request.
+    fn lowerInDraftWithDemand(self: *BodyDraftStore, allocator: Allocator, demand: Demand) Allocator.Error!void {
+        if (demand == .evaluation and self.demand == .discovery) self.upgrade_all = true;
+        try self.demand_overrides.append(allocator, demand);
+    }
+
+    /// Record that a request with the current demand reuses the body this
+    /// draft is lowering for its own coordinator specialization.
+    fn reuseOwnBody(self: *BodyDraftStore) void {
+        if (self.currentDemand() != .evaluation or self.demand == .evaluation) return;
+        self.upgrade_all = true;
+        self.upgrade_owner = true;
+    }
 
     fn init(allocator: Allocator) BodyDraftStore {
         return .{
@@ -18154,6 +18677,7 @@ const BodyDraftStore = struct {
 
     fn deinit(self: *BodyDraftStore) void {
         self.interface_replay.deinit(self.allocator);
+        self.demand_overrides.deinit(self.allocator);
         for (self.template_specs.items) |*spec| {
             if (spec.lexical) |lexical| {
                 self.allocator.free(lexical.binders);
@@ -23728,6 +24252,36 @@ const BodyContext = struct {
         relation_base.ctx.relation_variables = &relation_base.variables;
         for (entries) |entry| try relation_base.relate(entry);
         return relation_base;
+    }
+
+    /// The lexical binder environment a context set aside to lower a closed
+    /// expression. `nested_relation_base` relates exactly these binders in
+    /// the view they belong to, so it is set aside and restored with them.
+    const SavedBinderEnvironment = struct {
+        binders: BinderMap,
+        typed_binders: TypedBinders,
+        nested_relation_base: ?*NestedRelationBase,
+    };
+
+    fn enterFreshBinderEnvironment(self: *BodyContext, binder_count: usize) Allocator.Error!SavedBinderEnvironment {
+        const saved: SavedBinderEnvironment = .{
+            .binders = self.binders,
+            .typed_binders = self.typed_binders,
+            .nested_relation_base = self.nested_relation_base,
+        };
+        self.binders = try BinderMap.init(self.allocator, binder_count);
+        self.typed_binders = TypedBinders.init(self.allocator);
+        self.nested_relation_base = null;
+        return saved;
+    }
+
+    fn restoreBinderEnvironment(self: *BodyContext, saved: SavedBinderEnvironment) void {
+        self.destroyNestedRelationBase();
+        self.binders.deinit();
+        self.typed_binders.deinit();
+        self.binders = saved.binders;
+        self.typed_binders = saved.typed_binders;
+        self.nested_relation_base = saved.nested_relation_base;
     }
 
     fn destroyNestedRelationBase(self: *BodyContext) void {
@@ -30173,38 +30727,25 @@ const BodyContext = struct {
         return self.source_region_override orelse expr.source_region;
     }
 
-    const DivergentExprContext = union(enum) {
-        uncontextual,
-        mono_type: Type.TypeId,
-        type_cell: DraftTypeCell,
-    };
-
-    /// Lower a producer-marked divergent expression before any value
-    /// representation or type relation is requested for it. The continuation's
-    /// context is the result cell for a value that can never materialize.
-    fn divergentExprInContextStep(
-        self: *BodyContext,
-        expr_id: checked.CheckedExprId,
-        context: DivergentExprContext,
-    ) Allocator.Error!?LowerStep {
+    /// Lower a producer-marked divergent expression whose value nothing
+    /// consumes, for its effect alone, before any value representation or type
+    /// relation is requested for it. It lowers at its own type, never at its
+    /// consumer's: a consumer of a value that never materializes continues at
+    /// its own type, and a control-flow expression's branches still produce
+    /// values of the expression's own type up to wherever it diverges.
+    fn divergentEffectExprStep(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!?LowerStep {
         if (!self.checkedExprDivergesInLoweredRuntime(expr_id)) return null;
 
-        return switch (context) {
-            .uncontextual => blk: {
-                const expr = self.view.bodies.expr(expr_id);
-                // A runtime error produces no value, and its checked type can
-                // contain the error it was retired for. Every other divergent
-                // expression retains its checked result variable as an
-                // unobservable continuation cell; asking for expression value
-                // evidence here would instantiate a rejected dispatch.
-                if (expr.data == .runtime_error or self.view.types.payload(expr.ty) == .err) {
-                    break :blk divergentStep(self, expr_id, .{ .at_type = try self.unitType() });
-                }
-                break :blk divergentStep(self, expr_id, .{ .at_cell = DraftTypeCell.fromGraphNode(try self.instNode(expr.ty)) });
-            },
-            .mono_type => |ty| divergentStep(self, expr_id, .{ .at_type = ty }),
-            .type_cell => |cell| divergentStep(self, expr_id, .{ .at_cell = cell }),
-        };
+        const expr = self.view.bodies.expr(expr_id);
+        // A runtime error produces no value, and its checked type can contain
+        // the error it was retired for. Every other divergent expression
+        // retains its checked result variable as an unobservable continuation
+        // cell; asking for expression value evidence here would instantiate a
+        // rejected dispatch.
+        if (expr.data == .runtime_error or self.view.types.payload(expr.ty) == .err) {
+            return divergentStep(self, expr_id, .{ .at_type = try self.unitType() });
+        }
+        return divergentStep(self, expr_id, .{ .at_cell = DraftTypeCell.fromGraphNode(try self.instNode(expr.ty)) });
     }
     // Expression lowering //
     //
@@ -30837,7 +31378,7 @@ const BodyContext = struct {
                 // pattern to a scrutinee that always crashes, so those patterns
                 // need not even agree with each other and must not be
                 // instantiated here.
-                if (try self.divergentExprInContextStep(match.cond, .{ .type_cell = task.result_cell })) |step| {
+                if (try self.divergentEffectExprStep(match.cond)) |step| {
                     task.stage = .divergent;
                     return step;
                 }
@@ -30866,7 +31407,13 @@ const BodyContext = struct {
             },
             .body => try self.finishMatchBranchBody(task, input.?.exprValue()),
             .scrutinee => return self.finishMatch(task, input.?.exprValue()),
-            .divergent => return .{ .ret = input.? },
+            .divergent => {
+                const stmt = try self.addStmt(.{ .expr = input.?.exprValue() });
+                return loweredExprStep(try self.addExprWithTypeCell(task.result_cell, .{ .block = .{
+                    .statements = try self.addStmtSpan(&.{stmt}),
+                    .final_expr = try self.addExprWithTypeCell(task.result_cell, .@"unreachable"),
+                } }));
+            },
         }
 
         // All checked pattern evidence must reach the shared scrutinee before
@@ -31286,7 +31833,7 @@ const BodyContext = struct {
         // statement. Its value type is never requested: a checked runtime
         // error has a deliberately erroneous type, and value evidence for a
         // divergent call could instantiate a rejected dispatch.
-        if (try self.divergentExprInContextStep(expr_id, .uncontextual)) |step| {
+        if (try self.divergentEffectExprStep(expr_id)) |step| {
             task.stage = .divergent;
             return step;
         }
@@ -31445,8 +31992,8 @@ const BodyContext = struct {
 
     /// A pattern statement's value lowers as a child: a divergent initializer
     /// for its effect alone, since it never produces a value to bind and
-    /// emitting a pattern or reading its dead checked type would invent a
-    /// relation for a value that cannot exist.
+    /// emitting a pattern would invent a relation for a value that cannot
+    /// exist.
     fn beginPatternStatementStep(
         self: *BodyContext,
         task: *StatementTask,
@@ -31455,7 +32002,8 @@ const BodyContext = struct {
     ) Allocator.Error!LowerStep {
         if (task.diverges) {
             task.stage = .divergent_value;
-            return divergentStep(self, expr, .{ .at_type = try self.unitType() });
+            return (try self.divergentEffectExprStep(expr)) orelse
+                Common.invariant("a divergent pattern statement's initializer did not diverge");
         }
         task.requested_cell = try self.beginPatternStatementValue(pattern, expr);
         task.stage = .pattern_value;
@@ -31631,10 +32179,33 @@ const BodyContext = struct {
         const expr_id = task.expr;
         const checked_expr = self.view.bodies.expr(expr_id);
         switch (task.form) {
+            // A control-flow expression produces values of its own type on
+            // every path that does not diverge, so it lowers at its cell;
+            // every other expression lowers its operands for their effects.
+            // A conditional whose scrutinee or first condition diverges runs
+            // nothing else, so only that operand lowers; its branches may not
+            // even have the continuation's shape.
             .at_cell => |cell| switch (checked_expr.data) {
-                .match_ => |match| return requestLowerTask(self, .{ .match_task = .{ .expr_id = expr_id, .match = match, .result_cell = cell } }),
-                .if_ => |if_| return requestLowerTask(self, .{ .if_task = .{ .expr_id = expr_id, .if_ = if_, .result_cell = cell } }),
-                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {
+                .match_ => |match| {
+                    if (self.checkedExprDivergesInLoweredRuntime(match.cond)) {
+                        task.finish = .{ .effect_at_cell = cell };
+                        return divergentStep(self, match.cond, .{ .at_type = try self.unitType() });
+                    }
+                    return requestLowerTask(self, .{ .match_task = .{ .expr_id = expr_id, .match = match, .result_cell = cell } });
+                },
+                .if_ => |if_| {
+                    if (if_.branches.len > 0 and self.checkedExprDivergesInLoweredRuntime(if_.branches[0].cond)) {
+                        task.finish = .{ .effect_at_cell = cell };
+                        return divergentStep(self, if_.branches[0].cond, .{ .at_type = try self.unitType() });
+                    }
+                    return requestLowerTask(self, .{ .if_task = .{ .expr_id = expr_id, .if_ = if_, .result_cell = cell } });
+                },
+                .block => |block| return requestLowerTask(self, .{ .block = try self.boxLowerTask(BlockTask, .{
+                    .statements = block.statements,
+                    .final_expr = block.final_expr,
+                    .result_cell = cell,
+                }) }),
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {
                     task.finish = .{ .effect_at_cell = cell };
                     return divergentStep(self, expr_id, .{ .at_type = try self.unitType() });
                 },
@@ -31661,17 +32232,12 @@ const BodyContext = struct {
                 return divergentStep(self, expr_id, .{ .data = ty });
             },
             .effect_data => |ty| {
-                // A divergent expression never returns a value, so its checked result
-                // variable can legitimately remain unconstrained; the continuation's
-                // explicit type stands in for a result that cannot exist. An explicit
-                // checked runtime error lowers its crash path at unit because its
-                // deliberately erroneous source type has no monotype.
-                const effect_ty = if (checked_expr.data == .runtime_error)
-                    try self.unitType()
-                else
-                    ty;
+                // The operand is evaluated only for its effect, so it lowers at
+                // its own type, and the continuation's explicit type stands in
+                // for the consumer's result, which cannot exist.
                 task.finish = .{ .effect_data = ty };
-                return divergentStep(self, expr_id, .{ .at_type = effect_ty });
+                return (try self.divergentEffectExprStep(expr_id)) orelse
+                    Common.invariant("an operand evaluated only for its divergence did not diverge");
             },
             .data => |ty| return self.divergentDataStep(task, checked_expr, ty),
         }
@@ -33131,6 +33697,10 @@ const BodyContext = struct {
                     try relateRequestComponent(self.graph, item_node, try self.lowerExprTypeNode(value));
                 }
                 frame.cursor = 1;
+                // The conversion runs during compile-time evaluation; see
+                // `lowerLiteralConversionDispatch`. Its operands are the
+                // literal segments, so nothing else lowers before cursor 1.
+                self.draft.evaluation_depth += 1;
                 return requestLowerTask(self, .{ .dispatch = .{
                     .checked_ret_ty = try_ty,
                     .maybe_plan = task.maybe_plan,
@@ -33138,6 +33708,7 @@ const BodyContext = struct {
                 } });
             },
             1 => {
+                self.draft.evaluation_depth -= 1;
                 const site = self.literalRejectionSite(task.expr);
                 const assembler = try self.unwrapLiteralConversionAtNode(input.?.exprValue(), task.try_node, task.assembler_node, site);
                 task.assembler = if (self.builder.literal_roots)
@@ -33513,7 +34084,7 @@ const BodyContext = struct {
             return .{ .ret = input.? };
         }
         task.saved = try self.saveSourceLocation(expr);
-        if (try self.divergentExprInContextStep(expr_id, .uncontextual)) |step| {
+        if (try self.divergentEffectExprStep(expr_id)) |step| {
             frame.cursor = 1;
             return step;
         }
@@ -34441,10 +35012,15 @@ const BodyContext = struct {
             .method_scope = self.method_scope.key,
         };
         const slot = if (self.draft.closed_direct_specializations.get(direct_key)) |existing| blk: {
+            switch (existing.slot.local) {
+                .draft => {},
+                .final => self.draft.reuseOwnBody(),
+            }
             if (existing.draft_spec) |raw_spec| {
                 if (raw_spec >= self.draft.template_specs.items.len) {
                     Common.invariant("closed direct call cache referenced a missing draft specialization");
                 }
+                self.draft.reuseTemplateSpec(raw_spec);
                 const spec = &self.draft.template_specs.items[raw_spec];
                 if (spec.state != .deferred and !runtimeDemandGuardFrameSetsEql(
                     spec.runtime_demand_guard_frames,
@@ -34491,10 +35067,20 @@ const BodyContext = struct {
                     Common.invariant("closed direct call created a draft function without a specialization record"),
                 .final => null,
             };
-            try self.draft.closed_direct_specializations.put(direct_key, .{
-                .slot = created,
-                .draft_spec = draft_spec,
-            });
+            // A caller-owned specialization's identity also includes its
+            // lexical owner and lexical context, which this key does not
+            // carry. Repeated requests for one reach it through the
+            // template lookup, which checks both.
+            const caller_owned = if (draft_spec) |raw_spec|
+                self.draft.template_specs.items[raw_spec].local_context_dependent
+            else
+                false;
+            if (!caller_owned) {
+                try self.draft.closed_direct_specializations.put(direct_key, .{
+                    .slot = created,
+                    .draft_spec = draft_spec,
+                });
+            }
             break :blk created;
         };
         const completed_callable_node = try self.draftFnSlotTypeNode(slot, callable_node);
@@ -36321,10 +36907,13 @@ const BodyContext = struct {
     }
 
     /// Function rendering does not consume the function value, but the
-    /// source expression must still run: it lowers normally, the produced
-    /// callable is discarded, and the representation is the result.
+    /// source expression must still run: it lowers at its own type node, the
+    /// produced callable is discarded, and the representation is the result.
+    /// Nothing ever calls that callable, so its parameter types may have no
+    /// evidence; they settle with the rest of the body rather than being
+    /// demanded as an active type before the expression lowers.
     fn stepInspectOnly(self: *BodyContext, task: *InspectOnlyTask, input: ?LowerResult) Allocator.Error!LowerStep {
-        const evaluated = if (input) |lowered| lowered.exprValue() else return requestLowerTask(self, .{ .expr = .{ .expr = task.arg } });
+        const evaluated = if (input) |lowered| lowered.exprValue() else return requestLowerChild(self, task.arg, DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(task.arg)));
         const evaluation = try self.addStmt(.{ .expr = evaluated });
         return loweredExprStep(try self.addExpr(.{ .ty = task.str_ty, .data = .{ .block = .{
             .statements = try self.addStmtSpan(&.{evaluation}),
@@ -43925,18 +44514,11 @@ const BodyContext = struct {
             self.source_file_id = previous_source_file_id;
         }
         const crosses_module = !moduleBytesEqual(previous_view.key.bytes, local_view.key.bytes);
-        const previous_binders = self.binders;
-        const previous_typed_binders = self.typed_binders;
-        if (crosses_module) {
-            self.binders = try BinderMap.init(self.allocator, local_view.bodies.patternBinderCount());
-            self.typed_binders = TypedBinders.init(self.allocator);
-        }
-        defer if (crosses_module) {
-            self.binders.deinit();
-            self.typed_binders.deinit();
-            self.binders = previous_binders;
-            self.typed_binders = previous_typed_binders;
-        };
+        const saved_binders = if (crosses_module)
+            try self.enterFreshBinderEnvironment(local_view.bodies.patternBinderCount())
+        else
+            null;
+        defer if (saved_binders) |saved| self.restoreBinderEnvironment(saved);
         var installed_context = try self.installLocalProcContext(context);
         defer installed_context.deinit();
         const previous_owner_template = self.owner_template;
@@ -48021,15 +48603,9 @@ const BodyContext = struct {
             // one body would capture the first's (or the consuming body's)
             // lexical binder entries into its local-procedure declaration
             // contexts and trip the one-context-per-binder invariant.
-            const previous_binders = self.binders;
-            const previous_typed_binders = self.typed_binders;
-            self.binders = try BinderMap.init(self.allocator, self.view.bodies.patternBinderCount());
-            self.typed_binders = TypedBinders.init(self.allocator);
+            const saved_binders = try self.enterFreshBinderEnvironment(self.view.bodies.patternBinderCount());
             defer {
-                self.binders.deinit();
-                self.typed_binders.deinit();
-                self.binders = previous_binders;
-                self.typed_binders = previous_typed_binders;
+                self.restoreBinderEnvironment(saved_binders);
                 self.in_default_expr = previous_in_default_expr;
                 self.instantiation.deinit();
                 self.instantiation = previous_instantiation;
@@ -48059,18 +48635,12 @@ const BodyContext = struct {
         // The default is a closed expression: it binds nothing from the
         // consuming body, so foreign lowering gets fresh binder state
         // exactly like a cross-module local procedure.
-        const previous_binders = self.binders;
-        const previous_typed_binders = self.typed_binders;
-        self.binders = try BinderMap.init(self.allocator, declaring_view.bodies.patternBinderCount());
-        self.typed_binders = TypedBinders.init(self.allocator);
+        const saved_binders = try self.enterFreshBinderEnvironment(declaring_view.bodies.patternBinderCount());
         const previous_in_default_expr = self.in_default_expr;
         self.in_default_expr = true;
         defer {
             self.in_default_expr = previous_in_default_expr;
-            self.binders.deinit();
-            self.typed_binders.deinit();
-            self.binders = previous_binders;
-            self.typed_binders = previous_typed_binders;
+            self.restoreBinderEnvironment(saved_binders);
         }
         return try self.lowerExprAtTypeCell(default_expr, field_cell);
     }
@@ -49673,7 +50243,7 @@ const BodyContext = struct {
         const plan = self.literalConversionPlan(expr_id);
         const try_ty = self.literalConversionTryType(plan);
         const try_node = try self.instNode(try_ty);
-        const try_value = try self.lowerDispatchExprAtType(try_ty, plan, DraftTypeCell.fromGraphNode(try_node));
+        const try_value = try self.lowerLiteralConversionDispatch(try_ty, plan, try_node);
         const site = self.literalRejectionSite(expr_id);
         const value = try self.unwrapLiteralConversionAtNode(try_value, try_node, value_node, site);
         if (!self.builder.literal_roots) return value;
@@ -49681,6 +50251,21 @@ const BodyContext = struct {
         // context runs where that context exists: in place, at runtime.
         if (self.dispatchPlanSelectsLocalProc(plan)) return value;
         return try self.literalRootRead(expr_id, site, value, value_node);
+    }
+
+    /// Lower a literal's conversion call. A program that evaluates its
+    /// literal roots runs this call during compile-time evaluation, so every
+    /// specialization it requests is evaluation demand, whatever demand the
+    /// surrounding body was lowered for.
+    fn lowerLiteralConversionDispatch(
+        self: *BodyContext,
+        try_ty: checked.CheckedTypeId,
+        plan: ?static_dispatch.StaticDispatchPlanId,
+        try_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        self.draft.evaluation_depth += 1;
+        defer self.draft.evaluation_depth -= 1;
+        return try self.lowerDispatchExprAtType(try_ty, plan, DraftTypeCell.fromGraphNode(try_node));
     }
 
     /// Whether a dispatch plan's resolution in this body selects a local
@@ -49843,7 +50428,7 @@ const BodyContext = struct {
         const plan = self.literalConversionPlan(expr_id);
         const try_ty = self.literalConversionTryType(plan);
         const try_node = try self.instNode(try_ty);
-        const try_value = try self.lowerDispatchExprAtType(try_ty, plan, DraftTypeCell.fromGraphNode(try_node));
+        const try_value = try self.lowerLiteralConversionDispatch(try_ty, plan, try_node);
         const site = self.literalRejectionSite(expr_id);
         const expected_kind: Common.LiteralRejectionKind = switch (kind) {
             .numeral => .numeral,
@@ -65668,6 +66253,7 @@ test "queued specialization skips a body claimed immediately before dispatch" {
     builder.post_check_executor = null;
     builder.pending_spec_jobs = .empty;
     defer builder.pending_spec_jobs.deinit(allocator);
+    builder.discovery_specs = .empty;
     builder.next_spec_dispatch_index = 0;
     builder.next_spec_accept_index = 0;
     builder.counters = null;

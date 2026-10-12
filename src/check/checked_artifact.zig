@@ -36378,6 +36378,11 @@ pub const ImportedModuleView = struct {
     interface_capabilities: *const ModuleInterfaceCapabilities,
     const_store: *const ConstStore,
     compile_time_root_reads: *const CompileTimeRootReadTable = &no_compile_time_root_reads,
+
+    /// The keys of the modules this module imports directly.
+    pub fn directImportKeys(self: ImportedModuleView) []const CheckedModuleArtifactKey {
+        return self.direct_import_artifact_keys;
+    }
 };
 
 const no_compile_time_root_reads: CompileTimeRootReadTable = .{};

@@ -2291,7 +2291,7 @@ pub const Coordinator = struct {
         var state_owned = true;
         errdefer if (state_owned) self.gpa.destroy(state);
         var problems = try platform.evaluation_diagnostics.instantiate(self.gpa);
-        errdefer if (state_owned) problems.deinit(self.gpa);
+        errdefer if (state_owned) problems.deinit();
         var display_names = try platform.evaluation_diagnostics.instantiateImportMapping(self.gpa);
         errdefer if (state_owned) display_names.deinit();
         state.* = .{
@@ -3160,7 +3160,7 @@ pub const Coordinator = struct {
     fn commitPreparedModule(self: *Coordinator, mod: *ModuleState) CoordinatorError!void {
         const state = mod.pending_evaluation.?;
         const artifact = mod.checkedArtifact().?;
-        try eval.CompileTimeFinalization.finishPendingExhaustiveness(self.gpa, artifact, &state.problems);
+        try eval.CompileTimeFinalization.finishPendingExhaustiveness(artifact, &state.problems);
         artifact.evaluation_state = .finalized;
         try artifact.verifyComplete();
 
