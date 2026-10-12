@@ -388,6 +388,9 @@ const CustomCase = enum {
     issue_11344_shared_helper,
     issue_11344_lir_image,
     issue_11364_interpreter_static_big_string,
+    issue_12221_static_or_fresh_list_dev,
+    issue_12221_static_or_fresh_list_size,
+    issue_12221_static_or_fresh_list_speed,
     cli_cache_roots_distinct,
     watch_inputs_reject_absolute_import,
     absolute_platform_path_check_build_reject,
@@ -1222,6 +1225,9 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "echo platform: all_syntax_test.roc prints expected output (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/echo/all_syntax_test.roc", .stdout_exact = all_syntax_expected_stdout, .stderr_exact = all_syntax_expected_stderr } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: all_syntax_test.roc run populates checked module cache", .backend = .interpreter, .body = .{ .custom = .default_app_all_syntax_checked_cache } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: all_syntax_test.roc built executable prints expected output (interpreter)", .backend = .interpreter, .body = .{ .custom = .build_all_syntax_interpreter_output_runs } },
+    .{ .id = 0, .suite = .echo, .name = "issue 12221: built programs append to a static list literal joined with a fresh list (dev)", .backend = .dev, .body = .{ .custom = .issue_12221_static_or_fresh_list_dev } },
+    .{ .id = 0, .suite = .echo, .name = "issue 12221: built programs append to a static list literal joined with a fresh list (size)", .backend = .size, .body = .{ .custom = .issue_12221_static_or_fresh_list_size } },
+    .{ .id = 0, .suite = .echo, .name = "issue 12221: built programs append to a static list literal joined with a fresh list (speed)", .backend = .speed, .body = .{ .custom = .issue_12221_static_or_fresh_list_speed } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: all_syntax_test.roc prints expected output (dev backend)", .backend = .dev, .body = .{ .command = .{ .args = &.{"--opt=dev"}, .roc_file = "test/echo/all_syntax_test.roc", .stdout_exact = all_syntax_expected_stdout, .stderr_exact = all_syntax_expected_stderr } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: all_syntax_test.roc prints expected output (interpreter, specialize=no)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache", "--specialize=no" }, .roc_file = "test/echo/all_syntax_test.roc", .stdout_exact = all_syntax_expected_stdout, .stderr_exact = all_syntax_expected_stderr } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: all_syntax_test.roc prints expected output (dev backend, specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache", "--specialize=no" }, .roc_file = "test/echo/all_syntax_test.roc", .stdout_exact = all_syntax_expected_stdout, .stderr_exact = all_syntax_expected_stderr } } },
@@ -4636,6 +4642,9 @@ fn runCustomCase(
         .issue_11344_shared_helper => customIssue11344SharedHelper(io, allocator, &env, &timer, timeout_ms),
         .issue_11344_lir_image => customIssue11344LirImage(io, allocator, &env, &timer, timeout_ms),
         .issue_11364_interpreter_static_big_string => customIssue11364InterpreterStaticBigString(io, allocator, &env, &timer, timeout_ms),
+        .issue_12221_static_or_fresh_list_dev => customIssue12221StaticOrFreshList(io, allocator, &env, &timer, timeout_ms, "dev"),
+        .issue_12221_static_or_fresh_list_size => customIssue12221StaticOrFreshList(io, allocator, &env, &timer, timeout_ms, "size"),
+        .issue_12221_static_or_fresh_list_speed => customIssue12221StaticOrFreshList(io, allocator, &env, &timer, timeout_ms, "speed"),
         .cli_cache_roots_distinct => customCliCacheRootsDistinct(io, allocator, &timer),
         .watch_inputs_reject_absolute_import => customWatchInputsRejectAbsoluteImport(io, allocator, &env, &timer, timeout_ms),
         .absolute_platform_path_check_build_reject => customAbsolutePlatformPathCheckBuildReject(io, allocator, &env, &timer, timeout_ms),
@@ -10067,6 +10076,42 @@ fn customBuildAllSyntaxInterpreterOutputRuns(io: std.Io, allocator: Allocator, e
         .stderr_exact = all_syntax_expected_stderr,
     })) |failure| return failure;
 
+    return null;
+}
+
+/// Only a built executable links list literals as internal static data, so
+/// each static-or-fresh list program of issue 12221 is built and then run.
+fn customIssue12221StaticOrFreshList(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64, opt: []const u8) ?TestResult {
+    const programs = [_]struct { name: []const u8, stdout: []const u8 }{
+        .{ .name = "append", .stdout = "0!1!" },
+        .{ .name = "return", .stdout = "d0!d1!" },
+    };
+    const opt_arg = std.fmt.allocPrint(allocator, "--opt={s}", .{opt}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate opt arg: {}", .{err});
+    for (programs) |program| {
+        const roc_file = std.fmt.allocPrint(allocator, "test/echo/issue_12221_static_or_fresh_{s}.roc", .{program.name}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate roc file path: {}", .{err});
+        const output_name = std.fmt.allocPrint(allocator, "static_or_fresh_{s}_{s}", .{ program.name, opt }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output name: {}", .{err});
+        const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, output_name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+        const out_arg = outputArg(allocator, output_path) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "build", opt_arg, "--no-cache", out_arg },
+            .roc_file = roc_file,
+            .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+        })) |failure| return failure;
+
+        const executable_path = runnableOutputPath(io, allocator, output_path) catch |err|
+            return customInfraFailure(allocator, timer, "failed to find built executable: {}", .{err});
+
+        if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{executable_path}, env.dirs.work_dir, .{
+            .args = &.{},
+            .stdout_exact = program.stdout,
+        })) |failure| return failure;
+    }
     return null;
 }
 
