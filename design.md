@@ -130,25 +130,65 @@ stages or produce partially checked modules as checked module data.
 ## REPL formatter plugins
 
 `roc repl --formatter FILE` uses a checked Roc module as a line-oriented
-frontend. The module exposes `decode : Str -> Try(Str, Str)` and
-`encode : { result : Str, stdout : Str, diagnostics : Str, value : [Other, Tag({ name : Str, payload : Try(Str, {}) })] } -> Str`.
-`Ok(source)` evaluates a cell in the process's persistent language session;
-`Err(reply)` answers immediately without changing that session. Each input line
-receives one output line. Replies must not contain literal newlines. EOF ends
-the session. Wire protocols, including JSON parsing and serialization, belong
-to the formatter, never to compiler-side dispatch.
+frontend. The module exposes these structural signatures:
+
+```roc
+module [decode, encode]
+
+Request : [Evaluate(Str), Reply(Str)]
+Response : {
+    status : [Success, Incomplete, Failure],
+    result : Str,
+    stdout : Str,
+    diagnostics : Str,
+    value : [Other, Tag({ name : Str, payload : Try(Str, {}) })],
+}
+
+decode : Str -> Request
+encode : Str, Response -> Str
+```
+
+`Evaluate(source)` evaluates a cell in the process's persistent language session.
+`Reply(reply)` answers immediately without evaluation or a call to `encode`;
+it can represent either protocol success or protocol failure. For evaluation,
+`encode` receives the original input line and the completed response. Only the
+LF framing delimiter is removed: spaces, tabs, and any CR byte are preserved
+and passed identically to both functions. EOF submits a final nonempty line,
+then ends the session. Each completed request receives one LF-terminated reply.
+Replies must not contain literal LF bytes. Wire protocols, request IDs, display
+preferences, and JSON parsing and serialization belong to the formatter. There
+is no persistent formatter state or compiler-owned protocol metadata.
 
 A compiler-owned, annotated wrapper checks both functions' signatures before
 lowering. The formatter is compiled once, in a separate scope, with sibling
 imports relative to its file. Calls use the LIR interpreter and explicit tuple
 field placements from committed layouts. User code cannot shadow formatter
-definitions. Compiler diagnostics for invalid plugins go to stderr and abort
-startup; language diagnostics from cells are passed to `encode` without color.
-Cells commit accepted definitions in order, stop at the first error, and expose
-the last expression's inspected text plus captured debug output. A standalone
-`:t <identifier>` line between statements uses the terminal REPL's checked
-binding type query without evaluating the binding. It replaces the cell's text
-result and sets its formatter value to `Other`; subsequent statements still run.
+definitions. Invalid plugins, formatter crashes, multiline replies, unsupported
+host effects, and operational failures (including allocation and transport
+failures) terminate the process with stderr diagnostics; no reply is guaranteed
+for the interrupted request. User-code failures are encoded replies and keep
+the process usable.
+
+Decoded source may span multiple lines. Top-level statements are processed in
+order and stop at the first failure or incomplete statement. Accepted definitions and
+annotations before that point remain available; rejected definitions are rolled
+back individually and later statements are not attempted. Incomplete source
+is not retained for the next request: callers submit a complete replacement
+request, while previously accepted definitions remain in scope.
+
+`status` is `Success` only when the entire request completes (including empty
+source), `Incomplete` when the parser reports incomplete input, and
+`Failure` for other user-code or type-query failures. It is derived exclusively
+from structured statement diagnostics and evaluation events, never diagnostic
+text. The last successfully evaluated expression supplies `result` (inspected
+text) and `value`, even if a later statement fails. Definitions and successful
+`expect`, `for`, or `while` statements do not replace that result. A standalone `dbg` is evaluated as an expression and replaces the
+result with `{}`; its debug text also appears in `stdout`. Without an expression,
+the fields are `""` and `Other`. A successful standalone `:t <identifier>` between statements
+replaces the result text with the checked binding type and sets `value` to
+`Other`; it does not evaluate the binding. `stdout` accumulates captured debug
+output, and `diagnostics` contains uncolored diagnostic text. Neither field's
+emptiness determines status. No output is streamed before the reply.
 
 Formatter evaluation explicitly returns a tuple containing inspected text and
 its original value, evaluated once. A hygienic synthetic local binder is chosen

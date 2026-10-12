@@ -1,5 +1,6 @@
 module [decode, encode]
 
-decode = |line| Ok(line)
+decode : Str -> [Evaluate(Str), Reply(Str)]
+decode = |line| if line == "reply" Reply("broken\nreply") else Evaluate(line)
 
-encode = |_| "broken\nreply"
+encode = |_, _| "broken\nreply"

@@ -963,17 +963,34 @@ fn printDefs(self: *ReplSession, use_color: bool) ReplStepError![]u8 {
 
 /// Render a stored binding's checked type without evaluating its value.
 pub fn printTypeOfVar(self: *ReplSession, name: []const u8, use_color: bool) ReplStepError![]u8 {
+    return (try self.queryTypeOfVar(name, use_color)).text;
+}
+
+/// A checked type query, including lookup failure independently of its text.
+pub const TypeQueryResult = struct {
+    success: bool,
+    text: []u8,
+};
+
+/// Query a binding without evaluating it; the caller owns the returned text.
+pub fn queryTypeOfVar(self: *ReplSession, name: []const u8, use_color: bool) ReplStepError!TypeQueryResult {
     var out = std.ArrayList(u8).empty;
     defer out.deinit(self.allocator);
 
     var ret = try self.initParsedResources();
     defer ret.deinit(self.allocator);
+    if (try eval.Inspected.parsedResourcesHaveErrorDiagnostics(self.allocator, &ret)) {
+        var config = reporting.ReportingConfig.initColorTerminal();
+        config.color_preference = if (use_color) .always else .never;
+        return .{ .success = false, .text = try eval.Inspected.renderParsedResourcesProblemsWithConfig(self.allocator, &ret, config) };
+    }
     var env = ret.module_env;
 
     var tw = try env.initTypeWriter();
     defer tw.deinit();
 
-    if (getBindingPatternOfName(env, name)) |pattern| {
+    const binding = getBindingPatternOfName(env, name);
+    if (binding) |pattern| {
         try tw.write(ModuleEnv.varFrom(pattern), .one_line);
         if (use_color) {
             try out.print(self.allocator, "\x1b[3m\x1b[90m{s} : {s}\x1b[0m\n", .{ name, tw.get() });
@@ -984,7 +1001,7 @@ pub fn printTypeOfVar(self: *ReplSession, name: []const u8, use_color: bool) Rep
         try out.print(self.allocator, "Did not find a definition for `{s}`\n", .{name});
     }
 
-    return out.toOwnedSlice(self.allocator);
+    return .{ .success = binding != null, .text = try out.toOwnedSlice(self.allocator) };
 }
 
 /// Type information for an expression without evaluating it or changing the session.
@@ -1466,7 +1483,7 @@ pub fn programFailureKind(err: eval.Inspected.Error) ProgramFailureKind {
     };
 }
 
-fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingConfig) Allocator.Error!DefinitionValidation {
+fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingConfig) ReplStepError!DefinitionValidation {
     const definitions = try self.definitionsSource();
     defer self.allocator.free(definitions);
 
@@ -1506,7 +1523,7 @@ fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingCon
             };
             return .{ .valid = false, .error_message = msg };
         },
-        .out_of_memory, .operational => return .{ .valid = false, .error_message = null },
+        .out_of_memory, .operational => return err,
     }
 }
 

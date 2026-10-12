@@ -17,24 +17,32 @@ pub const Error = CallError || EvaluateError || @import("ctx").CoreCtx.ReadError
 // Tuples are an internal host ABI; their offsets come from committed layouts.
 const wrapper =
     \\import Formatter
-    \\main : (Bool, Str, Str, Str, Str, Bool, Str, Bool, Str) -> (Bool, Str)
+    \\main : (Bool, Str, Str, Str, Str, Bool, Str, Bool, Str, Bool, Bool) -> (Bool, Str)
     \\main = |request| {
-    \\    (decoding, input, result, stdout, diagnostics, is_tag, name, has_payload, payload) = request
+    \\    (decoding, input, result, stdout, diagnostics, is_tag, name, has_payload, payload, succeeded, incomplete) = request
     \\    if decoding {
-    \\        decoded : Try(Str, Str)
+    \\        decoded : [Evaluate(Str), Reply(Str)]
     \\        decoded = Formatter.decode(input)
     \\        match decoded {
-    \\            Ok(source) => (True, source)
-    \\            Err(reply) => (False, reply)
+    \\            Evaluate(source) => (True, source)
+    \\            Reply(reply) => (False, reply)
     \\        }
     \\    } else {
     \\        value = if is_tag {
     \\            Tag({ name, payload: if has_payload Ok(payload) else Err({}) })
     \\        } else { Other }
-    \\        (False, Formatter.encode({ result, stdout, diagnostics, value }))
+    \\        status = if succeeded Success else if incomplete Incomplete else Failure
+    \\        (False, Formatter.encode(input, { status, result, stdout, diagnostics, value }))
     \\    }
     \\}
 ;
+
+const Status = enum { success, incomplete, failure };
+
+const Evaluation = struct {
+    status: Status = .success,
+    value: ReplSession.ResultValue = .{},
+};
 
 const Reply = struct {
     evaluate: bool,
@@ -43,7 +51,7 @@ const Reply = struct {
 
 /// Call an already checked and lowered formatter. Each call owns its runtime
 /// allocations, including on a language crash; the compiled program is reused.
-fn call(allocator: std.mem.Allocator, stderr: *std.Io.Writer, program: *const eval.Inspected.CompiledTargetProgram, decoding: bool, strings: [4][]const u8, value: ReplSession.ResultValue) CallError!Reply {
+fn call(allocator: std.mem.Allocator, stderr: *std.Io.Writer, program: *const eval.Inspected.CompiledTargetProgram, decoding: bool, strings: [4][]const u8, evaluation: Evaluation) CallError!Reply {
     const lowered = &program.lowered;
     const layouts = &lowered.view.layouts;
     var runtime = eval.RuntimeHostEnv.init(allocator);
@@ -72,10 +80,13 @@ fn call(allocator: std.mem.Allocator, stderr: *std.Io.Writer, program: *const ev
     for (strings, 0..) |bytes, i| {
         field(RocStr, args.ptr, layouts, arg_layouts[0], @intCast(i + 1)).* = RocStr.fromSlice(bytes, runtime.get_ops());
     }
+    const value = evaluation.value;
     field(bool, args.ptr, layouts, arg_layouts[0], 5).* = value.tag_name != null;
     field(RocStr, args.ptr, layouts, arg_layouts[0], 6).* = RocStr.fromSlice(value.tag_name orelse "", runtime.get_ops());
     field(bool, args.ptr, layouts, arg_layouts[0], 7).* = value.string_payload != null;
     field(RocStr, args.ptr, layouts, arg_layouts[0], 8).* = RocStr.fromSlice(value.string_payload orelse "", runtime.get_ops());
+    field(bool, args.ptr, layouts, arg_layouts[0], 9).* = evaluation.status == .success;
+    field(bool, args.ptr, layouts, arg_layouts[0], 10).* = evaluation.status == .incomplete;
     const returned = interpreter.eval(.{
         .proc_id = lowered.mainProc(),
         .arg_layouts = arg_layouts,
@@ -149,7 +160,8 @@ pub fn run(ctx: *CliCtx, session: *ReplSession, path: []const u8) Error!void {
         const eof = input.interface.buffered().len == 0;
         if (eof and line.writer.buffered().len == 0) break;
         if (!eof) input.interface.toss(1);
-        const decoded = try call(allocator, ctx.io.stderr(), &program, true, .{ std.mem.trimEnd(u8, line.writer.buffered(), "\r"), "", "", "" }, .{});
+        const original_input = line.writer.buffered();
+        const decoded = try call(allocator, ctx.io.stderr(), &program, true, .{ original_input, "", "", "" }, .{});
         defer allocator.free(decoded.bytes);
         if (!decoded.evaluate) {
             try writeReply(ctx, decoded.bytes);
@@ -161,9 +173,9 @@ pub fn run(ctx: *CliCtx, session: *ReplSession, path: []const u8) Error!void {
         defer output.deinit();
         var diagnostics = std.Io.Writer.Allocating.init(allocator);
         defer diagnostics.deinit();
-        const value = try evaluate(session, decoded.bytes, config, &result, &output, &diagnostics);
-        defer value.deinit(allocator);
-        const encoded = try call(allocator, ctx.io.stderr(), &program, false, .{ "", result.writer.buffered(), output.writer.buffered(), diagnostics.writer.buffered() }, value);
+        const evaluation = try evaluate(session, decoded.bytes, config, &result, &output, &diagnostics);
+        defer evaluation.value.deinit(allocator);
+        const encoded = try call(allocator, ctx.io.stderr(), &program, false, .{ original_input, result.writer.buffered(), output.writer.buffered(), diagnostics.writer.buffered() }, evaluation);
         defer allocator.free(encoded.bytes);
         try writeReply(ctx, encoded.bytes);
     }
@@ -177,20 +189,25 @@ fn writeReply(ctx: *CliCtx, bytes: []const u8) (std.Io.Writer.Error || error{Mul
     ctx.io.flush();
 }
 
-fn evaluate(session: *ReplSession, source: []const u8, config: reporting.ReportingConfig, result: *std.Io.Writer.Allocating, output: *std.Io.Writer.Allocating, diagnostics: *std.Io.Writer.Allocating) EvaluateError!ReplSession.ResultValue {
-    var value: ReplSession.ResultValue = .{};
-    errdefer value.deinit(session.allocator);
+fn evaluate(session: *ReplSession, source: []const u8, config: reporting.ReportingConfig, result: *std.Io.Writer.Allocating, output: *std.Io.Writer.Allocating, diagnostics: *std.Io.Writer.Allocating) EvaluateError!Evaluation {
+    var evaluation: Evaluation = .{};
+    errdefer evaluation.value.deinit(session.allocator);
     const statements = try session.splitInputIntoStatements(source);
     defer session.freeStatementSlices(statements);
     for (statements) |statement| {
         if (ReplSession.parseTypeQuery(statement)) |name| {
-            const text = try session.printTypeOfVar(name, false);
-            defer session.allocator.free(text);
+            const query = try session.queryTypeOfVar(name, false);
+            defer session.allocator.free(query.text);
+            if (!query.success) {
+                evaluation.status = .failure;
+                try diagnostics.writer.writeAll(query.text);
+                break;
+            }
             // A query is a text result, never the preceding expression's tag.
-            value.deinit(session.allocator);
-            value = .{};
+            evaluation.value.deinit(session.allocator);
+            evaluation.value = .{};
             result.clearRetainingCapacity();
-            try result.writer.writeAll(std.mem.trimEnd(u8, text, "\n"));
+            try result.writer.writeAll(std.mem.trimEnd(u8, query.text, "\n"));
             continue;
         }
         const step = try session.stepLanguageWithConfig(statement, config);
@@ -200,30 +217,43 @@ fn evaluate(session: *ReplSession, source: []const u8, config: reporting.Reporti
             for (events) |*event| event.deinit(session.allocator);
             session.allocator.free(events);
         }
+        var event_failed = false;
         for (events) |event| {
             switch (event) {
                 .dbg => |message| try output.writer.print("{s}\n", .{message}),
-                .expect_failed, .crashed => |message| try diagnostics.writer.print("{s}\n", .{message}),
+                .expect_failed, .crashed => |message| {
+                    event_failed = true;
+                    try diagnostics.writer.print("{s}\n", .{message});
+                },
                 .effect => return error.UnsupportedReplEffect,
             }
         }
+        if (event_failed) {
+            evaluation.status = .failure;
+            break;
+        }
         switch (step) {
             .expression => |text| {
-                value.deinit(session.allocator);
-                value = session.takeResultValue();
+                evaluation.value.deinit(session.allocator);
+                evaluation.value = session.takeResultValue();
                 result.clearRetainingCapacity();
                 try result.writer.writeAll(text);
             },
             .diagnostic => |diagnostic| {
+                evaluation.status = switch (diagnostic.kind) {
+                    .incomplete_input => .incomplete,
+                    .parse_error, .compile_error, .unsupported_file_import => .failure,
+                };
                 try diagnostics.writer.writeAll(diagnostic.message);
                 break;
             },
             .runtime_crash => |message| {
+                evaluation.status = .failure;
                 try diagnostics.writer.writeAll(message);
                 break;
             },
             .definition, .statement, .none => {},
         }
     }
-    return value;
+    return evaluation;
 }
