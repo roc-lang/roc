@@ -257,6 +257,12 @@ fn writeExpr(self: *Self, typ: Type, depth: u8) std.mem.Allocator.Error!void {
             2 => try self.writeIfExpr(.tuple_bool_u64, depth - 1),
             else => unreachable,
         },
+        .nominal_record, .wrapper, .optional_record => switch (self.reader.intRangeAtMost(u8, 0, 2)) {
+            0 => if (!try self.writeMethodCall(typ, depth - 1)) try self.writeLiteral(typ, depth - 1),
+            1 => try self.writeLiteral(typ, depth - 1),
+            2 => try self.writeIfExpr(typ, depth - 1),
+            else => unreachable,
+        },
     }
 }
 
@@ -265,6 +271,7 @@ fn writeMethodCall(self: *Self, result_type: Type, depth: u8) std.mem.Allocator.
     try self.writeAppSymbol(self.module.getRootSymbols().typ);
     try self.writeAppText(".");
     try self.writeAppSymbol(method.symbol);
+    if (method.effectful) try self.writeAppText("!");
     try self.writeAppText("(");
     for (0..method.arity) |index| {
         if (index > 0) try self.writeAppText(", ");
@@ -316,6 +323,9 @@ fn writeLiteral(self: *Self, typ: Type, depth: u8) std.mem.Allocator.Error!void 
         .list_u64 => try self.writeListLiteral(depth),
         .try_u64_str => try self.writeTryLiteral(depth),
         .tuple_bool_u64 => try self.writeTupleLiteral(depth),
+        .nominal_record => try self.writeNominalRecordLiteral(depth),
+        .wrapper => try self.writeWrapperLiteral(depth),
+        .optional_record => try self.writeOptionalRecordLiteral(depth),
     }
 }
 
@@ -361,6 +371,64 @@ fn writeRecordLiteral(self: *Self, depth: u8) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(root.field2);
     try self.writeAppText(": ");
     try self.writeExpr(.str, depth);
+    try self.writeAppText(" }");
+}
+
+fn writeNominalRecordLiteral(self: *Self, depth: u8) std.mem.Allocator.Error!void {
+    const root = self.module.getRootSymbols();
+    try self.writeAppType(.nominal_record);
+    try self.writeAppText(".{ ");
+    try self.writeAppSymbol(root.field0);
+    try self.writeAppText(": ");
+    try self.writeExpr(.bool, depth);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(root.field1);
+    try self.writeAppText(": ");
+    try self.writeExpr(.u64, depth);
+    switch (self.reader.intRangeAtMost(u8, 0, 2)) {
+        0 => {},
+        1 => {
+            try self.writeAppText(", ");
+            try self.writeAppSymbol(root.field3);
+            try self.writeAppText(": ");
+            try self.writeExpr(.u64, depth);
+        },
+        2 => {
+            try self.writeAppText(", ");
+            try self.writeAppSymbol(root.field3);
+            try self.writeAppText(": _");
+        },
+        else => unreachable,
+    }
+    try self.writeAppText(" }");
+}
+
+fn writeWrapperLiteral(self: *Self, depth: u8) std.mem.Allocator.Error!void {
+    const root = self.module.getRootSymbols();
+    try self.writeAppType(.wrapper);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(root.wrapper_tag);
+    try self.writeAppText("(");
+    try self.writeExpr(.u64, depth);
+    try self.writeAppText(", ");
+    try self.writeExpr(.str, depth);
+    try self.writeAppText(")");
+}
+
+fn writeOptionalRecordLiteral(self: *Self, depth: u8) std.mem.Allocator.Error!void {
+    const root = self.module.getRootSymbols();
+    try self.writeAppText("{ ");
+    try self.writeAppSymbol(root.field0);
+    try self.writeAppText(": ");
+    try self.writeExpr(.bool, depth);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(root.field3);
+    try self.writeAppText(": ");
+    if (self.reader.boolean()) {
+        try self.writeAppText("_");
+    } else {
+        try self.writeExpr(.u64, depth);
+    }
     try self.writeAppText(" }");
 }
 
@@ -411,6 +479,10 @@ fn writeStringLiteral(self: *Self) std.mem.Allocator.Error!void {
         try self.app_output.append(self.allocator, char);
     }
     try self.writeAppText("\"");
+}
+
+fn writeAppType(self: *Self, typ: Type) std.mem.Allocator.Error!void {
+    try TypedCodeGenerator.writeTypeTo(self.module.getRootSymbols(), &self.app_output, self.allocator, typ);
 }
 
 fn writeAppSymbol(self: *Self, symbol: Symbol) std.mem.Allocator.Error!void {

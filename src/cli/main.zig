@@ -4678,7 +4678,9 @@ fn finishHotReloadRebuild(
     joinWatchChild(rebuild.child);
     if (rebuild.child.output_error) |err| return err;
 
-    try replayWatchChildOutput(ctx, rebuild.child, true);
+    if (hotReloadOutputAllowed()) {
+        try replayWatchChildOutput(ctx, rebuild.child, true);
+    }
 
     const rebuild_succeeded = hotReloadRebuildSucceeded(rebuild.child);
     const new_inputs = if (rebuild_succeeded)
@@ -4718,10 +4720,18 @@ fn finishHotReloadRebuild(
     };
 }
 
+/// A running app that has put the terminal in raw mode (such as a TUI) owns the
+/// screen, so hot reload output would corrupt what it has drawn.
+fn hotReloadOutputAllowed() bool {
+    return !ReplLine.stdinRawModeActive();
+}
+
 fn reportHotReloadRebuildPublished(ctx: *CliCtx, rebuild: *HotReloadRebuild) CliOutputWriteError!void {
     if (rebuild.published_reported) return;
-    try ctx.io.stderr().print("--- roc watch: hot reload generation {} published ---\n", .{rebuild.generation});
-    ctx.io.flush();
+    if (hotReloadOutputAllowed()) {
+        try ctx.io.stderr().print("--- roc watch: hot reload generation {} published ---\n", .{rebuild.generation});
+        ctx.io.flush();
+    }
     rebuild.published_reported = true;
 }
 
@@ -4741,12 +4751,15 @@ fn reportHotReloadAcknowledgement(
         }
     }
 
-    switch (ack.status) {
+    const outcome = switch (ack.status) {
         .none => return null,
-        .accepted => try ctx.io.stderr().print("--- roc watch: hot reload generation {} accepted by host ---\n", .{generation}),
-        .rejected => try ctx.io.stderr().print("--- roc watch: hot reload generation {} rejected by host; previous code remains active ---\n", .{generation}),
+        .accepted => "accepted by host",
+        .rejected => "rejected by host; previous code remains active",
+    };
+    if (hotReloadOutputAllowed()) {
+        try ctx.io.stderr().print("--- roc watch: hot reload generation {} {s} ---\n", .{ generation, outcome });
+        ctx.io.flush();
     }
-    ctx.io.flush();
     last_reported_ack.* = generation;
     return generation;
 }
@@ -16362,6 +16375,7 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
     var pending = std.ArrayList(u8).empty;
     defer pending.deinit(ctx.gpa);
 
+    var multiline_string_at_eof = false;
     var should_exit = false;
     var had_diagnostics = false;
     while (!should_exit) {
@@ -16385,6 +16399,16 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
             .line => |raw_line| {
                 defer ctx.gpa.free(raw_line);
 
+                // A complete multiline string remains pending until a line
+                // without a string prefix arrives (or EOF). Process that line
+                // separately so it can begin the next REPL statement.
+                if (multiline_string_at_eof and !ReplSession.lineStartsMultilineString(raw_line)) {
+                    should_exit = try processReplInput(ctx, &session, pending.items, report_config, &had_diagnostics);
+                    pending.clearRetainingCapacity();
+                    multiline_string_at_eof = false;
+                    if (should_exit) break;
+                }
+
                 if (pending.items.len == 0 and std.mem.trim(u8, raw_line, " \t\r\n").len == 0) {
                     continue;
                 }
@@ -16395,8 +16419,16 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
                 try pending.appendSlice(ctx.gpa, raw_line);
 
                 switch (try session.inputStatus(pending.items)) {
-                    .incomplete => {},
-                    .complete, .invalid => {
+                    .incomplete => multiline_string_at_eof = false,
+                    .complete => |info| {
+                        multiline_string_at_eof = info.multiline_string_at_eof;
+                        if (!multiline_string_at_eof) {
+                            should_exit = try processReplInput(ctx, &session, pending.items, report_config, &had_diagnostics);
+                            pending.clearRetainingCapacity();
+                        }
+                    },
+                    .invalid => {
+                        multiline_string_at_eof = false;
                         should_exit = try processReplInput(ctx, &session, pending.items, report_config, &had_diagnostics);
                         pending.clearRetainingCapacity();
                     },
