@@ -3987,15 +3987,22 @@ const ConsumptionProof = struct {
 /// returns its parameter—keeps the birth its entry edge brings, which is the
 /// inductive fact the runtime obeys. Deadness ascends along the same edges:
 /// a second holder of a source is a second holder of everything the source
-/// flows into.
-fn orOriginWords(into: []u64, origins: []const u64, origin_words: usize, local: u32) void {
-    orWords(into, origins[local * origin_words ..][0..origin_words]);
+/// flows into. Candidate origins ascend as well: a local starts from the
+/// candidate reads among its own definitions and gathers its inputs'
+/// origins, and a stored field gathers its inputs' origins.
+fn orOriginWords(into: []u64, origins: []const u64, origin_words: usize, local: u32) bool {
+    return orWords(into, origins[local * origin_words ..][0..origin_words]);
 }
 
-/// ORs `from` into `into`; an empty `from` (no fields tracked, or no
-/// candidate) leaves `into` alone.
-fn orWords(into: []u64, from: []const u64) void {
-    for (from, 0..) |word, index| into[index] |= word;
+/// ORs `from` into `into`, returning whether any bit was new; an empty
+/// `from` (no fields tracked, or no candidate) leaves `into` alone.
+fn orWords(into: []u64, from: []const u64) bool {
+    var grew: u64 = 0;
+    for (from, 0..) |word, index| {
+        grew |= word & ~into[index];
+        into[index] |= word;
+    }
+    return grew != 0;
 }
 
 fn settleUniqueOrigins(
@@ -4114,8 +4121,6 @@ fn settleUniqueOrigins(
     defer mask_work.deinit(allocator);
     var mask_queued = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
     defer mask_queued.deinit(allocator);
-    const origin_scratch = try allocator.alloc(u64, origin_words);
-    defer allocator.free(origin_scratch);
     var container_count: u32 = 0;
     for (0..local_count) |index| {
         const local: u32 = @intCast(index);
@@ -4151,8 +4156,6 @@ fn settleUniqueOrigins(
     field_conds.origin_words = origin_words;
     field_conds.origins = try allocator.alloc(u64, @as(usize, container_count) * 64 * origin_words);
     @memset(field_conds.origins, 0);
-    const field_origin_scratch = try allocator.alloc(u64, 64 * origin_words);
-    defer allocator.free(field_origin_scratch);
 
     const Meet = struct {
         /// The condition under which every input so far is born, or null
@@ -4192,19 +4195,20 @@ fn settleUniqueOrigins(
             if (field_conds.base[container] == no_local) continue;
             var meets: [64]Meet = @splat(Meet{});
             var dead: u64 = dead_masks[container];
-            // A stored field's origins are its inputs' origins.
-            @memset(field_origin_scratch, 0);
+            var changed = false;
+            // A stored field's origins gather its inputs' origins.
+            const container_origins = field_conds.origins[field_conds.base[container] * origin_words ..][0 .. 64 * origin_words];
             for (store_inputs.row(container)) |edge_index| {
                 const edge = field_edges.stores[edge_index];
                 meets[edge.field].fromLocal(born, conds, edge.source);
-                orOriginWords(field_origin_scratch[edge.field * origin_words ..][0..origin_words], origins, origin_words, edge.source);
+                if (orOriginWords(container_origins[edge.field * origin_words ..][0..origin_words], origins, origin_words, edge.source)) changed = true;
                 if (destroyed.isSet(edge.source)) dead |= @as(u64, 1) << @as(u6, @intCast(edge.field));
             }
             for (mask_alias_inputs.row(container)) |edge_index| {
                 const source = field_edges.aliases[edge_index].source;
                 for (0..64) |field| {
                     meets[field].fromSlot(masks, field_conds, source, @intCast(field));
-                    orWords(field_origin_scratch[field * origin_words ..][0..origin_words], field_conds.originsOf(source, @intCast(field)));
+                    if (orWords(container_origins[field * origin_words ..][0..origin_words], field_conds.originsOf(source, @intCast(field)))) changed = true;
                 }
                 dead |= dead_masks[source];
             }
@@ -4225,19 +4229,12 @@ fn settleUniqueOrigins(
                 const meet = &meets[edge.field];
                 for (field_edges.call_args[edge.args_start..][0..edge.args_len]) |arg| {
                     meet.fromLocal(born, conds, arg);
-                    orOriginWords(field_origin_scratch[edge.field * origin_words ..][0..origin_words], origins, origin_words, arg);
+                    if (orOriginWords(container_origins[edge.field * origin_words ..][0..origin_words], origins, origin_words, arg)) changed = true;
                     if (destroyed.isSet(arg)) dead |= @as(u64, 1) << @as(u6, @intCast(edge.field));
                 }
             }
             var mask: u64 = 0;
-            var changed = dead != dead_masks[container];
-            if (origin_words != 0) {
-                const container_origins = field_conds.origins[field_conds.base[container] * origin_words ..][0 .. 64 * origin_words];
-                if (!std.mem.eql(u64, container_origins, field_origin_scratch)) {
-                    @memcpy(container_origins, field_origin_scratch);
-                    changed = true;
-                }
-            }
+            if (dead != dead_masks[container]) changed = true;
             for (meets, 0..) |meet, field| {
                 if (!meet.isBorn()) continue;
                 const bit = @as(u64, 1) << @as(u6, @intCast(field));
@@ -4272,17 +4269,20 @@ fn settleUniqueOrigins(
 
         var meet = Meet{};
         var dead = destroyed.isSet(local);
-        @memset(origin_scratch, 0);
+        var changed = false;
+        // A derived local's origins gather its inputs' origins on top of the
+        // candidate reads among its own definitions.
+        const local_origins = origins[local * origin_words ..][0..origin_words];
         if (alias_source[local] != no_local) {
             const source = alias_source[local];
             meet.fromLocal(born, conds, source);
-            orOriginWords(origin_scratch, origins, origin_words, source);
+            if (orOriginWords(local_origins, origins, origin_words, source)) changed = true;
             dead = dead or destroyed.isSet(source);
         } else if (join_inputs.row(local).len != 0 or read_inputs.row(local).len != 0) {
             for (join_inputs.row(local)) |edge_index| {
                 const source = join_incoming[edge_index].source;
                 meet.fromLocal(born, conds, source);
-                orOriginWords(origin_scratch, origins, origin_words, source);
+                if (orOriginWords(local_origins, origins, origin_words, source)) changed = true;
                 dead = dead or destroyed.isSet(source);
             }
             // A join result cell's field takes are incoming edges alongside
@@ -4290,7 +4290,7 @@ fn settleUniqueOrigins(
             for (read_inputs.row(local)) |edge_index| {
                 const read = field_edges.reads[edge_index];
                 meet.fromSlot(masks, field_conds, read.container, read.field);
-                orWords(origin_scratch, field_conds.originsOf(read.container, read.field));
+                if (orWords(local_origins, field_conds.originsOf(read.container, read.field))) changed = true;
                 dead = dead or (dead_masks[read.container] & (@as(u64, 1) << @as(u6, @intCast(read.field)))) != 0;
             }
         } else {
@@ -4299,21 +4299,14 @@ fn settleUniqueOrigins(
                 if (edge.field != arc_sig.RetCondition.whole_value) continue;
                 for (field_edges.call_args[edge.args_start..][0..edge.args_len]) |arg| {
                     meet.fromLocal(born, conds, arg);
-                    orOriginWords(origin_scratch, origins, origin_words, arg);
+                    if (orOriginWords(local_origins, origins, origin_words, arg)) changed = true;
                     dead = dead or destroyed.isSet(arg);
                 }
             }
         }
         const stays_born = meet.isBorn() and !foreign.isSet(local) and (!multi_def.isSet(local) or multi_ok.isSet(local));
-        var changed = false;
         if (born.isSet(local) != stays_born) {
             born.setValue(local, stays_born);
-            changed = true;
-        }
-        // A derived local's origins are its inputs' origins.
-        const local_origins = origins[local * origin_words ..][0..origin_words];
-        if (!std.mem.eql(u64, local_origins, origin_scratch)) {
-            @memcpy(local_origins, origin_scratch);
             changed = true;
         }
         if (stays_born and conds[local] != meet.value.?) {

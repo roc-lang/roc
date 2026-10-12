@@ -93,6 +93,9 @@ const RawTypePair = struct {
 
 const RawMismatchEvidence = struct {
     record: ?RawTypePair = null,
+    /// The pair whose relation failed when the mismatch left the unifier,
+    /// when that failure came from relating a pair of variables.
+    leaf: ?RawTypePair = null,
 };
 
 /// Exact checker evidence produced when a fresh record construction omits a
@@ -360,6 +363,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
         const expected_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, a);
         const actual_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, b);
         const evidence = try snapshotMismatchEvidence(env);
+        const leaf = try snapshotMismatchLeaf(env);
         const problem_idx = try env.problems.appendProblem(.{ .type_mismatch = .{
             .types = .{
                 .expected_var = a,
@@ -369,6 +373,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
             },
             .context = opts.context,
             .evidence = evidence,
+            .leaf = leaf,
         } });
         try env.types.poisonOnMismatch(a, b);
         return Result{ .problem = problem_idx };
@@ -448,6 +453,18 @@ pub fn snapshotMismatchEvidence(env: *const Env) std.mem.Allocator.Error!TypeMis
         try snapshotRawRecordEvidence(env, record)
     else
         .none;
+}
+
+/// Snapshot the pair whose relation failed, before the top-level operands are
+/// poisoned, so a reporter that recognizes it can show the conflicting types.
+pub fn snapshotMismatchLeaf(env: *const Env) std.mem.Allocator.Error!?problem_mod.TypePair {
+    const raw = env.unify_scratch.mismatch_evidence.leaf orelse return null;
+    return .{
+        .expected_var = raw.expected,
+        .expected_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, raw.expected),
+        .actual_var = raw.actual,
+        .actual_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, raw.actual),
+    };
 }
 
 /// A temporary unification context used to unify two type variables within a `Store`.
@@ -783,10 +800,37 @@ const Unifier = struct {
         while (self.popWorkFrame(&frame)) {
             self.processFrame(frame) catch |err| switch (err) {
                 error.ErroneousType => return error.ErroneousType,
-                error.TypeMismatch => try self.handleTypeMismatch(),
+                error.TypeMismatch => {
+                    // The first failed pair is the leaf: a child mismatch a
+                    // handler flags is raised again by its parent's frame,
+                    // which relates no pair of its own.
+                    const leaf_was_set = self.scratch.mismatch_evidence.leaf != null;
+                    if (!leaf_was_set) self.scratch.mismatch_evidence.leaf = framePair(frame);
+                    if (try self.handleTypeMismatch() == .ignored and !leaf_was_set) {
+                        self.scratch.mismatch_evidence.leaf = null;
+                    }
+                },
                 error.OutOfMemory => return error.OutOfMemory,
             };
         }
+    }
+
+    /// The pair of variables a frame relates, if it relates one.
+    fn framePair(frame: WorkFrame) ?RawTypePair {
+        return switch (frame) {
+            .root_pair => |pair| .{ .expected = pair.a, .actual = pair.b },
+            .guarded_pair => |pair| .{ .expected = pair.a, .actual = pair.b },
+            .unify_vars => |vars| .{ .expected = vars.a.var_, .actual = vars.b.var_ },
+            .merge => |merge_frame| .{ .expected = merge_frame.vars.a.var_, .actual = merge_frame.vars.b.var_ },
+            .merge_to_nominal => |merge_frame| .{ .expected = merge_frame.vars.a.var_, .actual = merge_frame.vars.b.var_ },
+            .mismatch_handler,
+            .guard_handler,
+            .restore_enclosing_records,
+            .same_alias_after_args,
+            .shared_fields_after_children,
+            .shared_tags_after_children,
+            => null,
+        };
     }
 
     fn processFrame(self: *Self, frame: WorkFrame) Error!void {
@@ -862,7 +906,10 @@ const Unifier = struct {
         }
     }
 
-    fn handleTypeMismatch(self: *Self) Error!void {
+    /// How a handler absorbed a mismatch instead of propagating it.
+    const AbsorbedMismatch = enum { ignored, flagged };
+
+    fn handleTypeMismatch(self: *Self) Error!AbsorbedMismatch {
         var frame: WorkFrame = undefined;
         while (self.popWorkFrame(&frame)) {
             const frame_tag = std.meta.activeTag(frame);
@@ -882,12 +929,13 @@ const Unifier = struct {
         return error.TypeMismatch;
     }
 
-    fn applyMismatchHandling(self: *Self, handling: MismatchHandling) Error!void {
+    fn applyMismatchHandling(self: *Self, handling: MismatchHandling) Error!AbsorbedMismatch {
         switch (handling) {
             .propagate => return error.TypeMismatch,
-            .ignore => return,
+            .ignore => return .ignored,
             .set_flag => |flag_idx| {
                 self.scratch.mismatch_flags.items.items[flag_idx] = true;
+                return .flagged;
             },
             .record_then_propagate => |record| {
                 self.scratch.mismatch_evidence.record = record;
