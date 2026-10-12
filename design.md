@@ -1005,7 +1005,12 @@ checker recovery. The recovery rules:
   comparison, belongs to the same relation and fails at the expression,
   whichever later unification grounds it: `x == x` over a list whose items a
   later use makes functions reports the missing equality at `x == x`, as when
-  the items were known. So in `for letter in "a"..="z" { echo!(letter) }` the range's rejected
+  the items were known. A `for` loop's own `iter` and `next` dispatches have
+  no expression to own a relation, so an obligation derived from them (a
+  requirement of the selected `iter` target) keeps the relation that queued
+  it, but it reports at the loop's iterable (`Check.loop_dispatch_iterables`)
+  and retires no expression: the loop's checked iterator evidence carries the
+  rejection, and the iterable is a valid value. So in `for letter in "a"..="z" { echo!(letter) }` the range's rejected
   `range_inclusive_to` is reported at the range, which it retires, rather than
   at `echo!(letter)`, whose unification grounded the literal; `letter` is then
   bound from an erroneous value, and `Range.iter`'s `range_iter` requirement,

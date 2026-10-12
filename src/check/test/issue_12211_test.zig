@@ -108,3 +108,49 @@ test "issue 12211: an operator requirement a function's scheme inferred fails at
     defer test_env.deinit();
     try test_env.assertOneTypeErrorHighlightsWithin("Missing Method", .{ .line = 6, .start_column = 10, .end_column = 21 });
 }
+
+test "issue 12211: a requirement a for loop's iter target leaves behind fails at the iterable when the body decides the item type" {
+    const source =
+        \\Bag(a) := [B(a)].{
+        \\    iter : Bag(a) -> Iter(a) where [a.shout : a -> a]
+        \\    iter = |B(x)| [x.shout()].iter()
+        \\}
+        \\
+        \\echo! : Str => {}
+        \\echo! = |_| {}
+        \\
+        \\main! = |_| {
+        \\    for x in Bag.B("s") {
+        \\        echo!(x)
+        \\    }
+        \\    Ok({})
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeErrorHighlightsWithin("Missing Method", .{ .line = 10, .start_column = 14, .end_column = 24 });
+}
+
+test "issue 12211: a requirement a for loop's iter target leaves behind fails at the iterable when the item type is known" {
+    const source =
+        \\Bag(a) := [B(a)].{
+        \\    iter : Bag(a) -> Iter(a) where [a.shout : a -> a]
+        \\    iter = |B(x)| [x.shout()].iter()
+        \\}
+        \\
+        \\echo! : Str => {}
+        \\echo! = |_| {}
+        \\
+        \\main! = |_| {
+        \\    s : Str
+        \\    s = "s"
+        \\    for x in Bag.B(s) {
+        \\        echo!(x)
+        \\    }
+        \\    Ok({})
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeErrorHighlightsWithin("Missing Method", .{ .line = 12, .start_column = 14, .end_column = 22 });
+}
