@@ -255,4 +255,5 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_11698_test.zig"));
     std.testing.refAllDecls(@import("test/representation_capacity_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11732_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12230_test.zig"));
 }

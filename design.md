@@ -6332,6 +6332,21 @@ walking its proof graph again, so interning a chain of nested contracts costs
 one comparison per contract rather than one per contract below it. Source contracts remain intact for replay; specialization
 equality uses the shared identity rather than the per-use derivation index.
 
+That interned identity is local to one checked module, so each class also
+carries a content digest that is its identity across modules. The digest is a
+SHA-256 of a canonical depth-first encoding of the class's first member's proof
+graph. Contracts and evidence nodes are numbered by first visit, so shared and
+cyclic references encode as back-references. Each type encodes as its canonical
+key followed by the joint first-visit numbers of its variables in key order, so
+cross-root sharing is part of the digest. Methods encode by name, and targets
+encode by their owning artifact digests; the encoding writes no module-local id.
+A target's callable type is fixed by the target itself and is not encoded.
+Structural evidence that names a contract identifies it by this digest instead
+of by the module that recorded the edge. A generic codec function that callers
+in several modules use at one record type is therefore one specialization. A
+caller that passes a nominal with its own encoder still records a different
+contract, so it keeps a separate specialization.
+
 The checker's derived-codec walk records each nominal application whose
 backing it walks together with the generated derivation that walks it. A later
 occurrence of an equal application in the same walk (a sibling field, a list

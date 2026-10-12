@@ -8,6 +8,8 @@ const Allocator = std.mem.Allocator;
 const TypeId = checked.CheckedTypeId;
 const CodecId = dispatch.GeneratedCodecDerivationId;
 const Span = @import("artifact_serialize.zig").Span;
+const canonical = @import("canonical_names.zig");
+const TypeDigestHasher = @import("base").TypeDigestHasher;
 const type_roles = .{ "source_constructor_ty", "source_runtime_ty", "source_shape_ty", "source_body_shape_ty", "source_encoding_ty", "source_state_ty", "source_error_ty", "constructor_ty", "runtime_ty", "shape_ty", "body_shape_ty", "encoding_ty", "state_ty", "error_ty" };
 
 /// Intern each completed contract once, in table order. Type and call keys
@@ -52,6 +54,260 @@ pub fn intern(allocator: Allocator, types: checked.CheckedTypeStoreView, table: 
         }
     }
 }
+
+/// Give each contract the content digest of its proof graph. Contracts that
+/// `intern` placed in one class share the digest of the class's first member.
+/// Must run after `intern`.
+pub fn digestContents(
+    allocator: Allocator,
+    store: *const checked.CheckedTypeStore,
+    names: *const canonical.CanonicalNameStore,
+    table: *dispatch.StaticDispatchPlanTable,
+) Allocator.Error!void {
+    var digester = ContentDigester{
+        .allocator = allocator,
+        .store = store,
+        .names = names,
+        .table = table,
+        .keys = checked.CheckedTypeKeys.init(allocator, names, store),
+    };
+    defer digester.deinit();
+    for (table.generated_codec_derivations, 0..) |*derivation, index| {
+        const representative = @backingInt(derivation.identity);
+        derivation.content = if (representative == index)
+            try digester.digest(@intCast(index))
+        else
+            table.generated_codec_derivations[representative].content;
+    }
+}
+
+/// A depth-first canonical encoding of one contract's proof graph. Contracts
+/// and evidence nodes are numbered by first visit, so shared and recursive
+/// references encode as back-references. A type encodes as its canonical key
+/// plus the joint first-visit numbers of its variables in key order, so
+/// variables shared between roots stay shared. Methods encode by name and
+/// targets by their owning artifact digests; no module-local id is written.
+const ContentDigester = struct {
+    allocator: Allocator,
+    store: *const checked.CheckedTypeStore,
+    names: *const canonical.CanonicalNameStore,
+    table: *const dispatch.StaticDispatchPlanTable,
+    keys: checked.CheckedTypeKeys,
+    hasher: TypeDigestHasher = undefined,
+    codec_ordinals: std.AutoHashMapUnmanaged(u32, u32) = .empty,
+    evidence_ordinals: std.AutoHashMapUnmanaged(u32, u32) = .empty,
+    variable_ordinals: std.AutoHashMapUnmanaged(TypeId, u32) = .empty,
+    /// Each root's variables in key order. Checked types are immutable here,
+    /// so the order is computed once per root for every contract.
+    identity_orders: std.AutoHashMapUnmanaged(TypeId, []const TypeId) = .empty,
+    tasks: std.ArrayList(Task) = .empty,
+    children: std.ArrayList(Task) = .empty,
+
+    const Task = union(enum) { codec: u32, evidence: u32, refs: Span };
+
+    fn deinit(self: *ContentDigester) void {
+        self.keys.deinit();
+        self.codec_ordinals.deinit(self.allocator);
+        self.evidence_ordinals.deinit(self.allocator);
+        self.variable_ordinals.deinit(self.allocator);
+        var orders = self.identity_orders.valueIterator();
+        while (orders.next()) |order| self.allocator.free(order.*);
+        self.identity_orders.deinit(self.allocator);
+        self.tasks.deinit(self.allocator);
+        self.children.deinit(self.allocator);
+    }
+
+    fn digest(self: *ContentDigester, root: u32) Allocator.Error!dispatch.GeneratedCodecContentDigest {
+        self.hasher = TypeDigestHasher.init();
+        self.hasher.update("roc.generated_codec.content.v1");
+        self.codec_ordinals.clearRetainingCapacity();
+        self.evidence_ordinals.clearRetainingCapacity();
+        self.variable_ordinals.clearRetainingCapacity();
+        self.tasks.clearRetainingCapacity();
+        try self.tasks.append(self.allocator, .{ .codec = root });
+        while (self.tasks.pop()) |task| {
+            self.children.clearRetainingCapacity();
+            switch (task) {
+                .codec => |id| try self.writeCodec(id),
+                .evidence => |id| try self.writeEvidence(id),
+                .refs => |span| try self.writeRefs(span),
+            }
+            // Children run in the order they were written, after this node.
+            var index = self.children.items.len;
+            while (index > 0) {
+                index -= 1;
+                try self.tasks.append(self.allocator, self.children.items[index]);
+            }
+        }
+        return .{ .bytes = self.hasher.finalResult() };
+    }
+
+    /// Writes a back-reference and returns false when `id` was already
+    /// visited; otherwise numbers it and returns true.
+    fn firstVisit(self: *ContentDigester, ordinals: *std.AutoHashMapUnmanaged(u32, u32), id: u32) Allocator.Error!bool {
+        const entry = try ordinals.getOrPut(self.allocator, id);
+        if (entry.found_existing) {
+            self.writeU8(0);
+            self.writeU32(entry.value_ptr.*);
+            return false;
+        }
+        entry.value_ptr.* = ordinals.count() - 1;
+        self.writeU8(1);
+        return true;
+    }
+
+    fn writeCodec(self: *ContentDigester, id: u32) Allocator.Error!void {
+        if (!try self.firstVisit(&self.codec_ordinals, id)) return;
+        const derivation = self.table.generated_codec_derivations[id];
+        self.writeU8(@backingInt(derivation.kind));
+        inline for (type_roles) |role| try self.writeType(@field(derivation, role));
+        const calls = derivation.callsSlice(self.table);
+        self.writeU32(@intCast(calls.len));
+        for (calls) |call| {
+            self.writeText(self.names.methodNameText(call.method));
+            self.writeU32(call.method_role);
+            try self.writeType(call.dispatcher_ty);
+            try self.writeType(call.callable_ty);
+            try self.writeOptionalType(call.subject_ty);
+            self.writeU8(@backingInt(std.meta.activeTag(call.resolution)));
+            switch (call.resolution) {
+                .pending => unreachable,
+                .checked_error => {},
+                .callable => |node| try self.children.append(self.allocator, .{ .evidence = @backingInt(node) }),
+                .structural => |nested| try self.children.append(self.allocator, .{ .codec = @backingInt(nested) }),
+            }
+        }
+    }
+
+    fn writeEvidence(self: *ContentDigester, id: u32) Allocator.Error!void {
+        if (!try self.firstVisit(&self.evidence_ordinals, id)) return;
+        const node = self.table.evidence_nodes[id];
+        self.writeTarget(node.target);
+        try self.writeOptionalType(node.dispatcher_ty);
+        self.writeU8(@backingInt(std.meta.activeTag(node.instantiation)));
+        switch (node.instantiation) {
+            .monomorphic => {},
+            .callable, .derived_from_callable => |ty| try self.writeType(ty),
+        }
+        const subst = self.table.site_substitutions[node.subst.start..][0..node.subst.len];
+        self.writeU32(@intCast(subst.len));
+        for (subst) |ty| try self.writeType(ty);
+        self.writeU8(@intFromBool(node.generated_codec_derivation != null));
+        if (node.generated_codec_derivation) |nested| try self.children.append(self.allocator, .{ .codec = @backingInt(nested) });
+        self.writeU8(@backingInt(std.meta.activeTag(node.nested)));
+        switch (node.nested) {
+            .from_callable => {},
+            .resolved => |span| try self.children.append(self.allocator, .{ .refs = span }),
+        }
+    }
+
+    /// The target's `callable_ty` is its own declared type, which the target's
+    /// identity already fixes; it is also an id in the target module's store,
+    /// not this one.
+    fn writeTarget(self: *ContentDigester, target: dispatch.MethodTarget) void {
+        self.writeU32(target.module_idx);
+        self.writeU32(@backingInt(target.def_idx));
+        self.writeU8(@backingInt(std.meta.activeTag(target.kind)));
+        switch (target.kind) {
+            .procedure => |procedure| {
+                self.hasher.update(&procedure.proc.artifact.bytes);
+                self.writeU32(@backingInt(procedure.proc.proc_base));
+                self.hasher.update(&procedure.template.artifact.bytes);
+                self.writeU32(@backingInt(procedure.template.proc_base));
+                self.writeU32(@backingInt(procedure.template.template));
+            },
+            .local_proc => |local| {
+                self.writeU32(@backingInt(local.binder));
+                self.writeU32(@backingInt(local.expr));
+                self.writeU32(@backingInt(local.context_anchor));
+                self.writeU8(@intFromBool(local.dispatch_scope != null));
+                if (local.dispatch_scope) |scope| self.writeU32(@backingInt(scope));
+            },
+            .structural => |kind| self.writeU8(@backingInt(kind)),
+        }
+        self.writeU8(@intFromBool(target.reached_through_alias));
+    }
+
+    fn writeRefs(self: *ContentDigester, span: Span) Allocator.Error!void {
+        const refs = self.table.evidence_refs[span.start..][0..span.len];
+        self.writeU32(@intCast(refs.len));
+        for (refs) |ref| {
+            self.writeU8(@intFromBool(ref.runtime_dictionary));
+            try self.writeType(ref.dispatcher_ty);
+            self.writeU8(@backingInt(std.meta.activeTag(ref.resolution)));
+            switch (ref.resolution) {
+                .direct => |node| try self.children.append(self.allocator, .{ .evidence = @backingInt(node) }),
+                .constraint => |constraint| {
+                    self.writeOptionalU32(constraint.scheme_param);
+                    self.writeU32(constraint.index.depth);
+                    self.writeU32(constraint.index.index);
+                    self.writeU8(@intFromBool(constraint.independent_callable));
+                    self.writeU8(@intFromBool(constraint.reuse_slot_nested_evidence));
+                    self.writeOptionalU32(constraint.callable_contract);
+                },
+                .structural => |structural| {
+                    self.writeU8(@backingInt(std.meta.activeTag(structural.derivation)));
+                    switch (structural.derivation) {
+                        .map, .map_effectful => |plan| {
+                            self.writeU32(@backingInt(plan.tag));
+                            self.writeU32(plan.payload_index);
+                        },
+                        .equality, .hash, .parser, .encoder => {},
+                    }
+                    try self.writeType(structural.dispatcher_ty);
+                    try self.writeType(structural.callable_ty);
+                    self.writeU8(@intFromBool(structural.generated_codec_derivation != null));
+                    if (structural.generated_codec_derivation) |nested| try self.children.append(self.allocator, .{ .codec = @backingInt(nested) });
+                },
+                .from_callable, .from_scheme, .checked_error, .unreachable_value => {},
+            }
+            try self.children.append(self.allocator, .{ .refs = ref.callable_contracts });
+        }
+    }
+
+    fn writeType(self: *ContentDigester, ty: TypeId) Allocator.Error!void {
+        self.hasher.update(&(try self.keys.key(ty)).bytes);
+        const order = try self.identityOrder(ty);
+        for (order) |variable| {
+            const entry = try self.variable_ordinals.getOrPut(self.allocator, variable);
+            if (!entry.found_existing) entry.value_ptr.* = self.variable_ordinals.count() - 1;
+            self.writeU32(entry.value_ptr.*);
+        }
+    }
+
+    fn writeOptionalType(self: *ContentDigester, ty: ?TypeId) Allocator.Error!void {
+        self.writeU8(@intFromBool(ty != null));
+        if (ty) |present| try self.writeType(present);
+    }
+
+    fn identityOrder(self: *ContentDigester, ty: TypeId) Allocator.Error![]const TypeId {
+        const entry = try self.identity_orders.getOrPut(self.allocator, ty);
+        if (!entry.found_existing) {
+            errdefer _ = self.identity_orders.remove(ty);
+            entry.value_ptr.* = try checked.collectCheckedIdentityRootsInKeyOrder(self.allocator, self.store, self.names, ty);
+        }
+        return entry.value_ptr.*;
+    }
+
+    fn writeText(self: *ContentDigester, text: []const u8) void {
+        self.writeU32(@intCast(text.len));
+        self.hasher.update(text);
+    }
+
+    fn writeOptionalU32(self: *ContentDigester, value: ?u32) void {
+        self.writeU8(@intFromBool(value != null));
+        if (value) |present| self.writeU32(present);
+    }
+
+    fn writeU32(self: *ContentDigester, value: u32) void {
+        const little = std.mem.nativeToLittle(u32, value);
+        self.hasher.update(std.mem.asBytes(&little));
+    }
+
+    fn writeU8(self: *ContentDigester, value: u8) void {
+        self.hasher.update(&.{value});
+    }
+};
 
 /// Whether two calls of one generated codec body select the same method with
 /// the same proof: equal checked types modulo transparent aliases and fresh
@@ -287,4 +543,67 @@ test "codec identity preserves cross-root sharing, method roles, and recursive s
     try intern(gpa, types.view(), &table);
     try std.testing.expectEqual(derivations[0].identity, derivations[1].identity);
     for (derivations[2..], 2..) |derivation, i| try std.testing.expectEqual(@as(CodecId, @fromBackingInt(@intCast(@as(u32, @intCast(i))))), derivation.identity);
+}
+
+/// One encoder contract over two fresh variables, after `padding` unrelated
+/// roots, so equal contracts sit at different ids in different stores. Every
+/// role names the first variable except `shape_ty`, which names the second
+/// unless `shared`.
+fn digestTestContract(padding: usize, shared: bool) (Allocator.Error || error{NoSpaceLeft})!dispatch.GeneratedCodecContentDigest {
+    const gpa = std.testing.allocator;
+    var types = checked.CheckedTypeStore{};
+    defer types.deinit(gpa);
+    var variables: [2]TypeId = undefined;
+    for (0..padding + variables.len) |index| {
+        const variable = try types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @as([32]u8, @splat(7)) }, true);
+        try types.fillSyntheticTypeRoot(gpa, variable, .{ .flex = .{} });
+        if (index >= padding) variables[index - padding] = variable;
+    }
+    var names = canonical.CanonicalNameStore.init(gpa);
+    defer names.deinit();
+    for (0..padding) |index| {
+        var text: [16]u8 = undefined;
+        _ = try names.internMethodName(try std.fmt.bufPrint(&text, "padding_{d}", .{index}));
+    }
+    const ty = variables[0];
+    var derivations = [_]dispatch.GeneratedCodecDerivation{.{
+        .identity = @fromBackingInt(0),
+        .kind = .encoder,
+        .source_constructor_ty = ty,
+        .source_runtime_ty = ty,
+        .source_shape_ty = ty,
+        .source_body_shape_ty = ty,
+        .source_encoding_ty = ty,
+        .source_state_ty = ty,
+        .source_error_ty = ty,
+        .constructor_ty = ty,
+        .runtime_ty = ty,
+        .shape_ty = if (shared) ty else variables[1],
+        .body_shape_ty = ty,
+        .encoding_ty = ty,
+        .state_ty = ty,
+        .error_ty = ty,
+        .calls = .{ .start = 0, .len = 1 },
+    }};
+    var calls = [_]dispatch.GeneratedCodecCall{.{
+        .method = try names.internMethodName("to_encoder"),
+        .method_role = 0,
+        .dispatcher_ty = ty,
+        .callable_ty = ty,
+        .resolution = .checked_error,
+    }};
+    var table = dispatch.StaticDispatchPlanTable{
+        .generated_codec_derivations = &derivations,
+        .generated_codec_calls = &calls,
+    };
+    try digestContents(gpa, &types, &names, &table);
+    return derivations[0].content;
+}
+
+test "codec content digest is independent of the recording module's ids and keeps cross-root sharing" {
+    const shared = try digestTestContract(0, true);
+    try std.testing.expectEqual(shared, try digestTestContract(5, true));
+    const distinct = try digestTestContract(0, false);
+    try std.testing.expectEqual(distinct, try digestTestContract(3, false));
+    try std.testing.expect(!std.meta.eql(shared, distinct));
 }
