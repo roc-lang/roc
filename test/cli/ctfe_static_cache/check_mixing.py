@@ -158,6 +158,27 @@ for name, marker in (
                 f"{name}: {mode} cache changed failure classification or source"
             )
 
+# A helper that reads a checked constant runs both at compile time and at
+# runtime. A cold build evaluates it before its runtime consumer lowers, so
+# the runtime program must lower that body itself; a warm build links the
+# cached body, which must keep the materializer of every root it reads.
+both = str(static_fixture / "CompileTimeAndRuntime.roc")
+both_cache = root / "compile-time-and-runtime-cache"
+both_outputs = []
+for label, extra in (("uncached", ["--no-cache"]), ("cold", []), ("warm", [])):
+    executable = root / f"compile-time-and-runtime-{label}"
+    run(
+        f"compile-time-and-runtime-{label}",
+        ["build", "--opt=dev", both, "--output=" + str(executable), *extra],
+        selected_cache=both_cache,
+    )
+    executed = subprocess.run(
+        [str(executable)], input="ab\n", capture_output=True, text=True, timeout=60
+    )
+    assert executed.returncode == 0, f"{label}: {executed.stdout}\n{executed.stderr}"
+    both_outputs.append(executed.stdout)
+assert both_outputs == ["237\n"] * 3, both_outputs
+
 summary = {
     "binary": str(binary),
     "binary_sha256": binary_before,

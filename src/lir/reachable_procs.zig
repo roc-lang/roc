@@ -416,7 +416,7 @@ const Pass = struct {
     /// compaction and native emission must retain the same materializers.
     fn markCachedStorage(self: *Pass) Allocator.Error!void {
         for (self.result.static_data_values.items, 0..) |value, index| {
-            if (value.cached_demand) try self.markStaticData(@fromBackingInt(@intCast(index)));
+            if (value.cached_demand or value.retired_read) try self.markStaticData(@fromBackingInt(@intCast(index)));
         }
     }
 

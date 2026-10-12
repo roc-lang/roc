@@ -19,5 +19,8 @@ reuse; successful checks or cache-file creation alone are not that evidence.
 check that native consumers preserve evaluated captures and that cached code
 does not suppress literal errors. `RuntimeSeed.roc` additionally seeds application
 code for the static-reading helpers, so compiler failure reporting is checked
-against mixed and runtime-only object caches. The latter harness requires the
-native `test/fx` platform host; it does not build unrelated platform hosts.
+against mixed and runtime-only object caches. `CompileTimeAndRuntime.roc` calls
+the static-reading helper both while evaluating a constant and at runtime; its
+cold, warm, and uncached builds must all link and print the same result. The
+latter harness requires the native `test/fx` platform host; it does not build
+unrelated platform hosts.

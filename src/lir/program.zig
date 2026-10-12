@@ -866,6 +866,10 @@ pub const StaticDataValue = struct {
     accessor_rebuilt: bool = false,
     /// Explicit storage demand of a cached serving closure whose body is absent.
     cached_demand: bool = false,
+    /// A retired body this program links reads this slot through its
+    /// materializer. Unlike `cached_demand`, adopting completed values keeps
+    /// it: the linked code still calls the materializer.
+    retired_read: bool = false,
     /// An evaluated root owns this slot. Its initializer is representation
     /// evidence; materialization must consume the completed root value.
     compile_time_root: ?struct {

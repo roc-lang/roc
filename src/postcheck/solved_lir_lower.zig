@@ -892,6 +892,9 @@ const Lowerer = struct {
     comptime_read_shares_root: std.AutoHashMapUnmanaged(ComptimeReadTypes, bool) = .empty,
     /// The one slot holding each evaluated root's completed value.
     comptime_root_slots: std.AutoHashMap(ComptimeRootKey, ComptimeRootSlot),
+    /// The solved storage request Monotype declared for each checked root a
+    /// retired body reads, by position in `solved.layout_requests`.
+    retired_read_requests: std.AutoHashMapUnmanaged(Common.CheckedRootUse, u32) = .empty,
     comptime_failure_slots: std.AutoHashMap(ComptimeFailureKey, LIR.StaticDataId),
     static_initializer_queue: std.ArrayList(StaticInitializerEntry),
     packed_plans: collections.DenseMap(layout.Idx, lir_core.PackedData.Plan),
@@ -1308,6 +1311,7 @@ const Lowerer = struct {
         self.comptime_value_map.deinit();
         self.comptime_read_shares_root.deinit(self.allocator);
         self.comptime_root_slots.deinit();
+        self.retired_read_requests.deinit(self.allocator);
         self.comptime_failure_slots.deinit();
         self.layout_owner_types.deinit();
         self.deinitNamedLayoutIndex();
@@ -1394,6 +1398,7 @@ const Lowerer = struct {
         self.comptime_value_map = std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId).init(self.allocator);
         self.comptime_read_shares_root = .empty;
         self.comptime_root_slots = std.AutoHashMap(ComptimeRootKey, ComptimeRootSlot).init(self.allocator);
+        self.retired_read_requests = .empty;
         self.comptime_failure_slots = std.AutoHashMap(ComptimeFailureKey, LIR.StaticDataId).init(self.allocator);
         self.comptime_site_map = &.{};
         self.loop_stack = .empty;
@@ -3013,12 +3018,16 @@ const Lowerer = struct {
         if (cached == null and plain_spec and (!self.comptime_phase or self.comptime_closure_hits)) {
             if (self.spec_cache) |cache| {
                 if (source_fn.source) |template| {
-                    if (template.spec_key) |key| {
+                    // Substituting compiled code for a lowered body needs the
+                    // storage demand Monotype declared for this
+                    // specialization; without that declaration the body
+                    // lowers from source.
+                    if (template.spec_key) |key| if (template.cached_demand != null) {
                         if (cache.lookup(key.bytes, relation)) |hit| {
                             if (std.mem.eql(u8, &hit.identity, &identity.bytes)) cached = hit;
                             if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} {s}\n", .{ key.bytes[0..8], if (cached != null) "hit" else "identity-mismatch" });
                         } else if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} miss\n", .{key.bytes[0..8]});
-                    }
+                    };
                 } else if (literal_producer) |root| {
                     const recipe = root.recipe orelse Common.invariant("literal native producer has no declaration recipe");
                     if (cache.lookup(recipe.producer_key.bytes, relation)) |hit| {
@@ -3136,6 +3145,7 @@ const Lowerer = struct {
             }
         }
         try self.procs_by_identity.putNoClobber(identity, fn_id);
+        if (cached) |hit| try self.declareRetiredBodyReads(hit);
         if (source_fn.source) |template| {
             if (template.spec_key) |key| {
                 // A program that keeps its keyed specializations lowers each
@@ -6281,6 +6291,44 @@ const Lowerer = struct {
         const slot: u32 = @backingInt(id);
         hasher.update(&[_]u8{ @truncate(slot), @truncate(slot >> 8), @truncate(slot >> 16), @truncate(slot >> 24) });
         return .{ .bytes = hasher.finalResult() };
+    }
+
+    /// A retired body this program links calls the materializer of every
+    /// checked root it reads eagerly. Declare each one's slot and accessor
+    /// from the storage request Monotype declared when it retired the body,
+    /// and keep them through completed-value adoption.
+    fn declareRetiredBodyReads(self: *Lowerer, hit: Common.SpecCacheHit) Common.LowerError!void {
+        const demand = hit.demand orelse Common.invariant("retired body was linked without its demand facts");
+        if (demand.eager_reads.len == 0) return;
+        if (self.retired_read_requests.count() == 0) {
+            for (self.solved.layout_requests.items, 0..) |request, index| {
+                const root = request.comptime_root orelse continue;
+                const checked_root = switch (root.root) {
+                    .checked => |checked_root| checked_root,
+                    .literal => continue,
+                };
+                const use = Common.CheckedRootUse{ .module = root.module.bytes, .root = @backingInt(checked_root) };
+                const entry = try self.retired_read_requests.getOrPut(self.allocator, use);
+                if (!entry.found_existing) entry.value_ptr.* = @intCast(index);
+            }
+        }
+        for (demand.eager_reads) |read| {
+            const index = self.retired_read_requests.get(.{ .module = read.module, .root = read.root }) orelse
+                Common.invariant("retired body reads a checked root that has no declared storage request");
+            const request = self.solved.layout_requests.items[index];
+            const root = request.comptime_root orelse unreachable;
+            const ty = try self.lowerType(request.ty);
+            const root_layout = try self.layoutOfType(ty);
+            const slot = try self.comptimeValueSlot(root, ty, root_layout);
+            self.result.static_data_values.items[@backingInt(slot)].retired_read = true;
+            _ = try self.comptimeRootAccessor(.{
+                .loc = .none,
+                .region = .zero(),
+                .inline_scope = .none,
+                .outer = .none,
+                .mode = .derived,
+            }, slot, root, ty, root_layout);
+        }
     }
 
     /// The procedure that reads compile-time value slot `id`, which holds

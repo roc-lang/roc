@@ -766,6 +766,13 @@ empty-list capacity is explicit ConstStore/native-export data, preserved through
 symbolic construction and target transcoding without reading process addresses.
 Erased-read storage demand belongs to CTFE consumers, not unrelated runtime
 continuations; runtime ownership adoption releases those retention marks.
+Direct LIR substitutes a cached object for a specialization only when
+Monotype declared that specialization's storage demand, so an object
+published after Monotype ran (by the same build's evaluation) never replaces a
+body whose reads were not declared. A consumer that links a retired body
+declares the slot and materializer of every checked root the body reads
+eagerly, and keeps them through completed-value adoption, because the linked
+code calls those materializers.
 
 The persistent encoding canonicalizes context immediates, not diagnostic
 provenance. CTFE partials omit optional codegen debug-line entries whose file
