@@ -147,6 +147,9 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_11866_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11867_test.zig"));
     std.testing.refAllDecls(@import("test/tuple_access_control_flow_receiver_test.zig"));
+    std.testing.refAllDecls(@import("test/divergent_effect_operand_test.zig"));
+    std.testing.refAllDecls(@import("test/nominal_destructure_binders_test.zig"));
+    std.testing.refAllDecls(@import("test/retired_branch_value_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10831_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11302_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12052_test.zig"));

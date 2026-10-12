@@ -40,22 +40,22 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
 
     var generator = TypedCodeGenerator.init(gpa, &reader);
     defer generator.deinit();
-    generator.generateModule() catch |err| switch (err) {
+    generator.generateModules() catch |err| switch (err) {
         error.OutOfMemory => @panic("OOM during typecheck fuzz source generation"),
     };
 
-    const generated = generator.getOutput();
-    const root_file_name = generator.getRootFileName();
-    const generated_files = [_]FuzzHarness.GeneratedFile{
-        .{ .name = root_file_name, .source = generated },
-    };
+    var generated_files_buf: [TypedCodeGenerator.max_modules]FuzzHarness.GeneratedFile = undefined;
+    for (0..generator.moduleCount()) |index| {
+        generated_files_buf[index] = .{ .name = generator.moduleFileName(index), .source = generator.moduleOutput(index) };
+    }
+    const generated_files = generated_files_buf[0..generator.moduleCount()];
     if (debug) {
         std.debug.print("Input length: {d}, bytes consumed: {d}\n", .{ input.len, reader.position });
-        FuzzHarness.printGeneratedFiles(&generated_files);
+        FuzzHarness.printGeneratedFiles(generated_files);
     }
 
     const fuzz_io = std.Io.Threaded.global_single_threaded.io();
-    const abs_paths = FuzzHarness.writeGeneratedFiles(gpa, fuzz_io, "/tmp/roc-fuzz-typecheck", &generated_files) catch @panic("failed to write generated typecheck fuzz source");
+    const abs_paths = FuzzHarness.writeGeneratedFiles(gpa, fuzz_io, "/tmp/roc-fuzz-typecheck", generated_files) catch @panic("failed to write generated typecheck fuzz source");
     defer FuzzHarness.freeGeneratedPaths(gpa, abs_paths);
 
     const cwd = std.Io.Dir.cwd().realPathFileAlloc(fuzz_io, ".", gpa) catch @panic("failed to resolve cwd");
@@ -65,12 +65,12 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     defer build_env.deinit();
     build_env.setPostCheckPublicationMode(.none);
 
-    build_env.build(abs_paths[0]) catch |err| switch (err) {
+    build_env.build(abs_paths[generator.mainModule()]) catch |err| switch (err) {
         error.OutOfMemory => @panic("OOM during generated source typecheck"),
         else => {},
     };
 
-    FuzzHarness.assertNoBlockingReports(&build_env, debug, &generated_files, "generated typecheck fuzz source produced blocking report") catch |err| switch (err) {
+    FuzzHarness.assertNoBlockingReports(&build_env, debug, generated_files, "generated typecheck fuzz source produced blocking report") catch |err| switch (err) {
         error.OutOfMemory => @panic("OOM while draining typecheck fuzz reports"),
     };
 }

@@ -1137,10 +1137,14 @@ Consumers of a build's modules skip a module that has no CheckedModule.
 
 Rejected programs are tested generatively rather than case by case. The
 `build-errors` fuzzer uses the shared typed generator with a type-error budget:
-occasionally it writes an expression, or destructures a parameter, at a type
-other than the one its position requires, so every construct the generator
-learns is also exercised ill-typed, and the program must lower without a
-compiler crash. The CLI `snapshot-programs` suite checks every `file`,
+occasionally it writes an expression, or destructures a parameter or a
+top-level value, at a type other than the one its position requires, and each
+construct with a rejected form of its own is occasionally written in that form
+(a `.?` of a required field, a plain access of an optional field, an unset of a
+required field, an effectful top-level value, a self-import, an import cycle).
+Every construct the generator learns is therefore also exercised rejected, and
+the program must lower without a compiler crash; only an import cycle may leave
+the app unchecked, and then the program must still finish checking. The CLI `snapshot-programs` suite checks every `file`,
 `snippet`, and `expr` snapshot source as a program and requires the compiler
 not to crash, so the snapshot corpus, most of which is rejected programs,
 covers the recovery of every diagnostic that has a snapshot.
@@ -3065,7 +3069,17 @@ every result crashes) relates no branch pattern at all: no value ever reaches
 a branch, so no pattern is observed at runtime and the patterns are not
 required to agree with each other. Monotype consumes the scrutinee's checked
 divergence and lowers any match whose scrutinee diverges as the scrutinee's
-divergence alone; it never instantiates or relates the branch patterns.
+divergence alone; it never instantiates or relates the branch patterns. The
+scrutinee lowers at its own type, exactly like a discarded divergent
+statement, followed by an unreachable continuation at the match's type: a
+scrutinee that diverges in its condition, such as an `if` whose condition is
+a checked runtime error, still has branches whose values have the scrutinee's
+type, not the match's. Every other operand a consumer evaluates only for its
+divergence (a field access's receiver, a nominal's backing value, a divergent
+pattern statement's initializer) lowers the same way. A divergent control-flow
+expression (a block, `if`, or `match`) lowers at the cell its own value was
+requested at, never at unit: its paths that do not diverge still produce
+values of that type.
 
 ## Type Alias Invariant
 
@@ -10124,8 +10138,12 @@ Checking a module ends by thawing every frozen class, so no later stage,
 serialized store, or import sees the mark. Builds with runtime safety check
 the mechanism against what it replaces: every replay first relates a fresh
 copy of the method's scheme to the edge's callable on a savepoint and requires
-the result to equal the frozen instance exactly, and requires the callable the
-replay leaves to equal the callable that relation left; module checking verifies
+the result to equal the frozen instance exactly, comparing each record or tag
+union row as its fields or tags sorted by name, however many extensions store
+it (a scheme's ground parts are shared with every use, so a later relation
+through any of them can store an equal row split across extensions after the
+instance froze), and requires the callable the replay leaves to equal the
+callable that relation left; module checking verifies
 before thawing that every frozen instance is still the tree it was frozen as;
 and every in-place descriptor write asserts that its class is not frozen.
 
@@ -11454,10 +11472,12 @@ Other solved-graph mutations:
   before the default commits and withdrawn when the decision left the class
   flex. The write never changes content or links classes; only diagnostics
   consult it, under Diagnostics About Defaulted Types (below).
-- `snapshotPreDefaultType` (`setVarContent`)—mechanism: restores each
-  default-decided class's recorded pre-default flex content solely to render a
-  diagnostic, under a store savepoint that is always rolled back before
-  returning. No solved type, dispatch decision, or plan metadata observes it.
+- `snapshotPreDefaultType` (`setClassContentInSavepoint`)—mechanism: restores
+  each default-decided class's recorded pre-default flex content solely to
+  render a diagnostic, under a store savepoint that is always rolled back
+  before returning. The write is to the class itself, a frozen class included,
+  since the view is of the whole class and the rollback restores it. No solved
+  type, dispatch decision, or plan metadata observes it.
 - `markNominalBackingStructure`—mechanism: provenance on vars an opening
   of a nominal declaration backing has just minted below its root, written before any
   relation reads them. Unification consults the mark under the declared

@@ -378,7 +378,7 @@ pub fn canonicalizeAndTypeCheckModule(
 
     try checker.checkFile();
 
-    _ = try checker.problems.flushAllPendingStaticExhaustiveness(gpa);
+    _ = try checker.problems.flushAllPendingStaticExhaustiveness();
 
     return checker;
 }
