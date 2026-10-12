@@ -5771,8 +5771,6 @@ pub const MonoLlvmCodeGen = struct {
             .ptr_cast => try self.emitPtrCast(target, GuardedList.at(arg_locals, 0)),
             .crash => try self.emitCrashBytes("Roc crashed"),
             // Not conversions, and not lowered by this backend.
-            .list_split_first,
-            .list_split_last,
             .num_log,
             => return error.UnsupportedLowLevel,
             .u8_to_i8_wrap,

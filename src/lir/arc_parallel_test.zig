@@ -7,6 +7,7 @@ const executor = @import("base").post_check_task_executor;
 const arc = @import("arc.zig");
 const arc_solve = @import("arc_solve.zig");
 const arc_sig = @import("arc_sig.zig");
+const arc_dismantle = @import("arc_dismantle.zig");
 const debug_print = @import("debug_print.zig");
 const testing = std.testing;
 
@@ -199,8 +200,11 @@ test "ARC executor reverse completions match inline RC bodies and identities acr
         var metrics: arc.ParallelMetrics = .{};
         try candidate.run(&interface, &metrics);
         try runner.expectDrained();
-        try testing.expectEqual(@as(u64, 120) + metrics.uniqueness.task_committed, runner.received);
+        try testing.expectEqual(@as(u64, 120) + metrics.uniqueness.task_committed + metrics.dismantle_tasks_committed, runner.received);
         try expectUniquenessMetrics(inline_metrics.uniqueness, metrics.uniqueness);
+        // Forty statements fit one dismantle fact range.
+        try testing.expectEqual(@as(u64, 1), metrics.dismantle_tasks_submitted);
+        try testing.expectEqual(@as(u64, 1), metrics.dismantle_tasks_committed);
         // These pinned, independent bodies return scalars: no signature can
         // change, so uniqueness is one initial wave before source preparation.
         try testing.expectEqual(@as(u64, 1), metrics.uniqueness.signature_waves);
@@ -219,21 +223,38 @@ test "ARC executor reverse completions match inline RC bodies and identities acr
     }
 }
 
+/// One executor session of `Fixture.init(8)`: the task whose submission or
+/// output fails, and the callbacks every earlier session already received.
+const FixturePhase = struct {
+    session: usize,
+    fail_task: usize,
+    earlier: usize,
+};
+
+/// Uniqueness, dismantle facts, source, planning, emission. The pinned
+/// scalar-return fixture has exactly one uniqueness wave, asserted by the
+/// successful test above, and its eight statements fit one fact range.
+const fixture_phases = [_]FixturePhase{
+    .{ .session = 0, .fail_task = 2, .earlier = 0 },
+    .{ .session = 1, .fail_task = 0, .earlier = 8 },
+    .{ .session = 2, .fail_task = 2, .earlier = 9 },
+    .{ .session = 3, .fail_task = 2, .earlier = 17 },
+    .{ .session = 4, .fail_task = 2, .earlier = 25 },
+};
+
 test "ARC executor submit failures drain accepted callbacks in each phase" {
-    // Uniqueness, source, planning, emission. The pinned scalar-return fixture
-    // has exactly one uniqueness wave, asserted by the successful test above.
-    for (0..4) |phase| {
+    for (fixture_phases) |phase| {
         var source = try Fixture.init(8);
         defer source.deinit();
         var candidate = try Fixture.init(8);
         defer candidate.deinit();
-        var runner: ReverseExecutor = .{ .fail_session = phase, .fail_submit = true };
+        var runner: ReverseExecutor = .{ .fail_session = phase.session, .fail_submit = true, .fail_task = phase.fail_task };
         defer runner.deinit();
         const interface = runner.interface();
         var metrics: arc.ParallelMetrics = .{};
         try testing.expectError(error.OutOfMemory, candidate.run(&interface, &metrics));
         try runner.expectDrained();
-        try testing.expectEqual(phase * 8 + 2, runner.received);
+        try testing.expectEqual(phase.earlier + phase.fail_task, runner.received);
         try testing.expectEqual(@as(u64, 0), metrics.emission_tasks_committed);
         try expectSame(&source, &candidate);
         try candidate.run(null, &metrics);
@@ -241,7 +262,10 @@ test "ARC executor submit failures drain accepted callbacks in each phase" {
 }
 
 test "ARC executor sweeps retained allocations through uniqueness source planning and emission bodies" {
-    for (0..4) |phase| {
+    // The dismantle fact range of these return-only bodies allocates nothing;
+    // its own sweep runs against a fixture with statements to record.
+    for (fixture_phases) |phase| {
+        if (phase.session == 1) continue;
         var fail_index: usize = 0;
         while (true) : (fail_index += 1) {
             var source = try Fixture.init(8);
@@ -249,7 +273,8 @@ test "ARC executor sweeps retained allocations through uniqueness source plannin
             var candidate = try Fixture.init(8);
             defer candidate.deinit();
             var runner: ReverseExecutor = .{
-                .fail_session = phase,
+                .fail_session = phase.session,
+                .fail_task = phase.fail_task,
                 .output_failure = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index }),
             };
             defer runner.deinit();
@@ -259,7 +284,7 @@ test "ARC executor sweeps retained allocations through uniqueness source plannin
             try runner.expectDrained();
             if (runner.output_failure.has_induced_failure) {
                 try testing.expectError(error.OutOfMemory, result);
-                try testing.expect(runner.received >= phase * 8 + 4);
+                try testing.expect(runner.received >= phase.earlier + 4);
                 try testing.expectEqual(@as(u64, 0), metrics.emission_tasks_committed);
                 try expectSame(&source, &candidate);
             } else {
@@ -276,9 +301,10 @@ test "ARC executor later wave failure drains without rolling back earlier commit
     var candidate = try Fixture.init(40);
     defer candidate.deinit();
     const before = candidate.store.cfStmtCount();
-    // One uniqueness wave, two source batches, then planning/emission for the first 32 bodies,
-    // followed by planning/emission for the final eight.
-    var runner: ReverseExecutor = .{ .fail_session = 6, .fail_submit = true };
+    // One uniqueness wave, one dismantle fact range, two source batches, then
+    // planning/emission for the first 32 bodies, followed by planning/emission
+    // for the final eight.
+    var runner: ReverseExecutor = .{ .fail_session = 7, .fail_submit = true };
     defer runner.deinit();
     const interface = runner.interface();
     var metrics: arc.ParallelMetrics = .{};
@@ -666,4 +692,241 @@ test "ARC executor outcome restitution variant closure matches inline under reve
         if (expected_metrics) |expected| try testing.expectEqualDeep(expected, metrics);
         expected_metrics = metrics;
     }
+}
+
+/// Divergent field takes of a dying pair on both sides of a straight-line
+/// procedure long enough to span several dismantle fact ranges.
+const DismantleRangeFixture = struct {
+    fixture: Fixture,
+    takes: [2][2]core.LIR.CFStmtId = undefined,
+
+    fn init() std.mem.Allocator.Error!DismantleRangeFixture {
+        var self: DismantleRangeFixture = .{ .fixture = try Fixture.init(0) };
+        errdefer self.fixture.deinit();
+        const pair_layout = try self.fixture.layouts.putStructFields(&[_]layout.StructField{
+            .{ .index = 0, .layout = .str },
+            .{ .index = 1, .layout = .str },
+        });
+        try self.addPairProc(pair_layout, 0);
+        const s = &self.fixture.store;
+        const counter = try s.addLocal(.{ .layout_idx = .i64 });
+        const tick = try s.addProcSpec(.{
+            .identity = core.LIR.ProcIdentity.forTest(@intCast(s.procSpecCount())),
+            .name = s.freshSyntheticSymbol(),
+            .args = .empty(),
+            .body = null,
+            .ret_layout = .i64,
+        }, .none);
+        var body = try s.addCFStmt(.{ .ret = .{ .value = counter } }, .test_fixture);
+        for (0..20_000) |index| {
+            body = if (index % 2 == 0)
+                try s.addCFStmt(.{ .assign_literal = .{
+                    .target = counter,
+                    .value = .{ .i64_literal = .{ .value = @intCast(index), .layout_idx = .i64 } },
+                    .next = body,
+                } }, .test_fixture)
+            else
+                try s.addCFStmt(.{ .assign_call = .{
+                    .target = counter,
+                    .proc = tick,
+                    .args = .empty(),
+                    .next = body,
+                } }, .test_fixture);
+        }
+        _ = try s.addProcSpec(.{
+            .identity = core.LIR.ProcIdentity.forTest(@intCast(s.procSpecCount())),
+            .name = s.freshSyntheticSymbol(),
+            .args = .empty(),
+            .frame_locals = try s.addLocalSpan(&.{counter}),
+            .body = body,
+            .ret_layout = .i64,
+        }, .none);
+        try self.addPairProc(pair_layout, 1);
+        return self;
+    }
+
+    fn addPairProc(self: *DismantleRangeFixture, pair_layout: layout.Idx, slot: usize) std.mem.Allocator.Error!void {
+        const s = &self.fixture.store;
+        const sink = try s.addProcSpec(.{
+            .identity = core.LIR.ProcIdentity.forTest(@intCast(s.procSpecCount())),
+            .name = s.freshSyntheticSymbol(),
+            .args = .empty(),
+            .body = null,
+            .ret_layout = .i64,
+        }, .none);
+        const cond = try s.addLocal(.{ .layout_idx = .i64 });
+        const first = try s.addLocal(.{ .layout_idx = .str });
+        const second = try s.addLocal(.{ .layout_idx = .str });
+        const pair = try s.addLocal(.{ .layout_idx = pair_layout });
+        const first_read = try s.addLocal(.{ .layout_idx = .str });
+        const second_read = try s.addLocal(.{ .layout_idx = .str });
+        const first_sink = try s.addLocal(.{ .layout_idx = .i64 });
+        const second_sink = try s.addLocal(.{ .layout_idx = .i64 });
+        const result = try s.addLocal(.{ .layout_idx = .i64 });
+        const ret = try s.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+        const first_call = try s.addCFStmt(.{ .assign_call = .{
+            .target = first_sink,
+            .proc = sink,
+            .args = try s.addLocalSpan(&.{first_read}),
+            .next = ret,
+        } }, .test_fixture);
+        const first_branch = try s.addCFStmt(.{ .assign_ref = .{
+            .target = first_read,
+            .op = .{ .field = .{ .source = pair, .field_idx = 0 } },
+            .next = first_call,
+        } }, .test_fixture);
+        const second_call = try s.addCFStmt(.{ .assign_call = .{
+            .target = second_sink,
+            .proc = sink,
+            .args = try s.addLocalSpan(&.{second_read}),
+            .next = ret,
+        } }, .test_fixture);
+        const second_branch = try s.addCFStmt(.{ .assign_ref = .{
+            .target = second_read,
+            .op = .{ .field = .{ .source = pair, .field_idx = 1 } },
+            .next = second_call,
+        } }, .test_fixture);
+        const choose = try s.addCFStmt(.{ .switch_stmt = .{
+            .cond = cond,
+            .branches = try s.addCFSwitchBranches(&.{.{ .value = 0, .body = first_branch }}),
+            .default_branch = second_branch,
+            .continuation = null,
+        } }, .test_fixture);
+        const assign_result = try s.addCFStmt(.{ .assign_literal = .{
+            .target = result,
+            .value = .{ .i64_literal = .{ .value = 7, .layout_idx = .i64 } },
+            .next = choose,
+        } }, .test_fixture);
+        const assign_pair = try s.addCFStmt(.{ .assign_struct = .{
+            .target = pair,
+            .fields = try s.addLocalSpan(&.{ first, second }),
+            .next = assign_result,
+        } }, .test_fixture);
+        const assign_second = try s.addCFStmt(.{ .assign_literal = .{
+            .target = second,
+            .value = .{ .str_literal = try s.insertStringView("second", 0, 6) },
+            .next = assign_pair,
+        } }, .test_fixture);
+        const body = try s.addCFStmt(.{ .assign_literal = .{
+            .target = first,
+            .value = .{ .str_literal = try s.insertStringView("first", 0, 5) },
+            .next = assign_second,
+        } }, .test_fixture);
+        _ = try s.addProcSpec(.{
+            .identity = core.LIR.ProcIdentity.forTest(@intCast(s.procSpecCount())),
+            .name = s.freshSyntheticSymbol(),
+            .args = try s.addLocalSpan(&.{cond}),
+            .frame_locals = try s.addLocalSpan(&.{ cond, first, second, pair, first_read, second_read, first_sink, second_sink, result }),
+            .body = body,
+            .ret_layout = .i64,
+        }, .none);
+        self.takes[slot] = .{ first_branch, second_branch };
+    }
+
+    fn compute(self: *DismantleRangeFixture, options: arc_dismantle.ComputeOptions) arc_dismantle.Error!arc_dismantle.Dismantles {
+        const store = &self.fixture.store;
+        const rc = try arc_solve.computeLocalContainsRefcounted(testing.allocator, store, &self.fixture.layouts);
+        defer testing.allocator.free(rc);
+        var solution = try arc_solve.solve(testing.allocator, store, &self.fixture.layouts, rc, &.{}, &.{}, true);
+        defer solution.deinit();
+        return arc_dismantle.compute(testing.allocator, store, &self.fixture.layouts, rc, &solution, options);
+    }
+};
+
+fn expectSameMap(expected: anytype, actual: anytype) error{TestExpectedEqual}!void {
+    try testing.expectEqual(expected.count(), actual.count());
+    var expected_it = expected.iterator();
+    var actual_it = actual.iterator();
+    while (expected_it.next()) |entry| {
+        const other = actual_it.next().?;
+        try testing.expectEqualDeep(entry.key_ptr.*, other.key_ptr.*);
+        try testing.expectEqualDeep(entry.value_ptr.*, other.value_ptr.*);
+    }
+}
+
+fn expectSameDismantles(expected: *const arc_dismantle.Dismantles, actual: *const arc_dismantle.Dismantles) error{TestExpectedEqual}!void {
+    try expectSameMap(expected.takes, actual.takes);
+    try expectSameMap(expected.containers, actual.containers);
+    try expectSameMap(expected.owned_only_takes, actual.owned_only_takes);
+    try expectSameMap(expected.owned_only_containers, actual.owned_only_containers);
+    try expectSameMap(expected.field_restitution_args, actual.field_restitution_args);
+    try expectSameMap(expected.projection_units, actual.projection_units);
+    try expectSameMap(expected.complete_takes, actual.complete_takes);
+    try expectSameMap(expected.projection_aliases, actual.projection_aliases);
+    try testing.expectEqualSlices(arc_sig.ParamMask, expected.owned_only_param_benefits, actual.owned_only_param_benefits);
+    try testing.expectEqualSlices(bool, expected.take_bindings, actual.take_bindings);
+    try testing.expectEqualSlices(u32, expected.owned_only_binding_roots, actual.owned_only_binding_roots);
+}
+
+test "ARC dismantle fact ranges match inline analysis under reverse completions and drain failures" {
+    var direct = try DismantleRangeFixture.init();
+    defer direct.fixture.deinit();
+    var inline_metrics: arc_dismantle.TaskMetrics = .{};
+    var expected = try direct.compute(.{ .metrics = &inline_metrics });
+    defer expected.deinit();
+    try testing.expectEqual(arc_dismantle.TaskMetrics{}, inline_metrics);
+    for (direct.takes) |pair_reads| {
+        for (pair_reads) |read| try testing.expect(expected.takes.contains(read));
+    }
+    const range_count: u64 = 3;
+    try testing.expect(direct.fixture.store.cfStmtCount() > 2 * 8192);
+    try testing.expect(direct.fixture.store.cfStmtCount() <= 3 * 8192);
+
+    for ([_]usize{ 2, 4 }) |lanes| {
+        var candidate = try DismantleRangeFixture.init();
+        defer candidate.fixture.deinit();
+        var runner: ReverseExecutor = .{ .lanes = lanes };
+        defer runner.deinit();
+        const interface = runner.interface();
+        var metrics: arc_dismantle.TaskMetrics = .{};
+        var actual = try candidate.compute(.{ .executor = &interface, .metrics = &metrics });
+        defer actual.deinit();
+        try runner.expectDrained();
+        try testing.expectEqual(range_count, runner.received);
+        try testing.expectEqual(arc_dismantle.TaskMetrics{ .submitted = range_count, .committed = range_count }, metrics);
+        try expectSameDismantles(&expected, &actual);
+    }
+
+    // Every range records direct calls, so a failing output allocator fails
+    // its range; earlier and later accepted ranges still drain.
+    for (0..range_count) |fail_task| {
+        var fail_index: usize = 0;
+        while (true) : (fail_index += 1) {
+            var candidate = try DismantleRangeFixture.init();
+            defer candidate.fixture.deinit();
+            var runner: ReverseExecutor = .{
+                .lanes = 2,
+                .fail_session = 0,
+                .fail_task = fail_task,
+                .output_failure = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index }),
+            };
+            defer runner.deinit();
+            const interface = runner.interface();
+            var metrics: arc_dismantle.TaskMetrics = .{};
+            const result = candidate.compute(.{ .executor = &interface, .metrics = &metrics });
+            try runner.expectDrained();
+            if (runner.output_failure.has_induced_failure) {
+                try testing.expectError(error.OutOfMemory, result);
+                try testing.expect(metrics.committed < metrics.submitted);
+            } else {
+                var actual = try result;
+                defer actual.deinit();
+                try testing.expect(fail_index > 0);
+                try expectSameDismantles(&expected, &actual);
+                break;
+            }
+        }
+    }
+
+    // A refused submission stops admission after the ranges already accepted.
+    var candidate = try DismantleRangeFixture.init();
+    defer candidate.fixture.deinit();
+    var runner: ReverseExecutor = .{ .lanes = 2, .fail_session = 0, .fail_task = 2, .fail_submit = true };
+    defer runner.deinit();
+    const interface = runner.interface();
+    var metrics: arc_dismantle.TaskMetrics = .{};
+    try testing.expectError(error.OutOfMemory, candidate.compute(.{ .executor = &interface, .metrics = &metrics }));
+    try runner.expectDrained();
+    try testing.expectEqual(@as(usize, 2), runner.received);
+    try testing.expectEqual(arc_dismantle.TaskMetrics{ .submitted = 2, .committed = 2 }, metrics);
 }

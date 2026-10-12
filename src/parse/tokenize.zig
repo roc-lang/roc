@@ -348,6 +348,7 @@ pub const Token = struct {
                 tok == .CloseSquare or
                 tok == .CloseCurly or
                 tok == .CloseStringInterpolation or
+                tok == .TripleDot or
                 tok == .StringEnd or
                 tok == .SingleQuote or
                 tok == .MalformedSingleQuote or
@@ -1463,9 +1464,15 @@ pub const Tokenizer = struct {
                                 try self.pushTokenNormalHere(gpa, tag, start);
                             }
                         } else {
+                            // Look at what follows the minus to determine if it's unary.
+                            // A minus before `...` follows the same rule as a minus before
+                            // a number: `x-...` is subtraction, while `-...` is negation.
+                            const negates_triple_dot = n == '.' and
+                                self.cursor.peekAt(2) == '.' and
+                                self.cursor.peekAt(3) == '.' and
+                                (sp or !(if (self.lastTokenTag()) |prev| prev.canEndExpression() else false));
                             self.cursor.pos += 1;
-                            // Look at what follows the minus to determine if it's unary
-                            const tokenType: Token.Tag = if (canFollowUnaryMinus(n)) .OpUnaryMinus else .OpBinaryMinus;
+                            const tokenType: Token.Tag = if (canFollowUnaryMinus(n) or negates_triple_dot) .OpUnaryMinus else .OpBinaryMinus;
                             try self.pushTokenNormalHere(gpa, tokenType, start);
                         }
                     } else {
@@ -2585,6 +2592,12 @@ test "tokenizer" {
     try testTokenization(gpa, "1e10", &[_]Token.Tag{.Float});
     try testTokenization(gpa, "_ident", &[_]Token.Tag{.NamedUnderscore});
     try testTokenization(gpa, "3...4", &[_]Token.Tag{ .Int, .TripleDot, .Int });
+    try testTokenization(gpa, "-...", &[_]Token.Tag{ .OpUnaryMinus, .TripleDot });
+    try testTokenization(gpa, "a -...", &[_]Token.Tag{ .LowerIdent, .OpUnaryMinus, .TripleDot });
+    try testTokenization(gpa, "a-...", &[_]Token.Tag{ .LowerIdent, .OpBinaryMinus, .TripleDot });
+    try testTokenization(gpa, "...-...", &[_]Token.Tag{ .TripleDot, .OpBinaryMinus, .TripleDot });
+    try testTokenization(gpa, "...-1", &[_]Token.Tag{ .TripleDot, .OpBinaryMinus, .Int });
+    try testTokenization(gpa, "-..", &[_]Token.Tag{ .OpBinaryMinus, .DoubleDot });
     try testTokenization(gpa, "..<", &[_]Token.Tag{.OpDoubleDotLessThan});
     try testTokenization(gpa, "..=", &[_]Token.Tag{.OpDoubleDotEquals});
     try testTokenization(gpa, "1..<5", &[_]Token.Tag{ .Int, .OpDoubleDotLessThan, .Int });

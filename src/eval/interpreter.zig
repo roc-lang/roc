@@ -6277,13 +6277,6 @@ pub const Interpreter = struct {
 
     const ListElemInfo = struct { alignment: u32, width: usize };
 
-    const ListElementPairStruct = struct {
-        list_offset: usize,
-        list_layout: layout_mod.Idx,
-        elem_offset: usize,
-        elem_layout: layout_mod.Idx,
-    };
-
     const ListElementRcContext = struct {
         interp: *LirInterpreter,
         frame: *const Frame,
@@ -7566,8 +7559,6 @@ pub const Interpreter = struct {
             .list_take_first => self.evalListTakeFirst(args[0], args[1], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll),
             .list_take_last => self.evalListTakeLast(args[0], args[1], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll),
             .list_reverse => self.evalListReverse(args[0], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll),
-            .list_split_first => self.evalListSplitFirst(args[0], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll),
-            .list_split_last => self.evalListSplitLast(args[0], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll),
 
             // ── Arithmetic ──
             .num_int_add_wrap,
@@ -8237,85 +8228,6 @@ pub const Interpreter = struct {
             // ── Crash ──
             .crash => return self.triggerCrash("Roc crashed"),
         };
-    }
-
-    fn resolveListElementPairStruct(self: *LirInterpreter, struct_layout: layout_mod.Idx) ListElementPairStruct {
-        const struct_layout_val = self.layout_store.getLayout(struct_layout);
-        if (struct_layout_val.tag != .struct_) {
-            self.invariantFailed(
-                "LIR/interpreter invariant violated: expected struct layout for list/element pair, got layout {d} ({s})",
-                .{ @backingInt(struct_layout), @tagName(struct_layout_val.tag) },
-            );
-        }
-
-        const struct_info = self.layout_store.getStructInfo(struct_layout_val);
-        if (struct_info.fields.len != 2) {
-            self.invariantFailed(
-                "LIR/interpreter invariant violated: expected 2-field struct layout {d} for list/element pair, found {d} fields",
-                .{ @backingInt(struct_layout), struct_info.fields.len },
-            );
-        }
-
-        var pair: ?ListElementPairStruct = null;
-        var found_list = false;
-        var found_elem = false;
-        for (0..struct_info.fields.len) |i| {
-            const field_layout = self.layout_store.getStructFieldLayout(struct_layout_val.getStruct().idx, @intCast(i));
-            const field_offset = self.layout_store.getStructFieldOffset(struct_layout_val.getStruct().idx, @intCast(i));
-            const field_layout_val = self.layout_store.getLayout(field_layout);
-            const is_list = field_layout_val.tag == .list or field_layout_val.tag == .list_of_zst;
-            if (is_list) {
-                if (found_list) {
-                    self.invariantFailed(
-                        "LIR/interpreter invariant violated: struct layout {d} had multiple list fields in list/element pair lowering",
-                        .{@backingInt(struct_layout)},
-                    );
-                }
-                found_list = true;
-                pair = if (pair) |existing| .{
-                    .list_offset = field_offset,
-                    .list_layout = field_layout,
-                    .elem_offset = existing.elem_offset,
-                    .elem_layout = existing.elem_layout,
-                } else .{
-                    .list_offset = field_offset,
-                    .list_layout = field_layout,
-                    .elem_offset = 0,
-                    .elem_layout = .zst,
-                };
-            } else {
-                if (found_elem) {
-                    self.invariantFailed(
-                        "LIR/interpreter invariant violated: struct layout {d} had multiple non-list fields in list/element pair lowering",
-                        .{@backingInt(struct_layout)},
-                    );
-                }
-                found_elem = true;
-                pair = if (pair) |existing| .{
-                    .list_offset = existing.list_offset,
-                    .list_layout = existing.list_layout,
-                    .elem_offset = field_offset,
-                    .elem_layout = field_layout,
-                } else .{
-                    .list_offset = 0,
-                    .list_layout = undefined,
-                    .elem_offset = field_offset,
-                    .elem_layout = field_layout,
-                };
-            }
-        }
-
-        const resolved = pair orelse self.invariantFailed(
-            "LIR/interpreter invariant violated: struct layout {d} did not resolve a list/element pair shape",
-            .{@backingInt(struct_layout)},
-        );
-        if (!found_list or !found_elem) {
-            self.invariantFailed(
-                "LIR/interpreter invariant violated: struct layout {d} missing list or element field in list/element pair shape",
-                .{@backingInt(struct_layout)},
-            );
-        }
-        return resolved;
     }
 
     fn writeStructFieldValue(
@@ -9442,114 +9354,6 @@ pub const Interpreter = struct {
             &self.roc_ops,
         );
         return self.rocListToValue(result, ret_layout);
-    }
-
-    fn evalListSplitFirst(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode, ll: LowLevelEvalInput) Error!Value {
-        const rl = self.valueToRocListForLayout(list_arg, list_layout);
-        const info = self.listElemInfo(list_layout);
-        const elems_rc = self.builtinListElemRc(list_layout);
-        const elem_layout = self.listElemLayout(list_layout);
-        const val = try self.alloc(ret_layout);
-        if (rl.len() > 0 and info.width == 0) {
-            const payload_layout = self.tagPayloadLayout(ret_layout, 1);
-            const pair = self.resolveListElementPairStruct(payload_layout);
-            try self.writeStructFieldValue(val, pair.elem_offset, pair.elem_layout, Value.zst, elem_layout);
-            const rest_value = try self.rocListToValue(canonicalZstList(rl.len() - 1), pair.list_layout);
-            try self.writeStructFieldValue(val, pair.list_offset, pair.list_layout, rest_value, pair.list_layout);
-            self.helper.writeTagDiscriminant(val, ret_layout, 1);
-        } else if (rl.len() > 0 and rl.bytes != null and info.width > 0) {
-            const payload_layout = self.tagPayloadLayout(ret_layout, 1);
-            const pair = self.resolveListElementPairStruct(payload_layout);
-            const first_elem = Value{ .ptr = rl.bytes.? };
-            try self.writeStructFieldValue(
-                val,
-                pair.elem_offset,
-                pair.elem_layout,
-                first_elem,
-                elem_layout,
-            );
-            if (self.builtinInternalContainsRefcounted("interpreter.list_split_first.elem_rc", elem_layout)) {
-                self.performBuiltinInternalRc("interpreter.list_split_first.elem_incref", .incref, first_elem, elem_layout, 1);
-            }
-            // Rest list starts at offset info.width
-            var crash_boundary = self.enterCrashBoundary();
-            defer crash_boundary.deinit();
-            const sj = crash_boundary.set();
-            if (sj != 0) return self.crashError();
-            var elem_rc_ctx = try self.listElementRcContext(ll, list_layout);
-            const rest = builtins.list.listSublist(
-                rl,
-                info.alignment,
-                info.width,
-                elems_rc,
-                1,
-                std.math.maxInt(u64),
-                if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
-                if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
-                update_mode,
-                &self.roc_ops,
-            );
-            const rest_value = try self.rocListToValue(rest, pair.list_layout);
-            try self.writeStructFieldValue(val, pair.list_offset, pair.list_layout, rest_value, pair.list_layout);
-            self.helper.writeTagDiscriminant(val, ret_layout, 1);
-        } else {
-            self.helper.writeTagDiscriminant(val, ret_layout, 0);
-        }
-        return val;
-    }
-
-    fn evalListSplitLast(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode, ll: LowLevelEvalInput) Error!Value {
-        const rl = self.valueToRocListForLayout(list_arg, list_layout);
-        const info = self.listElemInfo(list_layout);
-        const elems_rc = self.builtinListElemRc(list_layout);
-        const elem_layout = self.listElemLayout(list_layout);
-        const val = try self.alloc(ret_layout);
-        if (rl.len() > 0 and info.width == 0) {
-            const payload_layout = self.tagPayloadLayout(ret_layout, 1);
-            const pair = self.resolveListElementPairStruct(payload_layout);
-            try self.writeStructFieldValue(val, pair.elem_offset, pair.elem_layout, Value.zst, elem_layout);
-            const rest_value = try self.rocListToValue(canonicalZstList(rl.len() - 1), pair.list_layout);
-            try self.writeStructFieldValue(val, pair.list_offset, pair.list_layout, rest_value, pair.list_layout);
-            self.helper.writeTagDiscriminant(val, ret_layout, 1);
-        } else if (rl.len() > 0 and rl.bytes != null and info.width > 0) {
-            const payload_layout = self.tagPayloadLayout(ret_layout, 1);
-            const pair = self.resolveListElementPairStruct(payload_layout);
-            const last_offset = (rl.len() - 1) * info.width;
-            const last_elem = Value{ .ptr = rl.bytes.? + last_offset };
-            try self.writeStructFieldValue(
-                val,
-                pair.elem_offset,
-                pair.elem_layout,
-                last_elem,
-                elem_layout,
-            );
-            if (self.builtinInternalContainsRefcounted("interpreter.list_split_last.elem_rc", elem_layout)) {
-                self.performBuiltinInternalRc("interpreter.list_split_last.elem_incref", .incref, last_elem, elem_layout, 1);
-            }
-            var crash_boundary = self.enterCrashBoundary();
-            defer crash_boundary.deinit();
-            const sj = crash_boundary.set();
-            if (sj != 0) return self.crashError();
-            var elem_rc_ctx = try self.listElementRcContext(ll, list_layout);
-            const rest = builtins.list.listSublist(
-                rl,
-                info.alignment,
-                info.width,
-                elems_rc,
-                0,
-                rl.len() - 1,
-                if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
-                if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
-                update_mode,
-                &self.roc_ops,
-            );
-            const rest_value = try self.rocListToValue(rest, pair.list_layout);
-            try self.writeStructFieldValue(val, pair.list_offset, pair.list_layout, rest_value, pair.list_layout);
-            self.helper.writeTagDiscriminant(val, ret_layout, 1);
-        } else {
-            self.helper.writeTagDiscriminant(val, ret_layout, 0);
-        }
-        return val;
     }
 
     /// Generic integer binary operation.

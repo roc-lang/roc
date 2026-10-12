@@ -4065,7 +4065,9 @@ const GeneratedTryTypeAddress = struct {
 /// procedure call. `evidence` is an interned producer identity in `module`;
 /// the plan's closed callable type is likewise structurally interned there.
 /// The method scope remains part of specialization identity because imported
-/// bodies resolve compiler-generated method calls in that scope.
+/// bodies resolve compiler-generated method calls in that scope. The key is a
+/// complete identity only for specializations independent of the caller's
+/// local context, so caller-owned specializations are never stored under it.
 const ClosedDirectCallIdentity = struct {
     callable: CheckedTypeAddress,
     evidence: static_dispatch.EvidenceNodeId,
@@ -23362,6 +23364,36 @@ const BodyContext = struct {
         return relation_base;
     }
 
+    /// The lexical binder environment a context set aside to lower a closed
+    /// expression. `nested_relation_base` relates exactly these binders in
+    /// the view they belong to, so it is set aside and restored with them.
+    const SavedBinderEnvironment = struct {
+        binders: BinderMap,
+        typed_binders: TypedBinders,
+        nested_relation_base: ?*NestedRelationBase,
+    };
+
+    fn enterFreshBinderEnvironment(self: *BodyContext, binder_count: usize) Allocator.Error!SavedBinderEnvironment {
+        const saved: SavedBinderEnvironment = .{
+            .binders = self.binders,
+            .typed_binders = self.typed_binders,
+            .nested_relation_base = self.nested_relation_base,
+        };
+        self.binders = try BinderMap.init(self.allocator, binder_count);
+        self.typed_binders = TypedBinders.init(self.allocator);
+        self.nested_relation_base = null;
+        return saved;
+    }
+
+    fn restoreBinderEnvironment(self: *BodyContext, saved: SavedBinderEnvironment) void {
+        self.destroyNestedRelationBase();
+        self.binders.deinit();
+        self.typed_binders.deinit();
+        self.binders = saved.binders;
+        self.typed_binders = saved.typed_binders;
+        self.nested_relation_base = saved.nested_relation_base;
+    }
+
     fn destroyNestedRelationBase(self: *BodyContext) void {
         const relation_base = self.nested_relation_base orelse return;
         self.nested_relation_base = null;
@@ -29857,38 +29889,25 @@ const BodyContext = struct {
         return self.source_region_override orelse expr.source_region;
     }
 
-    const DivergentExprContext = union(enum) {
-        uncontextual,
-        mono_type: Type.TypeId,
-        type_cell: DraftTypeCell,
-    };
-
-    /// Lower a producer-marked divergent expression before any value
-    /// representation or type relation is requested for it. The continuation's
-    /// context is the result cell for a value that can never materialize.
-    fn divergentExprInContextStep(
-        self: *BodyContext,
-        expr_id: checked.CheckedExprId,
-        context: DivergentExprContext,
-    ) Allocator.Error!?LowerStep {
+    /// Lower a producer-marked divergent expression whose value nothing
+    /// consumes, for its effect alone, before any value representation or type
+    /// relation is requested for it. It lowers at its own type, never at its
+    /// consumer's: a consumer of a value that never materializes continues at
+    /// its own type, and a control-flow expression's branches still produce
+    /// values of the expression's own type up to wherever it diverges.
+    fn divergentEffectExprStep(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!?LowerStep {
         if (!self.checkedExprDivergesInLoweredRuntime(expr_id)) return null;
 
-        return switch (context) {
-            .uncontextual => blk: {
-                const expr = self.view.bodies.expr(expr_id);
-                // A runtime error produces no value, and its checked type can
-                // contain the error it was retired for. Every other divergent
-                // expression retains its checked result variable as an
-                // unobservable continuation cell; asking for expression value
-                // evidence here would instantiate a rejected dispatch.
-                if (expr.data == .runtime_error or self.view.types.payload(expr.ty) == .err) {
-                    break :blk divergentStep(self, expr_id, .{ .at_type = try self.unitType() });
-                }
-                break :blk divergentStep(self, expr_id, .{ .at_cell = DraftTypeCell.fromGraphNode(try self.instNode(expr.ty)) });
-            },
-            .mono_type => |ty| divergentStep(self, expr_id, .{ .at_type = ty }),
-            .type_cell => |cell| divergentStep(self, expr_id, .{ .at_cell = cell }),
-        };
+        const expr = self.view.bodies.expr(expr_id);
+        // A runtime error produces no value, and its checked type can contain
+        // the error it was retired for. Every other divergent expression
+        // retains its checked result variable as an unobservable continuation
+        // cell; asking for expression value evidence here would instantiate a
+        // rejected dispatch.
+        if (expr.data == .runtime_error or self.view.types.payload(expr.ty) == .err) {
+            return divergentStep(self, expr_id, .{ .at_type = try self.unitType() });
+        }
+        return divergentStep(self, expr_id, .{ .at_cell = DraftTypeCell.fromGraphNode(try self.instNode(expr.ty)) });
     }
     // Expression lowering //
     //
@@ -30521,7 +30540,7 @@ const BodyContext = struct {
                 // pattern to a scrutinee that always crashes, so those patterns
                 // need not even agree with each other and must not be
                 // instantiated here.
-                if (try self.divergentExprInContextStep(match.cond, .{ .type_cell = task.result_cell })) |step| {
+                if (try self.divergentEffectExprStep(match.cond)) |step| {
                     task.stage = .divergent;
                     return step;
                 }
@@ -30550,7 +30569,13 @@ const BodyContext = struct {
             },
             .body => try self.finishMatchBranchBody(task, input.?.exprValue()),
             .scrutinee => return self.finishMatch(task, input.?.exprValue()),
-            .divergent => return .{ .ret = input.? },
+            .divergent => {
+                const stmt = try self.addStmt(.{ .expr = input.?.exprValue() });
+                return loweredExprStep(try self.addExprWithTypeCell(task.result_cell, .{ .block = .{
+                    .statements = try self.addStmtSpan(&.{stmt}),
+                    .final_expr = try self.addExprWithTypeCell(task.result_cell, .@"unreachable"),
+                } }));
+            },
         }
 
         // All checked pattern evidence must reach the shared scrutinee before
@@ -30970,7 +30995,7 @@ const BodyContext = struct {
         // statement. Its value type is never requested: a checked runtime
         // error has a deliberately erroneous type, and value evidence for a
         // divergent call could instantiate a rejected dispatch.
-        if (try self.divergentExprInContextStep(expr_id, .uncontextual)) |step| {
+        if (try self.divergentEffectExprStep(expr_id)) |step| {
             task.stage = .divergent;
             return step;
         }
@@ -31129,8 +31154,8 @@ const BodyContext = struct {
 
     /// A pattern statement's value lowers as a child: a divergent initializer
     /// for its effect alone, since it never produces a value to bind and
-    /// emitting a pattern or reading its dead checked type would invent a
-    /// relation for a value that cannot exist.
+    /// emitting a pattern would invent a relation for a value that cannot
+    /// exist.
     fn beginPatternStatementStep(
         self: *BodyContext,
         task: *StatementTask,
@@ -31139,7 +31164,8 @@ const BodyContext = struct {
     ) Allocator.Error!LowerStep {
         if (task.diverges) {
             task.stage = .divergent_value;
-            return divergentStep(self, expr, .{ .at_type = try self.unitType() });
+            return (try self.divergentEffectExprStep(expr)) orelse
+                Common.invariant("a divergent pattern statement's initializer did not diverge");
         }
         task.requested_cell = try self.beginPatternStatementValue(pattern, expr);
         task.stage = .pattern_value;
@@ -31315,10 +31341,33 @@ const BodyContext = struct {
         const expr_id = task.expr;
         const checked_expr = self.view.bodies.expr(expr_id);
         switch (task.form) {
+            // A control-flow expression produces values of its own type on
+            // every path that does not diverge, so it lowers at its cell;
+            // every other expression lowers its operands for their effects.
+            // A conditional whose scrutinee or first condition diverges runs
+            // nothing else, so only that operand lowers; its branches may not
+            // even have the continuation's shape.
             .at_cell => |cell| switch (checked_expr.data) {
-                .match_ => |match| return requestLowerTask(self, .{ .match_task = .{ .expr_id = expr_id, .match = match, .result_cell = cell } }),
-                .if_ => |if_| return requestLowerTask(self, .{ .if_task = .{ .expr_id = expr_id, .if_ = if_, .result_cell = cell } }),
-                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {
+                .match_ => |match| {
+                    if (self.checkedExprDivergesInLoweredRuntime(match.cond)) {
+                        task.finish = .{ .effect_at_cell = cell };
+                        return divergentStep(self, match.cond, .{ .at_type = try self.unitType() });
+                    }
+                    return requestLowerTask(self, .{ .match_task = .{ .expr_id = expr_id, .match = match, .result_cell = cell } });
+                },
+                .if_ => |if_| {
+                    if (if_.branches.len > 0 and self.checkedExprDivergesInLoweredRuntime(if_.branches[0].cond)) {
+                        task.finish = .{ .effect_at_cell = cell };
+                        return divergentStep(self, if_.branches[0].cond, .{ .at_type = try self.unitType() });
+                    }
+                    return requestLowerTask(self, .{ .if_task = .{ .expr_id = expr_id, .if_ = if_, .result_cell = cell } });
+                },
+                .block => |block| return requestLowerTask(self, .{ .block = try self.boxLowerTask(BlockTask, .{
+                    .statements = block.statements,
+                    .final_expr = block.final_expr,
+                    .result_cell = cell,
+                }) }),
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {
                     task.finish = .{ .effect_at_cell = cell };
                     return divergentStep(self, expr_id, .{ .at_type = try self.unitType() });
                 },
@@ -31345,17 +31394,12 @@ const BodyContext = struct {
                 return divergentStep(self, expr_id, .{ .data = ty });
             },
             .effect_data => |ty| {
-                // A divergent expression never returns a value, so its checked result
-                // variable can legitimately remain unconstrained; the continuation's
-                // explicit type stands in for a result that cannot exist. An explicit
-                // checked runtime error lowers its crash path at unit because its
-                // deliberately erroneous source type has no monotype.
-                const effect_ty = if (checked_expr.data == .runtime_error)
-                    try self.unitType()
-                else
-                    ty;
+                // The operand is evaluated only for its effect, so it lowers at
+                // its own type, and the continuation's explicit type stands in
+                // for the consumer's result, which cannot exist.
                 task.finish = .{ .effect_data = ty };
-                return divergentStep(self, expr_id, .{ .at_type = effect_ty });
+                return (try self.divergentEffectExprStep(expr_id)) orelse
+                    Common.invariant("an operand evaluated only for its divergence did not diverge");
             },
             .data => |ty| return self.divergentDataStep(task, checked_expr, ty),
         }
@@ -33206,7 +33250,7 @@ const BodyContext = struct {
             return .{ .ret = input.? };
         }
         task.saved = try self.saveSourceLocation(expr);
-        if (try self.divergentExprInContextStep(expr_id, .uncontextual)) |step| {
+        if (try self.divergentEffectExprStep(expr_id)) |step| {
             frame.cursor = 1;
             return step;
         }
@@ -34189,10 +34233,20 @@ const BodyContext = struct {
                     Common.invariant("closed direct call created a draft function without a specialization record"),
                 .final => null,
             };
-            try self.draft.closed_direct_specializations.put(direct_key, .{
-                .slot = created,
-                .draft_spec = draft_spec,
-            });
+            // A caller-owned specialization's identity also includes its
+            // lexical owner and lexical context, which this key does not
+            // carry. Repeated requests for one reach it through the
+            // template lookup, which checks both.
+            const caller_owned = if (draft_spec) |raw_spec|
+                self.draft.template_specs.items[raw_spec].local_context_dependent
+            else
+                false;
+            if (!caller_owned) {
+                try self.draft.closed_direct_specializations.put(direct_key, .{
+                    .slot = created,
+                    .draft_spec = draft_spec,
+                });
+            }
             break :blk created;
         };
         const completed_callable_node = try self.draftFnSlotTypeNode(slot, callable_node);
@@ -36005,10 +36059,13 @@ const BodyContext = struct {
     }
 
     /// Function rendering does not consume the function value, but the
-    /// source expression must still run: it lowers normally, the produced
-    /// callable is discarded, and the representation is the result.
+    /// source expression must still run: it lowers at its own type node, the
+    /// produced callable is discarded, and the representation is the result.
+    /// Nothing ever calls that callable, so its parameter types may have no
+    /// evidence; they settle with the rest of the body rather than being
+    /// demanded as an active type before the expression lowers.
     fn stepInspectOnly(self: *BodyContext, task: *InspectOnlyTask, input: ?LowerResult) Allocator.Error!LowerStep {
-        const evaluated = if (input) |lowered| lowered.exprValue() else return requestLowerTask(self, .{ .expr = .{ .expr = task.arg } });
+        const evaluated = if (input) |lowered| lowered.exprValue() else return requestLowerChild(self, task.arg, DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(task.arg)));
         const evaluation = try self.addStmt(.{ .expr = evaluated });
         return loweredExprStep(try self.addExpr(.{ .ty = task.str_ty, .data = .{ .block = .{
             .statements = try self.addStmtSpan(&.{evaluation}),
@@ -43608,18 +43665,11 @@ const BodyContext = struct {
             self.source_file_id = previous_source_file_id;
         }
         const crosses_module = !moduleBytesEqual(previous_view.key.bytes, local_view.key.bytes);
-        const previous_binders = self.binders;
-        const previous_typed_binders = self.typed_binders;
-        if (crosses_module) {
-            self.binders = try BinderMap.init(self.allocator, local_view.bodies.patternBinderCount());
-            self.typed_binders = TypedBinders.init(self.allocator);
-        }
-        defer if (crosses_module) {
-            self.binders.deinit();
-            self.typed_binders.deinit();
-            self.binders = previous_binders;
-            self.typed_binders = previous_typed_binders;
-        };
+        const saved_binders = if (crosses_module)
+            try self.enterFreshBinderEnvironment(local_view.bodies.patternBinderCount())
+        else
+            null;
+        defer if (saved_binders) |saved| self.restoreBinderEnvironment(saved);
         var installed_context = try self.installLocalProcContext(context);
         defer installed_context.deinit();
         const previous_owner_template = self.owner_template;
@@ -47698,15 +47748,9 @@ const BodyContext = struct {
             // one body would capture the first's (or the consuming body's)
             // lexical binder entries into its local-procedure declaration
             // contexts and trip the one-context-per-binder invariant.
-            const previous_binders = self.binders;
-            const previous_typed_binders = self.typed_binders;
-            self.binders = try BinderMap.init(self.allocator, self.view.bodies.patternBinderCount());
-            self.typed_binders = TypedBinders.init(self.allocator);
+            const saved_binders = try self.enterFreshBinderEnvironment(self.view.bodies.patternBinderCount());
             defer {
-                self.binders.deinit();
-                self.typed_binders.deinit();
-                self.binders = previous_binders;
-                self.typed_binders = previous_typed_binders;
+                self.restoreBinderEnvironment(saved_binders);
                 self.in_default_expr = previous_in_default_expr;
                 self.instantiation.deinit();
                 self.instantiation = previous_instantiation;
@@ -47736,18 +47780,12 @@ const BodyContext = struct {
         // The default is a closed expression: it binds nothing from the
         // consuming body, so foreign lowering gets fresh binder state
         // exactly like a cross-module local procedure.
-        const previous_binders = self.binders;
-        const previous_typed_binders = self.typed_binders;
-        self.binders = try BinderMap.init(self.allocator, declaring_view.bodies.patternBinderCount());
-        self.typed_binders = TypedBinders.init(self.allocator);
+        const saved_binders = try self.enterFreshBinderEnvironment(declaring_view.bodies.patternBinderCount());
         const previous_in_default_expr = self.in_default_expr;
         self.in_default_expr = true;
         defer {
             self.in_default_expr = previous_in_default_expr;
-            self.binders.deinit();
-            self.typed_binders.deinit();
-            self.binders = previous_binders;
-            self.typed_binders = previous_typed_binders;
+            self.restoreBinderEnvironment(saved_binders);
         }
         return try self.lowerExprAtTypeCell(default_expr, field_cell);
     }

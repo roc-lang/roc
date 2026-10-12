@@ -26,6 +26,7 @@ const layout_mod = @import("layout");
 const arc_sig = @import("arc_sig.zig");
 const arc_solve = @import("arc_solve.zig");
 const body_clone = @import("body_clone.zig");
+const TaskExecutor = base.post_check_task_executor;
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
@@ -1149,31 +1150,23 @@ fn fieldObservedAfter(
 
 /// Index one procedure's structural CFG. Jump targets use procedure-local
 /// identities, so a field-use walk must never resolve them through another
-/// procedure's join declaration.
+/// procedure's join declaration. `stmts` is every statement reachable from the
+/// procedure's body.
 fn collectProcJoinBodies(
     gpa: Allocator,
     store: *const LirStore,
-    root: LIR.CFStmtId,
+    stmts: []const LIR.CFStmtId,
     joins: *collections.DenseMap(u32, LIR.CFStmtId),
-    epochs: []u32,
-    epoch: u32,
-    stack: *std.ArrayList(LIR.CFStmtId),
 ) Error!void {
-    try stack.append(gpa, root);
-    while (stack.pop()) |stmt_id| {
-        const stmt_index = @backingInt(stmt_id);
-        if (epochs[stmt_index] == epoch) continue;
-        epochs[stmt_index] = epoch;
+    for (stmts) |stmt_id| {
         const stmt = store.getCFStmtImmediate(stmt_id);
-        if (stmt.* == .join) {
-            const entry = try joins.getOrPut(@backingInt(stmt.join.id));
-            if (entry.found_existing) {
-                if (entry.value_ptr.* != stmt.join.body) dismantleInvariant("procedure contains two bodies for one join identity");
-            } else {
-                entry.value_ptr.* = stmt.join.body;
-            }
+        if (stmt.* != .join) continue;
+        const entry = try joins.getOrPut(@backingInt(stmt.join.id));
+        if (entry.found_existing) {
+            if (entry.value_ptr.* != stmt.join.body) dismantleInvariant("procedure contains two bodies for one join identity");
+        } else {
+            entry.value_ptr.* = stmt.join.body;
         }
-        try body_clone.appendSuccessors(store, stack, stmt_id, gpa);
     }
 }
 
@@ -1209,13 +1202,12 @@ test "future field uses resolve joins in their procedure" {
     defer loop_joins.deinit();
     var other_joins = collections.DenseMap(u32, LIR.CFStmtId).init(gpa);
     defer other_joins.deinit();
-    const epochs = try gpa.alloc(u32, store.cfStmtCount());
-    defer gpa.free(epochs);
-    @memset(epochs, 0);
-    var stack = std.ArrayList(LIR.CFStmtId).empty;
-    defer stack.deinit(gpa);
-    try collectProcJoinBodies(gpa, &store, loop_proc, &loop_joins, epochs, 1, &stack);
-    try collectProcJoinBodies(gpa, &store, other_proc, &other_joins, epochs, 2, &stack);
+    var proc_stmts = std.ArrayList(LIR.CFStmtId).empty;
+    defer proc_stmts.deinit(gpa);
+    try arc_solve.collectProcStatements(gpa, &store, loop_proc, &proc_stmts);
+    try collectProcJoinBodies(gpa, &store, proc_stmts.items, &loop_joins);
+    try arc_solve.collectProcStatements(gpa, &store, other_proc, &proc_stmts);
+    try collectProcJoinBodies(gpa, &store, proc_stmts.items, &other_joins);
     try std.testing.expectEqual(read, loop_joins.get(0).?);
     try std.testing.expectEqual(exit, other_joins.get(0).?);
 
@@ -1545,24 +1537,6 @@ const StatementDominance = struct {
     const Edge = struct { from: u32, to: u32 };
     const Frame = struct { node: u32, edge: u32 };
 
-    fn init(gpa: Allocator, store: *LirStore) Error!StatementDominance {
-        const entry: u32 = @intCast(store.cfStmtCount());
-        var edges = std.ArrayList(Edge).empty;
-        defer edges.deinit(gpa);
-        var successors = std.ArrayList(LIR.CFStmtId).empty;
-        defer successors.deinit(store.allocator);
-        for (0..store.cfStmtCount()) |index| {
-            successors.clearRetainingCapacity();
-            try body_clone.appendSuccessors(store, &successors, @fromBackingInt(@as(u32, @intCast(index))), store.allocator);
-            for (successors.items) |next| try edges.append(gpa, .{ .from = @intCast(index), .to = @backingInt(next) });
-        }
-        for (0..store.procSpecCount()) |index| {
-            const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
-            if (proc.body) |body| try edges.append(gpa, .{ .from = entry, .to = @backingInt(body) });
-        }
-        return initGraph(gpa, store.cfStmtCount() + 1, entry, edges.items);
-    }
-
     fn initGraph(gpa: Allocator, count: usize, entry: u32, edges: []const Edge) Error!StatementDominance {
         const outgoing = try gpa.alloc(u32, count);
         defer gpa.free(outgoing);
@@ -1678,12 +1652,229 @@ const StatementDominance = struct {
     }
 
     fn dominates(self: StatementDominance, dominator: LIR.CFStmtId, target: LIR.CFStmtId) bool {
-        const a = @backingInt(dominator);
-        const b = @backingInt(target);
+        return self.dominatesNode(@backingInt(dominator), @backingInt(target));
+    }
+
+    fn dominatesNode(self: StatementDominance, a: u32, b: u32) bool {
         std.debug.assert(self.enter[a] != no_index and self.enter[b] != no_index);
         return self.enter[a] <= self.enter[b] and self.enter[b] < self.leave[a];
     }
 };
+
+/// Statement dominance from a synthetic entry for every procedure body, solved
+/// separately for each component of procedures that reach a common statement,
+/// on its first query. Every path from the entry to a statement starts at the
+/// body of a procedure reaching that statement and stays among statements that
+/// procedure reaches, all of which lie in the statement's component. A
+/// statement therefore dominates only statements of its own component, and the
+/// component's graph answers every query exactly as the whole store's would.
+const ComponentDominance = struct {
+    store: *const LirStore,
+    solution: *const arc_solve.Solution,
+    /// Union-find over procedures; a statement reached by two procedures
+    /// unites them.
+    proc_parent: []u32,
+    /// First procedure (in procedure order) reaching each statement.
+    stmt_first_proc: []const u32,
+    /// Index of each statement within its solved component's graph.
+    dense: []u32 = &.{},
+    /// Procedures grouped by component root, built with the first solve.
+    component_offsets: []u32 = &.{},
+    component_procs: []u32 = &.{},
+    solved: std.AutoHashMapUnmanaged(u32, StatementDominance) = .empty,
+
+    fn init(gpa: Allocator, store: *const LirStore, solution: *const arc_solve.Solution, stmt_first_proc: []const u32) Error!ComponentDominance {
+        const proc_parent = try gpa.alloc(u32, store.procSpecCount());
+        for (proc_parent, 0..) |*parent, index| parent.* = @intCast(index);
+        return .{ .store = store, .solution = solution, .proc_parent = proc_parent, .stmt_first_proc = stmt_first_proc };
+    }
+
+    fn deinit(self: *ComponentDominance, gpa: Allocator) void {
+        var it = self.solved.valueIterator();
+        while (it.next()) |dominance| dominance.deinit(gpa);
+        self.solved.deinit(gpa);
+        gpa.free(self.component_procs);
+        gpa.free(self.component_offsets);
+        gpa.free(self.dense);
+        gpa.free(self.proc_parent);
+    }
+
+    fn root(self: *ComponentDominance, proc: u32) u32 {
+        var current = proc;
+        while (self.proc_parent[current] != current) {
+            self.proc_parent[current] = self.proc_parent[self.proc_parent[current]];
+            current = self.proc_parent[current];
+        }
+        return current;
+    }
+
+    fn unite(self: *ComponentDominance, left: u32, right: u32) void {
+        const a = self.root(left);
+        const b = self.root(right);
+        self.proc_parent[@max(a, b)] = @min(a, b);
+    }
+
+    fn dominates(self: *ComponentDominance, gpa: Allocator, dominator: LIR.CFStmtId, target: LIR.CFStmtId) Error!bool {
+        const component = self.root(self.stmt_first_proc[@backingInt(target)]);
+        if (self.root(self.stmt_first_proc[@backingInt(dominator)]) != component) return false;
+        const slot = try self.solved.getOrPut(gpa, component);
+        if (!slot.found_existing) {
+            errdefer _ = self.solved.remove(component);
+            slot.value_ptr.* = try self.solve(gpa, component);
+        }
+        return slot.value_ptr.dominatesNode(self.dense[@backingInt(dominator)], self.dense[@backingInt(target)]);
+    }
+
+    fn solve(self: *ComponentDominance, gpa: Allocator, component: u32) Error!StatementDominance {
+        const store = self.store;
+        if (self.component_offsets.len == 0) try self.groupProcs(gpa);
+        var stmts = std.ArrayList(LIR.CFStmtId).empty;
+        defer stmts.deinit(gpa);
+        const procs = self.component_procs[self.component_offsets[component]..self.component_offsets[component + 1]];
+        for (procs) |proc| {
+            for (self.solution.procStatements(store, @fromBackingInt(@intCast(proc)))) |stmt_id| {
+                const dense = &self.dense[@backingInt(stmt_id)];
+                if (dense.* != no_index) continue;
+                dense.* = @intCast(stmts.items.len);
+                try stmts.append(gpa, stmt_id);
+            }
+        }
+        const entry: u32 = @intCast(stmts.items.len);
+        var edges = std.ArrayList(StatementDominance.Edge).empty;
+        defer edges.deinit(gpa);
+        var successors = std.ArrayList(LIR.CFStmtId).empty;
+        defer successors.deinit(gpa);
+        for (stmts.items, 0..) |stmt_id, index| {
+            successors.clearRetainingCapacity();
+            try body_clone.appendSuccessors(store, &successors, stmt_id, gpa);
+            for (successors.items) |next| try edges.append(gpa, .{ .from = @intCast(index), .to = self.dense[@backingInt(next)] });
+        }
+        for (procs) |proc| {
+            const body = store.getProcSpec(@fromBackingInt(@intCast(proc))).body orelse continue;
+            try edges.append(gpa, .{ .from = entry, .to = self.dense[@backingInt(body)] });
+        }
+        return StatementDominance.initGraph(gpa, stmts.items.len + 1, entry, edges.items);
+    }
+
+    fn groupProcs(self: *ComponentDominance, gpa: Allocator) Error!void {
+        const proc_count = self.proc_parent.len;
+        const offsets = try gpa.alloc(u32, proc_count + 1);
+        errdefer gpa.free(offsets);
+        @memset(offsets, 0);
+        for (0..proc_count) |proc| offsets[self.root(@intCast(proc)) + 1] += 1;
+        for (1..offsets.len) |index| offsets[index] += offsets[index - 1];
+        const procs = try gpa.alloc(u32, proc_count);
+        errdefer gpa.free(procs);
+        const cursors = try gpa.dupe(u32, offsets[0..proc_count]);
+        defer gpa.free(cursors);
+        for (0..proc_count) |proc| {
+            const component = self.root(@intCast(proc));
+            procs[cursors[component]] = @intCast(proc);
+            cursors[component] += 1;
+        }
+        const dense = try gpa.alloc(u32, self.store.cfStmtCount());
+        @memset(dense, no_index);
+        self.component_offsets = offsets;
+        self.component_procs = procs;
+        self.dense = dense;
+    }
+};
+
+test "component dominance agrees with whole-store dominance across shared procedure statements" {
+    const gpa = std.testing.allocator;
+    var store = LirStore.init(gpa);
+    defer store.deinit();
+    var layouts = try layout_mod.Store.init(gpa, .u64);
+    defer layouts.deinit();
+    const value = try store.addLocal(.{ .layout_idx = .i64 });
+    const frame = try store.addLocalSpan(&.{value});
+    const literal = struct {
+        fn add(s: *LirStore, target: LIR.LocalId, next: LIR.CFStmtId) Error!LIR.CFStmtId {
+            return s.addCFStmt(.{ .assign_literal = .{
+                .target = target,
+                .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .i64 } },
+                .next = next,
+            } }, .test_fixture);
+        }
+    }.add;
+    // Procedures 0 and 1 share a tail; procedure 2 shares nothing. An
+    // unreachable statement points into the shared tail.
+    const tail = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
+    const shared = try literal(&store, value, tail);
+    const left = try literal(&store, value, shared);
+    const right = try literal(&store, value, shared);
+    const branch = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = value,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = left }}),
+        .default_branch = right,
+        .continuation = null,
+    } }, .test_fixture);
+    const bodies = [_]LIR.CFStmtId{
+        try literal(&store, value, branch),
+        try literal(&store, value, shared),
+        try literal(&store, value, try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture)),
+    };
+    _ = try literal(&store, value, left);
+    for (bodies) |body| {
+        _ = try store.addProcSpec(.{
+            .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
+            .name = store.freshSyntheticSymbol(),
+            .args = .empty(),
+            .frame_locals = frame,
+            .body = body,
+            .ret_layout = .i64,
+        }, .none);
+    }
+    const rc = try gpa.alloc(bool, store.localCount());
+    defer gpa.free(rc);
+    @memset(rc, false);
+    var solution = try arc_solve.solve(gpa, &store, &layouts, rc, &.{}, &.{}, true);
+    defer solution.deinit();
+
+    const stmt_first_proc = try gpa.alloc(u32, store.cfStmtCount());
+    defer gpa.free(stmt_first_proc);
+    @memset(stmt_first_proc, no_index);
+    var components = try ComponentDominance.init(gpa, &store, &solution, stmt_first_proc);
+    defer components.deinit(gpa);
+    var edges = std.ArrayList(StatementDominance.Edge).empty;
+    defer edges.deinit(gpa);
+    var successors = std.ArrayList(LIR.CFStmtId).empty;
+    defer successors.deinit(gpa);
+    for (0..store.procSpecCount()) |proc_index| {
+        const proc: u32 = @intCast(proc_index);
+        for (solution.procStatements(&store, @fromBackingInt(proc))) |stmt_id| {
+            const index = @backingInt(stmt_id);
+            if (stmt_first_proc[index] != no_index) {
+                components.unite(stmt_first_proc[index], proc);
+                continue;
+            }
+            stmt_first_proc[index] = proc;
+            successors.clearRetainingCapacity();
+            try body_clone.appendSuccessors(&store, &successors, stmt_id, gpa);
+            for (successors.items) |next| try edges.append(gpa, .{ .from = index, .to = @backingInt(next) });
+        }
+    }
+    const entry: u32 = @intCast(store.cfStmtCount());
+    for (bodies) |body| try edges.append(gpa, .{ .from = entry, .to = @backingInt(body) });
+    var whole = try StatementDominance.initGraph(gpa, store.cfStmtCount() + 1, entry, edges.items);
+    defer whole.deinit(gpa);
+    try std.testing.expect(components.root(1) == components.root(0));
+    try std.testing.expect(components.root(2) != components.root(0));
+    var comparisons: usize = 0;
+    for (0..store.cfStmtCount()) |a| {
+        if (stmt_first_proc[a] == no_index) continue;
+        for (0..store.cfStmtCount()) |b| {
+            if (stmt_first_proc[b] == no_index) continue;
+            const dominator: LIR.CFStmtId = @fromBackingInt(@intCast(a));
+            const target: LIR.CFStmtId = @fromBackingInt(@intCast(b));
+            try std.testing.expectEqual(whole.dominates(dominator, target), try components.dominates(gpa, dominator, target));
+            comparisons += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 81), comparisons);
+    try std.testing.expect(!try components.dominates(gpa, bodies[0], shared));
+    try std.testing.expect(try components.dominates(gpa, branch, left));
+}
 
 test "statement dominance agrees with deleted-node reachability on every four-node graph" {
     const gpa = std.testing.allocator;
@@ -1730,6 +1921,505 @@ test "statement dominance agrees with deleted-node reachability on every four-no
     }
 }
 
+/// Classify every occurrence of every local in one reachable statement. The
+/// switch is exhaustive so a new statement form fails to compile rather than
+/// silently escaping classification.
+fn classifyStatement(
+    analysis: *Analysis,
+    store: *const LirStore,
+    solution: *const arc_solve.Solution,
+    operand_read_counts: []u32,
+    direct_call_stmt_by_arg: []u32,
+    direct_call_position_by_arg: []u8,
+    current: LIR.CFStmtId,
+) Error!void {
+    const current_stmt = store.getCFStmtImmediate(current);
+    body_clone.countStmtReads(store, operand_read_counts, current_stmt.*);
+    switch (current_stmt.*) {
+        .init_uninitialized => |stmt| {
+            try analysis.useWhole(current, stmt.target);
+        },
+        .assign_ref => |stmt| {
+            switch (stmt.op) {
+                .field => |op| {
+                    try analysis.noteFieldRead(current, op.source, op.field_idx, stmt.target);
+                    try analysis.noteDef(stmt.target, current);
+                },
+                .local => |source| {
+                    try analysis.noteDemandAlias(source, stmt.target);
+                    if (stmt.target == source) {
+                        try analysis.useWhole(current, source);
+                    } else {
+                        try analysis.noteAliasDef(current, stmt.target, source);
+                    }
+                },
+                .discriminant => |op| {
+                    // The tag word is disjoint from every stored unit, so
+                    // reading it is no use of a tag union.
+                    analysis.disqualify(op.source);
+                    try analysis.noteDef(stmt.target, current);
+                },
+                .tag_payload => |op| {
+                    try analysis.useWhole(current, op.source);
+                    try analysis.noteDef(stmt.target, current);
+                },
+                .tag_payload_struct => |op| {
+                    if (!try analysis.notePayloadView(stmt.target, op)) try analysis.useWhole(current, op.source);
+                    try analysis.noteDef(stmt.target, current);
+                },
+                inline .list_reinterpret, .nominal => |op| {
+                    try analysis.useWhole(current, op.backing_ref);
+                    analysis.disqualify(stmt.target);
+                },
+            }
+        },
+        .assign_literal => |stmt| {
+            try analysis.noteDef(stmt.target, current);
+        },
+        .assign_call => |stmt| {
+            const args = store.getLocalSpan(stmt.args);
+            const callee_sig = solution.sigOf(stmt.proc);
+            for (0..GuardedList.borrowLen(args)) |i| {
+                const arg = GuardedList.at(args, i);
+                if (i < arc_sig.tracked_param_count) {
+                    direct_call_stmt_by_arg[@backingInt(arg)] = @backingInt(current);
+                    direct_call_position_by_arg[@backingInt(arg)] = @intCast(i);
+                }
+                try analysis.useWholeAt(arg, current);
+                if (callee_sig.paramMode(i) == .owned) analysis.demandOwned(arg);
+            }
+            try analysis.noteDef(stmt.target, current);
+        },
+        .assign_call_erased => |stmt| {
+            try analysis.useWhole(current, stmt.closure);
+            if (stmt.reuse_source) |reuse_source| try analysis.useWhole(current, reuse_source);
+            const args = store.getLocalSpan(stmt.args);
+            for (0..GuardedList.borrowLen(args)) |i| try analysis.useWholeAt(GuardedList.at(args, i), current);
+            try analysis.noteDef(stmt.target, current);
+        },
+        .assign_packed_erased_fn => |stmt| {
+            if (stmt.capture) |capture| try analysis.useWhole(current, capture);
+            if (stmt.reuse) |reuse| try analysis.useWhole(current, reuse);
+            try analysis.noteDef(stmt.target, current);
+        },
+        .assign_boxy_desc_ref => |stmt| {
+            if (stmt.desc.localOrNull()) |local| try analysis.useWhole(current, local);
+            if (stmt.tag_residual_for) |desc| if (desc.localOrNull()) |local| try analysis.useWhole(current, local);
+            const captures = store.getLocalSpan(stmt.captures);
+            for (0..GuardedList.borrowLen(captures)) |i| try analysis.useWhole(current, GuardedList.at(captures, i));
+            try analysis.noteDef(stmt.target, current);
+            analysis.disqualify(stmt.target);
+        },
+        .assign_boxy_dict_ref => |stmt| {
+            if (stmt.dict.localOrNull()) |local| try analysis.useWhole(current, local);
+            const captures = store.getLocalSpan(stmt.captures);
+            for (0..GuardedList.borrowLen(captures)) |i| try analysis.useWhole(current, GuardedList.at(captures, i));
+            try analysis.noteDef(stmt.target, current);
+            analysis.disqualify(stmt.target);
+        },
+        .assign_boxy_box => |stmt| {
+            try analysis.useWhole(current, stmt.payload);
+            try analysis.noteDef(stmt.target, current);
+            analysis.disqualify(stmt.target);
+        },
+        .assign_boxy_record_update => |stmt| {
+            try analysis.useWhole(current, stmt.base);
+            try analysis.useWhole(current, stmt.fields);
+            try analysis.noteDef(stmt.target, current);
+            analysis.disqualify(stmt.target);
+        },
+        inline .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect => |stmt| {
+            try analysis.useWhole(current, stmt.source);
+            try analysis.noteDef(stmt.target, current);
+            analysis.disqualify(stmt.target);
+        },
+        .assign_boxy_eq => |stmt| {
+            try analysis.useWhole(current, stmt.lhs);
+            try analysis.useWhole(current, stmt.rhs);
+            try analysis.noteDef(stmt.target, current);
+            analysis.disqualify(stmt.target);
+        },
+        .assign_boxy_hash => |stmt| {
+            try analysis.useWhole(current, stmt.value);
+            try analysis.useWhole(current, stmt.hasher);
+            try analysis.noteDef(stmt.target, current);
+            analysis.disqualify(stmt.target);
+        },
+        .assign_boxy_tag => |stmt| {
+            if (stmt.payload) |payload| try analysis.useWhole(current, payload);
+            try analysis.noteDef(stmt.target, current);
+            analysis.disqualify(stmt.target);
+        },
+        .assign_boxy_tag_payload => |stmt| {
+            try analysis.useWhole(current, stmt.source);
+            try analysis.noteDef(stmt.target, current);
+            analysis.disqualify(stmt.target);
+            if (stmt.target_desc) |target_desc| {
+                try analysis.noteDef(target_desc, current);
+                analysis.disqualify(target_desc);
+            }
+        },
+        .assign_call_dict => |stmt| {
+            if (stmt.dict.localOrNull()) |local| try analysis.useWhole(current, local);
+            const args = store.getLocalSpan(stmt.args);
+            for (0..GuardedList.borrowLen(args)) |i| try analysis.useWhole(current, GuardedList.at(args, i));
+            const arg_descs = store.getLocalSpan(stmt.arg_descs);
+            for (0..GuardedList.borrowLen(arg_descs)) |i| try analysis.useWhole(current, GuardedList.at(arg_descs, i));
+            const hidden_args = store.getLocalSpan(stmt.hidden_args);
+            for (0..GuardedList.borrowLen(hidden_args)) |i| try analysis.useWhole(current, GuardedList.at(hidden_args, i));
+            try analysis.noteDef(stmt.target, current);
+            analysis.disqualify(stmt.target);
+        },
+        .assign_low_level => |stmt| {
+            const args = store.getLocalSpan(stmt.args);
+            const demand_mask = stmt.rc_effect.consume_args | stmt.rc_effect.retain_args;
+            for (0..GuardedList.borrowLen(args)) |i| {
+                const arg = GuardedList.at(args, i);
+                try analysis.useWholeAt(arg, current);
+                if (i < 64 and (demand_mask & (@as(u64, 1) << @intCast(i))) != 0) analysis.demandOwned(arg);
+            }
+            try analysis.noteDef(stmt.target, current);
+        },
+        .assign_list => |stmt| {
+            const elems = store.getLocalSpan(stmt.elems);
+            for (0..GuardedList.borrowLen(elems)) |i| try analysis.useWholeAt(GuardedList.at(elems, i), current);
+            try analysis.noteDef(stmt.target, current);
+        },
+        .assign_struct => |stmt| {
+            const fields = store.getLocalSpan(stmt.fields);
+            for (0..GuardedList.borrowLen(fields)) |i| try analysis.useWholeAt(GuardedList.at(fields, i), current);
+            try analysis.noteDef(stmt.target, current);
+        },
+        .assign_tag => |stmt| {
+            if (stmt.payload) |payload| try analysis.useWholeAt(payload, current);
+            try analysis.noteDef(stmt.target, current);
+        },
+        .store_struct => |stmt| {
+            try analysis.useWhole(current, stmt.dest);
+            const fields = store.getLocalSpan(stmt.fields);
+            for (0..GuardedList.borrowLen(fields)) |i| try analysis.useWhole(current, GuardedList.at(fields, i));
+        },
+        .store_tag => |stmt| {
+            try analysis.useWhole(current, stmt.dest);
+            if (stmt.payload) |payload| try analysis.useWhole(current, payload);
+        },
+        .set_local => |stmt| {
+            try analysis.useWholeAt(stmt.value, current);
+            if (stmt.mode == .initialize_join_param and analysis.explicit_init_join[@backingInt(stmt.target)]) {
+                try analysis.noteDef(stmt.target, current);
+            } else {
+                try analysis.useWhole(current, stmt.target);
+            }
+        },
+        .debug => |stmt| {
+            try analysis.useWhole(current, stmt.message);
+        },
+        .expect => |stmt| {
+            try analysis.useWhole(current, stmt.condition);
+        },
+        .expect_err => |stmt| try analysis.useWhole(current, stmt.message),
+        .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break, .jump => {},
+        .comptime_branch_taken => {},
+        // The input contract is RC-free LIR; if RC statements ever appear
+        // here, classifying their operands as whole uses stays sound.
+        inline .incref, .decref, .free => |stmt| {
+            try analysis.useWhole(current, stmt.value);
+        },
+        .decref_if_initialized => |stmt| {
+            try analysis.useWhole(current, stmt.cond);
+            try analysis.useWhole(current, stmt.value);
+        },
+        .switch_stmt => |stmt| {
+            try analysis.useWhole(current, stmt.cond);
+        },
+        .switch_initialized_payload => |stmt| {
+            try analysis.useWhole(current, stmt.cond);
+            try analysis.useWhole(current, stmt.payload);
+        },
+        .str_match => |stmt| {
+            try analysis.useWhole(current, stmt.source);
+            const steps = store.getStrMatchSteps(stmt.steps);
+            for (0..GuardedList.borrowLen(steps)) |i| {
+                switch (GuardedList.at(steps, i).capture) {
+                    .discard => {},
+                    .view => |view_local| try analysis.useWhole(current, view_local),
+                }
+            }
+        },
+        .str_match_set => |stmt| {
+            try analysis.useWhole(current, stmt.source);
+            const arms = store.getStrMatchArms(stmt.arms);
+            for (0..GuardedList.borrowLen(arms)) |arm_index| {
+                const arm = GuardedList.at(arms, arm_index);
+                const steps = store.getStrMatchSteps(arm.steps);
+                for (0..GuardedList.borrowLen(steps)) |i| {
+                    switch (GuardedList.at(steps, i).capture) {
+                        .discard => {},
+                        .view => |view_local| try analysis.useWhole(current, view_local),
+                    }
+                }
+            }
+        },
+        .boxy_tag_match => |stmt| {
+            try analysis.useWhole(current, stmt.source);
+        },
+        // Join parameters are excluded by the gate; the condition locals
+        // are scalar presence words.
+        .join => {},
+        .ret => |stmt| try analysis.useWholeAt(stmt.value, current),
+        .crash => |stmt| if (stmt.msg.localId()) |message| try analysis.useWholeAt(message, current),
+    }
+}
+
+/// A reachable reference read that can carry its source's ownership root: a
+/// borrowed same-layout alias or an ownership-complete projection.
+const ProjectionEdge = struct {
+    source: LIR.LocalId,
+    target: LIR.LocalId,
+    stmt: LIR.CFStmtId,
+    is_projection: bool,
+};
+
+fn projectionEdgeOf(
+    store: *const LirStore,
+    layouts: *const layout_mod.Store,
+    solution: *const arc_solve.Solution,
+    stmt_id: LIR.CFStmtId,
+    assign: anytype,
+) ?ProjectionEdge {
+    const source: LIR.LocalId, const is_projection: bool = switch (assign.op) {
+        .local => |local| blk: {
+            if (!solution.isBorrowed(assign.target)) return null;
+            if (store.getLocal(local).layout_idx != store.getLocal(assign.target).layout_idx) return null;
+            break :blk .{ local, false };
+        },
+        .field, .tag_payload, .tag_payload_struct => blk: {
+            const projection = encodeProjection(assign.op).?;
+            const local = switch (assign.op) {
+                inline .field, .tag_payload, .tag_payload_struct => |op| op.source,
+                .local, .discriminant, .list_reinterpret, .nominal => unreachable,
+            };
+            if (!projectionOwnsAllRc(store, layouts, local, assign.target, projection)) return null;
+            break :blk .{ local, true };
+        },
+        .discriminant, .list_reinterpret, .nominal => return null,
+    };
+    return .{ .source = source, .target = assign.target, .stmt = stmt_id, .is_projection = is_projection };
+}
+
+const PlaceEdgeKind = union(enum) {
+    alias,
+    projection: u32,
+};
+
+/// One edge of the ownership-place graph: a borrowed alias sharing its
+/// source's unit, or an ownership-complete projection of its source.
+const PlaceLink = struct {
+    source: u32,
+    target: u32,
+    kind: PlaceEdgeKind,
+};
+
+fn placeLinkOf(
+    store: *const LirStore,
+    layouts: *const layout_mod.Store,
+    solution: *const arc_solve.Solution,
+    stmt_index: u32,
+    assign: anytype,
+) ?PlaceLink {
+    const source: LIR.LocalId, const kind: PlaceEdgeKind = switch (assign.op) {
+        .local => |local| blk: {
+            if (!solution.isBorrowed(assign.target)) return null;
+            if (solution.unitLocalOf(assign.target) != solution.unitLocalOf(local)) return null;
+            break :blk .{ local, .alias };
+        },
+        .field, .tag_payload, .tag_payload_struct => blk: {
+            const projection = encodeProjection(assign.op).?;
+            const projection_source = switch (assign.op) {
+                inline .field, .tag_payload, .tag_payload_struct => |op| op.source,
+                .local, .discriminant, .list_reinterpret, .nominal => unreachable,
+            };
+            if (!projectionOwnsAllRc(store, layouts, projection_source, assign.target, projection)) return null;
+            break :blk .{ projection_source, .{ .projection = stmt_index } };
+        },
+        .discriminant, .list_reinterpret, .nominal => return null,
+    };
+    return .{ .source = @backingInt(source), .target = @backingInt(assign.target), .kind = kind };
+}
+
+/// A reachable reference read whose place link is read after projection
+/// aliases are materialized. Only a read carrying a projection edge can be
+/// rewritten into an alias, so every other read keeps the link computed here.
+const PlaceRead = struct {
+    stmt: u32,
+    link: ?PlaceLink,
+};
+
+/// Facts of the reachable statements in one statement-id range. Each fact
+/// depends only on its own statement, the store, and the solution, so ranges
+/// are independent executor tasks. Concatenating ranges in order lists every
+/// fact in ascending statement order, exactly as one whole-store scan would.
+const StatementFacts = struct {
+    store: *const LirStore,
+    layouts: *const layout_mod.Store,
+    solution: *const arc_solve.Solution,
+    reachable: *const std.bit_set.DynamicBitSetUnmanaged,
+    start: u32,
+    end: u32,
+    allocator: Allocator,
+    /// Join cells written by an `initialize_join_param` statement.
+    join_init_targets: std.ArrayList(LIR.LocalId) = .empty,
+    projection_edges: std.ArrayList(ProjectionEdge) = .empty,
+    place_reads: std.ArrayList(PlaceRead) = .empty,
+    calls: std.ArrayList(LIR.CFStmtId) = .empty,
+    failed: bool = false,
+    completed: bool = false,
+
+    fn deinit(self: *StatementFacts) void {
+        self.join_init_targets.deinit(self.allocator);
+        self.projection_edges.deinit(self.allocator);
+        self.place_reads.deinit(self.allocator);
+        self.calls.deinit(self.allocator);
+    }
+
+    fn collect(self: *StatementFacts, allocator: Allocator) Error!void {
+        self.allocator = allocator;
+        var index = self.start;
+        while (index < self.end) : (index += 1) {
+            if (!self.reachable.isSet(index)) continue;
+            const stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(index));
+            switch (self.store.getCFStmtImmediate(stmt_id).*) {
+                .set_local => |stmt| if (stmt.mode == .initialize_join_param) {
+                    try self.join_init_targets.append(allocator, stmt.target);
+                },
+                .assign_ref => |stmt| {
+                    const projection = projectionEdgeOf(self.store, self.layouts, self.solution, stmt_id, stmt);
+                    if (projection) |edge| try self.projection_edges.append(allocator, edge);
+                    const link = placeLinkOf(self.store, self.layouts, self.solution, index, stmt);
+                    if (projection != null or link != null) try self.place_reads.append(allocator, .{ .stmt = index, .link = link });
+                },
+                .assign_call => try self.calls.append(allocator, stmt_id),
+                .init_uninitialized,
+                .assign_literal,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .loop_continue,
+                .loop_break,
+                .join,
+                .jump,
+                .ret,
+                .crash,
+                => {},
+            }
+        }
+    }
+
+    fn run(opaque_context: *anyopaque, worker: TaskExecutor.Worker) ?*anyopaque {
+        const self: *StatementFacts = @ptrCast(@alignCast(opaque_context));
+        self.collect(worker.allocator) catch {
+            self.failed = true;
+        };
+        return self;
+    }
+};
+
+/// Statement ids per fact range. A fixed width makes the task set a function
+/// of the store alone, independent of how many lanes run it.
+const statement_facts_range_size = 8192;
+
+/// Executor tasks of one `compute` call.
+pub const TaskMetrics = struct {
+    submitted: u64 = 0,
+    committed: u64 = 0,
+};
+
+/// How `compute` schedules its statement-range tasks.
+pub const ComputeOptions = struct {
+    executor: ?*const TaskExecutor.Executor = null,
+    metrics: ?*TaskMetrics = null,
+};
+
+/// Collect every range's facts, on the executor's lanes when one is given.
+/// Submission failures stop admission, not draining: every accepted range
+/// finishes before its owner can be released.
+fn collectStatementFacts(
+    gpa: Allocator,
+    ranges: []StatementFacts,
+    options: ComputeOptions,
+) Error!void {
+    const executor = options.executor orelse {
+        for (ranges) |*range| try range.collect(gpa);
+        return;
+    };
+    var session = executor.begin();
+    var submitted: usize = 0;
+    var received: usize = 0;
+    var failed = false;
+    while (received < submitted or (!failed and submitted < ranges.len)) {
+        while (!failed and submitted < ranges.len and session.canSubmit()) {
+            session.submit(.{ .id = submitted, .context = &ranges[submitted], .run = StatementFacts.run }) catch {
+                failed = true;
+                break;
+            };
+            submitted += 1;
+            if (options.metrics) |metrics| metrics.submitted += 1;
+        }
+        if (received < submitted) {
+            const completion = session.receive();
+            if (completion.id >= submitted or completion.worker_id >= executor.worker_count) {
+                dismantleInvariant("ARC dismantle received invalid task identity");
+            }
+            const range = &ranges[completion.id];
+            if (range.completed or completion.value != @as(*anyopaque, @ptrCast(range))) {
+                dismantleInvariant("ARC dismantle received invalid task completion");
+            }
+            range.completed = true;
+            received += 1;
+            if (range.failed) {
+                failed = true;
+            } else if (options.metrics) |metrics| {
+                metrics.committed += 1;
+            }
+        }
+    }
+    session.end();
+    if (failed) return error.OutOfMemory;
+}
+
 /// Solve takes for every reachable statement in the store.
 pub fn compute(
     gpa: Allocator,
@@ -1737,6 +2427,7 @@ pub fn compute(
     layouts: *const layout_mod.Store,
     rc_local: []const bool,
     solution: *const arc_solve.Solution,
+    options: ComputeOptions,
 ) Error!Dismantles {
     if (rc_local.len != store.localCount()) {
         dismantleInvariant("ARC dismantle resource table did not cover every local");
@@ -1778,68 +2469,71 @@ pub fn compute(
     // projection roots must be known at the candidate gate: a borrowed payload
     // struct can carry its parent's exact unit in an owned emission and is then
     // a real dismantlable container, rather than an independently borrowed
-    // value with no unit to spend.
+    // value with no unit to spend. The uniqueness solve already listed every
+    // statement reachable from each procedure. Join identities belong to a
+    // procedure, so the same lists name each statement's procedure. The
+    // candidate's defining CFG statement identifies that procedure explicitly,
+    // including dismantle temporaries that are deliberately absent from a
+    // specialization frame.
     var reachable = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(gpa, store.cfStmtCount());
     defer reachable.deinit(gpa);
-    var reach_work = std.ArrayList(LIR.CFStmtId).empty;
-    defer reach_work.deinit(gpa);
+    const stmt_proc = try gpa.alloc(u32, store.cfStmtCount());
+    defer gpa.free(stmt_proc);
+    @memset(stmt_proc, no_index);
+    // Statements reached by more than one procedure have no single owner.
+    var shared_stmts = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(gpa, store.cfStmtCount());
+    defer shared_stmts.deinit(gpa);
+    var dominance = try ComponentDominance.init(gpa, store, solution, stmt_proc);
+    defer dominance.deinit(gpa);
     for (0..store.procSpecCount()) |proc_index| {
-        const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
-        if (proc.body) |body| try reach_work.append(gpa, body);
-    }
-    while (reach_work.pop()) |stmt_id| {
-        const index = @backingInt(stmt_id);
-        if (reachable.isSet(index)) continue;
-        reachable.set(index);
-        try body_clone.appendSuccessors(store, &reach_work, stmt_id, gpa);
-    }
-
-    const join_init_counts = try gpa.alloc(u32, store.localCount());
-    defer gpa.free(join_init_counts);
-    @memset(join_init_counts, 0);
-    for (0..store.cfStmtCount()) |stmt_index| {
-        if (!reachable.isSet(stmt_index)) continue;
-        const stmt = store.getCFStmtImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
-        if (stmt.* == .set_local and stmt.set_local.mode == .initialize_join_param) {
-            join_init_counts[@backingInt(stmt.set_local.target)] += 1;
+        const proc: u32 = @intCast(proc_index);
+        for (solution.procStatements(store, @fromBackingInt(proc))) |stmt_id| {
+            const stmt_index = @backingInt(stmt_id);
+            reachable.set(stmt_index);
+            const owner = stmt_proc[stmt_index];
+            if (owner == no_index) {
+                stmt_proc[stmt_index] = proc;
+            } else if (owner != proc) {
+                shared_stmts.set(stmt_index);
+                dominance.unite(owner, proc);
+            }
         }
     }
+
+    // Every per-statement fact the whole-store passes below consume, gathered
+    // in disjoint statement ranges off the coordinator.
+    const range_count = @max(1, std.math.divCeil(usize, store.cfStmtCount(), statement_facts_range_size) catch unreachable);
+    const fact_ranges = try gpa.alloc(StatementFacts, range_count);
+    defer gpa.free(fact_ranges);
+    for (fact_ranges, 0..) |*range, index| {
+        range.* = .{
+            .store = store,
+            .layouts = layouts,
+            .solution = solution,
+            .reachable = &reachable,
+            .start = @intCast(@min(index * statement_facts_range_size, store.cfStmtCount())),
+            .end = @intCast(@min((index + 1) * statement_facts_range_size, store.cfStmtCount())),
+            .allocator = gpa,
+        };
+    }
+    defer for (fact_ranges) |*range| range.deinit();
+    try collectStatementFacts(gpa, fact_ranges, options);
+
     const explicit_init_join = try gpa.alloc(bool, store.localCount());
     defer gpa.free(explicit_init_join);
-    for (join_init_counts, 0..) |count, index| {
-        explicit_init_join[index] = count != 0;
+    @memset(explicit_init_join, false);
+    for (fact_ranges) |range| {
+        for (range.join_init_targets.items) |target| explicit_init_join[@backingInt(target)] = true;
     }
 
     const projected_root = try gpa.alloc(u32, store.localCount());
     defer gpa.free(projected_root);
     @memset(projected_root, no_index);
-    const ProjectionEdge = struct { source: LIR.LocalId, target: LIR.LocalId, stmt: LIR.CFStmtId, is_projection: bool };
-    var projection_edges = std.ArrayList(ProjectionEdge).empty;
+    var projection_edge_count: usize = 0;
+    for (fact_ranges) |range| projection_edge_count += range.projection_edges.items.len;
+    var projection_edges = try std.ArrayList(ProjectionEdge).initCapacity(gpa, projection_edge_count);
     defer projection_edges.deinit(gpa);
-    for (0..store.cfStmtCount()) |stmt_index| {
-        if (!reachable.isSet(stmt_index)) continue;
-        const stmt = store.getCFStmtImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
-        if (stmt.* != .assign_ref) continue;
-        const assign = stmt.assign_ref;
-        const source: LIR.LocalId, const is_projection: bool = switch (assign.op) {
-            .local => |local| blk: {
-                if (!solution.isBorrowed(assign.target)) continue;
-                if (store.getLocal(local).layout_idx != store.getLocal(assign.target).layout_idx) continue;
-                break :blk .{ local, false };
-            },
-            .field, .tag_payload, .tag_payload_struct => blk: {
-                const projection = encodeProjection(assign.op).?;
-                const local = switch (assign.op) {
-                    inline .field, .tag_payload, .tag_payload_struct => |op| op.source,
-                    .local, .discriminant, .list_reinterpret, .nominal => unreachable,
-                };
-                if (!projectionOwnsAllRc(store, layouts, local, assign.target, projection)) continue;
-                break :blk .{ local, true };
-            },
-            .discriminant, .list_reinterpret, .nominal => continue,
-        };
-        try projection_edges.append(gpa, .{ .source = source, .target = assign.target, .stmt = @fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))), .is_projection = is_projection });
-    }
+    for (fact_ranges) |range| projection_edges.appendSliceAssumeCapacity(range.projection_edges.items);
     var projection_changed = true;
     while (projection_changed) {
         projection_changed = false;
@@ -1886,8 +2580,6 @@ pub fn compute(
         root_next[index] = root_heads[root];
         root_heads[root] = @intCast(index);
     }
-    var dominance = try StatementDominance.init(gpa, store);
-    defer dominance.deinit(gpa);
     for (projected_root, 0..) |root, local_index| {
         if (root == no_index) continue;
         const local: LIR.LocalId = @fromBackingInt(@intCast(@as(u32, @intCast(local_index))));
@@ -1898,13 +2590,15 @@ pub fn compute(
         var representative: u32 = @intCast(local_index);
         var other_index = root_heads[root];
         while (other_index != no_index) : (other_index = root_next[other_index]) {
+            // A projection dominates itself and the representative it starts as.
+            if (other_index == local_index) continue;
             const other: LIR.LocalId = @fromBackingInt(@intCast(@as(u32, @intCast(other_index))));
             if (store.getLocal(other).layout_idx != store.getLocal(local).layout_idx) continue;
             const other_stmt: LIR.CFStmtId = @fromBackingInt(@intCast(projected_stmt[other_index]));
             const target_stmt: LIR.CFStmtId = @fromBackingInt(@intCast(target_stmt_index));
-            if (!dominance.dominates(other_stmt, target_stmt)) continue;
+            if (!try dominance.dominates(gpa, other_stmt, target_stmt)) continue;
             const representative_stmt: LIR.CFStmtId = @fromBackingInt(@intCast(projected_stmt[representative]));
-            if (dominance.dominates(other_stmt, representative_stmt)) {
+            if (try dominance.dominates(gpa, other_stmt, representative_stmt)) {
                 representative = @intCast(other_index);
             }
         }
@@ -1938,300 +2632,22 @@ pub fn compute(
     @memset(analysis.mention_heads, no_index);
 
     // One linear scan over every reachable statement, classifying each
-    // occurrence of each local. The switch is exhaustive so a new statement
-    // form fails to compile rather than silently escaping classification.
+    // occurrence of each local. The order is one depth-first walk from every
+    // procedure body, last procedure first, which classifies a statement
+    // shared by several procedures on its first visit: each procedure's
+    // statement list, last procedure first, skipping statements already
+    // classified.
     var visited = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(gpa, store.cfStmtCount());
     defer visited.deinit(gpa);
-    var stack = std.ArrayList(LIR.CFStmtId).empty;
-    defer stack.deinit(gpa);
-    for (0..store.procSpecCount()) |proc_index| {
-        const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
-        if (proc.body) |body| try stack.append(gpa, body);
-    }
-
-    while (stack.pop()) |current| {
-        const stmt_index = @backingInt(current);
-        if (visited.isSet(stmt_index)) continue;
-        visited.set(stmt_index);
-        const current_stmt = store.getCFStmtImmediate(current);
-        body_clone.countStmtReads(store, operand_read_counts, current_stmt.*);
-        switch (current_stmt.*) {
-            .init_uninitialized => |stmt| {
-                try analysis.useWhole(current, stmt.target);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_ref => |stmt| {
-                switch (stmt.op) {
-                    .field => |op| {
-                        try analysis.noteFieldRead(current, op.source, op.field_idx, stmt.target);
-                        try analysis.noteDef(stmt.target, current);
-                    },
-                    .local => |source| {
-                        try analysis.noteDemandAlias(source, stmt.target);
-                        if (stmt.target == source) {
-                            try analysis.useWhole(current, source);
-                        } else {
-                            try analysis.noteAliasDef(current, stmt.target, source);
-                        }
-                    },
-                    .discriminant => |op| {
-                        // The tag word is disjoint from every stored unit, so
-                        // reading it is no use of a tag union.
-                        analysis.disqualify(op.source);
-                        try analysis.noteDef(stmt.target, current);
-                    },
-                    .tag_payload => |op| {
-                        try analysis.useWhole(current, op.source);
-                        try analysis.noteDef(stmt.target, current);
-                    },
-                    .tag_payload_struct => |op| {
-                        if (!try analysis.notePayloadView(stmt.target, op)) try analysis.useWhole(current, op.source);
-                        try analysis.noteDef(stmt.target, current);
-                    },
-                    inline .list_reinterpret, .nominal => |op| {
-                        try analysis.useWhole(current, op.backing_ref);
-                        analysis.disqualify(stmt.target);
-                    },
-                }
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_literal => |stmt| {
-                try analysis.noteDef(stmt.target, current);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_call => |stmt| {
-                const args = store.getLocalSpan(stmt.args);
-                const callee_sig = solution.sigOf(stmt.proc);
-                for (0..GuardedList.borrowLen(args)) |i| {
-                    const arg = GuardedList.at(args, i);
-                    if (i < arc_sig.tracked_param_count) {
-                        direct_call_stmt_by_arg[@backingInt(arg)] = @backingInt(current);
-                        direct_call_position_by_arg[@backingInt(arg)] = @intCast(i);
-                    }
-                    try analysis.useWholeAt(arg, current);
-                    if (callee_sig.paramMode(i) == .owned) analysis.demandOwned(arg);
-                }
-                try analysis.noteDef(stmt.target, current);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_call_erased => |stmt| {
-                try analysis.useWhole(current, stmt.closure);
-                if (stmt.reuse_source) |reuse_source| try analysis.useWhole(current, reuse_source);
-                const args = store.getLocalSpan(stmt.args);
-                for (0..GuardedList.borrowLen(args)) |i| try analysis.useWholeAt(GuardedList.at(args, i), current);
-                try analysis.noteDef(stmt.target, current);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_packed_erased_fn => |stmt| {
-                if (stmt.capture) |capture| try analysis.useWhole(current, capture);
-                if (stmt.reuse) |reuse| try analysis.useWhole(current, reuse);
-                try analysis.noteDef(stmt.target, current);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_boxy_desc_ref => |stmt| {
-                if (stmt.desc.localOrNull()) |local| try analysis.useWhole(current, local);
-                if (stmt.tag_residual_for) |desc| if (desc.localOrNull()) |local| try analysis.useWhole(current, local);
-                const captures = store.getLocalSpan(stmt.captures);
-                for (0..GuardedList.borrowLen(captures)) |i| try analysis.useWhole(current, GuardedList.at(captures, i));
-                try analysis.noteDef(stmt.target, current);
-                analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_boxy_dict_ref => |stmt| {
-                if (stmt.dict.localOrNull()) |local| try analysis.useWhole(current, local);
-                const captures = store.getLocalSpan(stmt.captures);
-                for (0..GuardedList.borrowLen(captures)) |i| try analysis.useWhole(current, GuardedList.at(captures, i));
-                try analysis.noteDef(stmt.target, current);
-                analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_boxy_box => |stmt| {
-                try analysis.useWhole(current, stmt.payload);
-                try analysis.noteDef(stmt.target, current);
-                analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_boxy_record_update => |stmt| {
-                try analysis.useWhole(current, stmt.base);
-                try analysis.useWhole(current, stmt.fields);
-                try analysis.noteDef(stmt.target, current);
-                analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
-            },
-            inline .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect => |stmt| {
-                try analysis.useWhole(current, stmt.source);
-                try analysis.noteDef(stmt.target, current);
-                analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_boxy_eq => |stmt| {
-                try analysis.useWhole(current, stmt.lhs);
-                try analysis.useWhole(current, stmt.rhs);
-                try analysis.noteDef(stmt.target, current);
-                analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_boxy_hash => |stmt| {
-                try analysis.useWhole(current, stmt.value);
-                try analysis.useWhole(current, stmt.hasher);
-                try analysis.noteDef(stmt.target, current);
-                analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_boxy_tag => |stmt| {
-                if (stmt.payload) |payload| try analysis.useWhole(current, payload);
-                try analysis.noteDef(stmt.target, current);
-                analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_boxy_tag_payload => |stmt| {
-                try analysis.useWhole(current, stmt.source);
-                try analysis.noteDef(stmt.target, current);
-                analysis.disqualify(stmt.target);
-                if (stmt.target_desc) |target_desc| {
-                    try analysis.noteDef(target_desc, current);
-                    analysis.disqualify(target_desc);
-                }
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_call_dict => |stmt| {
-                if (stmt.dict.localOrNull()) |local| try analysis.useWhole(current, local);
-                const args = store.getLocalSpan(stmt.args);
-                for (0..GuardedList.borrowLen(args)) |i| try analysis.useWhole(current, GuardedList.at(args, i));
-                const arg_descs = store.getLocalSpan(stmt.arg_descs);
-                for (0..GuardedList.borrowLen(arg_descs)) |i| try analysis.useWhole(current, GuardedList.at(arg_descs, i));
-                const hidden_args = store.getLocalSpan(stmt.hidden_args);
-                for (0..GuardedList.borrowLen(hidden_args)) |i| try analysis.useWhole(current, GuardedList.at(hidden_args, i));
-                try analysis.noteDef(stmt.target, current);
-                analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_low_level => |stmt| {
-                const args = store.getLocalSpan(stmt.args);
-                const demand_mask = stmt.rc_effect.consume_args | stmt.rc_effect.retain_args;
-                for (0..GuardedList.borrowLen(args)) |i| {
-                    const arg = GuardedList.at(args, i);
-                    try analysis.useWholeAt(arg, current);
-                    if (i < 64 and (demand_mask & (@as(u64, 1) << @intCast(i))) != 0) analysis.demandOwned(arg);
-                }
-                try analysis.noteDef(stmt.target, current);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_list => |stmt| {
-                const elems = store.getLocalSpan(stmt.elems);
-                for (0..GuardedList.borrowLen(elems)) |i| try analysis.useWholeAt(GuardedList.at(elems, i), current);
-                try analysis.noteDef(stmt.target, current);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_struct => |stmt| {
-                const fields = store.getLocalSpan(stmt.fields);
-                for (0..GuardedList.borrowLen(fields)) |i| try analysis.useWholeAt(GuardedList.at(fields, i), current);
-                try analysis.noteDef(stmt.target, current);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_tag => |stmt| {
-                if (stmt.payload) |payload| try analysis.useWholeAt(payload, current);
-                try analysis.noteDef(stmt.target, current);
-                try stack.append(gpa, stmt.next);
-            },
-            .store_struct => |stmt| {
-                try analysis.useWhole(current, stmt.dest);
-                const fields = store.getLocalSpan(stmt.fields);
-                for (0..GuardedList.borrowLen(fields)) |i| try analysis.useWhole(current, GuardedList.at(fields, i));
-                try stack.append(gpa, stmt.next);
-            },
-            .store_tag => |stmt| {
-                try analysis.useWhole(current, stmt.dest);
-                if (stmt.payload) |payload| try analysis.useWhole(current, payload);
-                try stack.append(gpa, stmt.next);
-            },
-            .set_local => |stmt| {
-                try analysis.useWholeAt(stmt.value, current);
-                if (stmt.mode == .initialize_join_param and analysis.explicit_init_join[@backingInt(stmt.target)]) {
-                    try analysis.noteDef(stmt.target, current);
-                } else {
-                    try analysis.useWhole(current, stmt.target);
-                }
-                try stack.append(gpa, stmt.next);
-            },
-            .debug => |stmt| {
-                try analysis.useWhole(current, stmt.message);
-                try stack.append(gpa, stmt.next);
-            },
-            .expect => |stmt| {
-                try analysis.useWhole(current, stmt.condition);
-                try stack.append(gpa, stmt.next);
-            },
-            .expect_err => |stmt| try analysis.useWhole(current, stmt.message),
-            .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break, .jump => {},
-            .comptime_branch_taken => |stmt| try stack.append(gpa, stmt.next),
-            // The input contract is RC-free LIR; if RC statements ever appear
-            // here, classifying their operands as whole uses stays sound.
-            inline .incref, .decref, .free => |stmt| {
-                try analysis.useWhole(current, stmt.value);
-                try stack.append(gpa, stmt.next);
-            },
-            .decref_if_initialized => |stmt| {
-                try analysis.useWhole(current, stmt.cond);
-                try analysis.useWhole(current, stmt.value);
-                try stack.append(gpa, stmt.next);
-            },
-            .switch_stmt => |stmt| {
-                try analysis.useWhole(current, stmt.cond);
-                const branches = store.getCFSwitchBranches(stmt.branches);
-                for (0..GuardedList.borrowLen(branches)) |i| {
-                    try stack.append(gpa, GuardedList.at(branches, i).body);
-                }
-                try stack.append(gpa, stmt.default_branch);
-                if (stmt.continuation) |continuation| try stack.append(gpa, continuation);
-            },
-            .switch_initialized_payload => |stmt| {
-                try analysis.useWhole(current, stmt.cond);
-                try analysis.useWhole(current, stmt.payload);
-                try stack.append(gpa, stmt.initialized_branch);
-                try stack.append(gpa, stmt.uninitialized_branch);
-            },
-            .str_match => |stmt| {
-                try analysis.useWhole(current, stmt.source);
-                const steps = store.getStrMatchSteps(stmt.steps);
-                for (0..GuardedList.borrowLen(steps)) |i| {
-                    switch (GuardedList.at(steps, i).capture) {
-                        .discard => {},
-                        .view => |view_local| try analysis.useWhole(current, view_local),
-                    }
-                }
-                try stack.append(gpa, stmt.on_match);
-                try stack.append(gpa, stmt.on_miss);
-            },
-            .str_match_set => |stmt| {
-                try analysis.useWhole(current, stmt.source);
-                const arms = store.getStrMatchArms(stmt.arms);
-                for (0..GuardedList.borrowLen(arms)) |arm_index| {
-                    const arm = GuardedList.at(arms, arm_index);
-                    const steps = store.getStrMatchSteps(arm.steps);
-                    for (0..GuardedList.borrowLen(steps)) |i| {
-                        switch (GuardedList.at(steps, i).capture) {
-                            .discard => {},
-                            .view => |view_local| try analysis.useWhole(current, view_local),
-                        }
-                    }
-                    try stack.append(gpa, arm.on_match);
-                }
-                try stack.append(gpa, stmt.on_miss);
-            },
-            .boxy_tag_match => |stmt| {
-                try analysis.useWhole(current, stmt.source);
-                try stack.append(gpa, stmt.on_match);
-                try stack.append(gpa, stmt.on_miss);
-            },
-            .join => |stmt| {
-                // Join parameters are excluded by the gate; the condition
-                // locals are scalar presence words.
-                try stack.append(gpa, stmt.body);
-                try stack.append(gpa, stmt.remainder);
-            },
-            .ret => |stmt| try analysis.useWholeAt(stmt.value, current),
-            .crash => |stmt| if (stmt.msg.localId()) |message| try analysis.useWholeAt(message, current),
+    var proc_cursor = store.procSpecCount();
+    while (proc_cursor > 0) {
+        proc_cursor -= 1;
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_cursor))));
+        for (solution.procStatements(store, proc_id)) |current| {
+            const stmt_index = @backingInt(current);
+            if (visited.isSet(stmt_index)) continue;
+            visited.set(stmt_index);
+            try classifyStatement(&analysis, store, solution, operand_read_counts, direct_call_stmt_by_arg, direct_call_position_by_arg, current);
         }
     }
 
@@ -2287,12 +2703,6 @@ pub fn compute(
     @memset(joins_ready, false);
     const proc_graphs = try gpa.alloc(FutureFields.ProcGraph, store.procSpecCount());
     defer gpa.free(proc_graphs);
-    const join_scan_epochs = try gpa.alloc(u32, store.cfStmtCount());
-    defer gpa.free(join_scan_epochs);
-    @memset(join_scan_epochs, 0);
-    var join_scan_stack = std.ArrayList(LIR.CFStmtId).empty;
-    defer join_scan_stack.deinit(gpa);
-    var join_scan_epoch: u32 = 0;
     // The one successor of every statement the take flow walk passes straight
     // through, or `no_index` for a statement it must decode. Each candidate's
     // walk reads this column instead of loading every statement it passes.
@@ -2320,31 +2730,6 @@ pub fn compute(
         };
     }
 
-    // Join identities belong to a procedure. The candidate's defining CFG
-    // statement identifies that procedure explicitly, including dismantle
-    // temporaries that are deliberately absent from a specialization frame.
-    const stmt_proc = try gpa.alloc(u32, store.cfStmtCount());
-    defer gpa.free(stmt_proc);
-    @memset(stmt_proc, no_index);
-    const ambiguous_proc = no_index - 1;
-    for (0..store.procSpecCount()) |proc_index| {
-        const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
-        if (proc.body == null) continue;
-        join_scan_epoch += 1;
-        try join_scan_stack.append(gpa, proc.body.?);
-        while (join_scan_stack.pop()) |stmt_id| {
-            const stmt_index = @backingInt(stmt_id);
-            if (join_scan_epochs[stmt_index] == join_scan_epoch) continue;
-            join_scan_epochs[stmt_index] = join_scan_epoch;
-            const owner = &stmt_proc[stmt_index];
-            if (owner.* == no_index) {
-                owner.* = @intCast(proc_index);
-            } else if (owner.* != @as(u32, @intCast(proc_index))) {
-                owner.* = ambiguous_proc;
-            }
-            try body_clone.appendSuccessors(store, &join_scan_stack, stmt_id, gpa);
-        }
-    }
     var future_fields = FutureFields.init(gpa);
     defer future_fields.deinit(gpa);
     var body_states = collections.DenseMap(LIR.CFStmtId, FlowState).init(gpa);
@@ -2627,14 +3012,14 @@ pub fn compute(
         if (candidate_mask == 0) continue;
 
         if (candidate.reads.items.len == 0) dismantleInvariant("field-take candidate had no field projection");
-        const owner = stmt_proc[@backingInt(candidate.reads.items[0].stmt)];
-        if (owner == no_index or owner == ambiguous_proc) continue;
+        const first_read = @backingInt(candidate.reads.items[0].stmt);
+        const owner = stmt_proc[first_read];
+        if (owner == no_index or shared_stmts.isSet(first_read)) continue;
         if (!joins_ready[owner]) {
             joins_ready[owner] = true;
-            join_scan_epoch += 1;
-            const proc = store.getProcSpec(@fromBackingInt(@intCast(owner)));
-            try collectProcJoinBodies(gpa, store, proc.body.?, &proc_joins[owner], join_scan_epochs, join_scan_epoch, &join_scan_stack);
-            proc_graphs[owner] = try future_fields.buildProcGraph(gpa, store, &.{proc.body.?}, &proc_joins[owner]);
+            try collectProcJoinBodies(gpa, store, solution.procStatements(store, @fromBackingInt(@intCast(owner))), &proc_joins[owner]);
+            const proc_body = store.getProcSpec(@fromBackingInt(@intCast(owner))).body.?;
+            proc_graphs[owner] = try future_fields.buildProcGraph(gpa, store, &.{proc_body}, &proc_joins[owner]);
         }
         const join_bodies = &proc_joins[owner];
 
@@ -2884,6 +3269,8 @@ pub fn compute(
         }
     }
 
+    var rewritten_reads = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(gpa, store.cfStmtCount());
+    defer rewritten_reads.deinit(gpa);
     // Materialize only equivalences whose representative actually acquired a
     // committed dismantle plan. Lookup-only projections retain their original
     // LIR and ownership schedule.
@@ -2902,6 +3289,7 @@ pub fn compute(
         const stmt = store.getCFStmtPtr(@fromBackingInt(@intCast(stmt_index)));
         if (stmt.* != .assign_ref) dismantleInvariant("projected alias definition stopped being a reference read");
         stmt.assign_ref.op = .{ .local = representative_local };
+        rewritten_reads.set(stmt_index);
         try result.projection_aliases.put(@fromBackingInt(@intCast(@as(u32, @intCast(local_index)))), representative_local);
     }
 
@@ -2962,10 +3350,6 @@ pub fn compute(
         root: u32,
         projected: bool,
     };
-    const PlaceEdgeKind = union(enum) {
-        alias,
-        projection: u32,
-    };
     const PlaceEdge = struct {
         source: u32,
         target: u32,
@@ -2976,41 +3360,23 @@ pub fn compute(
     defer place_edges.deinit(gpa);
     var place_heads = std.AutoHashMapUnmanaged(u32, u32).empty;
     defer place_heads.deinit(gpa);
-    for (0..store.cfStmtCount()) |stmt_index| {
-        if (!visited.isSet(stmt_index)) continue;
-        const stmt = store.getCFStmtImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
-        if (stmt.* != .assign_ref) continue;
-        const assign = stmt.assign_ref;
-        const source: LIR.LocalId, const kind: PlaceEdgeKind = switch (assign.op) {
-            .local => |local| blk: {
-                if (!solution.isBorrowed(assign.target)) continue;
-                if (solution.unitLocalOf(assign.target) != solution.unitLocalOf(local)) continue;
-                break :blk .{ local, .alias };
-            },
-            .field, .tag_payload, .tag_payload_struct => blk: {
-                const projection = encodeProjection(assign.op).?;
-                const projection_source = switch (assign.op) {
-                    inline .field, .tag_payload, .tag_payload_struct => |op| op.source,
-                    .local,
-                    .discriminant,
-                    .list_reinterpret,
-                    .nominal,
-                    => unreachable,
-                };
-                if (!projectionOwnsAllRc(store, layouts, projection_source, assign.target, projection)) continue;
-                break :blk .{ projection_source, .{ .projection = @intCast(stmt_index) } };
-            },
-            .discriminant, .list_reinterpret, .nominal => continue,
-        };
-        const source_index = @backingInt(source);
-        const previous_head = place_heads.get(source_index) orelse no_index;
-        try place_edges.append(gpa, .{
-            .source = source_index,
-            .target = @backingInt(assign.target),
-            .kind = kind,
-            .next = previous_head,
-        });
-        try place_heads.put(gpa, source_index, @intCast(place_edges.items.len - 1));
+    for (fact_ranges) |range| {
+        for (range.place_reads.items) |read| {
+            // A materialized alias reads its representative now.
+            const link = if (rewritten_reads.isSet(read.stmt))
+                placeLinkOf(store, layouts, solution, read.stmt, store.getCFStmt(@fromBackingInt(@intCast(read.stmt))).assign_ref)
+            else
+                read.link;
+            const edge = link orelse continue;
+            const previous_head = place_heads.get(edge.source) orelse no_index;
+            try place_edges.append(gpa, .{
+                .source = edge.source,
+                .target = edge.target,
+                .kind = edge.kind,
+                .next = previous_head,
+            });
+            try place_heads.put(gpa, edge.source, @intCast(place_edges.items.len - 1));
+        }
     }
 
     var places = std.AutoHashMapUnmanaged(u32, PlaceOrigin).empty;
@@ -3119,30 +3485,29 @@ pub fn compute(
     defer benefit_edges.deinit(gpa);
     var benefit_heads = std.AutoHashMapUnmanaged(u32, u32).empty;
     defer benefit_heads.deinit(gpa);
-    for (0..store.cfStmtCount()) |stmt_index| {
-        if (!visited.isSet(stmt_index)) continue;
-        const stmt = store.getCFStmtImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
-        if (stmt.* != .assign_call) continue;
-        const call = stmt.assign_call;
-        const args = store.getLocalSpan(call.args);
-        for (0..GuardedList.borrowLen(args)) |position| {
-            if (position >= arc_sig.tracked_param_count) continue;
-            const arg = GuardedList.at(args, position);
-            const arg_index = @backingInt(arg);
-            const place_origin = places.get(arg_index);
-            const root_index: u32 = if (place_origin) |origin| origin.root else @backingInt(solution.unitLocalOf(arg));
-            if (root_index == no_index or root_index == ambiguous_index) continue;
-            const source_info = param_info.get(root_index) orelse continue;
-            if (source_info.proc == ambiguous_index) continue;
-            const source_proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(source_info.proc));
-            if (solution.isPinnedProc(source_proc)) continue;
-            const target_key: u32 = @intCast(@backingInt(call.proc) * arc_sig.tracked_param_count + position);
-            const previous_head = benefit_heads.get(target_key) orelse no_index;
-            try benefit_edges.append(gpa, .{
-                .source_key = @intCast(source_info.proc * arc_sig.tracked_param_count + source_info.position),
-                .next = previous_head,
-            });
-            try benefit_heads.put(gpa, target_key, @intCast(benefit_edges.items.len - 1));
+    for (fact_ranges) |range| {
+        for (range.calls.items) |call_stmt| {
+            const call = store.getCFStmt(call_stmt).assign_call;
+            const args = store.getLocalSpan(call.args);
+            for (0..GuardedList.borrowLen(args)) |position| {
+                if (position >= arc_sig.tracked_param_count) continue;
+                const arg = GuardedList.at(args, position);
+                const arg_index = @backingInt(arg);
+                const place_origin = places.get(arg_index);
+                const root_index: u32 = if (place_origin) |origin| origin.root else @backingInt(solution.unitLocalOf(arg));
+                if (root_index == no_index or root_index == ambiguous_index) continue;
+                const source_info = param_info.get(root_index) orelse continue;
+                if (source_info.proc == ambiguous_index) continue;
+                const source_proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(source_info.proc));
+                if (solution.isPinnedProc(source_proc)) continue;
+                const target_key: u32 = @intCast(@backingInt(call.proc) * arc_sig.tracked_param_count + position);
+                const previous_head = benefit_heads.get(target_key) orelse no_index;
+                try benefit_edges.append(gpa, .{
+                    .source_key = @intCast(source_info.proc * arc_sig.tracked_param_count + source_info.position),
+                    .next = previous_head,
+                });
+                try benefit_heads.put(gpa, target_key, @intCast(benefit_edges.items.len - 1));
+            }
         }
     }
 

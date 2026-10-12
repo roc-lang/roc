@@ -67,6 +67,14 @@ pub const NEW_LINE = switch (SUPPORTED_OS) {
     .windows => "\r\n",
 };
 
+/// Whether the terminal attached to stdin is currently in raw mode.
+pub fn stdinRawModeActive() bool {
+    return switch (SUPPORTED_OS) {
+        .posix => Unix.stdinRawModeActive(),
+        .windows => Windows.stdinRawModeActive(),
+    };
+}
+
 /// One unit of meaning produced by `InputParser` from a raw byte stream.
 pub const InputEvent = union(enum) {
     /// One ASCII byte to be processed normally (text, control key, etc.).
