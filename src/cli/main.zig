@@ -4654,7 +4654,9 @@ fn finishHotReloadRebuild(
     joinWatchChild(rebuild.child);
     if (rebuild.child.output_error) |err| return err;
 
-    try replayWatchChildOutput(ctx, rebuild.child, hotReloadStatusLinesAllowed());
+    if (hotReloadOutputAllowed()) {
+        try replayWatchChildOutput(ctx, rebuild.child, true);
+    }
 
     const rebuild_succeeded = hotReloadRebuildSucceeded(rebuild.child);
     const new_inputs = if (rebuild_succeeded)
@@ -4695,14 +4697,14 @@ fn finishHotReloadRebuild(
 }
 
 /// A running app that has put the terminal in raw mode (such as a TUI) owns the
-/// screen, so hot reload status lines would corrupt what it has drawn.
-fn hotReloadStatusLinesAllowed() bool {
+/// screen, so hot reload output would corrupt what it has drawn.
+fn hotReloadOutputAllowed() bool {
     return !ReplLine.stdinRawModeActive();
 }
 
 fn reportHotReloadRebuildPublished(ctx: *CliCtx, rebuild: *HotReloadRebuild) CliOutputWriteError!void {
     if (rebuild.published_reported) return;
-    if (hotReloadStatusLinesAllowed()) {
+    if (hotReloadOutputAllowed()) {
         try ctx.io.stderr().print("--- roc watch: hot reload generation {} published ---\n", .{rebuild.generation});
         ctx.io.flush();
     }
@@ -4730,7 +4732,7 @@ fn reportHotReloadAcknowledgement(
         .accepted => "accepted by host",
         .rejected => "rejected by host; previous code remains active",
     };
-    if (hotReloadStatusLinesAllowed()) {
+    if (hotReloadOutputAllowed()) {
         try ctx.io.stderr().print("--- roc watch: hot reload generation {} {s} ---\n", .{ generation, outcome });
         ctx.io.flush();
     }
