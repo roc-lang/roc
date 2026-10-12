@@ -1286,7 +1286,7 @@ const Resolver = struct {
             },
             .pattern_nominal => {
                 const diagnostic_idx = try self.env.addDiagnostic(diagnostic);
-                self.env.store.settleDeferredPatternAsRuntimeError(@fromBackingInt(@intCast(entry.node_idx)), diagnostic_idx);
+                try self.env.store.settleDeferredPatternAsRuntimeError(@fromBackingInt(@intCast(entry.node_idx)), diagnostic_idx);
             },
             .numeric_suffix => {
                 _ = try self.env.addDiagnostic(diagnostic);
