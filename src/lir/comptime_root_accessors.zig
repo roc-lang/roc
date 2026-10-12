@@ -12,6 +12,7 @@
 //! further pass. The slots those accessors no longer read become
 //! unreachable and leave the image with the next reachability pass.
 const std = @import("std");
+const base = @import("base");
 const core = @import("lir_core");
 const postcheck = @import("postcheck");
 const LIR = core.LIR;
@@ -54,7 +55,7 @@ pub fn rebuildPublishedSlot(allocator: Allocator, result: *Program.Result, slot:
     if (entry.accessor_rebuilt) return;
     const accessor = entry.accessor orelse return;
     if (result.store.getProcSpec(accessor).root_materialization == null)
-        @panic("published root accessor has no materialization producer declaration");
+        base.invariant("published root accessor has no materialization producer declaration", .{});
     var decoded = try scalar_values.constructionForPublishedValue(allocator, result, slot, exports);
     defer decoded.deinit();
     const construction = decoded.construction orelse return;
@@ -69,7 +70,7 @@ pub fn rebuildExportedSlot(allocator: Allocator, result: *Program.Result, slot: 
     if (entry.accessor_rebuilt) return;
     const accessor = entry.accessor orelse return;
     if (result.store.getProcSpec(accessor).root_materialization == null)
-        @panic("exported root accessor has no materialization producer declaration");
+        base.invariant("exported root accessor has no materialization producer declaration", .{});
     var decoded = try scalar_values.constructionForExportedValue(allocator, result, slot, exported, frozen);
     defer decoded.deinit();
     const construction = decoded.construction orelse return;
@@ -94,7 +95,7 @@ fn rebuildConstruction(allocator: Allocator, result: *Program.Result, slot: LIR.
     const value = try context.addLocal(entry.layout_idx);
     const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, origin);
     const body = try scalar_values.emit(context, store, &result.layouts, origin, value, construction, ret) orelse
-        @panic("decoded root construction has no explicit LIR materialization");
+        base.invariant("decoded root construction has no explicit LIR materialization", .{});
     const locals = try store.addLocalSpan(new_locals.items);
     const proc = store.getProcSpecPtr(accessor);
     proc.body = body;

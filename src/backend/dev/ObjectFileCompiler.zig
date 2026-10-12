@@ -38,20 +38,20 @@ fn defineMaterializationHeaders(comptime CG: type, allocator: Allocator, scratch
     for (specs, 0..) |proc, index| {
         if (proc.root_materialization) |declaration| {
             if (!std.mem.eql(u8, &proc.identity.bytes, &declaration.wrapper_identity))
-                @panic("materialization wrapper did not retain its declared semantic identity");
+                invariant("materialization wrapper did not retain its declared semantic identity", .{});
             const entry = try producers.getOrPut(proc.identity);
-            if (entry.found_existing) @panic("duplicate semantic materialization producer");
+            if (entry.found_existing) invariant("duplicate semantic materialization producer", .{});
             entry.value_ptr.* = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         }
     }
     for (codegen.bindingDataCells()) |binding| {
         const declaration = binding.root_materialization orelse continue;
         const proc = producers.get(.{ .bytes = declaration.wrapper_identity }) orelse
-            @panic("linked output omitted a declared materialization wrapper");
+            invariant("linked output omitted a declared materialization wrapper", .{});
         if (!std.meta.eql(specs[@backingInt(proc)].root_materialization.?, declaration))
-            @panic("linked output changed a typed materialization provision");
+            invariant("linked output changed a typed materialization provision", .{});
         const implementation = codegen.compiledProcSymbol(proc) orelse
-            @panic("linked output did not compile its materialization wrapper");
+            invariant("linked output did not compile its materialization wrapper", .{});
         const symbol = try codegen.internRegionCodeSymbol(implementation.code_start, 0);
         const relocation = try scratch.alloc(ProcArtifact.DataRelocation, 1);
         relocation[0] = .{

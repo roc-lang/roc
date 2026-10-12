@@ -222,7 +222,7 @@ pub fn sourceEventObserver(self: *CompileTimeHost) SourceEvents.Observer {
 }
 
 fn sourceEventObserved(context: ?*anyopaque, header: *const SourceEvents.Header) callconv(.c) void {
-    const self: *CompileTimeHost = @ptrCast(@alignCast(context orelse @panic("source observer has no host")));
+    const self: *CompileTimeHost = @ptrCast(@alignCast(context orelse base.invariant("source observer has no host", .{})));
     self.handleSourceEvent(SourceEvents.decodeValidated(header));
 }
 
@@ -238,7 +238,7 @@ pub fn observeSourceEvent(self: *CompileTimeHost, header: *const SourceEvents.He
 
 fn handleSourceEvent(self: *CompileTimeHost, event: SourceEvents.Event) void {
     const descriptor = event.descriptor;
-    const resolver = self.source_event_resolver orelse @panic("source event ran without admitted semantic bindings");
+    const resolver = self.source_event_resolver orelse base.invariant("source event ran without admitted semantic bindings", .{});
     switch (event.kind) {
         .branch_taken => {
             self.comptime_branch_hits.append(self.host_arena.allocator(), .{
@@ -278,9 +278,9 @@ fn handleSourceEvent(self: *CompileTimeHost, event: SourceEvents.Event) void {
             }
         },
         .call_exit => {
-            if (self.source_event_frames.items.len == 0) @panic("source event call-frame stack underflow");
+            if (self.source_event_frames.items.len == 0) base.invariant("source event call-frame stack underflow", .{});
             if (self.source_event_frames.pop().?) {
-                if (self.call_regions.items.len == 0) @panic("source event known-frame stack underflow");
+                if (self.call_regions.items.len == 0) base.invariant("source event known-frame stack underflow", .{});
                 _ = self.call_regions.pop();
             }
         },

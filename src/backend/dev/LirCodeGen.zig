@@ -17194,7 +17194,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             });
             if (self.store.getProcSpec(proc.id).root_materialization) |materialization| {
                 if (args.len != 0 or out_desc != null or has_runtime_ret_desc)
-                    @panic("root materialization call did not use its declared owned-value ABI");
+                    base.invariant("root materialization call did not use its declared owned-value ABI", .{});
                 try self.emitRootMaterializationCall(materialization);
             } else if (proc.code_start == unresolved_proc_code_start) {
                 try self.emitPendingCallToProc(proc.id);
@@ -18703,7 +18703,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const entry = try self.materialization_cells.getOrPut(self.allocator, identity);
             if (entry.found_existing) {
                 if (!std.mem.eql(u8, self.symbolName(entry.value_ptr.*), binding_name))
-                    @panic("materialization dependency changed its declared binding symbol");
+                    base.invariant("materialization dependency changed its declared binding symbol", .{});
                 return;
             }
             const header = try self.internSymbolName(header_name, .shared);
@@ -22693,7 +22693,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 },
                                 .proc_ref => |proc_id| blk: {
                                     if (self.store.getProcSpec(proc_id).root_materialization != null)
-                                        @panic("root materialization wrapper escaped as an ordinary function object");
+                                        base.invariant("root materialization wrapper escaped as an ordinary function object", .{});
                                     const proc = try self.compiledProcForId(proc_id);
                                     const reg = try self.allocTempGeneral();
                                     if (proc.code_start == unresolved_proc_code_start)

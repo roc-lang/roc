@@ -15,6 +15,7 @@
 //! reference resolves to something inside the mapping.
 
 const std = @import("std");
+const base = @import("base");
 const builtin = @import("builtin");
 const builtins = @import("builtins");
 const lir = @import("lir");
@@ -104,7 +105,7 @@ pub const HostSplice = struct {
     /// only the current consumer owns and updates its storage.
     pub fn bindExternalDataAddress(self: *HostSplice, name: []const u8, address: usize) Allocator.Error!void {
         if (self.static_data_bindings.get(name)) |existing| {
-            if (existing != address) @panic("semantic data provision changed its stable address");
+            if (existing != address) base.invariant("semantic data provision changed its stable address", .{});
             return;
         }
         const owned = try self.allocator.dupe(u8, name);

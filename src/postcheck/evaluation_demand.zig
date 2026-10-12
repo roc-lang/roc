@@ -6,6 +6,7 @@
 //! semantic discovery or changing the compile-time execution closure.
 
 const std = @import("std");
+const base = @import("base");
 
 const Allocator = std.mem.Allocator;
 
@@ -130,17 +131,17 @@ pub const Plan = struct {
     /// Continue the declared producer. Evaluation demand and its observations
     /// are immutable under runtime demand; no semantic summary is revisited.
     pub fn continueRuntime(self: *Plan, roots: []const InstanceId) Allocator.Error!void {
-        if (self.failed) @panic("failed evaluation demand plan cannot be continued");
+        if (self.failed) base.invariant("failed evaluation demand plan cannot be continued", .{});
         for (roots) |root| {
-            if (!self.demand(root).semantic) @panic("runtime continuation was not declared under semantic demand");
+            if (!self.demand(root).semantic) base.invariant("runtime continuation was not declared under semantic demand", .{});
         }
         try self.extend(roots, .runtime);
     }
 
     pub fn demand(self: *const Plan, instance: InstanceId) Demand {
-        if (self.failed) @panic("failed evaluation demand plan cannot be observed");
+        if (self.failed) base.invariant("failed evaluation demand plan cannot be observed", .{});
         const index = @backingInt(instance);
-        if (index >= self.demands.len) @panic("evaluation demand referenced an unpublished instance");
+        if (index >= self.demands.len) base.invariant("evaluation demand referenced an unpublished instance", .{});
         return self.demands[index];
     }
 
@@ -153,7 +154,7 @@ pub const Plan = struct {
         for (roots) |instance| try pending.append(self.allocator, .{ .instance = instance, .lane = lane });
         while (pending.pop()) |item| {
             const index = @backingInt(item.instance);
-            if (index >= self.graph.instances.len) @panic("complete demand summary referenced an unpublished instance");
+            if (index >= self.graph.instances.len) base.invariant("complete demand summary referenced an unpublished instance", .{});
             const state = &self.demands[index];
             const visited = switch (item.lane) {
                 .semantic => &state.semantic,

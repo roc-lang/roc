@@ -496,7 +496,7 @@ pub const BindingPlan = struct {
         const self: *const BindingPlan = @ptrCast(@alignCast(raw));
         std.debug.assert(source.has_location == 1);
         return self.files.get(.{ .checked = source.checked_module, .content = source.source_identity }) orelse
-            @panic("source event location has no exact declared source binding");
+            base.invariant("source event location has no exact declared source binding", .{});
     }
 
     pub fn resolveEventSite(raw: *const anyopaque, site: *const Events.Site, branches: []align(1) const Events.Region) lir.LIR.ComptimeSiteId {
@@ -514,13 +514,13 @@ pub const BindingPlan = struct {
             .branch_regions = &.{},
         };
         return self.event_sites.get(siteKey(Events.Region, descriptor, branches)) orelse
-            @panic("source event site has no exact prebound producer certificate");
+            base.invariant("source event site has no exact prebound producer certificate", .{});
     }
 
     pub fn resolveEventFailure(raw: *const anyopaque, descriptor: *const Events.Descriptor) Failure.Observation {
         const self: *const BindingPlan = @ptrCast(@alignCast(raw));
         const id = self.values.get(.{ .failure = eventFailureDescriptor(descriptor) }) orelse
-            @panic("source event failure has no exact prebound producer certificate");
+            base.invariant("source event failure has no exact prebound producer certificate", .{});
         return self.failures.get(@intCast(id));
     }
 

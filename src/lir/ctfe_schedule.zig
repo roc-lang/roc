@@ -102,7 +102,7 @@ pub const Schedule = struct {
             if (cyclic) continue;
             for (self.componentMembers(component)) |node| {
                 for (self.predecessors(node)) |edge| {
-                    if (!done[edge.target]) @panic("CTFE schedule read an unfinished predecessor");
+                    if (!done[edge.target]) base.invariant("CTFE schedule read an unfinished predecessor", .{});
                 }
                 try executor.execute(node);
                 done[node] = true;
