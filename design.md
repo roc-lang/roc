@@ -5716,10 +5716,11 @@ literal-rejection crash with an `interpolation` `LiteralRejectionSite`, which
 compile-time evaluation reports as the interpolation's own diagnostic. The
 interpolation's value is the assembler called with the interpolated values as
 one list, which cannot reject. The checked interpolation carries its segments,
-its values, and the assembler's type; in a generalized body the checker keeps
-`item` a variable of its own, related to each value's type at every use, so
-Monotype relates `item` to each value's type before lowering the call and Boxy
-gives `item` the first value's representation. `Try` declares no
+its values, and the assembler's type; in a generalized body the checker relates
+each value's type to `item` at the generalization boundary (see "Builtin Str
+Interpolation Part Compatibility"), so Monotype relates `item` to each value's
+type before lowering the call and Boxy gives `item` the first value's
+representation. `Try` declares no
 `from_interpolation`, so an interpolation cannot target a `Try` itself.
 
 Literal-pattern deferred static-dispatch constraint groups are owned by the
@@ -6460,6 +6461,24 @@ one comparison per contract rather than one per contract below it. Source contra
 equality uses the shared identity rather than the per-use derivation index.
 Boxy selects a generated codec worker by the same identity, so every use of
 equivalent contracts shares one worker.
+
+That interned identity is local to one checked module, so each class also
+carries a content digest that is its identity across modules. The digest is a
+SHA-256 of a canonical depth-first encoding of the class's first member's proof
+graph. Contracts and evidence nodes are numbered by first visit, so shared and
+cyclic references encode as back-references. Each type encodes as its canonical
+key followed by the joint first-visit numbers of its variables in key order, so
+cross-root sharing is part of the digest. Methods encode by name. A procedure
+target encodes by its owning artifact's refs, a local procedure target by its
+lexical site within the recording artifact, and a structural target by its
+kind, which with the edge's dispatcher fixes its implementation. A target's
+module index, definition index, and callable type are relative to whichever
+artifact registered it, so the encoding writes none of them.
+Structural evidence that names a contract identifies it by this digest instead
+of by the module that recorded the edge. A generic codec function that callers
+in several modules use at one record type is therefore one specialization. A
+caller that passes a nominal with its own encoder still records a different
+contract, so it keeps a separate specialization.
 
 The checker's derived-codec walk records each nominal application whose
 backing it walks together with the generated derivation that walks it. A later
@@ -9877,23 +9896,64 @@ dispatch method-acceptance rule. Rejecting a constrained part retires its copied
 static-dispatch constraints together with the erroneous interpolation so no
 unresolved static-dispatch constraint can cross the checked boundary.
 
-The generated iterator yields each part as its item, so checking an
-interpolation unifies every part with the conversion's item type before any
-dispatch constraint is discharged. A generalized interpolation's scheme
-therefore relates its parts to the item type (`greet = |name| "hi ${name}"` is
-`a -> b where [b.from_interpolation : Str, Iter((a, Str)) -> b]`), and a body
-compiled once for every instantiation builds its items from its parts without
-consulting any use.
+The interpolation's target decides its item type, so checking the
+interpolation leaves each part unrelated to the item type and to the other
+parts. Discharging the constraint relates them: builtin `Str` checks each part
+as above, and any other target (a nominal's or alias's `from_interpolation`,
+or a `where` clause's signature) first relates its method's signature to the
+constraint, which decides the item type, and then relates each part to that
+item type, reporting a mismatch at the part. A part therefore never retypes
+another part: in `"${p.name} is ${p.age}"` used as `Str`, with `p.name` an
+unresolved string literal and `p.age` a `U64`, only `p.age` is rejected,
+and with a custom target only the part that differs from the method's item
+type is reported, wherever it appears. Pinned by
+test/snapshots/static_dispatch/interpolation_str_target_decides_parts.md and
+test/snapshots/static_dispatch/interpolation_custom_target_decides_parts.md.
+
+An interpolation whose target is still undecided at a generalization boundary
+relates every part to its item type there, before boundary literal defaulting
+and generalization read the boundary's variable pool
+(`relateUndischargedInterpolationParts`). Defaulting therefore sees each part
+through the constraint's signature exactly as it sees the item type, and a
+generalized interpolation's scheme relates its parts to the item type
+(`greet = |name| "hi ${name}"` is
+`a -> b where [b.from_interpolation : List(Str) -> Try(List(a) -> b, [InvalidInterpolation(Str)])]`),
+so a body compiled once for every instantiation builds its items from its parts
+without consulting any use.
 
 Instantiating a generalized interpolation copies its constraint and its parts'
 types, so a part rejected by an instantiated copy is rejected by that use's
 types. The instantiation records the use that instantiated each copy
 (`instantiated_interpolation_owners`, keyed by the copy's constraint function
-variable), and a rejected part poisons that use. The definition and its other
-uses are unaffected, and the use's own result type stays intact. Only a
-rejection with no instantiating use poisons the interpolation itself and marks
-its dispatcher erroneous. Pinned by
+variable, with the copy's metadata), and a rejected part poisons that use. The
+definition and its other uses are unaffected, and the use's own result type
+stays intact. Only a rejection with no instantiating use poisons the
+interpolation itself and marks its dispatcher erroneous. Pinned by
 test/snapshots/static_dispatch/generic_interpolation_use_rejects_part.md.
+
+The parts of a generalized interpolation with two or more parts share one item
+type, so a use can give them types that conflict with each other before the
+target is known: `describe = |person| "${person.name} is ${person.age}"` is
+`{ age: a, name: a, .. } -> b where [...]`, and a call with a `name : Str`,
+`age : U64` record fails to relate to it. The unifier keeps the pair whose
+relation failed first (a child mismatch a record or alias relation flags counts,
+an ignored one does not) and snapshots it before poisoning. When that pair
+reaches the item type of a copy the checker instantiated, the mismatch is
+reported as the use giving the interpolation's values different types: at the
+interpolation, with the use and both types, rather than as the call's or
+dispatch's own mismatch, whose types the failed relation has partly merged. The
+copy is then rejected, so discharging it reports nothing further. A mismatch
+found while relating a part to its item type is that part's own report. Pinned
+by test/snapshots/repro_issue_12213_method_interpolates_mixed_field_types.md
+(a method call) and
+test/snapshots/static_dispatch/interpolation_use_conflicting_values.md (a
+function call).
+
+Interpolation metadata records whether its regions are this module's source.
+Cross-module copying marks them imported, since a module renders only its own
+source, so a rejected part or conflicting values of an imported copy report
+at the use that instantiated it, once per copy. Pinned by
+test/cli/issue_12213_imported_interpolation_tie/Main.roc.
 
 Both sides are pinned by tests: accepted—
 test/cli/issue_10204_imported_interpolation_metadata/Main.roc (an imported

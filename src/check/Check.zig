@@ -71,8 +71,6 @@ const TypeDeclDependency = struct {
     dependency: u32,
 };
 
-const InterpolationPartsIdx = InterpolationPartMetadata.SafeList.Idx;
-
 const no_type_decl_dense_index = std.math.maxInt(u32);
 
 const no_def_group = std.math.maxInt(u32);
@@ -404,9 +402,6 @@ u64_var: Var,
 builtin_types_copied: bool,
 /// Map representation of Ident -> Var, used in checking static dispatch constraints
 ident_to_var_map: std.AutoHashMap(Ident.Idx, Var),
-/// Interpolation metadata ranges whose occurrence-specific custom part checks
-/// have already run.
-checked_interpolation_part_constraints: std.AutoHashMap(InterpolationPartsIdx, void),
 /// Vars that originated as single-quote (.int_unbound) literals.
 int_unbound_vars: collections.DenseMap(Var, void),
 /// Dispatcher/method pairs already reported by `reportConstraintError`, so a
@@ -3822,7 +3817,6 @@ fn initAssumePrepared(
         .u64_var = undefined,
         .builtin_types_copied = false,
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
-        .checked_interpolation_part_constraints = std.AutoHashMap(InterpolationPartsIdx, void).init(gpa),
         .scratch_generated_codec_calls = .empty,
         .int_unbound_vars = collections.DenseMap(Var, void).init(gpa),
         .reported_constraint_errors = std.AutoHashMap(ReportedConstraintError, void).init(gpa),
@@ -4160,7 +4154,6 @@ pub fn deinit(self: *Self) void {
     self.imported_scheme_by_source.deinit(self.gpa);
     self.associated_lookup_cache.deinit(self.gpa);
     self.ident_to_var_map.deinit();
-    self.checked_interpolation_part_constraints.deinit();
     self.int_unbound_vars.deinit();
     self.reported_constraint_errors.deinit();
     self.expect_effect_slots.deinit(self.gpa);
@@ -6849,6 +6842,8 @@ const OpenNumeralLiteral = struct {
 const InstantiatedInterpolationOwner = struct {
     fn_var: Var,
     owner: CIR.Expr.Idx,
+    /// The copy's own metadata, whose item type the use's relations reach.
+    interpolation: StaticDispatchConstraint.InterpolationMetadata,
 };
 
 const InterpolationPartNumeral = struct {
@@ -7044,6 +7039,7 @@ fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifi
         .problem => |problem_idx| {
             const mismatch = &self.problems.problems.items[@backingInt(problem_idx)].type_mismatch;
             mismatch.context = self.mismatchContext(mismatch.context, b);
+            try self.noteInterpolationTie(problem_idx);
         },
         .unified, .suppressed_by_error, .mismatch => {},
     }
@@ -7095,6 +7091,45 @@ fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifi
     self.debugAssertArraysInSync();
 
     return result;
+}
+
+/// Mark a recorded mismatch that a use's conflicting interpolation values
+/// caused, so it reports as that.
+fn noteInterpolationTie(self: *Self, problem_idx: problem.Problem.Idx) std.mem.Allocator.Error!void {
+    const mismatch = &self.problems.problems.items[@backingInt(problem_idx)].type_mismatch;
+    const entry = self.interpolationTieFor(mismatch.*) orelse return;
+    mismatch.interpolation_tie = .{
+        .interpolation_region = switch (entry.interpolation.regions) {
+            .this_module => entry.interpolation.expr_region.get(),
+            .imported => null,
+        },
+        .use_region = self.cir.store.getExprRegion(entry.owner),
+    };
+    // The use reports why the copy's values conflict, so discharging the copy
+    // must not report each value again.
+    try self.markStaticDispatchFnRejected(entry.fn_var);
+}
+
+/// The instantiated interpolation whose shared item type made this mismatch:
+/// the failed pair reaches the item type of a copy with two or more values,
+/// so the use gave those values different types. A mismatch found while
+/// relating one value to its item type is the value's own report.
+fn interpolationTieFor(self: *Self, mismatch: problem.TypeMismatch) ?InstantiatedInterpolationOwner {
+    if (mismatch.context == .interpolation_part) return null;
+    const leaf = mismatch.leaf orelse return null;
+
+    if (self.instantiated_interpolation_owners.items.len == 0) return null;
+    const expected_root = self.types.resolveVar(leaf.expected_var).var_;
+    const actual_root = self.types.resolveVar(leaf.actual_var).var_;
+    var index = self.instantiated_interpolation_owners.items.len;
+    while (index > 0) {
+        index -= 1;
+        const entry = self.instantiated_interpolation_owners.items[index];
+        if (entry.interpolation.interpolated_parts.len() < 2) continue;
+        const item_root = self.types.resolveVar(entry.interpolation.item_var).var_;
+        if (item_root == expected_root or item_root == actual_root) return entry;
+    }
+    return null;
 }
 
 /// Unify two types where `a` is the expected type and `b` is the actual type.
@@ -7215,7 +7250,8 @@ fn appendTypeMismatch(
     const actual_snapshot = try self.snapshotVarForError(actual);
     const unify_env = self.unifyEnv();
     const evidence = try unifier.snapshotMismatchEvidence(&unify_env);
-    return self.problems.appendProblem(.{ .type_mismatch = .{
+    const leaf = try unifier.snapshotMismatchLeaf(&unify_env);
+    const problem_idx = try self.problems.appendProblem(.{ .type_mismatch = .{
         .types = .{
             .expected_var = expected,
             .expected_snapshot = expected_snapshot,
@@ -7224,7 +7260,10 @@ fn appendTypeMismatch(
         },
         .context = diagnostic_ctx,
         .evidence = evidence,
+        .leaf = leaf,
     } });
+    try self.noteInterpolationTie(problem_idx);
+    return problem_idx;
 }
 
 /// The context the relation just rejected reports under. A relation the
@@ -11172,6 +11211,7 @@ fn recordOpenLiteralVar(
                     try self.instantiated_interpolation_owners.append(self.gpa, .{
                         .fn_var = constraint.fn_var,
                         .owner = owner,
+                        .interpolation = constraint.interpolation,
                     });
                 },
                 .quote => {},
@@ -29718,9 +29758,10 @@ fn resumeInterpolationCheck(self: *Self, task: *ExprTask, state: *InterpolationC
             state.item_var = try self.fresh(env, expr_region);
         },
         .part_value => {
-            _ = try self.unifyInContext(state.item_var, ModuleEnv.varFrom(parts[state.part_index]), env, .{
-                .interpolation_part = self.cir.store.getExprRegion(parts[state.part_index]),
-            });
+            // The part is not related to the item type here: the target's
+            // conversion decides the item type, and discharging it checks each
+            // part against that type (design.md "Builtin Str Interpolation
+            // Part Compatibility").
             self.checking_call_arg = true;
             state.phase = .part_segment;
             return .{ .child = .{ .expr = parts[state.part_index + 1], .expected = child_expected } };
@@ -33405,6 +33446,7 @@ fn mkInterpolationMetadata(
         ),
         .item_var = item_var,
         .interpolated_parts = try self.types.appendInterpolationParts(interpolated_parts.items),
+        .regions = .this_module,
     };
 }
 
@@ -39505,6 +39547,37 @@ fn reportDerivedCodecOpenRecord(
     try self.markStaticDispatchRejected(constraint);
 }
 
+/// Relate every part of each interpolation this boundary's pool owns whose
+/// target is still undecided to that interpolation's item type, before
+/// defaulting and generalization read the pool. A scheme quantifies one item
+/// type for all of an interpolation's parts (design.md "Builtin Str
+/// Interpolation Part Compatibility"); an interpolation whose target is
+/// decided was related when its constraint was discharged.
+fn relateUndischargedInterpolationParts(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    const rank = env.rank();
+    var related_roots: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    defer related_roots.deinit(self.gpa);
+    var pool_index: usize = 0;
+    // Relating a part can add vars to this rank's pool; they are fresh
+    // structure, never an interpolation's constrained target, so the scan
+    // reads the pool's length once.
+    const pool_len = env.var_pool.getVarsForRank(rank).len;
+    while (pool_index < pool_len) : (pool_index += 1) {
+        const resolved = self.types.resolveVar(env.var_pool.getVarsForRank(rank)[pool_index]);
+        const flex = switch (resolved.desc.content) {
+            .flex => |flex| flex,
+            .rigid, .alias, .structure, .field_presence, .err => continue,
+        };
+        if (flex.constraints.isEmpty()) continue;
+        if ((try related_roots.getOrPut(self.gpa, resolved.var_)).found_existing) continue;
+        var constraints = self.types.iterStaticDispatchConstraints(flex.constraints);
+        while (constraints.next()) |constraint| {
+            if (constraint.origin.literalKind() != .interpolation) continue;
+            try self.relateInterpolationPartsToItem(constraint, null, env);
+        }
+    }
+}
+
 /// `defaultLiteralsAtGeneralizationBoundary` for a whole binding group: the
 /// reachable protection set is seeded from every member's root, so a literal
 /// reachable from any member's signature stays open across the shared
@@ -39517,6 +39590,8 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
     const rank = env.rank();
     var boundary_codecs = std.ArrayList(FinalCodecDispatchConstraint).empty;
     defer boundary_codecs.deinit(self.gpa);
+
+    try self.relateUndischargedInterpolationParts(env);
 
     try self.closeBoundaryLocalDerivedCodecRecordRows(roots, env);
 
@@ -46254,10 +46329,6 @@ inline fn processDeferredDispatchEntry(
                         }
                     }
                 }
-                if (constraint.origin.literalKind() == .interpolation) {
-                    try self.ensureCustomInterpolationPartsChecked(constraint, explicitDeferredConstraintFailureExpr(deferred_constraint), env);
-                }
-
                 // Then, lookup the inferred constraint in the actual list of rigid constraints
                 if (self.ident_to_var_map.get(constraint.fn_name)) |rigid_var| {
                     // Each USE instantiates the where-method signature
@@ -46317,6 +46388,11 @@ inline fn processDeferredDispatchEntry(
                     // similar to e_call
                     const result = try self.unify(use_fn_var, constraint.fn_var, env);
                     if (result.isEstablished()) {
+                        // The where-clause signature has decided the item
+                        // type, so each part is now checked against it.
+                        if (constraint.origin.literalKind() == .interpolation) {
+                            try self.relateInterpolationPartsToItem(constraint, explicitDeferredConstraintFailureExpr(deferred_constraint), env);
+                        }
                         try self.recordSuccessfulStaticDispatch(constraint);
 
                         // The body provably forces this where-clause method: a
@@ -46434,8 +46510,6 @@ inline fn processDeferredDispatchEntry(
                         if (try self.satisfyBuiltinStrInterpolation(deferred_constraint.var_, constraint, explicitDeferredConstraintFailureExpr(deferred_constraint), env)) {
                             continue;
                         }
-                    } else {
-                        try self.ensureCustomInterpolationPartsChecked(constraint, explicitDeferredConstraintFailureExpr(deferred_constraint), env);
                     }
                 }
                 const method_lookup = self.lookupStaticDispatchMethodBinding(
@@ -46760,6 +46834,11 @@ inline fn processDeferredDispatchEntry(
                 };
                 switch (fn_result) {
                     .unified => {
+                        // The method's signature has decided the item type,
+                        // so each part is now checked against it.
+                        if (constraint.origin.literalKind() == .interpolation) {
+                            try self.relateInterpolationPartsToItem(constraint, explicitDeferredConstraintFailureExpr(deferred_constraint), env);
+                        }
                         try self.recordSuccessfulStaticDispatch(constraint);
                         if (self.dispatch_replay_candidates.count() != 0) try self.recordDispatchReplaySource(constraint.fn_var);
                     },
@@ -46812,9 +46891,6 @@ inline fn processDeferredDispatchEntry(
                     is_numeric_default_pass,
                 )) {
                     continue;
-                }
-                if (constraint.origin.literalKind() == .interpolation) {
-                    try self.ensureCustomInterpolationPartsChecked(constraint, explicitDeferredConstraintFailureExpr(deferred_constraint), env);
                 }
                 if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
                     const method_lookup = self.lookupStaticDispatchMethodBinding(
@@ -47096,6 +47172,11 @@ inline fn processDeferredDispatchEntry(
                 });
                 switch (fn_result) {
                     .unified => {
+                        // The method's signature has decided the item type,
+                        // so each part is now checked against it.
+                        if (constraint.origin.literalKind() == .interpolation) {
+                            try self.relateInterpolationPartsToItem(constraint, explicitDeferredConstraintFailureExpr(deferred_constraint), env);
+                        }
                         try self.recordSuccessfulStaticDispatch(constraint);
                         if (self.dispatch_replay_candidates.count() != 0) try self.recordDispatchReplaySource(constraint.fn_var);
                     },
@@ -47427,7 +47508,9 @@ fn interpolationPartConstraintsAcceptBuiltinStr(
     return true;
 }
 
-fn constrainInterpolationPartToStr(self: *Self, part: InterpolationPartMetadata, expected_str_var: Var, env: *Env) Allocator.Error!bool {
+/// `report_region` is null when an earlier part of the same imported copy
+/// already reported at the same use.
+fn constrainInterpolationPartToStr(self: *Self, part: InterpolationPartMetadata, report_region: ?Region, expected_str_var: Var, env: *Env) Allocator.Error!bool {
     const resolved_expr = self.types.resolveVar(part.var_);
     if (resolved_expr.desc.content == .err) return false;
 
@@ -47456,7 +47539,9 @@ fn constrainInterpolationPartToStr(self: *Self, part: InterpolationPartMetadata,
             if (entry.defaulted) entry.snapshot else null
         else
             null;
-        try self.recordInterpolationPartTypeMismatch(expected_str_var, part.var_, defaulted_numeral, part.region);
+        if (report_region) |region| {
+            try self.recordInterpolationPartTypeMismatch(expected_str_var, part.var_, defaulted_numeral, region);
+        }
         for (self.types.sliceStaticDispatchConstraints(constraints_range)) |constraint| {
             try self.markStaticDispatchRejected(constraint);
         }
@@ -47483,12 +47568,21 @@ fn satisfyBuiltinStrInterpolation(
         }
         unreachable;
     };
-    const expected_str_var = try self.freshStr(env, expr_region);
+    const expected_str_var = try self.freshStr(env, switch (metadata.regions) {
+        .this_module => expr_region,
+        .imported => self.getRegionAt(constraint.fn_var),
+    });
 
     var did_err = false;
     for (0..metadata.interpolated_parts.len()) |part_i| {
         const part = self.types.getInterpolationPartAt(metadata.interpolated_parts, @intCast(part_i));
-        did_err = (try self.constrainInterpolationPartToStr(part, expected_str_var, env)) or did_err;
+        // Every part of an imported copy reports at the one use, so only the
+        // first rejected part reports.
+        const report_region: ?Region = if (did_err and metadata.regions == .imported)
+            null
+        else
+            self.interpolationPartReportRegion(constraint, part, failure_expr);
+        did_err = (try self.constrainInterpolationPartToStr(part, report_region, expected_str_var, env)) or did_err;
     }
 
     if (did_err) {
@@ -47503,6 +47597,25 @@ fn satisfyBuiltinStrInterpolation(
     return true;
 }
 
+/// Where a report about one of an interpolation's parts points: the part
+/// itself when the regions are this module's source, and otherwise the use
+/// that instantiated the copy (design.md "Builtin Str Interpolation Part
+/// Compatibility").
+fn interpolationPartReportRegion(
+    self: *Self,
+    constraint: StaticDispatchConstraint,
+    part: InterpolationPartMetadata,
+    failure_expr: ?CIR.Expr.Idx,
+) Region {
+    return switch (constraint.interpolation.regions) {
+        .this_module => part.region,
+        .imported => if (failure_expr orelse self.instantiatedInterpolationOwner(constraint)) |owner|
+            self.cir.store.getExprRegion(owner)
+        else
+            self.getRegionAt(constraint.fn_var),
+    };
+}
+
 /// The use that instantiated this generalized interpolation copy, if it is
 /// one (`instantiated_interpolation_owners`).
 fn instantiatedInterpolationOwner(self: *Self, constraint: StaticDispatchConstraint) ?CIR.Expr.Idx {
@@ -47513,8 +47626,10 @@ fn instantiatedInterpolationOwner(self: *Self, constraint: StaticDispatchConstra
     return null;
 }
 
-/// `failure_expr` is as in `satisfyBuiltinStrInterpolation`.
-fn ensureCustomInterpolationPartsChecked(
+/// Relate each of an interpolation's parts to its item type, reporting a
+/// mismatch at the part. `failure_expr` is as in
+/// `satisfyBuiltinStrInterpolation`.
+fn relateInterpolationPartsToItem(
     self: *Self,
     constraint: StaticDispatchConstraint,
     failure_expr: ?CIR.Expr.Idx,
@@ -47531,9 +47646,9 @@ fn ensureCustomInterpolationPartsChecked(
     // Empty interpolations have no part constraints to validate and their
     // SafeList range intentionally has no usable start index.
     if (metadata.interpolated_parts.isEmpty()) return;
-    if ((try self.checked_interpolation_part_constraints.getOrPut(
-        metadata.interpolated_parts.start,
-    )).found_existing) return;
+    // A rejected constraint's failure is already reported. Every other
+    // repeat relates parts already equal to the item type.
+    if (self.types.varStaticDispatchRejected(constraint.fn_var)) return;
 
     const item_var = metadata.item_var;
     // Use the captured part metadata, not the original CIR `parts`, so an instantiated call
@@ -47544,7 +47659,9 @@ fn ensureCustomInterpolationPartsChecked(
     var did_err = false;
     for (0..interpolated_parts.len()) |part_i| {
         const part = self.types.getInterpolationPartAt(interpolated_parts, @intCast(part_i));
-        const result = try self.unifyInContext(item_var, part.var_, env, .{ .interpolation_part = part.region });
+        const result = try self.unifyInContext(item_var, part.var_, env, .{
+            .interpolation_part = self.interpolationPartReportRegion(constraint, part, failure_expr),
+        });
         did_err = did_err or result.isProblem() or self.types.resolveVar(part.var_).desc.content == .err;
     }
 

@@ -25,6 +25,7 @@ pub const RelationOwner = types.RelationOwner;
 pub const TypeMismatch = types.TypeMismatch;
 pub const TypeMismatchEvidence = types.TypeMismatchEvidence;
 pub const TypePair = types.TypePair;
+pub const InterpolationTie = types.InterpolationTie;
 pub const IncompatiblePlatformRequirement = types.IncompatiblePlatformRequirement;
 pub const CrossModuleImport = types.CrossModuleImport;
 
