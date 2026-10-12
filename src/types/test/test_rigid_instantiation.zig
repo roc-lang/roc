@@ -793,6 +793,7 @@ test "instantiate - markers in interpolation metadata get their own choices" {
             .expr_region = .some(region),
             .item_var = item_union,
             .interpolated_parts = parts,
+            .regions = .this_module,
         },
     }});
     const source = try env.types.freshFromContentWithRank(.{ .flex = .{ .name = null, .constraints = constraints } }, .generalized);

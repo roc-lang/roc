@@ -291,13 +291,17 @@ pub const ConstFnStructuralEvidence = struct {
     callable_contracts: u32 = 0,
     derivation: static_dispatch.StructuralDerivation,
     checked: ?struct {
+        /// The module that recorded the edge. Restoration reads the edge's
+        /// checked types and contract from it; a codec edge's identity is its
+        /// contract's content instead, so equal contracts recorded by
+        /// different modules are one specialization.
         view: names.CheckedModuleDigest,
         dispatcher_key: names.CanonicalTypeKey,
         dispatcher_ty: checked_ids.CheckedTypeId,
         callable_key: names.CanonicalTypeKey,
         callable_ty: checked_ids.CheckedTypeId,
         generated_codec_derivation: ?static_dispatch.GeneratedCodecDerivationId,
-        generated_codec_identity: ?static_dispatch.GeneratedCodecDerivationId,
+        generated_codec_content: ?static_dispatch.GeneratedCodecContentDigest,
     } = null,
 
     pub fn identityEql(left: ConstFnStructuralEvidence, right: ConstFnStructuralEvidence) bool {
@@ -305,10 +309,14 @@ pub const ConstFnStructuralEvidence = struct {
         if (!std.meta.eql(left.derivation, right.derivation) or (left.checked == null) != (right.checked == null)) return false;
         const a = left.checked orelse return true;
         const b = right.checked.?;
-        return std.meta.eql(a.view, b.view) and
+        if ((a.generated_codec_content == null) != (b.generated_codec_content == null)) return false;
+        const same_origin = if (a.generated_codec_content) |content|
+            std.meta.eql(content, b.generated_codec_content.?)
+        else
+            std.meta.eql(a.view, b.view);
+        return same_origin and
             std.meta.eql(a.dispatcher_key, b.dispatcher_key) and
-            std.meta.eql(a.callable_key, b.callable_key) and
-            a.generated_codec_identity == b.generated_codec_identity;
+            std.meta.eql(a.callable_key, b.callable_key);
     }
 };
 
