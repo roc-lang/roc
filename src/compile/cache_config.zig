@@ -302,7 +302,11 @@ pub const Constants = struct {
     ///      or a top-level compile-time root's recursive binding.
     /// 141: Checked bodies gain the `row_coerce` expression form (design.md
     ///      "Row Coercion Primitive").
-    pub const CACHE_VERSION = 141;
+    /// 142: Module environments record the uses of top-level values that read
+    ///      the value through a row coercion.
+    /// 143: Module environments record row-coerced callees and the definitions
+    ///      whose bodies closed an annotated open result row.
+    pub const CACHE_VERSION = 143;
 };
 
 /// Configuration for the Roc cache system.

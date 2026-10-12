@@ -4657,6 +4657,7 @@ fn isTypeCheckError(err: SnapshotError) bool {
         error.MissingSnapshotHeader,
         error.MissingSnapshotSource,
         error.MissingTargetFile,
+        error.InvalidTargetConfiguration,
         error.MmapFailed,
         error.ModuleLinkFailed,
         error.MonoFormattingFailed,

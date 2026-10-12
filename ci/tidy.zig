@@ -1392,10 +1392,10 @@ const DeadFilesDetector = struct {
 
         for (detector.files.keys(), detector.files.values()) |name, state| {
             if (state.definition_count == 0) {
-                errors.addFileUntracked(&name);
+                errors.addFileUntracked(std.mem.trimEnd(u8, &name, "\x00"));
             }
             if (state.is_src and state.import_count == 0 and !isEntryPoint(name)) {
-                errors.addFileDead(&name);
+                errors.addFileDead(std.mem.trimEnd(u8, &name, "\x00"));
             }
         }
     }

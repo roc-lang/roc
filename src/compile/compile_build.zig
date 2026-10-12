@@ -40,7 +40,7 @@ const Mode = compile_package.Mode;
 const Allocator = std.mem.Allocator;
 
 /// The set of errors that can occur during a build (including `roc check`).
-pub const BuildError = Allocator.Error || std.Thread.SpawnError || error{ ExpectedPlatformString, ExpectedString, FileNotFound, AccessDenied, StreamTooLong, IoError, InvalidNullByteInPath, PathOutsideWorkspace, UnsupportedHeader, Internal, DownloadFailed, FileError, InvalidUrl, NoCacheDir, NoPackageSource, UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound, InvalidDependency, MissingFilesDirectory, MissingTargetFile };
+pub const BuildError = Allocator.Error || std.Thread.SpawnError || error{ ExpectedPlatformString, ExpectedString, FileNotFound, AccessDenied, StreamTooLong, IoError, InvalidNullByteInPath, PathOutsideWorkspace, UnsupportedHeader, Internal, DownloadFailed, FileError, InvalidUrl, NoCacheDir, NoPackageSource, UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound, InvalidDependency, MissingFilesDirectory, MissingTargetFile, InvalidTargetConfiguration };
 /// Errors that can occur while initializing build inputs.
 pub const InitError = Allocator.Error || BuiltinModules.InitError;
 /// Errors that can occur while compiling discovered modules.
@@ -487,6 +487,18 @@ pub const BuildEnv = struct {
         return platform.root_file;
     }
 
+    /// The verified content hash of the selected platform's bundle, or null
+    /// when the platform is not a downloaded bundle. The platform's directory
+    /// in the package cache is content-addressed by this hash, so it
+    /// identifies every file in that directory.
+    pub fn getPlatformBundleHash(self: *const BuildEnv) ?[]const u8 {
+        const name = self.selected_platform_package_name orelse return null;
+        const platform = self.packages.get(name) orelse return null;
+        std.debug.assert(platform.kind == .platform);
+        const url = platform.url orelse return null;
+        return url.hash;
+    }
+
     /// Set the target for this build environment.
     /// Must be called before compileDiscovered() if target needs to change after discovery.
     pub fn setTarget(self: *BuildEnv, target: roc_target.RocTarget) void {
@@ -562,7 +574,7 @@ pub const BuildEnv = struct {
             // dangling pointer for deinit to double-free.
             self.root_url = null;
         }
-        self.root_url = try package_source.UrlSource.init(self.gpa, .{ .url = url, .url_id = parsed.url_id });
+        self.root_url = try package_source.UrlSource.init(self.gpa, .{ .url = url, .url_id = parsed.url_id, .hash = parsed.hash });
     }
 
     /// Declare that an explicitly supplied `--main` came from this bundle
@@ -573,7 +585,7 @@ pub const BuildEnv = struct {
             existing.deinit(self.gpa);
             self.main_url = null;
         }
-        self.main_url = try package_source.UrlSource.init(self.gpa, .{ .url = url, .url_id = parsed.url_id });
+        self.main_url = try package_source.UrlSource.init(self.gpa, .{ .url = url, .url_id = parsed.url_id, .hash = parsed.hash });
     }
 
     pub fn setWatchInputTracking(self: *BuildEnv, enabled: bool) void {
@@ -1731,6 +1743,7 @@ pub const BuildEnv = struct {
                 error.LowLevelOperationsNotFound,
                 error.MissingFilesDirectory,
                 error.MissingTargetFile,
+                error.InvalidTargetConfiguration,
                 error.NoCacheDir,
                 error.NoPackageSource,
                 error.PathOutsideWorkspace,
@@ -1815,6 +1828,7 @@ pub const BuildEnv = struct {
             const url_view: ?package_source.UrlSourceView = if (package.url) |url| .{
                 .url = url.url,
                 .url_id = url.url_id,
+                .hash = url.hash,
             } else null;
             const root_file_state: ?watch_inputs.State = if (self.track_watch_inputs)
                 if (url_view == null)
@@ -2064,7 +2078,11 @@ pub const BuildEnv = struct {
         try self.sink.emitReport("workspace", "root", report);
     }
 
-    fn resolvePlatformTargetConfigConstants(self: *BuildEnv) Allocator.Error!void {
+    /// Resolve the platform's target configuration fields that name
+    /// top-level values. A field that does not resolve to a usable constant is
+    /// reported and stops the build: linking without it would silently drop
+    /// what the platform asked for.
+    fn resolvePlatformTargetConfigConstants(self: *BuildEnv) (Allocator.Error || error{InvalidTargetConfiguration})!void {
         const semantic = self.getPlatformSemanticData() orelse return;
         const checked_module = semantic.checked_artifact orelse return;
 
@@ -2076,7 +2094,8 @@ pub const BuildEnv = struct {
             targets_config.resolveCheckedConstants(self.gpa, checked_module, &diagnostic) catch |err| switch (err) {
                 error.TargetConfigInvalid => {
                     try self.emitTargetConfigResolveError(diagnostic);
-                    return;
+                    try self.makeWorkspaceReportsDrainable();
+                    return error.InvalidTargetConfiguration;
                 },
             };
         }
