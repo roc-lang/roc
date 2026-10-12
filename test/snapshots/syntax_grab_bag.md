@@ -214,7 +214,6 @@ expect {
 }
 ~~~
 # EXPECTED
-EXPECTED RECORD ACCESSOR - syntax_grab_bag.md:154:2:154:5
 NOT IMPLEMENTED - syntax_grab_bag.md:6:1:12:4
 NOT IMPLEMENTED - syntax_grab_bag.md:6:1:12:4
 UNDECLARED TYPE - syntax_grab_bag.md:36:8:36:11
@@ -270,6 +269,7 @@ TYPE MISMATCH - syntax_grab_bag.md:70:5:70:8
 MISSING METHOD - syntax_grab_bag.md:99:3:99:8
 MISSING METHOD - syntax_grab_bag.md:101:3:101:8
 TYPE MISMATCH - syntax_grab_bag.md:84:2:84:2
+TYPE MISMATCH - syntax_grab_bag.md:150:3:150:6
 TOO FEW ARGS - syntax_grab_bag.md:155:2:157:3
 TYPE MISMATCH - syntax_grab_bag.md:167:3:167:3
 DECLARATION HAS NO VALUE - syntax_grab_bag.md:201:1:201:25
@@ -278,42 +278,6 @@ TYPE NOT DETERMINED - syntax_grab_bag.md:189:26:189:66
 # PROBLEMS
 ~~~clojure
 (reports
-	(report
-		(severity runtime_error)
-		(title "Expected Record Accessor")
-		(region (start 154 2) (end 154 5))
-		(headline
-			(reflow "I was parsing access after `.`, and I expected a field name or tuple index."))
-		(document
-			(reflow "Required record access uses ")
-			(annotated code ".name")
-			(reflow ", optional record access uses ")
-			(annotated code ".?name")
-			(reflow ", and tuple access uses ")
-			(annotated code ".0")
-			(reflow ". Accessor names must be lowercase and adjacent to their punctuation.")
-			(line-break)
-			(line-break)
-			(text "For example:")
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "person.name")
-			(line-break)
-			(indent 1)
-			(text "maybe_person.?name")
-			(line-break)
-			(indent 1)
-			(text "pair.0")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(text "I found ")
-			(annotated code "...")
-			(text " here.")
-			(line-break)
-			(line-break)
-			(source-region (file "syntax_grab_bag.md") (start 154 2) (end 154 5) (annotation error) (line-text "\t..."))))
 	(report
 		(severity fatal)
 		(title "Not Implemented")
@@ -1101,6 +1065,44 @@ TYPE NOT DETERMINED - syntax_grab_bag.md:189:26:189:66
 			(reflow "These can never match! Either the pattern or expression has a problem.")))
 	(report
 		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 150 3) (end 150 6))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "return")
+			(reflow " ")
+			(reflow "does not match the function's return type."))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 150 3) (end 150 6) (annotation error) (line-text "\t\ttag # Comment after return statement"))
+			(line-break)
+			(reflow "It has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[Blue]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But the function's return type is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Try({}, _d)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "All")
+			(reflow " ")
+			(annotated code "return")
+			(reflow " ")
+			(reflow "statements and the final expression in a function must have the same type.")))
+	(report
+		(severity runtime_error)
 		(title "Too Few Args")
 		(region (start 155 2) (end 157 3))
 		(headline
@@ -1789,7 +1791,8 @@ EndOfFile,
 							(p-ident (raw "tag"))
 							(e-tag (raw "Blue")))
 						(s-return
-							(e-malformed (reason "expr_dot_suffix_not_allowed")))
+							(e-ident (raw "tag")))
+						(e-ellipsis)
 						(e-apply
 							(e-ident (raw "match_time"))
 							(e-ellipsis))
@@ -2122,11 +2125,12 @@ main! = |_| { # Yeah I can leave a comment here
 	var number = 123
 	expect blah == 1
 	tag = Blue
-	return # Comment after return statement
+	return # Comment after return keyword
+		tag # Comment after return statement
 
-		# Just a random comment!
+	# Just a random comment!
 
-		
+	...
 	match_time(
 		..., # Single args with comment
 	)
