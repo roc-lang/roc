@@ -564,6 +564,7 @@ pub const CtfeDemandCause = struct {
     column: u32,
 };
 
+/// A cached body's eager read of a compile-time root, and the source that demanded it.
 pub const CachedCtfeRead = struct {
     module: [32]u8,
     root: u32,
@@ -572,6 +573,7 @@ pub const CachedCtfeRead = struct {
 
 pub const LiteralRepresentation = @import("literal_recipe.zig").Representation;
 
+/// A binder's type within a cached literal local context, in persistent form.
 pub const CachedLiteralBinding = struct {
     kind: u8,
     binder: u32,
@@ -583,6 +585,9 @@ pub const CachedLiteralBinding = struct {
     }
 };
 
+/// Persistent form of a literal recipe's local declaration context: the
+/// enclosing binder and expression, its specialization keys, its bindings, and
+/// its function evidence.
 pub const CachedLiteralLocalContext = struct {
     module: [32]u8,
     binder: u32,
@@ -692,6 +697,7 @@ pub const CachedLiteralRecipe = struct {
     }
 };
 
+/// A cached body's read of a literal producer, and the source that demanded it.
 pub const CachedLiteralRead = struct {
     recipe: CachedLiteralRecipe,
     cause: CtfeDemandCause,
@@ -879,6 +885,7 @@ pub const StaticDataValue = struct {
     } = null,
 };
 
+/// Whether a compile-time root has completed, and if so with a value or a failure.
 pub const ComptimeRootCompletion = union(enum) {
     pending,
     value,

@@ -72,6 +72,8 @@ pub const PublishedConstruction = struct {
     }
 };
 
+/// Decode the construction of the completed value root stored in `slot` from its
+/// export, which must be the first of `exports`.
 pub fn constructionForPublishedValue(
     allocator: Allocator,
     program: *const Program.Result,
@@ -86,6 +88,7 @@ pub fn constructionForPublishedValue(
     return constructionForExportedValue(allocator, program, slot, exports[0], &frozen);
 }
 
+/// Decode the construction of the completed value root stored in `slot` from its export.
 pub fn constructionForExportedValue(allocator: Allocator, program: *const Program.Result, slot: LIR.StaticDataId, exported: Program.StaticDataExport, frozen: *const Program.FrozenStaticData) Allocator.Error!PublishedConstruction {
     const entry = program.static_data_values.items[@backingInt(slot)];
     std.debug.assert(entry.compile_time_root != null);

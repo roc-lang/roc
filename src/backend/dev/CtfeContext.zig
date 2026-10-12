@@ -4,6 +4,7 @@
 const std = @import("std");
 const base = @import("base");
 
+/// The source location an event reports; `has_location` is false when the producer had none.
 pub const SourceDescriptor = struct {
     checked_module: [32]u8,
     source_identity: [32]u8,
@@ -12,12 +13,15 @@ pub const SourceDescriptor = struct {
     column: u32,
     has_location: bool,
 };
+/// The literal conversion a `LiteralDescriptor` names.
 pub const LiteralKind = enum(u8) { numeral, quote, interpolation };
+/// A checked literal conversion expression.
 pub const LiteralDescriptor = struct {
     checked_module: [32]u8,
     checked_expr: u32,
     kind: LiteralKind,
 };
+/// A compile-time root's producer, layout, and role (stored value or failure message).
 pub const RootDescriptor = struct {
     module: [32]u8,
     producer: union(enum) {
@@ -38,12 +42,14 @@ pub const RootDescriptor = struct {
         },
     },
 };
+/// A failure event's source and, when present, its rejected literal and guarding root.
 pub const FailureDescriptor = struct {
     source: SourceDescriptor,
     checked_error: bool,
     literal_rejection: ?LiteralDescriptor,
     guard_root: ?RootDescriptor,
 };
+/// A branching site (match, destructure, or if) and the regions of its branches.
 pub const SiteDescriptor = struct {
     checked_module: [32]u8,
     checked_site: ?u32,

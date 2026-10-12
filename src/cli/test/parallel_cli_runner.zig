@@ -8153,7 +8153,7 @@ fn customCtfeCachePublication(
                 };
                 const ordinary_failure = switch (failure.term) {
                     .exited => |code| code != 0,
-                    else => false,
+                    .signal, .stopped, .unknown => false,
                 };
                 if (!ordinary_failure or failure.stderr.len == 0 or std.mem.find(u8, failure.stderr, "panic") != null or std.mem.find(u8, failure.stderr, "invariant violated") != null) {
                     return failureFromRun(allocator, timer, failure.*, "overflow did not retain an ordinary compile-time failure");
@@ -8170,7 +8170,7 @@ fn customCtfeCachePublication(
             };
             const ordinary_traced_failure = switch (traced_failure.term) {
                 .exited => |code| code != 0,
-                else => false,
+                .signal, .stopped, .unknown => false,
             };
             if (!ordinary_traced_failure or !hasNamedPackHit(traced_failure.stderr, "Closed.checked_scale") or namedProcBody(traced_failure.stderr, "Closed.checked_scale") != false) {
                 return failureFromRun(allocator, timer, traced_failure, "overflow guard was not exercised inside the reused CTFE helper");

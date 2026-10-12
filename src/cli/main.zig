@@ -42,6 +42,7 @@ const build_options = @import("build_options");
 const shim_symbols = @import("builtins").shim_symbols;
 const Sha256Rounds = @import("builtins").sha256.Rounds;
 const base = @import("base");
+const collections = @import("collections");
 const reporting = @import("reporting");
 const parse = @import("parse");
 const tracy = @import("tracy");
@@ -468,19 +469,20 @@ const CompileTimeObjectCache = struct {
         defer encoding.deinit();
         const requester = check.CheckedArtifact.ModuleId{ .bytes = artifact.key.bytes };
         const builtin_owner = check.CheckedArtifact.ModuleId{ .bytes = build_env.builtin_modules.checked_artifact.key.bytes };
-        var owners = std.AutoHashMap(check.CheckedArtifact.ModuleId, void).init(self.allocator);
+        var owners = std.AutoHashMap([32]u8, void).init(self.allocator);
         defer owners.deinit();
         for (lowered.lir_result.spec_procs.items) |spec| {
             if (!generated[@backingInt(spec.proc)]) continue;
-            if (cachePublicationOwner(spec.owner, requester, builtin_owner)) |owner| try owners.put(owner, {});
+            if (cachePublicationOwner(spec.owner, requester, builtin_owner)) |owner| try owners.put(owner.bytes, {});
         }
         var owner_keys = owners.keyIterator();
-        while (owner_keys.next()) |owner| {
+        while (owner_keys.next()) |owner_bytes| {
+            const owner = check.CheckedArtifact.ModuleId{ .bytes = owner_bytes.* };
             const producer = if (owner.eql(requester)) artifact else self.declaredArtifact(owner.bytes) orelse continue;
             const placement = build_env.packPlacementForArtifactKey(producer.key) orelse continue;
             const bytes = try packFileBytesFiltered(self.allocator, &set, lowered, .{
                 .generated_roots = generated,
-                .checked_owner = owner.*,
+                .checked_owner = owner,
                 .requester = requester,
                 .builtin_owner = builtin_owner,
             }, &encoding);
@@ -9248,7 +9250,7 @@ const PackOfferFilter = struct {
 /// Only owner-root selection and serialization repeat, not whole-graph analysis.
 const PackEncodingPlan = struct {
     allocator: Allocator,
-    artifact_by_proc: std.AutoHashMap(lir.LIR.LirProcSpecId, u32),
+    artifact_by_proc: collections.DenseMap(lir.LIR.LirProcSpecId, u32),
     semantic_data: std.StringHashMap(void),
     materializers: std.AutoHashMap([32]u8, lir.Program.RootMaterialization),
     names: std.heap.ArenaAllocator,
@@ -9259,7 +9261,7 @@ const PackEncodingPlan = struct {
     fn init(allocator: Allocator, set: *const backend.dev.ProcArtifact.Set, lowered: *const lir.CheckedPipeline.LoweredProgram) Allocator.Error!PackEncodingPlan {
         var self = PackEncodingPlan{
             .allocator = allocator,
-            .artifact_by_proc = std.AutoHashMap(lir.LIR.LirProcSpecId, u32).init(allocator),
+            .artifact_by_proc = collections.DenseMap(lir.LIR.LirProcSpecId, u32).init(allocator),
             .semantic_data = std.StringHashMap(void).init(allocator),
             .materializers = std.AutoHashMap([32]u8, lir.Program.RootMaterialization).init(allocator),
             .names = std.heap.ArenaAllocator.init(allocator),
@@ -9494,7 +9496,7 @@ test "pack publication selects exact semantic literal producers without fixed wr
         defer set.deinit();
         var plan = PackEncodingPlan{
             .allocator = allocator,
-            .artifact_by_proc = std.AutoHashMap(lir.LIR.LirProcSpecId, u32).init(allocator),
+            .artifact_by_proc = collections.DenseMap(lir.LIR.LirProcSpecId, u32).init(allocator),
             .semantic_data = std.StringHashMap(void).init(allocator),
             .materializers = std.AutoHashMap([32]u8, lir.Program.RootMaterialization).init(allocator),
             .names = std.heap.ArenaAllocator.init(allocator),

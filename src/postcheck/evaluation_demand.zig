@@ -29,11 +29,13 @@ pub const DependencyKind = enum {
     static_dispatch,
 };
 
+/// An instance this instance depends on, and the relation that makes it a dependency.
 pub const Dependency = struct {
     instance: InstanceId,
     kind: DependencyKind,
 };
 
+/// The semantic check an `Obligation` requires.
 pub const ObligationKind = enum {
     literal_conversion,
     static_dispatch,
@@ -47,6 +49,7 @@ pub const ObligationKind = enum {
 /// this address. Two specializations of one source site have distinct records.
 pub const ObligationId = enum(u32) { _ };
 
+/// A semantic obligation an instance contributes when it is demanded semantically.
 pub const Obligation = struct {
     id: ObligationId,
     kind: ObligationKind,
@@ -70,12 +73,14 @@ pub const CompleteGraph = struct {
     instances: []const CompleteSummary,
 };
 
+/// The demand lanes in which an instance has been visited.
 pub const Demand = struct {
     semantic: bool = false,
     evaluation: bool = false,
     runtime: bool = false,
 };
 
+/// Counts of instance visits per demand lane, and of obligations recorded.
 pub const Metrics = struct {
     semantic_instances: usize = 0,
     evaluation_instances: usize = 0,
@@ -275,7 +280,7 @@ test "evaluation demand runtime continuation does not repeat discovery" {
 
 test "evaluation demand releases every failed producer session" {
     const Case = struct {
-        fn run(allocator: Allocator) !void {
+        fn run(allocator: Allocator) (Allocator.Error || error{TestExpectedEqual})!void {
             const root, const result = testInstances(2);
             const edge = [_]Dependency{.{ .instance = result, .kind = .result }};
             const obligations = [_]Obligation{.{

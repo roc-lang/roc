@@ -2253,7 +2253,7 @@ pub fn build(b: *std.Build) void {
         .name = "source-events-tests",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/builtins/source_events.zig"),
-            .target = b.graph.host,
+            .target = hostToolTarget(b, .debug),
             .optimize = .Debug,
         }),
     });
@@ -2263,7 +2263,7 @@ pub fn build(b: *std.Build) void {
         .name = "compile-time-host-static-tests",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/eval/compile_time_host.zig"),
-            .target = b.graph.host,
+            .target = hostToolTarget(b, .debug),
             .optimize = .Debug,
             .link_libc = true,
             .imports = &.{
@@ -6195,17 +6195,18 @@ fn testSourceEventRuntimeObject(b: *std.Build) void {
     const contract = b.createModule(.{
         .root_source_file = b.path("src/builtins/source_events.zig"),
     });
+    const host = hostToolTarget(b, .fast);
     const tests = b.addTest(.{
         .name = "source-events-object-tests",
         .root_module = b.createModule(.{
             .root_source_file = source,
-            .target = b.graph.host,
+            .target = host,
             .optimize = .ReleaseFast,
             .link_libc = true,
             .imports = &.{.{ .name = "source_events", .module = contract }},
         }),
     });
-    const object = buildSourceEventRuntimeObject(b, b.graph.host, "roc_source_events_link_test");
+    const object = buildSourceEventRuntimeObject(b, host, "roc_source_events_link_test");
     tests.root_module.addObject(object);
     configureBackend(tests, b.graph.host);
     b.step("test-source-events-object", "Exercise observer registration in the linked ReleaseFast tracing object")
@@ -6276,7 +6277,40 @@ fn sourceEventRuntimeTarget(target: roc_target.RocTarget) roc_target.RocTarget {
     return switch (target.defaultCpuTarget()) {
         .x64linux => .x64glibc,
         .arm64linux => .arm64glibc,
-        else => target.defaultCpuTarget(),
+        .x64mac,
+        .x64win,
+        .x64mingw,
+        .x64freebsd,
+        .x64openbsd,
+        .x64netbsd,
+        .x64musl,
+        .x64glibc,
+        .x64elf,
+        .x64v1mac,
+        .x64v1win,
+        .x64v1mingw,
+        .x64v1freebsd,
+        .x64v1openbsd,
+        .x64v1netbsd,
+        .x64v1musl,
+        .x64v1glibc,
+        .x64v1linux,
+        .x64v1elf,
+        .arm64mac,
+        .arm64win,
+        .arm64mingw,
+        .arm64musl,
+        .arm64glibc,
+        .arm64v1win,
+        .arm64v1mingw,
+        .arm64v1linux,
+        .arm64v1musl,
+        .arm64v1glibc,
+        .arm32linux,
+        .arm32musl,
+        .wasm32,
+        .wasm32v1,
+        => target.defaultCpuTarget(),
     };
 }
 
@@ -6290,7 +6324,7 @@ fn buildSourceEventRuntimeObjects(b: *std.Build, target_module: *std.Build.Modul
         .name = "source_event_runtime_digests",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/build/embedded_digests.zig"),
-            .target = b.graph.host,
+            .target = hostToolTarget(b, .fast),
             .optimize = .ReleaseFast,
         }),
     });
@@ -6360,7 +6394,7 @@ fn buildSourceEventRuntimeObjects(b: *std.Build, target_module: *std.Build.Modul
         .name = "source-event-runtime-objects-tests",
         .root_module = b.createModule(.{
             .root_source_file = generated,
-            .target = b.graph.host,
+            .target = hostToolTarget(b, .fast),
             .optimize = .ReleaseFast,
             .imports = &.{
                 .{ .name = "roc_target", .module = target_module },

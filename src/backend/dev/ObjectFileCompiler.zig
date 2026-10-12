@@ -460,7 +460,7 @@ fn compileWithCodeGen(
     for (codegen.codeRegions()) |region| {
         switch (region.kind) {
             .proc, .spliced_proc, .rc_helper, .spliced_helper, .boxy_thunk, .spliced_boxy_thunk => {},
-            else => continue,
+            .entrypoint, .message_pool_run, .branch_island, .hosted_stub => continue,
         }
         const id = try codegen.internRegionCodeSymbol(region.start, region.entry);
         try physical_entries.put(region.start + region.entry, id);
@@ -929,7 +929,7 @@ fn resolveObjectSymbols(
 }
 
 const SelectedCodeSymbols = struct {
-    functions: std.AutoHashMap(lir.LIR.LirProcSpecId, SymbolTable.Id),
+    functions: collections.DenseMap(lir.LIR.LirProcSpecId, SymbolTable.Id),
     helpers: std.AutoHashMap(layout.RcHelperKey, SymbolTable.Id),
 
     fn init(allocator: Allocator) SelectedCodeSymbols {

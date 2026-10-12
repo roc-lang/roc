@@ -11,8 +11,11 @@ const layout = @import("layout");
 const Events = @import("builtins").source_events;
 const Context = backend.dev.CtfeContext;
 const Failure = @import("native_failure.zig");
+/// Semantic failure observations, keyed by failure statement ID.
 pub const FailureRegistry = Failure.Registry;
 
+/// Provides the code generator with source, failure, site, and root
+/// descriptors for one lowered program.
 pub const Catalog = struct {
     allocator: std.mem.Allocator,
     arena: std.heap.ArenaAllocator,
@@ -226,7 +229,7 @@ test "native producer catalog owns appended materializer call and failure record
                     failures += 1;
                     try std.testing.expectEqual(@as(u32, 1), certificate.descriptor.failure.checked_error);
                 },
-                else => return error.TestUnexpectedResult,
+                .branch_taken, .exhaustiveness_failed => return error.TestUnexpectedResult,
             }
         }
     }
@@ -234,6 +237,7 @@ test "native producer catalog owns appended materializer call and failure record
     try std.testing.expectEqual(@as(usize, 1), failures);
 }
 
+/// The source descriptor for `region` at `loc`, or null when `loc`'s file has no checked module.
 pub fn sourceDescriptor(store: *const lir.LirStore, region: base.Region, loc: base.SourceLoc) ?Context.SourceDescriptor {
     if (!loc.hasLocation()) return .{
         .checked_module = @splat(0),

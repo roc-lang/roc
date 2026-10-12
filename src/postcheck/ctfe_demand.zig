@@ -8,8 +8,10 @@ const std = @import("std");
 const base = @import("base");
 const Common = @import("common.zig");
 
+/// A node of the demand graph: an expression, statement, or function.
 pub const NodeId = enum(u32) { _ };
 
+/// How the source of an `Edge` depends on its target.
 pub const Relation = enum {
     evaluation,
     application,
@@ -17,12 +19,14 @@ pub const Relation = enum {
     representation,
 };
 
+/// A demand relation from one node to another.
 pub const Edge = struct {
     from: NodeId,
     to: NodeId,
     relation: Relation,
 };
 
+/// A node's read of a compile-time root's value, with its source location.
 pub const Read = struct {
     node: NodeId,
     root: Common.ComptimeValueRoot,
@@ -40,6 +44,7 @@ pub const LateApplication = struct {
     boxed: bool = false,
 };
 
+/// The published demand summary that stands in for a node whose cached body is retired.
 pub const Contract = struct {
     node: NodeId,
     demand: @import("lir_core").Program.CachedCtfeDemand,
@@ -86,6 +91,8 @@ const ScratchSet = struct {
     }
 };
 
+/// Read-only view of a graph's facts. Edges and reads are grouped by source
+/// node; `edge_starts` and `read_starts` index each node's group.
 pub const View = struct {
     node_count: u32,
     edges: []const Edge,

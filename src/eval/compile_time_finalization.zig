@@ -314,7 +314,7 @@ const runtime_observer_fields = [_]RuntimeTargetField{
 /// Compare the original declaration, never the selected producer capability.
 fn sameRuntimeTarget(expected: lir.CheckedPipeline.TargetConfig, actual: lir.CheckedPipeline.TargetConfig) bool {
     inline for (comptime std.meta.tags(RuntimeTargetField)) |field| {
-        if (comptime std.mem.indexOfScalar(RuntimeTargetField, &runtime_observer_fields, field) != null) continue;
+        if (comptime std.mem.findScalar(RuntimeTargetField, &runtime_observer_fields, field) != null) continue;
         if (!std.meta.eql(@field(expected, @tagName(field)), @field(actual, @tagName(field)))) return false;
     }
     return true;
@@ -874,7 +874,7 @@ test "literal type-only projection consumes producer representation without bodi
     try std.testing.expect(provision.initializer == null);
 }
 
-fn testSerialExecutorSource(source: []const u8, expected_scalar: ?u64) !void {
+fn testSerialExecutorSource(source: []const u8, expected_scalar: ?u64) (@import("BuiltinModules.zig").BuiltinModules.InitError || @import("inspected.zig").Error || error{ TestUnexpectedResult, TestExpectedEqual })!void {
     const allocator = std.testing.allocator;
     const helpers = @import("inspected.zig");
     var builtin_modules = try @import("BuiltinModules.zig").BuiltinModules.init(allocator);
@@ -976,7 +976,7 @@ test "independent pack continuation freezes completed storage with no evaluation
     , true, true);
 }
 
-fn testWarmRuntimeStorage(source: []const u8, no_literal_roots: bool, pack_consumer: bool) !void {
+fn testWarmRuntimeStorage(source: []const u8, no_literal_roots: bool, pack_consumer: bool) (@import("BuiltinModules.zig").BuiltinModules.InitError || @import("inspected.zig").Error || RuntimeMaterializationError || error{ TestUnexpectedResult, TestExpectedEqual })!void {
     const allocator = std.testing.allocator;
     const helpers = @import("inspected.zig");
     var builtin_modules = try @import("BuiltinModules.zig").BuiltinModules.init(allocator);
@@ -4151,7 +4151,18 @@ const StaticSlotEnvironment = struct {
             const message = switch (node) {
                 .crash => |blob| owner.const_store.blobBytes(blob),
                 .checked_error => |blob| owner.const_store.blobBytes(blob),
-                else => finalizationInvariant("completed root failure has no archived message"),
+                .pending,
+                .zst,
+                .scalar,
+                .str,
+                .list,
+                .box,
+                .tuple,
+                .record,
+                .tag,
+                .nominal,
+                .fn_value,
+                => finalizationInvariant("completed root failure has no archived message"),
             };
             const module_id = lowered.lir_result.loweringModuleId(root.module).?;
             const origin: lir.LIR.ComptimeFailureOrigin = .{
@@ -5728,17 +5739,6 @@ const RootFailure = enum {
 
     fn of(lir_result: *const lir.Program.Result, failed_stmt: ?lir.LIR.CFStmtId) RootFailure {
         return if (failedAtCheckedError(lir_result, failed_stmt)) .checked_error else .crash;
-    }
-
-    /// The failure a failed root's stored payload records.
-    fn ofPayload(module: *const checked.CheckedModuleArtifact, payload: checked.CompileTimeRootPayload) RootFailure {
-        return switch (payload) {
-            .const_node => |node| switch (module.const_store.get(node)) {
-                .checked_error => .checked_error,
-                .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .tag, .nominal, .fn_value => .crash,
-            },
-            .pending, .fn_value, .discarded, .expect, .runtime => .crash,
-        };
     }
 
     fn recordKind(self: RootFailure) lir.Program.ComptimeFailureKind {

@@ -118,7 +118,7 @@ fn indexDefinition(self: *Self, map: anytype, key: anytype, index: u32) Allocato
     const supported = artifact.context_complete and artifact.context_contract != null and artifact.context_dependencies != null and
         (switch (artifact.kind) {
             .proc, .boxy_thunk => artifact.callable_contract != null,
-            else => true,
+            .rc_helper, .entrypoint, .message_pool_run, .branch_island => true,
         });
     if (!supported or self.ambiguous_definitions.contains(previous) or
         !sameValue(ProcArtifact.Artifact, artifact, self.set.artifacts[previous]))
@@ -146,6 +146,8 @@ pub fn symbolicTargets(self: *const Self, artifact: u32) []const ?u32 {
     return self.symbolic_targets[self.symbolic_offsets[artifact]..self.symbolic_offsets[artifact + 1]];
 }
 
+/// Resolved code targets of `artifact`'s data relocations that name code, in
+/// relocation order. Null marks an unresolved symbolic target, as in `symbolicTargets`.
 pub fn dataTargets(self: *const Self, artifact: u32) []const ?u32 {
     return self.data_targets[self.data_offsets[artifact]..self.data_offsets[artifact + 1]];
 }
@@ -156,6 +158,7 @@ pub fn of(self: *Self, root: u32) Allocator.Error![]const u32 {
     return self.ofMany(&.{root});
 }
 
+/// Like `of`, for the union of the closures of every root.
 pub fn ofMany(self: *Self, roots: []const u32) Allocator.Error![]const u32 {
     self.seen.clearRetainingCapacity();
     self.order.clearRetainingCapacity();
@@ -202,6 +205,7 @@ pub const Components = struct {
     }
 };
 
+/// Condense the serving graph into its strongly connected components.
 pub fn components(self: *const Self) Allocator.Error!Components {
     var arena = std.heap.ArenaAllocator.init(self.allocator);
     errdefer arena.deinit();
@@ -357,6 +361,7 @@ pub fn propagateInvalid(self: *const Self, valid: []bool) Allocator.Error!void {
     }
 }
 
+/// A deep-owned subset of an artifact set, with each original index's new index (null when not selected).
 pub const Selection = struct {
     set: ProcArtifact.Set,
     /// Borrowed from `set`'s arena.
@@ -395,7 +400,27 @@ fn sameValue(comptime T: type, left: T, right: T) bool {
             for (left, right) |a, b| if (!sameValue(info.child, a, b)) break :blk false;
             break :blk true;
         },
-        else => std.meta.eql(left, right),
+        .type,
+        .void,
+        .bool,
+        .noreturn,
+        .int,
+        .float,
+        .comptime_float,
+        .comptime_int,
+        .undefined,
+        .null,
+        .error_union,
+        .error_set,
+        .@"enum",
+        .@"fn",
+        .@"opaque",
+        .frame,
+        .@"anyframe",
+        .vector,
+        .enum_literal,
+        .spirv,
+        => std.meta.eql(left, right),
     };
 }
 
@@ -427,6 +452,8 @@ pub const Variants = struct {
     }
 };
 
+/// Combine physical artifact sets into one owned set of the definitions whose
+/// closures resolve within their own source and are accepted by `accepts`.
 pub fn prepareVariants(
     allocator: Allocator,
     sources: []const *const ProcArtifact.Set,
@@ -540,7 +567,7 @@ test "physical closure owns an empty cold provider plan" {
         fn accepts(_: *anyopaque, _: ProcArtifact.Artifact) bool {
             unreachable;
         }
-        fn run(allocator: Allocator) !void {
+        fn run(allocator: Allocator) (Allocator.Error || error{TestExpectedEqual})!void {
             var context: u8 = 0;
             var canonical = try prepareVariants(allocator, &.{}, &context, accepts);
             defer canonical.deinit();
@@ -619,7 +646,7 @@ test "variant graph preserves independently valid conflicting ARC and emitter cl
     try testCanonicalMixed(std.testing.allocator, true);
 }
 
-fn testCanonicalMixed(allocator: Allocator, conflict: bool) !void {
+fn testCanonicalMixed(allocator: Allocator, conflict: bool) (ProcArtifact.ExtractError || error{ TestUnexpectedResult, TestExpectedEqual })!void {
     const CG = @import("LirCodeGen.zig").LirCodeGen(@import("roc_target").RocTarget.x64linux);
     const b_identity = lir.ProcIdentity.forTest(2);
     var runtime = [_]ProcArtifact.Artifact{
@@ -947,7 +974,7 @@ test "artifact closure selection owns context graphs and rebases cyclic referenc
     try std.testing.checkAllAllocationFailures(std.testing.allocator, testSelection, .{});
 }
 
-fn testSelection(allocator: Allocator) !void {
+fn testSelection(allocator: Allocator) (@import("PackFile.zig").WriteError || @import("PackFile.zig").ReadError || error{ TestUnexpectedResult, TestExpectedEqual })!void {
     const helper = lir.ProcIdentity.forTest(3);
     const artifacts = [_]ProcArtifact.Artifact{
         .{
@@ -1002,7 +1029,7 @@ fn testSelection(allocator: Allocator) !void {
         fn node(_: *anyopaque, artifact: ProcArtifact.Artifact) bool {
             return switch (artifact.kind) {
                 .proc => |identity| !std.meta.eql(identity, lir.ProcIdentity.forTest(1)),
-                else => true,
+                .boxy_thunk, .rc_helper, .entrypoint, .message_pool_run, .branch_island => true,
             };
         }
     };

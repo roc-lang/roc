@@ -7,6 +7,7 @@ const ConstStore = check.ConstStore;
 const Names = check.CheckedNames;
 const Allocator = std.mem.Allocator;
 
+/// A self-contained copy of the type closure rooted at `root`, with the names it refers to.
 pub const Representation = struct {
     root: ConstStore.ConstTypeId,
     types: []const ConstStore.ConstType = &.{},

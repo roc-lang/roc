@@ -28679,13 +28679,15 @@ pub const CompileTimeRootRequestEligibility = enum(u8) {
     ineligible,
 };
 
-/// Public `CompileTimeRoot` declaration.
+/// The failure a completed guarded root recorded: its message and, when known,
+/// its source region and location.
 pub const CompileTimeRootFailure = struct {
     message: ConstNodeId,
     region: ?base.Region,
     location: ?struct { module: ModuleId, line: u32, column: u32 },
 };
 
+/// Public `CompileTimeRoot` declaration.
 pub const CompileTimeRoot = struct {
     id: ComptimeRootId,
     module_idx: u32,

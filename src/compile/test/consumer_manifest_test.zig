@@ -3,7 +3,6 @@
 //! producer's root metadata.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const base = @import("base");
 const build_options = @import("build_options");
 const eval = @import("eval");

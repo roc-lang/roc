@@ -539,7 +539,7 @@ fn collectCodeSymbols(allocator: Allocator, codegen: *HostLirCodeGen, out: *std.
                 if (gop.found_existing) allocator.free(name);
                 gop.value_ptr.* = region.start + region.entry;
             },
-            else => continue,
+            .entrypoint, .message_pool_run, .branch_island, .hosted_stub => continue,
         }
         const name: []u8 = switch (region.kind) {
             .proc => |proc_id| blk: {

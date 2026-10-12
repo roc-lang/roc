@@ -411,6 +411,8 @@ pub const CheckedRootUse = struct {
     root: u32,
 };
 
+/// A cached specialization's identity, demand facts, and the refcount facts
+/// callers rely on in place of its body.
 pub const SpecCacheHit = struct {
     identity: [32]u8,
     demand: ?lir_core.Program.CachedCtfeDemand = null,

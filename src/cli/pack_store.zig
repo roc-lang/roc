@@ -96,10 +96,12 @@ pub const Store = struct {
             return error.PackWriteFailed;
         };
         if (self.roc_ctx.fileExists(path)) return;
-        const temp_path = self.roc_ctx.writeTempFile(self.allocator, path, bytes) catch |err| {
-            if (err == error.OutOfMemory) return error.OutOfMemory;
-            self.reportWriteFailure("write staging file", path, bytes.len, err);
-            return error.PackWriteFailed;
+        const temp_path = self.roc_ctx.writeTempFile(self.allocator, path, bytes) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => |write_err| {
+                self.reportWriteFailure("write staging file", path, bytes.len, write_err);
+                return error.PackWriteFailed;
+            },
         };
         defer self.allocator.free(temp_path);
         errdefer self.roc_ctx.deleteFile(temp_path) catch {};
@@ -1741,7 +1743,52 @@ pub const LoadedPacks = struct {
             const kind: SourceEvents.LiteralKind = switch (expr.data) {
                 .numeral => |numeral| if (numeral.plan != null) .numeral else return,
                 .str_from_quote => |quote| if (quote.plan != null) .quote else return,
-                else => return,
+                .pending,
+                .str_segment,
+                .str,
+                .bytes_literal,
+                .lookup_local,
+                .lookup_external,
+                .lookup_required,
+                .list,
+                .empty_list,
+                .tuple,
+                .match_,
+                .if_,
+                .call,
+                .record,
+                .empty_record,
+                .block,
+                .tag,
+                .nominal,
+                .zero_argument_tag,
+                .closure,
+                .lambda,
+                .binop,
+                .unary_minus,
+                .unary_not,
+                .field_access,
+                .dispatch_call,
+                .interpolation,
+                .structural_eq,
+                .structural_hash,
+                .method_eq,
+                .type_dispatch_call,
+                .tuple_access,
+                .runtime_error,
+                .crash,
+                .dbg,
+                .expect_err,
+                .expect,
+                .ellipsis,
+                .anno_only,
+                .break_,
+                .return_,
+                .row_coerce,
+                .for_,
+                .hosted_lambda,
+                .run_low_level,
+                => return,
             };
             try self.literals.put(key, .{ .kind = @backingInt(kind), .region = sourceRegion(expr.source_region) });
         }
@@ -1784,7 +1831,52 @@ pub const LoadedPacks = struct {
                         }
                         try branches.append(a, sourceRegion(bodies.expr(if_expr.final_else).source_region));
                     },
-                    else => return,
+                    .pending,
+                    .numeral,
+                    .str_from_quote,
+                    .str_segment,
+                    .str,
+                    .bytes_literal,
+                    .lookup_local,
+                    .lookup_external,
+                    .lookup_required,
+                    .list,
+                    .empty_list,
+                    .tuple,
+                    .call,
+                    .record,
+                    .empty_record,
+                    .block,
+                    .tag,
+                    .nominal,
+                    .zero_argument_tag,
+                    .closure,
+                    .lambda,
+                    .binop,
+                    .unary_minus,
+                    .unary_not,
+                    .field_access,
+                    .dispatch_call,
+                    .interpolation,
+                    .structural_eq,
+                    .structural_hash,
+                    .method_eq,
+                    .type_dispatch_call,
+                    .tuple_access,
+                    .runtime_error,
+                    .crash,
+                    .dbg,
+                    .expect_err,
+                    .expect,
+                    .ellipsis,
+                    .anno_only,
+                    .break_,
+                    .return_,
+                    .row_coerce,
+                    .for_,
+                    .hosted_lambda,
+                    .run_low_level,
+                    => return,
                 }
             },
             .checked_pattern => |raw| {

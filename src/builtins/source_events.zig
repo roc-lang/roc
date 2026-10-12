@@ -4,11 +4,16 @@
 
 const std = @import("std");
 
+/// Version every emitted `Header` carries; `validate` rejects any other.
 pub const abi_version: u32 = 1;
+/// Version of the `Observer`/`Saved` registration ABI.
 pub const registration_abi_version: u32 = 1;
+/// Symbol generated code calls to report an event.
 pub const symbol_name = "roc_source_event";
+/// A 32-byte content identity (checked module, source, procedure, or layout digest).
 pub const Identity = [32]u8;
 
+/// What an event reports; stored in `Header.kind`.
 pub const Kind = enum(u32) {
     branch_taken = 1,
     exhaustiveness_failed = 2,
@@ -17,6 +22,7 @@ pub const Kind = enum(u32) {
     call_exit = 5,
 };
 
+/// Fixed prefix of every event record; `byte_size` covers the whole record including any Region tail.
 pub const Header = extern struct {
     version: u32 = abi_version,
     kind: u32,
@@ -24,6 +30,7 @@ pub const Header = extern struct {
     reserved: u32 = 0,
 };
 
+/// Start and end byte offsets of a span within a source file.
 pub const Region = extern struct {
     start: u32 = 0,
     end: u32 = 0,
@@ -39,14 +46,18 @@ pub const Source = extern struct {
     has_location: u32 = 0,
 };
 
+/// The literal conversion a `Literal` names; stored in `Literal.kind`.
 pub const LiteralKind = enum(u32) { numeral = 1, quote = 2, interpolation = 3 };
+/// A checked literal conversion expression, identified by its module and checked expression.
 pub const Literal = extern struct {
     checked_module: Identity = @splat(0),
     checked_expr: u32 = 0,
     kind: u32 = 0,
 };
 
+/// Whether a `Root` is produced by a checked expression or by a literal conversion.
 pub const ProducerKind = enum(u32) { checked = 1, literal = 2 };
+/// Whether a `Root` stores a value or a failure message.
 pub const RootRole = enum(u32) { value = 1, failure_message = 2 };
 
 /// A semantic producer certificate, never a mutable evaluator slot ordinal.
@@ -64,6 +75,7 @@ pub const Root = extern struct {
     message_offset: u32 = 0,
 };
 
+/// Payload of a `failure` event: the checked error and, when flagged, the rejected literal and guarding root.
 pub const Failure = extern struct {
     checked_error: u32 = 0,
     has_literal_rejection: u32 = 0,
@@ -72,7 +84,9 @@ pub const Failure = extern struct {
     guard_root: Root = .{},
 };
 
+/// The checked construct a `Site` names; stored in `Site.kind`.
 pub const SiteKind = enum(u32) { match = 1, destructure = 2, if_ = 3 };
+/// A branching site (match, destructure, or if) reported by `branch_taken` and `exhaustiveness_failed` events.
 pub const Site = extern struct {
     checked_module: Identity = @splat(0),
     procedure_identity: Identity = @splat(0),
@@ -98,6 +112,7 @@ pub const Descriptor = extern struct {
     failure: Failure = .{},
 };
 
+/// Reasons `validate` rejects an event record.
 pub const Invalid = error{
     UnsupportedVersion,
     InvalidKind,
@@ -128,6 +143,7 @@ pub const InvalidTag = enum(u32) {
     InvalidRoot = 11,
 };
 
+/// The stable registration ABI tag reported to `Observer.on_invalid` for `err`.
 pub fn invalidTag(err: Invalid) InvalidTag {
     return switch (err) {
         error.UnsupportedVersion => .UnsupportedVersion,
@@ -144,6 +160,7 @@ pub fn invalidTag(err: Invalid) InvalidTag {
     };
 }
 
+/// Typed view of a validated event record; borrows the record's storage.
 pub const Event = struct {
     kind: Kind,
     descriptor: *const Descriptor,
@@ -200,6 +217,7 @@ pub fn enter(observer: ?Observer) Saved {
     return saved;
 }
 
+/// Restore the registration `enter` returned, on the thread that called `enter`.
 pub fn leave(saved: Saved) void {
     if (saved.reserved != 0) @trap();
     replaceObserver(switch (saved.active) {
@@ -231,6 +249,7 @@ pub fn roc_source_event_observer_enter(observer: ?*const Observer, saved: *Saved
     saved.* = enter(if (observer) |value| value.* else null);
 }
 
+/// C ABI export of `leave`.
 pub fn roc_source_event_observer_leave(saved: *const Saved) callconv(.c) void {
     leave(saved.*);
 }
@@ -272,6 +291,7 @@ comptime {
     }
 }
 
+/// Address of `roc_source_event`, which in-process consumers bind `symbol_name` to.
 pub fn address() usize {
     return @intFromPtr(&roc_source_event);
 }
@@ -301,6 +321,7 @@ fn root(value: Root) Invalid!void {
     if (producer == .literal) try literal(value.literal);
 }
 
+/// Check an event record against ABI v1 and return its typed view.
 pub fn validate(header: *const Header) Invalid!Event {
     if (header.version != abi_version) return error.UnsupportedVersion;
     const kind = tag(Kind, header.kind) orelse return error.InvalidKind;

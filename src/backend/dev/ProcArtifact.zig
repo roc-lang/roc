@@ -24,6 +24,7 @@ const layout = @import("layout");
 const RelocationMod = @import("Relocation.zig");
 const LirCodeGenMod = @import("LirCodeGen.zig");
 const SymbolTable = @import("SymbolTable.zig");
+/// A source-event record an artifact carries, with the data item that holds it.
 pub const SourceEventCertificate = LirCodeGenMod.SourceEventCertificate;
 
 /// Whether a symbol's name means the same thing in every program.
@@ -49,7 +50,9 @@ pub const Form = enum {
     }
 };
 
+/// The bytes of an artifact's code that placement rewrites for one reference.
 pub const PatchSpan = struct { offset: u64, width: u32 };
+/// A reference or relocation whose patch bytes fall outside its artifact's code.
 pub const PatchError = error{InvalidCodeRelocation};
 
 /// A producer-identified target whose code need not have been emitted yet.
@@ -156,6 +159,7 @@ pub const CodeTarget = union(enum) {
     image_offset: usize,
 };
 
+/// A pointer inside a `DataItem` to another symbol, at `offset` within its bytes.
 pub const DataRelocation = struct {
     offset: u32,
     name: []const u8,
@@ -175,6 +179,7 @@ pub const RootMaterializationDependency = struct {
     materialization: lir.Program.RootMaterialization,
 };
 
+/// Deep-copy materialization dependencies, including their names, into `allocator`.
 pub fn cloneRootMaterializations(allocator: Allocator, source: []const RootMaterializationDependency) Allocator.Error![]const RootMaterializationDependency {
     const copied = try allocator.dupe(RootMaterializationDependency, source);
     for (copied) |*dependency| {
@@ -184,8 +189,13 @@ pub fn cloneRootMaterializations(allocator: Allocator, source: []const RootMater
     return copied;
 }
 
+/// Failures of `validateRootMaterializations`.
 pub const MaterializationError = Allocator.Error || error{InvalidRootMaterializationDependency};
 
+/// Check that every declared materialization dependency is a single zeroed
+/// pointer slot bound externally to its header, with names derived from the
+/// materialization itself, and that a root materialization belongs to its
+/// wrapper procedure.
 pub fn validateRootMaterializations(allocator: Allocator, artifact: Artifact) MaterializationError!void {
     if (artifact.root_materialization) |root| {
         if (artifact.kind != .proc or !std.mem.eql(u8, &artifact.kind.proc.bytes, &root.wrapper_identity))
@@ -320,10 +330,10 @@ pub fn validateCodePatches(artifact: Artifact) PatchError!void {
     for (artifact.relocations) |relocation| try validatePatchSpan(artifact.code, relocation.patchSpan());
     if (artifact.refs.len == 0 and artifact.symbolic_refs.len == 0) return;
     const contract = artifact.context_contract orelse return error.InvalidCodeRelocation;
-    const arm = switch (contract.target.toCpuArch()) {
+    const arm = switch (@import("roc_target").classifyCpuArch(contract.target.toCpuArch())) {
         .aarch64 => true,
         .x86_64 => false,
-        else => return error.InvalidCodeRelocation,
+        .aarch64_be, .arm, .wasm32, .other => return error.InvalidCodeRelocation,
     };
     for (artifact.refs) |reference| {
         try validatePatchSpan(artifact.code, try reference.form.patchSpan(reference.site, arm));
@@ -475,6 +485,7 @@ fn cloneData(a: Allocator, item: DataItem) Allocator.Error!DataItem {
     };
 }
 
+/// Deep-copy source-event certificates, including their names and branch regions, into `a`.
 pub fn cloneSourceEventCertificates(a: Allocator, source: []const SourceEventCertificate) Allocator.Error![]const SourceEventCertificate {
     const owned = try a.dupe(SourceEventCertificate, source);
     for (owned) |*certificate| {
@@ -484,6 +495,7 @@ pub fn cloneSourceEventCertificates(a: Allocator, source: []const SourceEventCer
     return owned;
 }
 
+/// Failures of `validateSourceEventCertificates`.
 pub const SourceEventCertificateError = Allocator.Error || error{InvalidSourceEventCertificate};
 
 /// Certificates identify their data explicitly. Validation never discovers
@@ -589,7 +601,7 @@ pub fn bindProducedReferences(set: *Set, fresh_count: u32, helper_roots: []const
         switch (artifact.kind) {
             .proc => |identity| try procs.putNoClobber(identity, @intCast(index)),
             .boxy_thunk => |identity| try thunks.putNoClobber(identity, @intCast(index)),
-            else => unreachable,
+            .rc_helper, .entrypoint, .message_pool_run, .branch_island => unreachable,
         }
     }
     for (helper_roots) |root| try helpers.putNoClobber(set.artifacts[root].kind.rc_helper, root);
@@ -1162,16 +1174,16 @@ pub fn extractPrepared(
             .kind = kind,
             .root_materialization = switch (region.kind) {
                 .proc => |proc| proc_specs[@backingInt(proc)].root_materialization,
-                else => null,
+                .boxy_thunk, .rc_helper, .entrypoint, .message_pool_run, .branch_island, .spliced_proc, .spliced_boxy_thunk, .spliced_helper, .hosted_stub => null,
             },
             .materializations = try materializations.toOwnedSlice(arena_allocator),
             .producer_proc = switch (region.kind) {
                 .proc, .boxy_thunk => |proc| proc,
-                else => null,
+                .rc_helper, .entrypoint, .message_pool_run, .branch_island, .spliced_proc, .spliced_boxy_thunk, .spliced_helper, .hosted_stub => null,
             },
             .producer_helper = switch (region.kind) {
                 .rc_helper => |key| key,
-                else => null,
+                .proc, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island, .spliced_proc, .spliced_boxy_thunk, .spliced_helper, .hosted_stub => null,
             },
             .code = artifact_code,
             .callable_contract = try callableContract(CG, codegen, region, proc_specs, layout_store),
@@ -1581,7 +1593,7 @@ pub fn splice(
     for (roots) |root| {
         const identity = switch (set.artifacts[root].kind) {
             .proc, .boxy_thunk => |identity| identity,
-            else => continue,
+            .rc_helper, .entrypoint, .message_pool_run, .branch_island => continue,
         };
         if (procs_by_identity.get(identity)) |proc| try bindings.put(root, proc);
     }

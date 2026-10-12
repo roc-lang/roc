@@ -7,6 +7,7 @@ const Program = @import("program.zig");
 const LIR = @import("LIR.zig");
 const Allocator = std.mem.Allocator;
 
+/// Identifies a compile-time root by its module and producer.
 pub const Key = struct {
     module: [32]u8,
     kind: enum { checked, literal },
@@ -20,6 +21,7 @@ pub const Key = struct {
     }
 };
 
+/// A root to schedule, with the demand facts its producer sealed.
 pub const Node = struct {
     key: Key,
     guarded: bool,
@@ -28,17 +30,20 @@ pub const Node = struct {
     demand: Program.CtfeDemandFacts,
 };
 
+/// A value dependency of one node on the node at `target`.
 pub const Edge = struct {
     target: u32,
     cause: Program.CtfeDemandRead,
 };
 
+/// Why `Schedule.build` could not schedule the given nodes.
 pub const BuildError = Allocator.Error || error{
     MissingDemandProof,
     MissingRootProducer,
     DuplicateRootProducer,
 };
 
+/// The roots' dependency graph, condensed into components in evaluation order.
 pub const Schedule = struct {
     allocator: Allocator,
     /// Borrowed source-owned nodes also retain the address-only nondependency

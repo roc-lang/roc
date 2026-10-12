@@ -1549,6 +1549,7 @@ pub const LiteralRecipe = struct {
     }
 };
 
+/// A binder's type within a literal local context.
 pub const LiteralBinding = struct {
     kind: u8,
     binder: u32,
@@ -1556,6 +1557,8 @@ pub const LiteralBinding = struct {
     ty: Type.TypeId,
 };
 
+/// A literal recipe's local declaration context: the enclosing binder and
+/// expression, its specialization keys, its bindings, and its function evidence.
 pub const LiteralLocalContext = struct {
     module: checked.ModuleId,
     binder: checked.PatternBinderId,

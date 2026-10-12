@@ -57,6 +57,7 @@ pub const ReadError = Allocator.Error || error{
     UnsupportedPackVersion,
 };
 
+/// Why an artifact set could not be written as a pack.
 pub const WriteError = Allocator.Error || error{ InvalidCodeTarget, InvalidSourceEventCertificate, InvalidLiteralRecipe, InvalidRootMaterializationDependency };
 
 /// Native-image offsets have no persistent representation.
@@ -99,7 +100,7 @@ test "pack preserves physical callable targets and observation facts but rejects
     try std.testing.expectEqualDeep(artifacts[1], decoded.set.artifacts[1]);
     const corrupt = try allocator.dupe(u8, bytes);
     defer allocator.free(corrupt);
-    const name_offset = std.mem.indexOf(u8, corrupt, relocation[0].name).?;
+    const name_offset = std.mem.find(u8, corrupt, relocation[0].name).?;
     const target_offset = name_offset - 8; // length prefix and the local target word
     std.mem.writeInt(u32, corrupt[target_offset..][0..4], 2, .little);
     try std.testing.expectError(error.MalformedPack, read(allocator, corrupt));
@@ -608,7 +609,23 @@ const Writer = struct {
                     if (tag == @field(info.tag_type.?, field_name)) try self.context(@field(value, field_name));
                 }
             },
-            else => @compileError("unsupported context metadata"),
+            .type,
+            .noreturn,
+            .float,
+            .comptime_float,
+            .comptime_int,
+            .undefined,
+            .null,
+            .error_union,
+            .error_set,
+            .@"fn",
+            .@"opaque",
+            .frame,
+            .@"anyframe",
+            .vector,
+            .enum_literal,
+            .spirv,
+            => @compileError("unsupported context metadata"),
         }
     }
 
@@ -687,7 +704,23 @@ const Reader = struct {
                 }
                 return error.MalformedPack;
             },
-            else => @compileError("unsupported context metadata"),
+            .type,
+            .noreturn,
+            .float,
+            .comptime_float,
+            .comptime_int,
+            .undefined,
+            .null,
+            .error_union,
+            .error_set,
+            .@"fn",
+            .@"opaque",
+            .frame,
+            .@"anyframe",
+            .vector,
+            .enum_literal,
+            .spirv,
+            => @compileError("unsupported context metadata"),
         }
     }
 

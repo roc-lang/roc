@@ -8,11 +8,13 @@ const check = @import("check");
 const std = @import("std");
 const base = @import("base");
 
+/// The compile-time producer whose value a failed guard protects.
 pub const GuardProducer = struct {
     module: check.CheckedArtifact.ModuleId,
     root: lir.LIR.ComptimeProducer,
 };
 
+/// What a native failure hook reports about one failure.
 pub const Observation = struct {
     checked_error: bool,
     literal_rejection: ?lir.LIR.LiteralRejectionSite = null,
@@ -25,6 +27,8 @@ pub const Observation = struct {
     origin_slot: ?lir.LIR.StaticDataId = null,
 };
 
+/// A compile-time branching site, with its procedure named by identity rather than
+/// by the consumer's procedure ID.
 pub const Site = struct {
     owner: lir.LIR.LoweringModuleId,
     checked_site: ?check.CheckedArtifact.CheckedExhaustivenessSiteId,
@@ -34,6 +38,7 @@ pub const Site = struct {
     branch_regions: []const base.Region,
 };
 
+/// The `Site` for `id` in `result`.
 pub fn site(result: *const lir.Program.Result, id: lir.LIR.ComptimeSiteId) Site {
     const original = result.comptime_sites.items[@backingInt(id)];
     return .{
@@ -46,6 +51,7 @@ pub fn site(result: *const lir.Program.Result, id: lir.LIR.ComptimeSiteId) Site 
     };
 }
 
+/// The `Site` of every compile-time site in `result`, indexed by site ID.
 pub fn captureSites(allocator: std.mem.Allocator, result: *const lir.Program.Result) std.mem.Allocator.Error![]Site {
     const sites = try allocator.alloc(Site, result.comptime_sites.items.len);
     for (sites, 0..) |*entry, index| entry.* = site(result, @fromBackingInt(@intCast(index)));

@@ -4,18 +4,20 @@
 
 const std = @import("std");
 const check = @import("check");
+const collections = @import("collections");
 const Type = @import("monotype/type.zig");
 const Common = @import("common.zig");
 const Representation = @import("lir_core").Program.LiteralRepresentation;
 const Const = check.ConstStore;
 const Allocator = std.mem.Allocator;
 
+/// Export the type closure rooted at `root` as a portable `Representation`.
 pub fn representation(allocator: Allocator, types: Type.Store.View, names: *const check.CheckedNames.NameStore, root: Type.TypeId) Allocator.Error!Representation {
     var export_: Export = .{
         .allocator = allocator,
         .source = types,
         .store = Const.ConstTypeStore.init(allocator),
-        .map = std.AutoHashMap(Type.TypeId, Const.ConstTypeId).init(allocator),
+        .map = collections.DenseMap(Type.TypeId, Const.ConstTypeId).init(allocator),
     };
     defer export_.store.deinit();
     defer export_.map.deinit();
@@ -34,7 +36,7 @@ const Export = struct {
     allocator: Allocator,
     source: Type.Store.View,
     store: Const.ConstTypeStore,
-    map: std.AutoHashMap(Type.TypeId, Const.ConstTypeId),
+    map: collections.DenseMap(Type.TypeId, Const.ConstTypeId),
     queue: std.ArrayList(Type.TypeId) = .empty,
 
     fn request(self: *Export, ty: Type.TypeId) Allocator.Error!Const.ConstTypeId {
@@ -56,7 +58,7 @@ const Export = struct {
     fn content(self: *Export, value: Type.Content) Allocator.Error!Const.ConstType {
         return switch (value) {
             .primitive => |primitive| .{ .primitive = switch (primitive) {
-                inline else => |tag| @field(Const.Primitive, @tagName(tag)),
+                inline .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => |tag| @field(Const.Primitive, @tagName(tag)),
             } },
             .zst => .zst,
             .erased => |key| .{ .erased = key },
@@ -122,17 +124,17 @@ const Export = struct {
                         .iterator_topology = topology,
                     },
                     .kind = switch (named.kind) {
-                        inline else => |tag| @field(Const.TypeNamedKind, @tagName(tag)),
+                        inline .nominal, .@"opaque", .alias => |tag| @field(Const.TypeNamedKind, @tagName(tag)),
                     },
                     .builtin_owner = named.builtin_owner,
                     .args = try self.span(named.args),
                     .backing = if (named.backing) |backing| .{
                         .ty = try self.request(backing.ty),
                         .use = switch (backing.use) {
-                            inline else => |tag| @field(Const.TypeBackingUse, @tagName(tag)),
+                            inline .inspectable, .runtime_layout_only => |tag| @field(Const.TypeBackingUse, @tagName(tag)),
                         },
                         .authority = switch (backing.authority) {
-                            inline else => |tag| @field(Const.TypeBackingAuthority, @tagName(tag)),
+                            inline .checked_public, .generated_private => |tag| @field(Const.TypeBackingAuthority, @tagName(tag)),
                         },
                     } else null,
                     .declared_order = try self.store.appendDeclaredFieldSpan(declared),

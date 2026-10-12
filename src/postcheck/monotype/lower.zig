@@ -5615,7 +5615,52 @@ const Builder = struct {
         const kind: Common.LiteralRejectionKind = switch (view.bodies.expr(expr_id).data) {
             .numeral => .numeral,
             .str_from_quote => .quote,
-            else => Common.invariant("literal recipe did not name a checked literal conversion"),
+            .pending,
+            .str_segment,
+            .str,
+            .bytes_literal,
+            .lookup_local,
+            .lookup_external,
+            .lookup_required,
+            .list,
+            .empty_list,
+            .tuple,
+            .match_,
+            .if_,
+            .call,
+            .record,
+            .empty_record,
+            .block,
+            .tag,
+            .nominal,
+            .zero_argument_tag,
+            .closure,
+            .lambda,
+            .binop,
+            .unary_minus,
+            .unary_not,
+            .field_access,
+            .dispatch_call,
+            .interpolation,
+            .structural_eq,
+            .structural_hash,
+            .method_eq,
+            .type_dispatch_call,
+            .tuple_access,
+            .runtime_error,
+            .crash,
+            .dbg,
+            .expect_err,
+            .expect,
+            .ellipsis,
+            .anno_only,
+            .break_,
+            .return_,
+            .row_coerce,
+            .for_,
+            .hosted_lambda,
+            .run_low_level,
+            => Common.invariant("literal recipe did not name a checked literal conversion"),
         };
         if (kind != recipe.kind) Common.invariant("literal recipe kind disagreed with its checked source");
         var result_store = recipe.result.materialize(self.allocator) catch |err| switch (err) {
@@ -5752,7 +5797,7 @@ const Builder = struct {
                     .value => switch (root.payload) {
                         .const_node => |node| try self.restoreConstNodeAtType(view, view, node, ty),
                         .fn_value => |fn_id| try self.restoreConstFnExpr(view, fn_id, ty, null),
-                        else => Common.invariant("completed root storage lacked a stored value"),
+                        .pending, .discarded, .expect, .runtime => Common.invariant("completed root storage lacked a stored value"),
                     },
                 };
                 var hasher = TypeDigestHasher.init();
@@ -5797,7 +5842,7 @@ const Builder = struct {
         if (root.failure) |failure| return .{ .failure = failure };
         return switch (root.payload) {
             .const_node, .fn_value => .value,
-            else => .pending,
+            .pending, .discarded, .expect, .runtime => .pending,
         };
     }
 

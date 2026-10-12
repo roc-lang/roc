@@ -32,6 +32,8 @@ const OverflowFusion = lir.OverflowFusion;
 const builtins = @import("builtins");
 const dev_wrappers = builtins.dev_wrappers;
 const SourceEvents = builtins.source_events;
+/// A source-event record the code generator emitted, naming the data item
+/// that holds its encoded descriptor and branch regions.
 pub const SourceEventCertificate = struct {
     data_name: []const u8,
     descriptor: SourceEvents.Descriptor,
@@ -39,11 +41,14 @@ pub const SourceEventCertificate = struct {
     /// Checked producer authority is metadata, not part of the runtime ABI.
     site_origin: ?lir.LIR.CheckedSiteOrigin = null,
 };
+/// An emitted source-event data item: its symbol name, encoded bytes, and certificate.
 pub const SourceEventData = struct {
     name: []const u8,
     bytes: []const u8,
     certificate: SourceEventCertificate,
 };
+/// A definition within a physical artifact graph, identified by the graph's
+/// namespace and the definition's index in it.
 pub const PhysicalProvision = struct { graph: [32]u8, definition: u32 };
 
 /// Encode the public pointer-free event ABI without observing struct padding.
@@ -61,7 +66,29 @@ pub fn encodeSourceEventField(comptime T: type, value: T, bytes: []u8, endian: s
                 encodeSourceEventField(field_type, @field(value, field_name), bytes[@offsetOf(T, field_name)..], endian);
             }
         },
-        else => @compileError("source event ABI contains a non-data field"),
+        .type,
+        .void,
+        .bool,
+        .noreturn,
+        .float,
+        .pointer,
+        .comptime_float,
+        .comptime_int,
+        .undefined,
+        .null,
+        .optional,
+        .error_union,
+        .error_set,
+        .@"enum",
+        .@"union",
+        .@"fn",
+        .@"opaque",
+        .frame,
+        .@"anyframe",
+        .vector,
+        .enum_literal,
+        .spirv,
+        => @compileError("source event ABI contains a non-data field"),
     }
 }
 
@@ -25742,7 +25769,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     std.debug.assert(std.meta.eql(identity, proc.identity));
                     try self.boxy_dict_thunks.put(@backingInt(id), start + artifact.entry);
                 },
-                else => unreachable,
+                .rc_helper, .entrypoint, .message_pool_run, .branch_island => unreachable,
             }
         }
 
@@ -29066,7 +29093,7 @@ test "common native source events preserve producer certificates and identical c
             for (cg.getRelocations()) |reloc| switch (reloc) {
                 .linked_function => |function| try std.testing.expectEqualStrings(SourceEvents.symbol_name, cg.symbolName(function.symbol)),
                 .linked_data => |data| try std.testing.expect(std.mem.startsWith(u8, cg.symbolName(data.symbol), "roc__source_event_")),
-                else => return error.NonSymbolicSourceEvent,
+                .local_data, .jmp_to_return, .retired => return error.NonSymbolicSourceEvent,
             };
             if (first) |*peer| {
                 try std.testing.expectEqualSlices(u8, peer.getGeneratedCode(), cg.getGeneratedCode());
