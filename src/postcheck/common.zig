@@ -8,6 +8,7 @@ const lir_core = @import("lir_core");
 
 const checked = check.CheckedModule;
 const LIR = lir_core.LIR;
+const LiteralDemand = @import("literal_demand.zig");
 
 /// Span into one of a post-check IR's flat side tables.
 ///
@@ -103,6 +104,14 @@ pub const RootRequests = struct {
     layout_requests: []const checked.CheckedTypeId = &.{},
     static_data_requests: []const StaticDataRequest = &.{},
     test_plan_metadata: []const RootTestPlanMetadata = &.{},
+    /// The requests from this position on are discovery roots: runtime roots
+    /// lowered only to register the literal roots they reach, which no
+    /// consumer of the program runs (design.md "Demand-Driven Compile-Time
+    /// Specialization"). Null when the program has none.
+    discovery_start: ?usize = null,
+    /// Which specializations can register a literal root; present exactly
+    /// when `discovery_start` is.
+    literal_demand: ?*const LiteralDemand.LiteralDemand = null,
 };
 
 /// Checked const data that must produce a runtime layout and callable entries.

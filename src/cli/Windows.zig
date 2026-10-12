@@ -83,3 +83,12 @@ pub fn deinit(state: Windows) void {
     _ = windows.SetConsoleMode(h_out, state.output_mode);
     _ = windows.SetConsoleMode(h_in, state.input_mode);
 }
+
+/// Whether the console attached to stdin currently has line input disabled, as
+/// it does while a TUI or line editor has put it in raw mode.
+pub fn stdinRawModeActive() bool {
+    const enable_line_input: windows.DWORD = 0x0002;
+    var input_mode: windows.DWORD = 0;
+    if (0 == windows.GetConsoleMode(std.Io.File.stdin().handle, &input_mode)) return false;
+    return input_mode & enable_line_input == 0;
+}
