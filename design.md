@@ -1713,7 +1713,11 @@ shares them with evaluation.
 
 Monotype lowering, lifting, SpecConstr, lambda solving, and inline analysis
 run once for that evaluation over the union of its roots, and the frozen
-Solved program they produce is one immutable producer identity domain. An
+Solved program they produce is one immutable producer identity domain. When
+no LSS runtime consumer continues that program, as in `roc check`, the
+program roots in that union are discovery roots and only the bodies that can
+register a literal root are specialized (see "Demand-Driven Compile-Time
+Specialization" below). An
 LSS runtime consumer continues that program and borrows it: none copies it,
 none reruns any of those stages, and callable correspondence compares ids
 from one producer domain, never ids allocated by separate solver runs. A
@@ -1807,6 +1811,116 @@ Boxy runtime lowering is a distinct declared specialization strategy. Compile-
 time evaluation remains LSS, so that consumer's runtime roots are excluded from
 the LSS union and lowered by the separate Boxy pipeline after checking completes.
 This split follows the selected strategy, never a failed specialization attempt.
+
+#### Demand-Driven Compile-Time Specialization
+
+Compile-time evaluation runs the compile-time roots, and the literal roots
+that specializations register. Checking already gave every literal whose
+conversion is closed a compile-time root of its own, so a runtime body
+matters to compile-time evaluation only where specializing it registers a
+literal root: a conversion that depends on its instance, a custom
+interpolation, or a conversion root no evaluation requests. Specializing the
+rest of the runtime program, or lowering any of it for execution, is runtime
+work, and compile-time evaluation without an LSS runtime consumer to
+continue its program does none of it. Its program roots are *discovery
+roots*, specialized only to find those literal roots.
+
+Which bodies can register a literal root is decided from explicit checked
+data (`postcheck.LiteralDemand`), per checked procedure template. The
+analysis is a graph over templates, the checked types their bodies use,
+nominal types, and the builtin types, with each node carrying flags for what
+it can contribute to a literal root. A template's own flags are *strict*
+when its body has a custom interpolation, or a literal whose conversion root
+no evaluation of this compilation requests and whose payload is not stored,
+or a read of a constant that is neither stored nor evaluated (its
+computation lowers in place); *dependent numeral* (*quote*) when its body has
+a numeral (quote) whose conversion depends on its instance. A nominal's own
+flags are *custom numeral* (*quote*) when it has a `from_numeral`
+(`from_quote`) method of its own. A template reaches the templates its
+resolved value references and its direct dispatch plans (with their nested
+evidence) select, and the types of its signature, references, and plans. A
+type reaches its component types and the nominals it names. A nominal, and
+the builtin types, reach the procedures of their methods whose names
+dispatch can select by type rather than by an explicit plan: names of
+where-clause requirements, evidence-dependent and structural plans, generated
+codec calls, and iterator loops, and `to_inspect`. Every other method is
+reached only through a plan that selects it. A node's reach flags are its
+own and those of every node it reaches.
+
+A specialization can register a literal root only when the reach flags of
+its template, the types of its request, and its dispatch evidence include
+*strict*, or a dependent kind together with the custom type of that kind:
+every body it would lower is reached from its template, every type a
+dependent conversion is instantiated at is named by the request or by a
+reached body, and every method dispatch can select is reached through the
+types it dispatches on. Dispatch evidence that selects a local procedure,
+abstract scheme evidence, and a template outside the lowering's modules are
+never bounded. The analysis over-approximates; it never consults procedure
+names other than method names, syntax, or emitted code.
+
+Discovery roots that cannot register a literal root are not specialized at
+all. Each Monotype body records the demand it is lowered for: `evaluation`
+for a compile-time root, a literal root, and everything they reach, and
+`discovery` for a discovery root and the bodies it requests. A discovery
+request whose specialization cannot register a literal root reserves the
+specialization's identity and signature but parks its body. The conversion
+call of a literal root is lowered as an evaluation request even inside a
+discovery body, since evaluation runs it. An evaluation request that reaches
+a parked or discovery specialization upgrades it, and transitively every
+specialization it requested for discovery, so no body evaluation can run
+calls a parked one. After every body has lowered, each still-parked
+specialization is completed as a `crash` at its requested signature. Only
+discovery bodies reference these, and the compile-time consumer's root
+manifest names no discovery root, so evaluation never runs one (a discovery
+procedure reaches that consumer's LIR only as a member of a callable set an
+evaluation never selects). A
+specialization's Monotype identity includes the method scope that requested
+it, but its procedure identity does not, and Direct LIR shares one
+procedure among specializations of equal procedure identity. So every
+procedure a discovery body commits, and every stub, is marked as discovery
+in its source template: the mark is part of its procedure identity and
+removes its object-cache key, so a discovery body, whose requests may name
+stubs, never stands in for the evaluation procedure of the same template and
+types. Commit can also merge a body lowered inside a draft into an equal
+committed specialization; that merge is a request like any other, upgrading
+the committed specialization when the draft evaluates and recorded as a
+discovery request otherwise.
+Literal roots registered in discovery bodies are evaluated exactly as before,
+so `roc check` reports every rejected or crashing conversion a build reports.
+
+An LSS runtime consumer needs every runtime body specialized anyway and
+continues the evaluation's program, so a build with one still names its
+program roots in full. Its compile-time consumer lowers and evaluates the
+same compile-time and literal roots, and closed specializations keep the
+same object-cache keys in either program, so compiled compile-time code
+serves both.
+
+`--timings` reports these decisions under "Demand-driven specialization":
+the program roots offered, the discovery roots kept, the analysis's
+templates, source and reaching templates, and custom literal types, and the discovery bodies,
+parked, unparked, and upgraded requests, and never-run stubs.
+
+#### Compile-Time Object Packs
+
+A runtime build fills the object cache with packs of runtime-policy code;
+compile-time evaluation reads them. A command that only checks fills it too:
+once checking completes with no error, the CLI compiles the compile-time
+evaluation program's LIR again for the object cache (no compile-time hooks,
+ordinary relocatable code) and stores its keyed closed specializations as
+one pack, under the same withholding rules as a runtime pack: an entry whose
+closure reads a compile-time value slot, names another program-local symbol,
+or still converts a literal is not offered. The pack is filed beside the root
+module's packs in a separate compile-time store (`<target>-comptime`) under a
+key derived from the root module's code-generation key, which no runtime pack
+uses, so it never stands in for, removes, or completes a runtime pack, and an
+edited root files a new pack beside the old one. Every compile-time
+evaluation provider loads the compile-time store after the runtime store, so
+an entry both offer is served by the runtime pack. The provider a dev build
+for the host shares with its runtime program does not load it: that program
+must be served runtime-policy code only. Evaluation serves a compile-time
+pack's entries exactly as it serves runtime packs' (see "Early Compile-Time
+Object Reuse"), so a later check whose roots must be evaluated again splices
+the code instead of lowering and compiling it.
 
 Native compile-time instruction generation consumes an explicit, read-only LIR
 demand closure seeded by compile-time root procedures and materialized callable
@@ -6140,7 +6254,12 @@ thunks, and the key thunk calls the format's key protocol (`encode_key_start`,
 `encode_key_str`, or the scalar's `encode_key_<scalar>`). `Set` calls
 `encode_list` with `Set` as the call subject. A record field stored in a
 presence slot is written from its `Present` payload, and a `Missing` slot is
-skipped. A generated codec constructor keeps its checked callable
+skipped. The runtime worker captures every field name its contract renames.
+Each callback it packs captures the encoding, the value it writes, and only
+the renamed names its own value reaches: a record-fields callback captures its
+record's names, and every callback also captures the names of each callback it
+packs, closed over the planned callback edges. A field whose value contains no
+record therefore captures no names. A generated codec constructor keeps its checked callable
 representation. When the runtime worker it returns has a different
 representation (for example, a presence slot where the constructor's return
 names an inline required field), the constructor's pack boundary adapts the
@@ -6404,7 +6523,9 @@ key components. CheckedModule construction caches the complete schema by its che
 owner; aliases and local scopes share the same evidence and quantified-variable
 pool ranges. Schemes whose checker-authored codec requirements require
 instantiation have no concrete template-root evidence. Selecting one as a root
-requires an explicit instantiated root edge with its own evidence.
+requires an explicit instantiated root edge with its own evidence. A root has
+no calling site, so Monotype and Boxy planning both take a root's evidence,
+including its captured codec requirements, from the request's root evidence.
 
 Constant-evaluation entry wrappers retain the evaluated value's quantified type
 variables without accepting its dispatch requirements as wrapper arguments.
@@ -6423,6 +6544,8 @@ that already holds its identity is compared by that identity rather than by
 walking its proof graph again, so interning a chain of nested contracts costs
 one comparison per contract rather than one per contract below it. Source contracts remain intact for replay; specialization
 equality uses the shared identity rather than the per-use derivation index.
+Boxy selects a generated codec worker by the same identity, so every use of
+equivalent contracts shares one worker.
 
 The checker's derived-codec walk records each nominal application whose
 backing it walks together with the generated derivation that walks it. A later
@@ -6789,6 +6912,16 @@ Monotype commits that plan as one loop plus explicit shared continuations:
 - fallible operations inside the initialized record loop transfer their error
   payload to one typed error continuation, which constructs the outer `Err`
   exactly once.
+
+Boxy's generated record parser keeps the first rule the same way: each field's
+value parser is built once, as a join whose parameter is the state after the
+field's key, and the `Field`, `TryField`, and `TryFieldCaseless` events jump to
+it. It keeps the third rule with one error join inside the record loop, whose
+parameter is the parser result: every fallible operation in the loop,
+including those of nested field shapes, writes its `Err` into that parameter
+and jumps to it. The join's `retained` environment is the field-name evidence,
+the field names the worker owns, and the payload slots (initialized under their
+presence bits), so ARC releases them once in the join body.
 
 The continuation targets are producer-authored Monotype data. Lifting,
 specialization, lambda solving, and direct LIR lowering preserve and consume
@@ -14777,7 +14910,13 @@ the identity `(target template, target-instantiated checked callable,
 nested-evidence identity, method scope)`. Closed checked callable and evidence
 identities are interned in CheckedModule, so the first request creates or loads
 the specialization and every repeated call is an O(1) hit before durable type
-or evidence digests are rebuilt. Graph-participating targets consume their
+or evidence digests are rebuilt. That identity is complete only for a
+specialization independent of the caller's local context. A caller-owned
+specialization (structural evidence lowered inside a local procedure context,
+or evidence naming a local procedure) also belongs to its lexical owner and
+lexical context, so the O(1) memo never records it; each repeated request takes
+the template lookup, which reuses it only from inside its lexical owner and
+only at an equal lexical context. Graph-participating targets consume their
 producer-authored graph protocol instead of taking this sealed-interface path.
 
 Nothing else exists. Absent an explicit checker-authored callable path,
@@ -20398,9 +20537,15 @@ read of the source, and a view that some statement consumes is retained
 there and hands the retained unit on, so it follows the alias rule. A
 low-level op that neither allocates nor checks and whose result is its one
 consumed argument's own unit passes the value through and is an alias of
-that argument. A tag birth without a refcounted payload has every payload
-field vacuously unique, so an error-path return never vetoes the fields the
-success path carries. A borrowed argument position the callee only reads
+that argument. A field of a value with several definitions is unique only
+when every definition vouches for it. A tag birth without a refcounted
+payload has every payload field vacuously unique, so an error-path return
+never vetoes the fields the success path carries. A call vouches for exactly
+the fields its callee's signature returns unique or names in a conditional
+row: a callee's result born unique as a whole may still hold fields that
+other values share. A definition that states nothing about the fields (a
+field take, an op's result, a nominal or reinterpreting alias) vetoes every
+field. A borrowed argument position the callee only reads
 (`read_only_params`: no consuming use, no holder-adding occurrence) adds no
 holder to the caller's argument; every other borrowed position is treated
 as a holder that may outlive the call.

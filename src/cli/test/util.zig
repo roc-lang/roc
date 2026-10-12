@@ -73,11 +73,11 @@ pub fn putIsolatedTempEnv(env_map: *std.process.Environ.Map, temp_dir: []const u
 }
 
 /// Absolute path to the declared compiler artifact used by CLI tests.
-pub const roc_binary_path = buildRootPath(@import("fixture_options").roc_binary_build_path);
+pub const roc_binary_path = buildOutputPath(@import("fixture_options").roc_binary_build_path);
 
-/// A build-option path as an absolute path. Zig resolves option paths against
-/// the build runner's directory, but tests run in prepared fixture roots.
-pub fn buildRootPath(comptime path: []const u8) []const u8 {
+/// Absolute path to a build output. Zig names an output relative to the build
+/// runner's directory, while tests run in prepared fixture roots.
+pub fn buildOutputPath(comptime path: []const u8) []const u8 {
     if (comptime std.fs.path.isAbsolute(path)) return path;
     return @import("fixture_options").build_root ++ "/" ++ path;
 }
