@@ -830,13 +830,16 @@ pub fn finalizeProgram(
         // All readers of this producer are declared before any cache hit can
         // erase a source body. CTFE still owns its native late-splice policy.
         host_target.code_provision = sharedProducerProvision(host_target, runtime_target);
-        // Counting work observes the evaluation without shaping it, and a
-        // runtime consumer whose specializations go into the object cache
-        // needs what each one reads of compile-time evaluation.
+        // Counting work observes the evaluation without shaping it. A program
+        // whose specializations go into the object cache needs what each one
+        // reads of compile-time evaluation: the runtime consumer's, when it
+        // asks for them, and this program's own, which the compile-time pack
+        // publishes whenever there is an object cache.
         if (runtime_target) |target| {
             host_target.work_metrics = target.work_metrics;
             host_target.spec_comptime_reads = target.spec_comptime_reads;
         }
+        if (options.object_cache != null) host_target.spec_comptime_reads = true;
         var monotype = lir.CheckedPipeline.prepareCheckedModulesMonotype(allocator, lowering_modules, union_roots, host_target) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.HostedFunctionNotBound => finalizationInvariant("compile-time evaluation required every hosted procedure to be bound"),
