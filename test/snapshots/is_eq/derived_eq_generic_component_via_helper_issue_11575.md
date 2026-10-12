@@ -10,18 +10,18 @@ eq = |a, b| { n: a } == { n: b }
 x = eq(|z| z, |z| z)
 ~~~
 # EXPECTED
-TYPE DOES NOT SUPPORT EQUALITY - derived_eq_generic_component_via_helper_issue_11575.md:1:13:1:33
+TYPE DOES NOT SUPPORT EQUALITY - derived_eq_generic_component_via_helper_issue_11575.md:3:5:3:21
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
 		(title "Type Does Not Support Equality")
-		(region (start 1 13) (end 1 33))
+		(region (start 3 5) (end 3 21))
 		(headline
 			(reflow "This expression is doing an equality check on a type that doesn't support equality."))
 		(document
-			(source-region (file "derived_eq_generic_component_via_helper_issue_11575.md") (start 1 13) (end 1 33) (annotation error) (line-text "eq = |a, b| { n: a } == { n: b }"))
+			(source-region (file "derived_eq_generic_component_via_helper_issue_11575.md") (start 3 5) (end 3 21) (annotation error) (line-text "x = eq(|z| z, |z| z)"))
 			(line-break)
 			(reflow "The type is:")
 			(line-break)
@@ -100,18 +100,7 @@ NO CHANGE
 									(p-assign (ident "b"))))))))))
 	(d-let
 		(p-assign (ident "x"))
-		(e-call (constraint-fn-var 241)
-			(e-runtime-error (tag "erroneous_value_expr"))
-			(e-lambda
-				(args
-					(p-assign (ident "z")))
-				(e-lookup-local
-					(p-assign (ident "z"))))
-			(e-lambda
-				(args
-					(p-assign (ident "z")))
-				(e-lookup-local
-					(p-assign (ident "z")))))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

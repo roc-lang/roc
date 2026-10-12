@@ -78,3 +78,33 @@ test "issue 12211: a for loop's own iter dispatch on a value a later use decides
     defer test_env.deinit();
     try test_env.assertOneTypeErrorHighlightsWithin("Missing Method", .{ .line = 6, .start_column = 14, .end_column = 15 });
 }
+
+test "issue 12211: an equality requirement its comparison derived fails at the comparison when a later use decides the item type" {
+    const source =
+        \\main! = |_| {
+        \\    x = []
+        \\    _same = x == x
+        \\    _y = List.append(x, |z| z)
+        \\    Ok({})
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeErrorHighlightsWithin("Type Does Not Support Equality", .{ .line = 3, .start_column = 13, .end_column = 19 });
+}
+
+test "issue 12211: an operator requirement a function's scheme inferred fails at the use, as a declared one does" {
+    const source =
+        \\sub = |a, b| a - b
+        \\
+        \\main! = |_| {
+        \\    x : Str
+        \\    x = "a"
+        \\    _y = sub(x, "b")
+        \\    Ok({})
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeErrorHighlightsWithin("Missing Method", .{ .line = 6, .start_column = 10, .end_column = 21 });
+}

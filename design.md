@@ -997,10 +997,15 @@ checker recovery. The recovery rules:
   requirement waits on the receiver and is queued by whichever later
   unification grounds it, yet it still belongs to the expression's relation
   over its operands and fails at that expression, exactly as if the receiver
-  had been known (`Check.own_dispatch_fn_vars`, exact by callable identity, so
+  had been known (`Check.own_dispatch_exprs`, exact by callable identity, so
   a copy that instantiation or import makes is never one). The obligations its
   resolution queues inherit no failure expression from the entry that carried
-  it. So in `for letter in "a"..="z" { echo!(letter) }` the range's rejected
+  it. An obligation derived from such a dispatch, a requirement its selected
+  target's instantiation left behind or a component relation of a structural
+  comparison, belongs to the same relation and fails at the expression,
+  whichever later unification grounds it: `x == x` over a list whose items a
+  later use makes functions reports the missing equality at `x == x`, as when
+  the items were known. So in `for letter in "a"..="z" { echo!(letter) }` the range's rejected
   `range_inclusive_to` is reported at the range, which it retires, rather than
   at `echo!(letter)`, whose unification grounded the literal; `letter` is then
   bound from an erroneous value, and `Range.iter`'s `range_iter` requirement,
@@ -5753,7 +5758,13 @@ requirement of a scheme that another expression instantiated is not its
 owner's own dispatch, even when the owner dispatches on its operands: the
 owner only made it concrete by relating that instantiation's type (`Friendly
 == Blub.parse("Friendly")?` makes `Blub.parse`'s `a.parser_for` concrete at
-`==`, which reports it, while the lookup of `Blub.parse` instantiated it). The
+`==`, which reports it, while the lookup of `Blub.parse` instantiated it).
+A scheme's requirement is its requirement whether its annotation declared it
+in a where clause or the scheme inferred it from an operator or method call
+its body dispatches: `sub = |a, b| a - b` used as `sub(x, "b")` with
+`x : Str` reports the missing `minus` at `sub(x, "b")`, as the annotated
+`sub : a, a -> a where [a.minus : a, a -> a]` does, never at `a - b` in the
+body (`Check.use_instance_by_fn_var` names the copies a value use owns). The
 call carrying the requirement is among the owner's operands, so the owner is
 the crash alone rather than evaluating a call whose callee cannot run. Each
 instantiated relation records the expression that instantiated it
