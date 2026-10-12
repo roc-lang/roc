@@ -12679,11 +12679,12 @@ const ProcedureBuilder = struct {
             retained[retained_len] = field.payload;
             retained_len += 1;
         }
-        const error_body = try proc.assignRepresentationBoundaryConsumingSource(
+        const error_body = try proc.assignRepresentationBoundaryWithSourceMode(
             state.shape_context.result,
             context.target,
             state.shape_context.result_rep,
             context.target_rep,
+            .move,
             state.shape_context.next,
         );
         const loop_body = try self.result.store.addCFStmt(.{ .join = .{

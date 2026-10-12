@@ -7511,7 +7511,7 @@ test "uniqueness vetoes a join cell's field that a call definition does not vouc
     for ([_]LIR.LocalId{ callee_index, caller_index, flag }) |scalar| rc[@backingInt(scalar)] = false;
     var solution = try solve(allocator, &f.store, &f.layouts, rc, &.{}, &.{}, true);
     defer solution.deinit();
-    try settleUniqueness(allocator, &f.store, &f.layouts, rc, &solution, .stamped, true);
+    try settleUniquenessWithOptions(allocator, &f.store, &f.layouts, rc, &solution, .stamped, true, .{});
     try std.testing.expect(solution.sigOf(callee).ret_unique);
     try std.testing.expectEqual(@as(u64, 0b10), solution.sigOf(callee).ret_unique_fields);
     try std.testing.expect(!solution.isUniqueUnder(first, std.math.maxInt(arc_sig.ParamMask)));
