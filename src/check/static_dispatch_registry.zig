@@ -1915,6 +1915,13 @@ pub const GeneratedCodecDerivationKind = enum(u8) {
 /// Stable index of a checked generated-codec derivation contract.
 pub const GeneratedCodecDerivationId = enum(u32) { _ };
 
+/// SHA-256 of a generated codec contract's complete proof graph, encoded
+/// without module-local ids: equal digests denote equivalent contracts even
+/// when different checked modules recorded them.
+pub const GeneratedCodecContentDigest = struct {
+    bytes: [32]u8 = @splat(0),
+};
+
 /// The exact checked resolution of one compiler-generated codec call.
 /// `pending` exists only while CheckedModule publication links the checker
 /// snapshot to its target evidence or nested structural derivation.
@@ -1943,6 +1950,10 @@ pub const GeneratedCodecDerivation = struct {
     /// Producer-proven equivalence class of the complete codec proof graph.
     /// Source/frozen roles remain specific to this contract for replay.
     identity: GeneratedCodecDerivationId,
+    /// Identity of the equivalence class across checked modules. Specialization
+    /// identity names a contract by this digest, never by the module that
+    /// recorded it.
+    content: GeneratedCodecContentDigest = .{},
     kind: GeneratedCodecDerivationKind,
     source_constructor_ty: CheckedTypeId,
     source_runtime_ty: CheckedTypeId,

@@ -2783,9 +2783,19 @@ fn specEvidenceShallowEql(
     };
 }
 
-fn codecEvidenceIdentity(evidence: CheckedSpecStructuralEvidence) ?static_dispatch.GeneratedCodecDerivationId {
+fn codecEvidenceContent(evidence: CheckedSpecStructuralEvidence) ?static_dispatch.GeneratedCodecContentDigest {
     const id = evidence.evidence.generated_codec_derivation orelse return null;
-    return evidence.view.static_dispatch_plans.generated_codec_derivations[@backingInt(id)].identity;
+    return evidence.view.static_dispatch_plans.generated_codec_derivations[@backingInt(id)].content;
+}
+
+/// A codec edge is identified by its contract's content, wherever it was
+/// recorded; any other checked edge by the module that recorded it.
+fn checkedStructuralOriginEql(left: CheckedSpecStructuralEvidence, right: CheckedSpecStructuralEvidence) bool {
+    const left_content = codecEvidenceContent(left);
+    const right_content = codecEvidenceContent(right);
+    if ((left_content == null) != (right_content == null)) return false;
+    if (left_content) |content| return std.mem.eql(u8, &content.bytes, &right_content.?.bytes);
+    return moduleBytesEqual(left.view.key.bytes, right.view.key.bytes);
 }
 
 fn specStructuralEvidenceEql(left: SpecStructuralEvidence, right: SpecStructuralEvidence) bool {
@@ -2794,8 +2804,7 @@ fn specStructuralEvidenceEql(left: SpecStructuralEvidence, right: SpecStructural
     if (left.checked == null) return true;
     const left_checked = left.checked.?;
     const right_checked = right.checked.?;
-    return moduleBytesEqual(left_checked.view.key.bytes, right_checked.view.key.bytes) and
-        codecEvidenceIdentity(left_checked) == codecEvidenceIdentity(right_checked) and
+    return checkedStructuralOriginEql(left_checked, right_checked) and
         std.meta.eql(
             left_checked.view.types.rootKey(left_checked.evidence.dispatcher_ty),
             right_checked.view.types.rootKey(right_checked.evidence.dispatcher_ty),
@@ -6577,7 +6586,7 @@ const Builder = struct {
                         .callable_key = checked_structural.view.types.rootKey(checked_structural.evidence.callable_ty),
                         .callable_ty = checked_structural.evidence.callable_ty,
                         .generated_codec_derivation = checked_structural.evidence.generated_codec_derivation,
-                        .generated_codec_identity = codecEvidenceIdentity(checked_structural),
+                        .generated_codec_content = codecEvidenceContent(checked_structural),
                     } else null,
                 } }),
                 .from_callable => |use| {
@@ -50383,11 +50392,11 @@ const BodyContext = struct {
                         {
                             Common.invariant("stored structural evidence checked type identity changed during restoration");
                         }
-                        const identity = if (stored_checked.generated_codec_derivation) |id|
-                            view.static_dispatch_plans.generated_codec_derivations[@backingInt(id)].identity
+                        const content = if (stored_checked.generated_codec_derivation) |id|
+                            view.static_dispatch_plans.generated_codec_derivations[@backingInt(id)].content
                         else
                             null;
-                        if (identity != stored_checked.generated_codec_identity)
+                        if (!std.meta.eql(content, stored_checked.generated_codec_content))
                             Common.invariant("stored codec proof identity changed during restoration");
                         break :restored .{
                             .view = view,
