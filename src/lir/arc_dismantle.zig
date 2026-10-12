@@ -1937,7 +1937,7 @@ fn classifyStatement(
             try analysis.noteDef(stmt.target, current);
             analysis.disqualify(stmt.target);
         },
-        inline .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect => |stmt| {
+        inline .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect => |stmt| {
             try analysis.useWhole(current, stmt.source);
             try analysis.noteDef(stmt.target, current);
             analysis.disqualify(stmt.target);
@@ -2027,7 +2027,7 @@ fn classifyStatement(
             try analysis.useWhole(current, stmt.condition);
         },
         .expect_err => |stmt| try analysis.useWhole(current, stmt.message),
-        .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break, .jump => {},
+        .runtime_error, .comptime_exhaustiveness_failed, .jump => {},
         .comptime_branch_taken => {},
         // The input contract is RC-free LIR; if RC statements ever appear
         // here, classifying their operands as whole uses stays sound.
@@ -2216,7 +2216,6 @@ const StatementFacts = struct {
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
@@ -2246,8 +2245,6 @@ const StatementFacts = struct {
                 .switch_initialized_payload,
                 .str_match,
                 .str_match_set,
-                .loop_continue,
-                .loop_break,
                 .join,
                 .jump,
                 .ret,
