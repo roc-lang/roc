@@ -54,6 +54,9 @@ pub const HostSplice = struct {
     data_names: std.StringHashMap(void),
     /// Each data item's offset in the mapping once `link` has laid it out.
     data_offsets: std.StringHashMap(usize),
+    /// Each data item's symbol offset in the mapping, which references to
+    /// its name resolve to, once `link` has laid it out.
+    data_symbol_offsets: std.StringHashMap(usize),
     /// Hosted functions spliced code calls, by name, with the stub's code
     /// offset.
     hosted_stubs: std.StringHashMap(usize),
@@ -75,6 +78,7 @@ pub const HostSplice = struct {
             .allocator = allocator,
             .data_names = std.StringHashMap(void).init(allocator),
             .data_offsets = std.StringHashMap(usize).init(allocator),
+            .data_symbol_offsets = std.StringHashMap(usize).init(allocator),
             .hosted_stubs = std.StringHashMap(usize).init(allocator),
         };
     }
@@ -112,6 +116,7 @@ pub const HostSplice = struct {
         self.data.deinit(self.allocator);
         self.data_names.deinit();
         self.data_offsets.deinit();
+        self.data_symbol_offsets.deinit();
         var bindings = self.static_data_bindings.keyIterator();
         while (bindings.next()) |name| self.allocator.free(name.*);
         self.static_data_bindings.deinit(self.allocator);
@@ -314,6 +319,7 @@ pub const HostSplice = struct {
         for (self.data.items) |item| {
             total = std.mem.alignForward(usize, total, @max(item.alignment, 1));
             try self.data_offsets.put(item.name, total);
+            try self.data_symbol_offsets.put(item.name, total + item.symbol_offset);
             total += @max(item.bytes.len, 1);
         }
 
@@ -393,11 +399,7 @@ const Binder = struct {
         }
         if (self.splice.hosted_stubs.get(name)) |offset| return self.image_base + offset;
         if (self.code_symbols.get(name)) |offset| return self.image_base + offset;
-        if (self.splice.data_offsets.get(name)) |offset| {
-            for (self.splice.data.items) |item| {
-                if (std.mem.eql(u8, item.name, name)) return self.image_base + offset + item.symbol_offset;
-            }
-        }
+        if (self.splice.data_symbol_offsets.get(name)) |offset| return self.image_base + offset;
         return null;
     }
 
