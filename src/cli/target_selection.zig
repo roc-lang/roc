@@ -116,11 +116,11 @@ fn matchesNativeAbi(target: RocTarget) bool {
 /// Whether the platform lists a target for this exact machine, ABI included.
 ///
 /// A platform can list several targets that share this machine's OS and
-/// architecture but differ in ABI (`x64win` and `x64mingw`, say). Those are not
-/// interchangeable: the interpreter backend only builds for the native target,
-/// so defaulting to whichever the platform happened to list first would reject
-/// the build outright. When this answers true, the host targets in the other
-/// ABI stop being default candidates.
+/// architecture but differ in ABI (`x64win` and `x64mingw`, say). Every one of
+/// them builds and runs here, so the default is the one in the compiler's own
+/// ABI rather than whichever the platform happened to list first. When this
+/// answers true, the host targets in the other ABI stop being default
+/// candidates.
 ///
 /// `runsOnHostCpu` still narrows the two CPU-level spellings, so a machine
 /// below the default level looks for the `v1` twin of its native ABI, not the
@@ -517,8 +517,7 @@ fn otherWindowsAbiSibling(target: RocTarget) ?RocTarget {
 
 test "default build target prefers the native ABI over an OS-and-arch match" {
     // Both spellings pass `matchesHostOsAndArch`, which ignores the ABI, so
-    // without the ABI tie-break the platform's listing order would decide—and
-    // the interpreter backend refuses anything but the native target.
+    // without the ABI tie-break the platform's listing order would decide.
     const native = RocTarget.detectNative();
     const sibling = otherWindowsAbiSibling(native) orelse return error.SkipZigTest;
 

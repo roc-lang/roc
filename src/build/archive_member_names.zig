@@ -18,9 +18,11 @@
 
 const std = @import("std");
 
-const Os = enum { linux, macos, windows };
+/// The OS whose archive layout is being read.
+pub const Os = enum { linux, macos, windows };
 
-const RewriteError = error{
+/// Why an archive could not be read or rewritten.
+pub const RewriteError = error{
     NotAnArchive,
     MalformedArchive,
     UnknownIndexOffset,
@@ -53,12 +55,15 @@ pub fn main(init: std.process.Init) MainError!void {
     try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[3], .data = rewritten });
 }
 
-const magic = "!<arch>\n";
-const header_len = 60;
+/// The signature every archive starts with.
+pub const magic = "!<arch>\n";
+/// Size of the header in front of each member.
+pub const header_len = 60;
 /// Longest name the 16-byte header field holds inline alongside its `/` terminator.
 const max_inline_name = 15;
 
-const Member = struct {
+/// One member of a parsed archive, viewing the archive's own bytes.
+pub const Member = struct {
     /// Offset of this member's 60-byte header in the archive it was parsed from.
     header_offset: usize,
     header: *const [header_len]u8,
@@ -82,14 +87,16 @@ const Member = struct {
     };
 };
 
-const Parsed = struct {
+/// The members of an archive, in file order.
+pub const Parsed = struct {
     members: []Member,
     /// True for a BSD archive, whose names live inline in each member and are
     /// already bare.
     bsd: bool,
 };
 
-fn parse(gpa: std.mem.Allocator, bytes: []const u8, os: Os) RewriteError!Parsed {
+/// Split `bytes` into its members. The caller frees `members`.
+pub fn parse(gpa: std.mem.Allocator, bytes: []const u8, os: Os) RewriteError!Parsed {
     if (!std.mem.startsWith(u8, bytes, magic)) return error.NotAnArchive;
     var members = std.ArrayList(Member).empty;
     errdefer members.deinit(gpa);
@@ -137,14 +144,15 @@ fn parse(gpa: std.mem.Allocator, bytes: []const u8, os: Os) RewriteError!Parsed 
     return .{ .members = try members.toOwnedSlice(gpa), .bsd = false };
 }
 
-fn baseName(name: []const u8) RewriteError![]const u8 {
+/// A member name without the directories Zig recorded in front of it.
+pub fn baseName(name: []const u8) RewriteError![]const u8 {
     const base = if (std.mem.findLastAny(u8, name, "/\\")) |i| name[i + 1 ..] else name;
     if (base.len == 0) return error.MalformedArchive;
     return base;
 }
 
 /// Write `size` into a header's 10-character decimal size field.
-fn setHeaderSize(header: *[header_len]u8, size: usize) RewriteError!void {
+pub fn setHeaderSize(header: *[header_len]u8, size: usize) RewriteError!void {
     @memset(header[48..58], ' ');
     _ = try std.fmt.bufPrint(header[48..58], "{d}", .{size});
 }
@@ -248,8 +256,10 @@ fn remapOffsets(comptime T: type, comptime endian: std.builtin.Endian, body: []u
     }
 }
 
-const TestObject = struct { name: []const u8, data: []const u8 };
-const TestSymbol = struct { name: []const u8, object: usize };
+/// A member for `testArchive` to pack.
+pub const TestObject = struct { name: []const u8, data: []const u8 };
+/// A symbol index entry for `testArchive`, naming its member by position.
+pub const TestSymbol = struct { name: []const u8, object: usize };
 
 fn testHeader(out: *[header_len]u8, name_field: []const u8, size: usize) !void {
     const header = try std.fmt.bufPrint(out, "{s:<16}{d:<12}{d:<6}{d:<6}{o:<8}{d:<10}`\n", .{ name_field, @as(u32, 0), @as(u32, 0), @as(u32, 0), @as(u32, 0o644), size });
@@ -258,7 +268,7 @@ fn testHeader(out: *[header_len]u8, name_field: []const u8, size: usize) !void {
 
 /// Build a GNU (or, with `coff_second_index`, COFF) archive the way Zig lays
 /// one out: `/` index, optional second linker member, `//` long names, objects.
-fn testArchive(gpa: std.mem.Allocator, os: Os, objects: []const TestObject, symbols: []const TestSymbol, coff_second_index: bool) ![]u8 {
+pub fn testArchive(gpa: std.mem.Allocator, os: Os, objects: []const TestObject, symbols: []const TestSymbol, coff_second_index: bool) ![]u8 {
     var long_names = std.ArrayList(u8).empty;
     defer long_names.deinit(gpa);
     var fields = std.ArrayList([16]u8).empty;
@@ -409,6 +419,12 @@ fn expectStripped(os: Os, objects: []const TestObject, symbols: []const TestSymb
     const again = try stripDirectories(gpa, output, os);
     defer gpa.free(again);
     try std.testing.expectEqualSlices(u8, output, again);
+}
+
+test {
+    // The COFF sealing tool reads archives through this file; its tests run
+    // with these.
+    _ = @import("coff_private_compiler_rt.zig");
 }
 
 test "GNU archive: cache-directory and home-directory member names become bare names" {

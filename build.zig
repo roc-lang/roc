@@ -120,6 +120,8 @@ fn copyMingwRuntimeToTestPlatform(
 /// `*mingw` target; the startup archive is built from
 /// `src/default_platform/msvc_runtime/`.
 const msvc_runtime = @import("src/echo_platform/msvc_runtime.zig");
+/// The name prefix that keeps the Windows interpreter shim's compiler-rt private.
+const coff_private_compiler_rt = @import("src/build/coff_private_compiler_rt.zig");
 
 /// One startup archive per architecture, shared by every platform it is copied to.
 var msvc_runtime_libs: [2]?*Step.Compile = .{ null, null };
@@ -5323,6 +5325,29 @@ pub fn build(b: *std.Build) void {
         }
         b.getInstallStep().dependOn(final_fx_host_step);
 
+        // The fx suite also links the interpreter shim into the Windows target
+        // in the other C ABI, which a platform is free to offer alone, so it
+        // needs that target's host and C runtime as well.
+        const other_abi_fx_host_step: ?*Step = if (is_windows) for (windows_cross_targets) |cross_target| {
+            const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
+            if (cross_resolved_target.result.cpu.arch != fx_arch) continue;
+            if (std.mem.eql(u8, cross_target.name, native_fx_target_dir)) continue;
+            const copy_host = buildAndCopyTestPlatformHostLib(
+                b,
+                "fx",
+                cross_resolved_target,
+                cross_target.name,
+                optimize,
+                roc_modules,
+                strip,
+                omit_frame_pointer,
+            );
+            if (copyWindowsRuntimeToTestPlatform(b, "fx", cross_target.name)) |copy_runtime| {
+                copy_host.dependOn(copy_runtime);
+            }
+            break copy_host;
+        } else null else null;
+
         const static_data_host_target_dir = fx_host_target_dir orelse native_fx_target_dir;
         const final_static_data_host_step = buildAndCopyTestPlatformHostLib(
             b,
@@ -5414,6 +5439,8 @@ pub fn build(b: *std.Build) void {
                 final_provided_callable_platform_step,
                 // The tests shell out to the roc CLI.
                 build_roc_step,
+                // Naming a step twice is harmless where there is no other ABI.
+                other_abi_fx_host_step orelse final_fx_host_step,
             },
         });
 
@@ -6407,7 +6434,52 @@ fn addMainExe(
     const interpreter_shim_filename = if (target.result.os.tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a";
     const strip_interpreter_shim_names = b.addRunArtifact(archive_member_names_tool);
     strip_interpreter_shim_names.addArg(@tagName(target.result.os.tag));
-    strip_interpreter_shim_names.addFileArg(interpreter_shim_lib.getEmittedBin());
+    if (target.result.os.tag == .windows) {
+        // A COFF link rejects two definitions of a compiler-rt helper where
+        // ELF and Mach-O let weak definitions coexist, so on Windows the
+        // shim's bundled compiler-rt gets names private to the shim. Otherwise
+        // it collides with the compiler-rt a platform host carries (see
+        // src/build/coff_private_compiler_rt.zig).
+        const seal_tool = b.addExecutable(.{
+            .name = "coff_private_compiler_rt",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/build/coff_private_compiler_rt.zig"),
+                .target = hostToolTarget(b, .debug),
+                .optimize = .debug,
+            }),
+        });
+        configureBackend(seal_tool, b.graph.host);
+        const seal_interpreter_shim = b.addRunArtifact(seal_tool);
+        seal_interpreter_shim.addFileArg(interpreter_shim_lib.getEmittedBin());
+        const sealed_interpreter_shim = seal_interpreter_shim.addOutputFileArg("roc_interpreter_shim.lib");
+
+        // Prove it on the archive that gets embedded: link the shim's
+        // compiler-rt, the way an MSVC-ABI link does, beside a platform object
+        // defining the same helpers. A name the seal missed is a duplicate
+        // symbol here.
+        const platform_compiler_rt = b.addObject(.{
+            .name = "platform_compiler_rt",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/interpreter_shim/test/platform_compiler_rt.zig"),
+                .target = target,
+                .optimize = .safe,
+            }),
+        });
+        platform_compiler_rt.bundle_compiler_rt = false;
+        configureBackend(platform_compiler_rt, target);
+        const link_beside_platform = b.addSystemCommand(&.{ b.graph.zig_exe, "lld-link", "/nodefaultlib", "/dll", "/noentry" });
+        link_beside_platform.addArg(if (target.result.cpu.arch == .aarch64) "/machine:arm64" else "/machine:x64");
+        link_beside_platform.addArg("/include:" ++ coff_private_compiler_rt.private_prefix ++ "memcpy");
+        _ = link_beside_platform.addPrefixedOutputFileArg("/out:", "interpreter_shim_beside_platform.dll");
+        link_beside_platform.addFileArg(platform_compiler_rt.getEmittedBin());
+        link_beside_platform.addFileArg(sealed_interpreter_shim);
+        link_beside_platform.expectExitCode(0);
+
+        strip_interpreter_shim_names.step.dependOn(&link_beside_platform.step);
+        strip_interpreter_shim_names.addFileArg(sealed_interpreter_shim);
+    } else {
+        strip_interpreter_shim_names.addFileArg(interpreter_shim_lib.getEmittedBin());
+    }
     const bare_interpreter_shim = strip_interpreter_shim_names.addOutputFileArg(interpreter_shim_filename);
     embedded_digests.addArg("interpreter_shim");
     embedded_digests.addFileArg(bare_interpreter_shim);

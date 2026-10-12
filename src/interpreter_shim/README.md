@@ -51,6 +51,20 @@ in place.
 The parent embeds a viewable LIR image into the output binary. At runtime,
 the shim views that image without running semantic compiler stages.
 
+## Linking Into a Platform
+
+`roc` embeds one shim archive, built for the target `roc` itself runs on, and
+links it into any platform target with the same OS and architecture. The shim
+calls the OS directly and brings its own compiler-rt, so the platform's C ABI
+does not matter: the same archive serves `x64win` and `x64mingw`.
+
+On Windows the shim's compiler-rt is private. A platform host carries the same
+helpers (`compiler_builtins` in a Rust host, compiler-rt in a Zig or C host),
+and a COFF link rejects the duplicate weak definitions that ELF and Mach-O let
+coexist. The build gives every global in the shim's `compiler_rt.obj` a
+shim-only name (see `src/build/coff_private_compiler_rt.zig`) and then links the
+result beside a platform object that defines the same helpers.
+
 ## Key Symbols
 
 - `roc__main`: Entry point called by the platform host.

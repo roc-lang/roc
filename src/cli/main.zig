@@ -3894,7 +3894,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
             try ctx.io.stderr().print("Error: invalid target for roc: {s}\n", .{target_str});
             return error.InvalidTarget;
         };
-        if (!devShimTargetCompatible(requested, native_target)) {
+        if (!embeddedShimTargetCompatible(requested, native_target)) {
             try rejectRunTargetNotExecutable(ctx, requested);
             unreachable;
         }
@@ -6136,7 +6136,14 @@ fn viewLirImageFromHandle(handle: SharedMemoryHandle, target_usize: base.target.
     return lir.LirImage.viewMappedImageWithAllocator(header, base_ptr, handle.size, target_usize, arena);
 }
 
-fn devShimTargetCompatible(selected: RocTarget, native: RocTarget) bool {
+/// Whether the shim archives this compiler embeds link into `selected`.
+///
+/// The archives are built once, for the target the compiler itself runs on.
+/// They call the OS directly and carry their own runtime support, so the C
+/// ABI of the platform they are linked into does not matter: one archive
+/// serves `x64win` and `x64mingw` alike, and `x64musl` and `x64glibc`. Only the
+/// OS and architecture have to be the compiler's own.
+fn embeddedShimTargetCompatible(selected: RocTarget, native: RocTarget) bool {
     return selected.toCpuArch() == native.toCpuArch() and
         selected.toOsTag() == native.toOsTag() and
         selected.ptrBitWidth() == native.ptrBitWidth();
@@ -6148,7 +6155,7 @@ fn useDefaultAppSharedMemoryShim(args: cli_args.RunArgs) bool {
 
     const native_target = roc_target.host_cpu.nativeTarget();
     const default_target = defaultRunShimTarget(native_target);
-    return devShimTargetCompatible(default_target, native_target) and
+    return embeddedShimTargetCompatible(default_target, native_target) and
         default_target.toOsTag() == .linux and
         DefaultPlatformRuntimeObjects.forTarget(default_target) != null;
 }
@@ -6478,7 +6485,7 @@ fn writeDevRunImageToSharedMemory(
         return error.UnsupportedTarget;
     } else {
         const native_target = backend.HostLirCodeGen.roc_target;
-        if (!devShimTargetCompatible(selected_target, native_target)) {
+        if (!embeddedShimTargetCompatible(selected_target, native_target)) {
             try rejectRunTargetNotExecutable(ctx, selected_target);
             unreachable;
         }
@@ -11346,9 +11353,9 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     const link_type = selected.output;
 
     const native_target = roc_target.host_cpu.nativeTarget();
-    if (target != native_target) {
+    if (!embeddedShimTargetCompatible(target, native_target)) {
         const stderr = ctx.io.stderr();
-        try stderr.print("Error: The interpreter backend only supports building for the native target ({s}).\n\n", .{@tagName(native_target)});
+        try stderr.print("Error: The interpreter backend only supports building for this machine's OS and architecture ({s}).\n\n", .{@tagName(native_target)});
         try stderr.print("To cross-compile for {s}, use the dev backend:\n\n", .{@tagName(target)});
         try stderr.print("    roc build --opt=dev --target={s} {s}\n\n", .{ @tagName(target), args.path });
         return error.UnsupportedCrossCompilation;
@@ -11538,6 +11545,14 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
             .target_arch = target_arch,
             .output_path = final_output_path,
             .output_kind = linkerOutputKind(link_type),
+            // The host shim object names every hosted function and
+            // entrypoint the program uses, so host archives resolve by
+            // symbol reference, exactly as they do when `roc` runs the same
+            // program. Loading every member instead fails outright on
+            // Windows for a host archive that carries import-library
+            // members, as a Rust static library does: each one defines the
+            // same import descriptor symbols.
+            .lazy_platform_archives = true,
             .object_files = object_files.items,
             .platform_files_pre = link_inputs.platform_files_pre,
             .platform_files_post = link_inputs.platform_files_post,
