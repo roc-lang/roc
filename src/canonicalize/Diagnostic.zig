@@ -1069,7 +1069,7 @@ pub const Diagnostic = union(enum) {
         const owned_ident = try report.addOwnedString(ident_name);
         try report.headline.addReflowingText("The name ");
         try report.headline.addUnqualifiedSymbol(owned_ident);
-        try report.headline.addReflowingText(" is being redeclared here:");
+        try report.headline.addReflowingText(" is being redeclared here.");
 
         // The primary region shows the new declaration; point below it at the original.
         const owned_filename = try report.addOwnedString(filename);
@@ -1086,7 +1086,7 @@ pub const Diagnostic = union(enum) {
         try report.document.addUnqualifiedSymbol(owned_ident);
         try report.document.addReflowingText(" was already defined in ");
         try report.document.addSourceLocation(original_region_info, owned_filename);
-        try report.document.addReflowingText(":");
+        try report.document.addReflowingText(".");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             original_region_info,
@@ -1129,7 +1129,7 @@ pub const Diagnostic = union(enum) {
         try report.document.addType(owned_type_name);
         try report.document.addReflowingText(" was already declared in ");
         try report.document.addSourceLocation(original_region_info, owned_filename);
-        try report.document.addReflowingText(":");
+        try report.document.addReflowingText(".");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             original_region_info,
@@ -1249,7 +1249,7 @@ pub const Diagnostic = union(enum) {
         try report.document.addType(owned_type_name);
         try report.document.addReflowingText(" was already declared in ");
         try report.document.addSourceLocation(original_region_info, owned_filename);
-        try report.document.addReflowingText(":");
+        try report.document.addReflowingText(".");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             original_region_info,
@@ -1293,7 +1293,7 @@ pub const Diagnostic = union(enum) {
         try report.document.addLineBreak();
         try report.document.addText("The outer type was declared in ");
         try report.document.addSourceLocation(original_region_info, owned_filename);
-        try report.document.addText(":");
+        try report.document.addText(".");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             original_region_info,
@@ -1375,7 +1375,7 @@ pub const Diagnostic = union(enum) {
         try report.document.addUnqualifiedSymbol(owned_parameter_name);
         try report.document.addText(" was already declared in ");
         try report.document.addSourceLocation(original_region_info, owned_filename);
-        try report.document.addText(":");
+        try report.document.addText(".");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             original_region_info,
@@ -1404,7 +1404,7 @@ pub const Diagnostic = union(enum) {
 
         try report.headline.addReflowingText("Variable ");
         try report.headline.addUnqualifiedSymbol(owned_ident);
-        try report.headline.addReflowingText(" is defined here and then never used:");
+        try report.headline.addReflowingText(" is defined here and then never used.");
 
         try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore like ");
         const ident_with_underscore = try std.fmt.allocPrint(gpa, "_{s}", .{owned_ident});
@@ -1497,7 +1497,7 @@ pub const Diagnostic = union(enum) {
         try report.document.addRecordField(owned_field_name);
         try report.document.addReflowingText(" was first defined in ");
         try report.document.addSourceLocation(original_region_info, owned_filename);
-        try report.document.addReflowingText(":");
+        try report.document.addReflowingText(".");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             original_region_info,
@@ -1543,7 +1543,7 @@ pub const Diagnostic = union(enum) {
         try report.document.addUnqualifiedSymbol(owned_tag_name);
         try report.document.addReflowingText(" was first defined in ");
         try report.document.addSourceLocation(original_region_info, owned_filename);
-        try report.document.addReflowingText(":");
+        try report.document.addReflowingText(".");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             original_region_info,

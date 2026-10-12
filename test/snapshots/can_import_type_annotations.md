@@ -78,7 +78,7 @@ MOD NOT FOUND - can_import_type_annotations.md:28:43:28:46
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "Json")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "can_import_type_annotations.md") (start 2 1) (end 2 17) (annotation error) (line-text "import json.Json"))
 			(line-break)
@@ -89,7 +89,7 @@ MOD NOT FOUND - can_import_type_annotations.md:28:43:28:46
 				(file "can_import_type_annotations.md")
 				(line 1)
 				(column 1))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "can_import_type_annotations.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import http.Client as Http exposing [Request, Response]"))))
 	(report
@@ -111,7 +111,7 @@ MOD NOT FOUND - can_import_type_annotations.md:28:43:28:46
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "req")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_req")

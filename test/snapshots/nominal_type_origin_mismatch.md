@@ -28,7 +28,7 @@ MOD NOT FOUND - nominal_type_origin_mismatch.md:3:17:3:23
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "p")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_p")

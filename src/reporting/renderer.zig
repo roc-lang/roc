@@ -69,8 +69,9 @@ pub const RenderTarget = enum {
 };
 
 /// In debug builds, enforce that a report's headline reads as a complete
-/// sentence (ending in a period) or introduces a code block (ending in a
-/// colon). The headline is the one-sentence summary below the diagnostic header
+/// sentence ending in a period. A headline never ends in a colon: it must read
+/// correctly on its own, without relying on the source snippet printed after
+/// it. The headline is the one-sentence summary below the diagnostic header
 /// (or below the title in markdown/HTML/LSP). Compiled out of
 /// release builds. Reports that have not yet been migrated to a headline
 /// (none of the elements carry text) are exempt.
@@ -91,7 +92,7 @@ fn assertValidHeadline(report: *const Report) void {
     }
     // `last` stays 0 when the headline has no text content at all (legacy
     // reports without a headline)—those are exempt.
-    std.debug.assert(last == 0 or last == '.' or last == ':');
+    std.debug.assert(last == 0 or last == '.');
 }
 
 /// The default reporting configuration for a render target.

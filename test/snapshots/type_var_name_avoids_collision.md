@@ -85,7 +85,7 @@ UNUSED VARIABLE - type_var_name_avoids_collision.md:61:5:61:12
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "result3")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_result3")
@@ -99,7 +99,7 @@ UNUSED VARIABLE - type_var_name_avoids_collision.md:61:5:61:12
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "result4")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_result4")
@@ -113,7 +113,7 @@ UNUSED VARIABLE - type_var_name_avoids_collision.md:61:5:61:12
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "result5")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_result5")

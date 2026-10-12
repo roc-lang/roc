@@ -54,7 +54,7 @@ DOES NOT EXIST - can_import_unresolved_qualified.md:25:10:25:49
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "Json")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "can_import_unresolved_qualified.md") (start 1 1) (end 1 17) (annotation error) (line-text "import json.Json"))
 			(line-break)
@@ -65,7 +65,7 @@ DOES NOT EXIST - can_import_unresolved_qualified.md:25:10:25:49
 				(file "can_import_unresolved_qualified.md")
 				(line 1)
 				(column 1))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "can_import_unresolved_qualified.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import json.Json"))))
 	(report
@@ -75,7 +75,7 @@ DOES NOT EXIST - can_import_unresolved_qualified.md:25:10:25:49
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "req")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_req")

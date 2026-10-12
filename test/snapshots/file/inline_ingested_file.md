@@ -25,7 +25,7 @@ MISSING METHOD - inline_ingested_file.md:4:7:4:17
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "Json")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "inline_ingested_file.md") (start 2 1) (end 2 12) (annotation error) (line-text "import Json"))
 			(line-break)
@@ -36,7 +36,7 @@ MISSING METHOD - inline_ingested_file.md:4:7:4:17
 				(file "inline_ingested_file.md")
 				(line 1)
 				(column 1))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "inline_ingested_file.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import \"users.json\" as data : Str"))))
 	(report

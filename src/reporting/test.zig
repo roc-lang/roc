@@ -108,7 +108,7 @@ fn buildDuplicateDefinitionReport(allocator: Allocator) Allocator.Error!Report {
 
     try report.headline.addReflowingText("The name ");
     try report.headline.addUnqualifiedSymbol("c");
-    try report.headline.addReflowingText(" is being redeclared here:");
+    try report.headline.addReflowingText(" is being redeclared here.");
 
     try report.document.addSourceRegion(
         .{ .start_line_idx = 1, .start_col_idx = 0, .end_line_idx = 1, .end_col_idx = 1 },
@@ -125,7 +125,7 @@ fn buildDuplicateDefinitionReport(allocator: Allocator) Allocator.Error!Report {
         .{ .start_line_idx = 0, .start_col_idx = 0, .end_line_idx = 0, .end_col_idx = 1 },
         "example.roc",
     );
-    try report.document.addReflowingText(":");
+    try report.document.addReflowingText(".");
     try report.document.addLineBreak();
     try report.document.addSourceRegion(
         .{ .start_line_idx = 0, .start_col_idx = 0, .end_line_idx = 0, .end_col_idx = 1 },
@@ -152,12 +152,12 @@ test "terminal diagnostic layout has exact plain and ANSI output" {
     try testing.expectEqualStrings(
         "── ● duplicate definition " ++ ("─" ** 38) ++ " example.roc:2:1\n" ++
             "\n" ++
-            "The name c is being redeclared here:\n" ++
+            "The name c is being redeclared here.\n" ++
             "\n" ++
             "c = 5\n" ++
             "^\n" ++
             "\n" ++
-            "In this scope, c was already defined in example.roc:1:1:\n" ++
+            "In this scope, c was already defined in example.roc:1:1.\n" ++
             "\n" ++
             "c = if args.len() < 20 { \"a\" } else { 23 }\n" ++
             "^\n" ++
@@ -174,12 +174,12 @@ test "terminal diagnostic layout has exact plain and ANSI output" {
     try testing.expectEqualStrings(
         gray ++ "── " ++ yellow ++ "● duplicate definition " ++ gray ++ ("─" ** 38) ++ " " ++ cyan ++ "example.roc" ++ gray ++ ":2:1" ++ reset ++ "\n" ++
             "\n" ++
-            "The name " ++ cyan ++ "c" ++ reset ++ " is being redeclared here:\n" ++
+            "The name " ++ cyan ++ "c" ++ reset ++ " is being redeclared here.\n" ++
             "\n" ++
             "c = 5\n" ++
             yellow ++ "^" ++ reset ++ "\n" ++
             "\n" ++
-            "In this scope, " ++ cyan ++ "c" ++ reset ++ " was already defined in " ++ cyan ++ "example.roc" ++ gray ++ ":1:1" ++ reset ++ ":\n" ++
+            "In this scope, " ++ cyan ++ "c" ++ reset ++ " was already defined in " ++ cyan ++ "example.roc" ++ gray ++ ":1:1" ++ reset ++ ".\n" ++
             "\n" ++
             "c = if args.len() < 20 { \"a\" } else { 23 }\n" ++
             yellow ++ "^" ++ reset ++ "\n" ++

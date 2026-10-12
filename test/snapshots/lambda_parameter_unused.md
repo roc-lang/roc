@@ -44,7 +44,7 @@ UNDERSCORE VARIABLE USED - lambda_parameter_unused.md:9:22:9:29
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "unused")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_unused")

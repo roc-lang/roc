@@ -126,7 +126,7 @@ DUPLICATE DEFINITION - fuzz_crash_024.md:5:5:5:6
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "t")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "fuzz_crash_024.md") (start 5 5) (end 5 6) (annotation error) (line-text "var t= 0"))
 			(line-break)
@@ -137,7 +137,7 @@ DUPLICATE DEFINITION - fuzz_crash_024.md:5:5:5:6
 				(file "fuzz_crash_024.md")
 				(line 2)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "fuzz_crash_024.md") (start 2 5) (end 2 6) (annotation dim) (line-text "var t= ]")))))
 ~~~

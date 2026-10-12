@@ -2225,7 +2225,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const owned_ident = try report.addOwnedString(ident_name);
             try report.headline.addReflowingText("Variable ");
             try report.headline.addUnqualifiedSymbol(owned_ident);
-            try report.headline.addReflowingText(" is defined here and then never used:");
+            try report.headline.addReflowingText(" is defined here and then never used.");
 
             try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore like ");
             const ident_with_underscore = try std.fmt.allocPrint(allocator, "_{s}", .{owned_ident});
@@ -2335,7 +2335,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addType(owned_type_name);
             try report.document.addReflowingText(" was already declared in ");
             try report.document.addSourceLocation(original_region_info, owned_filename);
-            try report.document.addReflowingText(":");
+            try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try report.document.addSourceRegion(
                 original_region_info,
@@ -2372,7 +2372,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addType(owned_type_name);
             try report.document.addReflowingText(" was already declared in ");
             try report.document.addSourceLocation(original_region_info, owned_filename);
-            try report.document.addReflowingText(":");
+            try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try report.document.addSourceRegion(
                 original_region_info,
@@ -2409,7 +2409,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addType(owned_type_name);
             try report.document.addReflowingText(" was already declared in ");
             try report.document.addSourceLocation(original_region_info, owned_filename);
-            try report.document.addReflowingText(":");
+            try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try report.document.addSourceRegion(
                 original_region_info,
@@ -2564,7 +2564,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addRecordField(owned_field_name);
             try report.document.addReflowingText(" was first defined in ");
             try report.document.addSourceLocation(original_region_info, owned_filename);
-            try report.document.addReflowingText(":");
+            try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try report.document.addSourceRegion(
                 original_region_info,
@@ -2737,7 +2737,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const owned_ident = try report.addOwnedString(ident_name);
             try report.headline.addReflowingText("The name ");
             try report.headline.addUnqualifiedSymbol(owned_ident);
-            try report.headline.addReflowingText(" is being redeclared here:");
+            try report.headline.addReflowingText(" is being redeclared here.");
 
             // The primary region shows the new declaration; point below it at the original.
             const owned_filename = try report.addOwnedString(filename);
@@ -2754,7 +2754,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addUnqualifiedSymbol(owned_ident);
             try report.document.addReflowingText(" was already defined in ");
             try report.document.addSourceLocation(original_region_info, owned_filename);
-            try report.document.addReflowingText(":");
+            try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try report.document.addSourceRegion(
                 original_region_info,
@@ -3995,7 +3995,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             var report = try Report.init(allocator, "Trailing `?`", "", .warning);
             try report.headline.addReflowingText("It's usually a mistake to use a postfix ");
             try report.headline.addAnnotated("?", .inline_code);
-            try report.headline.addReflowingText(" on values being returned implicitly at the end of a function like this:");
+            try report.headline.addReflowingText(" on a value being returned implicitly at the end of a function.");
 
             try report.document.addSourceRegion(
                 region_info,
@@ -4147,7 +4147,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addType(owned_other_name);
             try report.document.addReflowingText(" declared in ");
             try report.document.addSourceLocation(other_region_info, owned_filename);
-            try report.document.addReflowingText(":");
+            try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try report.document.addSourceRegion(
                 other_region_info,

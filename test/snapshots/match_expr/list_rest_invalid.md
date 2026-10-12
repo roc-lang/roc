@@ -116,7 +116,7 @@ UNUSED VARIABLE - list_rest_invalid.md:4:17:4:18
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "first")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_first")
@@ -130,7 +130,7 @@ UNUSED VARIABLE - list_rest_invalid.md:4:17:4:18
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "rest")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_rest")
@@ -144,7 +144,7 @@ UNUSED VARIABLE - list_rest_invalid.md:4:17:4:18
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "rest")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_rest")
@@ -158,7 +158,7 @@ UNUSED VARIABLE - list_rest_invalid.md:4:17:4:18
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "last")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_last")
@@ -172,7 +172,7 @@ UNUSED VARIABLE - list_rest_invalid.md:4:17:4:18
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "x")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_x")
@@ -186,7 +186,7 @@ UNUSED VARIABLE - list_rest_invalid.md:4:17:4:18
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "rest")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_rest")
@@ -200,7 +200,7 @@ UNUSED VARIABLE - list_rest_invalid.md:4:17:4:18
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "y")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_y")

@@ -37,7 +37,7 @@ TRAILING `?` - try_suffix_trailing_warning.md:16:23:16:24
 		(headline
 			(reflow "It's usually a mistake to use a postfix ")
 			(annotated code "?")
-			(reflow " on values being returned implicitly at the end of a function like this:"))
+			(reflow " on a value being returned implicitly at the end of a function."))
 		(document
 			(source-region (file "try_suffix_trailing_warning.md") (start 8 11) (end 8 12) (annotation warning) (line-text "\tnested(s)?"))
 			(line-break)
@@ -118,7 +118,7 @@ TRAILING `?` - try_suffix_trailing_warning.md:16:23:16:24
 		(headline
 			(reflow "It's usually a mistake to use a postfix ")
 			(annotated code "?")
-			(reflow " on values being returned implicitly at the end of a function like this:"))
+			(reflow " on a value being returned implicitly at the end of a function."))
 		(document
 			(source-region (file "try_suffix_trailing_warning.md") (start 14 19) (end 14 20) (annotation warning) (line-text "\t\treturn nested(s)?"))
 			(line-break)
@@ -199,7 +199,7 @@ TRAILING `?` - try_suffix_trailing_warning.md:16:23:16:24
 		(headline
 			(reflow "It's usually a mistake to use a postfix ")
 			(annotated code "?")
-			(reflow " on values being returned implicitly at the end of a function like this:"))
+			(reflow " on a value being returned implicitly at the end of a function."))
 		(document
 			(source-region (file "try_suffix_trailing_warning.md") (start 16 23) (end 16 24) (annotation warning) (line-text "\tif s == \"y\" nested(s)? else Ok(s)"))
 			(line-break)

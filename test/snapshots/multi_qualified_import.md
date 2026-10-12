@@ -137,7 +137,7 @@ MOD NOT FOUND - multi_qualified_import.md:3:16:3:23
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "encoder")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_encoder")

@@ -515,7 +515,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "id")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_id")

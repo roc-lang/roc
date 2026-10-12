@@ -92,7 +92,7 @@ MISSING METHOD - Color.md:48:32:48:38
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "is_char_in_hex_range")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_is_char_in_hex_range")

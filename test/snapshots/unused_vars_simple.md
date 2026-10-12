@@ -40,7 +40,7 @@ UNDERSCORE VARIABLE USED - unused_vars_simple.md:7:28:7:34
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "x")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_x")

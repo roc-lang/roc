@@ -567,7 +567,7 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "lue")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_lue")
@@ -594,7 +594,7 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "er")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_er")
@@ -621,7 +621,7 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "est")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_est")
@@ -783,7 +783,7 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "t")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "fuzz_crash_020.md") (start 97 2) (end 97 3) (annotation error) (line-text "\tt = (123, \"World\", tag, O, (nd, t), [1, 2, 3])"))
 			(line-break)
@@ -794,7 +794,7 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 				(file "fuzz_crash_020.md")
 				(line 88)
 				(column 1))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "fuzz_crash_020.md") (start 88 1) (end 88 2) (annotation dim) (line-text "t = ["))))
 	(report
@@ -960,7 +960,7 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "w")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_w")
@@ -974,7 +974,7 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "i")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_i")
@@ -988,7 +988,7 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "rd")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_rd")
@@ -1002,7 +1002,7 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "t")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_t")

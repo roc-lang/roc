@@ -112,7 +112,7 @@ DOES NOT EXIST - qualified_type_canonicalization.md:36:25:36:38
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "color")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_color")
@@ -149,7 +149,7 @@ DOES NOT EXIST - qualified_type_canonicalization.md:36:25:36:38
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "err")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_err")

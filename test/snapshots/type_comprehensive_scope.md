@@ -89,7 +89,7 @@ UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
 				(file "type_comprehensive_scope.md")
 				(line 16)
 				(column 1))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "type_comprehensive_scope.md") (start 16 1) (end 16 48) (annotation dim) (line-text "Node(a) : { value: a, children: List(Tree(a)) }"))))
 	(report
@@ -118,7 +118,7 @@ UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
 				(file "type_comprehensive_scope.md")
 				(line 13)
 				(column 1))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "type_comprehensive_scope.md") (start 13 1) (end 13 37) (annotation dim) (line-text "Tree(a) : [Branch(Node(a)), Leaf(a)]"))))
 	(report
@@ -139,7 +139,7 @@ UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
 				(file "type_comprehensive_scope.md")
 				(line 7)
 				(column 1))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "type_comprehensive_scope.md") (start 7 1) (end 7 33) (annotation dim) (line-text "Person : { name: Str, age: U64 }"))))
 	(report

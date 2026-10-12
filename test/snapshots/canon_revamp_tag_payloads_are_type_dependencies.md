@@ -40,7 +40,7 @@ MUTUALLY RECURSIVE TYPE ALIASES - canon_revamp_tag_payloads_are_type_dependencie
 				(file "canon_revamp_tag_payloads_are_type_dependencies.md")
 				(line 2)
 				(column 1))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "canon_revamp_tag_payloads_are_type_dependencies.md") (start 2 1) (end 2 6) (annotation dim) (line-text "B : A"))))
 	(report
@@ -69,7 +69,7 @@ MUTUALLY RECURSIVE TYPE ALIASES - canon_revamp_tag_payloads_are_type_dependencie
 				(file "canon_revamp_tag_payloads_are_type_dependencies.md")
 				(line 1)
 				(column 1))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "canon_revamp_tag_payloads_are_type_dependencies.md") (start 1 1) (end 1 13) (annotation dim) (line-text "A : [Tag(B)]")))))
 ~~~

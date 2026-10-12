@@ -39,7 +39,7 @@ UNUSED VARIABLE - rigid_var_instantiation.md:16:5:16:8
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "num")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_num")
@@ -53,7 +53,7 @@ UNUSED VARIABLE - rigid_var_instantiation.md:16:5:16:8
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "str")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_str")
@@ -67,7 +67,7 @@ UNUSED VARIABLE - rigid_var_instantiation.md:16:5:16:8
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "lst")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_lst")
