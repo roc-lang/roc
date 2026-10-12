@@ -14929,13 +14929,65 @@ const Builder = struct {
         return substitution;
     }
 
+    /// An iterator protocol call takes its worker's dictionaries from the
+    /// checked evidence its dispatch selected, exactly as a direct dispatch
+    /// call does: a requirement checking rejected is a `checked_error` slot.
     fn materializeIteratorCallHiddenDictionaryArgs(self: *Builder) Allocator.Error!void {
         for (self.plan.iterator_calls.items, 0..) |call, call_index| {
+            if (self.plan.workers.items[@backingInt(call.worker)].hidden_dicts.len == 0) {
+                self.plan.iterator_calls.items[call_index].hidden_dict_args = .{};
+                continue;
+            }
             const arg_types = try self.callSubstitutionTypes(call.arg_substitutions, .operand);
             defer self.allocator.free(arg_types);
-            self.plan.iterator_calls.items[call_index].hidden_dict_args =
-                try self.materializeWorkerCallHiddenDictionaryArgs(call.worker, call.caller, arg_types, call.ret_type);
+            const view = self.moduleForId(call.module);
+            const node_id = iteratorCallEvidenceNode(view, call);
+            const node = view.static_dispatch_plans.evidenceNode(node_id);
+            // A target reached through a procedure alias derives its evidence
+            // from its callable, related to the call's function type.
+            const relation: ?Span = if (node.nested == .from_callable and node.subst.len == 0) blk: {
+                const call_rep = self.plan.repForSourceType(call.source_fn_type) orelse
+                    boxyPlanInvariant("boxy iterator call function type was not analyzed");
+                break :blk try self.storedUseSchemeRepSubstitutions(self.plan.workers.items[@backingInt(call.worker)].rep, call_rep);
+            } else null;
+            var machine = DictionaryArgsMachine{};
+            defer machine.deinit(self.allocator);
+            self.plan.iterator_calls.items[call_index].hidden_dict_args = if (try self.beginDictionaryCallArgs(&machine, .{
+                .worker_id = call.worker,
+                .caller_id = call.caller,
+                .arg_types = arg_types,
+                .ret_type = call.ret_type,
+                .evidence_view = view,
+                .evidence = switch (node.nested) {
+                    .resolved => view.static_dispatch_plans.nestedEvidence(node),
+                    .from_callable => null,
+                },
+                .scheme_substitution = self.evidenceEdgeSchemeSubstitution(call.worker, .{ .module = call.module, .node = node_id }),
+                .relation = relation,
+                .env = 0,
+            })) |span| span else blk: {
+                try self.runDictionaryArgs(&machine);
+                break :blk machine.span_result;
+            };
         }
+    }
+
+    /// The evidence node an iterator protocol call's dispatch selected.
+    fn iteratorCallEvidenceNode(view: ModuleView, call: IteratorCallPlan) static_dispatch.EvidenceNodeId {
+        const for_plan = view.static_dispatch_plans.iterator_for_plans[@backingInt(call.for_plan)];
+        const dispatch = switch (call.kind) {
+            .iter => for_plan.iter,
+            .next => for_plan.next,
+        };
+        return switch (dispatch.resolution) {
+            .direct_closed, .direct_parametric => |direct| direct.evidence,
+            .direct_pending => boxyPlanInvariant("unfinalized iterator call reached Boxy planning"),
+            .evidence_dependent,
+            .structural,
+            .checked_error,
+            .@"unreachable",
+            => boxyPlanInvariant("planned iterator call did not select a direct target"),
+        };
     }
 
     fn materializeGeneratedCodecCallHiddenDictionaryArgs(self: *Builder) Allocator.Error!void {
