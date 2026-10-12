@@ -17750,11 +17750,16 @@ lifetime and is not the shared-memory IPC transport.
 
 Recursive layout commitment interns unrolled copies of recursive nodes
 before selecting boxed slots. Once a recursive component has exact structural
-keys, its nodes also record their one-step encodings with settled child digests.
+keys, its nodes also record their one-step encodings with settled child digests,
+and the store keeps the one-step shape of every member of the settled group.
 An acyclic node with that same encoding inherits the recursive node's key and
-representation. Thus an unrolled record and its recursive counterpart commit
-the same field storage; graph sharing cannot make one inline and the other
-boxed. Procedure reuse by solved type identity consumes this consistent layout
+representation. A cyclic component that refers into a settled group (a copy of
+a recursive type unrolled through one of its own recursive references) is
+paired coinductively against the group's member shapes and inherits the
+group's keys when every member pairs. Thus an unrolled record and its recursive
+counterpart commit the same field storage, and two spellings of one recursive
+type commit the same layout whether they meet in one graph or in separate
+commits; graph sharing cannot make one inline and the other boxed. Procedure reuse by solved type identity consumes this consistent layout
 commitment.
 
 Layout selection is the first stage that chooses runtime encodings:
