@@ -7707,10 +7707,10 @@ const Builder = struct {
                 .zst, .erased => {},
                 .primitive => flags = flags.merge(demand.builtinFlags()),
                 .named => |named| {
-                    flags = flags.merge(demand.nominalFlags(
+                    // An alias is transparent: its backing carries its reach.
+                    if (named.kind != .alias) flags = flags.merge(demand.nominalFlags(
                         self.program.names.moduleIdentityBytes(named.def.module),
-                        self.program.names.typeNameText(named.def.type_name),
-                        named.def.source_decl,
+                        named.def.source_decl orelse Common.invariant("nominal type had no source declaration"),
                     ));
                     if (named.builtin_owner != null) flags = flags.merge(demand.builtinFlags());
                     for (types.span(named.args)) |arg| try pending.append(self.allocator, arg);
