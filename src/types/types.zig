@@ -47,8 +47,10 @@ test {
     // index (4B); expect effects live in checker-owned slots because they belong
     // to call occurrences, not copied type constraints. The optional derived-map
     // payload selection adds its tag, payload index, and optional discriminant
-    // without affecting type identity.
-    try std.testing.expectEqual(88, @sizeOf(StaticDispatchConstraint));
+    // without affecting type identity. Interpolation metadata records whose
+    // source its regions point into, so reports never render another module's
+    // positions against this module's source.
+    try std.testing.expectEqual(92, @sizeOf(StaticDispatchConstraint));
     // Directed effect dependencies must survive type generalization,
     // instantiation, and cross-module copying, so they live with the function
     // payload rather than in checker-only side state.
@@ -1151,13 +1153,28 @@ pub const StaticDispatchConstraint = struct {
     };
 
     pub const InterpolationMetadata = struct {
-        expr_region: OptRegion = OptRegion.none,
-        item_var: Var = no_var,
-        interpolated_parts: InterpolationPartMetadata.SafeList.Range = .empty(),
+        expr_region: OptRegion,
+        item_var: Var,
+        interpolated_parts: InterpolationPartMetadata.SafeList.Range,
+        /// Whose source `expr_region` and the parts' regions point into.
+        regions: RegionSource,
 
         const no_var: Var = @fromBackingInt(@intCast(std.math.maxInt(u32)));
 
-        pub const none = InterpolationMetadata{};
+        /// A module can render only its own source positions. Cross-module
+        /// copying keeps the defining module's positions, so a report about an
+        /// imported copy points at the use that instantiated it instead.
+        pub const RegionSource = enum(u8) {
+            this_module,
+            imported,
+        };
+
+        pub const none = InterpolationMetadata{
+            .expr_region = OptRegion.none,
+            .item_var = no_var,
+            .interpolated_parts = .empty(),
+            .regions = .this_module,
+        };
 
         pub fn isPresent(self: InterpolationMetadata) bool {
             return self.expr_region.get() != null;

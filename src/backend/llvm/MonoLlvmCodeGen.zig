@@ -397,11 +397,6 @@ pub const MonoLlvmCodeGen = struct {
     /// one subprogram per proc, and per-statement line locations from the
     /// LIR store's source-location tables.
     emit_debug_info: bool = false,
-    /// True when the module is compiled without LLVM optimization. LLVM 22's
-    /// x86 backend drops the stack-passed arguments of a `musttail` call at
-    /// that level, so frame-replacing calls are marked `tail` instead;
-    /// `tailcc` still guarantees they are tail calls.
-    unoptimized: bool = false,
     /// Emit local variable declarations for source-level debugger inspection.
     emit_local_debug_info: bool = false,
     /// Build-only default-platform Linux executables link a small runtime
@@ -1902,7 +1897,11 @@ pub const MonoLlvmCodeGen = struct {
         const owned = try arena.dupe(layout.Idx, arg_layouts);
         self.allocator.free(arg_layouts);
         const lowered = layout.abi.lower(arena, self.layouts(), self.abiTarget(), owned, proc.ret_layout, false) catch return error.OutOfMemory;
-        const tail_args = try self.tailArgs(arena, proc, lowered, owned);
+        const scratch: TailScratch = if (proc.tail_group) |group| blk: {
+            if (@backingInt(group) >= self.tail_scratch.items.len) llvmInvariantFmt("tail group {d} has no recorded argument storage", .{@backingInt(group)});
+            break :blk self.tail_scratch.items[@backingInt(group)];
+        } else .{};
+        const tail_args = try self.tailArgs(arena, proc, lowered, owned, scratch.size > 0);
         var cursor: u32 = if (lowered.ret == .indirect) 1 else 0;
         const args_start = cursor;
         for (lowered.args, tail_args.stored) |placement, stored| {
@@ -1910,10 +1909,6 @@ pub const MonoLlvmCodeGen = struct {
         }
         const desc_index: ?u32 = if (proc.runtime_ret_desc != null) cursor else null;
         if (desc_index != null) cursor += 1;
-        const scratch: TailScratch = if (proc.tail_group) |group| blk: {
-            if (@backingInt(group) >= self.tail_scratch.items.len) llvmInvariantFmt("tail group {d} has no recorded argument storage", .{@backingInt(group)});
-            break :blk self.tail_scratch.items[@backingInt(group)];
-        } else .{};
         return .{
             .lowered = lowered,
             .arg_layouts = owned,
@@ -1926,53 +1921,30 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     /// Lay out `proc`'s arguments in its tail group's storage: consecutive,
-    /// each at its own alignment. On AArch64 a tail-group member also stores
-    /// every argument that would otherwise travel on the stack, so its `tailcc`
-    /// function never pops stack arguments: LLVM's AArch64 backend can address
-    /// a spill reload placed between such a call and the caller's stack
-    /// readjustment from the stack pointer before the pop (#12191).
+    /// each at its own alignment. A tail-group member also stores every
+    /// argument its target's argument registers cannot hold, so its `tailcc`
+    /// function never takes stack arguments: LLVM's x86-64 backend emits a
+    /// `musttail` call without storing its stack arguments, and its AArch64
+    /// backend can address a spill reload placed between such a call and the
+    /// caller's stack readjustment from the stack pointer before the pop
+    /// (#12191).
     fn tailArgs(
         self: *MonoLlvmCodeGen,
         arena: std.mem.Allocator,
         proc: LirProcSpec,
         lowered: layout.abi.LoweredCall,
         arg_layouts: []const layout.Idx,
+        group_storage: bool,
     ) Error!TailArgs {
         const offsets = try arena.alloc(u32, lowered.args.len);
         @memset(offsets, 0);
         const stored = try arena.alloc(bool, lowered.args.len);
         @memset(stored, false);
-        if (proc.tail_group != null and self.target.cpu.arch == .aarch64 and !self.usesTailDrivers()) {
-            // x0-x7 and v0-v7 carry arguments (an indirect result uses x8).
-            // The group storage pointer and any descriptor pointer follow the
+        if (proc.tail_group != null and !self.usesTailDrivers()) {
+            // Any descriptor pointer and the group storage pointer follow the
             // arguments, so their registers are reserved up front.
-            const reserved: u32 = 1 + @as(u32, @intFromBool(proc.runtime_ret_desc != null));
-            const gp_limit: u32 = 8 - reserved;
-            var gp_used: u32 = 0;
-            var simd_used: u32 = 0;
-            for (lowered.args, stored) |placement, *is_stored| {
-                var gp: u32 = 0;
-                var simd: u32 = 0;
-                var first_gp = gp_used;
-                switch (placement) {
-                    .none => {},
-                    .indirect => gp = 1,
-                    .registers => |registers| {
-                        for (registers.pieces) |piece| switch (piece.class) {
-                            .integer => gp += 1,
-                            .float, .vector => simd += 1,
-                        };
-                        // A 128-bit integer may start at an even register.
-                        if (registers.carrier == .integer) first_gp = std.mem.alignForward(u32, gp_used, 2);
-                    },
-                }
-                if (first_gp + gp <= gp_limit and simd_used + simd <= 8) {
-                    if (gp != 0) gp_used = first_gp + gp;
-                    simd_used += simd;
-                } else {
-                    is_stored.* = true;
-                }
-            }
+            const trailing_pointers: u32 = @as(u32, @intFromBool(proc.runtime_ret_desc != null)) + @intFromBool(group_storage);
+            layout.abi.markRegisterOverflow(self.abiTarget(), lowered, trailing_pointers, stored);
         }
         var cursor: TailScratchCursor = .{};
         for (lowered.args, arg_layouts, offsets, stored) |placement, arg_layout, *offset, is_stored| {
@@ -1999,7 +1971,10 @@ pub const MonoLlvmCodeGen = struct {
     };
 
     /// Size every tail group's shared argument storage for its most demanding
-    /// member.
+    /// member. A group needs storage when a member passes an argument in
+    /// memory or has one its registers cannot hold even without a storage
+    /// pointer; only then does every member reserve a register for that
+    /// pointer, which can leave further arguments to the storage.
     fn computeTailScratch(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error!void {
         self.tail_scratch.clearRetainingCapacity();
         var group_count: usize = 0;
@@ -2009,20 +1984,30 @@ pub const MonoLlvmCodeGen = struct {
         self.tail_scratch.appendNTimes(self.allocator, .{}, group_count) catch return error.OutOfMemory;
         // Under tail drivers the arguments travel through static storage.
         if (self.usesTailDrivers()) return;
+        const needs_storage = self.allocator.alloc(bool, group_count) catch return error.OutOfMemory;
+        defer self.allocator.free(needs_storage);
+        @memset(needs_storage, false);
         var arena_state = std.heap.ArenaAllocator.init(self.allocator);
         defer arena_state.deinit();
-        for (procs) |proc| {
-            const group = proc.tail_group orelse continue;
-            const entry = &self.tail_scratch.items[@backingInt(group)];
-            if (proc.is_static_initializer or !fastAbiEligible(proc)) continue;
-            _ = arena_state.reset(.retain_capacity);
-            const arena = arena_state.allocator();
-            const arg_layouts = try self.procArgLayouts(proc, .explicit);
-            defer self.allocator.free(arg_layouts);
-            const lowered = layout.abi.lower(arena, self.layouts(), self.abiTarget(), arg_layouts, proc.ret_layout, false) catch return error.OutOfMemory;
-            const tail_args = try self.tailArgs(arena, proc, lowered, arg_layouts);
-            entry.size = @max(entry.size, tail_args.scratch.size);
-            entry.alignment = @max(entry.alignment, tail_args.scratch.alignment);
+        for ([_]bool{ false, true }) |group_storage| {
+            for (procs) |proc| {
+                const group = proc.tail_group orelse continue;
+                if (proc.is_static_initializer or !fastAbiEligible(proc)) continue;
+                if (group_storage and !needs_storage[@backingInt(group)]) continue;
+                _ = arena_state.reset(.retain_capacity);
+                const arena = arena_state.allocator();
+                const arg_layouts = try self.procArgLayouts(proc, .explicit);
+                defer self.allocator.free(arg_layouts);
+                const lowered = layout.abi.lower(arena, self.layouts(), self.abiTarget(), arg_layouts, proc.ret_layout, false) catch return error.OutOfMemory;
+                const tail_args = try self.tailArgs(arena, proc, lowered, arg_layouts, group_storage);
+                if (!group_storage) {
+                    if (tail_args.scratch.size > 0) needs_storage[@backingInt(group)] = true;
+                    continue;
+                }
+                const entry = &self.tail_scratch.items[@backingInt(group)];
+                entry.size = @max(entry.size, tail_args.scratch.size);
+                entry.alignment = @max(entry.alignment, tail_args.scratch.alignment);
+            }
         }
     }
 
@@ -4926,8 +4911,7 @@ pub const MonoLlvmCodeGen = struct {
             try call_args.append(self.allocator, self.current_tail_scratch orelse
                 llvmInvariantFmt("frame-replacing call into a tail group from outside it", .{}));
         }
-        const call_kind: LlvmBuilder.Function.Instruction.Call.Kind = if (self.unoptimized) .tail else .musttail;
-        const result = wip.call(call_kind, self.fastCallConv(proc), attrs_wip.finish(builder) catch return error.OutOfMemory, fast.typeOf(builder), fast.toValue(builder), call_args.items, "") catch return error.OutOfMemory;
+        const result = wip.call(.musttail, self.fastCallConv(proc), attrs_wip.finish(builder) catch return error.OutOfMemory, fast.typeOf(builder), fast.toValue(builder), call_args.items, "") catch return error.OutOfMemory;
         if (sig.lowered.ret == .registers) {
             _ = wip.ret(result) catch return error.OutOfMemory;
         } else {
