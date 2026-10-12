@@ -944,6 +944,11 @@ pub const ReportBuilder = struct {
                 if (try self.findFieldDefaultMismatch(mismatch.types)) |fdm| {
                     return self.buildIncompatibleDefaultsReport(mismatch.types, fdm);
                 }
+                // A use that gave one interpolation's values different types
+                // is reported as that, whatever relation exposed it.
+                if (mismatch.interpolation_tie) |tie| {
+                    if (mismatch.leaf) |leaf| return self.buildInterpolationTieReport(tie, leaf);
+                }
                 // All error contexts are now handled via mismatch.context
                 return switch (mismatch.context) {
                     .if_condition => self.buildNonBoolReport(mismatch.types, "if", "condition must evaluate to a"),
@@ -3394,6 +3399,53 @@ pub const ReportBuilder = struct {
         try D.renderSlice(&.{
             D.bytes("Hint:").withAnnotation(.emphasized),
             D.bytes("Add a type annotation saying which type it should be."),
+        }, self, &report);
+
+        return report;
+    }
+
+    /// Build a report for a use that gives one interpolation's values two
+    /// different types: the interpolation converts all of them with one
+    /// `from_interpolation` call, so they share one type.
+    fn buildInterpolationTieReport(
+        self: *Self,
+        tie: problem_mod.InterpolationTie,
+        leaf: TypePair,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Type Mismatch", "", .runtime_error);
+        errdefer report.deinit();
+
+        if (tie.interpolation_region) |interpolation_region| {
+            try D.renderSliceInto(&.{
+                D.bytes("The values interpolated into this string must all have the same type:"),
+            }, self, &report, &report.headline);
+            try self.addSourceHighlightRegion(&report, interpolation_region);
+            try report.document.addLineBreak();
+            try D.renderSlice(&.{D.bytes("But this use gives them different types:")}, self, &report);
+            try report.document.addLineBreak();
+            try self.addSourceHighlightRegion(&report, tie.use_region);
+            try report.document.addLineBreak();
+        } else {
+            try D.renderSliceInto(&.{
+                D.bytes("This use gives different types to values that are interpolated into the same string, so they must all have the same type:"),
+            }, self, &report, &report.headline);
+            try self.addSourceHighlightRegion(&report, tie.use_region);
+        }
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{D.bytes("One of them has the type:")}, self, &report);
+        try report.document.addLineBreaks(2);
+        try report.document.addCodeBlock(try report.addOwnedString(self.getFormattedString(leaf.expected_snapshot)));
+        try report.document.addLineBreaks(2);
+        try D.renderSlice(&.{D.bytes("But another has the type:")}, self, &report);
+        try report.document.addLineBreaks(2);
+        try report.document.addCodeBlock(try report.addOwnedString(self.getFormattedString(leaf.actual_snapshot)));
+        try report.document.addLineBreaks(2);
+        try D.renderSlice(&.{
+            D.bytes("Hint:").withAnnotation(.emphasized),
+            D.bytes("Convert the values to one type before interpolating them, for example with"),
+            D.bytes(".to_str()").withAnnotation(.inline_code),
+            D.bytes(".").withNoPrecedingSpace(),
         }, self, &report);
 
         return report;
