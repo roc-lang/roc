@@ -7422,6 +7422,25 @@ const CheckedTypeKeyDigester = struct {
     }
 };
 
+/// Canonical keys of any checked types in one store, published roots or
+/// not. Keys persist across requests, so the store must not change while
+/// this is alive.
+pub const CheckedTypeKeys = struct {
+    digester: CheckedTypeKeyDigester,
+
+    pub fn init(allocator: Allocator, names: *const canonical.CanonicalNameStore, store: *const CheckedTypeStore) CheckedTypeKeys {
+        return .{ .digester = CheckedTypeKeyDigester.init(allocator, names, store, &.{}, &.{}) };
+    }
+
+    pub fn deinit(self: *CheckedTypeKeys) void {
+        self.digester.deinit();
+    }
+
+    pub fn key(self: *CheckedTypeKeys, ty: CheckedTypeId) Allocator.Error!canonical.CanonicalTypeKey {
+        return (try self.digester.keyInfo(ty)).key;
+    }
+};
+
 /// One substitution applied across any number of clones into one store:
 /// each formal stands for its actual. It keeps each cloned source root's
 /// image, so a root reached again reuses it, and the substituted keys
@@ -7840,7 +7859,9 @@ const CheckedTypeKeyAdapter = struct {
     }
 };
 
-fn collectCheckedIdentityRootsInKeyOrder(
+/// The identity variables reachable from `root`, in the order its canonical
+/// key encodes them. Caller owns the returned slice.
+pub fn collectCheckedIdentityRootsInKeyOrder(
     allocator: Allocator,
     store: *const CheckedTypeStore,
     names: *const canonical.CanonicalNameStore,
@@ -19509,6 +19530,7 @@ const EvidencePass = struct {
         self.plan_table.site_substitutions = try self.site_substitutions.toOwnedSlice(self.allocator);
         self.plan_table.template_root_evidence = try self.allocator.dupe(?artifact_serialize.Span, self.template_root_evidence);
         try @import("codec_identity.zig").intern(self.allocator, self.checked_types.store.view(), self.plan_table);
+        try @import("codec_identity.zig").digestContents(self.allocator, self.import_views.current_owner, &self.checked_types.store, self.names, self.plan_table);
         if (builtin.mode == .debug) try self.debugVerifyGeneratedCodecRoleAgreement();
     }
 
@@ -40604,8 +40626,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x74, 0x27, 0x26, 0x0D, 0x88, 0x5B, 0xA9, 0xE0, 0xB2, 0xD1, 0x2B, 0xE9, 0x20, 0x90, 0xEE, 0x9D,
-        0x5C, 0x2C, 0x6D, 0xFA, 0xF8, 0x52, 0x43, 0x6C, 0x9E, 0x73, 0x37, 0x75, 0xB4, 0x86, 0x07, 0x24,
+        0x62, 0x79, 0x92, 0xC3, 0x12, 0x5A, 0x3B, 0xAD, 0x78, 0x84, 0x65, 0x97, 0xE3, 0x74, 0x18, 0xE1,
+        0xBC, 0x76, 0xFC, 0x51, 0x0E, 0x33, 0xBA, 0x13, 0x9F, 0x44, 0xD1, 0x3C, 0x70, 0x19, 0x8B, 0x54,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
