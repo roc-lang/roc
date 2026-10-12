@@ -20307,6 +20307,9 @@ its existing value-flow edges once per candidate; validation and emission consum
 that classification. Tracked sources forward valid metadata, while sources
 entering the chain establish metadata for their actual allocation. A merged
 local's membership in the chain is not evidence about all of its definitions.
+A loop-parameter write that brings an outside list into the chain also prevents
+slack-based loop versioning: its new allocation may have less spare capacity
+than the loop head measured, even when that write measures fresh metadata.
 
 Metadata forwarding also requires linear value use. Pure single-definition
 aliases belong to the same logical value; join writes, merged definitions,
