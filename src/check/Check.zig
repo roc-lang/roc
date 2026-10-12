@@ -683,6 +683,13 @@ erroneous_value_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .empty,
 /// become an explicit runtime error before checked-body construction, because
 /// its interface is erroneous independently of any value expression.
 erroneous_statements: std.AutoHashMapUnmanaged(CIR.Statement.Idx, ?CIR.Expr.Idx) = .empty,
+/// `for` loops whose iterable was not erroneous when the loop was checked.
+/// The iterable's rejection can be decided later (a literal bound converts
+/// only once the loop body relates the item type), and the erroneous-value
+/// sweep then retires the loop exactly as an iterable known to be erroneous
+/// up front would: the loop binds nothing and never iterates, so it evaluates
+/// its iterable and crashes.
+late_rejectable_for_loops: std.ArrayListUnmanaged(LateRejectableForLoop) = .empty,
 /// Top-level destructuring definitions whose pattern a judgment made after
 /// the pattern was checked rejected (see `rejectPatternFailureOwner`). The
 /// erroneous-value sweep retires each through `rejectTopLevelDestructure`.
@@ -6449,18 +6456,15 @@ fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifi
     // unification owns each obligation's boundary-time resolution.
     const failure_expr = self.discarded_binding_rhs_expr orelse self.instantiation_source_expr;
     for (self.unify_scratch.deferred_constraints.items.items) |deferred_constraint| {
-        var owned_constraint = deferred_constraint;
-        if (failure_expr) |expr_idx| {
-            if (owned_constraint.failure_expr == .none) {
-                for (self.types.sliceStaticDispatchConstraints(owned_constraint.constraints)) |constraint| {
-                    if (constraint.origin == .where_clause) {
-                        owned_constraint.failure_expr = .from(@backingInt(expr_idx));
-                        break;
-                    }
-                }
-            }
+        const expr_idx = failure_expr orelse {
+            try self.enqueueDeferredDispatchConstraint(env, deferred_constraint, owner);
+            continue;
+        };
+        if (deferred_constraint.failure_expr != .none) {
+            try self.enqueueDeferredDispatchConstraint(env, deferred_constraint, owner);
+            continue;
         }
-        try self.enqueueDeferredDispatchConstraint(env, owned_constraint, owner);
+        try self.enqueueUseOwnedDeferredConstraint(env, deferred_constraint, expr_idx, owner);
     }
 
     // Ensure arrays are in sync
@@ -10915,6 +10919,13 @@ const FreshRank = enum { current, target };
 /// Unify `target_var` against freshly-built `content`. When `target_var` is a
 /// root flex placeholder we mutate its descriptor in place (the common case),
 /// saving a typeslot and a full unification run.
+fn isUnconstrainedFlex(content: types_mod.Content) bool {
+    return switch (content) {
+        .flex => |flex| flex.constraints.isEmpty(),
+        .rigid, .alias, .structure, .field_presence, .err => false,
+    };
+}
+
 fn unifyWithFresh(
     self: *Self,
     target_var: Var,
@@ -10928,10 +10939,12 @@ fn unifyWithFresh(
     const resolved_target = self.types.resolveVar(target_var);
     switch (rank_policy) {
         .current => {
-            if (resolved_target.is_root and resolved_target.desc.rank == env.rank() and resolved_target.desc.content == .flex) {
+            if (resolved_target.is_root and resolved_target.desc.rank == env.rank() and isUnconstrainedFlex(resolved_target.desc.content)) {
                 // The vast majority of the time, we call unify with on a placeholder
                 // CIR var. In this case, we can safely replace the type descriptor
-                // directly, saving a typeslot and unifcation run
+                // directly, saving a typeslot and unifcation run. A flex that
+                // carries static-dispatch constraints (a literal's conversion)
+                // must unify, so the constraints are checked against `content`.
                 var desc = resolved_target.desc;
                 desc.content = content;
                 try self.types.dangerousSetVarDesc(target_var, desc);
@@ -10948,7 +10961,7 @@ fn unifyWithFresh(
             _ = try self.unify(target_var, fresh_var, env);
         },
         .target => {
-            if (resolved_target.is_root and resolved_target.desc.content == .flex) {
+            if (resolved_target.is_root and isUnconstrainedFlex(resolved_target.desc.content)) {
                 var desc = resolved_target.desc;
                 desc.content = content;
                 try self.types.dangerousSetVarDesc(target_var, desc);
@@ -13229,6 +13242,24 @@ fn instantiatedConstraintUseExpr(self: *const Self, constraint: StaticDispatchCo
     return null;
 }
 
+/// Whether this constraint is a copy an instantiation made out of a
+/// generalized scheme (see `instantiatedConstraintUseExpr`). Only failure
+/// paths ask.
+fn constraintWasInstantiated(self: *const Self, constraint: StaticDispatchConstraint) bool {
+    if (self.constraintIsLiteralConversion(constraint)) {
+        for (self.instantiated_literal_conversion_uses.items) |copied| {
+            if (copied.fn_var == constraint.fn_var) return true;
+        }
+        return false;
+    }
+    for (self.instantiation_dispatchers.items) |dispatcher| {
+        for (self.types.sliceStaticDispatchConstraints(dispatcher.constraints)) |copied| {
+            if (copied.fn_var == constraint.fn_var) return true;
+        }
+    }
+    return false;
+}
+
 /// Constraint provenance can name only expressions. A statement or definition
 /// retains its exact owner in the literal plan instead of borrowing its RHS.
 fn literalFailureOwnerExpr(self: *const Self, owner: CIR.Node.Idx) ?CIR.Expr.Idx {
@@ -13745,6 +13776,16 @@ fn poisonConstraintFailure(
 ) Allocator.Error!void {
     if (explicit_expr) |expr_idx| {
         return self.poisonConstraintFailureSource(dispatcher_var, constraint, expr_idx);
+    }
+    // A dispatch introduced directly by a source expression, and never copied
+    // out of a scheme, is owned by that expression even when it shares its
+    // receiver's obligation with a literal conversion (`"a"..="z"` holds the
+    // quote's conversion beside the operator's `range_inclusive_to`): the
+    // operator is the expression that cannot run.
+    if (constraint.origin != .where_clause and !self.constraintWasInstantiated(constraint)) {
+        if (constraintIntroExpr(constraint)) |expr_idx| {
+            return self.poisonConstraintFailureSource(dispatcher_var, constraint, expr_idx);
+        }
     }
 
     // An ownerless definition-site replay can precede an owned instantiation
@@ -18382,6 +18423,48 @@ fn enqueueDeferredDispatchConstraint(
     // resolution reports.
     if (owned.relation_owner.kind == .none) owned.relation_owner = self.relation_owner;
     _ = try env.deferred_static_dispatch_constraints.append(self.gpa, owned);
+}
+
+/// Enqueue an obligation that a unification run while checking `use_expr`
+/// made concrete. Its where-clause constraints belong to that use; its other
+/// constraints keep their own creation-time provenance. One receiver can carry
+/// both kinds (a range's item type holds the `..=` operator's own
+/// `range_inclusive_to` beside `Range.iter`'s `range_iter` where-clause), so a
+/// mixed obligation is enqueued as two, and only the where-clause half names
+/// the use as its owner.
+fn enqueueUseOwnedDeferredConstraint(
+    self: *Self,
+    env: *Env,
+    deferred: DeferredConstraintCheck,
+    use_expr: CIR.Expr.Idx,
+    owner: DeferredDispatchObligationOwner,
+) Allocator.Error!void {
+    const constraints = self.types.sliceStaticDispatchConstraints(deferred.constraints);
+    var where_clause_count: usize = 0;
+    for (constraints) |constraint| {
+        if (constraint.origin == .where_clause) where_clause_count += 1;
+    }
+    if (where_clause_count == 0) return try self.enqueueDeferredDispatchConstraint(env, deferred, owner);
+    var use_owned = deferred;
+    use_owned.failure_expr = .from(@backingInt(use_expr));
+    if (where_clause_count == constraints.len) return try self.enqueueDeferredDispatchConstraint(env, use_owned, owner);
+
+    var where_clauses = try std.ArrayList(StaticDispatchConstraint).initCapacity(self.gpa, where_clause_count);
+    defer where_clauses.deinit(self.gpa);
+    var others = try std.ArrayList(StaticDispatchConstraint).initCapacity(self.gpa, constraints.len - where_clause_count);
+    defer others.deinit(self.gpa);
+    for (constraints) |constraint| {
+        if (constraint.origin == .where_clause) {
+            where_clauses.appendAssumeCapacity(constraint);
+        } else {
+            others.appendAssumeCapacity(constraint);
+        }
+    }
+    use_owned.constraints = try self.types.appendStaticDispatchConstraints(where_clauses.items);
+    var self_owned = deferred;
+    self_owned.constraints = try self.types.appendStaticDispatchConstraints(others.items);
+    try self.enqueueDeferredDispatchConstraint(env, self_owned, owner);
+    try self.enqueueDeferredDispatchConstraint(env, use_owned, owner);
 }
 
 /// Re-defer a dispatch obligation whose method target is an unchecked,
@@ -27713,6 +27796,16 @@ const IteratorLoopExpr = struct {
     expr_var: Var,
 };
 
+/// A `for` loop whose iterable a later judgment may still reject (see
+/// `late_rejectable_for_loops`).
+const LateRejectableForLoop = struct {
+    owner: union(enum) {
+        statement: CIR.Statement.Idx,
+        expr: CIR.Expr.Idx,
+    },
+    iterable: CIR.Expr.Idx,
+};
+
 /// A `for` loop suspended on its iterable or its body.
 const ForLoopCheck = struct {
     kind: CIR.ForKind = .iter,
@@ -27766,6 +27859,15 @@ fn resumeForLoop(self: *Self, state: *ForLoopCheck, env: *Env) std.mem.Allocator
         try self.retireCallLikeExprWithErroneousOperands(expr.expr_idx, expr.expr_var, &.{iterable})
     else
         try self.callLikeOperandsContainErroneousValue(&.{iterable});
+    if (!iterable_is_erroneous) {
+        try self.late_rejectable_for_loops.append(self.gpa, .{
+            .owner = if (state.loop_expr) |expr|
+                .{ .expr = expr.expr_idx }
+            else
+                .{ .statement = @fromBackingInt(@intCast(@backingInt(state.loop_node))) },
+            .iterable = iterable,
+        });
+    }
     const iterator_var = try self.mkForLoopSequenceVar(state.kind, item_var, env, iterable_region);
     const iter_method = try @constCast(self.cir).insertIdent(base.Ident.for_text(switch (state.kind) {
         .iter => "iter",
@@ -29437,8 +29539,6 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
                 return self.requestIfChild(state, branch.body, expected.forBranchBody(), is_call_arg, is_immediate_callee, true);
             },
             .after_remaining_body => {
-                const branch = self.cir.store.getIfBranch(branches[state.remaining_index]);
-                try self.markErroneous(ModuleEnv.varFrom(branch.body));
                 state.remaining_index += 1;
                 state.phase = if (state.remaining_index < branches.len)
                     .schedule_remaining_cond
@@ -29668,7 +29768,9 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
             const branch = self.cir.store.getMatchBranch(branch_idxs[branch_cur_index]);
 
             if (state.checking_other_branches) {
-                try self.markErroneous(ModuleEnv.varFrom(branch.value));
+                // The branch is not related to the others. Its value's class
+                // can be shared with a binder (a lookup), so it is left as
+                // its own checking solved it.
             } else if (branch_cur_index == 0) {
                 state.val_var = if (self.branchValueIsErroneous(branch.value))
                     try self.fresh(env, expr_region)
@@ -29941,11 +30043,13 @@ fn beginMatchBranch(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env)
         for (branch_ptrn_idxs, 0..) |other_branch_ptrn_idx, other_cur_ptrn_index| {
             // Check the pattern's sub types
             const other_branch_ptrn = self.cir.store.getMatchBranchPattern(other_branch_ptrn_idx);
-            if (!try self.checkPattern(other_branch_ptrn.pattern, .{ .row_openness = .open, .failure_owner = ModuleEnv.nodeIdxFrom(expr_idx) }, env)) state.had_type_error = true;
+            const valid_pattern = try self.checkPattern(other_branch_ptrn.pattern, .{ .row_openness = .open, .failure_owner = ModuleEnv.nodeIdxFrom(expr_idx) }, env);
+            if (!valid_pattern) state.had_type_error = true;
             if (state.scrutinee_erroneous) try self.markPatternBindingsErroneous(other_branch_ptrn.pattern);
 
-            // Check the pattern against the cond
-            if (!state.cond_always_crashes) {
+            // Check the pattern against the cond. A rejected pattern's class
+            // belongs to the pattern alone.
+            if (valid_pattern and !state.cond_always_crashes) {
                 const other_branch_ptrn_var = ModuleEnv.varFrom(other_branch_ptrn.pattern);
                 _ = try self.unifyInContext(state.ptrn_target_var, other_branch_ptrn_var, env, .{ .match_pattern = .{
                     .branch_index = @intCast(branch_cur_index),
@@ -29967,11 +30071,15 @@ fn beginMatchBranch(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env)
     // pattern unifications short-circuit rather than cascading.)
     for (branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
         const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
-        if (!try self.checkPattern(branch_ptrn.pattern, .{ .row_openness = .open, .failure_owner = ModuleEnv.nodeIdxFrom(expr_idx) }, env)) state.had_type_error = true;
+        const valid_pattern = try self.checkPattern(branch_ptrn.pattern, .{ .row_openness = .open, .failure_owner = ModuleEnv.nodeIdxFrom(expr_idx) }, env);
+        if (!valid_pattern) state.had_type_error = true;
         // Matching an erroneous value binds nothing.
         if (state.scrutinee_erroneous) try self.markPatternBindingsErroneous(branch_ptrn.pattern);
 
-        if (!state.cond_always_crashes) {
+        // A rejected pattern's class is `.err` and belongs to the pattern
+        // alone: relating it would write that error into the scrutinee's
+        // class, which the scrutinee shares with whatever produced it.
+        if (valid_pattern and !state.cond_always_crashes) {
             const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
             const ptrn_result = try self.unifyInContext(state.ptrn_target_var, branch_ptrn_var, env, .{ .match_pattern = .{
                 .branch_index = @intCast(branch_cur_index),
@@ -34255,6 +34363,40 @@ fn poisonErroneousValueUses(self: *Self) Allocator.Error!void {
     }
 }
 
+/// Retire each `for` loop whose iterable was rejected after the loop was
+/// checked. Its `iter` and `next` plans were resolved against the iterable's
+/// type, but an erroneous iterable crashes before either runs, so the loop is
+/// replaced by the evaluation of its iterable, as when the iterable is known
+/// to be erroneous while the loop is checked.
+fn retireForLoopsOverLateRejectedIterables(self: *Self) Allocator.Error!void {
+    var index: usize = 0;
+    while (index < self.late_rejectable_for_loops.items.len) {
+        const loop = self.late_rejectable_for_loops.items[index];
+        if (!try self.valueIsErroneous(loop.iterable)) {
+            index += 1;
+            continue;
+        }
+        _ = self.late_rejectable_for_loops.swapRemove(index);
+        // The sweep below replaces the iterable before it retires the
+        // statement that evaluates it.
+        try self.erroneous_value_exprs.put(self.gpa, loop.iterable, {});
+        switch (loop.owner) {
+            .statement => |stmt_idx| {
+                const recorded = try self.erroneous_statements.getOrPut(self.gpa, stmt_idx);
+                if (!recorded.found_existing) recorded.value_ptr.* = loop.iterable;
+            },
+            .expr => |expr_idx| {
+                if (self.cir.store.getExpr(expr_idx) == .e_runtime_error) continue;
+                const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+                    .region = self.cir.store.getExprRegion(expr_idx),
+                } });
+                try self.replaceRejectedOperationWithRuntimeError(expr_idx, diagnostic_idx);
+                try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+            },
+        }
+    }
+}
+
 /// A consumer that rejected a lookup poisoned only that use's own occurrence
 /// (`Store.poisonOnMismatch`), so the referenced binding keeps its type and the
 /// use alone becomes the runtime error.
@@ -34268,6 +34410,8 @@ fn retireErroneousLookupOccurrence(self: *Self, expr_idx: CIR.Expr.Idx) Allocato
 }
 
 fn poisonErroneousValueExprs(self: *Self) Allocator.Error!void {
+    try self.retireForLoopsOverLateRejectedIterables();
+
     var rejected_defs = self.rejected_destructure_defs.keyIterator();
     while (rejected_defs.next()) |def_idx| {
         const def = self.cir.store.getDef(def_idx.*);
@@ -48144,7 +48288,8 @@ fn literalTargetIsBuiltinDirect(
 /// have selected the same method. Such a relation's dispatch shares that
 /// relation's instantiation, and checked publication keys it by these exact
 /// raw vars rather than by union-find roots, which unrelated dispatches can
-/// come to share.
+/// come to share. A relation folded into a rejected relation is rejected
+/// instead of published.
 fn publishDispatchRelationMerges(self: *Self) Allocator.Error!void {
     const merges = self.types.static_dispatch_relation_merges.items;
     if (merges.len == 0) return;
@@ -48220,6 +48365,12 @@ fn publishDispatchRelationMerges(self: *Self) Allocator.Error!void {
         }
 
         const retained = selected orelse continue;
+        // A relation folded into a rejected relation shares its rejection:
+        // the method it would dispatch through failed to relate to it.
+        if (self.types.varStaticDispatchRejected(retained)) {
+            try self.markStaticDispatchFnRejected(dropped);
+            continue;
+        }
         self.cir.dispatch_relation_merges.items.appendAssumeCapacity(.{
             .dropped_fn_var = @backingInt(dropped),
             .retained_fn_var = @backingInt(retained),

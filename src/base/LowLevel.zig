@@ -1372,3 +1372,12 @@ pub const LowLevel = enum(u16) {
         return mask;
     }
 };
+
+// Regression test for https://github.com/roc-lang/roc/issues/12204
+// No builtin produces a single-element list split, and the LLVM backend has no
+// lowering for one, so `LowLevel` must not declare `list_split_first` or
+// `list_split_last`.
+test "LowLevel declares no list_split_first or list_split_last op" {
+    try std.testing.expect(!@hasField(LowLevel, "list_split_first"));
+    try std.testing.expect(!@hasField(LowLevel, "list_split_last"));
+}
