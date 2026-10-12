@@ -306,8 +306,9 @@ const ContentDigester = struct {
     }
 
     fn writeU32(self: *ContentDigester, value: u32) void {
-        const little = std.mem.nativeToLittle(u32, value);
-        self.hasher.update(std.mem.asBytes(&little));
+        var bytes: [4]u8 = undefined;
+        std.mem.writeInt(u32, &bytes, value, .little);
+        self.hasher.update(&bytes);
     }
 
     fn writeU8(self: *ContentDigester, value: u8) void {
@@ -573,7 +574,7 @@ fn digestTestContract(padding: usize, shared: bool) (Allocator.Error || error{No
     }
     const ty = variables[0];
     var derivations = [_]dispatch.GeneratedCodecDerivation{.{
-        .identity = @fromBackingInt(0),
+        .identity = undefined,
         .kind = .encoder,
         .source_constructor_ty = ty,
         .source_runtime_ty = ty,
@@ -602,6 +603,7 @@ fn digestTestContract(padding: usize, shared: bool) (Allocator.Error || error{No
         .generated_codec_derivations = &derivations,
         .generated_codec_calls = &calls,
     };
+    try intern(gpa, types.view(), &table);
     try digestContents(gpa, .{}, &types, &names, &table);
     return derivations[0].content;
 }

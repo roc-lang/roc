@@ -2949,9 +2949,8 @@ test "codec function evidence identity excludes per-use replay addresses" {
         ty.* = try types.reserveSyntheticTypeRoot(allocator, .{ .bytes = @as([32]u8, @splat(2)) }, true);
         try types.fillSyntheticTypeRoot(allocator, ty.*, .{ .flex = .{} });
     }
-    const derivation_ids = [_]static_dispatch.GeneratedCodecDerivationId{
-        @fromBackingInt(0), @fromBackingInt(1), @fromBackingInt(2),
-    };
+    var derivation_ids: [3]static_dispatch.GeneratedCodecDerivationId = undefined;
+    for (&derivation_ids, 0..) |*id, index| id.* = @fromBackingInt(@intCast(index));
     const Evidence = check.ConstStore.ConstFnEvidence;
     const frames = [_]check.ConstStore.ConstFnEvidenceFrame{
         check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 1),

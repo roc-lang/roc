@@ -311,9 +311,9 @@ pub const ConstFnStructuralEvidence = struct {
         const b = right.checked.?;
         if ((a.generated_codec_content == null) != (b.generated_codec_content == null)) return false;
         const same_origin = if (a.generated_codec_content) |content|
-            std.mem.eql(u8, &content.bytes, &b.generated_codec_content.?.bytes)
+            std.meta.eql(content, b.generated_codec_content.?)
         else
-            std.mem.eql(u8, &a.view.bytes, &b.view.bytes);
+            std.meta.eql(a.view, b.view);
         return same_origin and
             std.meta.eql(a.dispatcher_key, b.dispatcher_key) and
             std.meta.eql(a.callable_key, b.callable_key);
