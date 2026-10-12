@@ -744,7 +744,7 @@ pub fn compute(
         var nominal_nodes = demand.nominals.iterator();
         while (nominal_nodes.next()) |entry| {
             const own = builder.own.items[entry.value_ptr.*];
-            if (own.custom_numeral or own.custom_quote) std.debug.print("ctfe-demand custom-type {s} numeral={} quote={}\n", .{ entry.key_ptr.name, own.custom_numeral, own.custom_quote });
+            if (own.custom_numeral or own.custom_quote) std.debug.print("ctfe-demand custom-type decl={d} numeral={} quote={}\n", .{ entry.key_ptr.source_decl, own.custom_numeral, own.custom_quote });
         }
         std.debug.print("ctfe-demand analysis templates={d} sources={d} reaching={d} custom-types={d}\n", .{
             demand.counters.templates,
