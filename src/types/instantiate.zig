@@ -410,23 +410,24 @@ pub const Instantiator = struct {
     /// Null explicitly reports a rejected declaration; no position is chosen.
     nominal_argument_position: ?struct {
         context: *anyopaque,
-        resolve: *const fn (*anyopaque, NominalType, u32, Polarity) std.mem.Allocator.Error!?Polarity,
+        resolve: *const fn (*anyopaque, NominalType, u32, Polarity) std.mem.Allocator.Error!?NominalArgumentPosition,
     } = null,
     /// Null explicitly reports a rejected declaration, never a phantom formal.
     alias_argument_unused: ?struct {
         context: *anyopaque,
         resolve: *const fn (*anyopaque, Alias, u32) std.mem.Allocator.Error!?bool,
     } = null,
-    /// Each marker's open/closed choice for the copy in progress. Set by
+    /// Each marker's choice for the copy in progress: true opens it (or, for
+    /// `.preserve_one_sided`, keeps it deferred). Set by
     /// `instantiateVarHelp` for the whole copy, so it is null only between
     /// instantiations.
     marker_choices: ?*std.AutoHashMapUnmanaged(Var, bool) = null,
     /// The polarity of the position currently being instantiated. Starts at
     /// the polarity of the instantiation root (callers using
-    /// `.resolve_by_polarity` set it). Each function resets arguments to
-    /// negative and its return to positive; each func frame saves the
-    /// surrounding polarity and re-asserts the stage-appropriate value
-    /// before every child it requests.
+    /// `.resolve_by_polarity` set it). Function argument positions flip it
+    /// and returns keep it; each func frame saves the surrounding polarity
+    /// and re-asserts the stage-appropriate value before every child it
+    /// requests.
     current_polarity: Polarity = .pos,
     /// Where the position currently being instantiated sits relative to the
     /// row the Monotype result-row widening adapter can re-tag. Starts at the
@@ -496,6 +497,16 @@ pub const Instantiator = struct {
         substitute_rigids_flex: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
     };
 
+    /// Where a nominal application's argument stands, from the declaration's
+    /// placement of the formal it is substituted for.
+    pub const NominalArgumentPosition = union(enum) {
+        /// Every occurrence of the formal stands at this polarity.
+        at: Polarity,
+        /// The formal occurs on both sides, so every position in the argument
+        /// does too, at any depth.
+        both,
+    };
+
     /// How to instantiate polarity vars: the marker rigids (named
     /// `types.polarity_var_text`) that alias declarations store as the ext of
     /// extensionless tag unions to defer the open-vs-closed decision to the
@@ -511,14 +522,19 @@ pub const Instantiator = struct {
         /// template (eg an orphan scheme copy), where the use-site polarity is
         /// still unknown.
         preserve,
-        /// Alias construction: retain output rows, close fixed input rows.
-        preserve_output,
+        /// Alias construction: keep each polarity var deferred when all of its
+        /// occurrences stand at one polarity relative to the copy's root, so
+        /// the enclosing alias's own uses decide it, and close one that
+        /// stands at both (one row cannot be open on the output side and
+        /// closed on the input side).
+        preserve_one_sided,
         /// Resolve each polarity var by the polarity of the position it
         /// occupies: open (a fresh unnamed flex, exactly what an implicitly
         /// opened output-position union gets) in positive/output positions,
         /// closed (`[]`) in negative/input positions. The walk starts at
-        /// `current_polarity`; embedded functions establish their own input
-        /// arguments and output returns independently of that position.
+        /// `current_polarity` and flips through the argument positions of
+        /// functions embedded in an alias body, so a callback's result in an
+        /// input position closes while the callback's argument opens.
         resolve_by_polarity,
         /// Like `resolve_by_polarity` for negative positions (closed), but a
         /// marker in a positive position that the result-row widening adapter
@@ -779,6 +795,13 @@ pub const Instantiator = struct {
         defer visited.deinit(allocator);
         var binders: std.ArrayList(Var) = .empty;
         defer binders.deinit(allocator);
+        // Which sides each marker's occurrences stand on. For
+        // `.preserve_one_sided` the sides are the two polarities; otherwise
+        // `first` is an occurrence that permits opening and `second` one
+        // that does not.
+        const Sides = struct { first: bool = false, second: bool = false };
+        var sides: std.AutoHashMapUnmanaged(Var, Sides) = .empty;
+        defer sides.deinit(allocator);
         try pending.append(allocator, .{ .var_ = root, .polarity = self.current_polarity, .reach = self.current_reach });
         while (pending.pop()) |item| {
             const resolved = self.store.resolveVar(item.var_);
@@ -786,9 +809,14 @@ pub const Instantiator = struct {
             if (visit.found_existing) continue;
             switch (resolved.desc.content) {
                 .rigid => |rigid| if (rigid.name.eql(marker_ident)) {
-                    const allows_open = item.polarity == .pos and (self.polarity_var_behavior != .defer_open or item.reach != .nested);
-                    const entry = try choices.getOrPut(allocator, resolved.var_);
-                    entry.value_ptr.* = allows_open and (!entry.found_existing or entry.value_ptr.*);
+                    const entry = try sides.getOrPut(allocator, resolved.var_);
+                    if (!entry.found_existing) entry.value_ptr.* = .{};
+                    const first = switch (self.polarity_var_behavior) {
+                        .preserve_one_sided => item.polarity == .pos,
+                        .resolve_by_polarity, .defer_open => item.polarity == .pos and (self.polarity_var_behavior != .defer_open or item.reach != .nested),
+                        .close, .preserve => unreachable,
+                    };
+                    if (first) entry.value_ptr.first = true else entry.value_ptr.second = true;
                 } else {
                     try self.pushConstraintChoiceItems(Item, &pending, rigid.constraints, item.polarity);
                 },
@@ -813,19 +841,26 @@ pub const Instantiator = struct {
                 },
                 .structure => |flat| switch (flat) {
                     .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                        for (self.store.sliceVars(func.args)) |arg| try pending.append(allocator, .{ .var_ = arg, .polarity = .neg, .reach = .nested });
-                        try pending.append(allocator, .{ .var_ = func.ret, .polarity = .pos, .reach = base.annotation_positions.functionReturnReach(item.reach) });
+                        for (self.store.sliceVars(func.args)) |arg| try pending.append(allocator, .{ .var_ = arg, .polarity = item.polarity.flip(), .reach = .nested });
+                        try pending.append(allocator, .{ .var_ = func.ret, .polarity = item.polarity, .reach = base.annotation_positions.functionReturnReach(item.reach) });
                         for (self.store.sliceVars(func.effect_deps)) |dep| try pending.append(allocator, .{ .var_ = dep, .polarity = item.polarity, .reach = .nested });
                     },
                     .nominal_type => |nominal| for (self.store.sliceNominalArgs(nominal), 0..) |arg, index| {
-                        const polarity = if (self.nominal_argument_position) |provider| (try provider.resolve(provider.context, nominal, @intCast(index), item.polarity)) orelse return false else blk: {
+                        const position: NominalArgumentPosition = if (self.nominal_argument_position) |provider| (try provider.resolve(provider.context, nominal, @intCast(index), item.polarity)) orelse return false else blk: {
                             // A source declaration requires the checker's exact
                             // placement provider; primitives have no body.
                             std.debug.assert(nominal.sourceDeclOptional() == null);
-                            break :blk item.polarity;
+                            break :blk .{ .at = item.polarity };
                         };
                         const reach: AdapterReachPosition = base.annotation_positions.nominalArgumentReach(item.reach, self.nominalIsBuiltinTry(nominal), index);
-                        try pending.append(allocator, .{ .var_ = arg, .polarity = polarity, .reach = reach });
+                        switch (position) {
+                            .at => |polarity| try pending.append(allocator, .{ .var_ = arg, .polarity = polarity, .reach = reach }),
+                            // Visiting the argument at both polarities makes
+                            // every marker in it stand on both sides.
+                            .both => for ([_]Polarity{ .pos, .neg }) |polarity| {
+                                try pending.append(allocator, .{ .var_ = arg, .polarity = polarity, .reach = reach });
+                            },
+                        }
                     },
                     .tuple => |tuple| for (self.store.sliceVars(tuple.elems)) |arg| {
                         try pending.append(allocator, .{ .var_ = arg, .polarity = item.polarity, .reach = .nested });
@@ -850,6 +885,15 @@ pub const Instantiator = struct {
                 .field_presence, .err => {},
             }
         }
+        var marker_sides = sides.iterator();
+        while (marker_sides.next()) |entry| {
+            const seen = entry.value_ptr.*;
+            try choices.put(allocator, entry.key_ptr.*, switch (self.polarity_var_behavior) {
+                .preserve_one_sided => !(seen.first and seen.second),
+                .resolve_by_polarity, .defer_open => seen.first and !seen.second,
+                .close, .preserve => unreachable,
+            });
+        }
         // Checked only in safe builds: in an unchecked build the assertion
         // would let the optimizer assume the lookup succeeds and read the
         // map's storage even when no choice was ever recorded.
@@ -870,7 +914,9 @@ pub const Instantiator = struct {
         var i: u32 = 0;
         while (i < constraints.len()) : (i += 1) {
             const constraint = self.store.static_dispatch_constraints.items.items[@backingInt(constraints.start) + i];
-            try pending.append(allocator, .{ .var_ = constraint.fn_var, .polarity = polarity, .reach = .nested });
+            // A method signature is its own annotation root, generated at the
+            // output polarity whatever position its dispatcher occupies.
+            try pending.append(allocator, .{ .var_ = constraint.fn_var, .polarity = .pos, .reach = .nested });
             if (constraint.interpolation.isPresent()) {
                 const metadata = constraint.interpolation;
                 var part_idx: u32 = 0;
@@ -893,7 +939,7 @@ pub const Instantiator = struct {
         self.marker_choices = &marker_choices;
         defer self.marker_choices = previous_choices;
         switch (self.polarity_var_behavior) {
-            .resolve_by_polarity, .preserve_output, .defer_open => {
+            .resolve_by_polarity, .preserve_one_sided, .defer_open => {
                 if (!try self.collectMarkerChoices(initial_var, &marker_choices)) {
                     const rejected = try self.store.freshFromContentWithRank(.err, self.current_rank);
                     try self.var_map.put(self.store.resolveVar(initial_var).var_, rejected);
@@ -1023,21 +1069,21 @@ pub const Instantiator = struct {
                         // `collectMarkerChoices`, for every marker the copy
                         // can reach. `.close` and `.preserve` decide
                         // independently of position.
-                        const positive = switch (self.polarity_var_behavior) {
+                        const chosen = switch (self.polarity_var_behavior) {
                             .close, .preserve => false,
-                            .resolve_by_polarity, .preserve_output, .defer_open => self.marker_choices.?.get(resolved_var) orelse
+                            .resolve_by_polarity, .preserve_one_sided, .defer_open => self.marker_choices.?.get(resolved_var) orelse
                                 base.invariant("compiler invariant violated: polarity marker reached by instantiation has no marker choice", .{}),
                         };
-                        const opened = self.polarity_var_behavior == .resolve_by_polarity and positive;
+                        const opened = self.polarity_var_behavior == .resolve_by_polarity and chosen;
                         const marker_content: Content = switch (self.polarity_var_behavior) {
                             .close => .{ .structure = .empty_tag_union },
                             .preserve => .{ .rigid = Rigid.init(rigid.name) },
-                            .preserve_output => if (positive)
+                            .preserve_one_sided => if (chosen)
                                 .{ .rigid = Rigid.init(rigid.name) }
                             else
                                 .{ .structure = .empty_tag_union },
-                            .resolve_by_polarity => if (positive) .{ .flex = Flex.init() } else .{ .structure = .empty_tag_union },
-                            .defer_open => if (positive and self.current_reach != .nested)
+                            .resolve_by_polarity => if (chosen) .{ .flex = Flex.init() } else .{ .structure = .empty_tag_union },
+                            .defer_open => if (chosen and self.current_reach != .nested)
                                 .{ .rigid = Rigid.init(rigid.name) }
                             else
                                 .{ .structure = .empty_tag_union },
@@ -1537,7 +1583,7 @@ pub const Instantiator = struct {
             const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
             if (arrived < frame.args_count) {
                 const arg_var = self.store.vars.items.items[frame.args_start + arrived];
-                self.current_polarity = if (self.nominal_argument_position) |provider|
+                const position: NominalArgumentPosition = if (self.nominal_argument_position) |provider|
                     (try provider.resolve(provider.context, frame.nominal, arrived, frame.saved_polarity)) orelse {
                         machine.value_stack.items.len = frame.vars_base;
                         self.current_polarity = frame.saved_polarity;
@@ -1546,7 +1592,11 @@ pub const Instantiator = struct {
                         return true;
                     }
                 else
-                    frame.saved_polarity;
+                    .{ .at = frame.saved_polarity };
+                self.current_polarity = switch (position) {
+                    .at => |polarity| polarity,
+                    .both => .neg,
+                };
                 // A `Try` written as the direct result passes the adapter's
                 // reach to its ERROR row. The ok row is deliberately NOT
                 // reachable: the adapter asserts the ok type is unchanged.
@@ -1577,18 +1627,18 @@ pub const Instantiator = struct {
             const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
             if (arrived < args_count) {
                 const arg_var = self.store.vars.items.items[@backingInt(frame.func.args.start) + arrived];
-                // Each function establishes its own input position. No
+                // Argument positions flip the surrounding polarity. No
                 // position inside a function is adapter-reachable: the adapter
                 // re-tags the result it is generated for, never a row inside a
                 // function that result contains.
-                self.current_polarity = .neg;
+                self.current_polarity = frame.saved_polarity.flip();
                 self.current_reach = .nested;
                 if (!try self.requestVar(arg_var, false)) return false;
                 continue;
             }
             if (arrived == args_count) {
-                // Each function establishes its own output position.
-                self.current_polarity = .pos;
+                // The return position keeps the surrounding polarity.
+                self.current_polarity = frame.saved_polarity;
                 self.current_reach = base.annotation_positions.functionReturnReach(frame.saved_reach);
                 if (!try self.requestVar(frame.func.ret, false)) return false;
                 continue;

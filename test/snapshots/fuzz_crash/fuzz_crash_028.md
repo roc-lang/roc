@@ -202,7 +202,6 @@ UNEXPECTED STATEMENT - fuzz_crash_028.md:40:7:40:8
 UNEXPECTED STATEMENT - fuzz_crash_028.md:40:9:40:10
 UNEXPECTED STATEMENT - fuzz_crash_028.md:41:1:41:2
 UNEXPECTED STATEMENT - fuzz_crash_028.md:48:1:48:5
-EXPECTED RECORD ACCESSOR - fuzz_crash_028.md:103:2:103:5
 UNDECLARED TYPE - fuzz_crash_028.md:29:2:29:5
 UNDECLARED TYPE - fuzz_crash_028.md:30:2:30:5
 UNDECLARED TYPE - fuzz_crash_028.md:32:19:32:21
@@ -261,6 +260,7 @@ MISSING METHOD - fuzz_crash_028.md:68:3:68:8
 MISSING METHOD - fuzz_crash_028.md:70:3:70:8
 TYPE MISMATCH - fuzz_crash_028.md:64:2:64:2
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:95:1:95:34
+TYPE MISMATCH - fuzz_crash_028.md:102:8:102:11
 TOO FEW ARGS - fuzz_crash_028.md:104:2:106:3
 REFERENCE HAS NO VALUE - fuzz_crash_028.md:115:3:115:10
 TYPE MISMATCH - fuzz_crash_028.md:133:5:133:18
@@ -1397,42 +1397,6 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 			(source-region (file "fuzz_crash_028.md") (start 48 1) (end 48 5) (annotation error) (line-text "add_\u{12}ne = |num| {"))))
 	(report
 		(severity runtime_error)
-		(title "Expected Record Accessor")
-		(region (start 103 2) (end 103 5))
-		(headline
-			(reflow "I was parsing access after `.`, and I expected a field name or tuple index."))
-		(document
-			(reflow "Required record access uses ")
-			(annotated code ".name")
-			(reflow ", optional record access uses ")
-			(annotated code ".?name")
-			(reflow ", and tuple access uses ")
-			(annotated code ".0")
-			(reflow ". Accessor names must be lowercase and adjacent to their punctuation.")
-			(line-break)
-			(line-break)
-			(text "For example:")
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "person.name")
-			(line-break)
-			(indent 1)
-			(text "maybe_person.?name")
-			(line-break)
-			(indent 1)
-			(text "pair.0")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(text "I found ")
-			(annotated code "...")
-			(text " here.")
-			(line-break)
-			(line-break)
-			(source-region (file "fuzz_crash_028.md") (start 103 2) (end 103 5) (annotation error) (line-text "\t..."))))
-	(report
-		(severity runtime_error)
 		(title "Undeclared Type")
 		(region (start 29 2) (end 29 5))
 		(headline
@@ -2248,6 +2212,33 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
 	(report
 		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 102 8) (end 102 11))
+		(headline
+			(reflow "This expression produces a value, but it's not being used."))
+		(document
+			(source-region (file "fuzz_crash_028.md") (start 102 8) (end 102 11) (annotation error) (line-text "\t\ttag  Jus"))
+			(line-break)
+			(reflow "It has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[Jus]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "Since this expression is used as a statement, it must evaluate to")
+			(reflow " ")
+			(annotated code "{}")
+			(reflow ".")
+			(line-break)
+			(reflow "If you don't need the value, you can ignore it with")
+			(reflow " ")
+			(annotated code "_ =")
+			(reflow ".")))
+	(report
+		(severity runtime_error)
 		(title "Too Few Args")
 		(region (start 104 2) (end 106 3))
 		(headline
@@ -2919,7 +2910,8 @@ EndOfFile,
 							(e-tag (raw "Blue")))
 						(s-return
 							(e-ident (raw "tag")))
-						(e-malformed (reason "expr_dot_suffix_not_allowed"))
+						(e-tag (raw "Jus"))
+						(e-ellipsis)
 						(e-apply
 							(e-ident (raw "match_time"))
 							(e-ellipsis))
@@ -3178,7 +3170,10 @@ EndOfFile,
 				(s-return
 					(e-lookup-local
 						(p-assign (ident "tag"))))
-				(s-runtime-error (tag "expr_syntax_error"))
+				(s-expr
+					(e-runtime-error (tag "erroneous_value_expr")))
+				(s-expr
+					(e-not-implemented))
 				(s-expr
 					(e-runtime-error (tag "erroneous_value_expr")))
 				(s-runtime-error (tag "erroneous_value_expr"))
@@ -3200,7 +3195,7 @@ EndOfFile,
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 1353) (dispatcher-var 280)
+						(e-interpolation (constraint-fn-var 1355) (dispatcher-var 281)
 							(first
 								(e-literal (string "H, ")))
 							(parts
@@ -3215,10 +3210,8 @@ EndOfFile,
 					(p-assign (ident "n"))
 					(e-runtime-error (tag "ident_not_in_scope"))
 					(e-block
-						(s-runtime-error (tag "erroneous_value_expr")
-							(e-runtime-error (tag "erroneous_value_expr")
-								(e-runtime-error (tag "erroneous_value_expr"))))
-						(e-empty_record)))
+						(e-runtime-error (tag "erroneous_value_expr")
+							(e-runtime-error (tag "erroneous_value_expr")))))
 				(s-let
 					(p-assign (ident "rd"))
 					(e-runtime-error (tag "erroneous_value_expr")
@@ -3257,11 +3250,11 @@ EndOfFile,
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 1536)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 1538)
 									(receiver
 										(e-runtime-error (tag "erroneous_value_expr")))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 1533)
+										(e-dispatch-call (method "times") (constraint-fn-var 1535)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -3276,18 +3269,18 @@ EndOfFile,
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 1569)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 1571)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 1559)
+															(e-dispatch-call (method "plus") (constraint-fn-var 1561)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 1596)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 1598)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 1586)
+															(e-dispatch-call (method "minus") (constraint-fn-var 1588)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -3302,11 +3295,11 @@ EndOfFile,
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 1635)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 1637)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 1632)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 1634)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -3321,12 +3314,12 @@ EndOfFile,
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 1701)
+													(e-dispatch-call (method "ned") (constraint-fn-var 1703)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "od") (constraint-fn-var 1671)
+																		(e-dispatch-call (method "od") (constraint-fn-var 1673)
 																			(receiver
 																				(e-runtime-error (tag "erroneous_value_expr")))
 																			(args)))

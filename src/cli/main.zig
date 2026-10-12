@@ -261,38 +261,73 @@ const CompileTimeObjectCache = struct {
     allocator: Allocator,
     io: std.Io,
     store: pack_store.Store,
+    /// The packs compile-time evaluation publishes from its own programs.
+    compile_time_store: pack_store.Store,
     packs: pack_store.LoadedPacks,
+    /// Whether the provider offers the compile-time store's packs. A dev
+    /// build for the host shares this provider with its runtime program,
+    /// which must be served only runtime-policy code.
+    offers_compile_time_packs: bool = true,
 
     fn bind(context: *anyopaque, build_env: *BuildEnv) void {
         const self: *CompileTimeObjectCache = @ptrCast(@alignCast(context));
-        self.packs.pending = .{ .store = &self.store, .io = self.io, .build_env = build_env };
+        self.packs.pending = .{
+            .store = &self.store,
+            .compile_time_store = if (self.offers_compile_time_packs) &self.compile_time_store else null,
+            .io = self.io,
+            .build_env = build_env,
+        };
     }
 
     fn deinit(context: *anyopaque) void {
         const self: *CompileTimeObjectCache = @ptrCast(@alignCast(context));
         self.packs.deinit();
+        self.compile_time_store.deinit();
         self.store.deinit();
         self.allocator.destroy(self);
     }
 };
+
+/// The store directory name of the packs compile-time evaluation publishes,
+/// in place of an optimization level: their code is lowered under the
+/// compile-time LIR policy, which no runtime build uses.
+const compile_time_pack_policy = "comptime";
 
 /// The compile-time object cache, when a build's own runtime packs are the
 /// same store: a dev build for the host.
 fn sharedCompileTimeObjectCache(build_env: *BuildEnv, target: RocTarget, opt: cli_args.OptLevel) ?*CompileTimeObjectCache {
     if (opt != .dev or target != RocTarget.detectNative()) return null;
     const owner = build_env.compile_time_object_cache_owner orelse return null;
-    return @ptrCast(@alignCast(owner.context));
+    const cache: *CompileTimeObjectCache = @ptrCast(@alignCast(owner.context));
+    // The runtime program reads these offers too.
+    cache.offers_compile_time_packs = false;
+    return cache;
 }
 
 fn attachCompileTimeObjectCache(ctx: *CliCtx, build_env: *BuildEnv, verbose: bool) Allocator.Error!void {
     const store_config = CacheConfig{ .enabled = true, .verbose = verbose, .roc_ctx = ctx.coreCtx() };
-    const store = pack_store.Store.init(ctx.gpa, store_config, RocTarget.detectNative(), @tagName(cli_args.OptLevel.dev)) catch |err| switch (err) {
+    var store = pack_store.Store.init(ctx.gpa, store_config, RocTarget.detectNative(), @tagName(cli_args.OptLevel.dev)) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         // Without a cache root there is no cache to read.
         error.NoHomeDirectory => return,
     };
+    errdefer store.deinit();
+    var compile_time_store = pack_store.Store.init(ctx.gpa, store_config, RocTarget.detectNative(), compile_time_pack_policy) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.NoHomeDirectory => {
+            store.deinit();
+            return;
+        },
+    };
+    errdefer compile_time_store.deinit();
     const cache = try ctx.gpa.create(CompileTimeObjectCache);
-    cache.* = .{ .allocator = ctx.gpa, .io = ctx.io.std_io, .store = store, .packs = pack_store.LoadedPacks.init(ctx.gpa) };
+    cache.* = .{
+        .allocator = ctx.gpa,
+        .io = ctx.io.std_io,
+        .store = store,
+        .compile_time_store = compile_time_store,
+        .packs = pack_store.LoadedPacks.init(ctx.gpa),
+    };
     // One heap-owned collection supplies both lookup offers and splice artifacts.
     // Runtime sharing must retain this exact provider, not merely its host domain.
     build_env.setCompileTimeObjectCache(.{
@@ -4654,7 +4689,9 @@ fn finishHotReloadRebuild(
     joinWatchChild(rebuild.child);
     if (rebuild.child.output_error) |err| return err;
 
-    try replayWatchChildOutput(ctx, rebuild.child, true);
+    if (hotReloadOutputAllowed()) {
+        try replayWatchChildOutput(ctx, rebuild.child, true);
+    }
 
     const rebuild_succeeded = hotReloadRebuildSucceeded(rebuild.child);
     const new_inputs = if (rebuild_succeeded)
@@ -4694,10 +4731,18 @@ fn finishHotReloadRebuild(
     };
 }
 
+/// A running app that has put the terminal in raw mode (such as a TUI) owns the
+/// screen, so hot reload output would corrupt what it has drawn.
+fn hotReloadOutputAllowed() bool {
+    return !ReplLine.stdinRawModeActive();
+}
+
 fn reportHotReloadRebuildPublished(ctx: *CliCtx, rebuild: *HotReloadRebuild) CliOutputWriteError!void {
     if (rebuild.published_reported) return;
-    try ctx.io.stderr().print("--- roc watch: hot reload generation {} published ---\n", .{rebuild.generation});
-    ctx.io.flush();
+    if (hotReloadOutputAllowed()) {
+        try ctx.io.stderr().print("--- roc watch: hot reload generation {} published ---\n", .{rebuild.generation});
+        ctx.io.flush();
+    }
     rebuild.published_reported = true;
 }
 
@@ -4717,12 +4762,15 @@ fn reportHotReloadAcknowledgement(
         }
     }
 
-    switch (ack.status) {
+    const outcome = switch (ack.status) {
         .none => return null,
-        .accepted => try ctx.io.stderr().print("--- roc watch: hot reload generation {} accepted by host ---\n", .{generation}),
-        .rejected => try ctx.io.stderr().print("--- roc watch: hot reload generation {} rejected by host; previous code remains active ---\n", .{generation}),
+        .accepted => "accepted by host",
+        .rejected => "rejected by host; previous code remains active",
+    };
+    if (hotReloadOutputAllowed()) {
+        try ctx.io.stderr().print("--- roc watch: hot reload generation {} {s} ---\n", .{ generation, outcome });
+        ctx.io.flush();
     }
-    ctx.io.flush();
     last_reported_ack.* = generation;
     return generation;
 }
@@ -8689,6 +8737,55 @@ fn writePacksToStore(
             std.log.warn("object cache could not store a module's pack: {}", .{err});
         };
     }
+}
+
+/// Publish the code compile-time evaluation compiled for this program, so a
+/// later compatible evaluation splices it instead of compiling it again
+/// (design.md "Compile-Time Object Packs"). The pack holds the keyed closed
+/// specializations of the evaluation's program under the same withholding
+/// rules as a runtime pack, filed beside the root module's packs in the
+/// compile-time store under a key no runtime pack uses. A program whose
+/// evaluation reported an error publishes nothing.
+fn publishCompileTimePack(ctx: *CliCtx, build_env: *BuildEnv) (Allocator.Error || error{NativeCompilationFailed})!void {
+    if (comptime !backend.host_lir_codegen_available) return;
+    const owner = build_env.compile_time_object_cache_owner orelse return;
+    const cache: *CompileTimeObjectCache = @ptrCast(@alignCast(owner.context));
+    const host = build_env.compileTimeProgram() orelse return;
+    if (host.lir_result.spec_procs.items.len == 0) return;
+    const root_semantic = build_env.getExecutableRootSemanticData() orelse return;
+    const root_artifact = root_semantic.checked_artifact orelse return;
+    const placement = build_env.packPlacementForArtifactKey(root_artifact.key) orelse return;
+    const key = pack_store.compileTimePackKey(root_artifact.codeGenerationKey().bytes);
+    const store = &cache.compile_time_store;
+    if (try store.has(placement.origin, placement.identity, key)) return;
+
+    var object_compiler = backend.ObjectFileCompiler.initForPack(ctx.gpa);
+    object_compiler.post_check_executor = build_env.postCheckExecutor();
+    // Procedures the evaluation spliced from packs are spliced here too.
+    object_compiler.splice_source = cache.packs.spliceSource();
+    const exports = if (host.frozen_static_data) |frozen| frozen.exports else &.{};
+    var compiled = object_compiler.compileToObjectFile(
+        &host.lir_result.store,
+        &host.lir_result.layouts,
+        &.{},
+        exports,
+        host.lir_result.store.getProcSpecs(),
+        host.lir_result.boxy_erased_arg_desc_offsets.items,
+        host.lir_result.boxy_erased_arg_desc_params.items,
+        host.lir_result.boxy_worker_procs.items,
+        RocTarget.detectNative(),
+    ) catch |err| {
+        std.log.err("Compile-time pack compilation failed: {}", .{err});
+        return error.NativeCompilationFailed;
+    };
+    defer compiled.deinit();
+    const set = &(compiled.artifacts orelse return);
+    const bytes = try packFileBytes(ctx.gpa, set, host);
+    defer ctx.gpa.free(bytes);
+    if (std.c.getenv("ROC_PACK_TRACE") != null) std.debug.print("compile-time pack {d} bytes\n", .{bytes.len});
+    store.write(placement.origin, placement.identity, key, bytes) catch |err| {
+        std.log.warn("object cache could not store the compile-time pack: {}", .{err});
+    };
 }
 
 /// Encode a pack program's artifacts with its spec table: every keyed
@@ -13947,7 +14044,7 @@ const CliOutputWriteError = error{WriteFailed};
 const WatchChildOutputError = std.Io.File.MultiReader.UnendingError || std.Io.Timeout.Error || std.process.Child.WaitError;
 const WatchCommandError = error{UnsupportedWatchMode} || WatchInputsPathError || WatchSpawnChildError || WatchCollectPathsError || WatchRefreshError || WatchReadInputsError || WatchChangeError || WatchChildOutputError || CliOutputWriteError;
 const ReportRenderError = Allocator.Error || CliOutputWriteError;
-const CheckFileWithBuildEnvPreservedError = compile.build.InitError || compile.build.BuildError || compile.build.CompileDiscoveredError || compile.build.BuildWithMainError || Allocator.Error || std.Io.Dir.RealPathFileAllocError || error{ ExpectedAppHeader, InvalidPackageName };
+const CheckFileWithBuildEnvPreservedError = compile.build.InitError || compile.build.BuildError || compile.build.CompileDiscoveredError || compile.build.BuildWithMainError || Allocator.Error || std.Io.Dir.RealPathFileAllocError || error{ ExpectedAppHeader, InvalidPackageName, NativeCompilationFailed };
 const RocTestError = lir.CheckedPipeline.HostedBindingError || WatchCommandError || compile.build.InitError || compile.build.BuildError || compile.build.CompileDiscoveredError || compile.build.BuildWithMainError || WatchWriteInputsError || ReportRenderError || std.Io.Dir.RealPathFileAllocError || SourceRefResolveError || error{ CompilationFailed, TestsFailed, NoHomeDirectory };
 const RocCheckError = WatchCommandError || CheckFileWithBuildEnvPreservedError || WatchWriteInputsError || ReportRenderError || CliError || std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError || SourceRefResolveError || error{CheckFailed};
 
@@ -16338,6 +16435,7 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
     var pending = std.ArrayList(u8).empty;
     defer pending.deinit(ctx.gpa);
 
+    var multiline_string_at_eof = false;
     var should_exit = false;
     var had_diagnostics = false;
     while (!should_exit) {
@@ -16361,6 +16459,16 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
             .line => |raw_line| {
                 defer ctx.gpa.free(raw_line);
 
+                // A complete multiline string remains pending until a line
+                // without a string prefix arrives (or EOF). Process that line
+                // separately so it can begin the next REPL statement.
+                if (multiline_string_at_eof and !ReplSession.lineStartsMultilineString(raw_line)) {
+                    should_exit = try processReplInput(ctx, &session, pending.items, report_config, &had_diagnostics);
+                    pending.clearRetainingCapacity();
+                    multiline_string_at_eof = false;
+                    if (should_exit) break;
+                }
+
                 if (pending.items.len == 0 and std.mem.trim(u8, raw_line, " \t\r\n").len == 0) {
                     continue;
                 }
@@ -16371,8 +16479,16 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
                 try pending.appendSlice(ctx.gpa, raw_line);
 
                 switch (try session.inputStatus(pending.items)) {
-                    .incomplete => {},
-                    .complete, .invalid => {
+                    .incomplete => multiline_string_at_eof = false,
+                    .complete => |info| {
+                        multiline_string_at_eof = info.multiline_string_at_eof;
+                        if (!multiline_string_at_eof) {
+                            should_exit = try processReplInput(ctx, &session, pending.items, report_config, &had_diagnostics);
+                            pending.clearRetainingCapacity();
+                        }
+                    },
+                    .invalid => {
+                        multiline_string_at_eof = false;
                         should_exit = try processReplInput(ctx, &session, pending.items, report_config, &had_diagnostics);
                         pending.clearRetainingCapacity();
                     },
@@ -16733,6 +16849,9 @@ fn recordLoweringCounters(
     comptime prefix: []const u8,
 ) void {
     if (strategy == .lss) {
+        if (!std.meta.eql(snapshot.demand, lir.CheckedPipeline.DemandMetrics{})) {
+            reporter.recordCounters(prefix ++ "Demand-driven specialization", &demandCounters(snapshot.demand));
+        }
         reporter.recordCounters(prefix ++ "Monotype specialization", &monotypeSpecializationCounters(snapshot.monotype_diagnostics));
         reporter.recordCounters(prefix ++ "Monotype type graph", &monotypeGraphCounters(snapshot.monotype_diagnostics));
         reporter.recordCounters(prefix ++ "Monotype body + dispatch", &monotypeBodyCounters(snapshot.monotype_diagnostics));
@@ -16806,6 +16925,24 @@ fn recordDevTestExecution(reporter: *progress.Reporter, timing: *const eval.test
         .{},
         &devTestExecutionBreakdown(snapshot),
     );
+}
+
+fn demandCounters(demand: lir.CheckedPipeline.DemandMetrics) [13]progress.Counter {
+    return .{
+        .{ .name = "Program roots", .count = demand.program_roots },
+        .{ .name = "Discovery roots", .count = demand.discovery_roots },
+        .{ .name = "Checked modules", .count = demand.modules },
+        .{ .name = "Procedure templates", .count = demand.templates },
+        .{ .name = "Literal source templates", .count = demand.source_templates },
+        .{ .name = "Literal reaching templates", .count = demand.reaching_templates },
+        .{ .name = "Custom literal types", .count = demand.custom_literal_types },
+        .{ .name = "Discovery roots lowered", .count = demand.monotype.discovery_roots },
+        .{ .name = "Discovery bodies", .count = demand.monotype.discovery_bodies },
+        .{ .name = "Parked requests", .count = demand.monotype.parked },
+        .{ .name = "Unparked requests", .count = demand.monotype.unparked },
+        .{ .name = "Upgraded bodies", .count = demand.monotype.upgraded },
+        .{ .name = "Never-run stubs", .count = demand.monotype.stubs },
+    };
 }
 
 fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [29]progress.Counter {
@@ -16978,8 +17115,10 @@ test "post-check diagnostics preserve labeled SpecConstr counts" {
     for (specConstrParallelCounters(.{})) |row| try std.testing.expectEqual(@as(u64, 0), row.count);
 }
 
-fn arcParallelCounters(parallel: lir.CheckedPipeline.ArcParallelMetrics) [17]progress.Counter {
+fn arcParallelCounters(parallel: lir.CheckedPipeline.ArcParallelMetrics) [19]progress.Counter {
     return .{
+        .{ .name = "Dismantle tasks submitted", .count = parallel.dismantle_tasks_submitted },
+        .{ .name = "Dismantle tasks committed", .count = parallel.dismantle_tasks_committed },
         .{ .name = "Source tasks submitted", .count = parallel.source_tasks_submitted },
         .{ .name = "Source tasks committed", .count = parallel.source_tasks_committed },
         .{ .name = "Planning tasks submitted", .count = parallel.planning_tasks_submitted },
@@ -17002,27 +17141,31 @@ fn arcParallelCounters(parallel: lir.CheckedPipeline.ArcParallelMetrics) [17]pro
 
 test "post-check diagnostics preserve labeled ARC counts" {
     const rows = arcParallelCounters(.{
-        .source_tasks_submitted = 1,
-        .source_tasks_committed = 2,
-        .planning_tasks_submitted = 3,
-        .planning_tasks_committed = 4,
-        .emission_tasks_submitted = 5,
-        .emission_tasks_committed = 6,
-        .waves = 7,
-        .variants_reserved = 8,
+        .dismantle_tasks_submitted = 1,
+        .dismantle_tasks_committed = 2,
+        .source_tasks_submitted = 3,
+        .source_tasks_committed = 4,
+        .planning_tasks_submitted = 5,
+        .planning_tasks_committed = 6,
+        .emission_tasks_submitted = 7,
+        .emission_tasks_committed = 8,
+        .waves = 9,
+        .variants_reserved = 10,
         .uniqueness = .{
-            .settlements = 9,
-            .components = 10,
-            .component_runs = 11,
-            .task_submitted = 12,
-            .task_committed = 13,
-            .signature_waves = 14,
-            .signature_changes = 15,
-            .statement_visits = 16,
-            .local_visits = 17,
+            .settlements = 11,
+            .components = 12,
+            .component_runs = 13,
+            .task_submitted = 14,
+            .task_committed = 15,
+            .signature_waves = 16,
+            .signature_changes = 17,
+            .statement_visits = 18,
+            .local_visits = 19,
         },
     });
     const names = [_][]const u8{
+        "Dismantle tasks submitted",
+        "Dismantle tasks committed",
         "Source tasks submitted",
         "Source tasks committed",
         "Planning tasks submitted",
@@ -17592,6 +17735,7 @@ fn handleProcessFileError(err: ProcessFileError, stderr: anytype, path: []const 
         // Catch-all for any other errors
         error.AccessDenied,
         error.AlreadyStarted,
+        error.NativeCompilationFailed,
         error.AntivirusInterference,
         error.BadPathName,
         error.BrokenPipe,
@@ -17896,9 +18040,9 @@ const CheckResultWithBuildEnv = struct {
 
 /// Only failures that already have build reports may enter report recovery.
 /// Operational interpreter failures must never become a zero-error result.
-fn requireReportableCheckFailure(err: CheckFileWithBuildEnvPreservedError) error{ OutOfMemory, RuntimeError }!void {
+fn requireReportableCheckFailure(err: CheckFileWithBuildEnvPreservedError) error{ OutOfMemory, RuntimeError, NativeCompilationFailed }!void {
     switch (err) {
-        error.OutOfMemory, error.RuntimeError => |operational| return operational,
+        error.OutOfMemory, error.RuntimeError, error.NativeCompilationFailed => |operational| return operational,
         error.AccessDenied,
         error.AntivirusInterference,
         error.BadPathName,
@@ -18218,6 +18362,7 @@ fn checkFileWithBuildEnv(
             if (report.severity.isError()) error_count += 1 else warning_count += 1;
         }
     }
+    if (error_count == 0) try publishCompileTimePack(ctx, &build_env);
 
     var reports = try ctx.gpa.alloc(DrainedReport, drained.len);
     for (drained, 0..) |mod, i| {

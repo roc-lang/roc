@@ -283,11 +283,9 @@ With multiple lines
 							(e-string
 								(e-literal (string "multiline"))))))
 				(field (name "d")
-					(e-dispatch-call (method "minus") (constraint-fn-var 355)
-						(receiver
-							(e-runtime-error (tag "erroneous_value_expr")))
-						(args
-							(e-string))))
+					(e-runtime-error (tag "erroneous_value_expr")
+						(e-num (value "0"))
+						(e-string)))
 				(field (name "e")
 					(e-call (constraint-fn-var 370)
 						(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18231") (target-def "18231"))
