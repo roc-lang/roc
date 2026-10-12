@@ -1897,8 +1897,11 @@ pub const MonoLlvmCodeGen = struct {
         const owned = try arena.dupe(layout.Idx, arg_layouts);
         self.allocator.free(arg_layouts);
         const lowered = layout.abi.lower(arena, self.layouts(), self.abiTarget(), owned, proc.ret_layout, false) catch return error.OutOfMemory;
-        const group_storage = if (proc.tail_group) |group| self.tail_scratch.items[@backingInt(group)].size > 0 else false;
-        const tail_args = try self.tailArgs(arena, proc, lowered, owned, group_storage);
+        const scratch: TailScratch = if (proc.tail_group) |group| blk: {
+            if (@backingInt(group) >= self.tail_scratch.items.len) llvmInvariantFmt("tail group {d} has no recorded argument storage", .{@backingInt(group)});
+            break :blk self.tail_scratch.items[@backingInt(group)];
+        } else .{};
+        const tail_args = try self.tailArgs(arena, proc, lowered, owned, scratch.size > 0);
         var cursor: u32 = if (lowered.ret == .indirect) 1 else 0;
         const args_start = cursor;
         for (lowered.args, tail_args.stored) |placement, stored| {
@@ -1906,10 +1909,6 @@ pub const MonoLlvmCodeGen = struct {
         }
         const desc_index: ?u32 = if (proc.runtime_ret_desc != null) cursor else null;
         if (desc_index != null) cursor += 1;
-        const scratch: TailScratch = if (proc.tail_group) |group| blk: {
-            if (@backingInt(group) >= self.tail_scratch.items.len) llvmInvariantFmt("tail group {d} has no recorded argument storage", .{@backingInt(group)});
-            break :blk self.tail_scratch.items[@backingInt(group)];
-        } else .{};
         return .{
             .lowered = lowered,
             .arg_layouts = owned,
