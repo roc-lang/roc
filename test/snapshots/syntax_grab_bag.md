@@ -2126,7 +2126,6 @@ main! = |_| { # Yeah I can leave a comment here
 
 		# Just a random comment!
 
-		
 	match_time(
 		..., # Single args with comment
 	)

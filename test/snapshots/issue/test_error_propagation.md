@@ -13,7 +13,7 @@ value : GoodAlias
 value = "test"
 ~~~
 # EXPECTED
-UNDERSCORE IN TYPE ALIAS - test_error_propagation.md:1:1:1:1
+UNDERSCORE IN TYPE ALIAS - test_error_propagation.md:1:12:1:13
 TYPE MISMATCH - test_error_propagation.md:6:9:6:15
 # PROBLEMS
 ~~~clojure
@@ -21,11 +21,11 @@ TYPE MISMATCH - test_error_propagation.md:6:9:6:15
 	(report
 		(severity runtime_error)
 		(title "Underscore In Type Alias")
-		(region (start 1 1) (end 1 1))
+		(region (start 1 12) (end 1 13))
 		(headline
 			(reflow "Underscores are not allowed in type alias declarations."))
 		(document
-			(source-region (file "test_error_propagation.md") (start 1 1) (end 1 1) (annotation error) (line-text "BadBase := _"))
+			(source-region (file "test_error_propagation.md") (start 1 12) (end 1 13) (annotation error) (line-text "BadBase := _"))
 			(line-break)
 			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
 	(report
