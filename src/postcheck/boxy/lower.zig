@@ -805,11 +805,11 @@ fn procedureModuleById(modules: Common.CheckedModules, module_id: checked.Module
 
 fn procedureModuleByKey(modules: Common.CheckedModules, key: checked.CheckedModuleArtifactKey) ProcedureModuleView {
     if (checked_moduleKeyEqual(modules.root.module.key, key)) return rootProcedureModule(modules);
-    for (modules.imports) |import| {
-        if (checked_moduleKeyEqual(import.key, key)) return procedureModuleFromImport(import);
+    for (modules.imports) |*import| {
+        if (checked_moduleKeyEqual(import.key, key)) return procedureModuleFromImport(import.*);
     }
-    for (modules.root.relation_modules) |relation| {
-        if (checked_moduleKeyEqual(relation.key, key)) return procedureModuleFromImport(relation);
+    for (modules.root.relation_modules) |*relation| {
+        if (checked_moduleKeyEqual(relation.key, key)) return procedureModuleFromImport(relation.*);
     }
     boxyLowerInvariant("boxy worker referenced a checked checked_module that was not available to lowering");
 }
@@ -1366,6 +1366,10 @@ const ProcedureBuilder = struct {
     rep_holds_callable: []?bool,
     generated_evidence_desc_ids: [4]?LIR.BoxyTypeDescId,
     internal_leaf_desc_ids: std.AutoHashMapUnmanaged(layout.Idx, LIR.BoxyTypeDescId),
+    /// Exact-storage template descriptors that read no procedure's bound
+    /// descriptor locals, so every procedure describes the representation
+    /// with the same descriptor.
+    exact_template_desc_ids: std.AutoHashMapUnmanaged(Plan.TypeRepId, LIR.BoxyTypeDescId) = .empty,
     static_dict_cache: std.ArrayList(StaticDictCacheEntry),
     /// The procedures every descriptor dictionary's `is_eq` and `to_hash`
     /// slots call; see `descriptorDict`.
@@ -1553,6 +1557,7 @@ const ProcedureBuilder = struct {
         self.callable_adapter_cache.deinit(self.allocator);
         self.descriptor_method_slot_cache.deinit(self.allocator);
         self.internal_leaf_desc_ids.deinit(self.allocator);
+        self.exact_template_desc_ids.deinit(self.allocator);
         self.static_dict_cache.deinit(self.allocator);
         self.descriptor_dicts.deinit(self.allocator);
         for (self.derived_helpers.items) |helper| helper.shape.deinit(self.allocator);
@@ -9934,12 +9939,8 @@ const ProcedureBuilder = struct {
         ) orelse boxyLowerInvariant("generated record encoder had no planned field callback");
         const callback = try proc.addFrameLocalForRep(proc.repForTypeRef(arg_types[2]));
         const count = try proc.addFrameLocal(.u64);
-        const name_captures = self.generatedEncoderNameCaptureLocals(proc, contract_worker);
-        const capture_values = try self.allocator.alloc(LIR.LocalId, 2 + name_captures.len);
+        const capture_values = try self.generatedEncoderCallbackCaptureValues(proc, callback_worker, value);
         defer self.allocator.free(capture_values);
-        capture_values[0] = proc.erased_capture_locals.items[0];
-        capture_values[1] = value;
-        @memcpy(capture_values[2..], name_captures);
 
         const fields = try self.generatedEncoderRecordFields(proc, contract_worker, shape_type);
         defer self.allocator.free(fields);
@@ -10071,12 +10072,8 @@ const ProcedureBuilder = struct {
         ) orelse boxyLowerInvariant("generated sequence encoder had no planned element callback");
         const callback = try proc.addFrameLocalForRep(proc.repForTypeRef(arg_types[2]));
         const count = try proc.addFrameLocal(.u64);
-        const name_captures = self.generatedEncoderNameCaptureLocals(proc, contract_worker);
-        const capture_values = try self.allocator.alloc(LIR.LocalId, 2 + name_captures.len);
+        const capture_values = try self.generatedEncoderCallbackCaptureValues(proc, callback_worker, value);
         defer self.allocator.free(capture_values);
-        capture_values[0] = proc.erased_capture_locals.items[0];
-        capture_values[1] = value;
-        @memcpy(capture_values[2..], name_captures);
         const shape_rep = proc.repForTypeRef(shape_type);
         const tuple_items = if (proc.tupleRepForBoundary(shape_rep) != null)
             try self.generatedParserTupleItems(proc, shape_rep)
@@ -10179,12 +10176,8 @@ const ProcedureBuilder = struct {
         ) orelse boxyLowerInvariant("generated Dict encoder had no planned field callback");
         const callback = try proc.addFrameLocalForRep(proc.repForTypeRef(arg_types[2]));
         const count = try proc.addFrameLocal(.u64);
-        const name_captures = self.generatedEncoderNameCaptureLocals(proc, contract_worker);
-        const capture_values = try self.allocator.alloc(LIR.LocalId, 2 + name_captures.len);
+        const capture_values = try self.generatedEncoderCallbackCaptureValues(proc, callback_worker, entries);
         defer self.allocator.free(capture_values);
-        capture_values[0] = proc.erased_capture_locals.items[0];
-        capture_values[1] = entries;
-        @memcpy(capture_values[2..], name_captures);
 
         var continuation = try self.lowerGeneratedCodecCallLocalsInto(
             proc,
@@ -10241,8 +10234,6 @@ const ProcedureBuilder = struct {
             .{ .generated_codec = callback_source },
             arg_types[3],
         ) orelse boxyLowerInvariant("generated tag encoder had no planned payload callback");
-        const name_captures = self.generatedEncoderNameCaptureLocals(proc, contract_worker);
-
         const variants = try self.generatedEncoderTagVariants(proc, shape_type, false);
         defer self.allocator.free(variants);
         const bodies = try self.allocator.alloc(LIR.CFStmtId, variants.len);
@@ -10252,11 +10243,8 @@ const ProcedureBuilder = struct {
             const count = try proc.addFrameLocal(.u64);
             const callback_rep = proc.repForTypeRef(arg_types[3]);
             const callback = try proc.addFrameLocalForRep(callback_rep);
-            const capture_values = try self.allocator.alloc(LIR.LocalId, 2 + name_captures.len);
+            const capture_values = try self.generatedEncoderCallbackCaptureValues(proc, callback_worker, value);
             defer self.allocator.free(capture_values);
-            capture_values[0] = proc.erased_capture_locals.items[0];
-            capture_values[1] = value;
-            @memcpy(capture_values[2..], name_captures);
 
             var continuation = try self.lowerGeneratedCodecCallLocalsInto(
                 proc,
@@ -10356,16 +10344,14 @@ const ProcedureBuilder = struct {
         );
     }
 
+    /// The locals of the current encoder worker's field-name captures, in
+    /// the order of its planned name captures.
     fn generatedEncoderNameCaptureLocals(
         self: *ProcedureBuilder,
         proc: *ProcBodyBuilder,
-        contract_worker: Plan.WorkerPlanId,
     ) []const LIR.LocalId {
-        var count: usize = 0;
-        for (self.plan.generated_parser_field_captures.items) |capture| {
-            if (capture.worker == contract_worker) count += 1;
-        }
         const worker = self.plan.workers.items[@backingInt(proc.worker_layout.worker)];
+        const count = self.plan.encoderNameCaptureSlice(worker.encoder_name_captures).len;
         var captured_value_count: usize = 0;
         for (self.plan.erasedCaptureSlice(worker.erased_captures)) |capture| {
             if (capture.kind == .captured_value) captured_value_count += 1;
@@ -10374,6 +10360,33 @@ const ProcedureBuilder = struct {
             boxyLowerInvariant("generated encoder field-name captures exceeded bound captures");
         }
         return proc.erased_capture_locals.items[captured_value_count - count .. captured_value_count];
+    }
+
+    /// The value captures of an encoder callback `callee` this worker packs:
+    /// the encoding, `value`, and the field names `callee` captures, each
+    /// read from this worker's own name captures.
+    fn generatedEncoderCallbackCaptureValues(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        callee: Plan.WorkerPlanId,
+        value: LIR.LocalId,
+    ) Allocator.Error![]LIR.LocalId {
+        const worker = self.plan.workers.items[@backingInt(proc.worker_layout.worker)];
+        const own_names = self.plan.encoderNameCaptureSlice(worker.encoder_name_captures);
+        const own_locals = self.generatedEncoderNameCaptureLocals(proc);
+        const callee_names = self.plan.encoderNameCaptureSlice(self.plan.workers.items[@backingInt(callee)].encoder_name_captures);
+        const values = try self.allocator.alloc(LIR.LocalId, 2 + callee_names.len);
+        values[0] = proc.erased_capture_locals.items[0];
+        values[1] = value;
+        var own_index: usize = 0;
+        for (callee_names, values[2..]) |name, *out| {
+            while (own_index < own_names.len and own_names[own_index] < name) own_index += 1;
+            if (own_index == own_names.len or own_names[own_index] != name) {
+                boxyLowerInvariant("generated encoder callback captured a field name its packing worker did not hold");
+            }
+            out.* = own_locals[own_index];
+        }
+        return values;
     }
 
     fn generatedEncoderRecordFields(
@@ -10404,30 +10417,30 @@ const ProcedureBuilder = struct {
         }
         const fields = try self.allocator.alloc(GeneratedEncoderRecordField, field_count);
         const record_view = procedureModuleById(self.modules, record.source_type.module);
-        const name_captures = self.generatedEncoderNameCaptureLocals(proc, contract_worker);
+        const worker = self.plan.workers.items[@backingInt(proc.worker_layout.worker)];
+        const name_capture_ids = self.plan.encoderNameCaptureSlice(worker.encoder_name_captures);
+        const name_captures = self.generatedEncoderNameCaptureLocals(proc);
 
         var out_index: usize = 0;
         for (children) |child| {
             if (child.role == .record_ext) continue;
             if (child.role != .record_field) unreachable;
             const label = child.role.record_field;
-            var capture_index: usize = 0;
             var renamed: ?LIR.LocalId = null;
             var field_capture: ?Plan.GeneratedParserFieldCapture = null;
-            for (self.plan.generated_parser_field_captures.items) |capture| {
-                if (capture.worker != contract_worker) continue;
-                if (capture_index >= name_captures.len) {
-                    boxyLowerInvariant("generated encoder field capture exceeded bound names");
+            for (name_capture_ids, name_captures) |capture_index, name_local| {
+                const capture = self.plan.generated_parser_field_captures.items[capture_index];
+                if (capture.worker != contract_worker) {
+                    boxyLowerInvariant("generated encoder captured a field name outside its contract");
                 }
                 const capture_view = procedureModuleById(self.modules, capture.field_module);
                 if (planTypeRefEql(capture.record_type, shape_type) and
                     Plan.recordFieldNameMatches(viewNames(record_view), label, viewNames(capture_view), capture.field_name))
                 {
                     if (renamed != null) boxyLowerInvariant("generated encoder record field had duplicate renamed captures");
-                    renamed = name_captures[capture_index];
+                    renamed = name_local;
                     field_capture = capture;
                 }
-                capture_index += 1;
             }
             const capture = field_capture orelse
                 boxyLowerInvariant("generated encoder record field had no checked capture metadata");
@@ -10769,12 +10782,8 @@ const ProcedureBuilder = struct {
                         success,
                     );
 
-                    const name_captures = self.generatedEncoderNameCaptureLocals(proc, frame.contract_worker);
-                    const capture_values = try self.allocator.alloc(LIR.LocalId, 2 + name_captures.len);
+                    const capture_values = try self.generatedEncoderCallbackCaptureValues(proc, frame.thunk_worker, frame.field_value);
                     defer self.allocator.free(capture_values);
-                    capture_values[0] = proc.erased_capture_locals.items[0];
-                    capture_values[1] = frame.field_value;
-                    @memcpy(capture_values[2..], name_captures);
                     frame.written = try self.packGeneratedCodecCallable(proc, frame.thunk, frame.thunk_rep, frame.thunk_worker, capture_values, success);
                     if (field.optional_missing or frame.presence != null) {
                         // Encode the fields after this one again, skipping it.
@@ -10950,12 +10959,8 @@ const ProcedureBuilder = struct {
             &.{ frame.state_rep, frame.thunk_rep },
             continuation,
         );
-        const name_captures = self.generatedEncoderNameCaptureLocals(proc, frame.contract_worker);
-        const capture_values = try self.allocator.alloc(LIR.LocalId, 2 + name_captures.len);
+        const capture_values = try self.generatedEncoderCallbackCaptureValues(proc, frame.thunk_worker, frame.value.local);
         defer self.allocator.free(capture_values);
-        capture_values[0] = proc.erased_capture_locals.items[0];
-        capture_values[1] = frame.value.local;
-        @memcpy(capture_values[2..], name_captures);
         return try self.packGeneratedCodecCallable(proc, frame.thunk, frame.thunk_rep, frame.thunk_worker, capture_values, continuation);
     }
 
@@ -11275,12 +11280,8 @@ const ProcedureBuilder = struct {
             &.{ state_rep, thunk_rep },
             continuation,
         );
-        const name_captures = self.generatedEncoderNameCaptureLocals(proc, contract_worker);
-        const capture_values = try self.allocator.alloc(LIR.LocalId, 2 + name_captures.len);
+        const capture_values = try self.generatedEncoderCallbackCaptureValues(proc, thunk_worker, elem_value);
         defer self.allocator.free(capture_values);
-        capture_values[0] = proc.erased_capture_locals.items[0];
-        capture_values[1] = elem_value;
-        @memcpy(capture_values[2..], name_captures);
         continuation = try self.packGeneratedCodecCallable(proc, thunk, thunk_rep, thunk_worker, capture_values, continuation);
         continuation = try proc.assignBinaryLowLevel(next_index, .num_int_add_crash_on_overflow, index, one, continuation);
         continuation = try proc.assignIntLiteral(one, 1, continuation);
@@ -11471,15 +11472,12 @@ const ProcedureBuilder = struct {
             &.{ state_rep, key_thunk_rep, value_thunk_rep },
             write_entry,
         );
-        const name_captures = self.generatedEncoderNameCaptureLocals(proc, contract_worker);
-        const capture_values = try self.allocator.alloc(LIR.LocalId, 2 + name_captures.len);
-        defer self.allocator.free(capture_values);
-        capture_values[0] = proc.erased_capture_locals.items[0];
-        @memcpy(capture_values[2..], name_captures);
-        capture_values[1] = item_value;
-        write_entry = try self.packGeneratedCodecCallable(proc, value_thunk, value_thunk_rep, value_thunk_worker, capture_values, write_entry);
-        capture_values[1] = key_value;
-        write_entry = try self.packGeneratedCodecCallable(proc, key_thunk, key_thunk_rep, key_thunk_worker, capture_values, write_entry);
+        const value_captures = try self.generatedEncoderCallbackCaptureValues(proc, value_thunk_worker, item_value);
+        defer self.allocator.free(value_captures);
+        write_entry = try self.packGeneratedCodecCallable(proc, value_thunk, value_thunk_rep, value_thunk_worker, value_captures, write_entry);
+        const key_captures = try self.generatedEncoderCallbackCaptureValues(proc, key_thunk_worker, key_value);
+        defer self.allocator.free(key_captures);
+        write_entry = try self.packGeneratedCodecCallable(proc, key_thunk, key_thunk_rep, key_thunk_worker, key_captures, write_entry);
         write_entry = try proc.assignBinaryLowLevel(next_index, .num_int_add_crash_on_overflow, index, one, write_entry);
         write_entry = try proc.assignIntLiteral(one, 1, write_entry);
         write_entry = try proc.lowerTupleFieldReadInto(item_value, entry_value, entry.rep, 1, write_entry);
@@ -11904,11 +11902,16 @@ const ProcedureBuilder = struct {
         key_state: LIR.LocalId = undefined,
     };
 
-    /// A record parsed by a loop whose field events each parse one matched
-    /// field: every `Field` match first, then every `TryField` and
-    /// `TryFieldCaseless` name comparison last field first.
+    /// A record parsed by a loop whose field events each select one matched
+    /// field. Each field's value parser is built once, in its own join whose
+    /// parameter is the state after the field's key; the `Field`, `TryField`,
+    /// and `TryFieldCaseless` events jump to it. Every error inside the loop
+    /// writes the parser result into `context.target` and jumps to
+    /// `error_join`, which retains the field names and payload slots and
+    /// forwards that result to `shape_context`.
     const GeneratedRecordParseState = struct {
         shape_context: GeneratedParserShapeContext,
+        error_join: LIR.JoinPointId,
         state: LIR.LocalId,
         field_names_source: GeneratedParserFieldNamesSource,
         parse_call: Plan.GeneratedCodecCallPlan,
@@ -11917,23 +11920,12 @@ const ProcedureBuilder = struct {
         step: GeneratedParserTryCall,
         variants: [5]GeneratedParserTagVariant,
         bodies: [5]LIR.CFStmtId,
-        phase: enum { direct, try_field, caseless },
-        /// The field whose match is being built.
+        /// The field whose value parser is being built.
         field_cursor: usize = 0,
-        direct: struct {
-            payload: ProcBodyBuilder.GeneratedParserTagPayload,
-            field_handle: LIR.LocalId,
-            rest: LIR.LocalId,
-            index: LIR.LocalId,
-            branches: []LIR.CFSwitchBranch,
-        },
-        named: struct {
-            payload: ProcBodyBuilder.GeneratedParserTagPayload,
-            name: LIR.LocalId,
-            rest: LIR.LocalId,
-            dispatch: LIR.CFStmtId,
-            matches: LIR.LocalId,
-        } = undefined,
+        field_joins: []LIR.JoinPointId,
+        /// Each field join's parameter: the state its value parser starts at.
+        field_states: []LIR.LocalId,
+        field_bodies: []LIR.CFStmtId,
     };
 
     fn lowerGeneratedParseShapeFromState(
@@ -12020,7 +12012,9 @@ const ProcedureBuilder = struct {
             .record => |state| {
                 self.allocator.free(state.context.fields);
                 self.allocator.free(state.context.presence);
-                self.allocator.free(state.direct.branches);
+                self.allocator.free(state.field_joins);
+                self.allocator.free(state.field_states);
+                self.allocator.free(state.field_bodies);
             },
         }
     }
@@ -12553,50 +12547,20 @@ const ProcedureBuilder = struct {
                 },
             },
             .record => |*state| {
-                const fields = state.context.fields;
-                switch (state.phase) {
-                    .direct => {
-                        if (child) |matched| {
-                            state.direct.branches[state.field_cursor].body = matched;
-                            state.field_cursor += 1;
-                        }
-                        if (state.field_cursor < fields.len) {
-                            state.direct.branches[state.field_cursor].value = fields[state.field_cursor].index;
-                            frame.awaiting = true;
-                            return .{ .request = try self.beginGeneratedMatchedRecordField(proc, &state.context, state.field_cursor, state.direct.rest) };
-                        }
-                        state.bodies[2] = try self.finishGeneratedRecordDirectFieldEvent(proc, state);
-                        try self.beginGeneratedRecordNamedFieldEvent(proc, state, .try_field);
-                    },
-                    .try_field, .caseless => if (child) |matched| {
-                        const compare_op: LIR.LowLevel = switch (state.phase) {
-                            .try_field => .str_is_eq,
-                            .caseless => .str_caseless_ascii_equals,
-                            .direct => boxyLowerInvariant("generated record named field phase was direct"),
-                        };
-                        const switch_stmt = try proc.boolSwitchNoContinuation(state.named.matches, matched, state.named.dispatch);
-                        state.named.dispatch = try proc.assignBinaryLowLevel(state.named.matches, compare_op, state.named.name, fields[state.field_cursor].renamed, switch_stmt);
-                    },
+                if (child) |matched| {
+                    state.field_bodies[state.field_cursor] = matched;
+                    state.field_cursor += 1;
                 }
-                while (true) {
-                    if (state.field_cursor > 0) {
-                        state.field_cursor -= 1;
-                        state.named.matches = try proc.addFrameLocal(.bool);
-                        frame.awaiting = true;
-                        return .{ .request = try self.beginGeneratedMatchedRecordField(proc, &state.context, state.field_cursor, state.named.rest) };
-                    }
-                    switch (state.phase) {
-                        .direct => boxyLowerInvariant("generated record parser named fields began in the direct phase"),
-                        .try_field => {
-                            state.bodies[3] = try self.finishGeneratedRecordNamedFieldEvent(proc, state);
-                            try self.beginGeneratedRecordNamedFieldEvent(proc, state, .caseless);
-                        },
-                        .caseless => {
-                            state.bodies[4] = try self.finishGeneratedRecordNamedFieldEvent(proc, state);
-                            return self.finishParseShapeFrame(frames, try self.finishGeneratedRecordParse(proc, state));
-                        },
-                    }
+                if (state.field_cursor < state.context.fields.len) {
+                    frame.awaiting = true;
+                    return .{ .request = try self.beginGeneratedMatchedRecordField(
+                        proc,
+                        &state.context,
+                        state.field_cursor,
+                        state.field_states[state.field_cursor],
+                    ) };
                 }
+                return self.finishParseShapeFrame(frames, try self.finishGeneratedRecordParse(proc, state));
             },
         }
     }
@@ -13122,6 +13086,8 @@ const ProcedureBuilder = struct {
             boxyLowerInvariant("generated parse_record_field call disagreed with parser state metadata");
         }
 
+        const error_join = proc.freshJoinPointId();
+        const error_target = try proc.addFrameBoundaryTargetLocalForRep(shape_context.result_rep);
         const cursor = try proc.addGeneratedParserOutputLocalForRep(shape_context.state_rep);
         const counted = try proc.addFrameLocal(.bool);
         const remaining = try proc.addFrameLocal(.u64);
@@ -13129,6 +13095,7 @@ const ProcedureBuilder = struct {
         const evidence = try proc.addFrameLocalForRep(proc.repForTypeRef(parse_arg_types[1]));
         var frame: ParseShapeFrame = .{ .state = .{ .record = .{
             .shape_context = shape_context,
+            .error_join = error_join,
             .state = state,
             .field_names_source = field_names_source,
             .parse_call = parse_call,
@@ -13138,7 +13105,7 @@ const ProcedureBuilder = struct {
                 .encoding = shape_context.encoding,
                 .shape_type = shape_type,
                 .shape_rep = shape_rep,
-                .target = shape_context.result,
+                .target = error_target,
                 .target_rep = shape_context.result_rep,
                 .state_type = shape_context.state_type,
                 .state_rep = shape_context.state_rep,
@@ -13150,7 +13117,7 @@ const ProcedureBuilder = struct {
                 .fields = &.{},
                 .presence = &.{},
                 .join_id = undefined,
-                .next = shape_context.next,
+                .next = try proc.joinJump(error_join),
                 .value = value,
                 .rest = rest,
                 .success = success,
@@ -13159,14 +13126,9 @@ const ProcedureBuilder = struct {
             .step = undefined,
             .variants = undefined,
             .bodies = undefined,
-            .phase = .direct,
-            .direct = .{
-                .payload = undefined,
-                .field_handle = undefined,
-                .rest = undefined,
-                .index = undefined,
-                .branches = &.{},
-            },
+            .field_joins = &.{},
+            .field_states = &.{},
+            .field_bodies = &.{},
         } } };
         errdefer self.releaseParseShapeFrame(&frame);
         const record = &frame.state.record;
@@ -13204,108 +13166,118 @@ const ProcedureBuilder = struct {
         record.bodies[0] = try self.lowerGeneratedRecordContinueEvent(proc, record.context, event, continue_variant);
         record.bodies[1] = try self.lowerGeneratedRecordDoneEvent(proc, record.context, event, done_variant);
 
-        record.direct.payload = try proc.generatedParserSingleTagPayloadLocal(field_variant);
-        record.direct.field_handle = try proc.addFrameLocal(self.layout_plan.generated_evidence.field);
-        record.direct.rest = try proc.addFrameLocalForRep(record.context.state_rep);
-        record.direct.index = try proc.addFrameLocal(.u64);
-        record.direct.branches = try self.allocator.alloc(LIR.CFSwitchBranch, fields.len);
+        record.field_joins = try self.allocator.alloc(LIR.JoinPointId, fields.len);
+        for (record.field_joins) |*join_id| join_id.* = proc.freshJoinPointId();
+        record.field_states = try self.allocator.alloc(LIR.LocalId, fields.len);
+        for (record.field_states) |*local| local.* = try proc.addGeneratedParserOutputLocalForRep(record.context.state_rep);
+        record.field_bodies = try self.allocator.alloc(LIR.CFStmtId, fields.len);
         try frames.append(self.allocator, frame);
         return .pushed;
     }
 
-    fn finishGeneratedRecordDirectFieldEvent(
+    /// Enter a field's value parser at `rest`, the state after its key.
+    fn lowerGeneratedRecordFieldJump(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        state: *const GeneratedRecordParseState,
+        field_index: usize,
+        rest: LIR.LocalId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const jump = try self.result.store.addCFStmt(.{ .jump = .{ .target = state.field_joins[field_index] } }, proc.derivedOrigin());
+        return try proc.setLocalInitializeJoinParamFromRep(state.field_states[field_index], rest, state.context.state_rep, jump);
+    }
+
+    /// A `Field` event names its field by handle index.
+    fn lowerGeneratedRecordDirectFieldEvent(
         self: *ProcedureBuilder,
         proc: *ProcBodyBuilder,
         state: *const GeneratedRecordParseState,
     ) Allocator.Error!LIR.CFStmtId {
-        const direct = state.direct;
         const context = state.context;
+        const fields = context.fields;
+        const payload = try proc.generatedParserSingleTagPayloadLocal(state.variants[2]);
+        const field_handle = try proc.addFrameLocal(self.layout_plan.generated_evidence.field);
+        const rest = try proc.addFrameLocalForRep(context.state_rep);
+        const index = try proc.addFrameLocal(.u64);
+        const branches = try self.allocator.alloc(LIR.CFSwitchBranch, fields.len);
+        defer self.allocator.free(branches);
+        for (fields, branches, 0..) |field, *branch, field_index| {
+            branch.* = .{
+                .value = field.index,
+                .body = try self.lowerGeneratedRecordFieldJump(proc, state, field_index, rest),
+            };
+        }
         const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
         const field_switch = try self.result.store.addCFStmt(.{ .switch_stmt = .{
-            .cond = direct.index,
-            .branches = try self.result.store.addCFSwitchBranches(direct.branches),
+            .cond = index,
+            .branches = try self.result.store.addCFSwitchBranches(branches),
             .default_branch = impossible,
             .continuation = null,
         } }, proc.derivedOrigin());
         var continuation = try self.result.store.addCFStmt(.{ .assign_ref = .{
-            .target = direct.index,
-            .op = .{ .field = .{ .source = direct.field_handle, .field_idx = 1 } },
+            .target = index,
+            .op = .{ .field = .{ .source = field_handle, .field_idx = 1 } },
             .next = field_switch,
         } }, proc.derivedOrigin());
         continuation = try proc.generatedParserReadRecordField(
-            direct.rest,
+            rest,
             context.state_rep,
-            direct.payload.local,
-            direct.payload.child,
+            payload.local,
+            payload.child,
             "rest",
             continuation,
         );
         continuation = try proc.generatedParserReadRecordField(
-            direct.field_handle,
-            proc.repForTypeRef(try proc.generatedParserRecordFieldType(direct.payload.child.source_type, "field")),
-            direct.payload.local,
-            direct.payload.child,
+            field_handle,
+            proc.repForTypeRef(try proc.generatedParserRecordFieldType(payload.child.source_type, "field")),
+            payload.local,
+            payload.child,
             "field",
             continuation,
         );
-        return try proc.generatedParserReadTagPayload(state.step.ok_payload.local, state.variants[2], direct.payload, continuation);
+        return try proc.generatedParserReadTagPayload(state.step.ok_payload.local, state.variants[2], payload, continuation);
     }
 
-    /// Begin a `TryField` or `TryFieldCaseless` event: compare the name with
-    /// each field's name, last field first, skipping an unmatched entry.
-    fn beginGeneratedRecordNamedFieldEvent(
+    /// A `TryField` or `TryFieldCaseless` event compares the name with each
+    /// field's name, first field first, skipping an unmatched entry.
+    fn lowerGeneratedRecordNamedFieldEvent(
         self: *ProcedureBuilder,
         proc: *ProcBodyBuilder,
-        state: *GeneratedRecordParseState,
-        phase: @FieldType(GeneratedRecordParseState, "phase"),
-    ) Allocator.Error!void {
-        const variant = switch (phase) {
-            .try_field => state.variants[3],
-            .caseless => state.variants[4],
-            .direct => boxyLowerInvariant("generated record named field event began in the direct phase"),
-        };
+        state: *const GeneratedRecordParseState,
+        variant: GeneratedParserTagVariant,
+        compare_op: LIR.LowLevel,
+    ) Allocator.Error!LIR.CFStmtId {
+        const context = state.context;
+        const fields = context.fields;
         const payload = try proc.generatedParserSingleTagPayloadLocal(variant);
         const name = try proc.addFrameLocal(.str);
-        const rest = try proc.addFrameLocalForRep(state.context.state_rep);
-        state.named = .{
-            .payload = payload,
-            .name = name,
-            .rest = rest,
-            .dispatch = try self.lowerGeneratedSkipRecordField(proc, state.context, rest),
-            .matches = undefined,
-        };
-        state.phase = phase;
-        state.field_cursor = state.context.fields.len;
-    }
-
-    fn finishGeneratedRecordNamedFieldEvent(
-        _: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        state: *const GeneratedRecordParseState,
-    ) Allocator.Error!LIR.CFStmtId {
-        const named = state.named;
-        const variant = switch (state.phase) {
-            .try_field => state.variants[3],
-            .caseless => state.variants[4],
-            .direct => boxyLowerInvariant("generated record named field event finished in the direct phase"),
-        };
-        var dispatch = try proc.generatedParserReadRecordField(
-            named.rest,
-            state.context.state_rep,
-            named.payload.local,
-            named.payload.child,
+        const rest = try proc.addFrameLocalForRep(context.state_rep);
+        var dispatch = try self.lowerGeneratedSkipRecordField(proc, context, rest);
+        var field_index = fields.len;
+        while (field_index > 0) {
+            field_index -= 1;
+            const matches = try proc.addFrameLocal(.bool);
+            const matched = try self.lowerGeneratedRecordFieldJump(proc, state, field_index, rest);
+            const switch_stmt = try proc.boolSwitchNoContinuation(matches, matched, dispatch);
+            dispatch = try proc.assignBinaryLowLevel(matches, compare_op, name, fields[field_index].renamed, switch_stmt);
+        }
+        dispatch = try proc.generatedParserReadRecordField(
+            rest,
+            context.state_rep,
+            payload.local,
+            payload.child,
             "rest",
-            named.dispatch,
+            dispatch,
         );
         dispatch = try proc.generatedParserReadRecordField(
-            named.name,
-            proc.repForTypeRef(try proc.generatedParserRecordFieldType(named.payload.child.source_type, "name")),
-            named.payload.local,
-            named.payload.child,
+            name,
+            proc.repForTypeRef(try proc.generatedParserRecordFieldType(payload.child.source_type, "name")),
+            payload.local,
+            payload.child,
             "name",
             dispatch,
         );
-        return try proc.generatedParserReadTagPayload(state.step.ok_payload.local, variant, named.payload, dispatch);
+        return try proc.generatedParserReadTagPayload(state.step.ok_payload.local, variant, payload, dispatch);
     }
 
     /// The parser for a matched record field's value, reserving the value
@@ -13371,8 +13343,22 @@ const ProcedureBuilder = struct {
         const context = state.context;
         const fields = context.fields;
         const presence = context.presence;
+        var bodies = state.bodies;
+        bodies[2] = try self.lowerGeneratedRecordDirectFieldEvent(proc, state);
+        bodies[3] = try self.lowerGeneratedRecordNamedFieldEvent(proc, state, state.variants[3], .str_is_eq);
+        bodies[4] = try self.lowerGeneratedRecordNamedFieldEvent(proc, state, state.variants[4], .str_caseless_ascii_equals);
         const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
-        const event_body = try proc.generatedParserTagDispatch(state.step.ok_payload.local, state.step.ok_payload.child.rep, &state.variants, &state.bodies, impossible);
+        var event_body = try proc.generatedParserTagDispatch(state.step.ok_payload.local, state.step.ok_payload.child.rep, &state.variants, &bodies, impossible);
+        var field_index = fields.len;
+        while (field_index > 0) {
+            field_index -= 1;
+            event_body = try self.result.store.addCFStmt(.{ .join = .{
+                .id = state.field_joins[field_index],
+                .params = try proc.joinParamSpan(&.{state.field_states[field_index]}),
+                .body = state.field_bodies[field_index],
+                .remainder = event_body,
+            } }, proc.derivedOrigin());
+        }
         const read_event = try self.finishGeneratedParserTryCall(
             proc,
             state.step,
@@ -13398,15 +13384,70 @@ const ProcedureBuilder = struct {
 
         const entry_end = try self.lowerGeneratedRecordEntryEnd(proc, context);
         const head_dispatch = try proc.boolSwitchNoContinuation(context.entry_pending, entry_end, head);
-        const loop_body = try self.result.store.addCFStmt(.{ .join = .{
+        const step_loop = try self.result.store.addCFStmt(.{ .join = .{
             .id = state.step_join,
             .params = LIR.LocalSpan.empty(),
             .body = read_event,
             .remainder = head_dispatch,
         } }, proc.derivedOrigin());
 
-        var initial = try self.lowerGeneratedRecordStart(proc, context, state.state);
-        var field_index = fields.len;
+        const maybe_payloads = try self.allocator.alloc(LIR.LocalId, fields.len);
+        defer self.allocator.free(maybe_payloads);
+        const maybe_conditions = try self.allocator.alloc(LIR.LocalId, fields.len);
+        defer self.allocator.free(maybe_conditions);
+        const maybe_masks = try self.allocator.alloc(u64, fields.len);
+        defer self.allocator.free(maybe_masks);
+        for (fields, 0..) |field, index| {
+            maybe_payloads[index] = field.payload;
+            maybe_conditions[index] = presence[index / 64];
+            maybe_masks[index] = @as(u64, 1) << @intCast(index % 64);
+        }
+
+        // The loop's one error continuation. Its retained environment is the
+        // field-name evidence, the field names this worker owns, and the
+        // payload slots, so their cleanup exists once rather than at every
+        // fallible call inside the loop.
+        const retained = try self.allocator.alloc(LIR.LocalId, 1 + fields.len * 2);
+        defer self.allocator.free(retained);
+        var retained_len: usize = 0;
+        retained[retained_len] = context.evidence;
+        retained_len += 1;
+        switch (state.field_names_source) {
+            .captures => for (fields) |field| {
+                retained[retained_len] = field.renamed;
+                retained_len += 1;
+            },
+            .tag_union_spec => {},
+        }
+        for (fields) |field| {
+            retained[retained_len] = field.payload;
+            retained_len += 1;
+        }
+        const error_body = try proc.assignRepresentationBoundaryConsumingSource(
+            state.shape_context.result,
+            context.target,
+            state.shape_context.result_rep,
+            context.target_rep,
+            state.shape_context.next,
+        );
+        const loop_body = try self.result.store.addCFStmt(.{ .join = .{
+            .id = state.error_join,
+            .params = try proc.joinParamSpan(&.{context.target}),
+            .retained = try self.result.store.addLocalSpan(retained[0..retained_len]),
+            .maybe_uninitialized_params = try self.result.store.addLocalSpan(maybe_payloads),
+            .maybe_uninitialized_conditions = try self.result.store.addLocalSpan(maybe_conditions),
+            .maybe_uninitialized_condition_masks = try self.result.store.addU64Span(maybe_masks),
+            .body = error_body,
+            .remainder = step_loop,
+        } }, proc.derivedOrigin());
+
+        // `parse_record_start` runs before the loop holds any payload, so its
+        // error goes straight to the parser result.
+        var start_context = context;
+        start_context.target = state.shape_context.result;
+        start_context.next = state.shape_context.next;
+        var initial = try self.lowerGeneratedRecordStart(proc, start_context, state.state);
+        field_index = fields.len;
         while (field_index > 0) {
             field_index -= 1;
             initial = try proc.initUninitializedLocal(fields[field_index].payload, initial);
@@ -13425,18 +13466,6 @@ const ProcedureBuilder = struct {
         @memcpy(join_params[0..control_params.len], &control_params);
         for (fields, 0..) |field, index| join_params[control_params.len + index] = field.payload;
         for (presence, 0..) |local, index| join_params[control_params.len + fields.len + index] = local;
-
-        const maybe_payloads = try self.allocator.alloc(LIR.LocalId, fields.len);
-        defer self.allocator.free(maybe_payloads);
-        const maybe_conditions = try self.allocator.alloc(LIR.LocalId, fields.len);
-        defer self.allocator.free(maybe_conditions);
-        const maybe_masks = try self.allocator.alloc(u64, fields.len);
-        defer self.allocator.free(maybe_masks);
-        for (fields, 0..) |field, index| {
-            maybe_payloads[index] = field.payload;
-            maybe_conditions[index] = presence[index / 64];
-            maybe_masks[index] = @as(u64, 1) << @intCast(index % 64);
-        }
 
         const join = try self.result.store.addCFStmt(.{ .join = .{
             .id = context.join_id,
@@ -15911,21 +15940,40 @@ const ProcBodyBuilder = struct {
         ids: std.AutoHashMap(DescriptorTemplateDescKey, LIR.BoxyTypeDescId),
         env_ids: std.AutoHashMap(DescriptorTemplateEnvKey, DescriptorTemplateEnvId),
         bindings: std.ArrayList(DescriptorTemplateBinding),
-        forced_refs: []?LIR.LocalId,
+        /// The descriptor local a constructed value forces at a
+        /// representation. A template names few, so the map is sparse.
+        forced_refs: std.AutoHashMapUnmanaged(Plan.TypeRepId, LIR.LocalId) = .empty,
         /// The environment of the root's own instantiation, where descriptor
         /// locals named by representation describe what they were bound to.
         root_env: ?DescriptorTemplateEnvId = null,
-        exact_reps: []?Plan.TypeRepId,
+        /// The actual each currently bound nominal formal stands for.
+        exact_reps: std.AutoHashMapUnmanaged(Plan.TypeRepId, Plan.TypeRepId) = .empty,
         exact_storage: bool,
         env: DescriptorTemplateEnvId = .empty,
         excluded_local: ?LIR.LocalId = null,
+        /// Whether the build asked which descriptor locals this procedure
+        /// has bound, making its descriptor specific to the procedure.
+        read_bound_locals: bool = false,
 
         fn deinit(self: *DescriptorTemplateContext, allocator: Allocator) void {
             self.ids.deinit();
             self.env_ids.deinit();
             self.bindings.deinit(allocator);
-            allocator.free(self.forced_refs);
-            allocator.free(self.exact_reps);
+            self.forced_refs.deinit(allocator);
+            self.exact_reps.deinit(allocator);
+        }
+
+        /// Restore `formal` to `outer`, its value before a binding. An
+        /// `outer` representation was read from this map, so its entry is
+        /// still present and restoring it needs no allocation.
+        fn restoreExactRep(self: *DescriptorTemplateContext, formal: Plan.TypeRepId, outer: ?Plan.TypeRepId) void {
+            if (outer) |rep| {
+                const entry = self.exact_reps.getPtr(formal) orelse
+                    boxyLowerInvariant("boxy descriptor template restored a formal it never bound");
+                entry.* = rep;
+            } else {
+                _ = self.exact_reps.remove(formal);
+            }
         }
     };
 
@@ -21044,7 +21092,7 @@ const ProcBodyBuilder = struct {
             => return try self.beginBoxBoundaryLowLevel(target, result_ty, op, args, next),
             .box_unbox_borrowed => boxyLowerInvariant("ARC-only Box.unbox variant reached boxy lowering"),
             .list_map_can_reuse => return try self.beginListMapCanReuse(target, args, next),
-            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_prefetch, .list_prefetched, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_sort_with, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => {},
+            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_prefetch, .list_prefetched, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_sort_with, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_map_prepare_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => {},
         }
         try self.markLocalDescriptorForType(target, result_ty);
 
@@ -21109,9 +21157,9 @@ const ProcBodyBuilder = struct {
         }
 
         // list_sort_with calls its comparator through a fixed ABI whose
-        // ordering result is the closed `[Before, Same, After]`. A comparator
-        // written as a callback returns that union open, so cross into the
-        // comparator's exact ABI representation before the call.
+        // ordering result is the closed `[Before, Same, After]` in its host
+        // representation. A comparator whose representation differs crosses
+        // into that exact ABI representation before the call.
         if (op == .list_sort_with) {
             if (lowered.len != 2) boxyLowerInvariant("list_sort_with did not take a list and a comparator");
             const boxed_comparator_rep = self.repForType(self.module.checked_bodies.expr(args[1]).ty);
@@ -21818,11 +21866,11 @@ const ProcBodyBuilder = struct {
         method_text: []const u8,
         subject_type: ?Plan.CheckedTypeIdentity,
     ) ?Plan.GeneratedCodecCallPlan {
-        for (self.parent.plan.generated_codec_calls.items) |call| {
+        for (self.parent.plan.generated_codec_calls.items) |*call| {
             if (call.caller != caller or !planTypeRefEql(call.dispatch_type, dispatch_type)) continue;
             if (!optionalPlanTypeRefEql(call.subject_type, subject_type)) continue;
             const method_module = procedureModuleById(self.parent.modules, call.method_module);
-            if (std.mem.eql(u8, method_module.canonical_names.methodNameText(call.method), method_text)) return call;
+            if (std.mem.eql(u8, method_module.canonical_names.methodNameText(call.method), method_text)) return call.*;
         }
         return null;
     }
@@ -21835,10 +21883,10 @@ const ProcBodyBuilder = struct {
         method_module: checked.ModuleId,
         method: names.MethodNameId,
     ) Plan.GeneratedCodecCallPlan {
-        for (self.parent.plan.generated_codec_calls.items) |call| {
+        for (self.parent.plan.generated_codec_calls.items) |*call| {
             if (call.caller != caller or !planTypeRefEql(call.dispatch_type, dispatch_type)) continue;
             if (!optionalPlanTypeRefEql(call.subject_type, subject_type)) continue;
-            if (checked_moduleKeyEqual(call.method_module, method_module) and call.method == method) return call;
+            if (checked_moduleKeyEqual(call.method_module, method_module) and call.method == method) return call.*;
         }
         boxyLowerInvariant("generated codec body referenced an unplanned exact method call");
     }
@@ -21850,12 +21898,12 @@ const ProcBodyBuilder = struct {
         method_text: []const u8,
     ) Plan.GeneratedCodecCallPlan {
         var found: ?Plan.GeneratedCodecCallPlan = null;
-        for (self.parent.plan.generated_codec_calls.items) |call| {
+        for (self.parent.plan.generated_codec_calls.items) |*call| {
             if (call.caller != caller or !planTypeRefEql(call.dispatch_type, dispatch_type)) continue;
             const method_module = procedureModuleById(self.parent.modules, call.method_module);
             if (!std.mem.eql(u8, method_module.canonical_names.methodNameText(call.method), method_text)) continue;
             if (found != null) boxyLowerInvariant("generated codec body referenced an ambiguously planned method call");
-            found = call;
+            found = call.*;
         }
         return found orelse boxyLowerInvariant("generated codec body referenced an unplanned method call");
     }
@@ -21935,17 +21983,30 @@ const ProcBodyBuilder = struct {
             .concrete => blk: {
                 const branches = try self.parent.allocator.alloc(LIR.CFSwitchBranch, variants.len);
                 defer self.parent.allocator.free(branches);
+                const variant_count = self.parent.plan.representations.items[@backingInt(source_tag_rep)].tag_variants.len;
+                const dispatched = try self.parent.allocator.alloc(bool, variant_count);
+                defer self.parent.allocator.free(dispatched);
+                @memset(dispatched, false);
                 for (variants, bodies, branches) |variant, body, *branch| {
                     if (variant.tag_rep != source_tag_rep or variant.owner_rep != source_tag_rep) {
                         boxyLowerInvariant("generated parser concrete dispatch referenced a nonlocal row variant");
                     }
+                    if (variant.index >= variant_count or dispatched[variant.index]) {
+                        boxyLowerInvariant("generated parser concrete dispatch repeated or exceeded its union's variants");
+                    }
+                    dispatched[variant.index] = true;
                     branch.* = .{ .value = variant.index, .body = body };
                 }
+                // A dispatch over every variant of the union cannot miss, so
+                // its last variant is the default rather than an impossible
+                // branch.
+                const exhaustive = variants.len == variant_count;
+                const switch_branches = if (exhaustive) branches[0 .. branches.len - 1] else branches;
                 const discriminant = try self.addFrameLocal(.u32);
                 const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
                     .cond = discriminant,
-                    .branches = try self.parent.result.store.addCFSwitchBranches(branches),
-                    .default_branch = default_branch,
+                    .branches = try self.parent.result.store.addCFSwitchBranches(switch_branches),
+                    .default_branch = if (exhaustive) branches[branches.len - 1].body else default_branch,
                     .continuation = null,
                 } }, self.derivedOrigin());
                 break :blk try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
@@ -31708,7 +31769,7 @@ const ProcBodyBuilder = struct {
                         return assign;
                     },
                     .box_unbox_borrowed => boxyLowerInvariant("ARC-only Box.unbox variant reached boxy lowering"),
-                    .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_prefetch, .list_prefetched, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_sort_with, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => unreachable,
+                    .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_prefetch, .list_prefetched, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_sort_with, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => unreachable,
                 }
             }
             return try self.assignLocal(target, source, next);
@@ -31738,7 +31799,7 @@ const ProcBodyBuilder = struct {
                     return try self.assignUnaryLowLevel(target, .box_unbox, source, next);
                 }
             },
-            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_prefetch, .list_prefetched, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_sort_with, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => unreachable,
+            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_prefetch, .list_prefetched, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_sort_with, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => unreachable,
         }
 
         boxyLowerInvariant("Box boundary low-level operation required descriptor-backed box adaptation lowering");
@@ -33571,18 +33632,30 @@ const ProcBodyBuilder = struct {
         self: *ProcBodyBuilder,
         rep_id: Plan.TypeRepId,
     ) Allocator.Error!DescriptorMaterialization {
+        // Formal bindings make the template specific to this procedure.
+        const shareable = self.nominal_formal_bindings.items.len == 0;
+        if (shareable) {
+            if (self.parent.exact_template_desc_ids.get(rep_id)) |existing| {
+                return .{ .desc = .{ .static = existing }, .captures = LIR.LocalSpan.empty() };
+            }
+        }
+
         var captures = std.ArrayList(LIR.LocalId).empty;
         defer captures.deinit(self.parent.allocator);
 
         var context = try self.initDescriptorTemplateContext(true);
         defer context.deinit(self.parent.allocator);
 
-        const desc: LIR.BoxyDescRef = .{ .static = try self.descriptorTemplateTypeDescForRep(rep_id, &captures, &context) };
+        const desc_id = try self.descriptorTemplateTypeDescForRep(rep_id, &captures, &context);
+        if (shareable and !context.read_bound_locals) {
+            if (captures.items.len != 0) boxyLowerInvariant("boxy exact descriptor template captured a local it never read");
+            try self.parent.exact_template_desc_ids.put(self.parent.allocator, rep_id, desc_id);
+        }
         const span = if (captures.items.len == 0)
             LIR.LocalSpan.empty()
         else
             try self.parent.result.store.addLocalSpan(captures.items);
-        return .{ .desc = desc, .captures = span };
+        return .{ .desc = .{ .static = desc_id }, .captures = span };
     }
 
     fn descriptorMaterializationForKnownRepWithOverrides(
@@ -33613,7 +33686,7 @@ const ProcBodyBuilder = struct {
 
         for (overrides) |override| {
             const override_rep = self.parent.descriptorIdentityRep(override.rep);
-            context.forced_refs[@backingInt(override_rep)] = override.local;
+            try context.forced_refs.put(self.parent.allocator, override_rep, override.local);
         }
 
         const desc: LIR.BoxyDescRef = .{ .static = try self.descriptorTemplateTypeDescForRep(identity_rep, &captures, &context) };
@@ -33797,19 +33870,15 @@ const ProcBodyBuilder = struct {
     }
 
     fn initDescriptorTemplateContext(self: *ProcBodyBuilder, exact_storage: bool) Allocator.Error!DescriptorTemplateContext {
-        const forced_refs = try self.parent.allocator.alloc(?LIR.LocalId, self.parent.plan.representations.items.len);
-        errdefer self.parent.allocator.free(forced_refs);
-        const exact_reps = try self.parent.allocator.alloc(?Plan.TypeRepId, self.parent.plan.representations.items.len);
-        @memset(forced_refs, null);
-        @memset(exact_reps, null);
+        var exact_reps: std.AutoHashMapUnmanaged(Plan.TypeRepId, Plan.TypeRepId) = .empty;
+        errdefer exact_reps.deinit(self.parent.allocator);
         for (self.nominal_formal_bindings.items) |binding| {
-            exact_reps[@backingInt(binding.formal)] = binding.actual;
+            try exact_reps.put(self.parent.allocator, binding.formal, binding.actual);
         }
         return .{
             .ids = std.AutoHashMap(DescriptorTemplateDescKey, LIR.BoxyTypeDescId).init(self.parent.allocator),
             .env_ids = std.AutoHashMap(DescriptorTemplateEnvKey, DescriptorTemplateEnvId).init(self.parent.allocator),
             .bindings = std.ArrayList(DescriptorTemplateBinding).empty,
-            .forced_refs = forced_refs,
             .exact_reps = exact_reps,
             .exact_storage = exact_storage,
         };
@@ -33823,8 +33892,8 @@ const ProcBodyBuilder = struct {
         if (!context.exact_storage and !self.repIsBareDynamic(rep_id)) return rep_id;
 
         var current = rep_id;
-        var remaining = context.exact_reps.len;
-        while (context.exact_reps[@backingInt(current)]) |next| {
+        var remaining = context.exact_reps.count();
+        while (context.exact_reps.get(current)) |next| {
             if (remaining == 0) {
                 boxyLowerInvariant("boxy exact descriptor substitutions contained a cycle");
             }
@@ -33862,7 +33931,7 @@ const ProcBodyBuilder = struct {
             while (substitutions.next()) |substitution| {
                 const formal_rep = substitution.formal_rep orelse continue;
                 const actual = self.descriptorTemplateExactRep(substitution.actual_rep, context);
-                const outer = context.exact_reps[@backingInt(formal_rep)];
+                const outer = context.exact_reps.get(formal_rep);
                 if (formal_rep == actual or outer == actual) continue;
                 try context.bindings.append(self.parent.allocator, .{
                     .formal = formal_rep,
@@ -33870,7 +33939,7 @@ const ProcBodyBuilder = struct {
                     .actual = actual,
                 });
             }
-            try activateDescriptorTemplateBindings(context, bindings_start);
+            try activateDescriptorTemplateBindings(self.parent.allocator, context, bindings_start);
             current = self.parent.descriptorBackingShapeRep(current) orelse return scope;
         }
         boxyLowerInvariant("cyclic exact descriptor storage wrapper");
@@ -33879,11 +33948,12 @@ const ProcBodyBuilder = struct {
     /// Bind the formals of `context.bindings[bindings_start..]`, extending the
     /// environment by each binding.
     fn activateDescriptorTemplateBindings(
+        allocator: Allocator,
         context: *DescriptorTemplateContext,
         bindings_start: usize,
     ) Allocator.Error!void {
         for (context.bindings.items[bindings_start..]) |binding| {
-            context.exact_reps[@backingInt(binding.formal)] = binding.actual;
+            try context.exact_reps.put(allocator, binding.formal, binding.actual);
             const key = DescriptorTemplateEnvKey{
                 .parent = context.env,
                 .formal = binding.formal,
@@ -33906,7 +33976,7 @@ const ProcBodyBuilder = struct {
         while (index > scope.bindings_start) {
             index -= 1;
             const binding = context.bindings.items[index];
-            context.exact_reps[@backingInt(binding.formal)] = binding.outer;
+            context.restoreExactRep(binding.formal, binding.outer);
         }
         context.bindings.shrinkRetainingCapacity(scope.bindings_start);
         context.env = scope.env;
@@ -34049,7 +34119,7 @@ const ProcBodyBuilder = struct {
             // fills, which a nominal backing names by its formal. The value's
             // own descriptor describes its storage there, whatever descriptor
             // the formal's actual type carries.
-            if (context.forced_refs[@backingInt(self.parent.descriptorIdentityRep(rep_id))]) |local| {
+            if (context.forced_refs.get(self.parent.descriptorIdentityRep(rep_id))) |local| {
                 if (context.excluded_local != local) {
                     try appendUniqueLocal(self.parent.allocator, captures, local);
                     return .{ .local = local };
@@ -34069,7 +34139,7 @@ const ProcBodyBuilder = struct {
         const may_reuse_rep_local = shares_identity_storage and may_reuse_whole_descriptor and
             !try self.descriptorTemplateRebindsRep(identity_rep, context);
         if (may_reuse_rep_local) {
-            if (context.forced_refs[@backingInt(identity_rep)]) |local| {
+            if (context.forced_refs.get(identity_rep)) |local| {
                 if (context.excluded_local == local) return try self.templateStaticRef(rep_id, frames, context);
                 try appendUniqueLocal(self.parent.allocator, captures, local);
                 return .{ .local = local };
@@ -34078,6 +34148,7 @@ const ProcBodyBuilder = struct {
         const rep = self.parent.plan.representations.items[@backingInt(identity_rep)];
         if (may_reuse_rep_local) if (rep.descriptor) |desc| {
             if (parent_desc == null or desc != parent_desc.?) {
+                context.read_bound_locals = true;
                 if (self.descriptorLocalForRequirementAndRepOrNull(desc, identity_rep)) |local| {
                     if (self.descriptorBindingIsBoundForRep(identity_rep) and context.excluded_local != local) {
                         try appendUniqueLocal(self.parent.allocator, captures, local);
@@ -34496,14 +34567,14 @@ const ProcBodyBuilder = struct {
         context: *DescriptorTemplateContext,
     ) Allocator.Error!void {
         const actual = self.descriptorTemplateExactRep(actual_rep, context);
-        const outer = context.exact_reps[@backingInt(formal)];
+        const outer = context.exact_reps.get(formal);
         if (formal == actual or outer == actual) return;
         try context.bindings.append(self.parent.allocator, .{
             .formal = formal,
             .outer = outer,
             .actual = actual,
         });
-        context.exact_reps[@backingInt(formal)] = actual;
+        try context.exact_reps.put(self.parent.allocator, formal, actual);
         const key = DescriptorTemplateEnvKey{
             .parent = context.env,
             .formal = formal,
@@ -40817,15 +40888,17 @@ const ProcBodyBuilder = struct {
             state.scope = null;
             return stmt;
         }
-        const default_branch = switch (state.kind) {
-            .concrete => state.unreachable_source_variant,
-            .dynamic => try self.parent.result.store.addCFStmt(.runtime_error, self.glueOrigin()),
-        };
+        // Both kinds branch on every variant of the concrete source, so the
+        // switch cannot miss and its last variant is the default.
+        if (state.branches.len != state.source_variants.len or state.branches.len == 0) {
+            boxyLowerInvariant("boxy tag boundary did not branch on every source variant");
+        }
+        const last = state.branches.len - 1;
         const discriminant = try self.addFrameLocal(.u32);
         const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
             .cond = discriminant,
-            .branches = try self.parent.result.store.addCFSwitchBranches(state.branches),
-            .default_branch = default_branch,
+            .branches = try self.parent.result.store.addCFSwitchBranches(state.branches[0..last]),
+            .default_branch = state.branches[last].body,
             .continuation = null,
         } }, self.glueOrigin());
         const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{

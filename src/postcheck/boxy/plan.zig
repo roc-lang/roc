@@ -801,6 +801,29 @@ pub const GeneratedFieldIteratorLink = struct {
     first_step: WorkerPlanId,
 };
 
+/// Whether `source` is a callback a generated encoder packs for an encoding
+/// method to call.
+fn isGeneratedEncoderCallback(source: WorkerSource) bool {
+    return switch (source) {
+        .generated_codec => |codec| switch (codec.kind) {
+            .encoder_record_fields,
+            .encoder_dict_fields,
+            .encoder_sequence_elements,
+            .encoder_tag_payload_elements,
+            .encoder_value_thunk,
+            .encoder_dict_key_thunk,
+            => true,
+            .parser_constructor, .parser_runtime, .encoder_constructor, .encoder_runtime => false,
+        },
+        .procedure_template,
+        .procedure_binding,
+        .procedure_use,
+        .nested_expr,
+        .generated_field_iterator,
+        => false,
+    };
+}
+
 /// One renamed record field captured by a generated parser runtime worker.
 pub const GeneratedParserFieldCapture = struct {
     worker: WorkerPlanId,
@@ -900,6 +923,25 @@ pub const WorkerSource = union(enum) {
     generated_field_iterator: GeneratedFieldIteratorSource,
 };
 
+/// What selects one planned worker: its source and, except for a nested
+/// expression whose site fixes its type, the checked type it is planned at.
+const WorkerIdentity = struct {
+    source: WorkerSource,
+    checked_type: ?CheckedTypeIdentity,
+
+    const Context = struct {
+        pub fn hash(_: Context, key: WorkerIdentity) u64 {
+            var hasher = std.hash.Wyhash.init(0);
+            std.hash.autoHash(&hasher, key);
+            return hasher.final();
+        }
+
+        pub fn eql(_: Context, a: WorkerIdentity, b: WorkerIdentity) bool {
+            return std.meta.eql(a, b);
+        }
+    };
+};
+
 /// Const-store identity of a function value persisted into runtime code.
 pub const StoredFnSource = struct {
     module: checked.ModuleId,
@@ -935,6 +977,9 @@ pub const WorkerPlan = struct {
     hidden_dicts: Span = .{},
     body_hidden_dicts: Span = .{},
     erased_captures: Span = .{},
+    /// For a generated encoder runtime or callback, the renamed field names
+    /// it captures, as ascending indices into `generated_parser_field_captures`.
+    encoder_name_captures: Span = .{},
     /// Open records the worker's body needs whose descriptor one of its own
     /// dictionaries supplies, read from it on entry.
     dictionary_descs: Span = .{},
@@ -1267,6 +1312,7 @@ pub const ProgramPlan = struct {
     generated_parser_tag_union_record_types: std.ArrayList(CheckedTypeIdentity),
     generated_field_iterator_links: std.ArrayList(GeneratedFieldIteratorLink),
     generated_parser_field_captures: std.ArrayList(GeneratedParserFieldCapture),
+    encoder_name_captures: std.ArrayList(u32),
     generated_parser_missing_required_fields: std.ArrayList(GeneratedParserMissingRequiredField),
     generated_parser_try_plans: std.ArrayList(GeneratedParserTryPlan),
     generated_parser_dictionary_field_selections: std.ArrayList(GeneratedParserDictionaryFieldSelection),
@@ -1338,6 +1384,7 @@ pub const ProgramPlan = struct {
             .generated_parser_tag_union_record_types = .empty,
             .generated_field_iterator_links = .empty,
             .generated_parser_field_captures = .empty,
+            .encoder_name_captures = .empty,
             .generated_parser_missing_required_fields = .empty,
             .generated_parser_try_plans = .empty,
             .generated_parser_dictionary_field_selections = .empty,
@@ -1439,6 +1486,7 @@ pub const ProgramPlan = struct {
         self.derived_env_bindings.deinit(self.allocator);
         self.derived_envs.deinit(self.allocator);
         self.generated_parser_field_captures.deinit(self.allocator);
+        self.encoder_name_captures.deinit(self.allocator);
         self.generated_parser_missing_required_fields.deinit(self.allocator);
         self.generated_parser_try_plans.deinit(self.allocator);
         self.generated_parser_dictionary_field_selections.deinit(self.allocator);
@@ -1857,6 +1905,10 @@ pub const ProgramPlan = struct {
         return self.erased_captures.items[span.start .. span.start + span.len];
     }
 
+    pub fn encoderNameCaptureSlice(self: *const ProgramPlan, span: Span) []const u32 {
+        return self.encoder_name_captures.items[span.start .. span.start + span.len];
+    }
+
     pub fn generatedCodecCallTypeSlice(self: *const ProgramPlan, span: Span) []const CheckedTypeIdentity {
         return self.generated_codec_call_types.items[span.start .. span.start + span.len];
     }
@@ -2000,7 +2052,7 @@ pub const ProgramPlan = struct {
     }
 
     pub fn workerForSourceType(self: *const ProgramPlan, source: WorkerSource, checked_type: CheckedTypeIdentity) ?WorkerPlanId {
-        for (self.workers.items) |worker| {
+        for (self.workers.items) |*worker| {
             if (!workerSourceEql(worker.source, source)) continue;
             if (source == .nested_expr or typeRefEql(worker.checked_type, checked_type)) return worker.id;
         }
@@ -3676,6 +3728,7 @@ pub fn analyzeProgram(
     // propagation re-run before descriptor requirements are derived from it.
     builder.propagateDynamicRequirements();
     try builder.materializeDescriptorRequirements();
+    try builder.materializeEncoderNameCaptures();
     try builder.materializeWorkerHiddenDescriptorParams();
     try builder.materializeCallableUseHiddenDescriptorArgs();
     try builder.materializeDescriptorMethodHiddenDescriptorArgs();
@@ -3831,9 +3884,13 @@ const Builder = struct {
     active_worker: ?WorkerPlanId,
     /// The worker the most recent worker-planning step ensured.
     plan_worker_result: WorkerPlanId = undefined,
+    /// Every worker this builder planned, by the identity that selects it.
+    worker_ids: std.HashMapUnmanaged(WorkerIdentity, WorkerPlanId, WorkerIdentity.Context, std.hash_map.default_max_load_percentage) = .empty,
     /// The generated codec call the most recent worker-planning step ensured.
     plan_codec_result: GeneratedCodecCallPlan = undefined,
     generated_callable_uses: std.AutoHashMapUnmanaged(GeneratedCallableKey, void) = .empty,
+    /// How many workers had their encoder name captures planned.
+    encoder_name_capture_workers: usize = 0,
     has_custom_numeral: bool = false,
     observed_numeral_evidence: std.AutoHashMapUnmanaged(DictionaryMethodEvidence.EvidenceEdge, void) = .empty,
     evidence_workers_walked: usize = 0,
@@ -3936,6 +3993,7 @@ const Builder = struct {
     }
 
     fn deinit(self: *Builder) void {
+        self.worker_ids.deinit(self.allocator);
         self.stored_capture_consumed.deinit(self.allocator);
         var host_nominal_keys = self.host_nominals.keyIterator();
         while (host_nominal_keys.next()) |key| self.allocator.free(key.args);
@@ -4040,14 +4098,14 @@ const Builder = struct {
 
     fn moduleForId(self: *Builder, module_id: checked.ModuleId) ModuleView {
         if (moduleKeyEqual(module_id, self.root_view.key)) return self.root_view;
-        for (self.extra_module_views) |view| {
-            if (moduleKeyEqual(module_id, view.key)) return view;
+        for (self.extra_module_views) |*view| {
+            if (moduleKeyEqual(module_id, view.key)) return view.*;
         }
-        for (self.imports) |imported| {
-            if (moduleKeyEqual(module_id, imported.key)) return moduleViewFromImported(imported);
+        for (self.imports) |*imported| {
+            if (moduleKeyEqual(module_id, imported.key)) return moduleViewFromImported(imported.*);
         }
-        for (self.relation_modules) |relation| {
-            if (moduleKeyEqual(module_id, relation.key)) return moduleViewFromImported(relation);
+        for (self.relation_modules) |*relation| {
+            if (moduleKeyEqual(module_id, relation.key)) return moduleViewFromImported(relation.*);
         }
         boxyPlanInvariant("checked nominal representation referenced a module outside boxy planner input");
     }
@@ -4972,9 +5030,17 @@ const Builder = struct {
         checked_type: CheckedTypeIdentity,
         root_request: ?checked.RootRequest,
     ) Allocator.Error!void {
-        const selected_source = self.workerSourceForCallableEvalSource(source);
-        if (!workerSourceEql(selected_source, source)) {
-            return try actions.append(self.allocator, .{ .ensure_worker = .{ .source = selected_source, .checked_type = checked_type, .root_request = root_request } });
+        const selected: SharedGeneratedCodec = switch (source) {
+            .generated_codec => |codec| self.generatedCodecAtIdentity(codec, checked_type),
+            .procedure_template,
+            .procedure_binding,
+            .procedure_use,
+            .nested_expr,
+            .generated_field_iterator,
+            => .{ .source = self.workerSourceForCallableEvalSource(source), .checked_type = checked_type },
+        };
+        if (!workerSourceEql(selected.source, source) or !typeRefEql(selected.checked_type, checked_type)) {
+            return try actions.append(self.allocator, .{ .ensure_worker = .{ .source = selected.source, .checked_type = selected.checked_type, .root_request = root_request } });
         }
         const worker_type = if (source == .nested_expr)
             self.workerCheckedTypeForSource(source, checked_type)
@@ -4985,19 +5051,22 @@ const Builder = struct {
         if (!typeRefEql(definition_type, worker_type)) {
             _ = try self.analyzeType(self.moduleForId(definition_type.module), definition_type.ty);
         }
-        for (self.plan.workers.items) |worker| {
-            if (workerSourceEql(worker.source, source) and (source == .nested_expr or typeRefEql(worker.checked_type, worker_type))) {
-                if (root_request) |request| {
-                    if (worker.root_request == null) {
-                        self.plan.workers.items[@backingInt(worker.id)].root_request = request;
-                    }
-                }
-                self.plan_worker_result = worker.id;
-                return;
-            }
-        }
-
+        const identity = WorkerIdentity{
+            .source = source,
+            .checked_type = if (source == .nested_expr) null else worker_type,
+        };
         const worker_id: WorkerPlanId = @fromBackingInt(@intCast(@as(u32, @intCast(self.plan.workers.items.len))));
+        const entry = try self.worker_ids.getOrPut(self.allocator, identity);
+        if (entry.found_existing) {
+            const worker = &self.plan.workers.items[@backingInt(entry.value_ptr.*)];
+            if (root_request) |request| {
+                if (worker.root_request == null) worker.root_request = request;
+            }
+            self.plan_worker_result = worker.id;
+            return;
+        }
+        entry.value_ptr.* = worker_id;
+        errdefer _ = self.worker_ids.remove(identity);
         const body = if (self.root_module != null and
             source != .generated_codec and
             source != .generated_field_iterator)
@@ -8879,8 +8948,8 @@ const Builder = struct {
 
     /// The sort low-level calls its boxed comparator through a fixed ABI: the
     /// comparator's arguments keep their worker representation, and its
-    /// ordering result is the closed `[Before, Same, After]` that the ABI
-    /// context gives the open callback result.
+    /// ordering result is the closed `[Before, Same, After]` in its host
+    /// representation.
     fn planSortComparatorAbi(self: *Builder, boxed_comparator_rep: TypeRepId) Allocator.Error!void {
         const comparator_rep = self.repQuery().requiredSingleChild(boxed_comparator_rep, .box_payload).rep;
         if (self.plan.sort_comparator_abis.get(comparator_rep) != null) return;
@@ -11536,6 +11605,23 @@ const Builder = struct {
         return .{ .view = view, .entries = view.static_dispatch_plans.siteEvidence(use.expr) };
     }
 
+    const CheckedRootEvidence = struct {
+        view: ?ModuleView,
+        entries: ?[]const static_dispatch.CheckedEvidence,
+    };
+
+    /// The checked evidence a root request supplies to its worker, read
+    /// through the CheckedModule that resolved it.
+    fn checkedRootEvidence(self: *Builder, request: checked.RootRequest) CheckedRootEvidence {
+        const root_evidence = request.root_evidence orelse return .{ .view = null, .entries = null };
+        const view = self.moduleForCheckedModuleId(root_evidence.checked_module);
+        const span = root_evidence.span;
+        return .{
+            .view = view,
+            .entries = view.static_dispatch_plans.evidence_refs[span.start .. span.start + span.len],
+        };
+    }
+
     fn checkedEvidenceForDirectCall(self: *Builder, direct: DirectCallPlan) CheckedCallEvidence {
         const view = self.moduleForId(direct.call.module);
         const call_expr = view.checked_bodies.expr(direct.call.expr);
@@ -12145,6 +12231,74 @@ const Builder = struct {
         return result;
     }
 
+    /// The renamed field names each generated encoder worker captures. A
+    /// runtime holds every name its contract renames and a record-fields
+    /// callback needs its own record's names; every callback also needs the
+    /// names of each callback it packs.
+    fn materializeEncoderNameCaptures(self: *Builder) Allocator.Error!void {
+        const field_captures = self.plan.generated_parser_field_captures.items;
+        const workers = self.plan.workers.items;
+        const needs = try self.allocator.alloc(std.DynamicBitSetUnmanaged, workers.len);
+        defer self.allocator.free(needs);
+        @memset(needs, .{});
+        defer for (needs) |*names| names.deinit(self.allocator);
+        for (workers, needs) |worker, *names| {
+            const codec = switch (worker.source) {
+                .generated_codec => |codec| codec,
+                .procedure_template,
+                .procedure_binding,
+                .procedure_use,
+                .nested_expr,
+                .generated_field_iterator,
+                => continue,
+            };
+            switch (codec.kind) {
+                .parser_constructor, .parser_runtime, .encoder_constructor => continue,
+                .encoder_runtime => {
+                    names.* = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, field_captures.len);
+                    for (field_captures, 0..) |capture, index| {
+                        if (capture.worker == worker.id) names.set(index);
+                    }
+                },
+                .encoder_record_fields => {
+                    const contract_worker = codec.contract_worker orelse
+                        boxyPlanInvariant("generated encoder record callback had no contract worker");
+                    names.* = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, field_captures.len);
+                    for (field_captures, 0..) |capture, index| {
+                        if (capture.worker == contract_worker and typeRefEql(capture.record_type, codec.shape)) names.set(index);
+                    }
+                },
+                .encoder_dict_fields,
+                .encoder_sequence_elements,
+                .encoder_tag_payload_elements,
+                .encoder_value_thunk,
+                .encoder_dict_key_thunk,
+                => names.* = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, field_captures.len),
+            }
+        }
+        // A runtime already holds every name, so only callbacks grow.
+        var changed = true;
+        while (changed) {
+            changed = false;
+            var uses = self.generated_callable_uses.keyIterator();
+            while (uses.next()) |use| {
+                if (!isGeneratedEncoderCallback(workers[@backingInt(use.caller)].source)) continue;
+                if (!isGeneratedEncoderCallback(workers[@backingInt(use.worker)].source)) continue;
+                const caller = &needs[@backingInt(use.caller)];
+                const before = caller.count();
+                caller.setUnion(needs[@backingInt(use.worker)]);
+                if (caller.count() != before) changed = true;
+            }
+        }
+        for (workers, needs) |*worker, names| {
+            const start: u32 = @intCast(self.plan.encoder_name_captures.items.len);
+            var set_names = names.iterator(.{});
+            while (set_names.next()) |index| try self.plan.encoder_name_captures.append(self.allocator, @intCast(index));
+            worker.encoder_name_captures = .{ .start = start, .len = @intCast(self.plan.encoder_name_captures.items.len - start) };
+        }
+        self.encoder_name_capture_workers = workers.len;
+    }
+
     fn materializeWorkerHiddenDescriptorParams(self: *Builder) Allocator.Error!void {
         const worker_leaves = try self.computeWorkerDescriptorLeaves();
         defer {
@@ -12209,10 +12363,8 @@ const Builder = struct {
                                 boxyPlanInvariant("generated encoder callback schema type was not analyzed");
                             try self.collectHiddenDescriptorsForRep(.all, schema_rep, &pending, &seen_reps, &seen_descs);
                         }
-                        const contract_worker = codec.contract_worker orelse
-                            boxyPlanInvariant("generated encoder callback had no contract worker");
-                        for (self.plan.generated_parser_field_captures.items) |field_capture| {
-                            if (field_capture.worker != contract_worker) continue;
+                        for (self.plan.encoderNameCaptureSlice(worker.encoder_name_captures)) |capture_index| {
+                            const field_capture = self.plan.generated_parser_field_captures.items[capture_index];
                             const field_rep = self.plan.repForSourceType(field_capture.source_type) orelse
                                 boxyPlanInvariant("generated encoder field capture type was not analyzed");
                             try self.collectHiddenDescriptorsForRep(.all, field_rep, &pending, &seen_reps, &seen_descs);
@@ -12897,11 +13049,12 @@ const Builder = struct {
                             .rep = shape_rep,
                             .capture_id = checked.CaptureId.generatedCheck(1),
                         });
-                        const contract_worker = codec.contract_worker orelse
-                            boxyPlanInvariant("generated encoder record callback had no contract worker");
+                        if (worker_index >= self.encoder_name_capture_workers) {
+                            boxyPlanInvariant("generated encoder callback was planned after its name captures");
+                        }
                         var capture_index: u32 = 2;
-                        for (self.plan.generated_parser_field_captures.items) |field_capture| {
-                            if (field_capture.worker != contract_worker) continue;
+                        for (self.plan.encoderNameCaptureSlice(worker.encoder_name_captures)) |field_capture_index| {
+                            const field_capture = self.plan.generated_parser_field_captures.items[field_capture_index];
                             const field_rep = self.plan.repForSourceType(field_capture.source_type) orelse
                                 boxyPlanInvariant("generated encoder field-name capture type was not analyzed");
                             try pending.append(self.allocator, .{
@@ -12933,11 +13086,12 @@ const Builder = struct {
                             .rep = shape_rep,
                             .capture_id = checked.CaptureId.generatedCheck(1),
                         });
-                        const contract_worker = codec.contract_worker orelse
-                            boxyPlanInvariant("generated encoder value thunk had no contract worker");
+                        if (worker_index >= self.encoder_name_capture_workers) {
+                            boxyPlanInvariant("generated encoder value thunk was planned after its name captures");
+                        }
                         var capture_index: u32 = 2;
-                        for (self.plan.generated_parser_field_captures.items) |field_capture| {
-                            if (field_capture.worker != contract_worker) continue;
+                        for (self.plan.encoderNameCaptureSlice(worker.encoder_name_captures)) |field_capture_index| {
+                            const field_capture = self.plan.generated_parser_field_captures.items[field_capture_index];
                             const field_rep = self.plan.repForSourceType(field_capture.source_type) orelse
                                 boxyPlanInvariant("generated encoder value thunk field-name capture type was not analyzed");
                             try pending.append(self.allocator, .{
@@ -13400,8 +13554,10 @@ const Builder = struct {
             try self.materializeDirectCallTypeSubstitutions();
             try self.materializeDictionaryDispatchTypeSubstitutions();
             try self.materializeWorkerHiddenDictionaryParams();
-            try self.materializeRootHiddenDictionaryArgs();
             try self.materializeDirectCallHiddenDictionaryArgs();
+            // A root's evidence can plan workers whose direct calls this
+            // iteration has not given substitutions; the next iteration does.
+            try self.materializeRootHiddenDictionaryArgs();
             try self.materializeConstEvalCallHiddenDictionaryArgs();
             try self.materializeIteratorCallHiddenDictionaryArgs();
             try self.materializeInspectMethodHiddenDictionaryArgs();
@@ -14640,7 +14796,20 @@ const Builder = struct {
                 arg_type.* = child.source_type;
             }
             const ret_type = self.plan.representations.items[@backingInt(function.ret)].source_type;
-            const planned_hidden_dict_args = try self.materializeWorkerCallHiddenDictionaryArgs(root.worker, null, arg_types, ret_type);
+            // A root has no calling site; checking resolved the template's
+            // own requirements, including its captured codec requirements,
+            // into the request's root evidence.
+            const root_evidence = self.checkedRootEvidence(root.request);
+            const planned_hidden_dict_args = try self.materializeWorkerCallHiddenDictionaryArgsWithEvidence(
+                root.worker,
+                null,
+                arg_types,
+                ret_type,
+                root_evidence.view,
+                root_evidence.entries,
+                null,
+                0,
+            );
             self.plan.roots.items[root_index].hidden_dict_args = planned_hidden_dict_args;
         }
     }
@@ -20847,6 +21016,59 @@ const Builder = struct {
         const view = self.moduleForCheckedModuleId(template_ref.artifact);
         const template = view.checked_procedure_templates.get(template_ref.template);
         return typeRef(view, template.checked_fn_root);
+    }
+
+    /// A worker source with the checked type it is planned at.
+    const SharedGeneratedCodec = struct {
+        source: WorkerSource,
+        checked_type: CheckedTypeIdentity,
+    };
+
+    /// The source and type a generated codec worker is shared under. The
+    /// checker interns proof-equivalent contracts to one identity, so every
+    /// use of an equivalent contract selects the identity's runtime worker.
+    /// A runtime is keyed by its contract's shape, runtime, and capture
+    /// types, and an equivalent contract's own types can be distinct checked
+    /// types, so a runtime shared under the identity takes the identity
+    /// contract's types as well. A constructor stays its own contract's: it
+    /// builds the runtime from that contract's own field names, so equivalent
+    /// contracts construct separately and share what they construct. A
+    /// stored runtime keeps its own contract: its checked expression names
+    /// the value it captures.
+    fn generatedCodecAtIdentity(
+        self: *Builder,
+        codec: GeneratedCodecSource,
+        checked_type: CheckedTypeIdentity,
+    ) SharedGeneratedCodec {
+        const unchanged: SharedGeneratedCodec = .{ .source = .{ .generated_codec = codec }, .checked_type = checked_type };
+        if (codec.contract_expr != null) return unchanged;
+        const derivation_id = codec.contract_derivation orelse return unchanged;
+        const view = self.moduleForId(checked_type.module);
+        const derivations = view.static_dispatch_plans.generated_codec_derivations;
+        const identity = derivations[@backingInt(derivation_id)].identity;
+        const identity_contract = derivations[@backingInt(identity)];
+        if (identity_contract.kind != derivations[@backingInt(derivation_id)].kind) {
+            boxyPlanInvariant("generated codec contract identity named a contract of another kind");
+        }
+        var shared = codec;
+        shared.contract_derivation = identity;
+        switch (codec.kind) {
+            .parser_constructor, .encoder_constructor => return unchanged,
+            .parser_runtime, .encoder_runtime => {
+                const runtime_type = typeRef(view, identity_contract.runtime_ty);
+                shared.shape = typeRef(view, identity_contract.shape_ty);
+                shared.runtime_type = runtime_type;
+                shared.capture_type = typeRef(view, identity_contract.encoding_ty);
+                return .{ .source = .{ .generated_codec = shared }, .checked_type = runtime_type };
+            },
+            .encoder_record_fields,
+            .encoder_dict_fields,
+            .encoder_sequence_elements,
+            .encoder_tag_payload_elements,
+            .encoder_value_thunk,
+            .encoder_dict_key_thunk,
+            => return .{ .source = .{ .generated_codec = shared }, .checked_type = checked_type },
+        }
     }
 
     fn workerSourceForCallableEvalSource(self: *Builder, source: WorkerSource) WorkerSource {
