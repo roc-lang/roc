@@ -626,6 +626,24 @@ pub const TypeMismatch = struct {
     /// a nested mismatch hidden behind the root operands. This is populated
     /// only for contexts that consume it.
     evidence: TypeMismatchEvidence = .none,
+    /// The pair whose relation failed, snapshotted before the root operands
+    /// were poisoned.
+    leaf: ?TypePair = null,
+    /// Set when `leaf` failed because the use gave one instantiated
+    /// interpolation's values different types.
+    interpolation_tie: ?InterpolationTie = null,
+};
+
+/// A use of a generalized definition gave the values one of its
+/// interpolations shares between them different types: the interpolation
+/// converts them all with one `from_interpolation` call, so they have one
+/// item type (design.md "Builtin Str Interpolation Part Compatibility").
+pub const InterpolationTie = struct {
+    /// The interpolation in this module's source, or null when the
+    /// definition is in another module.
+    interpolation_region: ?base.Region,
+    /// The use that instantiated the definition.
+    use_region: base.Region,
 };
 
 /// The expected and actual types in a type mismatch

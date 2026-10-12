@@ -273,6 +273,67 @@ const aarch64_gp_registers: u8 = 8;
 const simd_argument_registers: u8 = 8;
 const win64_argument_registers: u8 = 4;
 
+/// Marks each argument of `lowered` that the target's argument registers
+/// cannot hold, for a parameter list that ends with `trailing_pointers`
+/// pointer parameters which must themselves travel in registers. Arguments
+/// are assigned in order and a marked argument takes no register, so later
+/// ones may still fit. An indirect argument's pointer counts as one integer
+/// argument.
+pub fn markRegisterOverflow(target: Target, lowered: LoweredCall, trailing_pointers: u32, overflow: []bool) void {
+    std.debug.assert(overflow.len == lowered.args.len);
+    @memset(overflow, false);
+    switch (target) {
+        .x86_64_windows => {
+            // Every argument, and an indirect result's pointer, takes one
+            // shared position.
+            var used: u32 = @intFromBool(lowered.ret == .indirect) + @intFromBool(lowered.leading_ops);
+            const limit = win64_argument_registers -| trailing_pointers;
+            for (lowered.args, overflow) |placement, *overflows| {
+                if (placement == .none) continue;
+                if (used < limit) used += 1 else overflows.* = true;
+            }
+        },
+        .x86_64_sysv, .aarch64, .aarch64_macho, .aarch64_windows => {
+            // AAPCS64 passes an indirect result's pointer in x8, outside the
+            // argument registers.
+            const indirect_ret_gp: u32 = if (target == .x86_64_sysv) @intFromBool(lowered.ret == .indirect) else 0;
+            const gp_registers: u32 = if (target == .x86_64_sysv) sysv_gp_registers else aarch64_gp_registers;
+            const gp_limit = gp_registers -| trailing_pointers;
+            var gp_used: u32 = indirect_ret_gp + @intFromBool(lowered.leading_ops);
+            var simd_used: u32 = 0;
+            for (lowered.args, overflow) |placement, *overflows| {
+                var first_gp = gp_used;
+                const counts: PieceCounts = switch (placement) {
+                    .none => continue,
+                    .indirect => .{ .gp = 1, .sse = 0 },
+                    .registers => |registers| counts: {
+                        const counts = pieceCounts(registers.pieces);
+                        // AAPCS64 starts a 16-byte-aligned value spanning
+                        // integer registers at an even register; Apple's
+                        // variant drops that rule.
+                        const even_start = switch (registers.carrier) {
+                            .integer => true,
+                            .array => |alignment| alignment == 16,
+                            .piecewise, .structure => false,
+                        };
+                        if (even_start and counts.gp > 1 and (target == .aarch64 or target == .aarch64_windows)) {
+                            first_gp = std.mem.alignForward(u32, gp_used, 2);
+                        }
+                        break :counts counts;
+                    },
+                };
+                if (first_gp + counts.gp <= gp_limit and simd_used + counts.sse <= simd_argument_registers) {
+                    if (counts.gp != 0) gp_used = first_gp + counts.gp;
+                    simd_used += counts.sse;
+                } else {
+                    overflows.* = true;
+                }
+            }
+        },
+        .wasm32, .wasm32v1, .wasm64 => unreachable,
+    }
+}
+
 const PieceCounts = struct { gp: u8, sse: u8 };
 
 fn pieceCounts(pieces: []const RegPiece) PieceCounts {
@@ -1254,4 +1315,34 @@ test "physical Apple arm64 stack arguments use compact natural alignment" {
     try testing.expectEqual(@as(u32, 8), elf.args[9].stack_value.offset);
     try testing.expectEqual(@as(u32, 16), elf.args[10].stack_value.offset);
     try testing.expectEqual(@as(u32, 24), elf.stack_size);
+}
+
+test "markRegisterOverflow leaves trailing pointers their registers" {
+    const word: Placement = .{ .registers = .{ .pieces = &.{.{ .class = .integer, .offset = 0, .size = 8 }} } };
+    const float: Placement = .{ .registers = .{ .pieces = &.{.{ .class = .float, .offset = 0, .size = 8 }} } };
+    const wide: Placement = .{ .registers = .{
+        .pieces = &.{ .{ .class = .integer, .offset = 0, .size = 8 }, .{ .class = .integer, .offset = 8, .size = 8 } },
+        .carrier = .integer,
+    } };
+    var overflow: [8]bool = undefined;
+
+    // SysV: six integer registers, one taken by an indirect result's pointer
+    // and one reserved for a trailing pointer. A float still has an SSE
+    // register after the integer registers run out.
+    const sysv_args = [_]Placement{ word, word, word, word, word, float, .indirect, word };
+    markRegisterOverflow(.x86_64_sysv, .{ .leading_ops = false, .ret = .indirect, .args = &sysv_args }, 1, &overflow);
+    try std.testing.expectEqualSlices(bool, &.{ false, false, false, false, true, false, true, true }, &overflow);
+
+    // Win64: four shared positions, whatever the class.
+    const win_args = [_]Placement{ word, float, word, word, word, word, word, word };
+    markRegisterOverflow(.x86_64_windows, .{ .leading_ops = false, .ret = .none, .args = &win_args }, 1, &overflow);
+    try std.testing.expectEqualSlices(bool, &.{ false, false, false, true, true, true, true, true }, &overflow);
+
+    // AAPCS64 starts a 128-bit integer at an even register; Apple's variant
+    // does not, and neither passes an indirect result's pointer in x0-x7.
+    const aarch64_args = [_]Placement{ word, wide, word, word, word, word, word };
+    markRegisterOverflow(.aarch64, .{ .leading_ops = false, .ret = .indirect, .args = &aarch64_args }, 2, overflow[0..7]);
+    try std.testing.expectEqualSlices(bool, &.{ false, false, false, false, true, true, true }, overflow[0..7]);
+    markRegisterOverflow(.aarch64_macho, .{ .leading_ops = false, .ret = .indirect, .args = &aarch64_args }, 2, overflow[0..7]);
+    try std.testing.expectEqualSlices(bool, &.{ false, false, false, false, false, true, true }, overflow[0..7]);
 }
