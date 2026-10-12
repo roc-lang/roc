@@ -47229,7 +47229,7 @@ const BodyContext = struct {
             if (!entry.found_existing) entry.value_ptr.* = field.value;
         }
         try unsets.ensureTotalCapacity(self.allocator, @intCast(record.unsets.len));
-        for (record.unsets) |label| unsets.putAssumeCapacity(try self.recordFieldName(self.view, label), {});
+        for (record.unsets) |label| try unsets.put(self.allocator, try self.recordFieldName(self.view, label), {});
         return .{ .field_names = field_names, .values = values, .unsets = unsets };
     }
 

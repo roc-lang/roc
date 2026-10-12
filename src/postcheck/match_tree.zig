@@ -1198,7 +1198,7 @@ pub fn Compiler(comptime Ctx: type) type {
                     while (self.undo.items.len > mark) {
                         const entry = self.undo.pop().?;
                         if (entry.previous) |previous| {
-                            self.locals.putAssumeCapacity(entry.occ, previous);
+                            self.locals.putInReservedPage(entry.occ, previous);
                         } else {
                             _ = self.locals.remove(entry.occ);
                         }

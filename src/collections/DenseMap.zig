@@ -482,14 +482,16 @@ pub fn DenseMapUnmanaged(comptime K: type, comptime V: type) type {
             return self.lend(gpa).getOrPutValue(key, value);
         }
 
-        /// See `DenseMap.getOrPutInReservedPage`.
-        pub fn getOrPutAssumeCapacity(self: *Self, key: K) GetOrPutResult {
+        /// See `DenseMap.getOrPutInReservedPage`. Capacity reserved by
+        /// `ensureTotalCapacity` covers only the dense columns, never a new
+        /// key's page, so there is no `getOrPutAssumeCapacity`.
+        pub fn getOrPutInReservedPage(self: *Self, key: K) GetOrPutResult {
             return self.map.getOrPutInReservedPage(key);
         }
 
-        /// `put` into reserved storage; see `getOrPutAssumeCapacity`.
-        pub fn putAssumeCapacity(self: *Self, key: K, value: V) void {
-            self.getOrPutAssumeCapacity(key).value_ptr.* = value;
+        /// `put` into a reserved page; see `getOrPutInReservedPage`.
+        pub fn putInReservedPage(self: *Self, key: K, value: V) void {
+            self.getOrPutInReservedPage(key).value_ptr.* = value;
         }
 
         pub fn remove(self: *Self, key: K) bool {
@@ -771,7 +773,7 @@ test "DenseMapUnmanaged starts empty and takes its allocator per call" {
     try std.testing.expectEqual(@as(?u32, 1), map.get(@fromBackingInt(9)));
     try std.testing.expect(map.remove(@fromBackingInt(9)));
     // A removed key's page and dense room remain reserved.
-    map.putAssumeCapacity(@fromBackingInt(9), 2);
+    map.putInReservedPage(@fromBackingInt(9), 2);
     try std.testing.expectEqual(@as(?u32, 2), map.get(@fromBackingInt(9)));
     var copy = try map.clone(std.testing.allocator);
     defer copy.deinit(std.testing.allocator);
