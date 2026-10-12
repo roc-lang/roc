@@ -15,6 +15,9 @@ isolated `ROC_CACHE_DIR`. Cache-hit instrumentation must establish actual helper
 reuse; successful checks or cache-file creation alone are not that evidence.
 
 `check_reuse.py` verifies named helper reuse and exact failure diagnostics.
+`Static.scaled` passes a local closure to `List.fold`; capturing a closure's
+address adds no compile-time read, so its specialization must still be
+published and reused.
 `check_mixing.py` uses the existing callable and rejected-literal fixtures to
 check that native consumers preserve evaluated captures and that cached code
 does not suppress literal errors. `RuntimeSeed.roc` additionally seeds application

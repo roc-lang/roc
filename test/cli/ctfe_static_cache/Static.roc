@@ -18,7 +18,15 @@ Static := [].{
     }
 
     scaled : I64 -> I64
-    scaled = |factor| values.fold(0.I64, |sum, value| sum + value * factor)
+    scaled = |factor| {
+        var $round = 0.U64
+        var $total = 0.I64
+        while $round < 4 {
+            $total = $total + values.fold(0.I64, |sum, value| sum + value * factor)
+            $round = $round + 1
+        }
+        $total
+    }
 
     guarded : U64 -> I64
     guarded = |index| {
