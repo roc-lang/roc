@@ -1369,7 +1369,7 @@ const ProcedureBuilder = struct {
     /// Exact-storage template descriptors that read no procedure's bound
     /// descriptor locals, so every procedure describes the representation
     /// with the same descriptor.
-    exact_template_desc_ids: std.AutoHashMapUnmanaged(Plan.TypeRepId, LIR.BoxyTypeDescId) = .empty,
+    exact_template_desc_ids: collections.DenseMapUnmanaged(Plan.TypeRepId, LIR.BoxyTypeDescId) = .empty,
     static_dict_cache: std.ArrayList(StaticDictCacheEntry),
     /// The procedures every descriptor dictionary's `is_eq` and `to_hash`
     /// slots call; see `descriptorDict`.
@@ -15944,12 +15944,12 @@ const ProcBodyBuilder = struct {
         bindings: std.ArrayList(DescriptorTemplateBinding),
         /// The descriptor local a constructed value forces at a
         /// representation. A template names few, so the map is sparse.
-        forced_refs: std.AutoHashMapUnmanaged(Plan.TypeRepId, LIR.LocalId) = .empty,
+        forced_refs: collections.DenseMapUnmanaged(Plan.TypeRepId, LIR.LocalId) = .empty,
         /// The environment of the root's own instantiation, where descriptor
         /// locals named by representation describe what they were bound to.
         root_env: ?DescriptorTemplateEnvId = null,
         /// The actual each currently bound nominal formal stands for.
-        exact_reps: std.AutoHashMapUnmanaged(Plan.TypeRepId, Plan.TypeRepId) = .empty,
+        exact_reps: collections.DenseMapUnmanaged(Plan.TypeRepId, Plan.TypeRepId) = .empty,
         exact_storage: bool,
         env: DescriptorTemplateEnvId = .empty,
         excluded_local: ?LIR.LocalId = null,
@@ -33869,7 +33869,7 @@ const ProcBodyBuilder = struct {
     }
 
     fn initDescriptorTemplateContext(self: *ProcBodyBuilder, exact_storage: bool) Allocator.Error!DescriptorTemplateContext {
-        var exact_reps: std.AutoHashMapUnmanaged(Plan.TypeRepId, Plan.TypeRepId) = .empty;
+        var exact_reps: collections.DenseMapUnmanaged(Plan.TypeRepId, Plan.TypeRepId) = .empty;
         errdefer exact_reps.deinit(self.parent.allocator);
         for (self.nominal_formal_bindings.items) |binding| {
             try exact_reps.put(self.parent.allocator, binding.formal, binding.actual);
