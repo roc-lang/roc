@@ -50,7 +50,7 @@ pub fn parseFloat(comptime T: type, s: []const u8) ParseFloatError!T {
         // redundantly using the Eisel-Lemire algorithm if it was unable to
         // correctly round on the first pass.
         if (convertEiselLemire(T, n.exponent, n.mantissa)) |bf| {
-            if (!n.many_digits) {
+            if (!n.truncated_nonzero) {
                 return bf.toFloat(T, n.negative);
             }
             if (convertEiselLemire(T, n.exponent, n.mantissa + 1)) |bf2| {

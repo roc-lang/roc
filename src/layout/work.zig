@@ -76,12 +76,12 @@ pub const Work = struct {
     /// We need to explicitly record the index because zero-sized tuple fields might have
     /// been dropped, and yet we need to know what the original indices were for debuginfo.
     pub const TupleField = struct {
-        index: u16,
+        index: u32,
         var_: types.Var,
     };
 
     pub const PendingRecordField = struct {
-        index: u16,
+        index: u32,
         var_: types.Var,
     };
 
@@ -91,12 +91,12 @@ pub const Work = struct {
     };
 
     pub const ResolvedRecordField = struct {
-        field_index: u16,
+        field_index: u32,
         field_idx: layout.Idx,
     };
 
     pub const ResolvedTupleField = struct {
-        field_index: u16,
+        field_index: u32,
         field_idx: layout.Idx,
     };
 
@@ -112,7 +112,7 @@ pub const Work = struct {
     /// Used in iterative tag union processing to avoid stack overflow.
     pub const TagUnionVariant = struct {
         /// Index of this variant in the sorted tag list (for correct ordering in final layout)
-        index: u16,
+        index: u32,
         /// Type vars for this variant's payload args. For single-arg variants, this has
         /// length 1. For multi-arg variants like `Point(1, 2)`, this contains all args
         /// which will be processed as a tuple.
@@ -122,7 +122,7 @@ pub const Work = struct {
     /// A tag union variant whose payload layout has been computed.
     pub const ResolvedTagUnionVariant = struct {
         /// Index of this variant in the sorted tag list
-        index: u16,
+        index: u32,
         /// The computed layout for this variant's payload
         layout_idx: layout.Idx,
     };

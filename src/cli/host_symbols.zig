@@ -13,6 +13,17 @@ const shim_symbols = @import("builtins").shim_symbols;
 
 const Allocator = std.mem.Allocator;
 
+/// Validate an offset and length from an object file before forming a slice.
+fn checkedSlice(bytes: []const u8, offset: usize, size: usize) ?[]const u8 {
+    const end = std.math.add(usize, offset, size) catch return null;
+    if (end > bytes.len) return null;
+    return bytes[offset..end];
+}
+
+fn checkedTableSize(count: usize, entry_size: usize) ?usize {
+    return std.math.mul(usize, count, entry_size) catch null;
+}
+
 /// The fixed runtime symbols every symbol-ABI host defines.
 pub const runtime_symbols: [shim_symbols.runtime_set.len][]const u8 = blk: {
     var symbols: [shim_symbols.runtime_set.len][]const u8 = undefined;
@@ -142,15 +153,12 @@ fn collectInput(
 fn collectArArchive(bytes: []const u8, sink: ExportSink) Allocator.Error!void {
     var offset: usize = "!<arch>\n".len;
 
-    while (offset + 60 <= bytes.len) {
-        const header = bytes[offset .. offset + 60];
+    while (checkedSlice(bytes, offset, 60)) |header| {
         const name_field = std.mem.trimEnd(u8, header[0..16], " ");
         const size_field = std.mem.trimEnd(u8, header[48..58], " ");
         const member_size = std.fmt.parseInt(usize, size_field, 10) catch return;
-        offset += 60;
-        if (offset + member_size > bytes.len) return;
-
-        var member = bytes[offset .. offset + member_size];
+        offset = std.math.add(usize, offset, 60) catch return;
+        var member = checkedSlice(bytes, offset, member_size) orelse return;
         var member_name = name_field;
 
         if (std.mem.startsWith(u8, name_field, "#1/")) {
@@ -169,8 +177,8 @@ fn collectArArchive(bytes: []const u8, sink: ExportSink) Allocator.Error!void {
             try collectObject(member, sink);
         }
 
-        offset += member_size;
-        if (offset % 2 == 1) offset += 1; // members are 2-byte aligned
+        offset = std.math.add(usize, offset, member_size) catch return;
+        offset = std.math.add(usize, offset, offset & 1) catch return; // members are 2-byte aligned
     }
 }
 
@@ -183,9 +191,9 @@ fn collectObject(bytes: []const u8, sink: ExportSink) Allocator.Error!void {
     }
     if (bytes.len >= 2) {
         const machine = std.mem.readInt(u16, bytes[0..2], .little);
-        if (machine == @intFromEnum(std.coff.IMAGE.FILE.MACHINE.AMD64) or
-            machine == @intFromEnum(std.coff.IMAGE.FILE.MACHINE.ARM64) or
-            machine == @intFromEnum(std.coff.IMAGE.FILE.MACHINE.I386))
+        if (machine == @backingInt(std.coff.IMAGE.FILE.MACHINE.AMD64) or
+            machine == @backingInt(std.coff.IMAGE.FILE.MACHINE.ARM64) or
+            machine == @backingInt(std.coff.IMAGE.FILE.MACHINE.I386))
         {
             return collectCoffObject(bytes, sink);
         }
@@ -198,40 +206,40 @@ fn collectElfObject(bytes: []const u8, sink: ExportSink) Allocator.Error!void {
     const ehdr = std.mem.bytesAsValue(elf.Elf64_Ehdr, bytes[0..@sizeOf(elf.Elf64_Ehdr)]);
     if (ehdr.e_ident[elf.EI_CLASS] != elf.ELFCLASS64) return;
 
-    const shoff: usize = @intCast(ehdr.e_shoff);
+    const shoff = std.math.cast(usize, ehdr.e_shoff) orelse return;
     const shnum: usize = ehdr.e_shnum;
     const shentsize: usize = ehdr.e_shentsize;
-    if (shentsize < @sizeOf(elf.Elf64_Shdr)) return;
-    if (shoff + shnum * shentsize > bytes.len) return;
+    if (shnum == 0 or shentsize < @sizeOf(elf.Elf64_Shdr)) return; // extended section numbering is unsupported
+    const section_bytes = checkedTableSize(shnum, shentsize) orelse return;
+    const sections = checkedSlice(bytes, shoff, section_bytes) orelse return;
 
     var i: usize = 0;
     while (i < shnum) : (i += 1) {
-        const shdr = std.mem.bytesAsValue(elf.Elf64_Shdr, bytes[shoff + i * shentsize ..][0..@sizeOf(elf.Elf64_Shdr)]);
+        const shdr = std.mem.bytesAsValue(elf.Elf64_Shdr, sections[i * shentsize ..][0..@sizeOf(elf.Elf64_Shdr)]);
         if (shdr.sh_type != elf.SHT_SYMTAB) continue;
 
         const strtab_index: usize = shdr.sh_link;
         if (strtab_index >= shnum) return;
-        const strtab_hdr = std.mem.bytesAsValue(elf.Elf64_Shdr, bytes[shoff + strtab_index * shentsize ..][0..@sizeOf(elf.Elf64_Shdr)]);
-        const strtab_off: usize = @intCast(strtab_hdr.sh_offset);
-        const strtab_size: usize = @intCast(strtab_hdr.sh_size);
-        if (strtab_off + strtab_size > bytes.len) return;
-        const strtab = bytes[strtab_off .. strtab_off + strtab_size];
+        const strtab_hdr = std.mem.bytesAsValue(elf.Elf64_Shdr, sections[strtab_index * shentsize ..][0..@sizeOf(elf.Elf64_Shdr)]);
+        const strtab_off = std.math.cast(usize, strtab_hdr.sh_offset) orelse return;
+        const strtab_size = std.math.cast(usize, strtab_hdr.sh_size) orelse return;
+        const strtab = checkedSlice(bytes, strtab_off, strtab_size) orelse return;
 
-        const sym_off: usize = @intCast(shdr.sh_offset);
-        const sym_size: usize = @intCast(shdr.sh_size);
-        if (sym_off + sym_size > bytes.len) return;
-        const sym_count = sym_size / @sizeOf(elf.Elf64_Sym);
+        const sym_off = std.math.cast(usize, shdr.sh_offset) orelse return;
+        const sym_size = std.math.cast(usize, shdr.sh_size) orelse return;
+        const symbols = checkedSlice(bytes, sym_off, sym_size) orelse return;
+        const sym_count = symbols.len / @sizeOf(elf.Elf64_Sym);
 
         var s: usize = 0;
         while (s < sym_count) : (s += 1) {
-            const sym = std.mem.bytesAsValue(elf.Elf64_Sym, bytes[sym_off + s * @sizeOf(elf.Elf64_Sym) ..][0..@sizeOf(elf.Elf64_Sym)]);
+            const sym = std.mem.bytesAsValue(elf.Elf64_Sym, symbols[s * @sizeOf(elf.Elf64_Sym) ..][0..@sizeOf(elf.Elf64_Sym)]);
             if (sym.st_shndx == elf.SHN_UNDEF) continue;
             const binding = sym.st_info >> 4;
             if (binding != elf.STB_GLOBAL and binding != elf.STB_WEAK) continue;
             // Only DEFAULT or PROTECTED visibility symbols are exported from a
             // shared object; HIDDEN/INTERNAL are the host's internals.
             const visibility: u3 = @intCast(sym.st_other & 0x3);
-            if (visibility != @intFromEnum(elf.STV.DEFAULT) and visibility != @intFromEnum(elf.STV.PROTECTED)) continue;
+            if (visibility != @backingInt(elf.STV.DEFAULT) and visibility != @backingInt(elf.STV.PROTECTED)) continue;
             const name_off: usize = sym.st_name;
             if (name_off >= strtab.len) continue;
             const name = std.mem.sliceTo(strtab[name_off..], 0);
@@ -248,24 +256,26 @@ fn collectMachoObject(bytes: []const u8, sink: ExportSink) Allocator.Error!void 
     var offset: usize = @sizeOf(macho.mach_header_64);
     var cmd_index: u32 = 0;
     while (cmd_index < header.ncmds) : (cmd_index += 1) {
-        if (offset + @sizeOf(macho.load_command) > bytes.len) return;
-        const cmd = std.mem.bytesAsValue(macho.load_command, bytes[offset..][0..@sizeOf(macho.load_command)]);
+        const cmd_bytes = checkedSlice(bytes, offset, @sizeOf(macho.load_command)) orelse return;
+        const cmd = std.mem.bytesAsValue(macho.load_command, cmd_bytes);
+        if (cmd.cmdsize < @sizeOf(macho.load_command)) return;
+        const full_cmd = checkedSlice(bytes, offset, cmd.cmdsize) orelse return;
         if (cmd.cmd == .SYMTAB) {
-            if (offset + @sizeOf(macho.symtab_command) > bytes.len) return;
-            const symtab = std.mem.bytesAsValue(macho.symtab_command, bytes[offset..][0..@sizeOf(macho.symtab_command)]);
+            if (full_cmd.len < @sizeOf(macho.symtab_command)) return;
+            const symtab = std.mem.bytesAsValue(macho.symtab_command, full_cmd[0..@sizeOf(macho.symtab_command)]);
 
             const str_off: usize = symtab.stroff;
             const str_size: usize = symtab.strsize;
-            if (str_off + str_size > bytes.len) return;
-            const strtab = bytes[str_off .. str_off + str_size];
+            const strtab = checkedSlice(bytes, str_off, str_size) orelse return;
 
             const sym_off: usize = symtab.symoff;
             const sym_count: usize = symtab.nsyms;
-            if (sym_off + sym_count * @sizeOf(macho.nlist_64) > bytes.len) return;
+            const symbols_size = checkedTableSize(sym_count, @sizeOf(macho.nlist_64)) orelse return;
+            const symbols = checkedSlice(bytes, sym_off, symbols_size) orelse return;
 
             var s: usize = 0;
             while (s < sym_count) : (s += 1) {
-                const nlist = std.mem.bytesAsValue(macho.nlist_64, bytes[sym_off + s * @sizeOf(macho.nlist_64) ..][0..@sizeOf(macho.nlist_64)]);
+                const nlist = std.mem.bytesAsValue(macho.nlist_64, symbols[s * @sizeOf(macho.nlist_64) ..][0..@sizeOf(macho.nlist_64)]);
                 if (nlist.n_type.bits.is_stab != 0) continue;
                 if (!nlist.n_type.bits.ext) continue;
                 // Private-external symbols (the host's `.hidden`) are not exported.
@@ -280,7 +290,7 @@ fn collectMachoObject(bytes: []const u8, sink: ExportSink) Allocator.Error!void 
                 try sink.add(name);
             }
         }
-        offset += cmd.cmdsize;
+        offset = std.math.add(usize, offset, cmd.cmdsize) catch return;
     }
 }
 
@@ -291,22 +301,21 @@ fn collectCoffObject(bytes: []const u8, sink: ExportSink) Allocator.Error!void {
     if (bytes.len < 20) return;
     const num_sections: usize = std.mem.readInt(u16, bytes[2..4], .little);
     const optional_header_size: usize = std.mem.readInt(u16, bytes[16..18], .little);
-    const section_table_off = 20 + optional_header_size;
+    const section_table_off = std.math.add(usize, 20, optional_header_size) catch return;
     const section_header_size = 40;
-    if (section_table_off + num_sections * section_header_size > bytes.len) return;
+    const section_table_size = checkedTableSize(num_sections, section_header_size) orelse return;
+    const sections = checkedSlice(bytes, section_table_off, section_table_size) orelse return;
 
     var i: usize = 0;
     while (i < num_sections) : (i += 1) {
-        const sh = bytes[section_table_off + i * section_header_size ..][0..section_header_size];
+        const sh = sections[i * section_header_size ..][0..section_header_size];
         const name = std.mem.sliceTo(sh[0..8], 0);
         if (!std.mem.eql(u8, name, ".drectve")) continue;
 
         const size_of_raw_data: usize = std.mem.readInt(u32, sh[16..20], .little);
         const ptr_to_raw_data: usize = std.mem.readInt(u32, sh[20..24], .little);
         if (ptr_to_raw_data == 0 or size_of_raw_data == 0) continue;
-        if (ptr_to_raw_data + size_of_raw_data > bytes.len) continue;
-
-        const text = bytes[ptr_to_raw_data .. ptr_to_raw_data + size_of_raw_data];
+        const text = checkedSlice(bytes, ptr_to_raw_data, size_of_raw_data) orelse continue;
         try collectDrectveExports(text, sink);
     }
 }
@@ -361,9 +370,9 @@ fn scanObject(bytes: []const u8, remaining: *std.StringHashMap(void)) bool {
     }
     if (bytes.len >= 2) {
         const machine = std.mem.readInt(u16, bytes[0..2], .little);
-        if (machine == @intFromEnum(std.coff.IMAGE.FILE.MACHINE.AMD64) or
-            machine == @intFromEnum(std.coff.IMAGE.FILE.MACHINE.ARM64) or
-            machine == @intFromEnum(std.coff.IMAGE.FILE.MACHINE.I386))
+        if (machine == @backingInt(std.coff.IMAGE.FILE.MACHINE.AMD64) or
+            machine == @backingInt(std.coff.IMAGE.FILE.MACHINE.ARM64) or
+            machine == @backingInt(std.coff.IMAGE.FILE.MACHINE.I386))
         {
             return scanCoffObject(bytes, remaining);
         }
@@ -378,15 +387,12 @@ fn scanArArchive(bytes: []const u8, remaining: *std.StringHashMap(void)) bool {
     var offset: usize = "!<arch>\n".len;
     var all_scanned = true;
 
-    while (offset + 60 <= bytes.len) {
-        const header = bytes[offset .. offset + 60];
+    while (checkedSlice(bytes, offset, 60)) |header| {
         const name_field = std.mem.trimEnd(u8, header[0..16], " ");
         const size_field = std.mem.trimEnd(u8, header[48..58], " ");
         const member_size = std.fmt.parseInt(usize, size_field, 10) catch return false;
-        offset += 60;
-        if (offset + member_size > bytes.len) return false;
-
-        var member = bytes[offset .. offset + member_size];
+        offset = std.math.add(usize, offset, 60) catch return false;
+        var member = checkedSlice(bytes, offset, member_size) orelse return false;
         var member_name = name_field;
 
         // BSD ar stores long names inline at the start of the member data.
@@ -408,8 +414,8 @@ fn scanArArchive(bytes: []const u8, remaining: *std.StringHashMap(void)) bool {
             }
         }
 
-        offset += member_size;
-        if (offset % 2 == 1) offset += 1; // members are 2-byte aligned
+        offset = std.math.add(usize, offset, member_size) catch return false;
+        offset = std.math.add(usize, offset, offset & 1) catch return false; // members are 2-byte aligned
     }
 
     return all_scanned;
@@ -421,33 +427,33 @@ fn scanElfObject(bytes: []const u8, remaining: *std.StringHashMap(void)) bool {
     const ehdr = std.mem.bytesAsValue(elf.Elf64_Ehdr, bytes[0..@sizeOf(elf.Elf64_Ehdr)]);
     if (ehdr.e_ident[elf.EI_CLASS] != elf.ELFCLASS64) return false;
 
-    const shoff: usize = @intCast(ehdr.e_shoff);
+    const shoff = std.math.cast(usize, ehdr.e_shoff) orelse return false;
     const shnum: usize = ehdr.e_shnum;
     const shentsize: usize = ehdr.e_shentsize;
-    if (shentsize < @sizeOf(elf.Elf64_Shdr)) return false;
-    if (shoff + shnum * shentsize > bytes.len) return false;
+    if (shnum == 0 or shentsize < @sizeOf(elf.Elf64_Shdr)) return false; // extended section numbering is unsupported
+    const section_bytes = checkedTableSize(shnum, shentsize) orelse return false;
+    const sections = checkedSlice(bytes, shoff, section_bytes) orelse return false;
 
     var i: usize = 0;
     while (i < shnum) : (i += 1) {
-        const shdr = std.mem.bytesAsValue(elf.Elf64_Shdr, bytes[shoff + i * shentsize ..][0..@sizeOf(elf.Elf64_Shdr)]);
+        const shdr = std.mem.bytesAsValue(elf.Elf64_Shdr, sections[i * shentsize ..][0..@sizeOf(elf.Elf64_Shdr)]);
         if (shdr.sh_type != elf.SHT_SYMTAB) continue;
 
         const strtab_index: usize = shdr.sh_link;
         if (strtab_index >= shnum) return false;
-        const strtab_hdr = std.mem.bytesAsValue(elf.Elf64_Shdr, bytes[shoff + strtab_index * shentsize ..][0..@sizeOf(elf.Elf64_Shdr)]);
-        const strtab_off: usize = @intCast(strtab_hdr.sh_offset);
-        const strtab_size: usize = @intCast(strtab_hdr.sh_size);
-        if (strtab_off + strtab_size > bytes.len) return false;
-        const strtab = bytes[strtab_off .. strtab_off + strtab_size];
+        const strtab_hdr = std.mem.bytesAsValue(elf.Elf64_Shdr, sections[strtab_index * shentsize ..][0..@sizeOf(elf.Elf64_Shdr)]);
+        const strtab_off = std.math.cast(usize, strtab_hdr.sh_offset) orelse return false;
+        const strtab_size = std.math.cast(usize, strtab_hdr.sh_size) orelse return false;
+        const strtab = checkedSlice(bytes, strtab_off, strtab_size) orelse return false;
 
-        const sym_off: usize = @intCast(shdr.sh_offset);
-        const sym_size: usize = @intCast(shdr.sh_size);
-        if (sym_off + sym_size > bytes.len) return false;
-        const sym_count = sym_size / @sizeOf(elf.Elf64_Sym);
+        const sym_off = std.math.cast(usize, shdr.sh_offset) orelse return false;
+        const sym_size = std.math.cast(usize, shdr.sh_size) orelse return false;
+        const symbols = checkedSlice(bytes, sym_off, sym_size) orelse return false;
+        const sym_count = symbols.len / @sizeOf(elf.Elf64_Sym);
 
         var s: usize = 0;
         while (s < sym_count) : (s += 1) {
-            const sym = std.mem.bytesAsValue(elf.Elf64_Sym, bytes[sym_off + s * @sizeOf(elf.Elf64_Sym) ..][0..@sizeOf(elf.Elf64_Sym)]);
+            const sym = std.mem.bytesAsValue(elf.Elf64_Sym, symbols[s * @sizeOf(elf.Elf64_Sym) ..][0..@sizeOf(elf.Elf64_Sym)]);
             if (sym.st_shndx == elf.SHN_UNDEF) continue;
             const binding = sym.st_info >> 4;
             if (binding != elf.STB_GLOBAL and binding != elf.STB_WEAK) continue;
@@ -468,24 +474,26 @@ fn scanMachoObject(bytes: []const u8, remaining: *std.StringHashMap(void)) bool 
     var offset: usize = @sizeOf(macho.mach_header_64);
     var cmd_index: u32 = 0;
     while (cmd_index < header.ncmds) : (cmd_index += 1) {
-        if (offset + @sizeOf(macho.load_command) > bytes.len) return false;
-        const cmd = std.mem.bytesAsValue(macho.load_command, bytes[offset..][0..@sizeOf(macho.load_command)]);
+        const cmd_bytes = checkedSlice(bytes, offset, @sizeOf(macho.load_command)) orelse return false;
+        const cmd = std.mem.bytesAsValue(macho.load_command, cmd_bytes);
+        if (cmd.cmdsize < @sizeOf(macho.load_command)) return false;
+        const full_cmd = checkedSlice(bytes, offset, cmd.cmdsize) orelse return false;
         if (cmd.cmd == .SYMTAB) {
-            if (offset + @sizeOf(macho.symtab_command) > bytes.len) return false;
-            const symtab = std.mem.bytesAsValue(macho.symtab_command, bytes[offset..][0..@sizeOf(macho.symtab_command)]);
+            if (full_cmd.len < @sizeOf(macho.symtab_command)) return false;
+            const symtab = std.mem.bytesAsValue(macho.symtab_command, full_cmd[0..@sizeOf(macho.symtab_command)]);
 
             const str_off: usize = symtab.stroff;
             const str_size: usize = symtab.strsize;
-            if (str_off + str_size > bytes.len) return false;
-            const strtab = bytes[str_off .. str_off + str_size];
+            const strtab = checkedSlice(bytes, str_off, str_size) orelse return false;
 
             const sym_off: usize = symtab.symoff;
             const sym_count: usize = symtab.nsyms;
-            if (sym_off + sym_count * @sizeOf(macho.nlist_64) > bytes.len) return false;
+            const symbols_size = checkedTableSize(sym_count, @sizeOf(macho.nlist_64)) orelse return false;
+            const symbols = checkedSlice(bytes, sym_off, symbols_size) orelse return false;
 
             var s: usize = 0;
             while (s < sym_count) : (s += 1) {
-                const nlist = std.mem.bytesAsValue(macho.nlist_64, bytes[sym_off + s * @sizeOf(macho.nlist_64) ..][0..@sizeOf(macho.nlist_64)]);
+                const nlist = std.mem.bytesAsValue(macho.nlist_64, symbols[s * @sizeOf(macho.nlist_64) ..][0..@sizeOf(macho.nlist_64)]);
                 if (nlist.n_type.bits.is_stab != 0) continue;
                 if (!nlist.n_type.bits.ext) continue;
                 if (nlist.n_type.bits.type != .sect) continue;
@@ -495,7 +503,7 @@ fn scanMachoObject(bytes: []const u8, remaining: *std.StringHashMap(void)) bool 
                 if (name.len > 0) defineSymbol(remaining, name);
             }
         }
-        offset += cmd.cmdsize;
+        offset = std.math.add(usize, offset, cmd.cmdsize) catch return false;
     }
     return true;
 }
@@ -508,22 +516,23 @@ fn scanCoffObject(bytes: []const u8, remaining: *std.StringHashMap(void)) bool {
     const symtab_offset: usize = std.mem.readInt(u32, bytes[8..12], .little);
     const symbol_count: usize = std.mem.readInt(u32, bytes[12..16], .little);
     const symbol_size = 18;
-    if (symtab_offset + symbol_count * symbol_size > bytes.len) return false;
+    const symbols_size = checkedTableSize(symbol_count, symbol_size) orelse return false;
+    const symbols = checkedSlice(bytes, symtab_offset, symbols_size) orelse return false;
 
     // The string table immediately follows the symbol table; its first four
     // bytes are its total size (including those bytes).
-    const strtab_offset = symtab_offset + symbol_count * symbol_size;
+    const strtab_offset = std.math.add(usize, symtab_offset, symbols_size) catch return false;
     var strtab: []const u8 = &.{};
-    if (strtab_offset + 4 <= bytes.len) {
-        const strtab_size: usize = std.mem.readInt(u32, bytes[strtab_offset..][0..4], .little);
-        if (strtab_size >= 4 and strtab_offset + strtab_size <= bytes.len) {
-            strtab = bytes[strtab_offset .. strtab_offset + strtab_size];
+    if (checkedSlice(bytes, strtab_offset, 4)) |size_bytes| {
+        const strtab_size: usize = std.mem.readInt(u32, size_bytes[0..4], .little);
+        if (strtab_size >= 4) {
+            if (checkedSlice(bytes, strtab_offset, strtab_size)) |table| strtab = table;
         }
     }
 
     var s: usize = 0;
     while (s < symbol_count) : (s += 1) {
-        const record = bytes[symtab_offset + s * symbol_size ..][0..symbol_size];
+        const record = symbols[s * symbol_size ..][0..symbol_size];
         const aux_count: usize = record[17];
         const section_number = std.mem.readInt(i16, record[12..14], .little);
         const storage_class = record[16];
@@ -558,16 +567,15 @@ fn scanWasmObject(bytes: []const u8, remaining: *std.StringHashMap(void)) bool {
         const section_id = bytes[offset];
         offset += 1;
         const section_size = readLeb32(bytes, &offset) orelse return false;
-        const section_end = offset + section_size;
+        const section_end = std.math.add(usize, offset, section_size) catch return false;
         if (section_end > bytes.len) return false;
 
         if (section_id == 0) {
             // Custom section: name then payload.
             var pos = offset;
             const name_len = readLeb32(bytes, &pos) orelse return false;
-            if (pos + name_len > section_end) return false;
-            const name = bytes[pos .. pos + name_len];
-            pos += name_len;
+            const name = checkedSlice(bytes[0..section_end], pos, name_len) orelse return false;
+            pos = std.math.add(usize, pos, name_len) catch return false;
             if (std.mem.eql(u8, name, "linking")) {
                 if (!scanWasmLinking(bytes[pos..section_end], remaining)) return false;
             }
@@ -585,7 +593,7 @@ fn scanWasmLinking(payload: []const u8, remaining: *std.StringHashMap(void)) boo
         const subsection_type = payload[pos];
         pos += 1;
         const subsection_size = readLeb32(payload, &pos) orelse return false;
-        const subsection_end = pos + subsection_size;
+        const subsection_end = std.math.add(usize, pos, subsection_size) catch return false;
         if (subsection_end > payload.len) return false;
 
         if (subsection_type == 8) { // WASM_SYMBOL_TABLE
@@ -606,18 +614,16 @@ fn scanWasmLinking(payload: []const u8, remaining: *std.StringHashMap(void)) boo
                         _ = readLeb32(payload, &pos) orelse return false;
                         if (!undefined_flag or explicit_name) {
                             const name_len = readLeb32(payload, &pos) orelse return false;
-                            if (pos + name_len > subsection_end) return false;
-                            const name = payload[pos .. pos + name_len];
-                            pos += name_len;
+                            const name = checkedSlice(payload[0..subsection_end], pos, name_len) orelse return false;
+                            pos = std.math.add(usize, pos, name_len) catch return false;
                             if (!undefined_flag) defineSymbol(remaining, name);
                         }
                     },
                     // data: name, then segment/offset/size when defined.
                     1 => {
                         const name_len = readLeb32(payload, &pos) orelse return false;
-                        if (pos + name_len > subsection_end) return false;
-                        const name = payload[pos .. pos + name_len];
-                        pos += name_len;
+                        const name = checkedSlice(payload[0..subsection_end], pos, name_len) orelse return false;
+                        pos = std.math.add(usize, pos, name_len) catch return false;
                         if (!undefined_flag) {
                             defineSymbol(remaining, name);
                             _ = readLeb32(payload, &pos) orelse return false;
@@ -644,12 +650,20 @@ fn readLeb32(bytes: []const u8, pos: *usize) ?usize {
     while (pos.* < bytes.len) {
         const byte = bytes[pos.*];
         pos.* += 1;
+        if (shift == 28 and byte & 0x70 != 0) return null;
         result |= @as(u32, byte & 0x7f) << shift;
         if (byte & 0x80 == 0) return result;
         if (shift >= 28) return null;
         shift += 7;
     }
     return null;
+}
+
+test "readLeb32 rejects values above u32" {
+    var pos: usize = 0;
+    try std.testing.expect(readLeb32(&.{ 0xff, 0xff, 0xff, 0xff, 0x1f }, &pos) == null);
+    pos = 0;
+    try std.testing.expectEqual(@as(?usize, std.math.maxInt(u32)), readLeb32(&.{ 0xff, 0xff, 0xff, 0xff, 0x0f }, &pos));
 }
 
 test "scanArArchive walks members and respects alignment" {
@@ -677,4 +691,104 @@ test "defineSymbol strips one leading underscore" {
     try remaining.put(shim_symbols.roc_alloc, {});
     defineSymbol(&remaining, "_roc_alloc");
     try std.testing.expectEqual(@as(u32, 0), remaining.count());
+}
+
+test "checked object ranges reject arithmetic overflow" {
+    const bytes = [_]u8{ 1, 2, 3, 4 };
+    try std.testing.expectEqualSlices(u8, &.{ 2, 3 }, checkedSlice(&bytes, 1, 2).?);
+    try std.testing.expect(checkedSlice(&bytes, std.math.maxInt(usize), 2) == null);
+    try std.testing.expect(checkedSlice(&bytes, 3, 2) == null);
+    try std.testing.expect(checkedTableSize(std.math.maxInt(usize), 2) == null);
+}
+
+test "ELF scanner rejects overflowing and unsupported section ranges" {
+    const elf = std.elf;
+    const header_size = @sizeOf(elf.Elf64_Ehdr);
+    const section_size = @sizeOf(elf.Elf64_Shdr);
+    const symbol_size = @sizeOf(elf.Elf64_Sym);
+    var base: [header_size + 2 * section_size + symbol_size + 4]u8 = @splat(0);
+    const header = std.mem.bytesAsValue(elf.Elf64_Ehdr, base[0..header_size]);
+    @memcpy(header.e_ident[0..4], "\x7fELF");
+    header.e_ident[elf.EI_CLASS] = elf.ELFCLASS64;
+    header.e_shoff = header_size;
+    header.e_shnum = 2;
+    header.e_shentsize = section_size;
+    const symtab = std.mem.bytesAsValue(elf.Elf64_Shdr, base[header_size..][0..section_size]);
+    symtab.sh_type = elf.SHT_SYMTAB;
+    symtab.sh_link = 1;
+    symtab.sh_offset = header_size + 2 * section_size;
+    symtab.sh_size = symbol_size;
+    const strtab = std.mem.bytesAsValue(elf.Elf64_Shdr, base[header_size + section_size ..][0..section_size]);
+    strtab.sh_offset = header_size + 2 * section_size + symbol_size;
+    strtab.sh_size = 4;
+
+    var remaining = std.StringHashMap(void).init(std.testing.allocator);
+    defer remaining.deinit();
+    try std.testing.expect(scanInput(&base, &remaining));
+
+    for (0..7) |case_index| {
+        var bad = base;
+        const bad_header = std.mem.bytesAsValue(elf.Elf64_Ehdr, bad[0..header_size]);
+        const bad_symtab = std.mem.bytesAsValue(elf.Elf64_Shdr, bad[header_size..][0..section_size]);
+        const bad_strtab = std.mem.bytesAsValue(elf.Elf64_Shdr, bad[header_size + section_size ..][0..section_size]);
+        switch (case_index) {
+            0 => bad_header.e_shoff = std.math.maxInt(u64) - section_size + 1,
+            1 => bad_header.e_shnum = 0, // extended section numbering requires section zero
+            2 => bad_symtab.sh_link = 2,
+            3 => bad_strtab.sh_offset = std.math.maxInt(u64) - 1,
+            4 => bad_strtab.sh_size = std.math.maxInt(u64),
+            5 => bad_symtab.sh_offset = std.math.maxInt(u64) - 1,
+            6 => bad_symtab.sh_size = std.math.maxInt(u64),
+            else => unreachable,
+        }
+        try std.testing.expect(!scanInput(&bad, &remaining));
+        var seen = std.StringHashMap(void).init(std.testing.allocator);
+        defer seen.deinit();
+        var exports = std.ArrayList([]const u8).empty;
+        defer exports.deinit(std.testing.allocator);
+        try collectInput(std.testing.allocator, &bad, &seen, &exports);
+    }
+}
+
+test "Mach-O scanner rejects malformed load commands and symbol ranges" {
+    const macho = std.macho;
+    const header_size = @sizeOf(macho.mach_header_64);
+    const command_size = @sizeOf(macho.symtab_command);
+    var base: [header_size + command_size + @sizeOf(macho.nlist_64) + 4]u8 = @splat(0);
+    const header = std.mem.bytesAsValue(macho.mach_header_64, base[0..header_size]);
+    header.magic = macho.MH_MAGIC_64;
+    header.ncmds = 1;
+    const command = std.mem.bytesAsValue(macho.symtab_command, base[header_size..][0..command_size]);
+    command.cmd = .SYMTAB;
+    command.cmdsize = command_size;
+    command.symoff = header_size + command_size;
+    command.nsyms = 1;
+    command.stroff = header_size + command_size + @sizeOf(macho.nlist_64);
+    command.strsize = 4;
+
+    var remaining = std.StringHashMap(void).init(std.testing.allocator);
+    defer remaining.deinit();
+    try std.testing.expect(scanInput(&base, &remaining));
+    for (0..4) |case_index| {
+        var bad = base;
+        const bad_command = std.mem.bytesAsValue(macho.symtab_command, bad[header_size..][0..command_size]);
+        switch (case_index) {
+            0 => bad_command.cmdsize = 0,
+            1 => bad_command.cmdsize = @sizeOf(macho.load_command),
+            2 => bad_command.symoff = std.math.maxInt(u32),
+            3 => bad_command.stroff = std.math.maxInt(u32),
+            else => unreachable,
+        }
+        try std.testing.expect(!scanInput(&bad, &remaining));
+    }
+
+    var bad_name = base;
+    const nlist_off = header_size + command_size;
+    const nlist = std.mem.bytesAsValue(macho.nlist_64, bad_name[nlist_off..][0..@sizeOf(macho.nlist_64)]);
+    nlist.n_type.bits.ext = true;
+    nlist.n_type.bits.type = .sect;
+    nlist.n_strx = std.math.maxInt(u32);
+    try remaining.put("missing", {});
+    try std.testing.expect(scanInput(&bad_name, &remaining));
+    try std.testing.expect(remaining.contains("missing"));
 }

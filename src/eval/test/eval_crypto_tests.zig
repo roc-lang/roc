@@ -57,6 +57,9 @@ const blake3_abc_hex = hexLiteral(Blake3, "abc");
 const sha256_abcdef_hex = hexLiteral(Sha256, "abcdef");
 const blake3_abcdef_hex = hexLiteral(Blake3, "abcdef");
 const invalid_hex_last = repeatByte('0', 63) ++ "z";
+const multi_block_text = repeatByte('q', 200);
+const multi_block_head = repeatByte('q', 70);
+const multi_block_tail = repeatByte('q', 130);
 
 /// Public crypto eval cases consumed by the parallel eval runner.
 pub const tests = [_]TestCase{
@@ -103,6 +106,21 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = quotedHexInspect(Blake3, "abcdef") },
+    },
+    .{
+        .name = "Crypto SHA256 hash spans several blocks",
+        .source = "Crypto.SHA256.hash(\"" ++ multi_block_text ++ "\".to_utf8()).to_hex()",
+        .expected = .{ .inspect_str = quotedHexInspect(Sha256, multi_block_text) },
+    },
+    .{
+        .name = "Crypto SHA256 Hasher write spans several blocks",
+        .source = "{\n" ++
+            "    hasher0 = Crypto.SHA256.Hasher.empty()\n" ++
+            "    hasher1 = Crypto.SHA256.Hasher.write(hasher0, \"" ++ multi_block_head ++ "\".to_utf8())\n" ++
+            "    hasher2 = Crypto.SHA256.Hasher.write(hasher1, \"" ++ multi_block_tail ++ "\".to_utf8())\n" ++
+            "    Crypto.SHA256.Digest.to_hex(Crypto.SHA256.Hasher.finish(hasher2))\n" ++
+            "}",
+        .expected = .{ .inspect_str = quotedHexInspect(Sha256, multi_block_text) },
     },
     .{
         .name = "Crypto SHA256 hash_chunks",

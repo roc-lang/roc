@@ -1,3 +1,3 @@
-import RecordField exposing [RecordField]
+import RecordField
 
 RecordRepr := { anonymous : Bool, fields : List(RecordField), name : Str }

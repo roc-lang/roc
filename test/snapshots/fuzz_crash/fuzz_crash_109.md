@@ -55,7 +55,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-package [e, E.a.*] {}
+package [E.a.*, e] {}
 ~~~
 # CANONICALIZE
 ~~~clojure

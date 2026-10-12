@@ -36,6 +36,12 @@ fn classifyPlatformOs(os: std.Target.Os.Tag) PlatformOs {
         .watchos,
         .uefi,
         .@"3ds",
+        .wiiu,
+        .@"switch",
+        .gba,
+        .psx,
+        .tios,
+        .ashetos,
         .ps3,
         .ps4,
         .ps5,
@@ -60,6 +66,7 @@ fn classifyPlatformOs(os: std.Target.Os.Tag) PlatformOs {
 const TestError = util.RocRunError ||
     std.Io.File.ReadStreamingError ||
     std.Io.File.Reader.Error ||
+    std.Io.net.Stream.Reader.Error ||
     std.Io.File.Writer.Error ||
     std.fmt.ParseIntError ||
     error{
@@ -143,7 +150,7 @@ test "HTTP header parsing platform derives structural parser without runtime all
     const tmp_path = try tmp_dir.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(tmp_path);
 
-    const prebuilt_path = try getEnvVarOwnedOrNull(allocator, "ROC_HTTP_HEADER_DECODER_PREBUILT_EXE");
+    const prebuilt_path = @as(?[]u8, try allocator.dupe(u8, @import("prebuilt_paths").app));
 
     const exe_name = if (builtin.os.tag == .windows) "http_header_decoder_server.exe" else "http_header_decoder_server";
     const output_path = if (prebuilt_path) |path|
@@ -351,13 +358,6 @@ fn buildRequest(allocator: std.mem.Allocator, optional_mask: u8) TestError![]u8 
     try request.appendSlice(allocator, request_body);
 
     return request.toOwnedSlice(allocator);
-}
-
-fn getEnvVarOwnedOrNull(allocator: std.mem.Allocator, key: []const u8) TestError!?[]u8 {
-    const key_z = try allocator.dupeZ(u8, key);
-    defer allocator.free(key_z);
-    const value = std.c.getenv(key_z) orelse return null;
-    return try allocator.dupe(u8, value[0..std.mem.len(value)]);
 }
 
 fn buildKnownHeadersRecordOrderRequest(allocator: std.mem.Allocator) TestError![]u8 {
@@ -626,6 +626,12 @@ fn isolatedProcessGroupId() ?std.posix.pid_t {
         .netbsd,
         .macos,
         .@"3ds",
+        .wiiu,
+        .@"switch",
+        .gba,
+        .psx,
+        .tios,
+        .ashetos,
         .ps3,
         .ps4,
         .ps5,

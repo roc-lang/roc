@@ -2,7 +2,6 @@
 //! operations used by the compilation coordinator and snapshot tooling.
 
 const std = @import("std");
-const build_options = @import("build_options");
 const base = @import("base");
 const parse = @import("parse");
 const can = @import("can");
@@ -24,8 +23,88 @@ pub const TimingInfo = struct {
     canonicalize_diagnostics_ns: u64 = 0,
     type_checking_ns: u64 = 0,
     check_diagnostics_ns: u64 = 0,
+    /// Compile-time evaluation run inside individual module checks, summed
+    /// across the worker threads that ran those checks.
+    module_compile_time_evaluation_ns: u64 = 0,
+    /// Wall time of whole-program finalization, which runs after every module
+    /// has been checked.
+    program_finalization_ns: u64 = 0,
+    /// Compile-time evaluation and shared lowering performed by whole-program
+    /// finalization.
     compile_time_evaluation: eval.CompileTimeFinalization.TimingSnapshot = .{},
+    /// Deterministic lowering and emission counters from all compile-time
+    /// evaluation, whether run inside module checks or program finalization.
+    compile_time_counters: eval.CompileTimeFinalization.TimingSnapshot = .{},
+    /// The modules whose type checking took longest.
+    slowest_type_checks: SlowestTypeChecks = .{},
 };
+
+/// One module's type-checking time: checking and checked-artifact
+/// publication, excluding compile-time evaluation run inside the check.
+/// The name is stored inline because the timing outlives the coordinator.
+pub const ModuleTypeCheckTiming = struct {
+    pub const max_name_len = 256;
+
+    name_buf: [max_name_len]u8 = undefined,
+    name_len: u16 = 0,
+    ns: u64,
+
+    /// `package.Module`, cut to `max_name_len` bytes.
+    pub fn init(package: []const u8, module: []const u8, ns: u64) ModuleTypeCheckTiming {
+        var result: ModuleTypeCheckTiming = .{ .ns = ns };
+        const written = std.fmt.bufPrint(&result.name_buf, "{s}.{s}", .{ package, module }) catch |err| switch (err) {
+            error.NoSpaceLeft => result.name_buf[0..],
+        };
+        result.name_len = @intCast(written.len);
+        return result;
+    }
+
+    pub fn name(self: *const ModuleTypeCheckTiming) []const u8 {
+        return self.name_buf[0..self.name_len];
+    }
+};
+
+/// The `capacity` slowest module type checks, slowest first. Ties keep the
+/// module that was offered first.
+pub const SlowestTypeChecks = struct {
+    pub const capacity = 10;
+
+    items: [capacity]ModuleTypeCheckTiming = undefined,
+    len: usize = 0,
+
+    pub fn offer(self: *SlowestTypeChecks, package: []const u8, module: []const u8, ns: u64) void {
+        var index = self.len;
+        while (index > 0 and self.items[index - 1].ns < ns) index -= 1;
+        if (index == capacity) return;
+        const last = @min(self.len, capacity - 1);
+        var shift = last;
+        while (shift > index) : (shift -= 1) self.items[shift] = self.items[shift - 1];
+        self.items[index] = .init(package, module, ns);
+        self.len = last + 1;
+    }
+
+    pub fn slice(self: *const SlowestTypeChecks) []const ModuleTypeCheckTiming {
+        return self.items[0..self.len];
+    }
+};
+
+test "SlowestTypeChecks keeps the slowest modules in descending order" {
+    var slowest: SlowestTypeChecks = .{};
+    var ns: u64 = 0;
+    while (ns < 2 * SlowestTypeChecks.capacity) : (ns += 1) {
+        // Interleave fast and slow modules so insertion order is not sorted.
+        const value = if (ns % 2 == 0) ns else 100 + ns;
+        slowest.offer("pkg", "Mod", value);
+    }
+    const items = slowest.slice();
+    try std.testing.expectEqual(@as(usize, SlowestTypeChecks.capacity), items.len);
+    try std.testing.expectEqual(@as(u64, 119), items[0].ns);
+    for (items[1..], items[0 .. items.len - 1]) |current, previous| {
+        try std.testing.expect(current.ns <= previous.ns);
+    }
+    try std.testing.expectEqual(@as(u64, 101), items[items.len - 1].ns);
+    try std.testing.expectEqualStrings("pkg.Mod", items[0].name());
+}
 const Allocator = std.mem.Allocator;
 
 const CoreCtx = @import("ctx").CoreCtx;
@@ -182,7 +261,7 @@ fn appendCheckOwnerEnvPublicDependencies(
         entry.value_ptr.* = {};
 
         const dependency = availableArtifactByKey(available_artifacts, dependency_key) orelse {
-            std.debug.panic("compile.typeCheckModule missing public API dependency artifact for imported module", .{});
+            base.invariant("compile.typeCheckModule missing public API dependency artifact for imported module", .{});
         };
         try appendCheckOwnerEnvIfMissing(allocator, owner_envs, dependency.module_env);
         try appendCheckOwnerEnvPublicDependencies(
@@ -329,7 +408,7 @@ fn importedTypeModule(sibling_env: *const ModuleEnv) ?ImportedTypeModule {
     const type_node_idx = sibling_env.getExposedTypeNodeIndexById(type_ident_in_module) orelse return null;
     return .{
         .source_ident = type_ident_in_module,
-        .statement_idx = @enumFromInt(type_node_idx),
+        .statement_idx = @fromBackingInt(@intCast(type_node_idx)),
     };
 }
 
@@ -345,7 +424,7 @@ pub fn resolveSelectedType(
 ) ?can.CIR.Statement.Idx {
     const source_ident = sibling_env.common.findIdent(qualified_name) orelse return null;
     const type_node_idx = sibling_env.getExposedTypeNodeIndexById(source_ident) orelse return null;
-    return @enumFromInt(type_node_idx);
+    return @fromBackingInt(@intCast(type_node_idx));
 }
 
 /// Canonicalize one module of a package.
@@ -362,13 +441,14 @@ pub fn canonicalizeModuleWithSiblings(
     builtin_indices: can.CIR.BuiltinIndices,
     validation: Can.Validation,
     is_entry_module: bool,
+    source_pin_version: ?[]const u8,
 ) Allocator.Error!void {
     var czer = try Can.initModule(roc_ctx, env, parse_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_module_env,
             .builtin_indices = builtin_indices,
         },
-        .compiler_version = build_options.compiler_version,
+        .compiler_version = source_pin_version,
         .validation = validation,
         .is_entry_module = is_entry_module,
     });
@@ -452,7 +532,7 @@ pub fn typeCheckModule(
     module_envs_map.deinit();
 
     if (!importedArtifactsCoverImportedEnvs(imported_envs, imported_artifacts)) {
-        std.debug.panic("compile.typeCheckModule received an imported module environment without its checked artifact", .{});
+        base.invariant("compile.typeCheckModule received an imported module environment without its checked artifact", .{});
     }
 
     var checked_artifact = try publishCheckedArtifactFromCheckedModule(

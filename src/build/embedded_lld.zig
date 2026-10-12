@@ -49,6 +49,12 @@ pub const Format = enum {
             .visionos,
             .uefi,
             .@"3ds",
+            .wiiu,
+            .@"switch",
+            .gba,
+            .psx,
+            .tios,
+            .ashetos,
             .ps3,
             .ps4,
             .ps5,
@@ -99,7 +105,7 @@ pub fn link(
 
     const c_args = try arena.alloc([*:0]const u8, args.len);
     for (args, 0..) |arg, i| {
-        c_args[i] = (try arena.dupeZ(u8, arg)).ptr;
+        c_args[i] = (try arena.dupeSentinel(u8, arg, 0)).ptr;
     }
 
     const success = switch (format) {

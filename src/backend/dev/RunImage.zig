@@ -103,7 +103,7 @@ pub const RelocationRecord = extern struct {
     code_offset: u64,
     symbol: StringRef,
     kind: u8,
-    _padding: [7]u8 = [_]u8{0} ** 7,
+    _padding: [7]u8 = @as([7]u8, @splat(0)),
 
     pub fn relocationKind(self: RelocationRecord) ImageError!RelocationKind {
         return std.enums.fromInt(RelocationKind, self.kind) orelse error.InvalidDevRunImage;
@@ -138,7 +138,7 @@ pub const DataRelocationRecord = extern struct {
     symbol: StringRef,
     addend: i64,
     target_kind: u8,
-    _padding: [7]u8 = [_]u8{0} ** 7,
+    _padding: [7]u8 = @as([7]u8, @splat(0)),
 
     pub fn targetKind(self: DataRelocationRecord) ImageError!StaticDataTargetKind {
         return std.enums.fromInt(StaticDataTargetKind, self.target_kind) orelse error.InvalidDevRunImage;
@@ -235,15 +235,15 @@ pub fn writeToSharedMemory(
             .linked_function => |function| {
                 try relocation_records.append(scratch, .{
                     .code_offset = function.offset,
-                    .symbol = symbol_refs[@intFromEnum(function.symbol)],
-                    .kind = @intFromEnum(RelocationKind.linked_function),
+                    .symbol = symbol_refs[@backingInt(function.symbol)],
+                    .kind = @backingInt(RelocationKind.linked_function),
                 });
             },
             .linked_data => |data| {
                 try relocation_records.append(scratch, .{
                     .code_offset = data.offset,
-                    .symbol = symbol_refs[@intFromEnum(data.symbol)],
-                    .kind = @intFromEnum(relocationKindForData(data.kind)),
+                    .symbol = symbol_refs[@backingInt(data.symbol)],
+                    .kind = @backingInt(relocationKindForData(data.kind)),
                 });
             },
             .local_data, .jmp_to_return => return error.UnsupportedDevRunRelocation,
@@ -290,7 +290,7 @@ pub fn writeToSharedMemory(
             }
             const target_ref = switch (relocation.kind) {
                 .address => switch (relocation.target) {
-                    .data_symbol => |id| data_refs[@intFromEnum(id)],
+                    .data_symbol => |id| data_refs[@backingInt(id)],
                     .named => symbol_names.find(relocation.target_symbol_name, .data) orelse return error.UnsupportedStaticDataRelocation,
                 },
                 .function_pointer => symbol_names.find(relocation.target_symbol_name, .code) orelse return error.UnsupportedStaticDataRelocation,
@@ -299,7 +299,7 @@ pub fn writeToSharedMemory(
                 .data_offset = @intCast(data_offset + relocation_offset),
                 .symbol = target_ref,
                 .addend = relocation.addend,
-                .target_kind = @intFromEnum(switch (relocation.kind) {
+                .target_kind = @backingInt(switch (relocation.kind) {
                     .address => StaticDataTargetKind.address,
                     .function_pointer => StaticDataTargetKind.function_pointer,
                 }),
@@ -474,7 +474,7 @@ pub fn requiredCapacityFromOffset(
             }
             const target_exists = switch (relocation.kind) {
                 .address => switch (relocation.target) {
-                    .data_symbol => |id| @intFromEnum(id) < data_exports.len,
+                    .data_symbol => |id| @backingInt(id) < data_exports.len,
                     .named => names.find(relocation.target_symbol_name, .data) != null,
                 },
                 .function_pointer => names.find(relocation.target_symbol_name, .code) != null,
@@ -559,13 +559,13 @@ const SymbolNames = struct {
             entry.value_ptr.* = .{ .ref = .{ .offset = @intCast(self.byte_len), .len = @intCast(name.len) }, .kinds = 0 };
             self.byte_len = end;
         }
-        entry.value_ptr.kinds |= @intFromEnum(kind);
+        entry.value_ptr.kinds |= @backingInt(kind);
         return entry.value_ptr.ref;
     }
 
     fn find(self: *const SymbolNames, name: []const u8, kind: Kind) ?StringRef {
         const entry = self.refs.get(name) orelse return null;
-        return if (entry.kinds & @intFromEnum(kind) != 0) entry.ref else null;
+        return if (entry.kinds & @backingInt(kind) != 0) entry.ref else null;
     }
 };
 
@@ -580,10 +580,10 @@ fn countReservedFunctionStubs(
     @memset(uses, 0);
     for (relocations) |relocation| switch (relocation) {
         .linked_function => |function| {
-            uses[@intFromEnum(function.symbol)] |= 1;
+            uses[@backingInt(function.symbol)] |= 1;
         },
         .linked_data => |data| {
-            uses[@intFromEnum(data.symbol)] |= 2;
+            uses[@backingInt(data.symbol)] |= 2;
         },
         .local_data, .jmp_to_return => return error.UnsupportedDevRunRelocation,
         .retired => {},

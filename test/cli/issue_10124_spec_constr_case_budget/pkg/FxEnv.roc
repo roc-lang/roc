@@ -1,4 +1,4 @@
-import FxOsStr exposing [FxOsStr]
+import FxOsStr
 
 FxEnv := [].{
     get : Str -> Try(FxOsStr, [VarNotFound(FxOsStr), EnvErr])

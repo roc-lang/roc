@@ -6,6 +6,7 @@
 //! entrypoint wrapper directly from the shared mapping.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const stack_probe = @import("stack_probe.zig");
 const instruction_cache = @import("instruction_cache.zig");
@@ -33,7 +34,7 @@ else
 
 fn panicThroughHost(message: []const u8, _: ?usize) noreturn {
     builtins.host_abi.extern_host.roc_crashed(message.ptr, message.len);
-    unreachable;
+    @trap();
 }
 
 /// Route std.debug.print / std.debug.panic through the minimal shim_io vtable so
@@ -100,12 +101,6 @@ const RuntimeState = struct {
     /// reaches zero; the shim only frees these small process-local descriptors.
     retired_programs: std.ArrayList(*DevProgram),
     control: ?*hot_reload.Control,
-};
-
-const ShimError = error{
-    ImageUnavailable,
-    InvalidEntrypoint,
-    OutOfMemory,
 };
 
 const LoadDevProgramError = Allocator.Error || RunImage.ImageError || error{
@@ -211,7 +206,7 @@ fn openRuntimeState(gpa: Allocator, ops: *RocOps) RuntimeStateError!RuntimeState
     };
 }
 
-fn ensureRuntimeState(ops: *RocOps) ShimError!*RuntimeState {
+fn ensureRuntimeState(ops: *RocOps) *RuntimeState {
     if (runtime_state_initialized.load(.acquire)) return &runtime_state;
 
     runtime_state_mutex.lockUncancelable(shimIo());
@@ -228,7 +223,6 @@ fn ensureRuntimeState(ops: *RocOps) ShimError!*RuntimeState {
                 "Machine-code shim could not map the compiled Roc image",
         };
         ops.crash(message);
-        return error.ImageUnavailable;
     };
     runtime_state_initialized.store(true, .release);
     return &runtime_state;
@@ -521,6 +515,7 @@ fn hostArch() HostArch {
         .bpfeb,
         .bpfel,
         .csky,
+        .ez80,
         .hexagon,
         .hppa,
         .hppa64,
@@ -530,6 +525,7 @@ fn hostArch() HostArch {
         .loongarch32,
         .loongarch64,
         .m68k,
+        .m88k,
         .microblaze,
         .microblazeel,
         .mips,
@@ -554,6 +550,7 @@ fn hostArch() HostArch {
         .sheb,
         .sparc,
         .sparc64,
+        .spork8,
         .spirv32,
         .spirv64,
         .thumb,
@@ -623,8 +620,8 @@ fn resolveHostedSymbol(name: []const u8) ?usize {
 
 /// Resolve a Boxy runtime wrapper to the linked in-process implementation.
 fn resolveBoxyShimFunction(name: []const u8) ?usize {
-    inline for (std.meta.fields(backend.LirCodeGenMod.BoxyBuiltinFn)) |field| {
-        const boxy_fn: backend.LirCodeGenMod.BoxyBuiltinFn = @enumFromInt(field.value);
+    inline for (@typeInfo(backend.LirCodeGenMod.BoxyBuiltinFn).@"enum".field_names) |field_name| {
+        const boxy_fn: backend.LirCodeGenMod.BoxyBuiltinFn = @fromBackingInt(@intCast(@backingInt(@field(backend.LirCodeGenMod.BoxyBuiltinFn, field_name))));
         const symbol_name = comptime boxy_fn.symbolName();
         if (std.mem.eql(u8, name, symbol_name)) {
             return @intFromPtr(&@field(eval.boxy_abi, symbol_name));
@@ -719,25 +716,22 @@ fn executeDevEntrypoint(
     ops: *RocOps,
     ret_ptr: ?*anyopaque,
     arg_ptr: ?*anyopaque,
-) ShimError!void {
+) void {
     const entrypoint = devEntrypointForOrdinal(program.entrypoints, entry_idx) orelse {
-        if (builtin.mode == .Debug) {
-            std.debug.panic("machine-code shim invariant violated: missing dev entrypoint ordinal {d}", .{entry_idx});
+        if (builtin.mode == .debug) {
+            invariant("machine-code shim invariant violated: missing dev entrypoint ordinal {d}", .{entry_idx});
         }
         unreachable;
     };
     if (entrypoint.code_offset > std.math.maxInt(usize)) {
         ops.crash("Machine-code shim received an invalid dev entrypoint offset");
-        return error.InvalidEntrypoint;
     }
     const entry_offset: usize = @intCast(entrypoint.code_offset);
     if (entry_offset >= program.code.len) {
         ops.crash("Machine-code shim received a dev entrypoint outside the code image");
-        return error.InvalidEntrypoint;
     }
     const ret = ret_ptr orelse {
         ops.crash("Machine-code shim received no result buffer for dev execution");
-        return error.InvalidEntrypoint;
     };
     // The image's entry takes the (ret_ptr, args_ptr) convention; it reaches
     // the host through this shim's runtime symbols.
@@ -769,15 +763,15 @@ fn acquireDevProgramRef(program: *DevProgram) void {
         hot_reload.retainDescriptor(descriptor);
         return;
     } else if (program.descriptor_offset != hot_reload.invalid_descriptor_offset) {
-        if (builtin.mode == .Debug) {
-            std.debug.panic("machine-code shim invariant violated: hot reload program has no descriptor", .{});
+        if (builtin.mode == .debug) {
+            invariant("machine-code shim invariant violated: hot reload program has no descriptor", .{});
         }
         unreachable;
     }
 
     const previous = program.local_refs.fetchAdd(1, .acquire);
-    if (builtin.mode == .Debug and previous == 0) {
-        std.debug.panic("machine-code shim invariant violated: acquired unreferenced dev program", .{});
+    if (builtin.mode == .debug and previous == 0) {
+        invariant("machine-code shim invariant violated: acquired unreferenced dev program", .{});
     }
 }
 
@@ -785,14 +779,14 @@ fn releaseDevProgramRefLocked(state: *RuntimeState, program: *DevProgram) void {
     if (program.descriptor) |descriptor| {
         hot_reload.releaseDescriptor(descriptor);
     } else if (program.descriptor_offset != hot_reload.invalid_descriptor_offset) {
-        if (builtin.mode == .Debug) {
-            std.debug.panic("machine-code shim invariant violated: hot reload program has no descriptor", .{});
+        if (builtin.mode == .debug) {
+            invariant("machine-code shim invariant violated: hot reload program has no descriptor", .{});
         }
         unreachable;
     } else {
         const previous = program.local_refs.fetchSub(1, .acq_rel);
-        if (builtin.mode == .Debug and previous == 0) {
-            std.debug.panic("machine-code shim invariant violated: released unreferenced dev program", .{});
+        if (builtin.mode == .debug and previous == 0) {
+            invariant("machine-code shim invariant violated: released unreferenced dev program", .{});
         }
     }
     reclaimRetiredProgramsLocked(state);
@@ -805,14 +799,14 @@ fn releaseDevProgramRef(program: *DevProgram) void {
     if (program.descriptor) |descriptor| {
         hot_reload.releaseDescriptor(descriptor);
     } else if (program.descriptor_offset != hot_reload.invalid_descriptor_offset) {
-        if (builtin.mode == .Debug) {
-            std.debug.panic("machine-code shim invariant violated: hot reload program has no descriptor", .{});
+        if (builtin.mode == .debug) {
+            invariant("machine-code shim invariant violated: hot reload program has no descriptor", .{});
         }
         unreachable;
     } else {
         const previous = program.local_refs.fetchSub(1, .acq_rel);
-        if (builtin.mode == .Debug and previous == 0) {
-            std.debug.panic("machine-code shim invariant violated: released unreferenced dev program", .{});
+        if (builtin.mode == .debug and previous == 0) {
+            invariant("machine-code shim invariant violated: released unreferenced dev program", .{});
         }
     }
 
@@ -913,8 +907,8 @@ fn evaluateEntrypoint(
     ops: *RocOps,
     ret_ptr: ?*anyopaque,
     arg_ptr: ?*anyopaque,
-) ShimError!void {
-    const state = try ensureRuntimeState(ops);
+) void {
+    const state = ensureRuntimeState(ops);
     if (state.control != null) {
         runtime_state_mutex.lockUncancelable(shimIo());
         refreshRuntimeProgramIfNeeded(state, ops);
@@ -923,9 +917,9 @@ fn evaluateEntrypoint(
         runtime_state_mutex.unlock(shimIo());
 
         defer releaseDevProgramRef(program);
-        try executeDevEntrypoint(program, entry_idx, ops, ret_ptr, arg_ptr);
+        executeDevEntrypoint(program, entry_idx, ops, ret_ptr, arg_ptr);
     } else {
-        try executeDevEntrypoint(state.program, entry_idx, ops, ret_ptr, arg_ptr);
+        executeDevEntrypoint(state.program, entry_idx, ops, ret_ptr, arg_ptr);
     }
 }
 
@@ -1002,12 +996,7 @@ fn shimEntrypoint(
     ret_ptr: ?*anyopaque,
     arg_ptr: ?*anyopaque,
 ) callconv(.c) void {
-    evaluateEntrypoint(entry_idx, ops, ret_ptr, arg_ptr) catch |err| switch (err) {
-        error.ImageUnavailable,
-        error.InvalidEntrypoint,
-        error.OutOfMemory,
-        => {},
-    };
+    evaluateEntrypoint(entry_idx, ops, ret_ptr, arg_ptr);
 }
 
 fn shimDefaultMain(argc: usize, argv: [*][*:0]const u8) callconv(.c) usize {
@@ -1019,17 +1008,11 @@ fn shimDefaultMain(argc: usize, argv: [*][*:0]const u8) callconv(.c) usize {
     const app_args = if (argc > 1) argv[1..argc] else argv[0..0];
     var cli_args_list = shim_host_abi.buildDefaultRunCliArgs(app_args, allocator()) catch {
         ops.crash("Machine-code shim could not allocate default-app arguments");
-        return 1;
     };
 
     var result: u8 align(16) = 0;
     shim_host_abi.resetInlineExpectFailed();
-    evaluateEntrypoint(0, ops, &result, &cli_args_list) catch |err| switch (err) {
-        error.ImageUnavailable,
-        error.InvalidEntrypoint,
-        error.OutOfMemory,
-        => return 1,
-    };
+    evaluateEntrypoint(0, ops, &result, &cli_args_list);
     if (result == 0 and shim_host_abi.takeInlineExpectFailed()) return 1;
     return result;
 }
@@ -1075,8 +1058,8 @@ test "loaded dev program borrows direct shared image metadata" {
 }
 
 test "shim resolves every Boxy runtime wrapper" {
-    inline for (std.meta.fields(backend.LirCodeGenMod.BoxyBuiltinFn)) |field| {
-        const boxy_fn: backend.LirCodeGenMod.BoxyBuiltinFn = @enumFromInt(field.value);
+    inline for (@typeInfo(backend.LirCodeGenMod.BoxyBuiltinFn).@"enum".field_names) |field_name| {
+        const boxy_fn: backend.LirCodeGenMod.BoxyBuiltinFn = @fromBackingInt(@intCast(@backingInt(@field(backend.LirCodeGenMod.BoxyBuiltinFn, field_name))));
         const symbol_name = comptime boxy_fn.symbolName();
         try std.testing.expectEqual(
             @intFromPtr(&@field(eval.boxy_abi, symbol_name)),
@@ -1086,7 +1069,7 @@ test "shim resolves every Boxy runtime wrapper" {
 }
 
 test "data relocations patch data pointers" {
-    var data = [_]u8{0} ** (@sizeOf(usize) + 4);
+    var data = @as([(@sizeOf(usize) + 4)]u8, @splat(0));
     const source_name = "roc__source";
     const target_name = "roc__target";
     const symbol_names = source_name ++ target_name;
@@ -1111,7 +1094,7 @@ test "data relocations patch data pointers" {
             .data_offset = 0,
             .symbol = .{ .offset = source_name.len, .len = target_name.len },
             .addend = 2,
-            .target_kind = @intFromEnum(RunImage.StaticDataTargetKind.address),
+            .target_kind = @backingInt(RunImage.StaticDataTargetKind.address),
         },
     };
     const view = RunImage.ProgramView{
@@ -1143,7 +1126,7 @@ test "data relocations patch data pointers" {
 
 test "function-pointer data relocations patch generated Roc code pointers" {
     var code = [_]u8{ 0, 0, 0, 0 };
-    var data = [_]u8{0} ** @sizeOf(usize);
+    var data = @as([@sizeOf(usize)]u8, @splat(0));
     const proc_name = "roc__p2a";
     const code_symbols = [_]RunImage.CodeSymbol{
         .{
@@ -1156,7 +1139,7 @@ test "function-pointer data relocations patch generated Roc code pointers" {
             .data_offset = 0,
             .symbol = .{ .offset = 0, .len = proc_name.len },
             .addend = 0,
-            .target_kind = @intFromEnum(RunImage.StaticDataTargetKind.function_pointer),
+            .target_kind = @backingInt(RunImage.StaticDataTargetKind.function_pointer),
         },
     };
     const view = RunImage.ProgramView{

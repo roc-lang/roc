@@ -21,13 +21,13 @@ const HostEnv = struct {
 
 const BaseCallbacks = host_alloc.Callbacks(HostEnv);
 
-fn rocAlloc(ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn rocAlloc(ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
     const env: *HostEnv = @ptrCast(@alignCast(ops.env));
     env.bytes += length;
     return BaseCallbacks.rocAllocFn(ops, length, alignment);
 }
 
-fn rocRealloc(ops: *RocOps, ptr: *anyopaque, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn rocRealloc(ops: *RocOps, ptr: *anyopaque, length: usize, alignment: usize) callconv(.c) *anyopaque {
     const env: *HostEnv = @ptrCast(@alignCast(ops.env));
     env.bytes += length;
     return BaseCallbacks.rocReallocFn(ops, ptr, length, alignment);

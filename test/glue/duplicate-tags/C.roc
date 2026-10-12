@@ -1,4 +1,4 @@
-import IOErr exposing [IOErr]
+import IOErr
 
 C := [].{
     unit! : Str => Try({}, [CErr(IOErr)])

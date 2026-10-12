@@ -64,7 +64,7 @@ expect {
 expect {
 	result : Try(Dec, [InvalidJson(Str)])
 	result = Json.parse("1e999999")
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 
 expect f32_parses_as("1.5", 1.5)
@@ -73,7 +73,7 @@ expect f32_round_trips(1.5)
 expect {
 	result : Try(F32, [InvalidJson(Str)])
 	result = Json.parse("1e999999")
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 
 expect f64_parses_as("-2.25", -2.25)
@@ -86,7 +86,7 @@ expect {
 	not_json : Try(F64, [InvalidJson(Str)])
 	not_json = Json.parse("NaN")
 
-	too_large == Err(Json.invalid_json) and not_json == Err(Json.invalid_json)
+	too_large == Err(Json.invalid_json({})) and not_json == Err(Json.invalid_json({}))
 }
 
 expect {

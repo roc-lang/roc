@@ -17,7 +17,7 @@ pub const ErrorCode = enum(i32) {
     request_cancelled = -32800,
 
     pub fn jsonStringify(self: ErrorCode, writer: anytype) error{WriteFailed}!void {
-        try writer.write(@intFromEnum(self));
+        try writer.write(@backingInt(self));
     }
 };
 
@@ -90,6 +90,7 @@ pub const InitializeParams = struct {
     root_uri: ?[]u8 = null,
     client_info: ?ClientInfo = null,
     capabilities_json: ?[]u8 = null,
+    trusted_workspace: bool = false,
 
     pub fn fromJson(allocator: std.mem.Allocator, value: std.json.Value) (Allocator.Error || error{InvalidParams})!InitializeParams {
         if (std.meta.activeTag(value) != .object) return error.InvalidParams;
@@ -135,6 +136,16 @@ pub const InitializeParams = struct {
         var params = InitializeParams{ .process_id = process_id };
         errdefer params.deinit(allocator);
 
+        if (obj.get("initializationOptions")) |options| {
+            if (options != .null) {
+                if (options != .object) return error.InvalidParams;
+                if (options.object.get("trustedWorkspace")) |trusted| {
+                    if (trusted != .bool) return error.InvalidParams;
+                    params.trusted_workspace = trusted.bool;
+                }
+            }
+        }
+
         if (root_uri_text) |text| {
             params.root_uri = try copyString(allocator, text);
         }
@@ -165,6 +176,7 @@ pub const InitializeParams = struct {
     }
 
     pub fn moveInto(self: *InitializeParams, state: *ClientState) void {
+        state.trusted_workspace = self.trusted_workspace;
         state.process_id = self.process_id;
         state.root_uri = self.root_uri;
         state.client_info = self.client_info;
@@ -183,6 +195,7 @@ pub const ClientState = struct {
     root_uri: ?[]u8 = null,
     client_info: ?ClientInfo = null,
     capabilities_json: ?[]u8 = null,
+    trusted_workspace: bool = false,
 
     pub fn deinit(self: *ClientState, allocator: std.mem.Allocator) void {
         if (self.root_uri) |uri| allocator.free(uri);

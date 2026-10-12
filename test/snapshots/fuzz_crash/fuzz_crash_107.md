@@ -67,8 +67,7 @@ e = {
 	(d-let
 		(p-assign (ident "e"))
 		(e-block
-			(s-expr
-				(e-runtime-error (tag "not_implemented")))
+			(s-runtime-error (tag "not_implemented"))
 			(e-empty_record))))
 ~~~
 # TYPES

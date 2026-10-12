@@ -52,7 +52,7 @@ fn requestInput(
     request_body: []const u8,
 ) std.mem.Allocator.Error![]u8 {
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
     ;
     const initialized_body =
         \\{"jsonrpc":"2.0","method":"initialized","params":{}}

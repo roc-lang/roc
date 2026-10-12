@@ -19,7 +19,7 @@ const testing = std.testing;
 const util = @import("util.zig");
 const fx_test_specs = @import("fx_test_specs.zig");
 
-const FxPlatformTestError = util.RocRunError || util.ChildTimeoutError || util.ResultCheckError || std.mem.Allocator.Error || std.Io.Dir.RealPathFileAllocError || std.Io.Dir.CreateDirPathError || std.Io.Dir.ReadFileAllocError || error{
+const FxPlatformTestError = util.RocRunError || util.ChildTimeoutError || util.ResultCheckError || std.mem.Allocator.Error || std.Io.Dir.RealPathFileAllocError || std.Io.Dir.CreateDirPathError || std.Io.Dir.ReadFileAllocError || std.Io.Dir.WriteFileError || error{
     NativeBackendBuildFailed,
     DivisionByZeroNotHandled,
     StackOverflowNotHandled,
@@ -453,6 +453,30 @@ test "fx platform host calls boxed callable after provided root returns (dev bac
 
 test "fx platform host calls boxed callable after provided root returns (speed backend)" {
     try expectProvidedBoxedCallablePostRootCall("--opt=speed", "fx_provided_boxed_callable_post_root_call_speed");
+}
+
+/// Repro for https://github.com/roc-lang/roc/issues/12025: a provided root
+/// returns a boxed callable stored in a top-level constant, and the host's later
+/// invocations of it through the erased-callable ABI must return 42 and 43.
+fn expectProvidedConstantBoxedCallableCall(opt_flag: []const u8, output_basename: []const u8) FxPlatformTestError!void {
+    try expectProvidedCallableHostSelfTest(
+        opt_flag,
+        output_basename,
+        "--run-provided-constant-boxed-callable-call",
+        "provided constant boxed callable call",
+    );
+}
+
+test "fx platform host calls constant boxed callable after provided root returns (interpreter)" {
+    try expectProvidedConstantBoxedCallableCall("--opt=interpreter", "fx_provided_constant_boxed_callable_call_interpreter");
+}
+
+test "fx platform host calls constant boxed callable after provided root returns (dev backend)" {
+    try expectProvidedConstantBoxedCallableCall("--opt=dev", "fx_provided_constant_boxed_callable_call_dev");
+}
+
+test "fx platform host calls constant boxed callable after provided root returns (speed backend)" {
+    try expectProvidedConstantBoxedCallableCall("--opt=speed", "fx_provided_constant_boxed_callable_call_speed");
 }
 
 test "fx platform direct run preserves RocOps after F32.abs before list allocation" {
@@ -960,6 +984,56 @@ test "fx platform run from different cwd" {
     try testing.expect(std.mem.find(u8, run_result.stdout, "Hello from stdout!") != null);
 }
 
+/// Runs an app whose declared platform is an unreachable URL, with
+/// `--replace-dep` pointing that URL at the local fx platform. Every dependency
+/// in the graph is local, so the run must succeed without fetching anything.
+/// Repro for https://github.com/roc-lang/roc/issues/12104
+fn runWithReplacedUrlPlatform(opt_args: []const []const u8) FxPlatformTestError!void {
+    const allocator = testing.allocator;
+
+    // Nothing listens on the discard port, so any attempt to fetch this
+    // bundle fails with a download error.
+    const platform_url = "http://127.0.0.1:9/fx/0.0.1/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst";
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data = "app [main!] { pf: platform \"" ++ platform_url ++ "\" }\n\n" ++
+            "import pf.Stdout\n\n" ++
+            "main! = || {\n" ++
+            "\tStdout.line!(\"replaced platform ok\")\n" ++
+            "}\n",
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", allocator);
+    defer allocator.free(app_path);
+
+    const local_platform = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, "test/fx/platform/main.roc", allocator);
+    defer allocator.free(local_platform);
+
+    const args = try std.mem.concat(allocator, []const u8, &.{
+        &.{ "--replace-dep", platform_url, local_platform },
+        opt_args,
+        &.{app_path},
+    });
+    defer allocator.free(args);
+
+    const run_result = try util.runRocCommand(std.testing.io, allocator, args);
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try util.checkSuccess(run_result);
+    try testing.expectEqualStrings("replaced platform ok\n", run_result.stdout);
+}
+
+test "default roc command loads a --replace-dep platform instead of the declared URL" {
+    try runWithReplacedUrlPlatform(&.{});
+}
+
+test "roc --opt=interpreter loads a --replace-dep platform instead of the declared URL" {
+    try runWithReplacedUrlPlatform(&.{"--opt=interpreter"});
+}
+
 test "drop_prefix segfault regression" {
     // Regression test: Calling drop_prefix on a string literal and assigning
     // the result to an unused variable causes a segfault.
@@ -1438,7 +1512,7 @@ test "fx platform runtime stack overflow" {
     //    design.md), so the guard's crash output can be asserted only when
     //    this suite and the roc binary it spawns are built in Debug mode.
     // 2. The compiled dev-backend host path via the FX host self-test hook.
-    if (comptime builtin.mode == .Debug) {
+    if (comptime builtin.mode == .debug) {
         try expectInterpreterRuntimeStackOverflow();
     }
     try expectDevRuntimeStackOverflow();
@@ -1660,9 +1734,10 @@ test "fx platform fold_rev static dispatch regression" {
 }
 
 test "fx platform invalid nested where-clause static dispatch fails in check" {
-    // Regression test for #9657: I64's builtin decode/encode methods do not
-    // have the signatures required by this where-clause, so check must reject
-    // the contract before post-check lowering.
+    // Regression test for #9657: nothing in the program determines the types
+    // this where-clause constrains, and the default chosen for them lacks the
+    // required methods, so check must reject the contract before post-check
+    // lowering, reporting the type as undetermined.
     const allocator = testing.allocator;
 
     var env = try util.buildIsolatedTestEnvMap(std.testing.io, allocator, null);
@@ -1685,7 +1760,7 @@ test "fx platform invalid nested where-clause static dispatch fails in check" {
         .stderr = check_result.stderr,
         .term = check_result.term,
     });
-    try testing.expect(std.mem.find(u8, check_result.stderr, "type mismatch") != null);
+    try testing.expect(std.mem.find(u8, check_result.stderr, "type not determined") != null);
     try testing.expect(std.mem.find(u8, check_result.stderr, "postcheck invariant violated") == null);
 }
 

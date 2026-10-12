@@ -1,6 +1,7 @@
 app [
     make_boxed_callable,
     make_boxed_str_callable,
+    make_constant_boxed_callable,
     drop_boxed_callable,
     make_aliased_boxed_callables,
     make_shared_boxed_callables,
@@ -14,6 +15,16 @@ make_boxed_callable = |offset| Box.box(|value| value + offset)
 
 make_boxed_str_callable : Str -> Box(U64 -> U64)
 make_boxed_str_callable = |captured| Box.box(|value| value + Str.count_utf8_bytes(captured))
+
+# Repro for https://github.com/roc-lang/roc/issues/12025
+#
+# A provided root returns a boxed callable stored in a top-level constant, and
+# the host invokes it after that root has returned.
+constant_boxed_callable : Box(U64 -> U64)
+constant_boxed_callable = Box.box(|value| value + 41)
+
+make_constant_boxed_callable : U64 -> Box(U64 -> U64)
+make_constant_boxed_callable = |_unused| constant_boxed_callable
 
 drop_boxed_callable : Box(U64 -> U64) -> {}
 drop_boxed_callable = |_callable| {}

@@ -243,23 +243,6 @@ pub fn pushReservedStringPair(self: *SExprTree, key: []const u8, begin: u32, val
     try self.endNode(node_begin, attrs);
 }
 
-/// Push a dynamic atom (copied into data buffer) onto the stack
-pub fn pushDynamicAtom(self: *SExprTree, value: []const u8) std.mem.Allocator.Error!void {
-    const begin: u32 = @intCast(self.data.items.len);
-    try self.data.appendSlice(value);
-    const end: u32 = @intCast(self.data.items.len);
-    try self.stack.append(Node{ .DynamicAtom = .{ .begin = begin, .end = end } });
-}
-
-/// Push a dynamic atom key-value pair onto the stack
-pub fn pushDynamicAtomPair(self: *SExprTree, key: []const u8, value: []const u8) std.mem.Allocator.Error!void {
-    const begin = self.beginNode();
-    try self.pushStaticAtom(key);
-    try self.pushDynamicAtom(value);
-    const attrs = self.beginNode();
-    try self.endNode(begin, attrs);
-}
-
 /// Push a boolean node onto the stack
 pub fn pushBool(self: *SExprTree, value: bool) std.mem.Allocator.Error!void {
     try self.stack.append(Node{ .Boolean = value });
@@ -288,11 +271,6 @@ pub fn pushU64Pair(self: *SExprTree, key: []const u8, value: u64) std.mem.Alloca
     try self.endNode(begin, attrs);
 }
 
-/// Push a NodeIdx node onto the stack
-pub fn pushNodeIdx(self: *SExprTree, idx: u32) std.mem.Allocator.Error!void {
-    try self.stack.append(Node{ .NodeIdx = idx });
-}
-
 /// Push a BytesRange node onto the stack
 pub fn pushBytesRange(self: *SExprTree, begin: u32, end: u32, region: RegionInfo) std.mem.Allocator.Error!void {
     try self.stack.append(Node{ .BytesRange = .{ .begin = begin, .end = end, .region = region } });
@@ -301,6 +279,18 @@ pub fn pushBytesRange(self: *SExprTree, begin: u32, end: u32, region: RegionInfo
 /// Begin a new node, returning a marker for the current stack position
 pub fn beginNode(self: *SExprTree) NodeBegin {
     return NodeBegin{ .stack_idx = @intCast(self.stack.items.len) };
+}
+
+/// Begin a new node whose first item is the static atom `name`.
+pub fn beginNamedNode(self: *SExprTree, name: []const u8) std.mem.Allocator.Error!NodeBegin {
+    const begin = self.beginNode();
+    try self.pushStaticAtom(name);
+    return begin;
+}
+
+/// End a node whose items since the begin marker are all attributes.
+pub fn endNodeWithoutChildren(self: *SExprTree, begin: NodeBegin) std.mem.Allocator.Error!void {
+    try self.endNode(begin, self.beginNode());
 }
 
 /// End a node by popping all items since the begin marker and creating a List node
@@ -330,13 +320,13 @@ fn toStringImpl(self: *const SExprTree, node: Node, writer_impl: anytype, indent
     switch (node) {
         .StaticAtom => |s| {
             try writer_impl.setColor(.node_name);
-            try writer_impl.print("{s}", .{s});
+            try writer_impl.print("{f}", .{@import("bidi.zig").Display{ .bytes = s }});
             try writer_impl.setColor(.default);
         },
         .DynamicAtom => |range| {
             const s = self.data.items[range.begin..range.end];
             try writer_impl.setColor(.node_name);
-            try writer_impl.print("{s}", .{s});
+            try writer_impl.print("{f}", .{@import("bidi.zig").Display{ .bytes = s }});
             try writer_impl.setColor(.default);
         },
         .String => |range| {
@@ -344,7 +334,7 @@ fn toStringImpl(self: *const SExprTree, node: Node, writer_impl: anytype, indent
             try writer_impl.setColor(.punctuation);
             try writer_impl.print("\"", .{});
             try writer_impl.setColor(.string);
-            try writer_impl.print("{s}", .{s});
+            try writer_impl.print("{f}", .{@import("bidi.zig").Display{ .bytes = s }});
             try writer_impl.setColor(.punctuation);
             try writer_impl.print("\"", .{});
             try writer_impl.setColor(.default);
@@ -419,13 +409,6 @@ fn toStringImpl(self: *const SExprTree, node: Node, writer_impl: anytype, indent
             try writer_impl.setColor(.default);
         },
     }
-}
-
-/// Pretty-print the root node (top of stack) to the writer
-pub fn printTree(self: *const SExprTree, writer: anytype, linecol_mode: LineColMode) (Allocator.Error || error{WriteFailed})!void {
-    if (self.stack.items.len == 0) return;
-    var plain_writer = PlainTextSExprWriter(@TypeOf(writer.any())){ .writer = writer.any() };
-    try self.toStringImpl(self.stack.items[self.stack.items.len - 1], &plain_writer, 0, linecol_mode);
 }
 
 /// Render this SExprTree to a writer with pleasing indentation.

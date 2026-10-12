@@ -13,35 +13,9 @@ match coord {
 }
 ~~~
 # EXPECTED
-MISSING METHOD - tuple_patterns.md:2:21:2:29
+NIL
 # PROBLEMS
-~~~clojure
-(reports
-	(report
-		(severity runtime_error)
-		(title "Missing Method")
-		(region (start 2 21) (end 2 29))
-		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_quote")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
-		(document
-			(source-region (file "tuple_patterns.md") (start 2 21) (end 2 29) (annotation error) (line-text "    (Zero, Zero) => \"origin\""))
-			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_quote")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "[Zero]")
-			(annotation-end))))
-~~~
+NIL
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -103,7 +77,8 @@ match coord {
 								(p-applied-tag)
 								(p-applied-tag)))))
 				(value
-					(e-runtime-error (tag "erroneous_value_expr"))))
+					(e-string
+						(e-literal (string "origin")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -137,5 +112,5 @@ match coord {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[Zero]"))
+(expr (type "Str"))
 ~~~

@@ -153,8 +153,7 @@ r = {
 	(d-let
 		(p-assign (ident "r"))
 		(e-block
-			(s-expr
-				(e-runtime-error (tag "empty_tuple")))
+			(s-runtime-error (tag "empty_tuple"))
 			(e-empty_record)))
 	(s-alias-decl
 		(ty-header (name "C")

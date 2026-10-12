@@ -79,6 +79,7 @@ pub const Tag = enum {
     expr_method_eq,
     expr_type_method_call,
     expr_type_dispatch_call,
+    expr_type_dispatch_call_dispatcher,
     expr_static_dispatch,
     expr_external_lookup,
     expr_deferred_import_ref,
@@ -271,6 +272,7 @@ pub const Tag = enum {
     diag_unused_variable,
     diag_used_underscore_variable,
     diag_duplicate_record_field,
+    diag_duplicate_pattern_binder,
     diag_duplicate_tag,
     diag_crash_expects_string,
     diag_f64_pattern_literal,
@@ -284,6 +286,9 @@ pub const Tag = enum {
     diag_infinite_loop_never_exits,
     diag_trailing_try_suffix,
     diag_return_outside_fn,
+    diag_redundant_return,
+    diag_control_flow_in_expect,
+    diag_var_reassigned_in_expect,
     diag_mutually_recursive_type_aliases,
     diag_deprecated_number_suffix,
     diag_range_op_chained,
@@ -499,7 +504,7 @@ pub const Payload = extern union {
         patt: u32,
         expr: u32,
         body: u32,
-        _reserved: [4]u8 = .{ 0, 0, 0, 0 },
+        kind: u32,
     };
 
     /// statement_while: cond + body
@@ -818,8 +823,10 @@ pub const Payload = extern union {
         _reserved: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
+    /// `expr_type_dispatch_call` stores a statement owner and
+    /// `expr_type_dispatch_call_dispatcher` stores a dispatcher type var.
     pub const ExprTypeDispatchCall = extern struct {
-        type_dispatch_stmt: u32,
+        owner: u32,
         method_name: u32,
         method_call_data_idx: u32,
         constraint_fn_var: u32,
@@ -852,7 +859,7 @@ pub const Payload = extern union {
         patt: u32,
         expr: u32,
         body: u32,
-        _reserved: [4]u8 = .{ 0, 0, 0, 0 },
+        kind: u32,
     };
 
     pub const ExprExpect = extern struct {
@@ -934,7 +941,8 @@ pub const Payload = extern union {
     pub const ExprDerivedMethod = extern struct {
         ident: u32,
         kind: u32,
-        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        owner: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     /// expr_return: return expression
@@ -1179,7 +1187,10 @@ pub const Payload = extern union {
     pub const Malformed = extern struct {
         diagnostic: u32,
         source_node_plus_one: u32 = 0,
-        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        /// The expressions a retired expression or statement evaluates, in
+        /// order, before it crashes (`CIR.Expr.e_runtime_error.evaluated`).
+        evaluated_start: u32 = 0,
+        evaluated_len: u32 = 0,
     };
 
     /// where_alias: a where alias applied to a type variable in a where clause
@@ -1284,7 +1295,7 @@ pub const Payload = extern union {
     pub const DiagInternalBuiltinType = extern struct {
         parent_name: u32, // @bitCast(Ident.Idx)
         nested_name: u32, // @bitCast(Ident.Idx)
-        kind: u32, // @intFromEnum(Diagnostic.InternalBuiltinTypeKind)
+        kind: u32, // @backingInt(Diagnostic.InternalBuiltinTypeKind)
         _reserved: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
@@ -1317,8 +1328,8 @@ pub const Payload = extern union {
     /// Diagnostics with two enum values.
     /// Used by: diag_deprecated_number_suffix
     pub const DiagTwoEnums = extern struct {
-        enum1: u32, // @intFromEnum
-        enum2: u32, // @intFromEnum
+        enum1: u32, // @backingInt
+        enum2: u32, // @backingInt
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
@@ -1387,19 +1398,24 @@ test "Payload: assigning a variant defines all 16 bytes, whatever the memory hel
     // cache writes all 16 verbatim. This is the property that makes that safe: the same
     // logical variant value, written over two different poison patterns, produces the
     // same 16 bytes. A variant that stopped short of 16 bytes fails here.
-    inline for (@typeInfo(Payload).@"union".fields) |variant| {
+    inline for (@typeInfo(Payload).@"union".field_names, @typeInfo(Payload).@"union".field_types) |variant_name, variant_type| {
         var over_ones: [@sizeOf(Payload)]u8 align(@alignOf(Payload)) = undefined;
         var over_fives: [@sizeOf(Payload)]u8 align(@alignOf(Payload)) = undefined;
         @memset(&over_ones, 0xAA);
         @memset(&over_fives, 0x55);
 
-        const value = @unionInit(Payload, variant.name, std.mem.zeroes(variant.type));
+        const value = @unionInit(Payload, variant_name, std.mem.zeroes(variant_type));
         @as(*Payload, @ptrCast(&over_ones)).* = value;
         @as(*Payload, @ptrCast(&over_fives)).* = value;
 
         try std.testing.expectEqualSlices(u8, &over_ones, &over_fives);
         // A zeroed variant value writes zeros, so any surviving poison byte shows up.
-        try std.testing.expectEqualSlices(u8, &[_]u8{0} ** @sizeOf(Payload), &over_ones);
+        try std.testing.expectEqualSlices(u8, repeated: {
+            const pattern = &[_]u8{0};
+            var result: [pattern.len * (@sizeOf(Payload))]@TypeOf(pattern[0]) = undefined;
+            for (0..(@sizeOf(Payload))) |i| @memcpy(result[i * pattern.len ..][0..pattern.len], pattern);
+            break :repeated &result;
+        }, &over_ones);
     }
 }
 
@@ -1536,7 +1552,12 @@ test "Node.List: serialization round-trips full-width payloads and ignores alloc
     const var_node = loaded.get(grown.var_node);
     try std.testing.expectEqual(Tag.expr_var, var_node.tag);
     try std.testing.expectEqual(@as(u32, 0x55555555), var_node.getPayload().expr_var.pattern_idx);
-    try std.testing.expectEqualSlices(u8, &[_]u8{0} ** 12, &var_node.getPayload().expr_var._padding);
+    try std.testing.expectEqualSlices(u8, repeated: {
+        const pattern = &[_]u8{0};
+        var result: [pattern.len * (12)]@TypeOf(pattern[0]) = undefined;
+        for (0..(12)) |i| @memcpy(result[i * pattern.len ..][0..pattern.len], pattern);
+        break :repeated &result;
+    }, &var_node.getPayload().expr_var._padding);
 
     const annotation = loaded.get(grown.annotation);
     try std.testing.expectEqual(Tag.annotation, annotation.tag);

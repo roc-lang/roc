@@ -536,11 +536,7 @@ transform = |result|
 			(ty-malformed)))
 	(d-let
 		(p-assign (ident "resultType"))
-		(e-nominal-external
-			(builtin)
-			(e-tag (name "Ok")
-				(args
-					(e-num (value "42")))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-malformed)))
 	(d-let

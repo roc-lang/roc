@@ -59,9 +59,9 @@ comptime {
     }, .default);
 }
 
-fn rocAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn rocAlloc(length: usize, alignment: usize) callconv(.c) *anyopaque {
     canonical_alloc_counts[0] += 1;
-    return host_alloc.alloc(wasm_allocator, length, alignment);
+    return host_alloc.alloc(wasm_allocator, length, alignment) orelse @trap();
 }
 
 fn rocDealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
@@ -69,10 +69,10 @@ fn rocDealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
     host_alloc.dealloc(wasm_allocator, ptr, alignment);
 }
 
-fn rocRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn rocRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     canonical_alloc_counts[0] += 1;
     canonical_alloc_counts[1] += 1;
-    return host_alloc.realloc(wasm_allocator, ptr, new_length, alignment);
+    return host_alloc.realloc(wasm_allocator, ptr, new_length, alignment) orelse @trap();
 }
 
 fn rocDbg(bytes: [*]const u8, len: usize) callconv(.c) void {
@@ -131,20 +131,15 @@ export fn roc_fallible_str_ok() callconv(.c) FallibleStrResult {
 
 const json_input = "{\"favoritesCount\":14}";
 var json_input_storage: [@sizeOf(usize) + json_input.len]u8 align(@alignOf(usize)) =
-    ([_]u8{0} ** @sizeOf(usize)) ++ json_input.*;
+    (@as([@sizeOf(usize)]u8, @splat(0))) ++ json_input.*;
 
 export fn roc_json_input() callconv(.c) RocStr {
-    const HostRocStr = extern struct {
-        bytes: ?[*]u8,
-        capacity_or_alloc_ptr: usize,
-        length: usize,
-    };
     const bytes = json_input_storage[@sizeOf(usize)..].ptr;
-    return @bitCast(HostRocStr{
+    return .{
         .bytes = bytes,
         .capacity_or_alloc_ptr = RocStr.encodeCapacity(json_input.len),
         .length = json_input.len,
-    });
+    };
 }
 
 fn canaryBlob(comptime marker: []const u8) [4096]u8 {

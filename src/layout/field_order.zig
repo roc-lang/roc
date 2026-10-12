@@ -26,7 +26,7 @@ pub const StructuralField = struct {
     /// Canonical semantic field index, used as the tie-break among equal sort
     /// keys. For records this is alphabetical field-name rank; for tuples it is
     /// the original element index.
-    semantic_index: u16,
+    semantic_index: u32,
 };
 
 /// Whether `a` precedes `b` in canonical structural field order.
@@ -42,7 +42,7 @@ pub fn comesBefore(a: StructuralField, b: StructuralField) bool {
 /// allocation is required.
 pub fn computeStructuralFieldOrder(
     fields: []const StructuralField,
-    out_order: []u16,
+    out_order: []u32,
 ) void {
     std.debug.assert(out_order.len == fields.len);
 
@@ -51,20 +51,20 @@ pub fn computeStructuralFieldOrder(
     const Ctx = struct {
         fields: []const StructuralField,
 
-        pub fn lessThan(ctx: @This(), a: u16, b: u16) bool {
+        pub fn lessThan(ctx: @This(), a: u32, b: u32) bool {
             return comesBefore(ctx.fields[a], ctx.fields[b]);
         }
     };
 
-    std.sort.pdq(u16, out_order, Ctx{ .fields = fields }, Ctx.lessThan);
+    std.sort.pdq(u32, out_order, Ctx{ .fields = fields }, Ctx.lessThan);
 }
 
 const testing = std.testing;
 
-fn expectStructuralOrder(fields: []const StructuralField, expected: []const u16) error{TestExpectedEqual}!void {
-    var order: [64]u16 = undefined;
+fn expectStructuralOrder(fields: []const StructuralField, expected: []const u32) error{TestExpectedEqual}!void {
+    var order: [64]u32 = undefined;
     computeStructuralFieldOrder(fields, order[0..fields.len]);
-    try testing.expectEqualSlices(u16, expected, order[0..fields.len]);
+    try testing.expectEqualSlices(u32, expected, order[0..fields.len]);
 }
 
 test "structural order sorts by descending sort key" {

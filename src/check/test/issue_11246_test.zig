@@ -59,7 +59,7 @@ test "issue 11246: parent cannot exclude a format error" {
     defer std.testing.allocator.free(input);
     var env = try TestEnv.init("Test", input);
     defer env.deinit();
-    try env.assertOneTypeError("Type Mismatch");
+    try env.assertOneTypeError("Parser Error Row Missing Tag");
 }
 
 test "issue 11246: parent cannot change an error payload" {

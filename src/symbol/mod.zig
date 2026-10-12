@@ -11,30 +11,20 @@ const base = @import("base");
 pub const Symbol = enum(u32) {
     _,
 
-    pub const none: Symbol = @enumFromInt(std.math.maxInt(u32));
+    pub const none: Symbol = @fromBackingInt(@intCast(std.math.maxInt(u32)));
 
     pub fn fromRaw(value: u32) Symbol {
-        return @enumFromInt(value);
+        return @fromBackingInt(@intCast(value));
     }
 
     pub fn raw(self: Symbol) u32 {
-        return @intFromEnum(self);
+        return @backingInt(self);
     }
 
     pub fn isNone(self: Symbol) bool {
         return self == Symbol.none;
     }
 };
-
-/// Public struct `AttachedMethodKey`.
-pub const AttachedMethodKey = struct {
-    module_idx: u32,
-    type_ident: base.Ident.Idx,
-    method_ident: base.Ident.Idx,
-};
-
-/// Public value `AttachedMethodIndex`.
-pub const AttachedMethodIndex = std.AutoHashMap(AttachedMethodKey, Symbol);
 
 /// Interned owner idents for builtin attached-method lookup.
 pub const PrimitiveMethodOwnerIdents = extern struct {
@@ -74,21 +64,6 @@ pub const PrimitiveMethodOwnerIdents = extern struct {
         };
     }
 };
-
-/// Public enum `BuiltinAttachedMethodOwner`.
-pub const BuiltinAttachedMethodOwner = enum {
-    list,
-    box,
-};
-
-/// Public struct `BuiltinAttachedMethodKey`.
-pub const BuiltinAttachedMethodKey = struct {
-    owner: BuiltinAttachedMethodOwner,
-    method_ident: base.Ident.Idx,
-};
-
-/// Public value `BuiltinAttachedMethodIndex`.
-pub const BuiltinAttachedMethodIndex = std.AutoHashMap(BuiltinAttachedMethodKey, Symbol);
 
 /// Public union `BindingOrigin`.
 pub const BindingOrigin = union(enum) {
@@ -150,11 +125,11 @@ pub const Store = struct {
             .name = name,
             .origin = origin,
         });
-        return @enumFromInt(idx);
+        return @fromBackingInt(@intCast(idx));
     }
 
     pub fn get(self: *const Store, symbol: Symbol) Entry {
-        return self.entries.items[@intFromEnum(symbol)];
+        return self.entries.items[@backingInt(symbol)];
     }
 
     pub fn len(self: *const Store) usize {

@@ -50,7 +50,7 @@ fn derivedRecordParseArcWork(field_count: usize) (harness.LowerToLirHarnessError
 test "ARC work for a derived record parser grows with the record's field count" {
     // The pipeline certifies its ARC output, and so moves this counter, only
     // in debug builds.
-    if (builtin.mode != .Debug) return;
+    if (builtin.mode != .debug) return;
 
     const narrow = try derivedRecordParseArcWork(6);
     const wide = try derivedRecordParseArcWork(12);
@@ -76,7 +76,7 @@ fn derivedRecordParseSparseWork(field_count: usize) (harness.LowerToLirHarnessEr
 }
 
 test "derived record parser keeps sparse ownership and constraint work bounded" {
-    if (builtin.mode != .Debug) return;
+    if (builtin.mode != .debug) return;
     const narrow = try derivedRecordParseSparseWork(12);
     const wide = try derivedRecordParseSparseWork(24);
     if (wide > narrow * 4) {

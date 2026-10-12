@@ -206,21 +206,6 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))))
 ~~~
-# FORMATTED
-~~~roc
-x = (
-	"one",
-	"two",
-	"",
-	"",
-	"",
-	"",
-	"",
-	"\u(1F680)",
-)
-
-# Test backslash before EOF
-~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir

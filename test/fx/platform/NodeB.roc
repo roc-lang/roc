@@ -1,4 +1,4 @@
-import NodeA exposing [NodeA]
+import NodeA
 
 NodeB := [
     ConstB(Str),

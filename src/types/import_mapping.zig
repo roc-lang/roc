@@ -19,29 +19,3 @@ const Ident = base.Ident;
 ///
 /// When multiple imports could refer to the same type, the shortest name wins.
 pub const ImportMapping = std.AutoHashMap(Ident.Idx, Ident.Idx);
-
-/// Get the shortest display name for a fully-qualified type identifier.
-///
-/// If the type is found in the import mapping (meaning the user has imported it
-/// or it's an auto-imported builtin), returns the mapped display name.
-/// Otherwise, returns the original identifier text unchanged.
-///
-/// This should be used instead of string manipulation like `findLast(".")`
-/// to ensure type names are displayed semantically based on what's in scope.
-///
-/// Example:
-/// - "Builtin.Num.Dec" → "Dec" (if Dec is auto-imported)
-/// - "Builtin.Bool" → "Bool" (if Bool is auto-imported)
-/// - "MyModule.Foo" → "MyModule.Foo" (if not imported, stays fully-qualified)
-/// - "MyModule.Foo" → "Foo" (if user has `import MyModule exposing [Foo]`)
-/// - "MyModule.Foo" → "F" (if user has `import MyModule exposing [Foo as F]`)
-pub fn getDisplayName(
-    mapping: *const ImportMapping,
-    idents: *const Ident.Store,
-    qualified_ident: Ident.Idx,
-) []const u8 {
-    if (mapping.get(qualified_ident)) |display_ident| {
-        return idents.getText(display_ident);
-    }
-    return idents.getText(qualified_ident);
-}

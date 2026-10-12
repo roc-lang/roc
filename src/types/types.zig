@@ -32,9 +32,11 @@ const MkSafeMultiList = collections.SafeMultiList;
 test {
     // If your changes caused this number to go down, great! Please update it to the lower number.
     // If it went up, please make sure your changes are absolutely required!
-    try std.testing.expectEqual(32, @sizeOf(Descriptor));
+    // A rank counts nested generalization scopes, which valid source can nest
+    // arbitrarily deep, so it takes a full word.
+    try std.testing.expectEqual(36, @sizeOf(Descriptor));
     try std.testing.expectEqual(28, @sizeOf(Content));
-    try std.testing.expectEqual(20, @sizeOf(Alias));
+    try std.testing.expectEqual(24, @sizeOf(Alias));
     try std.testing.expectEqual(24, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
     try std.testing.expectEqual(20, @sizeOf(NominalType)); // Increased from 16 due to source identity and opacity bits
@@ -87,7 +89,7 @@ pub const Var = enum(u32) {
 
     /// Debug representation of a type variable, panics on allocation failure
     pub fn allocPrint(self: Var, gpa: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
-        return try std.fmt.allocPrint(gpa, "#{d}", .{@intFromEnum(self)});
+        return try std.fmt.allocPrint(gpa, "#{d}", .{@backingInt(self)});
     }
 };
 
@@ -111,7 +113,34 @@ pub const DescriptorFlags = packed struct(u8) {
     /// Definition-site implicit annotation openness. Codec derivation may
     /// close this tail before generalization; fresh uses do not inherit it.
     annotation_tag_ext: bool = false,
-    _unused: u5 = 0,
+    /// The class is a frozen copy of a settled ground instance that several
+    /// uses share (design.md "Concrete dispatch replay"). Its descriptor
+    /// never changes while checking: merges keep it, and writes aimed at a
+    /// member detach that member instead.
+    frozen: bool = false,
+    /// This class is structure written below the root of a nominal
+    /// declaration's backing, reached by opening that declaration rather than
+    /// by substituting one of its formals. The declaration fixes this
+    /// structure, so a nominal value never lifts into it. See design.md's
+    /// "Declared Backing Structure" section.
+    nominal_backing_structure: bool = false,
+    /// An implicitly opened row of an annotated definition: the annotation
+    /// bounds the definition, so the class may close or stay open but never
+    /// gain a tag (design.md "Polarity"). Instantiation never copies it, so
+    /// uses of the definition widen freely.
+    bounded_row_ext: bool = false,
+    /// A defaulting decision—literal defaulting or a specialization default
+    /// materialization—chose this class's type: the class held a variable
+    /// that was still undetermined when its default was committed. The
+    /// checker keeps that variable's pre-default content, so diagnostics
+    /// describe the type the program wrote rather than the default owner.
+    /// See design.md's "Diagnostics About Defaulted Types" section.
+    default_decided: bool = false,
+    /// A placeholder for a requirement callable that a use's instantiation
+    /// deferred copying (design.md "Whole-use replay"). It stands only in
+    /// requirement records; the checker links it to the callable's copy
+    /// before anything reads it, and reading it unlinked is a compiler bug.
+    deferred_callable: bool = false,
 };
 
 /// A type descriptor
@@ -141,7 +170,7 @@ pub const Descriptor = struct {
 ///
 /// Keeping track of ranks makes type inference faster.
 ///
-pub const Rank = enum(u8) {
+pub const Rank = enum(u32) {
     /// When the corresponding type is generic, like in `List.len`.
     generalized = 0,
     outermost = 1,
@@ -149,22 +178,22 @@ pub const Rank = enum(u8) {
 
     /// Get the lowest rank
     pub fn min(a: Rank, b: Rank) Rank {
-        return @enumFromInt(@min(@intFromEnum(a), @intFromEnum(b)));
+        return @fromBackingInt(@intCast(@min(@backingInt(a), @backingInt(b))));
     }
 
     /// Get the lowest rank
     pub fn max(a: Rank, b: Rank) Rank {
-        return @enumFromInt(@max(@intFromEnum(a), @intFromEnum(b)));
+        return @fromBackingInt(@intCast(@max(@backingInt(a), @backingInt(b))));
     }
 
     /// Get the next rank
     pub fn next(a: Rank) Rank {
-        return @enumFromInt(@intFromEnum(a) + 1);
+        return @fromBackingInt(@intCast(@backingInt(a) + 1));
     }
 
     /// Get the prev rank
     pub fn prev(a: Rank) Rank {
-        return @enumFromInt(@intFromEnum(a) - 1);
+        return @fromBackingInt(@intCast(@backingInt(a) - 1));
     }
 };
 
@@ -257,9 +286,7 @@ pub const Content = union(enum(u8)) {
         switch (content) {
             .structure => |flat_type| {
                 switch (flat_type) {
-                    .fn_pure => |func| return func,
-                    .fn_effectful => |func| return func,
-                    .fn_unbound => |func| return func,
+                    inline .fn_pure, .fn_effectful, .fn_unbound => |func| return func,
                     .record,
                     .tuple,
                     .nominal_type,
@@ -309,13 +336,6 @@ pub const Flex = struct {
         };
     }
 
-    pub fn withName(self: Flex, name: ?Ident.Idx) Flex {
-        return .{
-            .name = name,
-            .constraints = self.constraints,
-        };
-    }
-
     pub fn withConstraints(self: Flex, constraints: StaticDispatchConstraint.SafeList.Range) Flex {
         return .{
             .name = self.name,
@@ -352,6 +372,8 @@ pub const Rigid = struct {
 pub const Alias = struct {
     ident: TypeIdent,
     vars: Var.SafeList.NonEmptyRange,
+    /// Source arguments precede hidden implicit-row parameters in `vars`.
+    source_arg_count: u32,
     /// Env-local index of the declaring module's deep content identity in the
     /// owning module env's identity table (see `base.module_identity`).
     origin_module: ModuleIdentity.Idx,
@@ -386,26 +408,9 @@ pub const SourceDecl = packed struct(u32) {
 
     pub const none: SourceDecl = .{ .statement = 0, .present = false, .builtin_origin = false };
 
-    pub fn fromOptional(source_decl: ?u32) SourceDecl {
-        return fromOptionalWithBuiltinOrigin(source_decl, false);
-    }
-
-    pub fn fromOptionalChecked(source_decl: ?u32) std.mem.Allocator.Error!SourceDecl {
-        return fromOptionalWithBuiltinOriginChecked(source_decl, false);
-    }
-
-    pub fn fromOptionalWithBuiltinOrigin(source_decl: ?u32, builtin_origin: bool) SourceDecl {
-        const statement = source_decl orelse return .none;
-        return fromStatementWithBuiltinOrigin(statement, builtin_origin);
-    }
-
     pub fn fromOptionalWithBuiltinOriginChecked(source_decl: ?u32, builtin_origin: bool) std.mem.Allocator.Error!SourceDecl {
         const statement = source_decl orelse return .none;
         return fromStatementWithBuiltinOriginChecked(statement, builtin_origin);
-    }
-
-    pub fn fromStatement(statement: u32) SourceDecl {
-        return fromStatementWithBuiltinOrigin(statement, false);
     }
 
     pub fn fromStatementChecked(statement: u32) std.mem.Allocator.Error!SourceDecl {
@@ -579,7 +584,7 @@ pub const Int = struct {
         pub fn alignment(self: @This()) std.mem.Alignment {
             // Both self and std.mem.Alignment are stored as log2(alignment) integers,
             // although we have to divide self by 2 to get to that exact representation.
-            return @enumFromInt(@intFromEnum(self) / 2);
+            return @fromBackingInt(@intCast(@backingInt(self) / 2));
         }
     };
 };
@@ -603,7 +608,7 @@ pub const Frac = struct {
             // f32 (2) -> 4 bytes -> log2(4) = 2
             // f64 (3) -> 8 bytes -> log2(8) = 3
             // dec (4) -> 16 bytes -> log2(16) = 4
-            return @enumFromInt(@intFromEnum(self));
+            return @fromBackingInt(@intCast(@backingInt(self)));
         }
     };
 };
@@ -760,9 +765,7 @@ pub const RecordField = struct {
 
     /// Get the ordering of how a compares to b
     pub fn orderByName(store: *const Ident.Store, a: Self, b: Self) std.math.Order {
-        const a_text = store.getText(a.name);
-        const b_text = store.getText(b.name);
-        return std.mem.order(u8, a_text, b_text);
+        return Ident.textOrder(store.getText(a.name), store.getText(b.name));
     }
 
     /// Whether a record field's kind is concretely required or still carried
@@ -774,7 +777,7 @@ pub const RecordField = struct {
         /// A field-kind variable, or `no_presence_var` for a required field.
         presence_var: Var,
 
-        const no_presence_var: Var = @enumFromInt(std.math.maxInt(u32));
+        const no_presence_var: Var = @fromBackingInt(@intCast(std.math.maxInt(u32)));
 
         pub const Decoded = union(enum) {
             required: Var,
@@ -873,9 +876,7 @@ pub const Tag = struct {
 
     /// Get the ordering of how a compares to b
     pub fn orderByName(store: *const Ident.Store, a: Self, b: Self) std.math.Order {
-        const a_text = store.getText(a.name);
-        const b_text = store.getText(b.name);
-        return std.mem.order(u8, a_text, b_text);
+        return Ident.textOrder(store.getText(a.name), store.getText(b.name));
     }
 
     /// A safe list of tags
@@ -1075,7 +1076,7 @@ pub const StaticDispatchConstraint = struct {
     /// user's own expression without reconstructing var->expr maps after the
     /// fact. Copied verbatim by instantiation and cross-module import. This is
     /// METADATA: it is deliberately excluded from type identity—canonical type
-    /// keys (`writeConstraints`) and unification content-equality never read it,
+    /// keys (the checked artifact's type-key writer) and unification content-equality never read it,
     /// so two structurally identical constraints with different provenance stay
     /// equal.
     provenance: Provenance = .{},
@@ -1109,12 +1110,12 @@ pub const StaticDispatchConstraint = struct {
 
             pub fn from(raw: u32) OptExprIdx {
                 std.debug.assert(raw != std.math.maxInt(u32));
-                return @enumFromInt(raw);
+                return @fromBackingInt(@intCast(raw));
             }
 
             /// The raw index, or null when absent.
             pub fn get(self: OptExprIdx) ?u32 {
-                return if (self == .none) null else @intFromEnum(self);
+                return if (self == .none) null else @backingInt(self);
             }
         };
     };
@@ -1146,7 +1147,7 @@ pub const StaticDispatchConstraint = struct {
         item_var: Var = no_var,
         interpolated_parts: InterpolationPartMetadata.SafeList.Range = .empty(),
 
-        const no_var: Var = @enumFromInt(std.math.maxInt(u32));
+        const no_var: Var = @fromBackingInt(@intCast(std.math.maxInt(u32)));
 
         pub const none = InterpolationMetadata{};
 
@@ -1233,18 +1234,6 @@ pub const StaticDispatchConstraint = struct {
 
     /// A safe multi list of static dispatch constraints
     pub const SafeMultiList = MkSafeMultiList(Self);
-
-    /// A function to be passed into std.mem.sort to sort fields by name
-    pub fn sortByFnNameAsc(ident_store: *const Ident.Store, a: Self, b: Self) bool {
-        return Self.orderByFnName(ident_store, a, b) == .lt;
-    }
-
-    /// Get the ordering of how a compares to b
-    pub fn orderByFnName(store: *const Ident.Store, a: Self, b: Self) std.math.Order {
-        const a_text = store.getText(a.fn_name);
-        const b_text = store.getText(b.fn_name);
-        return std.mem.order(u8, a_text, b_text);
-    }
 };
 
 /// Source-type identity for the payload slot selected by derived mapping.
@@ -1270,18 +1259,18 @@ pub const TwoStaticDispatchConstraints = struct {
 ///
 /// This is walk state for annotation generation, instantiation, and display—it
 /// is never stored in a type. The root of an annotation is positive
-/// (output), function argument positions negate the surrounding polarity, and
-/// every other position (returns, type application args, record fields, tuple
-/// elems, tag payloads) preserves it.
+/// (output). A function's argument positions flip the surrounding polarity
+/// and its return keeps it, so a callback's result is an input of the
+/// function that receives the callback. Type application args, record
+/// fields, tuple elements, and tag payloads inherit position.
 pub const Polarity = enum {
     /// An input (negative) position: a value the annotated thing consumes.
     neg,
     /// An output (positive) position: a value the annotated thing produces.
     pos,
 
-    /// The polarity one level deeper through a function argument position:
-    /// argument positions negate the surrounding polarity, while return
-    /// positions preserve it.
+    /// The polarity of a function argument position whose function stands
+    /// at `self`.
     pub fn flip(self: Polarity) Polarity {
         return switch (self) {
             .neg => .pos,

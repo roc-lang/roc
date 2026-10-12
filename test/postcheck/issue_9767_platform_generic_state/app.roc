@@ -7,7 +7,7 @@ app [State, program] { pf: platform "./platform/main.roc" }
 # State(Model).
 
 import pf.App
-import pf.Host exposing [Host]
+import pf.Host
 
 State(model) : [ProgramState(model)]
 

@@ -146,7 +146,7 @@ pub fn resolveDeferredImports(
     while (index < env.deferred_import_refs.len()) : (index += 1) {
         const entry = env.deferred_import_refs.items.items[index];
         if (entry.kind == .file_import) {
-            std.debug.assert(env.fileDependencySettled(@enumFromInt(entry.file_dependency_idx)));
+            std.debug.assert(env.fileDependencySettled(@fromBackingInt(@intCast(entry.file_dependency_idx))));
             continue;
         }
         try resolver.resolveEntry(entry);
@@ -162,7 +162,7 @@ pub fn resolveDeferredImports(
 
 fn sha256Bytes(bytes: []const u8) [32]u8 {
     var digest: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+    base.Sha256.hash(bytes, &digest, .{});
     return digest;
 }
 
@@ -212,7 +212,7 @@ const ValueTarget = union(enum) {
 
 /// The import a deferred reference whose kind always names one goes through.
 fn entryImport(entry: DeferredImportRef) CIR.Import.Idx {
-    return entry.importIdx() orelse std.debug.panic(
+    return entry.importIdx() orelse base.invariant(
         "compiler invariant violated: a deferred reference of kind {s} names a module import",
         .{@tagName(entry.kind)},
     );
@@ -266,7 +266,7 @@ const Resolver = struct {
                     const name = env.common.strings.get(env.imports.imports.items.items[idx]);
                     // An import the store left unresolved names no module at
                     // all, which is exactly the absence the drain reads below.
-                    const resolved = env.imports.getResolvedModule(@enumFromInt(idx)) orelse continue;
+                    const resolved = env.imports.getResolvedModule(@fromBackingInt(@intCast(idx))) orelse continue;
                     if (resolved >= envs.len) continue;
                     try self.outcomes.put(name, .{ .available = .{ .module_env = envs[resolved] } });
                     try self.registerEnv(envs[resolved]);
@@ -302,7 +302,7 @@ const Resolver = struct {
 
     /// The outcome recorded for one of this module's imports.
     fn outcomeFor(self: *const Resolver, import_idx: CIR.Import.Idx) ?ResolvedImport.Resolution {
-        const idx: usize = @intFromEnum(import_idx);
+        const idx: usize = @backingInt(import_idx);
         if (idx >= self.env.imports.imports.len()) return null;
         const name = self.env.common.strings.get(self.env.imports.imports.items.items[idx]);
         return self.outcomes.get(name);
@@ -315,7 +315,7 @@ const Resolver = struct {
         const count: u32 = @intCast(self.env.imports.imports.len());
         var idx: u32 = 0;
         while (idx < count) : (idx += 1) {
-            const import_idx: CIR.Import.Idx = @enumFromInt(idx);
+            const import_idx: CIR.Import.Idx = @fromBackingInt(@intCast(idx));
             // The compiler's own baked `Builtin` module is part of the
             // compiler, not a module this one depends on, so it takes no
             // entry here and owns no receiver extension.
@@ -418,9 +418,7 @@ const Resolver = struct {
 
         for (other.store.sliceStatements(other.all_statements)) |stmt_idx| {
             const header_idx = switch (other.store.getStatement(stmt_idx)) {
-                .s_nominal_decl => |decl| decl.header,
-                .s_alias_decl => |decl| decl.header,
-                .s_where_alias_decl => |decl| decl.header,
+                inline .s_nominal_decl, .s_alias_decl, .s_where_alias_decl => |decl| decl.header,
                 .s_decl,
                 .s_var,
                 .s_var_uninitialized,
@@ -442,7 +440,7 @@ const Resolver = struct {
                 => continue,
             };
             if (other.store.getTypeHeader(header_idx).name.eql(qualified_ident)) {
-                return @intFromEnum(stmt_idx);
+                return @backingInt(stmt_idx);
             }
         }
         return null;
@@ -452,7 +450,7 @@ const Resolver = struct {
     /// a plain type reference. This is how a re-exported type
     /// (`Files : Resource.Files`) reaches the module it was declared in.
     fn followAlias(self: *const Resolver, other: *const ModuleEnv, node_idx: u32) ?DeclRef {
-        const stmt_idx: Statement.Idx = @enumFromInt(node_idx);
+        const stmt_idx: Statement.Idx = @fromBackingInt(@intCast(node_idx));
         const alias = switch (other.store.getStatement(stmt_idx)) {
             .s_alias_decl => |decl| decl,
             .s_nominal_decl,
@@ -493,7 +491,7 @@ const Resolver = struct {
             => return null,
         };
         return switch (anno_base) {
-            .local => |local| DeclRef{ .env = other, .node_idx = @intFromEnum(local.decl_idx) },
+            .local => |local| DeclRef{ .env = other, .node_idx = @backingInt(local.decl_idx) },
             .external => |external| blk: {
                 const identity = other.importIdentity(external.module_idx) orelse break :blk null;
                 const target_env = self.envForIdentity(other, identity) orelse break :blk null;
@@ -572,7 +570,7 @@ const Resolver = struct {
             const head = path[0..dot];
             const item_text = path[dot + 1 ..];
             if (try self.exposedTypeNode(other, prefix, head)) |type_node_idx| {
-                if (other.store.getStatement(@enumFromInt(type_node_idx)) == .s_alias_decl) {
+                if (other.store.getStatement(@fromBackingInt(@intCast(type_node_idx))) == .s_alias_decl) {
                     return ValueTarget{ .associated = .{
                         .type_node_idx = type_node_idx,
                         .type_ident = try self.env.insertIdent(Ident.for_text(head)),
@@ -595,11 +593,11 @@ const Resolver = struct {
             if (try self.resolveTypePath(other, prefix, head, max_alias_depth)) |decl| {
                 if (decl.env != other) {
                     const item_ident = decl.env.common.findIdent(item_text) orelse return null;
-                    const owner = ModuleEnv.MethodOwner.initSelf(@enumFromInt(decl.node_idx));
+                    const owner = ModuleEnv.MethodOwner.initSelf(@fromBackingInt(@intCast(decl.node_idx)));
                     if (decl.env.lookupMethodBindingForMethodOwnerConst(owner, item_ident)) |binding| {
                         return ValueTarget{ .resolved_associated = .{
                             .owner_env = decl.env,
-                            .type_node_idx = @intFromEnum(binding.type_node_idx),
+                            .type_node_idx = @backingInt(binding.type_node_idx),
                             .def_idx = binding.def_idx,
                             .source_ident = try self.env.insertQualifiedIdent(
                                 self.env.getIdent(module_ident),
@@ -688,7 +686,7 @@ const Resolver = struct {
         prefix: Prefix,
         path_text: []const u8,
     ) std.mem.Allocator.Error!void {
-        const expr_idx: CIR.Expr.Idx = @enumFromInt(entry.node_idx);
+        const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(entry.node_idx));
         const import_idx = entryImport(entry);
 
         if (try self.resolveValuePath(available.module_env, prefix, path_text, entry.moduleName())) |found| {
@@ -714,7 +712,7 @@ const Resolver = struct {
                     self.env.store.replaceExprWithResolvedAssociatedLookup(
                         expr_idx,
                         identity,
-                        @enumFromInt(assoc.type_node_idx),
+                        @fromBackingInt(@intCast(assoc.type_node_idx)),
                         assoc.def_idx,
                         assoc.source_ident,
                     );
@@ -744,7 +742,80 @@ const Resolver = struct {
             }
         }
 
+        if (entry.has(DeferredImportRef.Flags.allows_tag_member)) {
+            if (try self.resolveTagMember(entry, available, prefix, path_text)) return;
+        }
+
         try self.failEntry(entry, entry.not_found_failure);
+    }
+
+    /// `Alias.Path.U.v` where the import has no value at that path: when
+    /// `Alias.Path` names a nominal type of the import and `Alias.Path.U` names
+    /// no type, `Alias.Path.U` is a qualified tag and `v` is a member accessed
+    /// on it. Returns whether the entry resolved that way.
+    fn resolveTagMember(
+        self: *Resolver,
+        entry: DeferredImportRef,
+        available: ResolvedImport.Available,
+        prefix: Prefix,
+        path_text: []const u8,
+    ) std.mem.Allocator.Error!bool {
+        const member_dot = lastDot(path_text) orelse return false;
+        const tag_path = path_text[0..member_dot];
+        if ((try self.resolveTypePath(available.module_env, prefix, tag_path, max_alias_depth)) != null) return false;
+
+        const tag_dot = lastDot(tag_path);
+        const owner_node = if (tag_dot) |dot| owner: {
+            const decl = (try self.resolveTypePath(available.module_env, prefix, tag_path[0..dot], max_alias_depth)) orelse
+                return false;
+            // A nominal construction names its type through the import it
+            // was written with.
+            if (decl.env != available.module_env) return false;
+            break :owner decl.node_idx;
+        } else (try self.importMainTypeNode(available)) orelse return false;
+        if (available.module_env.store.getStatement(@fromBackingInt(@intCast(owner_node))) != .s_nominal_decl) return false;
+
+        const tag_text = if (tag_dot) |dot| tag_path[dot + 1 ..] else tag_path;
+        const tag_name = try self.env.insertIdent(Ident.for_text(tag_text));
+        const member = entry.itemName();
+        const node_expr: CIR.Expr.Idx = @fromBackingInt(@intCast(entry.node_idx));
+        const access_expr: CIR.Expr.Idx = @fromBackingInt(@intCast(entry.tag_member_access_node));
+        const node_region = self.env.store.getExprRegion(node_expr);
+        const receiver_region = Region{ .start = node_region.start, .end = .{ .offset = entry.tag_receiver_end } };
+        const member_len: u32 = @intCast(self.env.getIdent(member).len);
+        const member_region = Region{ .start = .{ .offset = node_region.end.offset - member_len }, .end = node_region.end };
+
+        const tag_expr = try self.env.addExpr(CIR.Expr{ .e_tag = .{
+            .name = tag_name,
+            .args = .{ .span = base.DataSpan.empty() },
+        } }, receiver_region);
+        const import_idx = entryImport(entry);
+
+        if (access_expr == node_expr) {
+            // `Alias.Path.U.v` is not called, so it reads the field `v`.
+            const receiver = try self.env.addExpr(CIR.Expr{ .e_nominal_external = .{
+                .module_idx = import_idx,
+                .target_node_idx = owner_node,
+                .backing_expr = tag_expr,
+                .backing_type = .tag,
+            } }, receiver_region);
+            const path_builder = try self.env.startFieldAccessPath(1);
+            var path_finished = false;
+            errdefer if (!path_finished) self.env.rollbackFieldAccessPath(path_builder);
+            _ = self.env.appendFieldAccessPathSegmentAssumeCapacity(path_builder, .{
+                .name = member,
+                .mode = .required,
+            }, member_region);
+            const segments = self.env.finishFieldAccessPath(path_builder);
+            path_finished = true;
+            self.env.store.resolveDeferredExprToFieldAccess(node_expr, receiver, segments);
+        } else {
+            // The callee becomes the receiver of a method call.
+            try self.env.store.resolveDeferredExprToNominalExternal(node_expr, import_idx, owner_node, tag_expr, .tag);
+            self.env.store.setRegionAt(@fromBackingInt(@intCast(@backingInt(node_expr))), receiver_region);
+            try self.env.store.replaceCallWithMethodCall(access_expr, node_expr, member, member_region);
+        }
+        return true;
     }
 
     fn resolveTypeEntry(
@@ -779,10 +850,10 @@ const Resolver = struct {
                             return self.failEntry(entry, entry.not_found_failure),
                         .target_node_idx = decl_node_idx,
                     } };
-                try self.env.recordNumericSuffixTarget(@enumFromInt(entry.node_idx), target);
+                try self.env.recordNumericSuffixTarget(@fromBackingInt(@intCast(entry.node_idx)), target);
             },
             .type_anno_lookup => {
-                const anno_idx: CIR.TypeAnno.Idx = @enumFromInt(entry.node_idx);
+                const anno_idx: CIR.TypeAnno.Idx = @fromBackingInt(@intCast(entry.node_idx));
                 if (in_import) {
                     self.env.store.resolveDeferredTypeAnnoLookupBase(anno_idx, import_idx, decl_node_idx);
                 } else {
@@ -792,7 +863,7 @@ const Resolver = struct {
                 }
             },
             .type_anno_apply => {
-                const anno_idx: CIR.TypeAnno.Idx = @enumFromInt(entry.node_idx);
+                const anno_idx: CIR.TypeAnno.Idx = @fromBackingInt(@intCast(entry.node_idx));
                 if (in_import) {
                     self.env.store.resolveDeferredTypeAnnoApplyBase(anno_idx, import_idx, decl_node_idx);
                 } else {
@@ -807,7 +878,7 @@ const Resolver = struct {
                 // following an alias out of that module is not one this
                 // position can name.
                 if (!in_import) return self.failEntry(entry, entry.not_found_failure);
-                switch (decl_env.store.getStatement(@enumFromInt(decl_node_idx))) {
+                switch (decl_env.store.getStatement(@fromBackingInt(@intCast(decl_node_idx)))) {
                     .s_nominal_decl => try self.rewriteNominal(entry, import_idx, decl_node_idx),
                     // A construction names a nominal type; an alias is a
                     // different kind of declaration, not a missing one.
@@ -851,7 +922,7 @@ const Resolver = struct {
     ) std.mem.Allocator.Error!void {
         switch (entry.kind) {
             .expr_nominal => {
-                const expr_idx: CIR.Expr.Idx = @enumFromInt(entry.node_idx);
+                const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(entry.node_idx));
                 const deferred = self.env.store.getExpr(expr_idx).e_deferred_import_ref;
                 const backing = deferred.backing orelse
                     return self.failEntry(entry, entry.not_found_failure);
@@ -864,7 +935,7 @@ const Resolver = struct {
                 );
             },
             .pattern_nominal => {
-                const pattern_idx: CIR.Pattern.Idx = @enumFromInt(entry.node_idx);
+                const pattern_idx: CIR.Pattern.Idx = @fromBackingInt(@intCast(entry.node_idx));
                 const deferred = self.env.store.getPattern(pattern_idx).deferred_import_ref;
                 try self.env.store.resolveDeferredPatternToNominalExternal(
                     pattern_idx,
@@ -907,9 +978,9 @@ const Resolver = struct {
         entry: DeferredImportRef,
         file_imports: FileImports,
     ) std.mem.Allocator.Error!void {
-        const expr_idx: CIR.Expr.Idx = @enumFromInt(entry.node_idx);
+        const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(entry.node_idx));
         const region = self.regionOf(entry);
-        const dependency_idx: ModuleEnv.FileDependency.SafeList.Idx = @enumFromInt(entry.file_dependency_idx);
+        const dependency_idx: ModuleEnv.FileDependency.SafeList.Idx = @fromBackingInt(@intCast(entry.file_dependency_idx));
 
         self.path_buf.clearRetainingCapacity();
         try self.path_buf.appendSlice(self.env.gpa, self.env.getIdent(entry.path()));
@@ -990,7 +1061,7 @@ const Resolver = struct {
             return;
         };
         hosted.target_import = entryImport(entry);
-        hosted.target_def = @enumFromInt(target_node_idx);
+        hosted.target_def = @fromBackingInt(@intCast(target_node_idx));
         hosted.target_status = .resolved;
     }
 
@@ -1004,8 +1075,31 @@ const Resolver = struct {
         path_text: []const u8,
     ) std.mem.Allocator.Error!void {
         const selects_type = entry.has(DeferredImportRef.Flags.selects_type);
-        if (try self.exposedTarget(available.module_env, prefix, path_text)) |target| {
-            const node = if (selects_type) target.typeDeclNode() else target.valueDefNode();
+        const main_node = try self.importMainTypeNode(available);
+        const exposes_constructors = entry.has(DeferredImportRef.Flags.exposes_constructors);
+        const member_prefix: Prefix = if (main_node != null and !exposes_constructors) .{ .text = prefix.text, .exclusive = true } else prefix;
+        const target = try self.exposedTarget(available.module_env, member_prefix, path_text);
+        if (main_node != null and !exposes_constructors and !entry.parentName().eql(Ident.Idx.NONE) and
+            entry.qualifiedName().eql(entry.parentName()))
+        {
+            const region = self.regionOf(entry);
+            if (target != null and target.?.typeDeclNode() != null) {
+                try self.env.pushDiagnostic(.{ .type_redeclared = .{
+                    .name = entry.qualifiedName(),
+                    .redeclared_region = region,
+                    .original_region = self.env.store.getRegionAt(@fromBackingInt(@intCast(entry.node_idx))),
+                } });
+            } else {
+                try self.env.pushDiagnostic(.{ .redundant_expose_main_type = .{
+                    .type_name = entry.qualifiedName(),
+                    .module_name = entry.moduleName(),
+                    .region = region,
+                } });
+            }
+            return;
+        }
+        if (target) |resolved| {
+            const node = if (selects_type) resolved.typeDeclNode() else resolved.valueDefNode();
             if (node != null) return;
         }
         const region = self.regionOf(entry);
@@ -1028,7 +1122,7 @@ const Resolver = struct {
     /// resolved, which is why the registration waits here for it: the
     /// annotation this entry names has already been rewritten above.
     fn resolveReceiverMethodOwner(self: *Resolver, entry: DeferredImportRef) std.mem.Allocator.Error!void {
-        const anno_idx: CIR.TypeAnno.Idx = @enumFromInt(entry.node_idx);
+        const anno_idx: CIR.TypeAnno.Idx = @fromBackingInt(@intCast(entry.node_idx));
         const anno_base = switch (self.env.store.getTypeAnno(anno_idx)) {
             .lookup => |lookup| lookup.base,
             .apply => |apply| apply.base,
@@ -1050,20 +1144,32 @@ const Resolver = struct {
                 // The compiler's own baked Builtin module records no import
                 // identity here, and owns no receiver extension.
                 const identity = self.env.importIdentity(external.module_idx) orelse return;
-                break :blk ModuleEnv.MethodOwner.initImported(identity, @enumFromInt(external.target_node_idx));
+                break :blk ModuleEnv.MethodOwner.initImported(identity, @fromBackingInt(@intCast(external.target_node_idx)));
             },
             .external_identity => |external| ModuleEnv.MethodOwner.initImported(
                 external.module_identity,
-                @enumFromInt(external.target_node_idx),
+                @fromBackingInt(@intCast(external.target_node_idx)),
             ),
             .local => |local| ModuleEnv.MethodOwner.initSelf(local.decl_idx),
             .builtin, .pending => return,
         };
 
-        const binding = entry.methodBinding() orelse std.debug.panic(
+        const binding = entry.methodBinding() orelse base.invariant(
             "compiler invariant violated: a receiver method owner reference carries its method binding",
             .{},
         );
+        // A method declared by its receiver wins over a namespace extension,
+        // so an extension naming a method the receiver's own module already
+        // declares registers nothing.
+        if (owner.moduleIdentity()) |identity| {
+            const owner_env = self.envForIdentity(self.env, identity) orelse base.invariant(
+                "compiler invariant violated: a resolved receiver type's module is reachable from the import drain",
+                .{},
+            );
+            if (owner_env.common.findIdent(self.env.getIdent(entry.methodIdent()))) |owner_method_ident| {
+                if (owner_env.lookupMethodBindingForMethodOwnerConst(ModuleEnv.MethodOwner.initSelf(owner.owner), owner_method_ident) != null) return;
+            }
+        }
         const key = ModuleEnv.MethodKey.init(owner, entry.methodIdent());
         const region = self.env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(binding.def_idx));
         const gop = try self.receiver_extensions.getOrPut(key);
@@ -1176,19 +1282,19 @@ const Resolver = struct {
 
         switch (entry.kind) {
             .expr_value, .expr_nominal => {
-                try self.env.settleDeferredExprAsRuntimeError(@enumFromInt(entry.node_idx), diagnostic);
+                try self.env.settleDeferredExprAsRuntimeError(@fromBackingInt(@intCast(entry.node_idx)), diagnostic);
             },
             .pattern_nominal => {
                 const diagnostic_idx = try self.env.addDiagnostic(diagnostic);
-                self.env.store.settleDeferredPatternAsRuntimeError(@enumFromInt(entry.node_idx), diagnostic_idx);
+                self.env.store.settleDeferredPatternAsRuntimeError(@fromBackingInt(@intCast(entry.node_idx)), diagnostic_idx);
             },
             .numeric_suffix => {
                 _ = try self.env.addDiagnostic(diagnostic);
-                try self.env.recordNumericSuffixTarget(@enumFromInt(entry.node_idx), .invalid);
+                try self.env.recordNumericSuffixTarget(@fromBackingInt(@intCast(entry.node_idx)), .invalid);
             },
             .type_anno_lookup, .type_anno_apply => {
                 const diagnostic_idx = try self.env.addDiagnostic(diagnostic);
-                self.env.store.replaceTypeAnnoWithRuntimeError(@enumFromInt(entry.node_idx), diagnostic_idx);
+                self.env.store.replaceTypeAnnoWithRuntimeError(@fromBackingInt(@intCast(entry.node_idx)), diagnostic_idx);
             },
             // A method registration has no node of its own: the receiver type
             // reference it waits on carries the diagnostic. An import
@@ -1204,7 +1310,7 @@ const Resolver = struct {
                 .end = .{ .offset = entry.diagnostic_region_end },
             };
         }
-        return self.env.store.getRegionAt(@enumFromInt(entry.node_idx));
+        return self.env.store.getRegionAt(@fromBackingInt(@intCast(entry.node_idx)));
     }
 };
 
@@ -1213,9 +1319,7 @@ const Resolver = struct {
 fn selectedPrefix(other: *const ModuleEnv, selected: ?Statement.Idx) ?[]const u8 {
     const stmt_idx = selected orelse return null;
     const header_idx = switch (other.store.getStatement(stmt_idx)) {
-        .s_alias_decl => |decl| decl.header,
-        .s_nominal_decl => |decl| decl.header,
-        .s_where_alias_decl => |decl| decl.header,
+        inline .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => |decl| decl.header,
         .s_decl,
         .s_var,
         .s_var_uninitialized,
@@ -1241,7 +1345,7 @@ fn selectedPrefix(other: *const ModuleEnv, selected: ?Statement.Idx) ?[]const u8
 
 /// The prefix a declaration's own nested names carry inside its module.
 fn declPrefix(other: *const ModuleEnv, node_idx: u32) ?[]const u8 {
-    return selectedPrefix(other, @enumFromInt(node_idx));
+    return selectedPrefix(other, @fromBackingInt(@intCast(node_idx)));
 }
 
 /// The name an import's exposed declarations carry as their prefix: the

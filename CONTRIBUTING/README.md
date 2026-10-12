@@ -67,6 +67,22 @@ tests; it does not just build them.
 
 ### Test prerequisites
 
+Only the JavaScript cell tests in `run-test-repl-wasm` require
+[Node.js](https://nodejs.org/) **22.7.0 or newer**, available as `node` on your
+`PATH`. Node.js is not required to use Roc, build the compiler, or develop Roc
+in general. MiniCI includes this test, so running MiniCI also requires Node.js
+for this test alone.
+
+This version is needed because the test imports a `.js` ES module without a
+`package.json` declaring its module type; Node.js 22.7.0 enabled
+[module syntax detection by default](https://nodejs.org/download/release/v22.7.0/docs/api/packages.html#syntax-detection).
+Check your version with `node --version`. To run just these JavaScript tests
+from the repository root:
+
+```sh
+node --test test/repl-wasm-test/cells.test.mjs
+```
+
 The `run-test-cli` job includes the glue test suite, which compiles generated
 Rust glue for the `wasm32` target. Install a Rust toolchain (via [rustup]) with
 the WebAssembly target so those cases can build:
@@ -111,6 +127,22 @@ zig build run-test-zig -- --test-filter "name of test"
 - You can find good first issues [here][good-first-issues]. Once you have gained some experience you can take a look at the [intermediate issues](https://github.com/roc-lang/roc/issues?q=is%3Aopen+is%3Aissue+label%3A%22intermediate+issue%22).
 - It's a good idea to open a draft pull request as you begin working on something. This way, others can see that you're working on it, which avoids duplicate effort, and others can give important feedback sooner rather than later. Click the button "ready for review" when it's ready.
 - The [Glossary](../Glossary.md) file explains terms commonly used in the compiler.
+
+### Bidirectional source controls
+
+MiniCI rejects literal Unicode `Bidi_Control` characters in tracked text,
+filenames, and symlink targets to protect against CVE-2021-42574. Run the gate
+locally with `zig build run-check-source-bidi`. It scans bytes even in malformed
+UTF-8 or NUL-containing text and recognizes UTF-16/32 byte order marks. Known
+binary extensions are listed explicitly in `ci/check_source_bidi.zig`; changes
+to that list need review. The gate has no inline suppression syntax.
+
+Construct security test inputs with escaped code points, rather than placing
+invisible controls in fixtures. Roc strings can use `\u(202E)`; Zig tests can
+use `\u{202E}`. Ordinary Arabic and Hebrew text is allowed. Enable your editor's
+invisible-character warnings when reviewing Unicode changes. Remove a reported
+control from comments, or explicitly escape it in a literal when it is intended
+as runtime data; `roc fmt` refuses to rewrite affected source.
 
 ### Debugging tips
 

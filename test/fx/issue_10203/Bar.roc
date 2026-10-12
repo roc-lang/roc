@@ -1,4 +1,4 @@
-import Foo exposing [Foo]
+import Foo
 
 Bar := [].{
 	build : List(Str) -> Foo

@@ -35,7 +35,7 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 match numbers {
-	[.., middle, ..] => ...
+	[.., middle, ..] => ... # error, multiple rest patterns not allowed
 }
 ~~~
 # CANONICALIZE

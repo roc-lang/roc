@@ -53,7 +53,7 @@ const DebugRefcountTracker = builtins.utils.DebugRefcountTracker;
 /// Observation is debug-only: release builds carry no observer, no branch on
 /// one, and no hook in the interpreter's statement loop. Freestanding targets
 /// have no refcount event log to read, so they stay out too.
-pub const enabled = builtin.mode == .Debug and builtin.target.os.tag != .freestanding;
+pub const enabled = builtin.mode == .debug and builtin.target.os.tag != .freestanding;
 
 /// The most arguments one low-level statement is observed with. Every row in
 /// the table names positions 0-2; positions past this are still checked for
@@ -118,7 +118,7 @@ pub const ArgObservation = struct {
 pub const Observation = struct {
     op: LowLevel,
     arg_count: usize,
-    args: [max_observed_args]ArgObservation = [_]ArgObservation{.{}} ** max_observed_args,
+    args: [max_observed_args]ArgObservation = @as([max_observed_args]ArgObservation, @splat(.{})),
     /// The result's outermost allocation, after the op ran.
     result_outer: ?Allocation = null,
     /// Everything refcounted the result can reach, after the op ran.
@@ -195,7 +195,7 @@ var active_flag: bool = false;
 var findings_buf: [max_findings]Finding = undefined;
 var findings_len: usize = 0;
 var dropped_findings: usize = 0;
-var covered_ops: OpSet = OpSet.initEmpty();
+var covered_ops: OpSet = OpSet.empty;
 var row_overrides: std.EnumMap(LowLevel, RcEffect) = .{};
 /// One observation at a time, reused by every statement. The interpreter is
 /// single-threaded and low-level ops do not execute other low-level
@@ -210,7 +210,7 @@ pub fn begin() void {
     if (!enabled) return;
     findings_len = 0;
     dropped_findings = 0;
-    covered_ops = OpSet.initEmpty();
+    covered_ops = OpSet.empty;
     open_statements = 0;
     active_flag = true;
     DebugRefcountTracker.enable();
@@ -497,7 +497,7 @@ fn addFinding(finding: Finding) void {
 /// unverified. Exempt ops are ones no interpreted program can reach, and they
 /// must be listed with a reason at the exemption table.
 pub fn coverageGaps(observed: OpSet, exempt: OpSet, gaps: *OpSet) void {
-    gaps.* = OpSet.initEmpty();
+    gaps.* = OpSet.empty;
     for (std.enums.values(LowLevel)) |op| {
         if (std.meta.eql(op.rcEffect(), RcEffect.none())) continue;
         if (observed.contains(op)) continue;
@@ -509,7 +509,7 @@ pub fn coverageGaps(observed: OpSet, exempt: OpSet, gaps: *OpSet) void {
 /// Exemptions the sweep turned out to cover after all. A stale exemption hides
 /// the op from the coverage requirement for no reason.
 pub fn staleExemptions(observed: OpSet, exempt: OpSet, stale: *OpSet) void {
-    stale.* = OpSet.initEmpty();
+    stale.* = OpSet.empty;
     var it = exempt.iterator();
     while (it.next()) |op| {
         if (observed.contains(op)) stale.insert(op);
@@ -519,36 +519,36 @@ pub fn staleExemptions(observed: OpSet, exempt: OpSet, stale: *OpSet) void {
 test "coverage gaps name every uncovered nontrivial op" {
     // Stand in for a newly added builtin: everything is covered except one op
     // with a nontrivial row.
-    var observed = OpSet.initEmpty();
+    var observed = OpSet.empty;
     for (std.enums.values(LowLevel)) |op| observed.insert(op);
     observed.remove(.str_concat);
 
-    var gaps = OpSet.initEmpty();
-    coverageGaps(observed, OpSet.initEmpty(), &gaps);
+    var gaps = OpSet.empty;
+    coverageGaps(observed, OpSet.empty, &gaps);
 
     try std.testing.expectEqual(@as(usize, 1), gaps.count());
     try std.testing.expect(gaps.contains(.str_concat));
 }
 
 test "an op with a trivial row needs no coverage" {
-    var gaps = OpSet.initEmpty();
-    coverageGaps(OpSet.initEmpty(), OpSet.initEmpty(), &gaps);
+    var gaps = OpSet.empty;
+    coverageGaps(OpSet.empty, OpSet.empty, &gaps);
 
     try std.testing.expect(!gaps.contains(.num_plus));
     try std.testing.expect(gaps.contains(.str_concat));
 }
 
 test "an exemption suppresses a gap, and coverage makes it stale" {
-    var exempt = OpSet.initEmpty();
+    var exempt = OpSet.empty;
     exempt.insert(.str_concat);
 
-    var gaps = OpSet.initEmpty();
-    coverageGaps(OpSet.initEmpty(), exempt, &gaps);
+    var gaps = OpSet.empty;
+    coverageGaps(OpSet.empty, exempt, &gaps);
     try std.testing.expect(!gaps.contains(.str_concat));
 
-    var observed = OpSet.initEmpty();
+    var observed = OpSet.empty;
     observed.insert(.str_concat);
-    var stale = OpSet.initEmpty();
+    var stale = OpSet.empty;
     staleExemptions(observed, exempt, &stale);
     try std.testing.expect(stale.contains(.str_concat));
 }

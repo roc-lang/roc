@@ -1,4 +1,4 @@
-import FunctionSignature exposing [FunctionSignature]
+import FunctionSignature
 
 ## What glue knows about a stored function value's signature. `Known` names
 ## the argument and result type ids a host uses to fill the callable's

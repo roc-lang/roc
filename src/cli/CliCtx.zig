@@ -337,15 +337,7 @@ pub const CliCtx = struct {
     pub fn addProblem(self: *Self, problem: CliProblem) Allocator.Error!void {
         try self.problems.append(self.gpa, problem);
 
-        // Update exit code based on severity
-        const sev = problem.severity();
-        switch (sev) {
-            .fatal => self.exit_code = 1,
-            .runtime_error => if (self.exit_code == 0) {
-                self.exit_code = 1;
-            },
-            .warning => {},
-        }
+        if (problem.severity().isError()) self.exit_code = 1;
     }
 
     /// Add a problem, ignoring allocation failures (for use in error paths)
@@ -373,13 +365,7 @@ pub const CliCtx = struct {
 
     /// Check if any errors (not just warnings) have been recorded
     pub fn hasErrors(self: *const Self) bool {
-        for (self.problems.items) |problem| {
-            const sev = problem.severity();
-            if (sev == .fatal or sev == .runtime_error) {
-                return true;
-            }
-        }
-        return false;
+        return self.errorCount() > 0;
     }
 
     /// Get the number of problems
@@ -391,23 +377,14 @@ pub const CliCtx = struct {
     pub fn errorCount(self: *const Self) usize {
         var count: usize = 0;
         for (self.problems.items) |problem| {
-            const sev = problem.severity();
-            if (sev == .fatal or sev == .runtime_error) {
-                count += 1;
-            }
+            count += @intFromBool(problem.severity().isError());
         }
         return count;
     }
 
     /// Get the number of warnings
     pub fn warningCount(self: *const Self) usize {
-        var count: usize = 0;
-        for (self.problems.items) |problem| {
-            if (problem.severity() == .warning) {
-                count += 1;
-            }
-        }
-        return count;
+        return self.problemCount() - self.errorCount();
     }
 
     /// Render all problems to a writer
@@ -419,12 +396,6 @@ pub const CliCtx = struct {
             defer report.deinit();
             try reporting.renderReportToTerminal(&report, writer, reporting.ColorUtils.getPaletteForConfig(config), config);
         }
-    }
-
-    /// Render all problems and return whether there were any errors
-    pub fn renderAndCheck(self: *Self, writer: anytype) (Allocator.Error || error{WriteFailed})!bool {
-        try self.renderProblemsTo(writer);
-        return self.hasErrors();
     }
 
     /// Clear all problems
@@ -441,25 +412,6 @@ pub const CliCtx = struct {
 
 // Helper Functions
 
-/// Create a context, add a single problem, render it, and return the exit code.
-/// Convenience function for simple error cases.
-pub fn reportSingleProblem(
-    allocator: Allocator,
-    io: *Io,
-    command: Command,
-    problem: CliProblem,
-) u8 {
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    var ctx = CliCtx.init(allocator, arena.allocator(), io, command);
-    defer ctx.deinit();
-
-    ctx.addProblemIgnoreError(problem);
-    ctx.renderProblemsTo(io.stderr()) catch {};
-
-    return ctx.exitCode();
-}
-
 /// Render a single problem without adding it to the context's accumulated
 /// problem list.
 pub fn renderProblem(ctx: *CliCtx, problem: CliProblem) Allocator.Error!void {
@@ -472,9 +424,18 @@ pub fn renderProblem(ctx: *CliCtx, problem: CliProblem) Allocator.Error!void {
 
 // Tests
 
-const merged_stdio_helper_path_env = "ROC_CLI_IO_WRITER_TEST_HELPER";
-const merged_stdout_payload = "stdout \u{2713} issue-10465\n" ** 256;
-const merged_stderr_payload = "stderr \u{2713} issue-10465\n" ** 256;
+const merged_stdout_payload = repeated: {
+    const pattern = "stdout \u{2713} issue-10465\n";
+    var result: [pattern.len * (256)]@TypeOf(pattern[0]) = undefined;
+    for (0..(256)) |i| @memcpy(result[i * pattern.len ..][0..pattern.len], pattern);
+    break :repeated result;
+};
+const merged_stderr_payload = repeated: {
+    const pattern = "stderr \u{2713} issue-10465\n";
+    var result: [pattern.len * (256)]@TypeOf(pattern[0]) = undefined;
+    for (0..(256)) |i| @memcpy(result[i * pattern.len ..][0..pattern.len], pattern);
+    break :repeated result;
+};
 
 test "issue 10465 merged standard streams preserve both buffered outputs" {
     const allocator = std.testing.allocator;
@@ -486,8 +447,7 @@ test "issue 10465 merged standard streams preserve both buffered outputs" {
     const combined_path = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path, "combined.log" });
     defer allocator.free(combined_path);
 
-    const helper_path_z = std.c.getenv(merged_stdio_helper_path_env) orelse return error.TestUnexpectedResult;
-    const helper_path = helper_path_z[0..std.mem.len(helper_path_z)];
+    const helper_path = @import("cli_test_helpers").cli_io_writer_test_helper_path;
 
     var child = try std.process.spawn(test_io, .{
         .argv = &.{ helper_path, combined_path },
@@ -506,8 +466,8 @@ test "issue 10465 merged standard streams preserve both buffered outputs" {
     const combined = try tmp.dir.readFileAlloc(test_io, "combined.log", allocator, .limited(64 * 1024));
     defer allocator.free(combined);
 
-    try std.testing.expect(std.mem.find(u8, combined, merged_stderr_payload) != null);
-    try std.testing.expect(std.mem.find(u8, combined, merged_stdout_payload) != null);
+    try std.testing.expect(std.mem.find(u8, combined, &merged_stderr_payload) != null);
+    try std.testing.expect(std.mem.find(u8, combined, &merged_stdout_payload) != null);
 }
 
 test "CliCtx accumulates problems" {

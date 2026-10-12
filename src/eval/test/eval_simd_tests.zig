@@ -59,6 +59,40 @@ fn differentialSource() []const u8 {
 /// the runtime app and its `expect` supply the standalone and CTFE lanes.
 pub const tests = [_]TestCase{
     .{
+        .name = "SIMD typed loads preserve numeric lanes at unit offsets",
+        .source =
+        \\{
+        \\    words : List(U16)
+        \\    words = [9, 256, 32768, 65535, 127, 128, 4660, 43981, 1]
+        \\    dwords : List(U32)
+        \\    dwords = [9, 65536, 2147483648, 4294967295, 305419896]
+        \\    match (U16x8.load_units(words, 1), U32x4.load_units(dwords, 1)) {
+        \\        (Ok(a), Ok(b)) => a.to_list() == [256, 32768, 65535, 127, 128, 4660, 43981, 1] and b.to_list() == [65536, 2147483648, 4294967295, 305419896]
+        \\        _ => False
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "SIMD typed loads reject short lists and overflowing unit offsets",
+        .source =
+        \\{
+        \\    short16 = U16x8.load_units([1, 2, 3, 4, 5, 6, 7], 0)
+        \\    short32 = U32x4.load_units([1, 2, 3], 0)
+        \\    past16 = U16x8.load_units([1, 2, 3, 4, 5, 6, 7, 8], 1)
+        \\    past32 = U32x4.load_units([1, 2, 3, 4], 1)
+        \\    huge16 = U16x8.load_units([1, 2, 3, 4, 5, 6, 7, 8], U64.highest)
+        \\    huge32 = U32x4.load_units([1, 2, 3, 4], U64.highest)
+        \\    match (short16, short32, past16, past32, huge16, huge32) {
+        \\        (Err(OutOfBounds), Err(OutOfBounds), Err(OutOfBounds), Err(OutOfBounds), Err(OutOfBounds), Err(OutOfBounds)) => True
+        \\        _ => False
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
         .name = "SIMD full differential corpus",
         .source = "SimdDifferential.run_corpus(21345817372864405881847059188222722561)",
         .imports = &.{

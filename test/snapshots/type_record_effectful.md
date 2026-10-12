@@ -114,8 +114,7 @@ main! = |_| {}
 			(args
 				(p-assign (ident "person")))
 			(e-block
-				(s-expr
-					(e-runtime-error (tag "erroneous_value_expr")))
+				(s-runtime-error (tag "erroneous_value_expr"))
 				(e-field-access
 					(receiver
 						(e-lookup-local

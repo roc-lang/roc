@@ -151,8 +151,26 @@ count_items = |items| {
 When a nested function reads a variable, it sees the value the variable had
 when the nested function was defined, not whatever value the variable may have later.
 
-Unlike constants, variables are never generalized: a variable has exactly one type,
-even if it's given a type annotation with type variables in it. (See
+Note that a variable is not a "box" that holds a value, like a mutable reference would be in some
+other languages. It's just a name, and reassigning it changes which value the name refers to.
+The value it used to refer to doesn't change. So reassigning a variable doesn't allocate or copy
+anything by itself, and a variable costs the same at runtime as using a series of constants
+would.
+
+This works well with [opportunistic mutation](expressions#opportunistic-mutation). In a loop like
+this one, `$list` is the only thing referring to the list, so each `append` can add to the list in
+place rather than copying it:
+
+```roc
+var $list = List.with_capacity(100)
+
+for n in 0..<100 {
+    $list = $list.append(n * n)
+}
+```
+
+Like every other value that isn't a function, a variable is never generalized. It has exactly one
+type, and giving it a type annotation with a type variable in it is an error. (See
 [Generalization](types#generalization) for more on this.)
 
 ### `$` prefix

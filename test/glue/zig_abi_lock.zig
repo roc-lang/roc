@@ -49,8 +49,8 @@ fn lockStruct(
         @compileError("generated " ++ what ++ " alignment differs from builtins");
     }
 
-    const generated_fields = @typeInfo(Generated).@"struct".fields;
-    const canonical_fields = @typeInfo(Canonical).@"struct".fields;
+    const generated_fields = @typeInfo(Generated).@"struct".field_names;
+    const canonical_fields = @typeInfo(Canonical).@"struct".field_names;
     if (generated_fields.len != canonical_fields.len) {
         @compileError("generated " ++ what ++ " field count differs from builtins");
     }
@@ -59,24 +59,24 @@ fn lockStruct(
     }
 
     inline for (generated_fields, canonical_fields, generated_field_names) |gf, cf, expected_name| {
-        if (!std.mem.eql(u8, gf.name, expected_name)) {
+        if (!std.mem.eql(u8, gf, expected_name)) {
             @compileError("generated " ++ what ++ " field order changed: expected " ++
-                expected_name ++ ", found " ++ gf.name);
+                expected_name ++ ", found " ++ gf);
         }
         const canonical_name = if (std.mem.eql(u8, expected_name, "elements_ptr")) "bytes" else expected_name;
-        if (!std.mem.eql(u8, cf.name, canonical_name)) {
+        if (!std.mem.eql(u8, cf, canonical_name)) {
             @compileError("canonical " ++ what ++ " field order changed: expected " ++ canonical_name);
         }
-        if (@offsetOf(Generated, gf.name) != @offsetOf(Canonical, cf.name)) {
-            @compileError("generated " ++ what ++ "." ++ gf.name ++ " offset differs from builtins " ++
-                what ++ "." ++ cf.name);
+        if (@offsetOf(Generated, gf) != @offsetOf(Canonical, cf)) {
+            @compileError("generated " ++ what ++ "." ++ gf ++ " offset differs from builtins " ++
+                what ++ "." ++ cf);
         }
-        if (gf.type != cf.type) {
-            @compileError("generated " ++ what ++ "." ++ gf.name ++ " type differs from builtins");
+        if (@FieldType(Generated, gf) != @FieldType(Canonical, cf)) {
+            @compileError("generated " ++ what ++ "." ++ gf ++ " type differs from builtins");
         }
-        if (@sizeOf(gf.type) != @sizeOf(cf.type)) {
-            @compileError("generated " ++ what ++ "." ++ gf.name ++ " size differs from builtins " ++
-                what ++ "." ++ cf.name);
+        if (@sizeOf(@FieldType(Generated, gf)) != @sizeOf(@FieldType(Canonical, cf))) {
+            @compileError("generated " ++ what ++ "." ++ gf ++ " size differs from builtins " ++
+                what ++ "." ++ cf);
         }
     }
 }
@@ -86,14 +86,14 @@ fn lockStruct(
 /// identical after substituting `*RocHost` for `*RocOps` in the self-pointer
 /// position.
 fn lockRocHost() void {
-    const host_fields = @typeInfo(abi.RocHost).@"struct".fields;
-    const ops_fields = @typeInfo(RocOps).@"struct".fields;
+    const host_fields = @typeInfo(abi.RocHost).@"struct".field_names;
+    const ops_fields = @typeInfo(RocOps).@"struct".field_names;
 
     // RocOps = RocHost prefix + hosted_fns.
     if (host_fields.len + 1 != ops_fields.len) {
         @compileError("generated RocHost field count is not RocOps minus hosted_fns");
     }
-    if (!std.mem.eql(u8, ops_fields[ops_fields.len - 1].name, "hosted_fns")) {
+    if (!std.mem.eql(u8, ops_fields[ops_fields.len - 1], "hosted_fns")) {
         @compileError("RocOps no longer ends with hosted_fns; update ZigGlue's RocHost and this lock");
     }
 
@@ -104,14 +104,14 @@ fn lockRocHost() void {
     }
 
     inline for (host_fields, ops_fields[0..host_fields.len]) |hf, of| {
-        if (!std.mem.eql(u8, hf.name, of.name)) {
-            @compileError("generated RocHost field " ++ hf.name ++ " does not match RocOps field " ++ of.name);
+        if (!std.mem.eql(u8, hf, of)) {
+            @compileError("generated RocHost field " ++ hf ++ " does not match RocOps field " ++ of);
         }
-        if (@offsetOf(abi.RocHost, hf.name) != @offsetOf(RocOps, of.name)) {
-            @compileError("generated RocHost." ++ hf.name ++ " offset differs from RocOps");
+        if (@offsetOf(abi.RocHost, hf) != @offsetOf(RocOps, of)) {
+            @compileError("generated RocHost." ++ hf ++ " offset differs from RocOps");
         }
-        if (hf.type != of.type and !fnPointersMatchModuloSelf(hf.type, of.type)) {
-            @compileError("generated RocHost." ++ hf.name ++ " signature differs from RocOps." ++ of.name);
+        if (@FieldType(abi.RocHost, hf) != @FieldType(RocOps, of) and !fnPointersMatchModuloSelf(@FieldType(abi.RocHost, hf), @FieldType(RocOps, of))) {
+            @compileError("generated RocHost." ++ hf ++ " signature differs from RocOps." ++ of);
         }
     }
 }
@@ -137,18 +137,18 @@ fn lockErasedCallable() void {
         @compileError("generated RocErasedCallableOnDrop signature differs from builtins.erased_callable");
     }
 
-    const generated_fields = @typeInfo(abi.RocErasedCallablePayload).@"struct".fields;
-    const canonical_fields = @typeInfo(erased_callable.Payload).@"struct".fields;
+    const generated_fields = @typeInfo(abi.RocErasedCallablePayload).@"struct".field_names;
+    const canonical_fields = @typeInfo(erased_callable.Payload).@"struct".field_names;
     if (generated_fields.len != canonical_fields.len) {
         @compileError("generated RocErasedCallablePayload field count differs from builtins");
     }
     inline for (generated_fields, canonical_fields) |gf, cf| {
-        if (!std.mem.eql(u8, gf.name, cf.name)) {
-            @compileError("generated RocErasedCallablePayload field " ++ gf.name ++
-                " does not match builtins field " ++ cf.name);
+        if (!std.mem.eql(u8, gf, cf)) {
+            @compileError("generated RocErasedCallablePayload field " ++ gf ++
+                " does not match builtins field " ++ cf);
         }
-        if (@offsetOf(abi.RocErasedCallablePayload, gf.name) != @offsetOf(erased_callable.Payload, cf.name)) {
-            @compileError("generated RocErasedCallablePayload." ++ gf.name ++ " offset differs from builtins");
+        if (@offsetOf(abi.RocErasedCallablePayload, gf) != @offsetOf(erased_callable.Payload, cf)) {
+            @compileError("generated RocErasedCallablePayload." ++ gf ++ " offset differs from builtins");
         }
     }
     if (@sizeOf(abi.RocErasedCallablePayload) != @sizeOf(erased_callable.Payload)) {
@@ -167,15 +167,15 @@ fn fnPointersMatchModuloSelf(comptime Generated: type, comptime Canonical: type)
     const generated_info = @typeInfo(@typeInfo(Generated).pointer.child).@"fn";
     const canonical_info = @typeInfo(@typeInfo(Canonical).pointer.child).@"fn";
 
-    if (generated_info.params.len != canonical_info.params.len) return false;
-    if (generated_info.is_var_args != canonical_info.is_var_args) return false;
+    if (generated_info.param_types.len != canonical_info.param_types.len) return false;
+    if (generated_info.attrs.varargs != canonical_info.attrs.varargs) return false;
     if (generated_info.return_type != canonical_info.return_type) return false;
-    if (!std.meta.eql(generated_info.calling_convention, canonical_info.calling_convention)) return false;
+    if (!std.meta.eql(generated_info.attrs.@"callconv", canonical_info.attrs.@"callconv")) return false;
 
-    inline for (generated_info.params, canonical_info.params) |generated_param, canonical_param| {
-        if (canonical_param.type == *RocOps) {
-            if (generated_param.type != *abi.RocHost) return false;
-        } else if (generated_param.type != canonical_param.type) {
+    inline for (generated_info.param_types, canonical_info.param_types) |generated_param, canonical_param| {
+        if (canonical_param == *RocOps) {
+            if (generated_param != *abi.RocHost) return false;
+        } else if (generated_param != canonical_param) {
             return false;
         }
     }

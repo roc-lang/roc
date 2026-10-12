@@ -27,7 +27,7 @@ platform ""
     }
 
 import App
-import Host exposing [Host]
+import Host
 
 main_for_host! : {} => {}
 main_for_host! = |_| {}

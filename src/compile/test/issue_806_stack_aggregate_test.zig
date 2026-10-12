@@ -373,7 +373,7 @@ fn rejectConsumerOwnedLargeStackPatternPayloads(
     try std.testing.expect(hasLargeDiscriminatedTagLocal(store, layouts));
 
     for (store.getPatterns(), 0..) |_, index| {
-        if (patternHasUnsafeLargeAggregate(store, layouts, @enumFromInt(@as(u32, @intCast(index))))) {
+        if (patternHasUnsafeLargeAggregate(store, layouts, @fromBackingInt(@intCast(@as(u32, @intCast(index)))))) {
             return error.Issue806UnsafeLargeStackPatternPayload;
         }
     }

@@ -117,6 +117,7 @@ const CopyContext = struct {
 const Fill = struct {
     placeholder: Var,
     empty_tag_union_is_default: bool,
+    nominal_backing_structure: bool,
 };
 
 const IdentityResult = enum { flex, rigid };
@@ -371,6 +372,7 @@ fn request(ctx: *CopyContext, source_var: Var) std.mem.Allocator.Error!bool {
     const fill = Fill{
         .placeholder = placeholder_var,
         .empty_tag_union_is_default = resolved.desc.flags.empty_tag_union_is_default,
+        .nominal_backing_structure = resolved.desc.flags.nominal_backing_structure,
     };
 
     // NOTE: a copied var whose content is a flex carrying a literal-conversion
@@ -409,7 +411,7 @@ fn pushContent(ctx: *CopyContext, fill: Fill, content: Content) std.mem.Allocato
                 .source = alias,
                 .translated_ident = translated_ident,
                 .backing = ctx.source_store.getAliasBackingVar(alias),
-                .args = ctx.source_store.sliceAliasArgs(alias),
+                .args = ctx.source_store.sliceAliasAllArgs(alias),
                 .values_base = @intCast(machine.values.items.len),
             } });
             return false;
@@ -531,7 +533,10 @@ fn finishFrame(ctx: *CopyContext, fill: Fill, content: Content) std.mem.Allocato
     try ctx.dest_store.dangerousSetVarDesc(fill.placeholder, .{
         .content = content,
         .rank = types_mod.Rank.generalized,
-        .flags = .{ .empty_tag_union_is_default = fill.empty_tag_union_is_default },
+        .flags = .{
+            .empty_tag_union_is_default = fill.empty_tag_union_is_default,
+            .nominal_backing_structure = fill.nominal_backing_structure,
+        },
     });
     try ctx.scratch.values.append(ctx.allocator, fill.placeholder);
 }
@@ -677,6 +682,7 @@ fn stepAlias(ctx: *CopyContext, frame: *AliasFrame) std.mem.Allocator.Error!bool
                     .vars = .{ .nonempty = dest_vars_span },
                     .origin_module = translated_origin,
                     .source_decl = frame.source.source_decl,
+                    .source_arg_count = frame.source.source_arg_count,
                 } });
                 return true;
             },
@@ -822,7 +828,7 @@ fn finishRecordFields(
     const fields = machine.pending_fields.items[fields_base..];
     var value_idx: usize = values_base;
     for (fields, 0..) |*field, i| {
-        const source_field = ctx.source_store.record_fields.get(@enumFromInt(@intFromEnum(source_fields.start) + i));
+        const source_field = ctx.source_store.record_fields.get(@fromBackingInt(@intCast(@backingInt(source_fields.start) + i)));
         const dest_type = machine.values.items[value_idx];
         value_idx += 1;
         field.presence = if (source_field.presence.presenceVar()) |_| blk: {
@@ -848,7 +854,7 @@ fn requestRecordField(
     const machine = &ctx.scratch;
     // Indexing through the run's start only happens when the record has
     // fields; start may be undefined when count is 0.
-    const field = ctx.source_store.record_fields.get(@enumFromInt(@intFromEnum(source_fields.start) + idx.*));
+    const field = ctx.source_store.record_fields.get(@fromBackingInt(@intCast(@backingInt(source_fields.start) + idx.*)));
     return switch (axis.*) {
         .type_var => blk: {
             const translated_name = try ctx.copyIdent(field.name);
@@ -908,7 +914,7 @@ fn stepTagUnion(ctx: *CopyContext, frame: *TagUnionFrame) std.mem.Allocator.Erro
             .tag_args => {
                 // Indexing through the run's start only happens when the tag
                 // union has tags; start may be undefined when count is 0.
-                const tag = ctx.source_store.tags.get(@enumFromInt(@intFromEnum(frame.source_tags.start) + frame.tag_idx));
+                const tag = ctx.source_store.tags.get(@fromBackingInt(@intCast(@backingInt(frame.source_tags.start) + frame.tag_idx)));
                 const args_slice = ctx.source_store.sliceVars(tag.args);
                 if (frame.arg_idx < args_slice.len) {
                     const arg_var = args_slice[frame.arg_idx];
@@ -974,8 +980,8 @@ fn ensureNominalDeclCopied(
         // Invariant: every nominal application in a store can resolve its
         // declaration in that store, so a keyed application without a source
         // table entry is a compiler bug.
-        if (builtin.mode == .Debug) {
-            std.debug.panic(
+        if (builtin.mode == .debug) {
+            base.invariant(
                 "copy_import invariant violated: nominal '{s}' has a source declaration but no declaration table entry in its source store",
                 .{ctx.sourceIdents().getText(source_nominal.ident.ident_idx)},
             );

@@ -37,9 +37,16 @@ const mem_tick_ns: u64 = 10 * std.time.ns_per_ms;
 /// Operations slower than this show their breakdown even without `--timings`.
 const default_threshold_ns: u64 = std.time.ns_per_s;
 
-/// Minimum width of the phase-name column. A separator is always emitted after
-/// the padded name so a future longer label cannot run into its duration.
+/// Width of the phase-name column. Every phase and sub-timing label must fit
+/// in it so that all durations line up in one column.
 const name_width: usize = 37;
+
+/// Width of a sub-timing name indented beneath its parent row.
+const child_name_width: usize = name_width - 2;
+
+/// Display width of the marker in front of a phase name ("  ✓ " or a spinner
+/// frame), which the totals row pads past so its duration shares the column.
+const row_marker_width: usize = 4;
 
 /// Maximum number of top-level phases a single operation reports.
 const max_phases: usize = 16;
@@ -48,6 +55,11 @@ const max_subphases: usize = 25;
 // and native emission; tests also report result-cache counts.
 const max_counter_groups: usize = 2 * 9 + 1;
 const max_counters_per_group: usize = 32;
+/// Rows in the ranked timing list printed after the phases.
+const max_ranked_timings: usize = 10;
+/// Bytes reserved for copies of the ranked rows' names, which the caller's
+/// storage need not outlive.
+const ranked_name_capacity: usize = 4096;
 
 /// Wide enough for at least seven digits, their grouping underscores, and the ms suffix.
 /// This accommodates durations up to tens of minutes (5_999_000ms is just under 100 minutes).
@@ -75,6 +87,13 @@ const CounterGroup = struct {
     name: []const u8,
     counters: [max_counters_per_group]Counter = undefined,
     len: u8 = 0,
+};
+
+const RankedTimings = struct {
+    name: []const u8 = "",
+    rows: [max_ranked_timings]SubTiming = undefined,
+    len: u8 = 0,
+    name_bytes: [ranked_name_capacity]u8 = undefined,
 };
 
 const Phase = struct {
@@ -134,6 +153,7 @@ pub const Reporter = struct {
     phase_count: usize = 0,
     counter_groups: [max_counter_groups]CounterGroup = undefined,
     counter_group_count: usize = 0,
+    ranked: RankedTimings = .{},
     active: ?usize = null,
     displaying: bool = false,
     pending_partial: bool = false,
@@ -177,6 +197,7 @@ pub const Reporter = struct {
         self.mutex.lockUncancelable(self.std_io);
         defer self.mutex.unlock(self.std_io);
         if (self.finished or self.phase_count >= max_phases) return;
+        std.debug.assert(name.len <= name_width);
         const idx = self.phase_count;
         self.phases[idx] = .{ .name = name, .start_ns = self.elapsedNs() };
         self.active = idx;
@@ -202,6 +223,14 @@ pub const Reporter = struct {
         self.endActiveLocked(subs);
     }
 
+    /// End the active phase with a breakdown, excluding `excluded_ns` of its
+    /// wall time that a separately reported phase accounts for.
+    pub fn endWithBreakdownExcluding(self: *Reporter, subs: []const SubTiming, excluded_ns: u64) void {
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
+        self.endActiveExcludingLocked(subs, excluded_ns);
+    }
+
     /// End the active phase with aggregate/interleaved subtimings while keeping
     /// its wall-time parent row visible even when no memory sample was recorded.
     pub fn endWithParentBreakdown(self: *Reporter, subs: []const SubTiming) void {
@@ -209,26 +238,6 @@ pub const Reporter = struct {
         defer self.mutex.unlock(self.std_io);
         const idx = self.active orelse return;
         self.phases[idx].show_parent_with_subs = true;
-        self.endActiveLocked(subs);
-    }
-
-    /// End the active phase with a breakdown whose subs ran once each, in
-    /// order. Each sub's window is reconstructed from the cumulative
-    /// durations and sliced from the sample buffer for a per-sub memory
-    /// range.
-    pub fn endWithBreakdownSequential(self: *Reporter, subs: []const SubTiming) void {
-        self.mutex.lockUncancelable(self.std_io);
-        defer self.mutex.unlock(self.std_io);
-        const idx = self.active orelse return;
-        self.sampleMemoryLocked();
-        if (self.always) {
-            var cursor = self.phases[idx].start_ns;
-            const n = @min(subs.len, self.phases[idx].sub_mem.len);
-            for (subs[0..n], 0..) |sub, i| {
-                self.phases[idx].sub_mem[i] = self.sampleRangeInWindow(cursor, cursor + sub.ns);
-                cursor += sub.ns;
-            }
-        }
         self.endActiveLocked(subs);
     }
 
@@ -257,6 +266,7 @@ pub const Reporter = struct {
         self.mutex.lockUncancelable(self.std_io);
         defer self.mutex.unlock(self.std_io);
         if (self.finished or self.phase_count >= max_phases) return;
+        std.debug.assert(name.len <= name_width);
 
         const idx = self.phase_count;
         self.phases[idx] = .{
@@ -268,7 +278,10 @@ pub const Reporter = struct {
             .mem_max = if (self.always) mem.max else 0,
         };
         const n = @min(subs.len, self.phases[idx].sub.len);
-        for (subs[0..n], 0..) |sub, i| self.phases[idx].sub[i] = sub;
+        for (subs[0..n], 0..) |sub, i| {
+            std.debug.assert(sub.name.len <= child_name_width);
+            self.phases[idx].sub[i] = sub;
+        }
         self.phases[idx].sub_len = @intCast(n);
         self.phase_count += 1;
         if (self.displaying) self.writeCommittedPhase(idx);
@@ -291,12 +304,43 @@ pub const Reporter = struct {
         self.counter_group_count += 1;
     }
 
+    /// Record timings already ranked by the caller (for example the slowest
+    /// modules to type check), printed after the phases. Like counters, they
+    /// are explicit `--timings` output. Row names are copied, so they need not
+    /// outlive this call.
+    pub fn recordRankedTimings(self: *Reporter, name: []const u8, rows: []const SubTiming) void {
+        if (!self.always) return;
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
+        if (self.finished) return;
+
+        const ranked = &self.ranked;
+        ranked.name = name;
+        ranked.len = 0;
+        var name_bytes_used: usize = 0;
+        for (rows[0..@min(rows.len, max_ranked_timings)]) |row| {
+            const copied_len = @min(row.name.len, ranked.name_bytes.len - name_bytes_used);
+            const copied = ranked.name_bytes[name_bytes_used..][0..copied_len];
+            @memcpy(copied, row.name[0..copied_len]);
+            name_bytes_used += copied_len;
+            ranked.rows[ranked.len] = .{ .name = copied, .ns = row.ns };
+            ranked.len += 1;
+        }
+    }
+
     fn endActiveLocked(self: *Reporter, subs: []const SubTiming) void {
+        self.endActiveExcludingLocked(subs, 0);
+    }
+
+    fn endActiveExcludingLocked(self: *Reporter, subs: []const SubTiming, excluded_ns: u64) void {
         const idx = self.active orelse return;
         self.sampleMemoryLocked();
-        self.phases[idx].end_ns = self.elapsedNs();
+        self.phases[idx].end_ns = @max(self.phases[idx].start_ns, self.elapsedNs() -| excluded_ns);
         const n = @min(subs.len, self.phases[idx].sub.len);
-        for (subs[0..n], 0..) |s, i| self.phases[idx].sub[i] = s;
+        for (subs[0..n], 0..) |s, i| {
+            std.debug.assert(s.name.len <= child_name_width);
+            self.phases[idx].sub[i] = s;
+        }
         self.phases[idx].sub_len = @intCast(n);
         if (self.displaying) self.commitPhaseInPlace(idx);
         self.active = null;
@@ -317,10 +361,12 @@ pub const Reporter = struct {
         if (!self.displaying and (self.always or threshold_reached)) {
             self.printStaticBreakdown();
         } else if (self.displaying) {
-            var totals_buf: [64]u8 = undefined;
-            self.writer.print("{f}{s}\n", .{ padName(self.op_label), self.formatTotals(&totals_buf) }) catch {};
+            self.writeTotalsRow();
         }
-        if (self.always) self.writeCounterGroups();
+        if (self.always) {
+            self.writeRankedTimings();
+            self.writeCounterGroups();
+        }
         self.writer.flush() catch {};
     }
 
@@ -426,17 +472,6 @@ pub const Reporter = struct {
         self.last_sample_ns = now;
     }
 
-    /// Smallest and largest buffered sample in `[from_ns, to_ns]`.
-    fn sampleRangeInWindow(self: *const Reporter, from_ns: u64, to_ns: u64) MemRange {
-        var range = MemRange{};
-        for (self.samples[0..self.sample_len]) |sample| {
-            if (sample.at_ns < from_ns or sample.at_ns > to_ns) continue;
-            if (sample.bytes < range.min) range.min = sample.bytes;
-            if (sample.bytes > range.max) range.max = sample.bytes;
-        }
-        return range;
-    }
-
     /// One animation frame. Caller holds the mutex.
     fn tick(self: *Reporter) void {
         if (!self.displaying) {
@@ -469,17 +504,35 @@ pub const Reporter = struct {
 
     /// Print the whole breakdown at once (no animation). Caller holds the mutex.
     fn printStaticBreakdown(self: *Reporter) void {
-        var totals_buf: [64]u8 = undefined;
-        self.writer.print("{f}{s}\n", .{ padName(self.op_label), self.formatTotals(&totals_buf) }) catch {};
+        self.writeTotalsRow();
         var i: usize = 0;
         while (i < self.phase_count) : (i += 1) self.writeCommittedPhase(i);
     }
 
+    fn writeRankedTimings(self: *Reporter) void {
+        const ranked = &self.ranked;
+        if (ranked.len == 0) return;
+        self.writer.print("  {s}\n", .{ranked.name}) catch {};
+        for (ranked.rows[0..ranked.len]) |row| {
+            var buf: [32]u8 = undefined;
+            const dur = formatCompletedRowDuration(&buf, row.ns);
+            self.writer.print("      {f} {s}\n", .{ padChildName(row.name), dur }) catch {};
+        }
+    }
+
+    /// Counters are printed only once every group is recorded, so their
+    /// column is sized to the longest counter name across all groups.
     fn writeCounterGroups(self: *Reporter) void {
-        for (self.counter_groups[0..self.counter_group_count]) |group| {
+        const groups = self.counter_groups[0..self.counter_group_count];
+        var width: usize = child_name_width;
+        for (groups) |group| {
+            for (group.counters[0..group.len]) |counter| width = @max(width, counter.name.len);
+        }
+        for (groups) |group| {
             self.writer.print("  {s}\n", .{group.name}) catch {};
             for (group.counters[0..group.len]) |counter| {
-                self.writer.print("      {f} {d}\n", .{ padChildName(counter.name), counter.count }) catch {};
+                const padded: PaddedName = .{ .name = counter.name, .width = width };
+                self.writer.print("      {f} {d}\n", .{ padded, counter.count }) catch {};
             }
         }
     }
@@ -553,16 +606,22 @@ pub const Reporter = struct {
         ansi.clearFromCursorToLineEnd(self.writer) catch {};
     }
 
-    /// "2m 25s, peak RSS 6042MB" (the memory part only when sampled).
-    fn formatTotals(self: *Reporter, buf: []u8) []const u8 {
+    /// "roc build    2m 25s, peak RSS 6042MB" (the memory part only when
+    /// sampled), with the duration right-aligned in the phase rows' column.
+    /// Caller holds the mutex.
+    fn writeTotalsRow(self: *Reporter) void {
         var dur_buf: [32]u8 = undefined;
         const dur = formatDuration(&dur_buf, self.elapsedNs(), .final);
-        if (self.peak_bytes == 0) {
-            return std.fmt.bufPrint(buf, "{s}", .{dur}) catch buf[0..0];
+        const label: PaddedName = .{ .name = self.op_label, .width = row_marker_width + name_width };
+        const dur_padding = min_completed_duration_width -| dur.len;
+        self.writer.print("{f} ", .{label}) catch {};
+        self.writer.splatByteAll(' ', dur_padding) catch {};
+        self.writer.writeAll(dur) catch {};
+        if (self.peak_bytes != 0) {
+            var bytes_buf: [32]u8 = undefined;
+            self.writer.print(", peak RSS {s}", .{formatBytes(&bytes_buf, self.peak_bytes)}) catch {};
         }
-        var bytes_buf: [32]u8 = undefined;
-        const peak = formatBytes(&bytes_buf, self.peak_bytes);
-        return std.fmt.bufPrint(buf, "{s}, peak RSS {s}", .{ dur, peak }) catch buf[0..0];
+        self.writer.writeAll("\n") catch {};
     }
 
     fn elapsedNs(self: *Reporter) u64 {
@@ -578,7 +637,7 @@ fn padName(name: []const u8) PaddedName {
 }
 
 fn padChildName(name: []const u8) PaddedName {
-    return .{ .name = name, .width = name_width - 2 };
+    return .{ .name = name, .width = child_name_width };
 }
 
 const PaddedName = struct {
@@ -820,6 +879,51 @@ fn collectStatic(buf: *std.Io.Writer.Allocating, timings_flag: bool) void {
     reporter.finish();
 }
 
+test "ranked timings print copied names in the order given" {
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    var reporter = Reporter.init(.{
+        .std_io = std.Io.Threaded.global_single_threaded.io(),
+        .writer = &buf.writer,
+        .op_label = "roc check",
+        .timings_flag = true,
+        .is_tty = false,
+    });
+    defer reporter.deinit();
+    reporter.start();
+    var slow_name = "pdf.Slow".*;
+    reporter.recordRankedTimings("Slowest Module Type Inference", &.{
+        .{ .name = &slow_name, .ns = 1500 * std.time.ns_per_ms },
+        .{ .name = "pdf.Fast", .ns = 20 * std.time.ns_per_ms },
+    });
+    // The reporter must not read the caller's storage after recording.
+    @memset(&slow_name, 'x');
+    reporter.finish();
+    const out = buf.written();
+    const slow = std.mem.find(u8, out, "pdf.Slow") orelse return error.TestUnexpectedResult;
+    const fast = std.mem.find(u8, out, "pdf.Fast") orelse return error.TestUnexpectedResult;
+    try testing.expect(slow < fast);
+    try testing.expect(std.mem.find(u8, out, "Slowest Module Type Inference") != null);
+    try testing.expect(std.mem.find(u8, out, "1_500ms") != null);
+}
+
+test "ranked timings are omitted without --timings" {
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    var reporter = Reporter.init(.{
+        .std_io = std.Io.Threaded.global_single_threaded.io(),
+        .writer = &buf.writer,
+        .op_label = "roc check",
+        .timings_flag = false,
+        .is_tty = false,
+    });
+    defer reporter.deinit();
+    reporter.start();
+    reporter.recordRankedTimings("Slowest Module Type Inference", &.{.{ .name = "pdf.Slow", .ns = 1 }});
+    reporter.finish();
+    try testing.expect(std.mem.find(u8, buf.written(), "pdf.Slow") == null);
+}
+
 test "timing counter groups retain every Monotype graph diagnostic" {
     var buf: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buf.deinit();
@@ -832,7 +936,12 @@ test "timing counter groups retain every Monotype graph diagnostic" {
     });
     defer reporter.deinit();
     reporter.start();
-    var counters = [_]Counter{.{ .name = "Graph diagnostic", .count = 0 }} ** 27;
+    var counters = repeated: {
+        const pattern = [_]Counter{.{ .name = "Graph diagnostic", .count = 0 }};
+        var result: [pattern.len * (27)]@TypeOf(pattern[0]) = undefined;
+        for (0..(27)) |i| @memcpy(result[i * pattern.len ..][0..pattern.len], &pattern);
+        break :repeated result;
+    };
     counters[26] = .{ .name = "Generated-private guard returns", .count = 12345 };
     reporter.recordCounters("Monotype type graph", &counters);
     reporter.finish();
@@ -853,7 +962,12 @@ test "timing counters beyond the first 24 are printed" {
     defer reporter.deinit();
     reporter.start();
 
-    var counters = [_]Counter{.{ .name = "Earlier counter", .count = 0 }} ** 28;
+    var counters = repeated: {
+        const pattern = [_]Counter{.{ .name = "Earlier counter", .count = 0 }};
+        var result: [pattern.len * (28)]@TypeOf(pattern[0]) = undefined;
+        for (0..(28)) |i| @memcpy(result[i * pattern.len ..][0..pattern.len], &pattern);
+        break :repeated result;
+    };
     counters[25] = .{ .name = "Union-find resolutions", .count = 123456789 };
     counters[27] = .{ .name = "Final counter", .count = 987654321 };
     reporter.recordCounters("Monotype graph", &counters);
@@ -940,6 +1054,50 @@ test "static breakdown lists every phase with the timings flag" {
     } else {
         try testing.expect(std.mem.find(u8, out, "Type Checking") == null);
     }
+}
+
+test "totals, phase, and sub-timing durations end in one column" {
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    var reporter = Reporter.init(.{
+        .std_io = std.Io.Threaded.global_single_threaded.io(),
+        .writer = &buf.writer,
+        .op_label = "roc test",
+        .timings_flag = true,
+        .is_tty = false,
+    });
+    defer reporter.deinit();
+    reporter.begin("Type Checking");
+    reporter.endWithBreakdown(&.{
+        .{ .name = "Parsing (summed)", .ns = 10 * std.time.ns_per_ms },
+        .{ .name = "Specialization Lookup + Reservation", .ns = 3 * std.time.ns_per_ms },
+    });
+    reporter.recordCompletedWithBreakdown("Shared Lowering + Compile-Time Eval", 1_309 * std.time.ns_per_ms, .{}, &.{
+        .{ .name = "Specialization Lookup + Reservation", .ns = 46 * std.time.ns_per_ms },
+        .{ .name = "Execution", .ns = 1_053 * std.time.ns_per_ms },
+    });
+    reporter.begin("Compile + Run Tests (wall)");
+    reporter.end();
+    reporter.finish();
+
+    var lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, buf.written(), "\n"), '\n');
+    var row_count: usize = 0;
+    var duration_end: ?usize = null;
+    while (lines.next()) |line| {
+        // A sampled memory range follows the duration as ", RSS ...".
+        const duration_part = line[0 .. std.mem.find(u8, line, ", ") orelse line.len];
+        const end = try std.unicode.utf8CountCodepoints(duration_part);
+        if (duration_end) |expected| {
+            try testing.expectEqual(expected, end);
+        } else {
+            duration_end = end;
+        }
+        row_count += 1;
+    }
+    // The totals row, Type Checking's two subs, the shared parent with its
+    // two subs, and Compile + Run Tests, plus Type Checking's own row when a
+    // memory sample made it show.
+    try testing.expect(row_count >= 7);
 }
 
 test "parent breakdown remains grouped without a memory sample" {

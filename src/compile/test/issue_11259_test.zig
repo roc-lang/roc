@@ -210,11 +210,14 @@ fn expectConversionRecovery(source: []const u8, imported_source: ?[]const u8, ex
     var completed_conversions: usize = 0;
     for (artifact.compile_time_roots.roots) |root| {
         const expr = artifact.checked_bodies.expr(root.expr);
-        if (artifact.checked_bodies.exprContainsDiagnosticError(root.expr)) {
-            try std.testing.expectEqual(.ineligible, root.request_eligibility);
-            for (artifact.root_requests.compile_time_requests) |request| {
-                try std.testing.expect(request.compile_time_root != root.id);
-            }
+        // A root evaluated at compile time whose own body contains the
+        // rejected code reaches it and stores the crash, without reporting the
+        // problem a second time.
+        if (artifact.checked_bodies.exprContainsDiagnosticError(root.expr) and root.kind != .expect and
+            root.request_eligibility == .eligible)
+        {
+            try std.testing.expect(root.payload == .const_node);
+            try std.testing.expect(artifact.const_store.get(root.payload.const_node) == .checked_error);
         }
         const expr_source = module_source[expr.source_region.start.offset..expr.source_region.end.offset];
         if (expected.independent_expr) |independent| {
@@ -229,7 +232,8 @@ fn expectConversionRecovery(source: []const u8, imported_source: ?[]const u8, ex
             try std.testing.expect(root.payload == .const_node);
             found_good = true;
         }
-        if (root.kind == .quote_conversion and root.payload == .const_node) completed_conversions += 1;
+        if (root.kind == .quote_conversion and root.payload == .const_node and
+            artifact.const_store.get(root.payload.const_node) != .checked_error) completed_conversions += 1;
     }
     try std.testing.expect(found_good);
     try std.testing.expect(found_independent);

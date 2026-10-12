@@ -163,7 +163,9 @@ h = {
 (can-ir
 	(d-let
 		(p-assign (ident "h"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-block
+			(e-block
+				(e-runtime-error (tag "empty_tuple")))))
 	(s-alias-decl
 		(ty-header (name "A"))
 		(ty-malformed))
@@ -180,7 +182,7 @@ h = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "_c")))
 	(type_decls
 		(alias (type "Error")
 			(ty-header (name "A")))
@@ -189,5 +191,5 @@ h = {
 		(alias (type "Error")
 			(ty-header (name "C"))))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "_c"))))
 ~~~

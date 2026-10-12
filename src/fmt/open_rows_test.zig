@@ -44,6 +44,47 @@ test "open rows - function result drops its `..`" {
     );
 }
 
+test "open rows - auto-imported Range uses its source formal positions" {
+    try expectFormatsTo(
+        \\value : Str -> Range([E, ..])
+        \\value = |_| crash "unused"
+        \\
+        \\consume : Range([E, ..]) -> Str
+        \\consume = |_| "ok"
+        \\
+    ,
+        \\value : Str -> Range([E])
+        \\value = |_| crash "unused"
+        \\
+        \\consume : Range([E, ..]) -> Str
+        \\consume = |_| "ok"
+        \\
+    );
+}
+
+test "open rows - builtin Hasher resolves its exact declaration despite nested names" {
+    // Hasher has no type parameters. Invalid arity must remain intact for
+    // diagnostics, without confusing the top-level type with crypto Hashers.
+    try expectUnchanged(
+        \\value : Str -> Hasher([E, ..])
+        \\value = |_| crash "unused"
+        \\
+        \\Wrapped(a) : Hasher(a)
+        \\
+        \\wrapped : Str -> Wrapped([E, ..])
+        \\wrapped = |_| crash "unused"
+        \\
+    );
+}
+
+test "open rows - where-method builtin Hasher rejects arity without ambiguous lookup" {
+    try expectUnchanged(
+        \\f : a -> Str where [a.hash : a -> Hasher([E, ..])]
+        \\f = |_| "ok"
+        \\
+    );
+}
+
 test "open rows - function argument keeps its `..`" {
     try expectUnchanged(
         \\handle : [Known, ..] -> Str
@@ -99,9 +140,7 @@ test "open rows - empty union and named extension are kept" {
     );
 }
 
-test "open rows - arguments of a function argument are outputs" {
-    // `[A]` is the argument of a callback: the callback receives it from the
-    // annotated function, so it is an output of that function.
+test "open rows - arguments of a callback are outputs" {
     try expectFormatsTo(
         \\call : ([A, ..] -> Str) -> Str
         \\call = |f| f(A)
@@ -113,7 +152,7 @@ test "open rows - arguments of a function argument are outputs" {
     );
 }
 
-test "open rows - result of a function argument is an input" {
+test "open rows - result of a callback is an input" {
     try expectUnchanged(
         \\run : (Str -> [A, ..]) -> Str
         \\run = |_| "x"
@@ -163,9 +202,10 @@ test "open rows - input positions keep nested `..`" {
 }
 
 test "open rows - local alias composes its formal's variance" {
-    // `Handler` holds `e` in an input position, so `Handler([A, ..])` written
-    // as an output stands for `[A, ..] -> Str` and keeps its `..`; written as
-    // an input, the two negations cancel and it drops.
+    // `Handler` holds `e` in a function argument, so the polarity of
+    // `Handler([A, ..])`'s row is the flip of the reference's: it keeps its
+    // `..` as an output and drops it as an input. `Producer` holds `e` in a
+    // function result, so its row has the reference's own polarity.
     try expectFormatsTo(
         \\Handler(e) : e -> Str
         \\
@@ -203,9 +243,47 @@ test "open rows - local alias composes its formal's variance" {
     );
 }
 
-test "open rows - invariant formal is generated at the negative polarity" {
-    // `Both` holds `e` on both sides, so its argument is generated closed; a
-    // function argument inside that argument flips back to an output.
+test "open rows - a formal inside and outside a function result follows the reference position" {
+    try expectFormatsTo(
+        \\Mixed(a) : (a, (Str -> a))
+        \\
+        \\Reversed(a) : ((Str -> a), a)
+        \\
+        \\input : Mixed([E, ..]) -> Str
+        \\input = |_| "x"
+        \\
+        \\reversed_input : Reversed([E, ..]) -> Str
+        \\reversed_input = |_| "x"
+        \\
+        \\output : Str -> Mixed([E, ..])
+        \\output = |_| crash "unused"
+        \\
+        \\reversed_output : Str -> Reversed([E, ..])
+        \\reversed_output = |_| crash "unused"
+        \\
+    ,
+        \\Mixed(a) : (a, (Str -> a))
+        \\
+        \\Reversed(a) : ((Str -> a), a)
+        \\
+        \\input : Mixed([E, ..]) -> Str
+        \\input = |_| "x"
+        \\
+        \\reversed_input : Reversed([E, ..]) -> Str
+        \\reversed_input = |_| "x"
+        \\
+        \\output : Str -> Mixed([E])
+        \\output = |_| crash "unused"
+        \\
+        \\reversed_output : Str -> Reversed([E])
+        \\reversed_output = |_| crash "unused"
+        \\
+    );
+}
+
+test "open rows - invariant formal is generated as written at every depth" {
+    // `Both` holds `e` on both sides, so its argument is generated closed, and
+    // every position nested in the argument stands on both sides too.
     try expectFormatsTo(
         \\Both(e) : e -> e
         \\
@@ -221,7 +299,7 @@ test "open rows - invariant formal is generated at the negative polarity" {
         \\both : Str -> Both([A, ..])
         \\both = |_| |x| x
         \\
-        \\nested : Str -> Both([A] -> Str)
+        \\nested : Str -> Both([A, ..] -> Str)
         \\nested = |_| |x| x
         \\
     );
@@ -353,6 +431,48 @@ test "open rows - annotation-only definition drops its `..` in an app" {
         \\app [main!] { pf: platform "platform/main.roc" }
         \\
         \\todo : Str -> [A]
+        \\
+        \\main! = |_| {}
+        \\
+    );
+}
+
+test "open rows - destructured top-level value keeps its `..` in an app" {
+    // Can attaches the annotation to the def the destructured literal splits
+    // off for `e`: a value, not an annotation-only definition. (The
+    // formatter separates the two statements with a blank line, which does
+    // not change that attachment.)
+    try expectUnchanged(
+        \\app [main!] { pf: platform "platform/main.roc" }
+        \\
+        \\e : [Boom, ..]
+        \\
+        \\(e, n) = (Boom, 1)
+        \\
+        \\main! = |_| {}
+        \\
+    );
+}
+
+test "open rows - destructuring that does not bind the name leaves the annotation annotation-only" {
+    // Can attaches a top-level annotation to a destructured literal only when
+    // the pattern binds the annotated name; otherwise the annotation is
+    // annotation-only and its redundant `..` is removed like any other.
+    try expectFormatsTo(
+        \\app [main!] { pf: platform "platform/main.roc" }
+        \\
+        \\todo : Str -> [A, ..]
+        \\
+        \\(x, y) = (1, 2)
+        \\
+        \\main! = |_| {}
+        \\
+    ,
+        \\app [main!] { pf: platform "platform/main.roc" }
+        \\
+        \\todo : Str -> [A]
+        \\
+        \\(x, y) = (1, 2)
         \\
         \\main! = |_| {}
         \\
@@ -546,4 +666,33 @@ test "open rows - multiline union keeps a comment after its dropped `..`" {
         \\parse = |_| Ok
         \\
     );
+}
+
+test "open rows - deep input alias keeps explicit extension" {
+    const source =
+        \\A0(a) : a -> Str
+        \\
+        \\A1(a) : A0(a)
+        \\
+        \\A2(a) : A1(a)
+        \\
+        \\A3(a) : A2(a)
+        \\
+        \\A4(a) : A3(a)
+        \\
+        \\A5(a) : A4(a)
+        \\
+        \\A6(a) : A5(a)
+        \\
+        \\A7(a) : A6(a)
+        \\
+        \\A8(a) : A7(a)
+        \\
+        \\A9(a) : A8(a)
+        \\
+        \\value : A9([E, ..])
+        \\value = |_| "ok"
+        \\
+    ;
+    try expectFormatsTo(source, source);
 }

@@ -13,6 +13,22 @@ answer = 42
 
 The name an assignment gives must be a valid Roc [lowercase name](naming#lowercase-names).
 
+### [Type Annotations](#type-annotations) {#type-annotations}
+
+You can put a [type annotation](types#type-annotations) on the line before an assignment,
+using the same name followed by `:` and a type:
+
+```roc
+answer : U64
+answer = 42
+```
+
+This works the same way at the top level of a module and inside a function body. The
+annotation is optional; without it, the compiler [infers](types) the type. With it, you get a
+compile-time error if the value doesn't have that type, which is useful both as
+documentation and for getting errors reported where you meant something to be a certain type,
+rather than wherever the mismatch happens to show up later.
+
 ### [Pattern matching in assignments](#assignment-patterns) {#assignment-patterns}
 
 You can use [pattern matching](pattern-matching) in assignments to do things like destructuring:
@@ -86,6 +102,9 @@ However, this gives a [shadowing](naming#shadowing) warning:
 foo = 0
 foo = 1
 ```
+
+An [`expect`](#expect) cannot reassign a `var` declared outside of it. (See
+[control flow and variables inside `expect`](#expect-control-flow).)
 
 ## [`import`](#import) {#import}
 
@@ -196,6 +215,13 @@ from a URL, since those `expect`s are the responsibility of the package's author
 Inside a top-level `expect`, the [`?` operator](operators#-unwrap-if-ok-early-return-if-err) causes
 the `expect` to fail if its expression evaluates to an `Err`, rather than returning early from a function.
 
+If running a top-level `expect` reaches code that has a compilation error (such as a type
+mismatch), `roc test` counts that `expect` as a compiler error rather than as passed or failed. This
+applies even when the error is only reached indirectly, for example inside a function the `expect`
+calls, or inside a method that `==` or a [parser](parsers) calls. An `expect` that calls a function
+containing an error, but never reaches the part with the error, runs as usual. The error itself is
+reported once. See [Code With Errors](compile-time#code-with-errors).
+
 ### Inline `expect`
 
 An `expect` inside a function body checks an assumption each time that code runs:
@@ -216,6 +242,54 @@ reported is up to the platform.
 Inline `expect`s are for catching bugs during development, so they are omitted from optimized
 builds (such as the default for `roc build`). As such, programs should never depend on
 an `expect` running.
+
+### [Control flow and variables inside `expect`](#expect-control-flow) {#expect-control-flow}
+
+Since programs should never depend on an `expect` running, an `expect` cannot change where
+the program goes next. These give a compile error when used directly inside an `expect`:
+
+- [`return`](#return), in both top-level and inline `expect`s
+- [`break`](#break) to exit a loop that's outside the `expect`, in both top-level and inline `expect`s
+- the [`?` operator](operators#-unwrap-if-ok-early-return-if-err), in inline `expect`s
+  (in top-level `expect`s, it makes the `expect` fail instead, as described above)
+
+These rules don't apply inside a function defined within the `expect`, since leaving that
+function doesn't leave the `expect`. Similarly, `break` is allowed inside a loop that's
+written within the `expect`:
+
+```roc
+expect {
+    parse = |str| {
+        n = U64.from_str(str)?  # Fine: returns early from `parse`, not from the `expect`
+        Ok(n * 2)
+    }
+
+    parse("21") == Ok(42)
+}
+```
+
+For the same reason, an `expect` cannot change a variable declared outside of it. Reassigning
+one inside an `expect` gives a compile error, but variables declared inside the `expect` can be
+reassigned freely:
+
+```roc
+withdraw = |balance, amount| {
+    var $remaining = balance
+
+    expect {
+        $remaining = $remaining - amount  # Error: `$remaining` was declared outside this `expect`
+        $remaining >= 0
+    }
+
+    expect {
+        var $left = balance
+        $left = $left - amount  # Fine: `$left` was declared inside this `expect`
+        $left >= 0
+    }
+
+    $remaining - amount
+}
+```
 
 ## [`return`](#return) {#return}
 

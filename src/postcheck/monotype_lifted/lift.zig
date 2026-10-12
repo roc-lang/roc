@@ -1,6 +1,7 @@
 //! Closure lifting over Monotype IR.
 
 const std = @import("std");
+const base = @import("base");
 const collections = @import("collections");
 
 const Common = @import("../common.zig");
@@ -105,6 +106,7 @@ pub fn run(
         );
         output.comptime_value_roots = Ast.ProgramList(Common.ComptimeValueRoot, "comptime_value_roots").fromArrayList(owned.comptime_value_roots.takeArrayList());
         output.lowering_modules = Ast.ProgramList(checked.ModuleId, "lowering_modules").fromArrayList(owned.lowering_modules.takeArrayList());
+        output.platform_requirement_filling = owned.platform_requirement_filling;
         name_store = undefined;
         types = undefined;
         const_fn_evidence = undefined;
@@ -150,6 +152,8 @@ pub fn run(
 
     try lifter.lowerDefsAndRoots();
     program.next_symbol = lifter.symbols.next;
+
+    try @import("normalize.zig").run(&program);
 
     verifyCaptureInvariants(&program);
 
@@ -225,7 +229,7 @@ pub fn recomputeCaptures(allocator: Allocator, program: *Ast.Program) Allocator.
     try graph.finalizePostLiftOperands();
 
     for (0..program.fnCount()) |index| {
-        const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(index)));
+        const fn_id: Ast.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         program.setFnCaptures(fn_id, try program.addTypedLocalSpan(graph.states[index].captures.items));
     }
 
@@ -238,11 +242,11 @@ pub fn recomputeCaptures(allocator: Allocator, program: *Ast.Program) Allocator.
 /// they are deliberately absent from the active capture graph and cannot reach
 /// downstream compilation.
 fn verifyActiveCaptureInvariants(program: *const Ast.Program, graph: *const CaptureDependencyGraph) void {
-    if (@import("builtin").mode != .Debug) return;
+    if (@import("builtin").mode != .debug) return;
     const violation = checkActiveCaptureInvariants(program, graph) catch |err| switch (err) {
         error.OutOfMemory => Common.invariant("verifyActiveCaptureInvariants: out of memory during structural check"),
     };
-    if (violation) |message| std.debug.panic("postcheck invariant violated: {s}", .{message});
+    if (violation) |message| base.invariant("postcheck invariant violated: {s}", .{message});
 }
 
 /// Debug-only structural check that a freshly lifted program's entire capture
@@ -261,11 +265,11 @@ fn verifyActiveCaptureInvariants(program: *const Ast.Program, graph: *const Capt
 ///     CaptureId sequence (same ids, same sorted order), and each operand's
 ///     value type equals its slot's type.
 pub fn verifyCaptureInvariants(program: *const Ast.Program) void {
-    if (@import("builtin").mode != .Debug) return;
+    if (@import("builtin").mode != .debug) return;
     const violation = checkCaptureInvariants(program) catch |err| switch (err) {
         error.OutOfMemory => Common.invariant("verifyCaptureInvariants: out of memory during structural check"),
     };
-    if (violation) |message| std.debug.panic("postcheck invariant violated: {s}", .{message});
+    if (violation) |message| base.invariant("postcheck invariant violated: {s}", .{message});
 }
 
 /// The check itself, factored out of the panicking wrapper so it can be unit
@@ -335,8 +339,8 @@ fn checkCaptureSlotSpan(program: *const Ast.Program, slots: anytype) ?[]const u8
             if (id != checked.CaptureId.fromBinder(binder)) return "binder-derived CaptureId did not match its binder";
         }
         if (previous) |prev| {
-            if (@intFromEnum(prev) > @intFromEnum(id)) return "capture slots not sorted by CaptureId";
-            if (@intFromEnum(prev) == @intFromEnum(id)) return "duplicate CaptureId in a capture set";
+            if (@backingInt(prev) > @backingInt(id)) return "capture slots not sorted by CaptureId";
+            if (@backingInt(prev) == @backingInt(id)) return "duplicate CaptureId in a capture set";
         }
         previous = id;
     }
@@ -466,7 +470,7 @@ const Lifter = struct {
         }
 
         for (0..self.output.fnCount()) |index| {
-            const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(index)));
+            const fn_id: Ast.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             if (self.initialized_fns.contains(fn_id)) continue;
             Common.invariant("Monotype Lifted function was reserved but not initialized");
         }
@@ -474,7 +478,7 @@ const Lifter = struct {
         try self.completeFunctionReferenceCaptures();
 
         for (self.source.roots) |root| {
-            const raw = @intFromEnum(root.def);
+            const raw = @backingInt(root.def);
             if (raw >= self.def_map.len) Common.invariant("Monotype root references a missing definition");
             const fn_id = self.def_map[raw] orelse
                 Common.invariant("Monotype root definition was not lifted");
@@ -487,7 +491,7 @@ const Lifter = struct {
 
         // Literal roots keep their positions, which are their ids.
         for (self.source.literal_roots) |root| {
-            const raw = @intFromEnum(root.def);
+            const raw = @backingInt(root.def);
             if (raw >= self.def_map.len) Common.invariant("Monotype literal root references a missing definition");
             const fn_id = self.def_map[raw] orelse
                 Common.invariant("Monotype literal root definition was not lifted");
@@ -500,7 +504,7 @@ const Lifter = struct {
 
         for (self.source.layout_requests) |request| {
             const fn_id = if (request.def) |def| blk: {
-                const raw = @intFromEnum(def);
+                const raw = @backingInt(def);
                 if (raw >= self.def_map.len) Common.invariant("Monotype static data layout request references a missing definition");
                 break :blk self.def_map[raw] orelse
                     Common.invariant("Monotype static data layout request definition was not lifted");
@@ -525,7 +529,7 @@ const Lifter = struct {
     }
 
     fn lowerTopLevelDef(self: *Lifter, fn_id: Ast.FnId, def: Mono.Def) Allocator.Error!void {
-        if (self.fn_captures[@intFromEnum(fn_id)].items.len != 0) {
+        if (self.fn_captures[@backingInt(fn_id)].items.len != 0) {
             Common.invariant("top-level Monotype definition has free locals after checked closure collection");
         }
 
@@ -562,7 +566,7 @@ const Lifter = struct {
         const outer_shapes = self.output.beginFnShapes(fn_id);
         try self.rewriteExpr(def.body);
         const shapes = self.output.finishFnShapes(outer_shapes);
-        const capture_span = try self.output.addTypedLocalSpan(self.fn_captures[@intFromEnum(fn_id)].items);
+        const capture_span = try self.output.addTypedLocalSpan(self.fn_captures[@backingInt(fn_id)].items);
         var source = self.nestedSource(def.fn_id, def.fn_def);
         source.frozen_fn = def.fn_id;
         self.output.setFn(fn_id, .{
@@ -581,8 +585,61 @@ const Lifter = struct {
         try self.initialized_fns.put(fn_id, {});
     }
 
-    fn rewriteStmt(self: *Lifter, stmt_id: Mono.StmtId) Allocator.Error!void {
-        const index = @intFromEnum(stmt_id);
+    /// The rewrite keeps its own work stack, so expression nesting and
+    /// statement sequences never become native call depth. Children are
+    /// pushed in reverse so they are rewritten in source order; each
+    /// expression's completion is pushed before the children it follows.
+    const RewriteWork = union(enum) {
+        expr: Mono.ExprId,
+        stmt: Mono.StmtId,
+        finish_fn_def: Mono.ExprId,
+        finish_call_proc: Mono.ExprId,
+        finish_lambda: LambdaFinish,
+    };
+
+    /// An inline lambda's lifted function, completed once its body has been
+    /// rewritten inside the function's own shape scope.
+    const LambdaFinish = struct {
+        fn_id: Ast.FnId,
+        ty: @import("../monotype/type.zig").TypeId,
+        lambda: Mono.LambdaExpr,
+        outer_shapes: Ast.Program.FnShapesScope,
+        /// Owned: the lambda's solved capture slots.
+        captures: []const Ast.TypedLocal,
+    };
+
+    fn rewriteExpr(self: *Lifter, root: Mono.ExprId) Allocator.Error!void {
+        var work: std.ArrayList(RewriteWork) = .empty;
+        defer {
+            for (work.items) |item| switch (item) {
+                .finish_lambda => |finish| self.allocator.free(finish.captures),
+                .expr, .stmt, .finish_fn_def, .finish_call_proc => {},
+            };
+            work.deinit(self.allocator);
+        }
+        try work.append(self.allocator, .{ .expr = root });
+        while (work.pop()) |item| switch (item) {
+            .expr => |expr_id| try self.pushRewriteExprWork(&work, expr_id),
+            .stmt => |stmt_id| try self.pushRewriteStmtWork(&work, stmt_id),
+            .finish_fn_def => |expr_id| {
+                const fn_def = self.output.getExpr(expr_id).data.fn_def;
+                const lifted = self.liftedFn(fn_def.fn_id);
+                const captures = try self.fnRefCaptureExprSpanForFnDef(lifted, fn_def.captures, expr_id);
+                self.output.setExprData(expr_id, .{ .fn_ref = .{
+                    .fn_id = lifted,
+                    .captures = captures,
+                } });
+            },
+            .finish_call_proc => |expr_id| try self.finishRewrittenProcCall(expr_id),
+            .finish_lambda => |finish| {
+                defer self.allocator.free(finish.captures);
+                try self.finishLiftedLambda(finish);
+            },
+        };
+    }
+
+    fn pushRewriteStmtWork(self: *Lifter, work: *std.ArrayList(RewriteWork), stmt_id: Mono.StmtId) Allocator.Error!void {
+        const index = @backingInt(stmt_id);
         if (self.stmt_done[index]) return;
         self.stmt_done[index] = true;
 
@@ -590,67 +647,56 @@ const Lifter = struct {
         self.output.noteStmtShapes(stmt);
         switch (stmt) {
             .uninitialized => {},
-            .let_ => |let_| try self.rewriteExpr(let_.value),
+            .let_ => |let_| try work.append(self.allocator, .{ .expr = let_.value }),
             .expr,
             .expect,
             .dbg,
-            => |expr| try self.rewriteExpr(expr),
-            .return_ => |ret| try self.rewriteExpr(ret.value),
-            .crash => {},
+            => |expr| try work.append(self.allocator, .{ .expr = expr }),
+            .return_ => |ret| try work.append(self.allocator, .{ .expr = ret.value }),
+            .crash, .checked_error => {},
         }
     }
 
-    fn rewriteExprSpan(self: *Lifter, span: Ast.Span(Ast.ExprId)) Allocator.Error!void {
-        const exprs = self.output.exprSpan(span);
-        for (0..exprs.len) |index| try self.rewriteExpr(GuardedList.at(exprs, index));
-    }
-
-    fn rewriteFieldExprSpan(self: *Lifter, span: Ast.Span(Ast.FieldExpr)) Allocator.Error!void {
-        const fields = self.output.fieldExprSpan(span);
-        for (0..fields.len) |index| try self.rewriteExpr(GuardedList.at(fields, index).value);
-    }
-
-    fn rewriteCaptureOperandSpan(self: *Lifter, span: Ast.Span(Ast.CaptureOperand)) Allocator.Error!void {
-        const operands = self.output.captureOperandSpan(span);
-        for (0..operands.len) |index| try self.rewriteExpr(GuardedList.at(operands, index).value);
-    }
-
-    fn rewriteFnDefCaptureSpan(self: *Lifter, span: Ast.Span(Ast.FnDefCapture)) Allocator.Error!void {
-        const captures = self.output.fnDefCaptureSpan(span);
-        for (0..captures.len) |index| try self.rewriteExpr(GuardedList.at(captures, index).value);
-    }
-
-    fn rewriteBranchSpan(self: *Lifter, span: Ast.Span(Ast.Branch)) Allocator.Error!void {
-        const branches = self.output.branchSpan(span);
-        for (0..branches.len) |index| {
-            const branch = GuardedList.at(branches, index);
-            try self.rewriteStmtSpan(branch.bindings);
-            if (branch.guard) |guard| try self.rewriteExpr(guard);
-            try self.rewriteExpr(branch.body);
-        }
-    }
-
-    fn rewriteIfBranchSpan(self: *Lifter, span: Ast.Span(Ast.IfBranch)) Allocator.Error!void {
-        const branches = self.output.ifBranchSpan(span);
-        for (0..branches.len) |index| {
-            const branch = GuardedList.at(branches, index);
-            try self.rewriteExpr(branch.cond);
-            try self.rewriteExpr(branch.body);
-        }
-    }
-
-    fn rewriteStmtSpan(self: *Lifter, span: Ast.Span(Ast.StmtId)) Allocator.Error!void {
-        const statements = self.output.stmtSpan(span);
-        for (0..statements.len) |index| try self.rewriteStmt(GuardedList.at(statements, index));
-    }
-
-    fn rewriteExpr(self: *Lifter, expr_id: Mono.ExprId) Allocator.Error!void {
-        const index = @intFromEnum(expr_id);
+    fn pushRewriteExprWork(self: *Lifter, work: *std.ArrayList(RewriteWork), expr_id: Mono.ExprId) Allocator.Error!void {
+        const index = @backingInt(expr_id);
         if (self.expr_done[index]) return;
         self.expr_done[index] = true;
 
-        const expr = self.output.getExpr(expr_id);
-        self.output.noteExprShapes(expr);
+        const output = self.output;
+        const expr = output.getExpr(expr_id);
+        output.noteExprShapes(expr);
+        // Children are appended in source order, then reversed onto the stack.
+        const children_start = work.items.len;
+        defer std.mem.reverse(RewriteWork, work.items[children_start..]);
+        const Children = struct {
+            list: *std.ArrayList(RewriteWork),
+            allocator: Allocator,
+            program: *const Ast.Program,
+
+            fn add(children: @This(), item: RewriteWork) Allocator.Error!void {
+                try children.list.append(children.allocator, item);
+            }
+
+            fn child(children: @This(), child_expr: Mono.ExprId) Allocator.Error!void {
+                try children.add(.{ .expr = child_expr });
+            }
+
+            fn span(children: @This(), items: Ast.Span(Ast.ExprId)) Allocator.Error!void {
+                const values = children.program.exprSpan(items);
+                for (0..values.len) |value_index| try children.child(GuardedList.at(values, value_index));
+            }
+
+            fn fields(children: @This(), items: Ast.Span(Ast.FieldExpr)) Allocator.Error!void {
+                const values = children.program.fieldExprSpan(items);
+                for (0..values.len) |value_index| try children.child(GuardedList.at(values, value_index).value);
+            }
+
+            fn stmts(children: @This(), items: Ast.Span(Ast.StmtId)) Allocator.Error!void {
+                const values = children.program.stmtSpan(items);
+                for (0..values.len) |value_index| try children.add(.{ .stmt = GuardedList.at(values, value_index) });
+            }
+        };
+        const children = Children{ .list = work, .allocator = self.allocator, .program = output };
         switch (expr.data) {
             .@"unreachable",
             .local,
@@ -664,155 +710,175 @@ const Lifter = struct {
             .uninitialized,
             .uninitialized_payload,
             .crash,
+            .checked_error,
             .comptime_exhaustiveness_failed,
             => {},
             .fn_ref => |fn_ref| {
-                const operands = self.output.captureOperandSpan(fn_ref.captures);
-                for (0..operands.len) |operand_index| {
-                    const operand = GuardedList.at(operands, operand_index);
-                    try self.rewriteExpr(operand.value);
-                }
+                const operands = output.captureOperandSpan(fn_ref.captures);
+                for (0..operands.len) |operand_index| try children.child(GuardedList.at(operands, operand_index).value);
             },
             .list,
             .tuple,
-            => |items| try self.rewriteExprSpan(items),
-            .record => |fields| try self.rewriteFieldExprSpan(fields),
+            => |items| try children.span(items),
+            .record => |fields| try children.fields(fields),
             .record_update => |update| {
-                try self.rewriteExpr(update.base);
-                try self.rewriteFieldExprSpan(update.fields);
+                try children.child(update.base);
+                try children.fields(update.fields);
             },
-            .tag => |tag| try self.rewriteExprSpan(tag.payloads),
-            .static_data_candidate => |candidate| try self.rewriteExpr(candidate.runtime_expr),
-            .inline_expects_enabled => {},
-            .comptime_value => |candidate| try self.rewriteExpr(candidate.initializer),
-            .typed_boundary => |boundary| try self.rewriteExpr(boundary.value),
+            .tag => |tag| try children.span(tag.payloads),
+            .static_data_candidate => |candidate| try children.child(candidate.runtime_expr),
+            .comptime_value => |candidate| try children.child(candidate.initializer),
+            .typed_boundary => |boundary| try children.child(boundary.value),
+            .row_widen => |widen| try children.child(widen.value),
             .nominal,
             .dbg,
             .expect,
-            => |child| try self.rewriteExpr(child),
-            .return_ => |ret| try self.rewriteExpr(ret.value),
-            .expect_err => |expect_err| try self.rewriteExpr(expect_err.msg),
-            .literal_rejected => |rejected| try self.rewriteExpr(rejected.msg),
-            .comptime_branch_taken => |taken| try self.rewriteExpr(taken.body),
+            => |child| try children.child(child),
+            .return_ => |ret| try children.child(ret.value),
+            .expect_err => |expect_err| try children.child(expect_err.msg),
+            .literal_rejected => |rejected| try children.child(rejected.msg),
+            .comptime_branch_taken => |taken| try children.child(taken.body),
             .let_ => |let_| {
-                try self.rewriteExpr(let_.value);
-                try self.rewriteExpr(let_.rest);
+                try children.child(let_.value);
+                try children.child(let_.rest);
             },
-            .lambda => |lambda| try self.liftLambda(expr_id, expr.ty, lambda),
+            .lambda => |lambda| if (try self.beginLiftedLambda(expr_id, expr.ty, lambda)) |finish| {
+                try children.child(lambda.body);
+                children.add(.{ .finish_lambda = finish }) catch |err| {
+                    self.allocator.free(finish.captures);
+                    return err;
+                };
+            },
             .def_ref => |def_id| {
-                const raw = @intFromEnum(def_id);
+                const raw = @backingInt(def_id);
                 if (raw >= self.def_map.len) Common.invariant("Monotype definition reference was outside the definition table");
                 const fn_id = self.def_map[raw] orelse
                     Common.invariant("Monotype definition reference reached lifting before its function was registered");
                 const captures = try self.captureExprSpanForFn(fn_id, expr_id);
-                self.output.setExprData(expr_id, .{ .fn_ref = .{
+                output.setExprData(expr_id, .{ .fn_ref = .{
                     .fn_id = fn_id,
                     .captures = captures,
                 } });
             },
             .fn_def => |fn_def| {
-                try self.rewriteFnDefCaptureSpan(fn_def.captures);
-                const lifted = self.liftedFn(fn_def.fn_id);
-                const captures = try self.fnRefCaptureExprSpanForFnDef(lifted, fn_def.captures, expr_id);
-                self.output.setExprData(expr_id, .{ .fn_ref = .{
-                    .fn_id = lifted,
-                    .captures = captures,
-                } });
+                const captures = output.fnDefCaptureSpan(fn_def.captures);
+                for (0..captures.len) |capture_index| try children.child(GuardedList.at(captures, capture_index).value);
+                try children.add(.{ .finish_fn_def = expr_id });
             },
             .call_value => |call| {
-                try self.rewriteExpr(call.callee);
-                try self.rewriteExprSpan(call.args);
+                try children.child(call.callee);
+                try children.span(call.args);
             },
             .call_proc => |call| {
-                try self.rewriteExprSpan(call.args);
-                try self.rewriteCaptureOperandSpan(call.captures);
-                const RewrittenProcCall = struct {
-                    callee: Mono.ProcCallee,
-                    captures: Ast.Span(Ast.CaptureOperand),
-                };
-                const rewritten: RewrittenProcCall = switch (call.callee) {
-                    .func => |slot| switch (slot) {
-                        .local => |mono_fn_id| blk: {
-                            const fn_id = self.liftedFn(mono_fn_id);
-                            break :blk .{
-                                .callee = .{ .lifted = fn_id },
-                                .captures = if (call.captures.len == 0)
-                                    try self.captureExprSpanForFn(fn_id, expr_id)
-                                else
-                                    call.captures,
-                            };
-                        },
-                    },
-                    .lifted => |fn_id| .{
+                try children.span(call.args);
+                const operands = output.captureOperandSpan(call.captures);
+                for (0..operands.len) |operand_index| try children.child(GuardedList.at(operands, operand_index).value);
+                try children.add(.{ .finish_call_proc = expr_id });
+            },
+            .low_level => |call| try children.span(call.args),
+            .field_access => |field| try children.child(field.receiver),
+            .tuple_access => |access| try children.child(access.tuple),
+            .structural_eq => |eq| {
+                try children.child(eq.lhs);
+                try children.child(eq.rhs);
+            },
+            .structural_hash => |h| {
+                try children.child(h.value);
+                try children.child(h.hasher);
+            },
+            .match_ => |match| {
+                try children.child(match.scrutinee);
+                const branches = output.branchSpan(match.branches);
+                for (0..branches.len) |branch_index| {
+                    const branch = GuardedList.at(branches, branch_index);
+                    try children.stmts(branch.bindings);
+                    if (branch.guard) |guard| try children.child(guard);
+                    try children.child(branch.body);
+                }
+            },
+            .if_ => |if_| {
+                const branches = output.ifBranchSpan(if_.branches);
+                for (0..branches.len) |branch_index| {
+                    const branch = GuardedList.at(branches, branch_index);
+                    try children.child(branch.cond);
+                    try children.child(branch.body);
+                }
+                try children.child(if_.final_else);
+            },
+            .if_initialized_payload => |payload_switch| {
+                try children.child(payload_switch.cond);
+                try children.child(payload_switch.initialized);
+                try children.child(payload_switch.uninitialized);
+            },
+            .try_sequence => |sequence| {
+                try children.child(sequence.try_expr);
+                try children.child(sequence.ok_body);
+            },
+            .try_record_sequence => |sequence| {
+                try children.child(sequence.try_expr);
+                try children.child(sequence.ok_body);
+            },
+            .block => |block| {
+                try children.stmts(block.statements);
+                try children.child(block.final_expr);
+            },
+            .loop_ => |loop| {
+                try children.span(loop.initial_values);
+                try children.child(loop.body);
+            },
+            .break_ => |maybe| if (maybe) |value| try children.child(value),
+            .continue_ => |continue_| try children.span(continue_.values),
+            .join_point => |join_point| {
+                try children.child(join_point.body);
+                try children.child(join_point.remainder);
+            },
+            .jump => |jump| {
+                try children.span(jump.loop_values);
+                try children.span(jump.args);
+            },
+        }
+    }
+
+    fn finishRewrittenProcCall(self: *Lifter, expr_id: Mono.ExprId) Allocator.Error!void {
+        const call = self.output.getExpr(expr_id).data.call_proc;
+        const RewrittenProcCall = struct {
+            callee: Mono.ProcCallee,
+            captures: Ast.Span(Ast.CaptureOperand),
+        };
+        const rewritten: RewrittenProcCall = switch (call.callee) {
+            .func => |slot| switch (slot) {
+                .local => |mono_fn_id| blk: {
+                    const fn_id = self.liftedFn(mono_fn_id);
+                    break :blk .{
                         .callee = .{ .lifted = fn_id },
                         .captures = if (call.captures.len == 0)
                             try self.captureExprSpanForFn(fn_id, expr_id)
                         else
                             call.captures,
-                    },
-                };
-                self.output.setExprData(expr_id, .{ .call_proc = .{
-                    .callee = rewritten.callee,
-                    .args = call.args,
-                    .iterator_procedure = call.iterator_procedure,
-                    .captures = rewritten.captures,
-                    .is_cold = call.is_cold,
-                } });
+                    };
+                },
             },
-            .low_level => |call| try self.rewriteExprSpan(call.args),
-            .field_access => |field| try self.rewriteExpr(field.receiver),
-            .tuple_access => |access| try self.rewriteExpr(access.tuple),
-            .structural_eq => |eq| {
-                try self.rewriteExpr(eq.lhs);
-                try self.rewriteExpr(eq.rhs);
+            .lifted => |fn_id| .{
+                .callee = .{ .lifted = fn_id },
+                .captures = if (call.captures.len == 0)
+                    try self.captureExprSpanForFn(fn_id, expr_id)
+                else
+                    call.captures,
             },
-            .structural_hash => |h| {
-                try self.rewriteExpr(h.value);
-                try self.rewriteExpr(h.hasher);
-            },
-            .match_ => |match| {
-                try self.rewriteExpr(match.scrutinee);
-                try self.rewriteBranchSpan(match.branches);
-            },
-            .if_ => |if_| {
-                try self.rewriteIfBranchSpan(if_.branches);
-                try self.rewriteExpr(if_.final_else);
-            },
-            .if_initialized_payload => |payload_switch| {
-                try self.rewriteExpr(payload_switch.cond);
-                try self.rewriteExpr(payload_switch.initialized);
-                try self.rewriteExpr(payload_switch.uninitialized);
-            },
-            .try_sequence => |sequence| {
-                try self.rewriteExpr(sequence.try_expr);
-                try self.rewriteExpr(sequence.ok_body);
-            },
-            .try_record_sequence => |sequence| {
-                try self.rewriteExpr(sequence.try_expr);
-                try self.rewriteExpr(sequence.ok_body);
-            },
-            .block => |block| {
-                try self.rewriteStmtSpan(block.statements);
-                try self.rewriteExpr(block.final_expr);
-            },
-            .loop_ => |loop| {
-                try self.rewriteExprSpan(loop.initial_values);
-                try self.rewriteExpr(loop.body);
-            },
-            .break_ => |maybe| if (maybe) |value| try self.rewriteExpr(value),
-            .continue_ => |continue_| try self.rewriteExprSpan(continue_.values),
-            .join_point => |join_point| {
-                try self.rewriteExpr(join_point.body);
-                try self.rewriteExpr(join_point.remainder);
-            },
-            .jump => |jump| {
-                try self.rewriteExprSpan(jump.loop_values);
-                try self.rewriteExprSpan(jump.args);
-            },
-        }
+        };
+        self.output.setExprData(expr_id, .{ .call_proc = .{
+            .callee = rewritten.callee,
+            .args = call.args,
+            .iterator_procedure = call.iterator_procedure,
+            .captures = rewritten.captures,
+            .is_cold = call.is_cold,
+        } });
     }
 
-    fn liftLambda(self: *Lifter, expr_id: Mono.ExprId, ty: @import("../monotype/type.zig").TypeId, lambda: Mono.LambdaExpr) Allocator.Error!void {
+    /// Lift an inline lambda up to rewriting its body. Returns the
+    /// completion to run once the body is rewritten, or null when the lambda
+    /// was already lifted and its reference is complete.
+    fn beginLiftedLambda(self: *Lifter, expr_id: Mono.ExprId, ty: @import("../monotype/type.zig").TypeId, lambda: Mono.LambdaExpr) Allocator.Error!?LambdaFinish {
         const fn_id = try self.reserveFn(lambda.fn_id);
         if (self.nested_fn_ids.contains(fn_id) or self.initialized_fns.contains(fn_id)) {
             const captures = try self.captureExprSpanForFn(fn_id, expr_id);
@@ -820,7 +886,7 @@ const Lifter = struct {
                 .fn_id = fn_id,
                 .captures = captures,
             } });
-            return;
+            return null;
         }
 
         try self.setFnBody(fn_id, .{ .args = lambda.args, .body = .{ .roc = lambda.body } });
@@ -844,10 +910,21 @@ const Lifter = struct {
             .captures = capture_exprs,
         } });
 
-        const outer_shapes = self.output.beginFnShapes(fn_id);
-        try self.rewriteExpr(lambda.body);
-        const shapes = self.output.finishFnShapes(outer_shapes);
-        const capture_span = try self.output.addTypedLocalSpan(captures.items.items);
+        const owned_captures = try self.allocator.dupe(Ast.TypedLocal, captures.items.items);
+        return .{
+            .fn_id = fn_id,
+            .ty = ty,
+            .lambda = lambda,
+            .outer_shapes = self.output.beginFnShapes(fn_id),
+            .captures = owned_captures,
+        };
+    }
+
+    fn finishLiftedLambda(self: *Lifter, finish: LambdaFinish) Allocator.Error!void {
+        const fn_id = finish.fn_id;
+        const lambda = finish.lambda;
+        const shapes = self.output.finishFnShapes(finish.outer_shapes);
+        const capture_span = try self.output.addTypedLocalSpan(finish.captures);
         var source = self.source.fnSource(lambda.fn_id);
         source.frozen_fn = lambda.fn_id;
         self.output.setFn(fn_id, .{
@@ -860,14 +937,14 @@ const Lifter = struct {
             .args = lambda.args,
             .captures = capture_span,
             .body = .{ .roc = lambda.body },
-            .ret = functionRet(&self.output.types, ty),
+            .ret = functionRet(&self.output.types, finish.ty),
             .shapes = shapes,
         });
         try self.initialized_fns.put(fn_id, {});
     }
 
     fn reserveFn(self: *Lifter, mono_fn_id: Mono.FnId) Allocator.Error!Ast.FnId {
-        const raw = @intFromEnum(mono_fn_id);
+        const raw = @backingInt(mono_fn_id);
         if (raw >= self.fn_map.len) Common.invariant("Monotype lambda referenced a missing function specialization");
         if (self.fn_map[raw]) |existing| return existing;
 
@@ -878,7 +955,7 @@ const Lifter = struct {
     }
 
     fn setFnBody(self: *Lifter, fn_id: Ast.FnId, body: MonoFnBody) Allocator.Error!void {
-        const raw = @intFromEnum(fn_id);
+        const raw = @backingInt(fn_id);
         if (raw >= self.fn_bodies.items.len) Common.invariant("lifted function body id was outside body table");
         self.fn_bodies.items[raw] = body;
     }
@@ -889,7 +966,7 @@ const Lifter = struct {
     /// newly discovered captures through affected reference edges.
     fn computeCaptureFixpoint(self: *Lifter) Allocator.Error!void {
         // `count` covers top-level defs and nested defs only; inline lambdas are
-        // reserved later, during `rewriteExpr`/`liftLambda`. Sizing here is what
+        // reserved later, during `rewriteExpr`. Sizing here is what
         // keeps inline lambdas out of the graph, which is sound because they are
         // never direct-call targets. Their captures are computed when lifting
         // reaches the lambda, from the already-solved def/nested-def states.
@@ -906,7 +983,7 @@ const Lifter = struct {
     }
 
     fn registerFn(self: *Lifter, mono_fn_id: Mono.FnId, fn_id: Ast.FnId) void {
-        const raw = @intFromEnum(mono_fn_id);
+        const raw = @backingInt(mono_fn_id);
         if (raw >= self.fn_map.len) Common.invariant("Monotype definition referenced a missing function specialization");
         if (self.fn_map[raw]) |existing| {
             if (existing != fn_id) Common.invariant("Monotype function specialization was assigned two lifted function ids");
@@ -916,14 +993,14 @@ const Lifter = struct {
     }
 
     fn liftedFn(self: *Lifter, mono_fn_id: Mono.FnId) Ast.FnId {
-        const raw = @intFromEnum(mono_fn_id);
+        const raw = @backingInt(mono_fn_id);
         if (raw >= self.fn_map.len) Common.invariant("Monotype expression referenced a missing function specialization");
         return self.fn_map[raw] orelse
             Common.invariant("Monotype expression referenced a function specialization before lifting registered it");
     }
 
     fn captureExprSpanForFn(self: *Lifter, fn_id: Ast.FnId, call_expr: Mono.ExprId) Allocator.Error!Ast.Span(Ast.CaptureOperand) {
-        return try self.captureOperandSpanForSlots(self.fn_captures[@intFromEnum(fn_id)].items, &.{}, call_expr);
+        return try self.captureOperandSpanForSlots(self.fn_captures[@backingInt(fn_id)].items, &.{}, call_expr);
     }
 
     /// Build the keyed capture operand span for a function reference. `slots`
@@ -969,7 +1046,7 @@ const Lifter = struct {
         call_expr: Mono.ExprId,
     ) Allocator.Error!Ast.Span(Ast.CaptureOperand) {
         const explicit = self.output.fnDefCaptureSpan(explicit_span);
-        return try self.captureOperandSpanForSlots(self.fn_captures[@intFromEnum(fn_id)].items, explicit, call_expr);
+        return try self.captureOperandSpanForSlots(self.fn_captures[@backingInt(fn_id)].items, explicit, call_expr);
     }
 
     fn defSource(self: *Lifter, mono_fn_id: Mono.FnId, expected: ?Mono.FnTemplate) ?Mono.FnTemplate {
@@ -1087,7 +1164,7 @@ fn finalizeProgramFunctionReferenceCaptures(
     for (0..program.fnCount()) |raw| {
         walker.clear();
         bound.clear();
-        const fn_: Ast.FnId = @enumFromInt(@as(u32, @intCast(raw)));
+        const fn_: Ast.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(raw))));
         const body = program.getFn(fn_);
         try bindTypedLocals(program, &bound, program.typedLocalSpan(body.args));
         switch (body.body) {
@@ -1106,7 +1183,7 @@ fn slotCaptureId(program: *const Ast.Program, slot: Ast.TypedLocal) checked.Capt
 }
 
 fn captureSlotLessThan(program: *const Ast.Program, lhs: Ast.TypedLocal, rhs: Ast.TypedLocal) bool {
-    return @intFromEnum(slotCaptureId(program, lhs)) < @intFromEnum(slotCaptureId(program, rhs));
+    return @backingInt(slotCaptureId(program, lhs)) < @backingInt(slotCaptureId(program, rhs));
 }
 
 /// Sort a capture set into ascending CaptureId order so operand↔slot joins are
@@ -1114,7 +1191,7 @@ fn captureSlotLessThan(program: *const Ast.Program, lhs: Ast.TypedLocal, rhs: As
 /// debug) that no CaptureId appears twice.
 fn sortCaptureSlots(program: *const Ast.Program, items: []Ast.TypedLocal) void {
     std.sort.pdq(Ast.TypedLocal, items, program, captureSlotLessThan);
-    if (@import("builtin").mode == .Debug) {
+    if (@import("builtin").mode == .debug) {
         var index: usize = 1;
         while (index < items.len) : (index += 1) {
             if (slotCaptureId(program, items[index - 1]) == slotCaptureId(program, items[index])) {
@@ -1283,9 +1360,161 @@ const CaptureSet = struct {
         });
     }
 
+    /// The walk keeps its own work stack, so expression nesting and statement
+    /// sequences never become native call depth. Children are pushed in
+    /// reverse so they are visited in source order; scope ends and operand
+    /// finalization are pushed before the children they follow.
+    const Work = union(enum) {
+        expr: Mono.ExprId,
+        stmt: Mono.StmtId,
+        /// Bind a pattern's locals into the innermost lexical scope.
+        bind_pat: Mono.PatId,
+        bind_typed_locals: Ast.Span(Ast.TypedLocal),
+        /// Bind one local outside any tracked scope; paired with `remove_local`.
+        bind_local: Mono.LocalId,
+        remove_local: Mono.LocalId,
+        begin_scope,
+        /// Remove the innermost scope's locals, in reverse binding order.
+        end_scope,
+        add_if_free: Mono.LocalId,
+        /// Assemble a function reference's capture operands once its operand
+        /// values are collected.
+        finalize_fn_ref: Mono.ExprId,
+        /// Assemble a direct call's capture operands once its arguments and
+        /// capture values are collected.
+        finalize_call_proc: Mono.ExprId,
+    };
+
     fn collectExpr(self: *CaptureSet, expr_id: Mono.ExprId, bound: *BoundSet) Allocator.Error!void {
         const input = self.program;
+        var work: std.ArrayList(Work) = .empty;
+        defer work.deinit(self.allocator);
+        var scopes: std.ArrayList(std.ArrayList(Mono.LocalId)) = .empty;
+        defer {
+            for (scopes.items) |*scope| scope.deinit(self.allocator);
+            scopes.deinit(self.allocator);
+        }
+        try work.append(self.allocator, .{ .expr = expr_id });
+        while (work.pop()) |item| switch (item) {
+            .expr => |expr| try self.pushExprWork(&work, expr, bound),
+            .stmt => |stmt| try self.pushStmtWork(&work, stmt),
+            .bind_pat => |pat| try bindPat(self.allocator, input, pat, bound, &scopes.items[scopes.items.len - 1]),
+            .bind_typed_locals => |span| try bindTypedLocalsTracked(self.allocator, input, bound, input.typedLocalSpan(span), &scopes.items[scopes.items.len - 1]),
+            .bind_local => |local| try bound.put(input, local),
+            .remove_local => |local| _ = bound.remove(input, local),
+            .begin_scope => try scopes.append(self.allocator, .empty),
+            .end_scope => {
+                var scope = scopes.pop().?;
+                defer scope.deinit(self.allocator);
+                removeBound(input, bound, scope.items);
+            },
+            .add_if_free => |local| try self.addIfFree(local, bound),
+            .finalize_fn_ref => |ref_expr| try self.finalizeFnRef(ref_expr, bound),
+            .finalize_call_proc => |call_expr| try self.finalizeCallProc(call_expr, bound),
+        };
+    }
+
+    fn finalizeFnRef(self: *CaptureSet, expr_id: Mono.ExprId, bound: *BoundSet) Allocator.Error!void {
+        const fn_ref = self.program.getExpr(expr_id).data.fn_ref;
+        const fn_index = @backingInt(fn_ref.fn_id);
+        // Inline lambdas are reserved while lifting expressions, after the
+        // initial def/nested-def fixed-point table was sized. Their function
+        // records already contain the exact capture span computed when
+        // its lambda lifts; later recompute passes size the table to include
+        // every function.
+        const captures = if (fn_index < self.fn_captures.len)
+            try rebuildCaptureOperandSpan(
+                self.program,
+                fn_ref.captures,
+                self.fn_captures[fn_index].items,
+                expr_id,
+                bound,
+            )
+        else
+            try rebuildCaptureOperandSpan(
+                self.program,
+                fn_ref.captures,
+                self.program.typedLocalSpan(self.program.getFn(fn_ref.fn_id).captures),
+                expr_id,
+                bound,
+            );
+        self.program.setExprData(expr_id, .{ .fn_ref = .{
+            .fn_id = fn_ref.fn_id,
+            .captures = captures,
+        } });
+    }
+
+    fn finalizeCallProc(self: *CaptureSet, expr_id: Mono.ExprId, bound: *BoundSet) Allocator.Error!void {
+        const call = self.program.getExpr(expr_id).data.call_proc;
+        const fn_id = switch (call.callee) {
+            .lifted => |fn_id| fn_id,
+            // Imported direct calls retain their imported function slot
+            // through lifting and have no local capture set.
+            .func => return,
+        };
+        const fn_index = @backingInt(fn_id);
+        if (fn_index >= self.fn_captures.len) Common.invariant("direct call target missing recomputed captures");
+        const finalized = try rebuildCaptureOperandSpan(
+            self.program,
+            call.captures,
+            self.fn_captures[fn_index].items,
+            expr_id,
+            bound,
+        );
+        self.program.setExprData(expr_id, .{ .call_proc = .{
+            .callee = call.callee,
+            .args = call.args,
+            .iterator_procedure = call.iterator_procedure,
+            .captures = finalized,
+            .is_cold = call.is_cold,
+        } });
+    }
+
+    fn pushStmtWork(self: *CaptureSet, work: *std.ArrayList(Work), stmt_id: Mono.StmtId) Allocator.Error!void {
+        switch (self.program.getStmt(stmt_id)) {
+            .uninitialized => |pat| try work.append(self.allocator, .{ .bind_pat = pat }),
+            .let_ => |let_| {
+                if (let_.recursive) {
+                    try work.append(self.allocator, .{ .expr = let_.value });
+                    try work.append(self.allocator, .{ .bind_pat = let_.pat });
+                } else {
+                    try work.append(self.allocator, .{ .bind_pat = let_.pat });
+                    try work.append(self.allocator, .{ .expr = let_.value });
+                }
+            },
+            .expr,
+            .expect,
+            .dbg,
+            => |expr| try work.append(self.allocator, .{ .expr = expr }),
+            .return_ => |ret| try work.append(self.allocator, .{ .expr = ret.value }),
+            .crash, .checked_error => {},
+        }
+    }
+
+    fn pushExprWork(self: *CaptureSet, work: *std.ArrayList(Work), expr_id: Mono.ExprId, bound: *BoundSet) Allocator.Error!void {
+        const input = self.program;
         const expr = input.getExpr(expr_id);
+        // Children are appended in source order, then reversed onto the stack.
+        const children_start = work.items.len;
+        defer std.mem.reverse(Work, work.items[children_start..]);
+        const Children = struct {
+            list: *std.ArrayList(Work),
+            allocator: Allocator,
+
+            fn add(children: @This(), item: Work) Allocator.Error!void {
+                try children.list.append(children.allocator, item);
+            }
+
+            fn child(children: @This(), child_expr: Mono.ExprId) Allocator.Error!void {
+                try children.add(.{ .expr = child_expr });
+            }
+
+            fn span(children: @This(), program: *const Ast.Program, items: Ast.Span(Ast.ExprId)) Allocator.Error!void {
+                const values = program.exprSpan(items);
+                for (0..values.len) |index| try children.child(GuardedList.at(values, index));
+            }
+        };
+        const children = Children{ .list = work, .allocator = self.allocator };
         switch (expr.data) {
             .local => |local| try self.addIfFree(local, bound),
             .@"unreachable",
@@ -1300,42 +1529,13 @@ const CaptureSet = struct {
             .uninitialized_payload,
             .def_ref,
             .crash,
+            .checked_error,
             .comptime_exhaustiveness_failed,
             => {},
             .fn_ref => |fn_ref| {
-                const operands = try GuardedList.dupe(self.allocator, Ast.CaptureOperand, input.captureOperandSpan(fn_ref.captures));
-                defer self.allocator.free(operands);
-                for (operands) |operand| {
-                    try self.collectExpr(operand.value, bound);
-                }
-                if (self.finalize_operands) {
-                    const fn_index = @intFromEnum(fn_ref.fn_id);
-                    // Inline lambdas are reserved while lifting expressions,
-                    // after the initial def/nested-def fixed-point table was
-                    // sized. Their function records already contain the exact
-                    // capture span computed by `liftLambda`; later recompute
-                    // passes size the table to include every function.
-                    const captures = if (fn_index < self.fn_captures.len)
-                        try rebuildCaptureOperandSpan(
-                            self.program,
-                            fn_ref.captures,
-                            self.fn_captures[fn_index].items,
-                            expr_id,
-                            bound,
-                        )
-                    else
-                        try rebuildCaptureOperandSpan(
-                            self.program,
-                            fn_ref.captures,
-                            self.program.typedLocalSpan(self.program.getFn(fn_ref.fn_id).captures),
-                            expr_id,
-                            bound,
-                        );
-                    self.program.setExprData(expr_id, .{ .fn_ref = .{
-                        .fn_id = fn_ref.fn_id,
-                        .captures = captures,
-                    } });
-                }
+                const operands = input.captureOperandSpan(fn_ref.captures);
+                for (0..operands.len) |index| try children.child(GuardedList.at(operands, index).value);
+                if (self.finalize_operands) try children.add(.{ .finalize_fn_ref = expr_id });
             },
             .fn_def => |fn_def| {
                 const lifter = self.lifter orelse Common.invariant("post-lift capture recomputation saw a pre-lift function definition");
@@ -1344,62 +1544,51 @@ const CaptureSet = struct {
                     try self.collectFnCaptures(lifter.liftedFn(fn_def.fn_id), bound);
                 } else {
                     try self.collectFnCapturesExceptExplicit(lifter.liftedFn(fn_def.fn_id), explicit, bound);
-                    for (0..explicit.len) |capture_index| {
-                        const capture = GuardedList.at(explicit, capture_index);
-                        try self.collectExpr(capture.value, bound);
-                    }
+                    const captures = input.fnDefCaptureSpan(fn_def.captures);
+                    for (0..captures.len) |capture_index| try children.child(GuardedList.at(captures, capture_index).value);
                 }
             },
             .list,
             .tuple,
-            => |items| {
-                const children = input.exprSpan(items);
-                for (0..children.len) |child_index| try self.collectExpr(GuardedList.at(children, child_index), bound);
-            },
+            => |items| try children.span(input, items),
             .record => |fields| {
                 const field_exprs = input.fieldExprSpan(fields);
-                for (0..field_exprs.len) |field_index| try self.collectExpr(GuardedList.at(field_exprs, field_index).value, bound);
+                for (0..field_exprs.len) |field_index| try children.child(GuardedList.at(field_exprs, field_index).value);
             },
             .record_update => |update| {
-                try self.collectExpr(update.base, bound);
+                try children.child(update.base);
                 const field_exprs = input.fieldExprSpan(update.fields);
-                for (0..field_exprs.len) |field_index| try self.collectExpr(GuardedList.at(field_exprs, field_index).value, bound);
+                for (0..field_exprs.len) |field_index| try children.child(GuardedList.at(field_exprs, field_index).value);
             },
-            .tag => |tag| {
-                const payloads = input.exprSpan(tag.payloads);
-                for (0..payloads.len) |payload_index| try self.collectExpr(GuardedList.at(payloads, payload_index), bound);
-            },
-            .static_data_candidate => |candidate| try self.collectExpr(candidate.runtime_expr, bound),
-            .inline_expects_enabled => {},
-            .comptime_value => |candidate| try self.collectExpr(candidate.initializer, bound),
-            .typed_boundary => |boundary| try self.collectExpr(boundary.value, bound),
+            .tag => |tag| try children.span(input, tag.payloads),
+            .static_data_candidate => |candidate| try children.child(candidate.runtime_expr),
+            .comptime_value => |candidate| try children.child(candidate.initializer),
+            .typed_boundary => |boundary| try children.child(boundary.value),
+            .row_widen => |widen| try children.child(widen.value),
             .nominal,
             .dbg,
             .expect,
-            => |child| try self.collectExpr(child, bound),
-            .return_ => |ret| try self.collectExpr(ret.value, bound),
-            .expect_err => |expect_err| try self.collectExpr(expect_err.msg, bound),
-            .literal_rejected => |rejected| try self.collectExpr(rejected.msg, bound),
-            .comptime_branch_taken => |taken| try self.collectExpr(taken.body, bound),
+            => |child| try children.child(child),
+            .return_ => |ret| try children.child(ret.value),
+            .expect_err => |expect_err| try children.child(expect_err.msg),
+            .literal_rejected => |rejected| try children.child(rejected.msg),
+            .comptime_branch_taken => |taken| try children.child(taken.body),
             .let_ => |let_| {
-                try self.collectExpr(let_.value, bound);
-                var added = std.ArrayList(Mono.LocalId).empty;
-                defer added.deinit(self.allocator);
-                try bindPat(self.allocator, input, let_.bind, bound, &added);
-                try self.collectExpr(let_.rest, bound);
-                removeBound(input, bound, added.items);
+                try children.child(let_.value);
+                try children.add(.begin_scope);
+                try children.add(.{ .bind_pat = let_.bind });
+                try children.child(let_.rest);
+                try children.add(.end_scope);
             },
             .lambda => |lambda| {
-                var added = std.ArrayList(Mono.LocalId).empty;
-                defer added.deinit(self.allocator);
-                try bindTypedLocalsTracked(self.allocator, input, bound, input.typedLocalSpan(lambda.args), &added);
-                try self.collectExpr(lambda.body, bound);
-                removeBound(input, bound, added.items);
+                try children.add(.begin_scope);
+                try children.add(.{ .bind_typed_locals = lambda.args });
+                try children.child(lambda.body);
+                try children.add(.end_scope);
             },
             .call_value => |call| {
-                try self.collectExpr(call.callee, bound);
-                const args = input.exprSpan(call.args);
-                for (0..args.len) |arg_index| try self.collectExpr(GuardedList.at(args, arg_index), bound);
+                try children.child(call.callee);
+                try children.span(input, call.args);
             },
             .call_proc => |call| {
                 switch (call.callee) {
@@ -1411,133 +1600,93 @@ const CaptureSet = struct {
                     },
                     .lifted => |fn_id| try self.collectFnCaptures(fn_id, bound),
                 }
-                const args = input.exprSpan(call.args);
-                for (0..args.len) |arg_index| try self.collectExpr(GuardedList.at(args, arg_index), bound);
-                const captures = try GuardedList.dupe(self.allocator, Ast.CaptureOperand, input.captureOperandSpan(call.captures));
-                defer self.allocator.free(captures);
-                for (captures) |capture| try self.collectExpr(capture.value, bound);
-                if (self.finalize_operands) {
-                    const fn_id = switch (call.callee) {
-                        .lifted => |fn_id| fn_id,
-                        // Imported direct calls retain their imported function
-                        // slot through lifting and have no local capture set.
-                        .func => return,
-                    };
-                    const fn_index = @intFromEnum(fn_id);
-                    if (fn_index >= self.fn_captures.len) Common.invariant("direct call target missing recomputed captures");
-                    const finalized = try rebuildCaptureOperandSpan(
-                        self.program,
-                        call.captures,
-                        self.fn_captures[fn_index].items,
-                        expr_id,
-                        bound,
-                    );
-                    self.program.setExprData(expr_id, .{ .call_proc = .{
-                        .callee = call.callee,
-                        .args = call.args,
-                        .iterator_procedure = call.iterator_procedure,
-                        .captures = finalized,
-                        .is_cold = call.is_cold,
-                    } });
-                }
+                try children.span(input, call.args);
+                const captures = input.captureOperandSpan(call.captures);
+                for (0..captures.len) |capture_index| try children.child(GuardedList.at(captures, capture_index).value);
+                if (self.finalize_operands) try children.add(.{ .finalize_call_proc = expr_id });
             },
-            .low_level => |call| {
-                const args = input.exprSpan(call.args);
-                for (0..args.len) |arg_index| try self.collectExpr(GuardedList.at(args, arg_index), bound);
-            },
-            .field_access => |field| try self.collectExpr(field.receiver, bound),
-            .tuple_access => |access| try self.collectExpr(access.tuple, bound),
+            .low_level => |call| try children.span(input, call.args),
+            .field_access => |field| try children.child(field.receiver),
+            .tuple_access => |access| try children.child(access.tuple),
             .structural_eq => |eq| {
-                try self.collectExpr(eq.lhs, bound);
-                try self.collectExpr(eq.rhs, bound);
+                try children.child(eq.lhs);
+                try children.child(eq.rhs);
             },
             .structural_hash => |h| {
-                try self.collectExpr(h.value, bound);
-                try self.collectExpr(h.hasher, bound);
+                try children.child(h.value);
+                try children.child(h.hasher);
             },
             .match_ => |match| {
-                try self.collectExpr(match.scrutinee, bound);
+                try children.child(match.scrutinee);
                 const branches = input.branchSpan(match.branches);
                 for (0..branches.len) |branch_index| {
                     const branch = GuardedList.at(branches, branch_index);
-                    var added = std.ArrayList(Mono.LocalId).empty;
-                    defer added.deinit(self.allocator);
-                    try bindPat(self.allocator, input, branch.pat, bound, &added);
+                    try children.add(.begin_scope);
+                    try children.add(.{ .bind_pat = branch.pat });
                     const bindings = input.stmtSpan(branch.bindings);
-                    for (0..bindings.len) |binding_index| {
-                        try self.collectStmt(input, GuardedList.at(bindings, binding_index), bound, &added);
-                    }
-                    if (branch.guard) |guard| try self.collectExpr(guard, bound);
-                    try self.collectExpr(branch.body, bound);
-                    removeBound(input, bound, added.items);
+                    for (0..bindings.len) |binding_index| try children.add(.{ .stmt = GuardedList.at(bindings, binding_index) });
+                    if (branch.guard) |guard| try children.child(guard);
+                    try children.child(branch.body);
+                    try children.add(.end_scope);
                 }
             },
             .if_ => |if_| {
                 const branches = input.ifBranchSpan(if_.branches);
                 for (0..branches.len) |branch_index| {
                     const branch = GuardedList.at(branches, branch_index);
-                    try self.collectExpr(branch.cond, bound);
-                    try self.collectExpr(branch.body, bound);
+                    try children.child(branch.cond);
+                    try children.child(branch.body);
                 }
-                try self.collectExpr(if_.final_else, bound);
+                try children.child(if_.final_else);
             },
             .if_initialized_payload => |payload_switch| {
-                try self.collectExpr(payload_switch.cond, bound);
-                try self.addIfFree(payload_switch.payload, bound);
-                try self.collectExpr(payload_switch.initialized, bound);
-                try self.collectExpr(payload_switch.uninitialized, bound);
+                try children.child(payload_switch.cond);
+                try children.add(.{ .add_if_free = payload_switch.payload });
+                try children.child(payload_switch.initialized);
+                try children.child(payload_switch.uninitialized);
             },
             .try_sequence => |sequence| {
-                try self.collectExpr(sequence.try_expr, bound);
-                try bound.put(input, sequence.ok_local);
-                try self.collectExpr(sequence.ok_body, bound);
-                _ = bound.remove(input, sequence.ok_local);
+                try children.child(sequence.try_expr);
+                try children.add(.{ .bind_local = sequence.ok_local });
+                try children.child(sequence.ok_body);
+                try children.add(.{ .remove_local = sequence.ok_local });
             },
             .try_record_sequence => |sequence| {
-                try self.collectExpr(sequence.try_expr, bound);
-                try bound.put(input, sequence.value_local);
-                try bound.put(input, sequence.rest_local);
-                try self.collectExpr(sequence.ok_body, bound);
-                _ = bound.remove(input, sequence.rest_local);
-                _ = bound.remove(input, sequence.value_local);
+                try children.child(sequence.try_expr);
+                try children.add(.{ .bind_local = sequence.value_local });
+                try children.add(.{ .bind_local = sequence.rest_local });
+                try children.child(sequence.ok_body);
+                try children.add(.{ .remove_local = sequence.rest_local });
+                try children.add(.{ .remove_local = sequence.value_local });
             },
             .block => |block| {
-                var added = std.ArrayList(Mono.LocalId).empty;
-                defer added.deinit(self.allocator);
+                try children.add(.begin_scope);
                 const statements = input.stmtSpan(block.statements);
-                for (0..statements.len) |stmt_index| try self.collectStmt(input, GuardedList.at(statements, stmt_index), bound, &added);
-                try self.collectExpr(block.final_expr, bound);
-                removeBound(input, bound, added.items);
+                for (0..statements.len) |stmt_index| try children.add(.{ .stmt = GuardedList.at(statements, stmt_index) });
+                try children.child(block.final_expr);
+                try children.add(.end_scope);
             },
             .loop_ => |loop| {
-                const initial_values = input.exprSpan(loop.initial_values);
-                for (0..initial_values.len) |initial_index| try self.collectExpr(GuardedList.at(initial_values, initial_index), bound);
-                var added = std.ArrayList(Mono.LocalId).empty;
-                defer added.deinit(self.allocator);
-                try bindTypedLocalsTracked(self.allocator, input, bound, input.typedLocalSpan(loop.params), &added);
-                try self.collectExpr(loop.body, bound);
-                removeBound(input, bound, added.items);
+                try children.span(input, loop.initial_values);
+                try children.add(.begin_scope);
+                try children.add(.{ .bind_typed_locals = loop.params });
+                try children.child(loop.body);
+                try children.add(.end_scope);
             },
-            .break_ => |maybe| if (maybe) |value| try self.collectExpr(value, bound),
-            .continue_ => |continue_| {
-                const values = input.exprSpan(continue_.values);
-                for (0..values.len) |value_index| try self.collectExpr(GuardedList.at(values, value_index), bound);
-            },
+            .break_ => |maybe| if (maybe) |value| try children.child(value),
+            .continue_ => |continue_| try children.span(input, continue_.values),
             .join_point => |join_point| {
                 const retained = input.typedLocalSpan(join_point.retained);
                 for (0..retained.len) |index| try self.addIfFree(GuardedList.at(retained, index).local, bound);
-                var added = std.ArrayList(Mono.LocalId).empty;
-                defer added.deinit(self.allocator);
-                try bindTypedLocalsTracked(self.allocator, input, bound, input.typedLocalSpan(join_point.params), &added);
-                try self.collectExpr(join_point.body, bound);
-                removeBound(input, bound, added.items);
-                try self.collectExpr(join_point.remainder, bound);
+                try children.add(.begin_scope);
+                try children.add(.{ .bind_typed_locals = join_point.params });
+                try children.child(join_point.body);
+                try children.add(.end_scope);
+                try children.child(join_point.remainder);
             },
             .jump => |jump| {
-                const loop_values = input.exprSpan(jump.loop_values);
-                for (0..loop_values.len) |value_index| try self.collectExpr(GuardedList.at(loop_values, value_index), bound);
-                const args = input.exprSpan(jump.args);
-                for (0..args.len) |arg_index| try self.collectExpr(GuardedList.at(args, arg_index), bound);
+                try children.span(input, jump.loop_values);
+                try children.span(input, jump.args);
             },
         }
     }
@@ -1549,7 +1698,7 @@ const CaptureSet = struct {
     /// recursive references. During the fixpoint the read set is the previous
     /// round's value, which is exactly what makes recursion converge.
     fn collectFnCaptures(self: *CaptureSet, fn_id: Ast.FnId, caller_bound: *BoundSet) Allocator.Error!void {
-        const raw = @intFromEnum(fn_id);
+        const raw = @backingInt(fn_id);
         // Only defs and nested defs are reachable here (direct and
         // devirtualized calls and `fn_def` references never target an inline
         // lambda), and every one has a fixpoint entry. An out-of-range id
@@ -1566,32 +1715,11 @@ const CaptureSet = struct {
         explicit: anytype,
         caller_bound: *BoundSet,
     ) Allocator.Error!void {
-        const raw = @intFromEnum(fn_id);
+        const raw = @backingInt(fn_id);
         if (raw >= self.fn_captures.len) Common.invariant("capture collection referenced a function without a solved capture set");
         for (self.fn_captures[raw].items) |capture| {
             if (explicitProvidesCaptureSlot(self.program, explicit, capture)) continue;
             try self.addIfFree(capture.local, caller_bound);
-        }
-    }
-
-    fn collectStmt(self: *CaptureSet, input: *const Ast.Program, stmt_id: Mono.StmtId, bound: *BoundSet, added: *std.ArrayList(Mono.LocalId)) Allocator.Error!void {
-        switch (input.getStmt(stmt_id)) {
-            .uninitialized => |pat| try bindPat(self.allocator, input, pat, bound, added),
-            .let_ => |let_| {
-                if (let_.recursive) {
-                    try bindPat(self.allocator, input, let_.pat, bound, added);
-                    try self.collectExpr(let_.value, bound);
-                } else {
-                    try self.collectExpr(let_.value, bound);
-                    try bindPat(self.allocator, input, let_.pat, bound, added);
-                }
-            },
-            .expr,
-            .expect,
-            .dbg,
-            => |expr| try self.collectExpr(expr, bound),
-            .return_ => |ret| try self.collectExpr(ret.value, bound),
-            .crash => {},
         }
     }
 };
@@ -1625,7 +1753,7 @@ const BoundSetBinder = struct {
 };
 
 fn bindPat(allocator: Allocator, input: *const Ast.Program, pat_id: Mono.PatId, bound: *BoundSet, added: *std.ArrayList(Mono.LocalId)) Allocator.Error!void {
-    try Ast.forEachBoundLocal(input, pat_id, BoundSetBinder{
+    try Ast.forEachBoundLocal(allocator, input, pat_id, BoundSetBinder{
         .allocator = allocator,
         .input = input,
         .bound = bound,
@@ -1749,13 +1877,13 @@ const CaptureDependencyGraph = struct {
     }
 
     fn addNode(self: *CaptureDependencyGraph, owner: Ast.FnId) Allocator.Error!CaptureNodeId {
-        const id: CaptureNodeId = @enumFromInt(@as(u32, @intCast(self.nodes.items.len)));
+        const id: CaptureNodeId = @fromBackingInt(@intCast(@as(u32, @intCast(self.nodes.items.len))));
         try self.nodes.append(self.allocator, .{ .owner = owner });
         return id;
     }
 
     fn addScopeEntry(self: *CaptureDependencyGraph, parent: ?CaptureScopeId, local: Ast.LocalId) Allocator.Error!CaptureScopeId {
-        const id: CaptureScopeId = @enumFromInt(@as(u32, @intCast(self.scopes.items.len)));
+        const id: CaptureScopeId = @fromBackingInt(@intCast(@as(u32, @intCast(self.scopes.items.len))));
         try self.scopes.append(self.allocator, .{ .parent = parent, .local = local });
         return id;
     }
@@ -1765,7 +1893,7 @@ const CaptureDependencyGraph = struct {
         const binder = local_data.binder;
         var current = scope;
         while (current) |id| {
-            const entry = self.scopes.items[@intFromEnum(id)];
+            const entry = self.scopes.items[@backingInt(id)];
             if (entry.local == local) return entry.local;
             if (binder) |identity| {
                 const candidate = self.program.getLocal(entry.local);
@@ -1787,7 +1915,7 @@ const CaptureDependencyGraph = struct {
         defer builder.deinit();
         for (bodies, 0..) |maybe_body, raw| {
             const body = maybe_body orelse continue;
-            const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(raw)));
+            const fn_id: Ast.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(raw))));
             const root = try self.addNode(fn_id);
             try self.roots.append(self.allocator, root);
             builder.reset();
@@ -1804,7 +1932,7 @@ const CaptureDependencyGraph = struct {
         var builder = CaptureGraphBuilder.init(self);
         defer builder.deinit();
         for (0..self.program.fnCount()) |raw| {
-            const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(raw)));
+            const fn_id: Ast.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(raw))));
             const fn_ = self.program.getFn(fn_id);
             const root = try self.addNode(fn_id);
             try self.roots.append(self.allocator, root);
@@ -1818,7 +1946,7 @@ const CaptureDependencyGraph = struct {
     }
 
     fn queueNode(self: *CaptureDependencyGraph, node_id: CaptureNodeId) Allocator.Error!void {
-        const node = &self.nodes.items[@intFromEnum(node_id)];
+        const node = &self.nodes.items[@backingInt(node_id)];
         if (node.active) return;
         node.active = true;
         try self.pending_nodes.append(self.allocator, node_id);
@@ -1828,7 +1956,7 @@ const CaptureDependencyGraph = struct {
         const local_data = self.program.getLocal(capture.local);
         if (capture.ty != local_data.ty) Common.invariant("capture graph entry type differed from its local type");
         const id = self.program.ensureLiftCaptureId(capture.local);
-        const state = &self.states[@intFromEnum(fn_id)];
+        const state = &self.states[@backingInt(fn_id)];
         const result = try state.by_id.getOrPut(id);
         if (result.found_existing) {
             if (result.value_ptr.local != capture.local or result.value_ptr.ty != capture.ty) {
@@ -1842,7 +1970,7 @@ const CaptureDependencyGraph = struct {
     }
 
     fn processNode(self: *CaptureDependencyGraph, node_id: CaptureNodeId) Allocator.Error!void {
-        const node_index = @intFromEnum(node_id);
+        const node_index = @backingInt(node_id);
         const owner = self.nodes.items[node_index].owner;
         var direct_index: usize = 0;
         while (direct_index < self.nodes.items[node_index].direct.items.len) : (direct_index += 1) {
@@ -1855,11 +1983,11 @@ const CaptureDependencyGraph = struct {
     }
 
     fn activateEdge(self: *CaptureDependencyGraph, edge_id: CaptureEdgeId) Allocator.Error!void {
-        const edge_index = @intFromEnum(edge_id);
+        const edge_index = @backingInt(edge_id);
         if (self.edges.items[edge_index].active) return;
         self.edges.items[edge_index].active = true;
         const target = self.edges.items[edge_index].target;
-        const state = &self.states[@intFromEnum(target)];
+        const state = &self.states[@backingInt(target)];
         try state.reverse_edges.append(self.allocator, edge_id);
         var capture_index: usize = 0;
         while (capture_index < state.captures.items.len) : (capture_index += 1) {
@@ -1868,16 +1996,16 @@ const CaptureDependencyGraph = struct {
     }
 
     fn supplyLessThan(_: void, lhs: CaptureSupply, rhs: CaptureSupply) bool {
-        return @intFromEnum(lhs.id) < @intFromEnum(rhs.id);
+        return @backingInt(lhs.id) < @backingInt(rhs.id);
     }
 
     fn findSupply(supplies: []const CaptureSupply, id: checked.CaptureId) ?CaptureSupply {
         var low: usize = 0;
         var high: usize = supplies.len;
-        const wanted = @intFromEnum(id);
+        const wanted = @backingInt(id);
         while (low < high) {
             const mid = low + (high - low) / 2;
-            const found = @intFromEnum(supplies[mid].id);
+            const found = @backingInt(supplies[mid].id);
             if (found < wanted) {
                 low = mid + 1;
             } else if (found > wanted) {
@@ -1890,7 +2018,7 @@ const CaptureDependencyGraph = struct {
     }
 
     fn edgeSupply(self: *const CaptureDependencyGraph, edge_id: CaptureEdgeId, capture: Ast.TypedLocal) ?CaptureSupply {
-        const edge = self.edges.items[@intFromEnum(edge_id)];
+        const edge = self.edges.items[@backingInt(edge_id)];
         const local = self.program.getLocal(capture.local);
         const id = if (self.lifter != null)
             local.checked_capture_id orelse slotCaptureId(self.program, capture)
@@ -1904,14 +2032,14 @@ const CaptureDependencyGraph = struct {
             try self.queueNode(supply.node);
             return;
         }
-        const edge = self.edges.items[@intFromEnum(edge_id)];
+        const edge = self.edges.items[@backingInt(edge_id)];
         if (try self.scopeBindingFor(edge.scope, capture.local) == null) {
             try self.addCaptureUpdate(edge.owner, capture);
         }
     }
 
     fn processUpdate(self: *CaptureDependencyGraph, update: CaptureUpdate) Allocator.Error!void {
-        const state = &self.states[@intFromEnum(update.function)];
+        const state = &self.states[@backingInt(update.function)];
         var index: usize = 0;
         while (index < state.reverse_edges.items.len) : (index += 1) {
             try self.applyCaptureToEdge(state.reverse_edges.items[index], update.capture);
@@ -1935,7 +2063,7 @@ const CaptureDependencyGraph = struct {
     }
 
     fn resolvedOperandValue(self: *CaptureDependencyGraph, edge_id: CaptureEdgeId, slot: Ast.TypedLocal) Allocator.Error!Ast.ExprId {
-        const edge = self.edges.items[@intFromEnum(edge_id)];
+        const edge = self.edges.items[@backingInt(edge_id)];
         if (self.edgeSupply(edge_id, slot)) |supply| {
             const data = self.program.getExpr(supply.value).data;
             if (data != .local) return supply.value;
@@ -1949,8 +2077,8 @@ const CaptureDependencyGraph = struct {
     }
 
     fn finalizedSpan(self: *CaptureDependencyGraph, edge_id: CaptureEdgeId, call_expr: Ast.ExprId) Allocator.Error!Ast.Span(Ast.CaptureOperand) {
-        const edge = self.edges.items[@intFromEnum(edge_id)];
-        const slots = self.states[@intFromEnum(edge.target)].captures.items;
+        const edge = self.edges.items[@backingInt(edge_id)];
+        const slots = self.states[@backingInt(edge.target)].captures.items;
         if (slots.len == 0) return .empty();
 
         const saved_loc = self.program.current_loc;
@@ -1975,7 +2103,7 @@ const CaptureDependencyGraph = struct {
 
     fn finalizePostLiftOperands(self: *CaptureDependencyGraph) Allocator.Error!void {
         for (self.edges.items, 0..) |edge, raw| {
-            const edge_id: CaptureEdgeId = @enumFromInt(@as(u32, @intCast(raw)));
+            const edge_id: CaptureEdgeId = @fromBackingInt(@intCast(@as(u32, @intCast(raw))));
             switch (edge.site) {
                 .pre_lift => {},
                 .fn_ref => |expr_id| {
@@ -2040,7 +2168,7 @@ const CaptureGraphBuilder = struct {
 
     fn removeLocal(self: *CaptureGraphBuilder, local: Ast.LocalId) void {
         const scope_id = self.current_scope orelse Common.invariant("capture graph scope stack underflow");
-        const entry = self.graph.scopes.items[@intFromEnum(scope_id)];
+        const entry = self.graph.scopes.items[@backingInt(scope_id)];
         if (entry.local != local) Common.invariant("capture graph removed a lexical binding out of order");
         self.current_scope = entry.parent;
         self.bound.remove(self.graph.program, local);
@@ -2069,14 +2197,14 @@ const CaptureGraphBuilder = struct {
     };
 
     fn bindPat(self: *CaptureGraphBuilder, pat_id: Ast.PatId, added: *std.ArrayList(Ast.LocalId)) Allocator.Error!void {
-        try Ast.forEachBoundLocal(self.graph.program, pat_id, CaptureBinder{ .builder = self, .added = added });
+        try Ast.forEachBoundLocal(self.graph.allocator, self.graph.program, pat_id, CaptureBinder{ .builder = self, .added = added });
     }
 
     fn addDirect(self: *CaptureGraphBuilder, node_id: CaptureNodeId, local: Ast.LocalId) Allocator.Error!void {
         if (try self.bound.contains(self.graph.program, local)) return;
         _ = self.graph.program.ensureLiftCaptureId(local);
         const local_data = self.graph.program.getLocal(local);
-        try self.graph.nodes.items[@intFromEnum(node_id)].direct.append(self.graph.allocator, .{
+        try self.graph.nodes.items[@backingInt(node_id)].direct.append(self.graph.allocator, .{
             .local = local,
             .ty = local_data.ty,
         });
@@ -2095,81 +2223,186 @@ const CaptureGraphBuilder = struct {
                 if (current.id == previous.id) Common.invariant("capture edge declared one CaptureId more than once");
             }
         }
-        const edge_id: CaptureEdgeId = @enumFromInt(@as(u32, @intCast(self.graph.edges.items.len)));
+        const edge_id: CaptureEdgeId = @fromBackingInt(@intCast(@as(u32, @intCast(self.graph.edges.items.len))));
         try self.graph.edges.append(self.graph.allocator, .{
-            .owner = self.graph.nodes.items[@intFromEnum(parent)].owner,
+            .owner = self.graph.nodes.items[@backingInt(parent)].owner,
             .target = target,
             .scope = self.current_scope,
             .site = site,
             .supplies = supplies.*,
         });
         supplies.* = .empty;
-        try self.graph.nodes.items[@intFromEnum(parent)].edges.append(self.graph.allocator, edge_id);
+        try self.graph.nodes.items[@backingInt(parent)].edges.append(self.graph.allocator, edge_id);
     }
 
-    fn addCaptureOperandEdge(
-        self: *CaptureGraphBuilder,
+    /// The walk keeps its own work stack, so expression nesting and statement
+    /// sequences never become native call depth. Children are pushed in
+    /// reverse so they are visited in source order; scope ends and capture
+    /// edge completions are pushed before the children they follow.
+    const Work = union(enum) {
+        expr: struct { expr: Ast.ExprId, node: CaptureNodeId },
+        stmt: struct { stmt: Ast.StmtId, node: CaptureNodeId },
+        /// Bind a pattern's locals into the innermost lexical scope.
+        bind_pat: Ast.PatId,
+        bind_typed_locals: Ast.Span(Ast.TypedLocal),
+        /// Bind one local outside any tracked scope; paired with `remove_local`.
+        bind_local: Ast.LocalId,
+        remove_local: Ast.LocalId,
+        begin_scope,
+        /// Remove the innermost scope's locals, in reverse binding order.
+        end_scope,
+        add_direct: struct { node: CaptureNodeId, local: Ast.LocalId },
+        /// Start a capture edge: collect each operand into its own child
+        /// node, in operand order, then finish the edge.
+        begin_edge: PendingEdge,
+        /// Create the current edge's operand `index` child node and collect
+        /// its value.
+        edge_operand: u32,
+        supply: CaptureSupply,
+        finish_edge,
+    };
+
+    const PendingEdge = struct {
         parent: CaptureNodeId,
         target: Ast.FnId,
         site: CaptureEdgeSite,
-        span: Ast.Span(Ast.CaptureOperand),
+        values: union(enum) {
+            operands: Ast.Span(Ast.CaptureOperand),
+            fn_def: Ast.Span(Ast.FnDefCapture),
+        },
+        supplies: std.ArrayList(CaptureSupply) = .empty,
+    };
+
+    fn collectExpr(self: *CaptureGraphBuilder, expr_id: Ast.ExprId, node: CaptureNodeId) Allocator.Error!void {
+        const allocator = self.graph.allocator;
+        var work: std.ArrayList(Work) = .empty;
+        defer work.deinit(allocator);
+        var scopes: std.ArrayList(std.ArrayList(Ast.LocalId)) = .empty;
+        defer {
+            for (scopes.items) |*scope| scope.deinit(allocator);
+            scopes.deinit(allocator);
+        }
+        var edges: std.ArrayList(PendingEdge) = .empty;
+        defer {
+            for (edges.items) |*edge| edge.supplies.deinit(allocator);
+            edges.deinit(allocator);
+        }
+        try work.append(allocator, .{ .expr = .{ .expr = expr_id, .node = node } });
+        while (work.pop()) |item| switch (item) {
+            .expr => |visit| try self.pushExprWork(&work, visit.expr, visit.node),
+            .stmt => |visit| try self.pushStmtWork(&work, visit.stmt, visit.node),
+            .bind_pat => |pat| try self.bindPat(pat, &scopes.items[scopes.items.len - 1]),
+            .bind_typed_locals => |span| try self.bindTypedLocals(self.graph.program.typedLocalSpan(span), &scopes.items[scopes.items.len - 1]),
+            .bind_local => |local| try self.bindLocal(local, null),
+            .remove_local => |local| self.removeLocal(local),
+            .begin_scope => try scopes.append(allocator, .empty),
+            .end_scope => {
+                var scope = scopes.pop().?;
+                defer scope.deinit(allocator);
+                self.removeLocals(scope.items);
+            },
+            .add_direct => |direct| try self.addDirect(direct.node, direct.local),
+            .begin_edge => |edge| try self.pushEdgeWork(&work, &edges, edge),
+            .edge_operand => |index| {
+                const edge = &edges.items[edges.items.len - 1];
+                const child = try self.graph.addNode(self.graph.nodes.items[@backingInt(edge.parent)].owner);
+                const id: checked.CaptureId, const value: Ast.ExprId = switch (edge.values) {
+                    .operands => |span| blk: {
+                        const operand = GuardedList.at(self.graph.program.captureOperandSpan(span), index);
+                        break :blk .{ operand.id, operand.value };
+                    },
+                    .fn_def => |span| blk: {
+                        const capture = GuardedList.at(self.graph.program.fnDefCaptureSpan(span), index);
+                        break :blk .{ capture.id, capture.value };
+                    },
+                };
+                try work.append(allocator, .{ .supply = .{ .id = id, .value = value, .node = child } });
+                try work.append(allocator, .{ .expr = .{ .expr = value, .node = child } });
+            },
+            .supply => |supply| try edges.items[edges.items.len - 1].supplies.append(allocator, supply),
+            .finish_edge => {
+                var edge = edges.pop().?;
+                errdefer edge.supplies.deinit(allocator);
+                try self.finishEdge(edge.parent, edge.target, edge.site, &edge.supplies);
+            },
+        };
+    }
+
+    /// Open a capture edge and push its operand collection, in operand
+    /// order, followed by the edge's completion.
+    fn pushEdgeWork(
+        self: *CaptureGraphBuilder,
+        work: *std.ArrayList(Work),
+        edges: *std.ArrayList(PendingEdge),
+        edge: PendingEdge,
     ) Allocator.Error!void {
-        var supplies: std.ArrayList(CaptureSupply) = .empty;
-        errdefer supplies.deinit(self.graph.allocator);
-        const operands = self.graph.program.captureOperandSpan(span);
-        for (0..operands.len) |index| {
-            const operand = GuardedList.at(operands, index);
-            const child = try self.graph.addNode(self.graph.nodes.items[@intFromEnum(parent)].owner);
-            try self.collectExpr(operand.value, child);
-            const supply = CaptureSupply{ .id = operand.id, .value = operand.value, .node = child };
-            try supplies.append(self.graph.allocator, supply);
+        const allocator = self.graph.allocator;
+        const count: u32 = switch (edge.values) {
+            .operands => |span| @intCast(self.graph.program.captureOperandSpan(span).len),
+            .fn_def => |span| @intCast(self.graph.program.fnDefCaptureSpan(span).len),
+        };
+        try edges.append(allocator, edge);
+        try work.append(allocator, .finish_edge);
+        var index = count;
+        while (index > 0) {
+            index -= 1;
+            try work.append(allocator, .{ .edge_operand = index });
         }
-        try self.finishEdge(parent, target, site, &supplies);
     }
 
-    fn addFnDefEdge(self: *CaptureGraphBuilder, parent: CaptureNodeId, target: Ast.FnId, span: Ast.Span(Ast.FnDefCapture)) Allocator.Error!void {
-        var supplies: std.ArrayList(CaptureSupply) = .empty;
-        errdefer supplies.deinit(self.graph.allocator);
-        const captures = self.graph.program.fnDefCaptureSpan(span);
-        for (0..captures.len) |index| {
-            const capture = GuardedList.at(captures, index);
-            const child = try self.graph.addNode(self.graph.nodes.items[@intFromEnum(parent)].owner);
-            try self.collectExpr(capture.value, child);
-            try supplies.append(self.graph.allocator, .{ .id = capture.id, .value = capture.value, .node = child });
-        }
-        try self.finishEdge(parent, target, .pre_lift, &supplies);
-    }
-
-    fn collectExprSpan(self: *CaptureGraphBuilder, span: Ast.Span(Ast.ExprId), node: CaptureNodeId) Allocator.Error!void {
-        const values = self.graph.program.exprSpan(span);
-        for (0..values.len) |index| try self.collectExpr(GuardedList.at(values, index), node);
-    }
-
-    fn collectStmt(self: *CaptureGraphBuilder, stmt_id: Ast.StmtId, node: CaptureNodeId, added: *std.ArrayList(Ast.LocalId)) Allocator.Error!void {
-        const input = self.graph.program;
-        switch (input.getStmt(stmt_id)) {
-            .uninitialized => |pat| try self.bindPat(pat, added),
+    fn pushStmtWork(self: *CaptureGraphBuilder, work: *std.ArrayList(Work), stmt_id: Ast.StmtId, node: CaptureNodeId) Allocator.Error!void {
+        const allocator = self.graph.allocator;
+        switch (self.graph.program.getStmt(stmt_id)) {
+            .uninitialized => |pat| try work.append(allocator, .{ .bind_pat = pat }),
             .let_ => |let_| {
                 if (let_.recursive) {
-                    try self.bindPat(let_.pat, added);
-                    try self.collectExpr(let_.value, node);
+                    try work.append(allocator, .{ .expr = .{ .expr = let_.value, .node = node } });
+                    try work.append(allocator, .{ .bind_pat = let_.pat });
                 } else {
-                    try self.collectExpr(let_.value, node);
-                    try self.bindPat(let_.pat, added);
+                    try work.append(allocator, .{ .bind_pat = let_.pat });
+                    try work.append(allocator, .{ .expr = .{ .expr = let_.value, .node = node } });
                 }
             },
             .expr,
             .expect,
             .dbg,
-            => |expr| try self.collectExpr(expr, node),
-            .return_ => |ret| try self.collectExpr(ret.value, node),
-            .crash => {},
+            => |expr| try work.append(allocator, .{ .expr = .{ .expr = expr, .node = node } }),
+            .return_ => |ret| try work.append(allocator, .{ .expr = .{ .expr = ret.value, .node = node } }),
+            .crash, .checked_error => {},
         }
     }
 
-    fn collectExpr(self: *CaptureGraphBuilder, expr_id: Ast.ExprId, node: CaptureNodeId) Allocator.Error!void {
+    fn pushExprWork(
+        self: *CaptureGraphBuilder,
+        work: *std.ArrayList(Work),
+        expr_id: Ast.ExprId,
+        node: CaptureNodeId,
+    ) Allocator.Error!void {
+        const allocator = self.graph.allocator;
         const input = self.graph.program;
         const expr = input.getExpr(expr_id);
+        // Children are appended in source order, then reversed onto the stack.
+        const children_start = work.items.len;
+        defer std.mem.reverse(Work, work.items[children_start..]);
+        const Children = struct {
+            list: *std.ArrayList(Work),
+            allocator: Allocator,
+            node: CaptureNodeId,
+
+            fn add(children: @This(), item: Work) Allocator.Error!void {
+                try children.list.append(children.allocator, item);
+            }
+
+            fn child(children: @This(), child_expr: Ast.ExprId) Allocator.Error!void {
+                try children.add(.{ .expr = .{ .expr = child_expr, .node = children.node } });
+            }
+
+            fn span(children: @This(), program: *const Ast.Program, items: Ast.Span(Ast.ExprId)) Allocator.Error!void {
+                const values = program.exprSpan(items);
+                for (0..values.len) |index| try children.child(GuardedList.at(values, index));
+            }
+        };
+        const children = Children{ .list = work, .allocator = allocator, .node = node };
         switch (expr.data) {
             .local => |local| try self.addDirect(node, local),
             .unit,
@@ -2183,69 +2416,68 @@ const CaptureGraphBuilder = struct {
             .uninitialized,
             .uninitialized_payload,
             .crash,
+            .checked_error,
             .comptime_exhaustiveness_failed,
             => {},
             .def_ref => if (self.graph.lifter == null) Common.invariant("post-lift capture graph saw a definition reference"),
             .fn_ref => |fn_ref| {
                 if (self.graph.lifter == null) {
-                    try self.addCaptureOperandEdge(node, fn_ref.fn_id, .{ .fn_ref = expr_id }, fn_ref.captures);
+                    try children.add(.{ .begin_edge = .{ .parent = node, .target = fn_ref.fn_id, .site = .{ .fn_ref = expr_id }, .values = .{ .operands = fn_ref.captures } } });
                 } else {
                     // A pre-existing lifted reference already carries its exact
                     // capture payload. It is not part of the local Monotype
                     // definition graph, so its explicit values contribute
                     // directly and its lifted target is not subscribed here.
                     const operands = input.captureOperandSpan(fn_ref.captures);
-                    for (0..operands.len) |index| try self.collectExpr(GuardedList.at(operands, index).value, node);
+                    for (0..operands.len) |index| try children.child(GuardedList.at(operands, index).value);
                 }
             },
             .fn_def => |fn_def| {
                 const lifter = self.graph.lifter orelse Common.invariant("post-lift capture graph saw a function definition");
-                try self.addFnDefEdge(node, lifter.liftedFn(fn_def.fn_id), fn_def.captures);
+                try children.add(.{ .begin_edge = .{ .parent = node, .target = lifter.liftedFn(fn_def.fn_id), .site = .pre_lift, .values = .{ .fn_def = fn_def.captures } } });
             },
             .list,
             .tuple,
-            => |items| try self.collectExprSpan(items, node),
+            => |items| try children.span(input, items),
             .record => |fields| {
                 const field_exprs = input.fieldExprSpan(fields);
-                for (0..field_exprs.len) |index| try self.collectExpr(GuardedList.at(field_exprs, index).value, node);
+                for (0..field_exprs.len) |index| try children.child(GuardedList.at(field_exprs, index).value);
             },
             .record_update => |update| {
-                try self.collectExpr(update.base, node);
+                try children.child(update.base);
                 const field_exprs = input.fieldExprSpan(update.fields);
-                for (0..field_exprs.len) |index| try self.collectExpr(GuardedList.at(field_exprs, index).value, node);
+                for (0..field_exprs.len) |index| try children.child(GuardedList.at(field_exprs, index).value);
             },
-            .tag => |tag| try self.collectExprSpan(tag.payloads, node),
-            .static_data_candidate => |candidate| try self.collectExpr(candidate.runtime_expr, node),
-            .inline_expects_enabled => {},
-            .comptime_value => |candidate| try self.collectExpr(candidate.initializer, node),
-            .typed_boundary => |boundary| try self.collectExpr(boundary.value, node),
+            .tag => |tag| try children.span(input, tag.payloads),
+            .static_data_candidate => |candidate| try children.child(candidate.runtime_expr),
+            .comptime_value => |candidate| try children.child(candidate.initializer),
+            .typed_boundary => |boundary| try children.child(boundary.value),
+            .row_widen => |widen| try children.child(widen.value),
             .nominal,
             .dbg,
             .expect,
-            => |child| try self.collectExpr(child, node),
-            .return_ => |ret| try self.collectExpr(ret.value, node),
-            .expect_err => |expect_err| try self.collectExpr(expect_err.msg, node),
-            .literal_rejected => |rejected| try self.collectExpr(rejected.msg, node),
-            .comptime_branch_taken => |taken| try self.collectExpr(taken.body, node),
+            => |child| try children.child(child),
+            .return_ => |ret| try children.child(ret.value),
+            .expect_err => |expect_err| try children.child(expect_err.msg),
+            .literal_rejected => |rejected| try children.child(rejected.msg),
+            .comptime_branch_taken => |taken| try children.child(taken.body),
             .let_ => |let_| {
-                try self.collectExpr(let_.value, node);
-                var added: std.ArrayList(Ast.LocalId) = .empty;
-                defer added.deinit(self.graph.allocator);
-                try self.bindPat(let_.bind, &added);
-                try self.collectExpr(let_.rest, node);
-                self.removeLocals(added.items);
+                try children.child(let_.value);
+                try children.add(.begin_scope);
+                try children.add(.{ .bind_pat = let_.bind });
+                try children.child(let_.rest);
+                try children.add(.end_scope);
             },
             .lambda => |lambda| {
                 if (self.graph.lifter == null) Common.invariant("post-lift capture graph saw an inline lambda");
-                var added: std.ArrayList(Ast.LocalId) = .empty;
-                defer added.deinit(self.graph.allocator);
-                try self.bindTypedLocals(input.typedLocalSpan(lambda.args), &added);
-                try self.collectExpr(lambda.body, node);
-                self.removeLocals(added.items);
+                try children.add(.begin_scope);
+                try children.add(.{ .bind_typed_locals = lambda.args });
+                try children.child(lambda.body);
+                try children.add(.end_scope);
             },
             .call_value => |call| {
-                try self.collectExpr(call.callee, node);
-                try self.collectExprSpan(call.args, node);
+                try children.child(call.callee);
+                try children.span(input, call.args);
             },
             .call_proc => |call| {
                 const maybe_target: ?Ast.FnId = switch (call.callee) {
@@ -2257,104 +2489,100 @@ const CaptureGraphBuilder = struct {
                     },
                     .lifted => |fn_id| fn_id,
                 };
-                try self.collectExprSpan(call.args, node);
+                try children.span(input, call.args);
                 if (maybe_target) |target| {
-                    try self.addCaptureOperandEdge(
-                        node,
-                        target,
-                        if (self.graph.lifter == null) .{ .call_proc = expr_id } else .pre_lift,
-                        call.captures,
-                    );
+                    try children.add(.{ .begin_edge = .{
+                        .parent = node,
+                        .target = target,
+                        .site = if (self.graph.lifter == null) .{ .call_proc = expr_id } else .pre_lift,
+                        .values = .{ .operands = call.captures },
+                    } });
                 }
             },
-            .low_level => |call| try self.collectExprSpan(call.args, node),
-            .field_access => |field| try self.collectExpr(field.receiver, node),
-            .tuple_access => |access| try self.collectExpr(access.tuple, node),
+            .low_level => |call| try children.span(input, call.args),
+            .field_access => |field| try children.child(field.receiver),
+            .tuple_access => |access| try children.child(access.tuple),
             .structural_eq => |eq| {
-                try self.collectExpr(eq.lhs, node);
-                try self.collectExpr(eq.rhs, node);
+                try children.child(eq.lhs);
+                try children.child(eq.rhs);
             },
             .structural_hash => |hash| {
-                try self.collectExpr(hash.value, node);
-                try self.collectExpr(hash.hasher, node);
+                try children.child(hash.value);
+                try children.child(hash.hasher);
             },
             .match_ => |match| {
-                try self.collectExpr(match.scrutinee, node);
+                try children.child(match.scrutinee);
                 const branches = input.branchSpan(match.branches);
                 for (0..branches.len) |index| {
                     const branch = GuardedList.at(branches, index);
-                    var added: std.ArrayList(Ast.LocalId) = .empty;
-                    defer added.deinit(self.graph.allocator);
-                    try self.bindPat(branch.pat, &added);
+                    try children.add(.begin_scope);
+                    try children.add(.{ .bind_pat = branch.pat });
                     const bindings = input.stmtSpan(branch.bindings);
                     for (0..bindings.len) |binding_index| {
-                        try self.collectStmt(GuardedList.at(bindings, binding_index), node, &added);
+                        try children.add(.{ .stmt = .{ .stmt = GuardedList.at(bindings, binding_index), .node = node } });
                     }
-                    if (branch.guard) |guard| try self.collectExpr(guard, node);
-                    try self.collectExpr(branch.body, node);
-                    self.removeLocals(added.items);
+                    if (branch.guard) |guard| try children.child(guard);
+                    try children.child(branch.body);
+                    try children.add(.end_scope);
                 }
             },
             .if_ => |if_| {
                 const branches = input.ifBranchSpan(if_.branches);
                 for (0..branches.len) |index| {
                     const branch = GuardedList.at(branches, index);
-                    try self.collectExpr(branch.cond, node);
-                    try self.collectExpr(branch.body, node);
+                    try children.child(branch.cond);
+                    try children.child(branch.body);
                 }
-                try self.collectExpr(if_.final_else, node);
+                try children.child(if_.final_else);
             },
             .if_initialized_payload => |payload_switch| {
-                try self.collectExpr(payload_switch.cond, node);
-                try self.addDirect(node, payload_switch.payload);
-                try self.collectExpr(payload_switch.initialized, node);
-                try self.collectExpr(payload_switch.uninitialized, node);
+                try children.child(payload_switch.cond);
+                try children.add(.{ .add_direct = .{ .node = node, .local = payload_switch.payload } });
+                try children.child(payload_switch.initialized);
+                try children.child(payload_switch.uninitialized);
             },
             .try_sequence => |sequence| {
-                try self.collectExpr(sequence.try_expr, node);
-                try self.bindLocal(sequence.ok_local, null);
-                try self.collectExpr(sequence.ok_body, node);
-                self.removeLocal(sequence.ok_local);
+                try children.child(sequence.try_expr);
+                try children.add(.{ .bind_local = sequence.ok_local });
+                try children.child(sequence.ok_body);
+                try children.add(.{ .remove_local = sequence.ok_local });
             },
             .try_record_sequence => |sequence| {
-                try self.collectExpr(sequence.try_expr, node);
-                try self.bindLocal(sequence.value_local, null);
-                try self.bindLocal(sequence.rest_local, null);
-                try self.collectExpr(sequence.ok_body, node);
-                self.removeLocal(sequence.rest_local);
-                self.removeLocal(sequence.value_local);
+                try children.child(sequence.try_expr);
+                try children.add(.{ .bind_local = sequence.value_local });
+                try children.add(.{ .bind_local = sequence.rest_local });
+                try children.child(sequence.ok_body);
+                try children.add(.{ .remove_local = sequence.rest_local });
+                try children.add(.{ .remove_local = sequence.value_local });
             },
             .block => |block| {
-                var added: std.ArrayList(Ast.LocalId) = .empty;
-                defer added.deinit(self.graph.allocator);
+                try children.add(.begin_scope);
                 const statements = input.stmtSpan(block.statements);
-                for (0..statements.len) |index| try self.collectStmt(GuardedList.at(statements, index), node, &added);
-                try self.collectExpr(block.final_expr, node);
-                self.removeLocals(added.items);
+                for (0..statements.len) |index| try children.add(.{ .stmt = .{ .stmt = GuardedList.at(statements, index), .node = node } });
+                try children.child(block.final_expr);
+                try children.add(.end_scope);
             },
             .loop_ => |loop| {
-                try self.collectExprSpan(loop.initial_values, node);
-                var added: std.ArrayList(Ast.LocalId) = .empty;
-                defer added.deinit(self.graph.allocator);
-                try self.bindTypedLocals(input.typedLocalSpan(loop.params), &added);
-                try self.collectExpr(loop.body, node);
-                self.removeLocals(added.items);
+                try children.span(input, loop.initial_values);
+                try children.add(.begin_scope);
+                try children.add(.{ .bind_typed_locals = loop.params });
+                try children.child(loop.body);
+                try children.add(.end_scope);
             },
-            .break_ => |maybe| if (maybe) |value| try self.collectExpr(value, node),
-            .continue_ => |continue_| try self.collectExprSpan(continue_.values, node),
+            .break_ => |maybe| if (maybe) |value| try children.child(value),
+            .continue_ => |continue_| try children.span(input, continue_.values),
             .join_point => |join_point| {
                 const retained = input.typedLocalSpan(join_point.retained);
                 for (0..retained.len) |index| try self.addDirect(node, GuardedList.at(retained, index).local);
-                var added: std.ArrayList(Ast.LocalId) = .empty;
-                defer added.deinit(self.graph.allocator);
-                try self.bindTypedLocals(input.typedLocalSpan(join_point.params), &added);
-                try self.collectExpr(join_point.body, node);
-                self.removeLocals(added.items);
-                try self.collectExpr(join_point.remainder, node);
+                try children.add(.begin_scope);
+                try children.add(.{ .bind_typed_locals = join_point.params });
+                try children.child(join_point.body);
+                try children.add(.end_scope);
+                try children.child(join_point.remainder);
             },
             .jump => |jump| {
-                try self.collectExprSpan(jump.loop_values, node);
-                try self.collectExprSpan(jump.args, node);
+                try children.span(input, jump.loop_values);
+                try children.span(input, jump.args);
             },
         }
     }
@@ -2400,7 +2628,7 @@ test "lift owns transferred tables across every allocation failure" {
     const initializer = try source.addExpr(.{ .ty = ty, .data = .{ .str_lit = literal } });
     const descriptor: Common.ComptimeValueRoot = .{
         .module = std.mem.zeroes(checked.ModuleId),
-        .root = .{ .checked = @enumFromInt(3) },
+        .root = .{ .checked = @fromBackingInt(@intCast(3)) },
         .const_locator = null,
     };
     const root = try source.addComptimeValueRoot(descriptor);
@@ -2409,9 +2637,9 @@ test "lift owns transferred tables across every allocation failure" {
         .initializer = initializer,
     } } });
     const stmt = try source.addStmt(.{ .expr = value });
-    const file = try source.addSourceFile(.{ .name = "App.roc", .qualified_name = "app/App.roc" });
+    const file = try source.addSourceFile(.{ .name = "App.roc", .qualified_name = "app/App.roc", .module_identity = @splat(0) });
     const name = try source.names.internExportName("entry");
-    try source.proc_debug_names.put(@enumFromInt(1), name);
+    try source.proc_debug_names.put(@fromBackingInt(@intCast(1)), name);
     source.freeze();
 
     try std.testing.checkAllAllocationFailures(allocator, liftForAllocationTest, .{&source});
@@ -2426,9 +2654,9 @@ test "lift owns transferred tables across every allocation failure" {
     try std.testing.expectEqualDeep(descriptor, lifted.getComptimeValueRoot(root));
     try std.testing.expectEqual(root, lifted.getExpr(value).data.comptime_value.root);
     try std.testing.expectEqual(value, lifted.getStmt(stmt).expr);
-    try std.testing.expectEqualStrings("value", lifted.stringLiteralsView()[@intFromEnum(literal)].text());
+    try std.testing.expectEqualStrings("value", lifted.stringLiteralsView()[@backingInt(literal)].text());
     try std.testing.expectEqualStrings("app/App.roc", lifted.view().source_files[file].qualified_name);
-    try std.testing.expectEqual(name, lifted.proc_debug_names.get(@enumFromInt(1)).?);
+    try std.testing.expectEqual(name, lifted.proc_debug_names.get(@fromBackingInt(@intCast(1))).?);
     try std.testing.expectEqual(name, try lifted.names.internExportName("entry"));
     for (lifted.view().expr_inline_scopes) |scope| try std.testing.expectEqual(Ast.InlineScopeId.none, scope);
     for (lifted.view().stmt_inline_scopes) |scope| try std.testing.expectEqual(Ast.InlineScopeId.none, scope);
@@ -2443,7 +2671,7 @@ test "lift transfers compile-time descriptors without changing their domain" {
     const initializer = try mono.addExpr(.{ .ty = ty, .data = .unit });
     const descriptor: Common.ComptimeValueRoot = .{
         .module = std.mem.zeroes(checked.ModuleId),
-        .root = .{ .checked = @enumFromInt(3) },
+        .root = .{ .checked = @fromBackingInt(@intCast(3)) },
         .const_locator = null,
     };
     const root = try mono.addComptimeValueRoot(descriptor);
@@ -2545,11 +2773,11 @@ test "checkCaptureInvariants accepts a well-formed capture and catches a corrupt
     // One capturing function: a single binder-backed capture slot, and a
     // function reference that supplies it with a keyed operand.
     const ty = try program.types.add(.zst);
-    const binder: checked.PatternBinderId = @enumFromInt(1);
-    const cap_local = try program.addLocalWithBinder(@enumFromInt(1), ty, binder);
+    const binder: checked.PatternBinderId = @fromBackingInt(@intCast(1));
+    const cap_local = try program.addLocalWithBinder(@fromBackingInt(@intCast(1)), ty, binder);
     const cap_span = try program.addTypedLocalSpan(&.{.{ .local = cap_local, .ty = ty }});
     const fn_id = try program.addFn(.{
-        .symbol = @enumFromInt(1),
+        .symbol = @fromBackingInt(@intCast(1)),
         .args = Ast.Span(Ast.TypedLocal).empty(),
         .captures = cap_span,
         .body = .hosted,
@@ -2568,7 +2796,7 @@ test "checkCaptureInvariants accepts a well-formed capture and catches a corrupt
     // Intentionally skip capture maintenance: give the operand a CaptureId that
     // no longer matches its slot. The debug pass must catch it deterministically.
     program.setCaptureOperandInSpan(op_span, 0, .{
-        .id = checked.CaptureId.fromBinder(@enumFromInt(2)),
+        .id = checked.CaptureId.fromBinder(@fromBackingInt(@intCast(2))),
         .value = value,
     });
     try std.testing.expectEqualStrings(
@@ -2619,13 +2847,13 @@ test "capture finalization supplies the caller's active binder local" {
     defer program.deinit();
 
     const ty = try program.types.add(.zst);
-    const binder: checked.PatternBinderId = @enumFromInt(1);
-    const captured_outer = try program.addLocalWithBinder(@enumFromInt(1), ty, binder);
-    const active_arg = try program.addLocalWithBinder(@enumFromInt(2), ty, binder);
+    const binder: checked.PatternBinderId = @fromBackingInt(@intCast(1));
+    const captured_outer = try program.addLocalWithBinder(@fromBackingInt(@intCast(1)), ty, binder);
+    const active_arg = try program.addLocalWithBinder(@fromBackingInt(@intCast(2)), ty, binder);
 
     const callee_body = try program.addExpr(.{ .ty = ty, .data = .{ .local = captured_outer } });
     const callee = try program.addFn(.{
-        .symbol = @enumFromInt(1),
+        .symbol = @fromBackingInt(@intCast(1)),
         .args = .empty(),
         .captures = .empty(),
         .body = .{ .roc = callee_body },
@@ -2638,7 +2866,7 @@ test "capture finalization supplies the caller's active binder local" {
         .captures = .empty(),
     } } });
     _ = try program.addFn(.{
-        .symbol = @enumFromInt(2),
+        .symbol = @fromBackingInt(@intCast(2)),
         .args = try program.addTypedLocalSpan(&.{.{ .local = active_arg, .ty = ty }}),
         .captures = .empty(),
         .body = .{ .roc = call },
@@ -2666,10 +2894,10 @@ test "capture finalization preserves explicitly keyed capture permutation" {
     defer program.deinit();
 
     const ty = try program.types.add(.zst);
-    const first_binder: checked.PatternBinderId = @enumFromInt(1);
-    const second_binder: checked.PatternBinderId = @enumFromInt(2);
-    const first_capture = try program.addLocalWithBinder(@enumFromInt(1), ty, first_binder);
-    const second_capture = try program.addLocalWithBinder(@enumFromInt(2), ty, second_binder);
+    const first_binder: checked.PatternBinderId = @fromBackingInt(@intCast(1));
+    const second_binder: checked.PatternBinderId = @fromBackingInt(@intCast(2));
+    const first_capture = try program.addLocalWithBinder(@fromBackingInt(@intCast(1)), ty, first_binder);
+    const second_capture = try program.addLocalWithBinder(@fromBackingInt(@intCast(2)), ty, second_binder);
     const first_capture_ref = try program.addExpr(.{ .ty = ty, .data = .{ .local = first_capture } });
     const second_capture_ref = try program.addExpr(.{ .ty = ty, .data = .{ .local = second_capture } });
     const callee_body = try program.addExpr(.{
@@ -2677,15 +2905,15 @@ test "capture finalization preserves explicitly keyed capture permutation" {
         .data = .{ .tuple = try program.addExprSpan(&.{ first_capture_ref, second_capture_ref }) },
     });
     const callee = try program.addFn(.{
-        .symbol = @enumFromInt(3),
+        .symbol = @fromBackingInt(@intCast(3)),
         .args = .empty(),
         .captures = .empty(),
         .body = .{ .roc = callee_body },
         .ret = ty,
     });
 
-    const first_arg = try program.addLocalWithBinder(@enumFromInt(4), ty, first_binder);
-    const second_arg = try program.addLocalWithBinder(@enumFromInt(5), ty, second_binder);
+    const first_arg = try program.addLocalWithBinder(@fromBackingInt(@intCast(4)), ty, first_binder);
+    const second_arg = try program.addLocalWithBinder(@fromBackingInt(@intCast(5)), ty, second_binder);
     const first_arg_ref = try program.addExpr(.{ .ty = ty, .data = .{ .local = first_arg } });
     const second_arg_ref = try program.addExpr(.{ .ty = ty, .data = .{ .local = second_arg } });
     const operands = try program.addCaptureOperandSpan(&.{
@@ -2697,7 +2925,7 @@ test "capture finalization preserves explicitly keyed capture permutation" {
         .captures = operands,
     } } });
     const caller = try program.addFn(.{
-        .symbol = @enumFromInt(6),
+        .symbol = @fromBackingInt(@intCast(6)),
         .args = try program.addTypedLocalSpan(&.{
             .{ .local = first_arg, .ty = ty },
             .{ .local = second_arg, .ty = ty },
@@ -2726,10 +2954,10 @@ test "pre-lift closure operands name target slots independently of supplied loca
     defer program.deinit();
 
     const ty = try program.types.add(.zst);
-    const first_key = checked.CaptureId.fromBinder(@enumFromInt(1));
-    const second_key = checked.CaptureId.fromBinder(@enumFromInt(2));
-    const first = try program.addLocalWithCaptureIdentity(@enumFromInt(1), ty, @enumFromInt(1), program.nextLiftCaptureId(), first_key);
-    const second = try program.addLocalWithCaptureIdentity(@enumFromInt(2), ty, @enumFromInt(2), program.nextLiftCaptureId(), second_key);
+    const first_key = checked.CaptureId.fromBinder(@fromBackingInt(@intCast(1)));
+    const second_key = checked.CaptureId.fromBinder(@fromBackingInt(@intCast(2)));
+    const first = try program.addLocalWithCaptureIdentity(@fromBackingInt(@intCast(1)), ty, @fromBackingInt(@intCast(1)), program.nextLiftCaptureId(), first_key, .lexical);
+    const second = try program.addLocalWithCaptureIdentity(@fromBackingInt(@intCast(2)), ty, @fromBackingInt(@intCast(2)), program.nextLiftCaptureId(), second_key, .lexical);
     const first_value = try program.addExpr(.{ .ty = ty, .data = .{ .local = first } });
     const second_value = try program.addExpr(.{ .ty = ty, .data = .{ .local = second } });
     const supplied = try program.addFnDefCaptureSpan(&.{
@@ -2747,15 +2975,16 @@ test "lift boundary normalizes checked capture identity" {
     defer program.deinit();
 
     const ty = try program.types.add(.zst);
-    const binder: checked.PatternBinderId = @enumFromInt(1);
+    const binder: checked.PatternBinderId = @fromBackingInt(@intCast(1));
     const checked_id = checked.CaptureId.fromBinder(binder);
     const rewritten_id = program.nextLiftCaptureId();
     const rewritten_capture = try program.addLocalWithCaptureIdentity(
-        @enumFromInt(1),
+        @fromBackingInt(@intCast(1)),
         ty,
         binder,
         rewritten_id,
         checked_id,
+        .lexical,
     );
 
     const supplied_value = try program.addExpr(.{ .ty = ty, .data = .unit });
@@ -2779,15 +3008,16 @@ test "lift boundary preserves an already-lifted capture identity" {
     defer program.deinit();
 
     const ty = try program.types.add(.zst);
-    const binder: checked.PatternBinderId = @enumFromInt(1);
+    const binder: checked.PatternBinderId = @fromBackingInt(@intCast(1));
     const checked_id = checked.CaptureId.fromBinder(binder);
     const lifted_id = program.nextLiftCaptureId();
     const capture = try program.addLocalWithCaptureIdentity(
-        @enumFromInt(1),
+        @fromBackingInt(@intCast(1)),
         ty,
         binder,
         lifted_id,
         checked_id,
+        .lexical,
     );
 
     const supplied_value = try program.addExpr(.{ .ty = ty, .data = .unit });
@@ -2811,12 +3041,12 @@ test "capture graph does not activate an operand for a removed target slot" {
     defer program.deinit();
 
     const ty = try program.types.add(.zst);
-    const binder: checked.PatternBinderId = @enumFromInt(1);
-    const stale_capture = try program.addLocalWithBinder(@enumFromInt(1), ty, binder);
+    const binder: checked.PatternBinderId = @fromBackingInt(@intCast(1));
+    const stale_capture = try program.addLocalWithBinder(@fromBackingInt(@intCast(1)), ty, binder);
     const stale_slots = try program.addTypedLocalSpan(&.{.{ .local = stale_capture, .ty = ty }});
     const callee_body = try program.addExpr(.{ .ty = ty, .data = .unit });
     const callee = try program.addFn(.{
-        .symbol = @enumFromInt(1),
+        .symbol = @fromBackingInt(@intCast(1)),
         .args = .empty(),
         .captures = stale_slots,
         .body = .{ .roc = callee_body },
@@ -2833,7 +3063,7 @@ test "capture graph does not activate an operand for a removed target slot" {
         .captures = supplied_span,
     } } });
     const caller = try program.addFn(.{
-        .symbol = @enumFromInt(2),
+        .symbol = @fromBackingInt(@intCast(2)),
         .args = .empty(),
         .captures = .empty(),
         .body = .{ .roc = reference },
@@ -2856,12 +3086,12 @@ test "capture recomputation excludes replaced bodies from the active invariant" 
     defer program.deinit();
 
     const ty = try program.types.add(.zst);
-    const binder: checked.PatternBinderId = @enumFromInt(1);
-    const stale_capture = try program.addLocalWithBinder(@enumFromInt(1), ty, binder);
+    const binder: checked.PatternBinderId = @fromBackingInt(@intCast(1));
+    const stale_capture = try program.addLocalWithBinder(@fromBackingInt(@intCast(1)), ty, binder);
     const stale_slots = try program.addTypedLocalSpan(&.{.{ .local = stale_capture, .ty = ty }});
     const callee_body = try program.addExpr(.{ .ty = ty, .data = .unit });
     const callee = try program.addFn(.{
-        .symbol = @enumFromInt(1),
+        .symbol = @fromBackingInt(@intCast(1)),
         .args = .empty(),
         .captures = stale_slots,
         .body = .{ .roc = callee_body },
@@ -2897,7 +3127,7 @@ test "capture graph propagates recursive captures with a worklist" {
     defer program.deinit();
 
     const ty = try program.types.add(.zst);
-    const captured = try program.addLocalWithBinder(@enumFromInt(1), ty, @enumFromInt(1));
+    const captured = try program.addLocalWithBinder(@fromBackingInt(@intCast(1)), ty, @fromBackingInt(@intCast(1)));
     const first = try program.reserveFnSlot();
     const second = try program.reserveFnSlot();
 
@@ -2914,14 +3144,14 @@ test "capture graph propagates recursive captures with a worklist" {
         .captures = .empty(),
     } } });
     program.setFn(first, .{
-        .symbol = @enumFromInt(1),
+        .symbol = @fromBackingInt(@intCast(1)),
         .args = .empty(),
         .captures = .empty(),
         .body = .{ .roc = first_body },
         .ret = ty,
     });
     program.setFn(second, .{
-        .symbol = @enumFromInt(2),
+        .symbol = @fromBackingInt(@intCast(2)),
         .args = .empty(),
         .captures = .empty(),
         .body = .{ .roc = call_first },

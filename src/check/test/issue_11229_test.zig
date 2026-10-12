@@ -133,5 +133,5 @@ test "issue 11229 expected shape does not erase real arithmetic obligations" {
     ;
     var env = try TestEnv.init("Test", src);
     defer env.deinit();
-    try env.assertFirstTypeError("Missing Method");
+    try env.assertFirstTypeError("Type Not Determined");
 }

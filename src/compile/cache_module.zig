@@ -48,7 +48,7 @@ pub const Header = struct {
     warning_count: u32,
 
     /// Padding to ensure alignment
-    _padding: [4]u8 = [_]u8{0} ** 4,
+    _padding: [4]u8 = @as([4]u8, @splat(0)),
 
     /// Error specific to initializing a Header from bytes
     pub const InitError = error{
@@ -131,7 +131,7 @@ pub const CacheModule = struct {
             .data_size = @intCast(total_data_size),
             .error_count = error_count,
             .warning_count = warning_count,
-            ._padding = [_]u8{0} ** 4,
+            ._padding = @as([4]u8, @splat(0)),
         };
 
         // Consolidate the scattered iovecs into the cache data buffer
@@ -311,8 +311,8 @@ test "MODULE_ENV_VERSION_HASH golden value" {
     // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
     // golden bytes below with the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x53, 0xB8, 0xFC, 0xF5, 0x27, 0xAD, 0x1F, 0xAE, 0xF9, 0xBB, 0xCF, 0xE0, 0x22, 0x6E, 0x07, 0x68,
-        0xD0, 0x49, 0xFE, 0x85, 0xBB, 0x9E, 0xEE, 0x87, 0xF6, 0x9D, 0xB8, 0xD3, 0xCF, 0x31, 0x47, 0x8D,
+        0x71, 0xD4, 0xA7, 0xFE, 0x8A, 0xEF, 0x62, 0xDA, 0xA6, 0x58, 0x11, 0x0D, 0x98, 0xA9, 0x84, 0x86,
+        0xF3, 0x7D, 0x1F, 0x53, 0x47, 0x09, 0x67, 0x9C, 0x2D, 0x54, 0xAB, 0xA8, 0xFC, 0x8D, 0x11, 0xF4,
     };
     try std.testing.expectEqualSlices(u8, &golden, &MODULE_ENV_VERSION_HASH);
 }

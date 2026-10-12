@@ -230,7 +230,11 @@ NO CHANGE
 			(ty-lookup (name "MyType") (local))))
 	(d-let
 		(p-assign (ident "result2"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-runtime-error (tag "erroneous_value_expr")
+			(e-lookup-local
+				(p-assign (ident "c")))
+			(e-lookup-local
+				(p-assign (ident "d"))))
 		(annotation
 			(ty-lookup (name "MyType") (local))))
 	(s-nominal-decl

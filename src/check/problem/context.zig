@@ -56,11 +56,10 @@ pub const Context = union(enum) {
     /// From a type annotation
     type_annotation,
 
-    /// The post-body polarity audit: the definition produced a tag its
-    /// implicitly opened annotation row does not list (design.md "Polarity").
-    /// Carries the annotated union's region directly, because the producing
-    /// expression is unknown once unification absorbed the tag into the
-    /// opened extension.
+    /// The definition produced a tag its implicitly opened annotation row
+    /// does not list (design.md "Polarity"). Carries the reported region
+    /// directly: the expression whose relation the bounded row refused, or the
+    /// annotated union when a generated codec's demand added the tag.
     tag_not_in_annotation: TagNotInAnnotationContext,
 
     /// A record-destructure pattern binding (e.g. `{ x, y } = ...`). Tracked so
@@ -105,6 +104,10 @@ pub const Context = union(enum) {
     expect,
     /// recursive definition mismatch
     recursive_def: RecursiveDef,
+    /// A use that instantiated an annotated definition's predeclared scheme
+    /// relies on a type the definition's published scheme does not have
+    /// (design.md "Predeclared Scheme Uses").
+    predeclared_use: PredeclaredUseContext,
 
     /// Context for function call
     pub const FnCallArityContext = struct {
@@ -195,14 +198,6 @@ pub const Context = union(enum) {
         match_expr: CIR.Expr.Idx,
     };
 
-    /// Context for tag argument type errors
-    pub const TagArgContext = struct {
-        /// Name of the tag
-        tag_name: Ident.Idx,
-        /// 0-based index of the argument
-        arg_index: u32,
-    };
-
     /// Context for binary operator type errors
     pub const BinopContext = struct {
         operator: Binop,
@@ -251,14 +246,6 @@ pub const Context = union(enum) {
         record_name: ?Ident.Idx,
     };
 
-    /// Context for method call type errors
-    pub const MethodCallContext = struct {
-        /// Name of the method being called
-        method_name: Ident.Idx,
-        /// The type variable of the dispatcher (receiver)
-        dispatcher_var: Var,
-    };
-
     /// Context for list element type errors
     pub const ListEntryContext = struct {
         /// 0-based index of the element
@@ -271,6 +258,9 @@ pub const Context = union(enum) {
 
     /// Context for a `?` early return that does not match the function body
     pub const TryReturnContext = struct {
+        /// Host declaration reached through the operand's unchanged forwarding
+        /// path, interned in the reporting module. Diagnostic-only provenance.
+        hosted_origin: ?Ident.Idx = null,
         /// A `?` that produces the function body's own value, when there is
         /// one. It unwraps the `Try` the body would otherwise return, so it is
         /// the likely cause of the mismatch being reported.
@@ -330,14 +320,35 @@ pub const Context = union(enum) {
     /// Context for method type mismatch (where clause)
     /// Context for a tag the definition produced beyond its annotation
     pub const TagNotInAnnotationContext = struct {
-        /// The region of the annotated tag union
+        /// The expression that produced the tag, the pattern that matched it,
+        /// or the annotated tag union when a generated codec demanded it
         region: base.Region,
         /// The first tag the definition produced beyond the annotation
         tag_name: Ident.Idx,
+        source: Source,
+
+        pub const Source = enum {
+            /// An expression in the definition's body produced the tag.
+            expression,
+            /// A pattern matched the tag on a value that an annotated
+            /// definition also produces.
+            pattern,
+            /// A generated codec the definition introduced demands the tag.
+            generated_codec,
+        };
     };
 
     pub const RecursiveDef = struct {
         /// The def name
+        def_name: ?Ident.Idx,
+    };
+
+    /// Context for a predeclared-scheme use rejected by the definition's
+    /// published scheme
+    pub const PredeclaredUseContext = struct {
+        /// The use: the reference or the dispatching expression
+        region: base.Region,
+        /// The referenced definition's name, when the use names it
         def_name: ?Ident.Idx,
     };
 };

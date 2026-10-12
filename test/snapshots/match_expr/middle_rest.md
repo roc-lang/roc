@@ -86,13 +86,11 @@ match items {
 								(p-assign (ident "last")))
 							(rest-at (index 1)))))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 237)
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "first"))))
-						(args
-							(e-lookup-local
-								(p-assign (ident "last")))))))
+					(e-binop (op "add")
+						(e-lookup-local
+							(p-assign (ident "first")))
+						(e-lookup-local
+							(p-assign (ident "last"))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -105,23 +103,17 @@ match items {
 							(rest-at (index 2)
 								(p-assign (ident "middle"))))))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 243)
-						(receiver
-							(e-dispatch-call (method "plus") (constraint-fn-var 241)
-								(receiver
-									(e-dispatch-call (method "plus") (constraint-fn-var 239)
-										(receiver
-											(e-lookup-local
-												(p-assign (ident "a"))))
-										(args
-											(e-lookup-local
-												(p-assign (ident "b"))))))
-								(args
-									(e-lookup-local
-										(p-assign (ident "x"))))))
-						(args
+					(e-binop (op "add")
+						(e-binop (op "add")
+							(e-binop (op "add")
+								(e-lookup-local
+									(p-assign (ident "a")))
+								(e-lookup-local
+									(p-assign (ident "b"))))
 							(e-lookup-local
-								(p-assign (ident "y")))))))
+								(p-assign (ident "x"))))
+						(e-lookup-local
+							(p-assign (ident "y"))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)

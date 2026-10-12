@@ -15,7 +15,6 @@ const Content = types.Content;
 const Var = types.Var;
 const Record = types.Record;
 const Presence = types.RecordField.Presence;
-const TypeIdent = types.TypeIdent;
 const Ident = base.Ident;
 
 /// Result of unwrapping type aliases
@@ -45,13 +44,6 @@ pub fn unwrapAliases(type_store: *const TypeStore, type_var: Var, max_depth: usi
         .content = content,
         .depth = depth,
     };
-}
-
-/// Unwrap aliases and return record if found, null otherwise.
-/// This is a convenience function that combines alias unwrapping with record extraction.
-pub fn unwrapToRecord(type_store: *const TypeStore, type_var: Var, max_depth: usize) ?Record {
-    const result = unwrapAliases(type_store, type_var, max_depth);
-    return result.content.unwrapRecord();
 }
 
 /// Information about a single record field
@@ -110,96 +102,13 @@ pub fn getRecordFieldsIterator(type_store: *const TypeStore, record: Record) Rec
     };
 }
 
-/// Extract the base type name from a formatted type string.
-/// E.g., "List a" → "List", "Dict k v" → "Dict", "Foo[Bar]" → "Foo", "Foo(a)" → "Foo"
-///
-/// This is useful for getting the primary type name from a type string
-/// that may include type parameters or other decorations.
-pub fn extractBaseTypeName(type_str: []const u8) []const u8 {
-    // Skip leading whitespace
-    var start: usize = 0;
-    while (start < type_str.len and (type_str[start] == ' ' or type_str[start] == '\t')) {
-        start += 1;
-    }
-
-    // Find end of the type name (stop at space, bracket, paren, brace, or end)
-    var end = start;
-    while (end < type_str.len) {
-        const c = type_str[end];
-        if (c == ' ' or c == '[' or c == '(' or c == '{' or c == '<') break;
-        end += 1;
-    }
-
-    return type_str[start..end];
-}
-
-/// Get the alias type identifier if the content is an alias.
-/// Returns null if the content is not an alias.
-pub fn getAliasIdent(content: Content) ?TypeIdent {
-    return if (std.meta.activeTag(content) == .alias) content.alias.ident else null;
-}
-
 /// Check if a content is an alias and get the backing var.
 /// Returns the backing var if the content is an alias, null otherwise.
 pub fn getAliasBackingVar(type_store: *const TypeStore, content: Content) ?Var {
     return if (std.meta.activeTag(content) == .alias) type_store.getAliasBackingVar(content.alias) else null;
 }
 
-/// Get the backing var for a type variable if it's an alias.
-/// This resolves the type variable first, then checks if it's an alias.
-/// Returns null if the resolved content is not an alias.
-pub fn getTypeVarAliasBackingVar(type_store: *const TypeStore, type_var: Var) ?Var {
-    const resolved = type_store.resolveVar(type_var);
-    return getAliasBackingVar(type_store, resolved.desc.content);
-}
-
-/// Check if a type variable resolves to a record type (directly or through aliases).
-/// Returns the record if found, null otherwise.
-pub fn isRecordType(type_store: *const TypeStore, type_var: Var, max_alias_depth: usize) ?Record {
-    return unwrapToRecord(type_store, type_var, max_alias_depth);
-}
-
-/// Check if content is an error type
-pub fn isErrorContent(content: Content) bool {
-    return content == .err;
-}
-
-/// Check if a type variable resolves to an error type
-pub fn isErrorType(type_store: *const TypeStore, type_var: Var) bool {
-    const resolved = type_store.resolveVar(type_var);
-    return isErrorContent(resolved.desc.content);
-}
-
 // Tests
-
-test "extractBaseTypeName basic" {
-    const testing = std.testing;
-
-    try testing.expectEqualStrings("List", extractBaseTypeName("List a"));
-    try testing.expectEqualStrings("Dict", extractBaseTypeName("Dict k v"));
-    try testing.expectEqualStrings("Str", extractBaseTypeName("Str"));
-    try testing.expectEqualStrings("Foo", extractBaseTypeName("Foo[Bar]"));
-    try testing.expectEqualStrings("Foo", extractBaseTypeName("Foo(a)"));
-    try testing.expectEqualStrings("Foo", extractBaseTypeName("Foo{bar}"));
-    try testing.expectEqualStrings("Foo", extractBaseTypeName("Foo<T>"));
-}
-
-test "extractBaseTypeName with whitespace" {
-    const testing = std.testing;
-
-    try testing.expectEqualStrings("List", extractBaseTypeName("  List a"));
-    try testing.expectEqualStrings("Dict", extractBaseTypeName("\tDict k v"));
-    try testing.expectEqualStrings("Str", extractBaseTypeName("  \t  Str"));
-}
-
-test "extractBaseTypeName empty and edge cases" {
-    const testing = std.testing;
-
-    try testing.expectEqualStrings("", extractBaseTypeName(""));
-    try testing.expectEqualStrings("", extractBaseTypeName("   "));
-    try testing.expectEqualStrings("", extractBaseTypeName("(a)"));
-    try testing.expectEqualStrings("", extractBaseTypeName("[tag]"));
-}
 
 test "RecordFieldsIterator" {
     const testing = std.testing;

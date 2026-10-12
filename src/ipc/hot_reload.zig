@@ -36,7 +36,7 @@ pub const DescriptorState = enum(u32) {
 /// block. The compiler parent owns byte reclamation; the shim only updates refs.
 pub const ImageDescriptor = extern struct {
     magic: u32 = DESCRIPTOR_MAGIC,
-    state: u32 = @intFromEnum(DescriptorState.reclaimed),
+    state: u32 = @backingInt(DescriptorState.reclaimed),
     refs: u32 = 0,
     _padding: u32 = 0,
     generation: u64 = 0,
@@ -57,7 +57,7 @@ pub const Control = extern struct {
     image_size: u64 = 0,
     ack_sequence: u64 = 0,
     acknowledged_generation: u64 = 0,
-    status: u32 = @intFromEnum(Status.none),
+    status: u32 = @backingInt(Status.none),
     _ack_padding: u32 = 0,
 };
 
@@ -72,21 +72,10 @@ pub fn controlFromHeader(header: *SharedMemoryAllocator.Header) *Control {
     return @ptrCast(@alignCast(&header.reserved));
 }
 
-/// Reinterpret a const shared-memory header as its embedded control block.
-pub fn controlFromConstHeader(header: *const SharedMemoryAllocator.Header) *const Control {
-    return @ptrCast(@alignCast(&header.reserved));
-}
-
 /// Locate the mutable control block from the base pointer of a shared mapping.
 pub fn controlFromBase(base_ptr: [*]align(1) u8) *Control {
     const header: *SharedMemoryAllocator.Header = @ptrCast(@alignCast(base_ptr));
     return controlFromHeader(header);
-}
-
-/// Locate the const control block from the base pointer of a shared mapping.
-pub fn controlFromConstBase(base_ptr: [*]align(1) const u8) *const Control {
-    const header: *const SharedMemoryAllocator.Header = @ptrCast(@alignCast(base_ptr));
-    return controlFromConstHeader(header);
 }
 
 /// Return whether the control block has the expected magic and format version.
@@ -127,7 +116,7 @@ inline fn storeU32(ptr: *u32, value: u32, comptime order: std.builtin.AtomicOrde
 }
 
 fn builtinModeDebug() bool {
-    return @import("builtin").mode == .Debug;
+    return @import("builtin").mode == .debug;
 }
 
 fn nextOddSequence(sequence: u64) u64 {
@@ -154,7 +143,7 @@ pub fn prepareDescriptor(
     reset_refs: bool,
 ) void {
     descriptor.magic = DESCRIPTOR_MAGIC;
-    storeU32(&descriptor.state, @intFromEnum(DescriptorState.writing), .release);
+    storeU32(&descriptor.state, @backingInt(DescriptorState.writing), .release);
     if (reset_refs) storeU32(&descriptor.refs, 0, .release);
     descriptor._padding = 0;
     storeU64(&descriptor.generation, generation, .release);
@@ -168,17 +157,17 @@ pub fn prepareDescriptor(
 pub fn publishDescriptor(control: *Control, generation: u64, descriptor_offset: usize, descriptor: *ImageDescriptor) void {
     if (builtinModeDebug()) {
         if (descriptor_offset == invalid_descriptor_offset) {
-            std.debug.panic("hot reload invariant violated: invalid descriptor offset", .{});
+            invariant("hot reload invariant violated: invalid descriptor offset", .{});
         }
         if (descriptor.magic != DESCRIPTOR_MAGIC) {
-            std.debug.panic("hot reload invariant violated: published descriptor missing magic", .{});
+            invariant("hot reload invariant violated: published descriptor missing magic", .{});
         }
     }
 
     const image_offset = loadU64(&descriptor.image_offset, .acquire);
     const image_size = loadU64(&descriptor.image_size, .acquire);
     storeU64(&descriptor.generation, generation, .release);
-    storeU32(&descriptor.state, @intFromEnum(DescriptorState.published), .release);
+    storeU32(&descriptor.state, @backingInt(DescriptorState.published), .release);
 
     const start = nextOddSequence(loadU64(&control.publish_sequence, .acquire));
     storeU64(&control.publish_sequence, start, .release);
@@ -266,16 +255,6 @@ pub fn descriptorFromOffset(base_ptr: [*]align(1) u8, total_size: usize, descrip
     return descriptor;
 }
 
-/// Locate a const image descriptor by shared-memory byte offset.
-pub fn descriptorFromConstOffset(base_ptr: [*]align(1) const u8, total_size: usize, descriptor_offset: usize) ?*const ImageDescriptor {
-    if (!validDescriptorRange(total_size, descriptor_offset)) return null;
-    const ptr = base_ptr + descriptor_offset;
-    if (@intFromPtr(ptr) % @alignOf(ImageDescriptor) != 0) return null;
-    const descriptor: *const ImageDescriptor = @ptrCast(@alignCast(ptr));
-    if (descriptor.magic != DESCRIPTOR_MAGIC) return null;
-    return descriptor;
-}
-
 /// Coherent snapshot of one image descriptor's reclamation metadata.
 pub const ImageDescriptorSnapshot = struct {
     state: DescriptorState,
@@ -300,20 +279,14 @@ pub fn descriptorSnapshot(descriptor: *const ImageDescriptor) ImageDescriptorSna
     };
 }
 
-/// Return the current state of a descriptor addressed by offset.
-pub fn descriptorSnapshotFromOffset(base_ptr: [*]align(1) const u8, total_size: usize, descriptor_offset: usize) ?ImageDescriptorSnapshot {
-    const descriptor = descriptorFromConstOffset(base_ptr, total_size, descriptor_offset) orelse return null;
-    return descriptorSnapshot(descriptor);
-}
-
 /// Mark a descriptor as no longer published but not yet known reusable.
 pub fn markDescriptorRetired(descriptor: *ImageDescriptor) void {
-    storeU32(&descriptor.state, @intFromEnum(DescriptorState.retired), .release);
+    storeU32(&descriptor.state, @backingInt(DescriptorState.retired), .release);
 }
 
 /// Mark a descriptor reusable by a future compiler rebuild.
 pub fn markDescriptorReclaimed(descriptor: *ImageDescriptor) void {
-    storeU32(&descriptor.state, @intFromEnum(DescriptorState.reclaimed), .release);
+    storeU32(&descriptor.state, @backingInt(DescriptorState.reclaimed), .release);
 }
 
 /// Retain the latest published image while the shim installs it for direct execution.
@@ -355,7 +328,7 @@ pub fn acquirePublishedImage(control: *Control, base_ptr: [*]align(1) u8, total_
 pub fn retainDescriptor(descriptor: *ImageDescriptor) void {
     const previous_refs = @atomicRmw(u32, &descriptor.refs, .Add, 1, .acquire);
     if (builtinModeDebug() and previous_refs == std.math.maxInt(u32)) {
-        std.debug.panic("hot reload invariant violated: image descriptor refcount overflowed", .{});
+        invariant("hot reload invariant violated: image descriptor refcount overflowed", .{});
     }
 }
 
@@ -363,7 +336,7 @@ pub fn retainDescriptor(descriptor: *ImageDescriptor) void {
 pub fn releaseDescriptor(descriptor: *ImageDescriptor) void {
     const previous = @atomicRmw(u32, &descriptor.refs, .Sub, 1, .acq_rel);
     if (builtinModeDebug() and previous == 0) {
-        std.debug.panic("hot reload invariant violated: released an unreferenced image descriptor", .{});
+        invariant("hot reload invariant violated: released an unreferenced image descriptor", .{});
     }
 }
 
@@ -371,7 +344,7 @@ pub fn releaseDescriptor(descriptor: *ImageDescriptor) void {
 pub fn acknowledge(control: *Control, generation: u64, status: Status) void {
     const start = nextOddSequence(loadU64(&control.ack_sequence, .acquire));
     storeU64(&control.ack_sequence, start, .release);
-    @atomicStore(u32, &control.status, @intFromEnum(status), .release);
+    @atomicStore(u32, &control.status, @backingInt(status), .release);
     storeU64(&control.acknowledged_generation, generation, .release);
     storeU64(&control.ack_sequence, start +% 1, .release);
 }
@@ -406,15 +379,15 @@ pub fn acknowledgement(control: *const Control) ?Acknowledgement {
 }
 
 fn statusFromRaw(raw: u32) Status {
-    if (raw == @intFromEnum(Status.accepted)) return .accepted;
-    if (raw == @intFromEnum(Status.rejected)) return .rejected;
+    if (raw == @backingInt(Status.accepted)) return .accepted;
+    if (raw == @backingInt(Status.rejected)) return .rejected;
     return .none;
 }
 
 fn descriptorStateFromRaw(raw: u32) DescriptorState {
-    if (raw == @intFromEnum(DescriptorState.writing)) return .writing;
-    if (raw == @intFromEnum(DescriptorState.published)) return .published;
-    if (raw == @intFromEnum(DescriptorState.retired)) return .retired;
+    if (raw == @backingInt(DescriptorState.writing)) return .writing;
+    if (raw == @backingInt(DescriptorState.published)) return .published;
+    if (raw == @backingInt(DescriptorState.retired)) return .retired;
     return .reclaimed;
 }
 
@@ -433,7 +406,7 @@ fn testDescriptor(base_ptr: [*]align(1) u8, offset: usize) *ImageDescriptor {
 }
 
 test "hot reload control publishes and acknowledges generations" {
-    var bytes: [4096]u8 align(@alignOf(ImageDescriptor)) = [_]u8{0} ** 4096;
+    var bytes: [4096]u8 align(@alignOf(ImageDescriptor)) = @as([4096]u8, @splat(0));
     const base: [*]align(1) u8 = &bytes;
     var control = std.mem.zeroes(Control);
 
@@ -489,7 +462,7 @@ test "hot reload acknowledgement snapshots reject in-progress writes" {
     control.format_version = FORMAT_VERSION;
 
     storeU64(&control.ack_sequence, 5, .release);
-    @atomicStore(u32, &control.status, @intFromEnum(Status.accepted), .release);
+    @atomicStore(u32, &control.status, @backingInt(Status.accepted), .release);
     storeU64(&control.acknowledged_generation, 2, .release);
     try std.testing.expect(acknowledgement(&control) == null);
 
@@ -504,7 +477,7 @@ test "hot reload control block fits in shared memory reserved header bytes" {
 }
 
 test "hot reload image descriptors can be retained and released" {
-    var bytes: [4096]u8 align(@alignOf(ImageDescriptor)) = [_]u8{0} ** 4096;
+    var bytes: [4096]u8 align(@alignOf(ImageDescriptor)) = @as([4096]u8, @splat(0));
     const base: [*]align(1) u8 = &bytes;
     var control = std.mem.zeroes(Control);
 
@@ -523,7 +496,7 @@ test "hot reload image descriptors can be retained and released" {
 }
 
 test "hot reload image retain rejects descriptors that stopped being current" {
-    var bytes: [8192]u8 align(@alignOf(ImageDescriptor)) = [_]u8{0} ** 8192;
+    var bytes: [8192]u8 align(@alignOf(ImageDescriptor)) = @as([8192]u8, @splat(0));
     const base: [*]align(1) u8 = &bytes;
     var control = std.mem.zeroes(Control);
 
@@ -544,4 +517,12 @@ test "hot reload image retain rejects descriptors that stopped being current" {
     try std.testing.expectEqual(@as(u32, 0), descriptorSnapshot(desc0).refs);
     try std.testing.expectEqual(@as(u32, 1), descriptorSnapshot(desc1).refs);
     releaseDescriptor(retained.descriptor);
+}
+
+/// A violated compiler invariant (design.md): builds with runtime safety
+/// panic with this message, and optimized builds treat it as unreachable.
+/// The `ipc` module does not depend on `base`.
+inline fn invariant(comptime fmt: []const u8, args: anytype) noreturn {
+    if (std.debug.runtime_safety) std.debug.panic(fmt, args);
+    unreachable;
 }

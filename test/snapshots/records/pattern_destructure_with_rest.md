@@ -12,7 +12,6 @@ match person {
 ~~~
 # EXPECTED
 NAME NOT IN SCOPE - pattern_destructure_with_rest.md:1:7:1:13
-MISSING METHOD - pattern_destructure_with_rest.md:2:33:2:80
 # PROBLEMS
 ~~~clojure
 (reports
@@ -28,31 +27,7 @@ MISSING METHOD - pattern_destructure_with_rest.md:2:33:2:80
 			(reflow "Is it misspelled, or is there an import missing?")
 			(line-break)
 			(line-break)
-			(source-region (file "pattern_destructure_with_rest.md") (start 1 7) (end 1 13) (annotation error) (line-text "match person {"))))
-	(report
-		(severity runtime_error)
-		(title "Missing Method")
-		(region (start 2 33) (end 2 80))
-		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "is_gt")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
-		(document
-			(source-region (file "pattern_destructure_with_rest.md") (start 2 33) (end 2 80) (annotation error) (line-text "    { first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)"))
-			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "is_gt")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "[LearnAboutStringsInRoc(Str)]")
-			(annotation-end))))
+			(source-region (file "pattern_destructure_with_rest.md") (start 1 7) (end 1 13) (annotation error) (line-text "match person {")))))
 ~~~
 # TOKENS
 ~~~zig
@@ -106,9 +81,23 @@ match person {
 									(rest-pattern
 										(p-assign (ident "others"))))))))
 				(value
-					(e-runtime-error (tag "erroneous_value_expr")))))))
+					(e-binop (op "gt")
+						(e-call
+							(e-lookup-external
+								(builtin))
+							(e-lookup-local
+								(p-assign (ident "first_name"))))
+						(e-call
+							(e-lookup-external
+								(builtin))
+							(e-field-access
+								(receiver
+									(e-lookup-local
+										(p-assign (ident "others"))))
+								(segments
+									(segment (name "last_name") (mode "required")))))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Bool"))
+(expr (type "_a"))
 ~~~

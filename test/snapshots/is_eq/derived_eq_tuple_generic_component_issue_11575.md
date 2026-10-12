@@ -113,7 +113,19 @@ NO CHANGE
 			(args
 				(p-assign (ident "x"))
 				(p-assign (ident "y")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+			(e-runtime-error (tag "erroneous_value_expr")
+				(e-tuple
+					(elems
+						(e-lookup-local
+							(p-assign (ident "x")))
+						(e-lookup-local
+							(p-assign (ident "y")))))
+				(e-tuple
+					(elems
+						(e-lookup-local
+							(p-assign (ident "x")))
+						(e-lookup-local
+							(p-assign (ident "y")))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "a"))
@@ -121,7 +133,7 @@ NO CHANGE
 				(ty-lookup (name "Bool") (builtin)))))
 	(d-let
 		(p-assign (ident "x"))
-		(e-call (constraint-fn-var 246)
+		(e-call (constraint-fn-var 250)
 			(e-lookup-local
 				(p-assign (ident "eq")))
 			(e-lambda

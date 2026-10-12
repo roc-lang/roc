@@ -31,6 +31,7 @@
 //! the matched chain is that local's only use.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const core = @import("lir_core");
@@ -58,13 +59,13 @@ pub fn run(store: *LirStore) ResourceError!void {
     const proc_count = store.procSpecCount();
     var proc_index: usize = 0;
     while (proc_index < proc_count) : (proc_index += 1) {
-        const proc_id: LIR.LirProcSpecId = @enumFromInt(proc_index);
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(proc_index));
         // Only a body with the shape's flag can carry the caller shape; Debug
         // builds run the excluded procedures too and verify nothing rewrites.
         const admitted = store.getProcSpec(proc_id).shapes.str_call;
-        if (!admitted and builtin.mode != .Debug) continue;
+        if (!admitted and builtin.mode != .debug) continue;
         const rewrote = try pass.transformProc(proc_id);
-        if (rewrote and !admitted) @panic("string-append pass rewrote a procedure whose shapes excluded it");
+        if (rewrote and !admitted) invariant("{s}", .{"string-append pass rewrote a procedure whose shapes excluded it"});
     }
 }
 
@@ -184,14 +185,14 @@ const AppendRewriter = struct {
         return try self.concatInto(cloner, target, self.accumulator, try cloner.mapLocal(value), fused, ret_stmt);
     }
 
-    pub fn interceptStmt(self: *AppendRewriter, cloner: anytype, _: CFStmtId, stmt: LIR.CFStmt, origin: LIR.StmtOrigin) ResourceError!?CFStmtId {
+    pub fn interceptStmt(self: *AppendRewriter, cloner: anytype, _: CFStmtId, stmt: LIR.CFStmt, origin: LIR.StmtOrigin) ResourceError!body_clone.Intercept {
         if (stmt == .assign_low_level) {
             const s = stmt.assign_low_level;
             if (s.op == .str_concat and cloner.directReturnOf(s.next, s.target)) {
-                return try self.cloneConcatReturn(cloner, s, origin);
+                return .{ .done = try self.cloneConcatReturn(cloner, s, origin) };
             }
         }
-        return null;
+        return .none;
     }
 
     fn cloneConcatReturn(self: *AppendRewriter, cloner: anytype, s: anytype, origin: LIR.StmtOrigin) ResourceError!CFStmtId {
@@ -207,13 +208,7 @@ const AppendRewriter = struct {
     }
 
     fn concatInto(_: *AppendRewriter, cloner: anytype, target: LocalId, left: LocalId, right: LocalId, origin: LIR.StmtOrigin, next: CFStmtId) ResourceError!CFStmtId {
-        return try cloner.store.addCFStmt(.{ .assign_low_level = .{
-            .target = target,
-            .op = .str_concat,
-            .rc_effect = LowLevelOp.str_concat.rcEffect(),
-            .args = try cloner.store.addLocalSpan(&.{ left, right }),
-            .next = next,
-        } }, origin);
+        return try cloner.store.addLowLevelStmt(target, .str_concat, &.{ left, right }, next, origin);
     }
 };
 

@@ -22,7 +22,7 @@ fn isFastPath(comptime T: type, n: Number(T)) bool {
     return info.min_exponent_fast_path <= n.exponent and
         n.exponent <= info.max_exponent_fast_path_disguised and
         n.mantissa <= info.max_mantissa_fast_path and
-        !n.many_digits;
+        !n.truncated_nonzero;
 }
 
 // upper bound for tables is floor(mantissaDigits(T) / log2(5))

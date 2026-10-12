@@ -1,4 +1,4 @@
-import RecordFieldInfo exposing [RecordFieldInfo]
+import RecordFieldInfo
 
 HostedFunctionInfo := {
     arg_fields : List(RecordFieldInfo),

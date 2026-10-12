@@ -1,4 +1,4 @@
-import Record exposing [Record]
+import Record
 
 f : Record -> Str
 f = |Record.Bad(b)| b

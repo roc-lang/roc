@@ -28,7 +28,7 @@ Any expression which could have been a top-level declaration, even if it isn't *
 
 For example, `z.to_str()` could have been a top-level declaration because it only references a top-level declaration (namely, `z`). As such, `z.to_str()` will also get evaluated at compile time to produce the string `"3"`.
 
-The [string interpolation](strings#string-literal-conversion-and-interpolation) expression `"z is ${z.to_str()}"` also gets evaluated at compile time. It could have been a top-level declaration because it depends only on a [pure function](functions#pure-functions) (`to_str`) being called on a top-level value (`z`).
+The [string interpolation](strings#interpolation) expression `"z is ${z.to_str()}"` also gets evaluated at compile time. It could have been a top-level declaration because it depends only on a [pure function](functions#pure-functions) (`to_str`) being called on a top-level value (`z`).
 
 Putting all this together, the string `"z is 3"` will end up embedded in the static data section of this program's final binary. The values `1`, `2`, `3`, and `"z is "` (from the interpolation) will be dead-code eliminated and will not be stored in the binary.
 
@@ -69,6 +69,39 @@ An eligible call like `List.with_capacity(123)` will still be evaluated at compi
 
 Note that it's not `List.with_capacity` itself that's special-cased; rather, it's the empty builtin collections. You can still build nonempty lists at compile time by calling functions which use `List.with_capacity`; storing it in the binary is only skipped if its length is actually zero at the end of compile-time evaluation.
 
+## Code With Errors
+
+Roc keeps doing useful work in a program that has compilation errors (such as type mismatches): the
+code that has an error crashes if it runs, and everything else works normally. Compile-time
+evaluation follows the same principle, so every expression that can be evaluated at compile time
+still is.
+
+If evaluating an expression at compile time reaches code that has a compilation error, no matter how
+indirectly it gets there (through a chain of function calls, a method call, a call made by `==` or a
+[parser](parsers), and so on), Roc stops evaluating that expression and reports nothing beyond the
+original error. Using the expression's value at runtime crashes, just as running the code with the
+error would. For example:
+
+```roc
+Format := [Default].{
+    parse_u8 : Format, {} -> Try({ value : U8, rest : {} }, [Bad])
+    parse_u8 = |_, _| Err(OtherErr)
+}
+
+parsed = (U8.parser_for(Format.Default))({})
+fine = 1 + 2
+```
+
+`parse_u8` has a type mismatch (it can return `OtherErr`, which its annotation doesn't list), and
+the parser that `U8.parser_for(Format.Default)` builds calls `parse_u8`. So evaluating `parsed`
+reaches code with an error: the type mismatch is reported once, not a second time as a compile-time
+crash, and using `parsed` at runtime crashes. `fine` doesn't reach `parse_u8`, so it gets evaluated
+at compile time as usual. So does an expression that calls a function containing an error but never
+reaches that part of it, for example because a condition takes the other branch.
+
+The same rule applies to top-level [`expect`s](statements#top-level-expect): if running one reaches
+code with an error, `roc test` reports it as a compiler error instead of a pass or a failure.
+
 ## Performance
 
 Doing work at compile time instead of runtime ordinarily makes a program run faster because it does less work.
@@ -83,7 +116,11 @@ If you call this at runtime with a large number, it can make a big list at runti
 
 In contrast, if you do it at compile time, and the big list ends up in the program's static binary data, then when the binary gets loaded into memory to run the program, the memory is always being taken up even if that code path never gets run.
 
-- trick: both branches of an [`if`](if-else) that depends on args, gets optimized away prob hopefully haha
+Values that were computed at compile time are also never freed, and they're never
+[unique](expressions#opportunistic-mutation), since the compiled program shares one copy of each of
+them. So the first time a program updates one of these values (for example, by appending to a list
+that was built at compile time), the update starts by copying it. After that, the copy is unique,
+so later updates to it can happen in place as usual.
 
 ## Uses
 

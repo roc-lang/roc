@@ -172,7 +172,6 @@ TYPE APPLICATION NEEDS PARENTHESES - fuzz_crash_027.md:40:5:40:6
 UNEXPECTED STATEMENT - fuzz_crash_027.md:40:7:40:8
 UNEXPECTED STATEMENT - fuzz_crash_027.md:40:9:40:10
 UNEXPECTED STATEMENT - fuzz_crash_027.md:41:1:41:2
-EXPECTED RECORD ACCESSOR - fuzz_crash_027.md:110:2:110:5
 EXPECTED CALL ARGUMENT END - fuzz_crash_027.md:124:2:124:3
 UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:124:3:124:4
 EXPECTED LIST SEPARATOR - fuzz_crash_027.md:125:3:125:4
@@ -246,7 +245,6 @@ UNDECLARED TYPE - fuzz_crash_027.md:99:14:99:20
 VAR NAME MISSING `$` - fuzz_crash_027.md:102:6:102:12
 NAME NOT IN SCOPE - fuzz_crash_027.md:103:9:103:13
 NAME NOT IN SCOPE - fuzz_crash_027.md:114:2:114:11
-UNUSED VARIABLE - fuzz_crash_027.md:104:2:104:5
 UNUSED VARIABLE - fuzz_crash_027.md:119:2:119:10
 UNUSED VARIABLE - fuzz_crash_027.md:120:2:120:6
 UNUSED VARIABLE - fuzz_crash_027.md:121:2:121:6
@@ -260,6 +258,7 @@ NAME NOT BOUND IN EVERY ALTERNATIVE - fuzz_crash_027.md:64:17:64:20
 MISSING METHOD - fuzz_crash_027.md:68:3:68:8
 MISSING METHOD - fuzz_crash_027.md:70:3:70:8
 TYPE MISMATCH - fuzz_crash_027.md:64:2:64:2
+TYPE MISMATCH - fuzz_crash_027.md:106:3:106:6
 TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 # PROBLEMS
 ~~~clojure
@@ -382,42 +381,6 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 			(line-break)
 			(line-break)
 			(source-region (file "fuzz_crash_027.md") (start 41 1) (end 41 2) (annotation error) (line-text "] #se"))))
-	(report
-		(severity runtime_error)
-		(title "Expected Record Accessor")
-		(region (start 110 2) (end 110 5))
-		(headline
-			(reflow "I was parsing access after `.`, and I expected a field name or tuple index."))
-		(document
-			(reflow "Required record access uses ")
-			(annotated code ".name")
-			(reflow ", optional record access uses ")
-			(annotated code ".?name")
-			(reflow ", and tuple access uses ")
-			(annotated code ".0")
-			(reflow ". Accessor names must be lowercase and adjacent to their punctuation.")
-			(line-break)
-			(line-break)
-			(text "For example:")
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "person.name")
-			(line-break)
-			(indent 1)
-			(text "maybe_person.?name")
-			(line-break)
-			(indent 1)
-			(text "pair.0")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(text "I found ")
-			(annotated code "...")
-			(text " here.")
-			(line-break)
-			(line-break)
-			(source-region (file "fuzz_crash_027.md") (start 110 2) (end 110 5) (annotation error) (line-text "\t..."))))
 	(report
 		(severity runtime_error)
 		(title "Expected Call Argument End")
@@ -1766,7 +1729,7 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "rest")
-			(reflow " is defined here and then never used."))
+			(reflow " is defined here and then never used:"))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_rest")
@@ -1795,7 +1758,7 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "rest")
-			(reflow " is defined here and then never used."))
+			(reflow " is defined here and then never used:"))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_rest")
@@ -1809,7 +1772,7 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "ist")
-			(reflow " is defined here and then never used."))
+			(reflow " is defined here and then never used:"))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_ist")
@@ -1851,7 +1814,7 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "rest")
-			(reflow " is defined here and then never used."))
+			(reflow " is defined here and then never used:"))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_rest")
@@ -1880,7 +1843,7 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "b")
-			(reflow " is defined here and then never used."))
+			(reflow " is defined here and then never used:"))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_b")
@@ -1960,25 +1923,11 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 	(report
 		(severity warning)
 		(title "Unused Variable")
-		(region (start 104 2) (end 104 5))
-		(headline
-			(reflow "Variable ")
-			(annotated symbol-unqualified "tag")
-			(reflow " is defined here and then never used."))
-		(document
-			(reflow "If you don't need this variable, prefix it with an underscore like ")
-			(annotated symbol-unqualified "_tag")
-			(reflow " to suppress this warning.")
-			(line-break)
-			(source-region (file "fuzz_crash_027.md") (start 104 2) (end 104 5) (annotation error) (line-text "\ttag = Blue"))))
-	(report
-		(severity warning)
-		(title "Unused Variable")
 		(region (start 119 2) (end 119 10))
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "tag_with")
-			(reflow " is defined here and then never used."))
+			(reflow " is defined here and then never used:"))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_tag_with")
@@ -1992,7 +1941,7 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "ited")
-			(reflow " is defined here and then never used."))
+			(reflow " is defined here and then never used:"))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_ited")
@@ -2006,7 +1955,7 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "list")
-			(reflow " is defined here and then never used."))
+			(reflow " is defined here and then never used:"))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_list")
@@ -2251,6 +2200,44 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 			(reflow "These can never match! Either the pattern or expression has a problem.")))
 	(report
 		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 106 3) (end 106 6))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "return")
+			(reflow " ")
+			(reflow "does not match the function's return type."))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 106 3) (end 106 6) (annotation error) (line-text "\t\ttag"))
+			(line-break)
+			(reflow "It has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[Blue]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But the function's return type is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Try({}, _d)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "All")
+			(reflow " ")
+			(annotated code "return")
+			(reflow " ")
+			(reflow "statements and the final expression in a function must have the same type.")))
+	(report
+		(severity runtime_error)
 		(title "Too Few Args")
 		(region (start 111 2) (end 113 3))
 		(headline
@@ -2280,7 +2267,19 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Blue, Red, ..], _arg -> Error")
+			(text "[Blue, Red, ..d], _arg -> f")
+			(line-break)
+			(indent 1)
+			(text "  where [")
+			(line-break)
+			(indent 1)
+			(text "    d.is_eq : d, d -> Bool,")
+			(line-break)
+			(indent 1)
+			(text "    f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),")
+			(line-break)
+			(indent 1)
+			(text "  ]")
 			(annotation-end)
 			(line-break)
 			(line-break)
@@ -2717,7 +2716,8 @@ EndOfFile,
 							(p-ident (raw "tag"))
 							(e-tag (raw "Blue")))
 						(s-return
-							(e-malformed (reason "expr_dot_suffix_not_allowed")))
+							(e-ident (raw "tag")))
+						(e-ellipsis)
 						(e-apply
 							(e-ident (raw "match_time"))
 							(e-ellipsis))
@@ -2742,133 +2742,6 @@ EndOfFile,
 						(s-decl
 							(p-ident (raw "list"))
 							(e-malformed (reason "expected_expr_close_square_or_comma")))))))))
-~~~
-# FORMATTED
-~~~roc
-# Thnt!
-app [main!] { pf: platform "c" }
-
-import pf.Stdout exposing [line!, e!]
-
-import Stdot # Cose
-
-import pkg.S exposing [func as fry, Custom.*]
-
-import Bae as Gooe
-import
-	Ba
-Map(a, b) : List(a), (a -> b) -> List(b)
-
-MapML( # Cere
-	a, # Anre
-	b,
-) # Ag
-	: # Aon
-		List( # rg
-		),
-		(a -> b) -> # row
-			List(b) #
-
-Foo : (Bar, Baz)
-
-line : ( # Cpen
-	Bar, #
-	Baz, # m
-) # Co
-
-Some(a) : { foo : Ok(a), bar : g }
-
-Ml(a) : { # d
-	bar : Som, # Afld
-}
-
-Soine(a) : { # d
-	bar : Som,
-}
-#
-# se
-
-Func(a) : Maybe(a), a -> Maybe(a)
-
-ane = |num| if num 2 else 5
-
-add_one : U64 -> U64
-add_one = |num| {
-	other = 1
-	if num {
-		dbg # bug
-			() # r
-		0
-	} else {
-		dbg 123
-		other
-	}
-}
-
-match_time = |
-	a, # rg
-	b,
-| # As
-	match a {
-		lue | Red => {
-			x
-			x
-		}
-		Blue => 1
-		"foo" => # ent
-			00
-		"foo" | "bar" => 20
-		[1, 2, 3, .. as rest] # Aftet
-			=> ment
-
-		[1, 2 | 5, 3, .. as rest] => 123
-		[ist] => 123
-		3.14 => 314
-		3.14 | 6.28 => 314
-		(1, 2, 3) => 123
-		(1, 2 | 5, 3) => 123
-		{ foo: 1, bar: 2, ..rest } => 12 |> add(34)
-		{ # Afrd open
-			foo #
-				: # ue
-					1, # Aftd field
-			bar: 2,
-			..,
-		} => 12
-		{ foo: 1, bar: 2 | 7 } => 12
-		{
-			foo: 1,
-		} => 12
-		Ok(123) => 121000
-	}
-
-expect # Commeneyword
-	blah == 1 # Commnt
-
-main! : List(String) -> Try({}, _)
-main! = |_| { # Yeah Ie
-	world = "World"
-	var number = 123
-	expect blah == 1
-	tag = Blue
-	return
-
-	# Jusnt!
-
-		
-	match_time(
-		..., #
-	)
-	some_func(
-		dbg # bug
-			42, # Aft expr
-	)
-	crash "Unreachtement"
-	tag_with = Ok(number)
-	ited = "Hello, ${world}"
-	list =
-		
-}
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -2922,7 +2795,11 @@ main! = |_| { # Yeah Ie
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "match_time"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-lambda
+			(args
+				(p-assign (ident "a"))
+				(p-assign (ident "b")))
+			(e-runtime-error (tag "erroneous_value_expr"))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-runtime-error (tag "erroneous_value_expr"))
@@ -3020,7 +2897,7 @@ main! = |_| { # Yeah Ie
 		(patt (type "(Error, Error)"))
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "U64 -> U64"))
-		(patt (type "[Blue, Red, ..], _arg -> Error"))
+		(patt (type "[Blue, Red, ..d], _arg -> f where [d.is_eq : d, d -> Bool, f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(patt (type "List(Error) -> Try({}, _d)")))
 	(type_decls
 		(alias (type "Map(a, b)")
@@ -3055,6 +2932,6 @@ main! = |_| { # Yeah Ie
 		(expr (type "(Error, Error)"))
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "U64 -> U64"))
-		(expr (type "[Blue, Red, ..], _arg -> Error"))
+		(expr (type "[Blue, Red, ..d], _arg -> f where [d.is_eq : d, d -> Bool, f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(expr (type "List(Error) -> Try({}, _d)"))))
 ~~~

@@ -1,4 +1,4 @@
-import HostValue exposing [HostValue]
+import HostValue
 
 Capability(a) := [Capability(HostValue.CapabilityHandle)].{
     new_with_eq : (a, a -> Bool) -> Capability(a)

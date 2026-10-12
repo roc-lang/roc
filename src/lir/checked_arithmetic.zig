@@ -5,12 +5,6 @@ const layout = @import("layout");
 
 const LIR = @import("LIR.zig");
 
-/// Runtime failure category for a checked arithmetic operation.
-pub const ErrorKind = enum {
-    overflow,
-    zero_denominator,
-};
-
 /// The mathematical operation represented by one integer-arithmetic family.
 pub const Operation = enum {
     add,
@@ -50,16 +44,16 @@ const family = [_]FamilyEntry{
 
 const low_level_table_len = blk: {
     var highest: usize = 0;
-    for (@typeInfo(LIR.LowLevel).@"enum".fields) |field| {
-        highest = @max(highest, field.value);
+    for (@typeInfo(LIR.LowLevel).@"enum".field_values) |field_value| {
+        highest = @max(highest, field_value);
     }
     break :blk highest + 1;
 };
 
 const classify_table: [low_level_table_len]?FamilyEntry = blk: {
-    var table = [_]?FamilyEntry{null} ** low_level_table_len;
+    var table = @as([low_level_table_len]?FamilyEntry, @splat(null));
     for (family) |entry| {
-        const index = @intFromEnum(entry.op);
+        const index = @backingInt(entry.op);
         if (table[index] != null) @compileError("duplicate checked-arithmetic family operation");
         table[index] = entry;
     }
@@ -68,7 +62,7 @@ const classify_table: [low_level_table_len]?FamilyEntry = blk: {
 
 /// Returns the operation and behavior of an integer-arithmetic family member.
 pub fn classify(op: LIR.LowLevel) ?FamilyEntry {
-    return classify_table[@intFromEnum(op)];
+    return classify_table[@backingInt(op)];
 }
 
 /// Returns whether an operation belongs to an integer-arithmetic family.
@@ -314,7 +308,7 @@ test "legacy checked operations round trip through uncheckedOp" {
 }
 
 test "integer arithmetic family is total injective and round trips" {
-    var seen = std.EnumSet(LIR.LowLevel).initEmpty();
+    var seen = std.EnumSet(LIR.LowLevel).empty;
     inline for (std.meta.tags(Operation)) |operation| {
         inline for (std.meta.tags(Mode)) |mode| {
             const op = member(operation, mode);

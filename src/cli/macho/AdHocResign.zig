@@ -4,6 +4,7 @@
 //! step that patches a signed binary must finish by rewriting the signature.
 
 const std = @import("std");
+const Sha256 = @import("base").Sha256;
 const macho = std.macho;
 const Allocator = std.mem.Allocator;
 const CodeSignature = @import("vendor_macho").CodeSignature;
@@ -76,7 +77,7 @@ pub fn resign(io: std.Io, gpa: Allocator, arena: Allocator, path: []const u8) Er
     // including page 0 with the load commands. Its exact size is known up
     // front (one CodeDirectory blob, no special slots), so any load command
     // size changes must be written back before hashing.
-    const hash_size = std.crypto.hash.sha2.Sha256.digest_length;
+    const hash_size = Sha256.digest_length;
     const total_pages = std.mem.alignForward(usize, cs.dataoff, page_size) / page_size;
     const exact_size = @sizeOf(macho.SuperBlob) + @sizeOf(macho.BlobIndex) +
         @sizeOf(macho.CodeDirectory) + ident.len + 1 + total_pages * hash_size;

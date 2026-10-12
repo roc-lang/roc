@@ -6,21 +6,6 @@ const str = @import("str.zig");
 const float_bits = @import("float_bits.zig");
 const mem = std.mem;
 
-/// TODO: Document wyhash.
-pub fn wyhash(seed: u64, bytes: ?[*]const u8, length: usize) callconv(.c) u64 {
-    if (bytes) |nonnull| {
-        const slice = nonnull[0..length];
-        return wyhash_hash(seed, slice);
-    } else {
-        return 42;
-    }
-}
-
-/// TODO: Document wyhash_rocstr.
-pub fn wyhash_rocstr(seed: u64, input: str.RocStr) callconv(.c) u64 {
-    return wyhash_hash(seed, input.asSlice());
-}
-
 const primes = [_]u64{
     0xa0761d6478bd642f,
     0xe7037ed1a0b428db,
@@ -30,7 +15,7 @@ const primes = [_]u64{
 };
 
 fn read_bytes(comptime bytes: u8, data: []const u8) u64 {
-    const T = std.meta.Int(.unsigned, 8 * bytes);
+    const T = @Int(.unsigned, 8 * bytes);
     return mem.readInt(T, data[0..bytes], .little);
 }
 
@@ -194,10 +179,6 @@ pub const Wyhash = struct {
     }
 };
 
-fn wyhash_hash(seed: u64, input: []const u8) u64 {
-    return Wyhash.hash(seed, input);
-}
-
 /// Domain byte mixed before each value written to a builtin Hasher.
 pub const HasherDomain = enum(u8) {
     bool = 0x01,
@@ -256,7 +237,7 @@ pub fn hasher_write_f32_bits(seed: u64, bits: u32) callconv(.c) u64 {
         0
     else
         float_bits.normalizeF32NanBits(bits);
-    return hasher_write_u64(seed, @intFromEnum(HasherDomain.f32), normalized, 4);
+    return hasher_write_u64(seed, @backingInt(HasherDomain.f32), normalized, 4);
 }
 
 /// Mix F64 bits into a builtin Hasher state after normalizing both zero and NaN.
@@ -265,7 +246,7 @@ pub fn hasher_write_f64_bits(seed: u64, bits: u64) callconv(.c) u64 {
         0
     else
         float_bits.normalizeF64NanBits(bits);
-    return hasher_write_u64(seed, @intFromEnum(HasherDomain.f64), normalized, 8);
+    return hasher_write_u64(seed, @backingInt(HasherDomain.f64), normalized, 8);
 }
 
 /// Mix a byte slice into a builtin Hasher state.
@@ -279,7 +260,7 @@ pub fn hasher_write_bytes(seed: u64, domain: u8, bytes: ?[*]const u8, length: us
 
 /// Finalize a builtin Hasher state into a hash value.
 pub fn hasher_finish(seed: u64) callconv(.c) u64 {
-    return hasherFeed(seed, @intFromEnum(HasherDomain.finish), &.{});
+    return hasherFeed(seed, @backingInt(HasherDomain.finish), &.{});
 }
 
 test "float hashing collapses signed zero and every NaN representation" {
@@ -320,7 +301,11 @@ test "test vectors streaming" {
     const pattern = "1234567890";
     const count = 8;
     const result = 0x829e9c148b75970e;
-    try std.testing.expectEqual(Wyhash.hash(6, pattern ** 8), result);
+    try std.testing.expectEqual(Wyhash.hash(6, repeated: {
+        var repeated_bytes: [pattern.len * 8]u8 = undefined;
+        for (0..8) |i| @memcpy(repeated_bytes[i * pattern.len ..][0..pattern.len], pattern);
+        break :repeated &repeated_bytes;
+    }), result);
 
     wh = Wyhash.init(6);
     var i: u32 = 0;

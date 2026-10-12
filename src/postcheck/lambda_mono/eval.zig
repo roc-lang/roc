@@ -134,9 +134,8 @@ pub const ComptimeProducer = struct {
     root_index: usize,
 };
 
-/// Consumer policy and exact root declarations supplied by the harness.
+/// Exact root declarations supplied by the harness.
 pub const Inputs = struct {
-    inline_expects_enabled: bool,
     comptime_producers: []const ComptimeProducer,
 };
 
@@ -149,7 +148,6 @@ pub const Evaluator = struct {
     arena: std.heap.ArenaAllocator,
     inputs: Inputs,
     root_states: []RootState,
-    executing_comptime: bool,
 
     /// Rendered dbg messages in execution order (arena-owned bytes).
     dbg_events: std.ArrayList([]const u8),
@@ -190,7 +188,6 @@ pub const Evaluator = struct {
         return .{
             .inputs = inputs,
             .root_states = states,
-            .executing_comptime = false,
             .gpa = gpa,
             .program = program,
             .arena = std.heap.ArenaAllocator.init(gpa),
@@ -241,9 +238,6 @@ pub const Evaluator = struct {
         }
         self.root_states[index] = .active;
         errdefer self.root_states[index] = .pending;
-        const saved_comptime = self.executing_comptime;
-        self.executing_comptime = true;
-        defer self.executing_comptime = saved_comptime;
         const outcome = try self.runRootBody(index);
         self.root_states[index] = .{ .completed = outcome };
         return outcome;
@@ -383,7 +377,6 @@ pub const Evaluator = struct {
                 return frame.get(local_id) orelse self.unsupported_("unbound local");
             },
             .unit => return .unit,
-            .inline_expects_enabled => return .{ .bool_ = self.executing_comptime or self.inputs.inline_expects_enabled },
             .comptime_value => |value| return self.readComptimeValue(self.program.getComptimeValueRoot(value.root)),
             .@"unreachable" => return self.unsupported_("unreachable marker escaped its terminated block-final position"),
             .int_lit => |int_value| {
@@ -419,6 +412,13 @@ pub const Evaluator = struct {
             },
             .static_data_candidate => |cand| return self.evalExpr(frame, cand.runtime_expr),
             .typed_boundary => |boundary| return self.evalExpr(frame, boundary.value),
+            // A row coercion changes the row a tag value indexes: move each tag
+            // to its same-named tag in the wider row, as a `?` return does.
+            .row_widen => |widen| return try self.convertValue(
+                try self.evalExpr(frame, widen.value),
+                self.program.getExpr(widen.value).ty,
+                expr.ty,
+            ),
             .list => |span| return .{ .list = try self.evalExprSpan(frame, span) },
             .tuple => |span| return .{ .tuple = try self.evalExprSpan(frame, span) },
             .record => |span| return try self.evalRecord(frame, expr.ty, span),
@@ -489,14 +489,13 @@ pub const Evaluator = struct {
                 self.return_type = self.exprType(value_expr);
                 return error.Returned;
             },
-            .uninitialized => return .uninitialized,
-            .uninitialized_payload => return .uninitialized,
+            .uninitialized, .uninitialized_payload => return .uninitialized,
             .if_initialized_payload => |switch_| return try self.evalInitializedPayload(frame, switch_),
             .try_sequence => |seq| return try self.evalTrySequence(frame, expr.ty, seq),
             .try_record_sequence => |seq| return try self.evalTryRecordSequence(frame, expr.ty, seq),
             .comptime_branch_taken => |taken| return self.evalExpr(frame, taken.body),
             .comptime_exhaustiveness_failed => return self.comptimeExhaustAbort(),
-            .crash => |sid| return self.crashAbort(self.program.stringLiteralText(sid)),
+            .crash, .checked_error => |sid| return self.crashAbort(self.program.stringLiteralText(sid)),
             .dbg => |child| {
                 const value = try self.evalExpr(frame, child);
                 const bytes = self.alloc().dupe(u8, value.str) catch return error.OutOfMemory;
@@ -687,7 +686,7 @@ pub const Evaluator = struct {
     fn sameVariant(self: *Evaluator, a: Type.FnVariantId, b: Type.FnVariantId) bool {
         if (a == b) return true;
         const variants = self.program.types.view().fn_variants;
-        return std.meta.eql(variants[@intFromEnum(a)].source, variants[@intFromEnum(b)].source);
+        return std.meta.eql(variants[@backingInt(a)].source, variants[@backingInt(b)].source);
     }
 
     fn evalFieldAccess(
@@ -868,7 +867,7 @@ pub const Evaluator = struct {
                 self.return_type = self.exprType(expr_id);
                 return error.Returned;
             },
-            .crash => |sid| return self.crashAbort(self.program.stringLiteralText(sid)),
+            .crash, .checked_error => |sid| return self.crashAbort(self.program.stringLiteralText(sid)),
         }
     }
 
@@ -1377,7 +1376,7 @@ pub const Evaluator = struct {
         return switch (prim) {
             inline .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => |p| blk: {
                 const T = intType(p);
-                const U = std.meta.Int(.unsigned, @typeInfo(T).int.bits);
+                const U = @Int(.unsigned, @typeInfo(T).int.bits);
                 const narrowed: U = @truncate(@as(u128, @bitCast(bits)));
                 const typed: T = @bitCast(narrowed);
                 break :blk makeInt(T, typed);
@@ -1457,7 +1456,7 @@ pub const Evaluator = struct {
             .num_count_trailing_zero_bits => self.numBitCount(args, arg_types, .count_trailing_zeros),
 
             .num_from_le_bytes_unchecked => self.evalNumFromLeBytes(args, result_ty),
-            .simd_load_16_unchecked => self.evalSimdLoad(args, result_ty),
+            .simd_load_16_unchecked => self.evalSimdLoad(args, arg_types[0], result_ty),
             .simd_store_16_unchecked => self.evalSimdStore(args),
             .simd_append_16 => self.evalSimdAppend(args),
             .simd_splat,
@@ -1515,6 +1514,7 @@ pub const Evaluator = struct {
             => self.evalSimd(op, args, arg_types, result_ty),
 
             .bool_not => .{ .bool_ = !truthy(args[0]) },
+            .bool_likely => .{ .bool_ = truthy(args[0]) },
 
             .f32_to_bits => self.canonicalInt(.u32, builtins.float_bits.normalizeF32NanBits(@bitCast(args[0].float32))),
             .f32_from_bits => .{ .float32 = @bitCast(readInt(u32, args[0])) },
@@ -1563,6 +1563,12 @@ pub const Evaluator = struct {
             .str_release_excess_capacity,
             .str_to_utf8,
             .str_from_utf8_lossy,
+            .str_from_utf8_validated,
+            .str_from_utf16_le_short,
+            .str_from_utf16_be_short,
+            .str_from_utf32_le_short,
+            .str_from_utf32_be_short,
+
             .str_from_utf8,
             .str_split_on,
             .str_join_with,
@@ -1572,6 +1578,7 @@ pub const Evaluator = struct {
             .list_len,
             .list_capacity,
             .list_get_unsafe,
+            .list_prefetched,
             .list_append_unsafe,
             .list_concat,
             .list_with_capacity,
@@ -1590,9 +1597,9 @@ pub const Evaluator = struct {
             .list_take_last,
             .list_reverse,
             .list_reserve,
+            .list_reserve_for_append,
             .list_release_excess_capacity,
-            .list_split_first,
-            .list_split_last,
+            .list_clear,
             .list_map_prepare_reuse,
             .list_map_can_reuse,
             => self.evalListOp(op, args, arg_types, result_ty),
@@ -1943,6 +1950,7 @@ pub const Evaluator = struct {
             .list_slack_unique,
             .list_owned_unique,
             .list_set_in_place_unsafe,
+            .list_prefetch,
             => |op_tag| self.evalConversionOrUnsupported(op_tag, args, arg_types, result_ty),
         };
     }
@@ -2314,7 +2322,7 @@ pub const Evaluator = struct {
             .shl => av << shift,
             .shr => av >> shift,
             .shr_zf => blk: {
-                const U = std.meta.Int(.unsigned, max_bits);
+                const U = @Int(.unsigned, max_bits);
                 break :blk @bitCast(@as(U, @bitCast(av)) >> shift);
             },
         };
@@ -2384,7 +2392,7 @@ pub const Evaluator = struct {
         for (0..@min(args.len, operands.len)) |i| {
             operands[i] = valueBits(args[i]) catch return self.unsupported_("SIMD operand without integer bits");
         }
-        const simd_op: builtins.simd.Op = @enumFromInt(op.simdOpIndex() orelse unreachable);
+        const simd_op: builtins.simd.Op = @fromBackingInt(@intCast(op.simdOpIndex() orelse unreachable));
         const result_bits = builtins.simd.eval(simd_op, source, destination, operands[0], operands[1], operands[2]);
         if (destination_kind != null) return .{ .int = @bitCast(result_bits) };
         return self.canonicalInt(result_prim, @bitCast(result_bits));
@@ -2405,22 +2413,31 @@ pub const Evaluator = struct {
                     const byte_bits = valueBits(bytes[index + i]) catch return self.unsupported_("from_le_bytes byte without integer bits");
                     value |= @as(u128, @as(u8, @truncate(byte_bits))) << @intCast(i * 8);
                 }
-                break :blk makeInt(T, @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(T)), @truncate(value))));
+                break :blk makeInt(T, @bitCast(@as(@Int(.unsigned, @bitSizeOf(T)), @truncate(value))));
             },
             .bool, .str, .u8, .i8, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => self.unsupported_("from_le_bytes on non-multi-byte-integer type"),
         };
     }
 
-    fn evalSimdLoad(self: *Evaluator, args: []const Value, result_ty: Type.TypeId) EvalError!Value {
+    fn evalSimdLoad(self: *Evaluator, args: []const Value, list_ty: Type.TypeId, result_ty: Type.TypeId) EvalError!Value {
         const result_prim = self.primitiveOf(result_ty) orelse return self.unsupported_("SIMD load result without primitive type");
         if (simdKindForPrimitive(result_prim) == null) return self.unsupported_("SIMD load result without vector type");
         if (args[0] != .list) return self.unsupported_("SIMD load from non-list value");
-        const bytes = args[0].list;
+        const list_type = self.structural(list_ty);
+        if (list_type != .list) return self.unsupported_("SIMD load without list type");
+        const element_prim = self.primitiveOf(list_type.list) orelse return self.unsupported_("SIMD load without primitive element type");
+        const lane_bits: usize = switch (element_prim) {
+            .u8 => 8,
+            .u16 => 16,
+            .u32 => 32,
+            .bool, .str, .i8, .i16, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return self.unsupported_("SIMD load with unsupported element type"),
+        };
+        const units = args[0].list;
         const index: usize = @intCast(valueBits(args[1]) catch return self.unsupported_("SIMD load index without integer bits"));
         var bits: u128 = 0;
-        for (0..16) |i| {
-            const byte_bits = valueBits(bytes[index + i]) catch return self.unsupported_("SIMD load byte without integer bits");
-            bits |= @as(u128, @truncate(byte_bits)) << @intCast(i * 8);
+        for (0..128 / lane_bits) |i| {
+            const unit_bits = valueBits(units[index + i]) catch return self.unsupported_("SIMD load unit without integer bits");
+            bits |= unit_bits << @intCast(i * lane_bits);
         }
         return .{ .int = @bitCast(bits) };
     }
@@ -2593,6 +2610,12 @@ pub const Evaluator = struct {
             str_split_last,
             str_from_utf8,
             str_from_utf8_lossy,
+            str_from_utf8_validated,
+            str_from_utf16_le_short,
+            str_from_utf16_be_short,
+            str_from_utf32_le_short,
+            str_from_utf32_be_short,
+
             str_is_eq_static_small,
             str_static_small_word_eq,
             str_static_small_word_caseless_eq,
@@ -2653,6 +2676,16 @@ pub const Evaluator = struct {
             .str_split_first => return try self.strSplitFirst(result_ty, args[0].str, args[1].str),
             .str_split_last => return try self.strSplitLast(result_ty, args[0].str, args[1].str),
             .str_from_utf8 => return try self.strFromUtf8(result_ty, args[0]),
+            .str_from_utf8_validated => {
+                const elems = args[0].list;
+                const bytes = arena.alloc(u8, elems.len) catch return error.OutOfMemory;
+                for (elems, 0..) |elem, i| bytes[i] = readInt(u8, elem);
+                return .{ .str = bytes };
+            },
+            .str_from_utf16_le_short => return try self.strFromWideUtfShort(builtins.str.fromUtf16LeShort, args[0]),
+            .str_from_utf16_be_short => return try self.strFromWideUtfShort(builtins.str.fromUtf16BeShort, args[0]),
+            .str_from_utf32_le_short => return try self.strFromWideUtfShort(builtins.str.fromUtf32LeShort, args[0]),
+            .str_from_utf32_be_short => return try self.strFromWideUtfShort(builtins.str.fromUtf32BeShort, args[0]),
             .str_from_utf8_lossy => {
                 const elems = args[0].list;
                 const buf = arena.alloc(u8, elems.len) catch return error.OutOfMemory;
@@ -2666,6 +2699,15 @@ pub const Evaluator = struct {
             .str_static_small_word_caseless_eq,
             => return self.unsupported_("static small string dispatch op"),
         }
+    }
+
+    fn strFromWideUtfShort(self: *Evaluator, comptime decode: anytype, input: Value) EvalError!Value {
+        const bytes = self.alloc().alloc(u8, input.list.len) catch return error.OutOfMemory;
+        for (input.list, 0..) |value, i| bytes[i] = readInt(u8, value);
+        const list = builtins.list.RocList{ .bytes = bytes.ptr, .length = bytes.len, .capacity_or_alloc_ptr = builtins.list.RocList.encodeCapacity(bytes.len) };
+        const decoded = decode(list, self.getOps());
+        defer decoded.decref(self.getOps());
+        return .{ .str = self.alloc().dupe(u8, decoded.asSlice()) catch return error.OutOfMemory };
     }
 
     fn mapAscii(self: *Evaluator, source: []const u8, comptime f: fn (u8) u8) EvalError![]const u8 {
@@ -2818,12 +2860,15 @@ pub const Evaluator = struct {
         const ListOp = enum {
             list_len,
             list_get_unsafe,
+            list_prefetched,
             list_append_unsafe,
             list_prepend,
             list_concat,
             list_with_capacity,
             list_reserve,
+            list_reserve_for_append,
             list_release_excess_capacity,
+            list_clear,
             list_reverse,
             list_drop_first,
             list_drop_last,
@@ -2837,8 +2882,6 @@ pub const Evaluator = struct {
             list_replace_unsafe,
             list_first,
             list_last,
-            list_split_first,
-            list_split_last,
             list_map_prepare_reuse,
             list_map_can_reuse,
         };
@@ -2846,6 +2889,8 @@ pub const Evaluator = struct {
         const arena = self.alloc();
         switch (list_op) {
             .list_len => return self.canonicalInt(.u64, @intCast(args[0].list.len)),
+            // The same list; the hint means nothing at compile time.
+            .list_prefetched => return args[0],
             .list_get_unsafe => {
                 const index = readInt(u64, args[1]);
                 const list = args[0].list;
@@ -2875,7 +2920,8 @@ pub const Evaluator = struct {
                 return .{ .list = out };
             },
             .list_with_capacity => return .{ .list = &.{} },
-            .list_reserve, .list_release_excess_capacity => return .{ .list = args[0].list },
+            .list_reserve, .list_reserve_for_append, .list_release_excess_capacity => return .{ .list = args[0].list },
+            .list_clear => return .{ .list = &.{} },
             .list_reverse => {
                 const list = args[0].list;
                 const out = arena.alloc(Value, list.len) catch return error.OutOfMemory;
@@ -2939,8 +2985,6 @@ pub const Evaluator = struct {
             .list_replace_unsafe => return try self.listReplaceUnsafe(result_ty, args),
             .list_first => return try self.listFirstLast(result_ty, args[0].list, true),
             .list_last => return try self.listFirstLast(result_ty, args[0].list, false),
-            .list_split_first => return try self.listSplit(result_ty, args[0].list, true),
-            .list_split_last => return try self.listSplit(result_ty, args[0].list, false),
             .list_map_prepare_reuse => return args[0],
             .list_map_can_reuse => {
                 // In-place map reuse is disabled on the compared compile.
@@ -3000,22 +3044,6 @@ pub const Evaluator = struct {
         }
         const elem = if (first) list[0] else list[list.len - 1];
         return .{ .tag = .{ .discriminant = @intCast(ok_index), .payloads = try self.dupeValues(&.{elem}) } };
-    }
-
-    fn listSplit(self: *Evaluator, result_ty: Type.TypeId, list: []const Value, first: bool) EvalError!Value {
-        const ok_index = self.tagIndexByText(result_ty, "Ok") orelse return self.unsupported_("list split Ok tag not found");
-        const err_index = self.tagIndexByText(result_ty, "Err") orelse return self.unsupported_("list split Err tag not found");
-        if (list.len == 0) {
-            return .{ .tag = .{ .discriminant = @intCast(err_index), .payloads = try self.zeroPayloadsForTag(result_ty, err_index) } };
-        }
-        const payload_ty = self.okPayloadType(result_ty, ok_index) orelse return self.unsupported_("list split Ok payload type");
-        const elem = if (first) list[0] else list[list.len - 1];
-        const rest = if (first)
-            try self.sublist(list, 1, std.math.maxInt(usize))
-        else
-            try self.sublist(list, 0, list.len - 1);
-        const record = try self.buildListElemRecord(payload_ty, rest, elem);
-        return .{ .tag = .{ .discriminant = @intCast(ok_index), .payloads = try self.dupeValues(&.{record}) } };
     }
 
     /// Build the payload values for tag `index` of `tag_ty` as type-directed
@@ -3226,17 +3254,17 @@ pub const Evaluator = struct {
                 .roc_realloc = rocReallocFn,
                 .roc_dbg = rocNoopBytesFn,
                 .roc_expect_failed = rocNoopBytesFn,
-                .roc_crashed = rocNoopBytesFn,
+                .roc_crashed = rocCrashedFn,
                 .hosted_fns = builtins.host_abi.emptyHostedFunctions(),
             };
         }
         return &self.roc_ops.?;
     }
 
-    fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
         const self: *Evaluator = @ptrCast(@alignCast(ops.env));
-        const ptr = allocAligned(self.alloc(), length, alignment) orelse return null;
-        self.ops_alloc_sizes.put(@intFromPtr(ptr), length) catch return null;
+        const ptr = allocAligned(self.alloc(), length, alignment) orelse outOfMemory();
+        self.ops_alloc_sizes.put(@intFromPtr(ptr), length) catch outOfMemory();
         return @ptrCast(ptr);
     }
 
@@ -3245,9 +3273,9 @@ pub const Evaluator = struct {
         _ = self.ops_alloc_sizes.remove(@intFromPtr(ptr));
     }
 
-    fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
         const self: *Evaluator = @ptrCast(@alignCast(ops.env));
-        const new_ptr = allocAligned(self.alloc(), new_length, alignment) orelse return null;
+        const new_ptr = allocAligned(self.alloc(), new_length, alignment) orelse outOfMemory();
         const old_size = self.ops_alloc_sizes.get(@intFromPtr(ptr)) orelse 0;
         const copy = @min(old_size, new_length);
         if (copy > 0) {
@@ -3255,11 +3283,24 @@ pub const Evaluator = struct {
             @memcpy(new_ptr[0..copy], src[0..copy]);
         }
         _ = self.ops_alloc_sizes.remove(@intFromPtr(ptr));
-        self.ops_alloc_sizes.put(@intFromPtr(new_ptr), new_length) catch return null;
+        self.ops_alloc_sizes.put(@intFromPtr(new_ptr), new_length) catch outOfMemory();
         return @ptrCast(new_ptr);
     }
 
+    /// Builtins write through every allocation they receive, so a failed
+    /// one cannot be reported back to them.
+    fn outOfMemory() noreturn {
+        @panic("Lambda Mono evaluator ran out of memory in a builtin allocation");
+    }
+
     fn rocNoopBytesFn(_: *RocOps, _: [*]const u8, _: usize) callconv(.c) void {}
+
+    /// The builtins this evaluator calls only format and decode values; none
+    /// of them crashes, and `roc_crashed` never returns, so reaching this is a
+    /// bug in the evaluator.
+    fn rocCrashedFn(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+        base.invariant("lambda mono evaluator invariant violated: a builtin crashed: {s}", .{bytes[0..len]});
+    }
 };
 
 // free helpers
@@ -3348,7 +3389,7 @@ fn decTrunc(x: i128) i128 {
 /// Zero-extend the operand-width bit pattern of `x` into an i128 so a result
 /// primitive of a different signedness can re-canonicalize it.
 fn bitsOf(comptime T: type, x: T) i128 {
-    const U = std.meta.Int(.unsigned, @typeInfo(T).int.bits);
+    const U = @Int(.unsigned, @typeInfo(T).int.bits);
     return @bitCast(@as(u128, @as(U, @bitCast(x))));
 }
 
@@ -3440,7 +3481,7 @@ fn floatToIntTryPrim(comptime F: type, comptime dst: Primitive, value: F) ?i128 
 fn floatToIntWrapPrim(comptime F: type, comptime dst: Primitive, value: F) i128 {
     const T = intType(dst);
     const info = @typeInfo(T).int;
-    const U = std.meta.Int(.unsigned, info.bits);
+    const U = @Int(.unsigned, info.bits);
     const raw_bits = builtins.numeric_conversions.floatToIntWrapBits(
         F,
         value,
@@ -3601,13 +3642,13 @@ test "oracle demands declared roots once without executing representation witnes
     var program = Ast.Program.init(allocator, check.CheckedNames.NameStore.init(allocator), .empty, .empty, .empty);
     defer program.deinit();
     const bool_ty = try program.types.add(.{ .primitive = .bool });
-    const policy = try program.addExpr(.{ .ty = bool_ty, .data = .{ .inline_expects_enabled = {} } });
+    const produced = try program.addExpr(.{ .ty = bool_ty, .data = .{ .int_lit = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 } } });
     const witness = try program.addExpr(.{ .ty = bool_ty, .data = .@"unreachable" });
     const producer_index = program.rootCount();
-    const root: Common.ComptimeValueRoot = .{ .module = .{}, .root = .{ .checked = @enumFromInt(91) }, .const_locator = null };
+    const root: Common.ComptimeValueRoot = .{ .module = .{}, .root = .{ .checked = @fromBackingInt(@intCast(91)) }, .const_locator = null };
     // Neither checked identity nor descriptor-table ordinal is a producer index.
     _ = try program.addComptimeValueRoot(.{ .module = .{ .bytes = @splat(1) }, .root = root.root, .const_locator = null });
-    const producer_fn = try program.addFn(.{ .symbol = undefined, .args = .empty(), .body = .{ .roc = policy }, .ret = bool_ty });
+    const producer_fn = try program.addFn(.{ .symbol = undefined, .args = .empty(), .body = .{ .roc = produced }, .ret = bool_ty });
     // Oracle execution consumes fn_id; source requests and linker symbols are unread.
     try program.roots.append(allocator, .{ .fn_id = producer_fn, .request = undefined, .owner = .first });
     const root_id = try program.addComptimeValueRoot(root);
@@ -3615,13 +3656,9 @@ test "oracle demands declared roots once without executing representation witnes
     const consumer_index = program.rootCount();
     const consumer_fn = try program.addFn(.{ .symbol = undefined, .args = .empty(), .body = .{ .roc = read }, .ret = bool_ty });
     try program.roots.append(allocator, .{ .fn_id = consumer_fn, .request = undefined, .owner = .first });
-    const policy_index = program.rootCount();
-    const policy_fn = try program.addFn(.{ .symbol = undefined, .args = .empty(), .body = .{ .roc = policy }, .ret = bool_ty });
-    try program.roots.append(allocator, .{ .fn_id = policy_fn, .request = undefined, .owner = .first });
-    for ([_]bool{ false, true }) |enabled| {
-        var evaluator = try Evaluator.init(allocator, &program, .{ .inline_expects_enabled = enabled, .comptime_producers = &.{.{ .root = root, .root_index = producer_index }} });
+    {
+        var evaluator = try Evaluator.init(allocator, &program, .{ .comptime_producers = &.{.{ .root = root, .root_index = producer_index }} });
         defer evaluator.deinit();
-        try std.testing.expectEqual(enabled, (try evaluator.runRoot(policy_index)).value.bool_);
         try std.testing.expect((try evaluator.runRoot(consumer_index)).value.bool_);
         try std.testing.expect((try evaluator.runRoot(consumer_index)).value.bool_);
         try std.testing.expect(evaluator.root_states[producer_index] == .completed);
@@ -3630,18 +3667,18 @@ test "oracle demands declared roots once without executing representation witnes
         changed.body = .{ .roc = witness };
         program.setFn(producer_fn, changed);
         try std.testing.expect((try evaluator.runRoot(consumer_index)).value.bool_);
-        changed.body = .{ .roc = policy };
+        changed.body = .{ .roc = produced };
         program.setFn(producer_fn, changed);
     }
     var cyclic = program.getFn(producer_fn);
     cyclic.body = .{ .roc = read };
     program.setFn(producer_fn, cyclic);
-    var evaluator = try Evaluator.init(allocator, &program, .{ .inline_expects_enabled = false, .comptime_producers = &.{.{ .root = root, .root_index = producer_index }} });
+    var evaluator = try Evaluator.init(allocator, &program, .{ .comptime_producers = &.{.{ .root = root, .root_index = producer_index }} });
     defer evaluator.deinit();
     const failure = (try evaluator.runRoot(consumer_index)).aborted;
     try std.testing.expectEqual(AbortKind.crash, failure.kind);
     try std.testing.expectEqualStrings("cyclic compile-time value dependency", failure.message);
-    cyclic.body = .{ .roc = policy };
+    cyclic.body = .{ .roc = produced };
     program.setFn(producer_fn, cyclic);
     try std.testing.expectEqualStrings(failure.message, (try evaluator.runRoot(consumer_index)).aborted.message);
 }

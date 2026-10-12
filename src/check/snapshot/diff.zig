@@ -868,8 +868,8 @@ test "snapshot record field presence is preserved in missing-field hints" {
     const required_name = try idents.insert(gpa, Ident.for_text("required_field"));
     const optional_name = try idents.insert(gpa, Ident.for_text("optional_field"));
     const expected = [_]SnapshotRecordField{
-        .{ .name = required_name, .content = @enumFromInt(7), .presence = .required },
-        .{ .name = optional_name, .content = @enumFromInt(11), .presence = .unknown },
+        .{ .name = required_name, .content = @fromBackingInt(@intCast(7)), .presence = .required },
+        .{ .name = optional_name, .content = @fromBackingInt(@intCast(11)), .presence = .unknown },
     };
 
     var actual_fields = try SnapshotRecordFieldSafeList.initCapacity(gpa, 0);

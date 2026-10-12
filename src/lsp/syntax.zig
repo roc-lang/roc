@@ -48,9 +48,51 @@ pub const SyntaxCheckError = SyntaxPrepareDocumentError || error{WriteFailed};
 /// Errors that can occur while answering syntax-backed LSP queries.
 pub const SyntaxQueryError = SyntaxPrepareDocumentError || error{WriteFailed};
 
+/// The name of a failed syntax query, for request handlers that log it and
+/// answer the client with an empty result. Allocation failure propagates instead.
+pub fn queryFailureName(err: SyntaxQueryError) Allocator.Error![]const u8 {
+    return switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.BuiltinArtifactVersionMismatch,
+        error.Canceled,
+        error.CorruptArtifact,
+        error.CorruptBuiltinArtifact,
+        error.CorruptEmbeddedBuiltins,
+        error.DeviceBusy,
+        error.FileBusy,
+        error.FileNotFound,
+        error.FileSystem,
+        error.FileTooBig,
+        error.InputOutput,
+        error.IsDir,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.OperationUnsupported,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.StaleEmbeddedBuiltins,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.UnrecognizedVolume,
+        error.WriteFailed,
+        => |other| @errorName(other),
+    };
+}
+
 const MethodOwnerLookup = struct {
     owner: CIR.Statement.Idx,
     type_ident: base.Ident.Idx,
+    origin_module: base.ModuleIdentity.Idx,
     builtin_origin: bool,
 };
 
@@ -59,9 +101,7 @@ fn statementTypeAnno(module_env: *const ModuleEnv, statement: CIR.Statement) ?CI
         .s_decl => |decl| if (decl.anno) |anno_idx| module_env.store.getAnnotation(anno_idx).anno else null,
         .s_var => |var_stmt| if (var_stmt.anno) |anno_idx| module_env.store.getAnnotation(anno_idx).anno else null,
         .s_var_uninitialized => |var_stmt| if (var_stmt.anno) |anno_idx| module_env.store.getAnnotation(anno_idx).anno else null,
-        .s_type_anno => |type_anno| type_anno.anno,
-        .s_alias_decl => |alias| alias.anno,
-        .s_nominal_decl => |nominal| nominal.anno,
+        inline .s_type_anno, .s_alias_decl, .s_nominal_decl => |type_anno| type_anno.anno,
         .s_reassign,
         .s_crash,
         .s_dbg,
@@ -78,6 +118,44 @@ fn statementTypeAnno(module_env: *const ModuleEnv, statement: CIR.Statement) ?CI
         .s_type_var_alias,
         .s_runtime_error,
         => null,
+    };
+}
+
+/// The type annotation an alias or nominal declaration introduces; null for
+/// every other statement.
+fn typeDeclAnno(stmt: CIR.Statement) ?CIR.TypeAnno.Idx {
+    return switch (stmt) {
+        .s_alias_decl => |a| a.anno,
+        .s_nominal_decl => |n| n.anno,
+        .s_decl,
+        .s_var,
+        .s_var_uninitialized,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_where_alias_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => null,
+    };
+}
+
+/// Unwraps `result`; on allocation failure records it in `oom` and yields
+/// null, for queries that report "nothing found" as null.
+fn noteOom(oom: *?Allocator.Error, result: anytype) ?@typeInfo(@TypeOf(result)).error_union.payload {
+    return result catch |err| {
+        oom.* = err;
+        return null;
     };
 }
 
@@ -257,7 +335,7 @@ pub const SyntaxChecker = struct {
         defer self.allocator.free(path);
 
         const absolute_path: [:0]u8 = std.Io.Dir.cwd().realPathFileAlloc(self.std_io, path, self.allocator) catch
-            try self.allocator.dupeZ(u8, path);
+            try self.allocator.dupeSentinel(u8, path, 0);
 
         return .{
             .absolute_path = absolute_path,
@@ -524,7 +602,7 @@ pub const SyntaxChecker = struct {
                             .start = .{ .line = 0, .character = 0 },
                             .end = .{ .line = 0, .character = 1 },
                         },
-                        .severity = 1,
+                        .severity = reporting.Severity.fatal.toLspSeverity(),
                         .source = "roc",
                         .message = try std.fmt.allocPrint(self.allocator, "Failed to retrieve diagnostics for {s}", .{absolute_path}),
                     },
@@ -622,7 +700,8 @@ pub const SyntaxChecker = struct {
             builtin_modules,
         );
         errdefer env.deinit();
-        env.compiler_version = build_options.compiler_version;
+        env.compiler_version = build_options.compiler_compatibility_id;
+        env.source_pin_version = @import("compiler_version").compiler_version;
         env.setFinalizeExecutableArtifacts(false);
 
         if (self.cache_config.enabled) {
@@ -658,10 +737,7 @@ pub const SyntaxChecker = struct {
         for (drained) |entry| {
             if (std.mem.eql(u8, entry.abs_path, absolute_path)) {
                 for (entry.reports) |report| {
-                    switch (report.severity) {
-                        .runtime_error, .fatal => return false,
-                        .warning => {},
-                    }
+                    if (report.severity.isError()) return false;
                 }
             }
         }
@@ -802,51 +878,6 @@ pub const SyntaxChecker = struct {
         return module_state.moduleEnv();
     }
 
-    /// Get all imported ModuleEnvs for a given module.
-    /// Returns a slice of ModuleEnv pointers for the module's imports.
-    /// Caller must free the returned slice.
-    pub fn getImportedModuleEnvs(self: *SyntaxChecker, module_path: []const u8) Allocator.Error!?[]*ModuleEnv {
-        const env = self.getModuleLookupEnv() orelse return null;
-
-        // First, find the module and its coordinator package.
-        var target_pkg: ?*compile.coordinator.PackageState = null;
-        var target_module_imports: ?[]const compile.coordinator.LocalImportEdge = null;
-
-        const coord = env.coordinator orelse return null;
-        var pkg_it = coord.packages.iterator();
-        outer: while (pkg_it.next()) |entry| {
-            const pkg = entry.value_ptr.*;
-            for (pkg.modules.items) |*module_state| {
-                if (std.mem.eql(u8, module_state.path, module_path)) {
-                    target_pkg = pkg;
-                    target_module_imports = module_state.imports.items;
-                    break :outer;
-                }
-            }
-        }
-
-        const pkg = target_pkg orelse return null;
-        const imports = target_module_imports orelse return null;
-
-        // Collect ModuleEnvs for all imports
-        var imported_envs: std.ArrayListUnmanaged(*ModuleEnv) = .empty;
-        errdefer imported_envs.deinit(self.allocator);
-
-        // Local imports (within same package)
-        for (imports) |edge| {
-            if (edge.module_id < pkg.modules.items.len) {
-                const imported_module = &pkg.modules.items[edge.module_id];
-                if (imported_module.moduleEnv()) |imp_env| {
-                    try imported_envs.append(self.allocator, imp_env);
-                }
-            }
-        }
-
-        // TODO: Handle external_imports (cross-package) when needed
-
-        return try imported_envs.toOwnedSlice(self.allocator);
-    }
-
     /// Update the dependency graph from a successful build.
     fn updateDependencyGraph(self: *SyntaxChecker, env: *BuildEnv) Allocator.Error!void {
         self.logDebug(.build, "[DEPS] Updating dependency graph...", .{});
@@ -906,12 +937,7 @@ pub const SyntaxChecker = struct {
     }
 
     fn reportToDiagnostic(self: *SyntaxChecker, rep: reporting.Report) (Allocator.Error || error{WriteFailed})!Diagnostics.Diagnostic {
-        const range = self.rangeFromReport(rep);
-        const severity: u32 = switch (rep.severity) {
-            .warning => 2,
-            .runtime_error, .fatal => 1,
-        };
-
+        const range = rangeFromReport(rep);
         var writer: std.Io.Writer.Allocating = .init(self.allocator);
         defer writer.deinit();
         try reporting.renderReportToLsp(&rep, &writer.writer, reporting.ReportingConfig.initLsp());
@@ -921,20 +947,63 @@ pub const SyntaxChecker = struct {
 
         return .{
             .range = range,
-            .severity = severity,
+            .severity = rep.severity.toLspSeverity(),
             .source = "roc",
             .message = message,
         };
     }
 
-    fn rangeFromReport(_: *SyntaxChecker, rep: reporting.Report) Diagnostics.Range {
+    fn rangeFromReport(rep: reporting.Report) Diagnostics.Range {
         if (rep.getRegionInfo()) |region| {
-            return .{
-                .start = .{ .line = saturatingMinusOne(region.start_line_idx), .character = saturatingMinusOne(region.start_col_idx) },
-                .end = .{ .line = saturatingMinusOne(region.end_line_idx), .character = saturatingMinusOne(region.end_col_idx) },
-            };
+            // Convert the original source bytes, never the visible diagnostic
+            // text: escaping a control must not move its editor highlight.
+            for (rep.document.elements.items) |element| {
+                const source, const first_line = switch (element) {
+                    .source_code_region => |display| .{ display.line_text, display.start_line },
+                    .source_code_with_underlines => |underlines| if (underlines.underline_regions.len > 0)
+                        .{ underlines.display_region.line_text, underlines.display_region.start_line }
+                    else
+                        continue,
+                    .source_code_multi_region => |multi| if (multi.regions.len > 0)
+                        .{ multi.source, @as(u32, 1) }
+                    else
+                        continue,
+                    .text,
+                    .annotated,
+                    .line_break,
+                    .indent,
+                    .space,
+                    .horizontal_rule,
+                    .annotation_start,
+                    .annotation_end,
+                    .raw,
+                    .reflowing_text,
+                    .link,
+                    .vertical_stack,
+                    .horizontal_concat,
+                    .source_location,
+                    => continue,
+                };
+                return .{
+                    .start = reportPosition(source, first_line, region.start_line_idx, region.start_col_idx),
+                    .end = reportPosition(source, first_line, region.end_line_idx, region.end_col_idx),
+                };
+            }
         }
         return .{ .start = .{ .line = 0, .character = 0 }, .end = .{ .line = 0, .character = 0 } };
+    }
+
+    fn reportPosition(source: []const u8, first_line: u32, line: u32, column: u32) Diagnostics.Position {
+        var lines = std.mem.splitScalar(u8, source, '\n');
+        var current = first_line;
+        while (lines.next()) |text| : (current += 1) {
+            if (current == line) return .{
+                .line = saturatingMinusOne(line),
+                .character = pos.byteOffsetToUtf16Column(text, saturatingMinusOne(column)),
+            };
+        }
+        // Reports can point immediately past the available source at EOF.
+        return .{ .line = saturatingMinusOne(line), .character = 0 };
     }
 
     fn saturatingMinusOne(value: u32) u32 {
@@ -976,14 +1045,9 @@ pub const SyntaxChecker = struct {
         switch (element) {
             .text => |t| return textHasAny(t, needles),
             .annotated => |a| return textHasAny(a.content, needles),
-            .raw => |r| return textHasAny(r, needles),
-            .reflowing_text => |t| return textHasAny(t, needles),
-            .link => |l| return textHasAny(l, needles),
-            .vertical_stack => |stack| {
+            inline .raw, .reflowing_text, .link => |r| return textHasAny(r, needles),
+            inline .vertical_stack, .horizontal_concat => |stack| {
                 for (stack) |el| if (elementContainsAny(el, needles)) return true;
-            },
-            .horizontal_concat => |concat| {
-                for (concat) |el| if (elementContainsAny(el, needles)) return true;
             },
             .source_code_region => |region| return textHasAny(region.line_text, needles),
             .source_code_multi_region => |multi| return textHasAny(multi.source, needles),
@@ -1287,8 +1351,9 @@ pub const SyntaxChecker = struct {
         if (std.meta.activeTag(content) == .alias) {
             const source_decl = content.alias.source_decl.toOptional() orelse return null;
             return .{
-                .owner = @enumFromInt(source_decl),
+                .owner = @fromBackingInt(@intCast(source_decl)),
                 .type_ident = content.alias.ident.ident_idx,
+                .origin_module = content.alias.origin_module,
                 .builtin_origin = content.alias.source_decl.originIsBuiltin(),
             };
         }
@@ -1296,8 +1361,9 @@ pub const SyntaxChecker = struct {
         const nominal = content.structure.nominal_type;
         const source_decl = nominal.sourceDeclOptional() orelse return null;
         return .{
-            .owner = @enumFromInt(source_decl),
+            .owner = @fromBackingInt(@intCast(source_decl)),
             .type_ident = nominal.ident.ident_idx,
+            .origin_module = nominal.origin_module,
             .builtin_origin = nominal.originIsBuiltin(),
         };
     }
@@ -1311,13 +1377,18 @@ pub const SyntaxChecker = struct {
     }
 
     fn findTypeForQualifiedIdent(module_env: *ModuleEnv, qualified_ident: base.Ident.Idx) ?types.Var {
+        const pattern_idx = findPatternForQualifiedIdent(module_env, qualified_ident) orelse return null;
+        return ModuleEnv.varFrom(pattern_idx);
+    }
+
+    fn findPatternForQualifiedIdent(module_env: *ModuleEnv, qualified_ident: base.Ident.Idx) ?CIR.Pattern.Idx {
         const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
         for (defs_slice) |def_idx| {
             const def = module_env.store.getDef(def_idx);
             const ident_idx = module_lookup.extractIdentFromPattern(&module_env.store, def.pattern) orelse continue;
 
             if (ident_idx.eql(qualified_ident)) {
-                return ModuleEnv.varFrom(def.pattern);
+                return def.pattern;
             }
         }
 
@@ -1329,7 +1400,7 @@ pub const SyntaxChecker = struct {
             const ident_idx = module_lookup.extractIdentFromPattern(&module_env.store, pattern_idx) orelse continue;
 
             if (ident_idx.eql(qualified_ident)) {
-                return ModuleEnv.varFrom(pattern_idx);
+                return pattern_idx;
             }
         }
 
@@ -1503,10 +1574,7 @@ pub const SyntaxChecker = struct {
     fn findDefinitionAtOffset(self: *SyntaxChecker, build_env: *BuildEnv, module_env: *ModuleEnv, doc_path: []const u8, target_offset: u32, current_uri: []const u8, oom: *?Allocator.Error) ?DefinitionResult {
         if (cir_queries.findWriteAtOffset(module_env, target_offset)) |write| {
             const range = cir_queries.declarationNameRegion(module_env, write.pattern_idx) orelse return null;
-            const uri_copy = self.allocator.dupe(u8, current_uri) catch |err| {
-                oom.* = err;
-                return null;
-            };
+            const uri_copy = noteOom(oom, self.allocator.dupe(u8, current_uri)) orelse return null;
             return DefinitionResult{ .uri = uri_copy, .range = range };
         }
 
@@ -1523,10 +1591,7 @@ pub const SyntaxChecker = struct {
                 if (self.findTypeAnnoAtOffset(build_env, module_env, doc_path, annotation.anno, target_offset, oom)) |result| {
                     // If URI is empty, it's a local type - use current file
                     if (result.uri.len == 0) {
-                        const uri_copy = self.allocator.dupe(u8, current_uri) catch |err| {
-                            oom.* = err;
-                            return null;
-                        };
+                        const uri_copy = noteOom(oom, self.allocator.dupe(u8, current_uri)) orelse return null;
                         return DefinitionResult{
                             .uri = uri_copy,
                             .range = result.range,
@@ -1537,7 +1602,7 @@ pub const SyntaxChecker = struct {
             }
 
             const expr_idx = def.expr;
-            const expr_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+            const expr_node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
             const expr_region = module_env.store.getRegionAt(expr_node_idx);
 
             if (cir_queries.regionContainsOffset(expr_region, target_offset)) {
@@ -1557,16 +1622,10 @@ pub const SyntaxChecker = struct {
             if (cir_queries.regionContainsOffset(dep.region(), target_offset)) {
                 const path_text = module_env.getString(dep.relative_path);
                 const doc_dir = std.fs.path.dirname(doc_path) orelse "";
-                const target_path = std.fs.path.resolve(self.allocator, &.{ doc_dir, path_text }) catch |err| {
-                    oom.* = err;
-                    return null;
-                };
+                const target_path = noteOom(oom, std.fs.path.resolve(self.allocator, &.{ doc_dir, path_text })) orelse return null;
                 defer self.allocator.free(target_path);
 
-                const target_uri = uri_util.pathToUri(self.allocator, target_path) catch |err| {
-                    oom.* = err;
-                    return null;
-                };
+                const target_uri = noteOom(oom, uri_util.pathToUri(self.allocator, target_path)) orelse return null;
 
                 const origin_range = cir_queries.regionToRange(module_env, dep.region());
 
@@ -1591,7 +1650,7 @@ pub const SyntaxChecker = struct {
             // Handle import statements specially - navigate to the imported module or exposed item
             if (stmt == .s_import) {
                 const import_stmt = stmt.s_import;
-                const import_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(stmt_idx));
+                const import_node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(@backingInt(stmt_idx)));
                 const import_region = module_env.store.getRegionAt(import_node_idx);
 
                 if (cir_queries.regionContainsOffset(import_region, target_offset)) {
@@ -1610,7 +1669,7 @@ pub const SyntaxChecker = struct {
                     // Check if the click is on one of the exposed items
                     const exposed_slice = module_env.store.sliceExposedItems(import_stmt.exposes);
                     for (exposed_slice) |exposed_item_idx| {
-                        const exposed_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(exposed_item_idx));
+                        const exposed_node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(@backingInt(exposed_item_idx)));
                         const item_region = module_env.store.getRegionAt(exposed_node_idx);
                         if (cir_queries.regionContainsOffset(item_region, target_offset)) {
                             const exposed_item = module_env.store.getExposedItem(exposed_item_idx);
@@ -1633,10 +1692,7 @@ pub const SyntaxChecker = struct {
                 if (self.findTypeAnnoAtOffset(build_env, module_env, doc_path, type_anno_idx, target_offset, oom)) |result| {
                     // If URI is empty, it's a local type - use current file
                     if (result.uri.len == 0) {
-                        const uri_copy = self.allocator.dupe(u8, current_uri) catch |err| {
-                            oom.* = err;
-                            return null;
-                        };
+                        const uri_copy = noteOom(oom, self.allocator.dupe(u8, current_uri)) orelse return null;
                         return DefinitionResult{
                             .uri = uri_copy,
                             .range = result.range,
@@ -1649,7 +1705,7 @@ pub const SyntaxChecker = struct {
             const stmt_parts = module_lookup.getStatementParts(stmt);
 
             if (stmt_parts.expr) |expr_idx| {
-                const expr_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+                const expr_node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
                 const expr_region = module_env.store.getRegionAt(expr_node_idx);
 
                 if (cir_queries.regionContainsOffset(expr_region, target_offset)) {
@@ -1660,7 +1716,7 @@ pub const SyntaxChecker = struct {
             }
 
             if (stmt_parts.expr2) |expr_idx| {
-                const expr_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+                const expr_node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
                 const expr_region = module_env.store.getRegionAt(expr_node_idx);
 
                 if (cir_queries.regionContainsOffset(expr_region, target_offset)) {
@@ -1682,13 +1738,10 @@ pub const SyntaxChecker = struct {
             if (expr_tag == .e_lookup_local) {
                 const lookup = expr.e_lookup_local;
                 // Get the pattern's region - that's where it's defined
-                const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(lookup.pattern_idx));
+                const pattern_node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(@backingInt(lookup.pattern_idx)));
                 const def_region = module_env.store.getRegionAt(pattern_node_idx);
                 const range = cir_queries.regionToRange(module_env, def_region) orelse return null;
-                const uri_copy = self.allocator.dupe(u8, current_uri) catch |err| {
-                    oom.* = err;
-                    return null;
-                };
+                const uri_copy = noteOom(oom, self.allocator.dupe(u8, current_uri)) orelse return null;
                 return DefinitionResult{
                     .uri = uri_copy,
                     .range = range,
@@ -1696,7 +1749,7 @@ pub const SyntaxChecker = struct {
             }
             if (expr_tag == .e_lookup_external) {
                 const lookup = expr.e_lookup_external;
-                const import_idx_int = @intFromEnum(lookup.module_idx);
+                const import_idx_int = @backingInt(lookup.module_idx);
                 if (import_idx_int >= module_env.imports.imports.len()) return null;
 
                 const string_idx = module_env.imports.imports.items.items[import_idx_int];
@@ -1724,11 +1777,11 @@ pub const SyntaxChecker = struct {
             if (expr_tag == .e_lookup_associated) {
                 const lookup = expr.e_lookup_associated;
                 const member_name = module_env.getIdentText(lookup.item_ident);
-                const import_idx_int = @intFromEnum(lookup.module_idx);
+                const import_idx_int = @backingInt(lookup.module_idx);
                 if (import_idx_int < module_env.imports.imports.len()) {
                     const string_idx = module_env.imports.imports.items.items[import_idx_int];
                     const module_name = module_env.common.getString(string_idx);
-                    const expr_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+                    const expr_node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
                     const expr_region = module_env.store.getRegionAt(expr_node_idx);
                     const region_text = module_env.getSource(expr_region);
                     if (std.mem.find(u8, region_text, ".")) |dot_pos| {
@@ -1750,35 +1803,15 @@ pub const SyntaxChecker = struct {
                 }
                 return null;
             }
+            if (expr_tag == .e_method_call) {
+                const method_call = expr.e_method_call;
+                if (!cir_queries.regionContainsOffset(method_call.method_name_region, target_offset)) return null;
+                return self.findMethodDefinition(build_env, module_env, method_call.receiver, method_call.method_name, current_uri, oom);
+            }
             if (expr_tag == .e_dispatch_call) {
                 const method_call = expr.e_dispatch_call;
-                const method_name = module_env.common.idents.getText(method_call.method_name);
-                const receiver_type_var = ModuleEnv.varFrom(method_call.receiver);
-                const resolved = module_env.types.resolveVar(receiver_type_var);
-                const base_type_opt: ?[]const u8 = switch (resolved.desc.content) {
-                    .alias => |alias| module_env.common.idents.getText(alias.ident.ident_idx),
-                    .structure => |flat| switch (flat) {
-                        .nominal_type => |nom| module_env.common.idents.getText(nom.ident.ident_idx),
-                        .record,
-                        .tuple,
-                        .fn_pure,
-                        .fn_effectful,
-                        .fn_unbound,
-                        .empty_record,
-                        .tag_union,
-                        .empty_tag_union,
-                        => null,
-                    },
-                    .flex,
-                    .rigid,
-                    .field_presence,
-                    .err,
-                    => null,
-                };
-                if (base_type_opt) |base_type| {
-                    return self.findDefinitionInModule(build_env, doc_path, base_type, method_name, oom);
-                }
-                return null;
+                if (!cir_queries.regionContainsOffset(method_call.method_name_region, target_offset)) return null;
+                return self.findMethodDefinition(build_env, module_env, method_call.receiver, method_call.method_name, current_uri, oom);
             }
             return null;
         }
@@ -1789,6 +1822,57 @@ pub const SyntaxChecker = struct {
         }
 
         return null;
+    }
+
+    /// Find the definition of the method a method call (`receiver.method()`)
+    /// dispatches to, using the receiver's checked nominal type: its declaring
+    /// module and declaration locate the method table entry for `method_name`.
+    fn findMethodDefinition(
+        self: *SyntaxChecker,
+        build_env: *BuildEnv,
+        module_env: *ModuleEnv,
+        receiver: CIR.Expr.Idx,
+        method_name: base.Ident.Idx,
+        current_uri: []const u8,
+        oom: *?Allocator.Error,
+    ) ?DefinitionResult {
+        const method_owner = resolveMethodOwnerForLookup(module_env, ModuleEnv.varFrom(receiver)) orelse return null;
+
+        if (method_owner.builtin_origin) {
+            const type_name = module_env.getIdentText(method_owner.type_ident);
+            const base_name = if (std.mem.findLast(u8, type_name, ".")) |dot_pos|
+                type_name[dot_pos + 1 ..]
+            else
+                type_name;
+            return self.findBuiltinDefinition(base_name, module_env.getIdentText(method_name), oom);
+        }
+
+        if (method_owner.origin_module == module_env.selfModuleIdentity()) {
+            const range = methodDefinitionRange(module_env, module_env, method_owner.owner, method_name) orelse return null;
+            const uri_copy = noteOom(oom, self.allocator.dupe(u8, current_uri)) orelse return null;
+            return DefinitionResult{ .uri = uri_copy, .range = range };
+        }
+
+        const origin_hash = module_env.moduleIdentityHash(method_owner.origin_module);
+        const target_mod_state = findModuleByContentIdentity(build_env, origin_hash) orelse return null;
+        const target_mod_env = target_mod_state.moduleEnv() orelse return null;
+        const range = methodDefinitionRange(target_mod_env, module_env, method_owner.owner, method_name) orelse return null;
+        const module_uri = noteOom(oom, uri_util.pathToUri(self.allocator, target_mod_state.path)) orelse return null;
+        return DefinitionResult{ .uri = module_uri, .range = range };
+    }
+
+    /// The range of the definition of `method_name` (an ident in `source_env`)
+    /// on the type declared by `owner` in `owner_env`.
+    fn methodDefinitionRange(
+        owner_env: *ModuleEnv,
+        source_env: *const ModuleEnv,
+        owner: CIR.Statement.Idx,
+        method_name: base.Ident.Idx,
+    ) ?LspRange {
+        const owner_method_name = owner_env.common.findIdentFrom(&source_env.common, method_name) orelse return null;
+        const qualified_ident = owner_env.lookupMethodIdentForOwnerConst(owner, owner_method_name) orelse return null;
+        const pattern_idx = findPatternForQualifiedIdent(owner_env, qualified_ident) orelse return null;
+        return cir_queries.regionToRange(owner_env, owner_env.store.getPatternRegion(pattern_idx));
     }
 
     const TagOriginInfo = struct {
@@ -1892,30 +1976,7 @@ pub const SyntaxChecker = struct {
         const statements_slice = mod_env.store.sliceStatements(mod_env.all_statements);
         for (statements_slice) |stmt_idx| {
             const stmt = mod_env.store.getSourceStatement(stmt_idx);
-            const maybe_anno: ?CIR.TypeAnno.Idx = switch (stmt) {
-                .s_alias_decl => |a| a.anno,
-                .s_nominal_decl => |n| n.anno,
-                .s_decl,
-                .s_var,
-                .s_var_uninitialized,
-                .s_reassign,
-                .s_crash,
-                .s_dbg,
-                .s_expr,
-                .s_expect,
-                .s_for,
-                .s_while,
-                .s_infinite_loop,
-                .s_breakable_loop,
-                .s_break,
-                .s_return,
-                .s_import,
-                .s_where_alias_decl,
-                .s_type_anno,
-                .s_type_var_alias,
-                .s_runtime_error,
-                => null,
-            };
+            const maybe_anno = typeDeclAnno(stmt);
             if (maybe_anno) |anno_idx| {
                 if (findTagInTypeAnno(&mod_env.store, &mod_env.common, anno_idx, tag_name)) |r| {
                     return r;
@@ -1940,7 +2001,7 @@ pub const SyntaxChecker = struct {
         // 1. If the tag reference carries an explicit external nominal import identity,
         // navigate directly to that imported module and declaration.
         if (tag_ref.nominal_external) |nom_ext| {
-            const import_idx_int = @intFromEnum(nom_ext.module_idx);
+            const import_idx_int = @backingInt(nom_ext.module_idx);
             if (import_idx_int < module_env.imports.imports.len()) {
                 const string_idx = module_env.imports.imports.items.items[import_idx_int];
                 const module_name = module_env.common.getString(string_idx);
@@ -1952,41 +2013,15 @@ pub const SyntaxChecker = struct {
                     env.findModuleByNameInPackage(importing_pkg, module_name);
                 if (mod_state_opt) |mod_state| {
                     if (mod_state.moduleEnv()) |target_mod_env| {
-                        const target_node_idx: CIR.Node.Idx = @enumFromInt(nom_ext.target_node_idx);
+                        const target_node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(nom_ext.target_node_idx));
                         const node_tag = target_mod_env.store.nodes.get(target_node_idx).tag;
                         if (node_tag == .statement_nominal_decl or node_tag == .statement_alias_decl) {
-                            const stmt = target_mod_env.store.getSourceStatement(@enumFromInt(@intFromEnum(target_node_idx)));
-                            const maybe_anno: ?CIR.TypeAnno.Idx = switch (stmt) {
-                                .s_alias_decl => |a| a.anno,
-                                .s_nominal_decl => |n| n.anno,
-                                .s_decl,
-                                .s_var,
-                                .s_var_uninitialized,
-                                .s_reassign,
-                                .s_crash,
-                                .s_dbg,
-                                .s_expr,
-                                .s_expect,
-                                .s_for,
-                                .s_while,
-                                .s_infinite_loop,
-                                .s_breakable_loop,
-                                .s_break,
-                                .s_return,
-                                .s_import,
-                                .s_where_alias_decl,
-                                .s_type_anno,
-                                .s_type_var_alias,
-                                .s_runtime_error,
-                                => null,
-                            };
+                            const stmt = target_mod_env.store.getSourceStatement(@fromBackingInt(@backingInt(target_node_idx)));
+                            const maybe_anno = typeDeclAnno(stmt);
                             if (maybe_anno) |anno_idx| {
                                 if (findTagInTypeAnno(&target_mod_env.store, &target_mod_env.common, anno_idx, tag_name)) |tag_region| {
                                     const range = cir_queries.regionToRange(target_mod_env, tag_region) orelse return null;
-                                    const module_uri = uri_util.pathToUri(self.allocator, mod_state.path) catch |err| {
-                                        oom.* = err;
-                                        return null;
-                                    };
+                                    const module_uri = noteOom(oom, uri_util.pathToUri(self.allocator, mod_state.path)) orelse return null;
                                     return DefinitionResult{
                                         .uri = module_uri,
                                         .range = range,
@@ -1996,10 +2031,7 @@ pub const SyntaxChecker = struct {
                         }
                         if (findTagInModuleEnv(target_mod_env, tag_name)) |tag_region| {
                             const range = cir_queries.regionToRange(target_mod_env, tag_region) orelse return null;
-                            const module_uri = uri_util.pathToUri(self.allocator, mod_state.path) catch |err| {
-                                oom.* = err;
-                                return null;
-                            };
+                            const module_uri = noteOom(oom, uri_util.pathToUri(self.allocator, mod_state.path)) orelse return null;
                             return DefinitionResult{
                                 .uri = module_uri,
                                 .range = range,
@@ -2015,37 +2047,11 @@ pub const SyntaxChecker = struct {
         // navigate directly to that local statement.
         if (tag_ref.nominal_decl) |stmt_idx| {
             const stmt = module_env.store.getSourceStatement(stmt_idx);
-            const maybe_anno: ?CIR.TypeAnno.Idx = switch (stmt) {
-                .s_alias_decl => |a| a.anno,
-                .s_nominal_decl => |n| n.anno,
-                .s_decl,
-                .s_var,
-                .s_var_uninitialized,
-                .s_reassign,
-                .s_crash,
-                .s_dbg,
-                .s_expr,
-                .s_expect,
-                .s_for,
-                .s_while,
-                .s_infinite_loop,
-                .s_breakable_loop,
-                .s_break,
-                .s_return,
-                .s_import,
-                .s_where_alias_decl,
-                .s_type_anno,
-                .s_type_var_alias,
-                .s_runtime_error,
-                => null,
-            };
+            const maybe_anno = typeDeclAnno(stmt);
             if (maybe_anno) |anno_idx| {
                 if (findTagInTypeAnno(&module_env.store, &module_env.common, anno_idx, tag_name)) |tag_region| {
                     const range = cir_queries.regionToRange(module_env, tag_region) orelse return null;
-                    const uri_copy = self.allocator.dupe(u8, current_uri) catch |err| {
-                        oom.* = err;
-                        return null;
-                    };
+                    const uri_copy = noteOom(oom, self.allocator.dupe(u8, current_uri)) orelse return null;
                     return DefinitionResult{
                         .uri = uri_copy,
                         .range = range,
@@ -2061,38 +2067,12 @@ pub const SyntaxChecker = struct {
             if (origin_info.origin_module == module_env.selfModuleIdentity()) {
                 // Defined in current module
                 if (origin_info.source_decl.toOptional()) |stmt_num| {
-                    const stmt = module_env.store.getSourceStatement(@enumFromInt(stmt_num));
-                    const maybe_anno: ?CIR.TypeAnno.Idx = switch (stmt) {
-                        .s_alias_decl => |a| a.anno,
-                        .s_nominal_decl => |n| n.anno,
-                        .s_decl,
-                        .s_var,
-                        .s_var_uninitialized,
-                        .s_reassign,
-                        .s_crash,
-                        .s_dbg,
-                        .s_expr,
-                        .s_expect,
-                        .s_for,
-                        .s_while,
-                        .s_infinite_loop,
-                        .s_breakable_loop,
-                        .s_break,
-                        .s_return,
-                        .s_import,
-                        .s_where_alias_decl,
-                        .s_type_anno,
-                        .s_type_var_alias,
-                        .s_runtime_error,
-                        => null,
-                    };
+                    const stmt = module_env.store.getSourceStatement(@fromBackingInt(stmt_num));
+                    const maybe_anno = typeDeclAnno(stmt);
                     if (maybe_anno) |anno_idx| {
                         if (findTagInTypeAnno(&module_env.store, &module_env.common, anno_idx, tag_name)) |tag_region| {
                             const range = cir_queries.regionToRange(module_env, tag_region) orelse return null;
-                            const uri_copy = self.allocator.dupe(u8, current_uri) catch |err| {
-                                oom.* = err;
-                                return null;
-                            };
+                            const uri_copy = noteOom(oom, self.allocator.dupe(u8, current_uri)) orelse return null;
                             return DefinitionResult{
                                 .uri = uri_copy,
                                 .range = range,
@@ -2102,10 +2082,7 @@ pub const SyntaxChecker = struct {
                 }
                 if (findTagInModuleEnv(module_env, tag_name)) |tag_region| {
                     const range = cir_queries.regionToRange(module_env, tag_region) orelse return null;
-                    const uri_copy = self.allocator.dupe(u8, current_uri) catch |err| {
-                        oom.* = err;
-                        return null;
-                    };
+                    const uri_copy = noteOom(oom, self.allocator.dupe(u8, current_uri)) orelse return null;
                     return DefinitionResult{
                         .uri = uri_copy,
                         .range = range,
@@ -2117,38 +2094,12 @@ pub const SyntaxChecker = struct {
                 if (findModuleByContentIdentity(build_env, origin_hash)) |target_mod_state| {
                     if (target_mod_state.moduleEnv()) |target_mod_env| {
                         if (origin_info.source_decl.toOptional()) |stmt_num| {
-                            const stmt = target_mod_env.store.getSourceStatement(@enumFromInt(stmt_num));
-                            const maybe_anno: ?CIR.TypeAnno.Idx = switch (stmt) {
-                                .s_alias_decl => |a| a.anno,
-                                .s_nominal_decl => |n| n.anno,
-                                .s_decl,
-                                .s_var,
-                                .s_var_uninitialized,
-                                .s_reassign,
-                                .s_crash,
-                                .s_dbg,
-                                .s_expr,
-                                .s_expect,
-                                .s_for,
-                                .s_while,
-                                .s_infinite_loop,
-                                .s_breakable_loop,
-                                .s_break,
-                                .s_return,
-                                .s_import,
-                                .s_where_alias_decl,
-                                .s_type_anno,
-                                .s_type_var_alias,
-                                .s_runtime_error,
-                                => null,
-                            };
+                            const stmt = target_mod_env.store.getSourceStatement(@fromBackingInt(stmt_num));
+                            const maybe_anno = typeDeclAnno(stmt);
                             if (maybe_anno) |anno_idx| {
                                 if (findTagInTypeAnno(&target_mod_env.store, &target_mod_env.common, anno_idx, tag_name)) |tag_region| {
                                     const range = cir_queries.regionToRange(target_mod_env, tag_region) orelse return null;
-                                    const module_uri = uri_util.pathToUri(self.allocator, target_mod_state.path) catch |err| {
-                                        oom.* = err;
-                                        return null;
-                                    };
+                                    const module_uri = noteOom(oom, uri_util.pathToUri(self.allocator, target_mod_state.path)) orelse return null;
                                     return DefinitionResult{
                                         .uri = module_uri,
                                         .range = range,
@@ -2158,10 +2109,7 @@ pub const SyntaxChecker = struct {
                         }
                         if (findTagInModuleEnv(target_mod_env, tag_name)) |tag_region| {
                             const range = cir_queries.regionToRange(target_mod_env, tag_region) orelse return null;
-                            const module_uri = uri_util.pathToUri(self.allocator, target_mod_state.path) catch |err| {
-                                oom.* = err;
-                                return null;
-                            };
+                            const module_uri = noteOom(oom, uri_util.pathToUri(self.allocator, target_mod_state.path)) orelse return null;
                             return DefinitionResult{
                                 .uri = module_uri,
                                 .range = range,
@@ -2176,10 +2124,7 @@ pub const SyntaxChecker = struct {
         // 4. If tag has no nominal/alias type origin (e.g. pure open tag), check current module
         if (findTagInModuleEnv(module_env, tag_name)) |tag_region| {
             const range = cir_queries.regionToRange(module_env, tag_region) orelse return null;
-            const uri_copy = self.allocator.dupe(u8, current_uri) catch |err| {
-                oom.* = err;
-                return null;
-            };
+            const uri_copy = noteOom(oom, self.allocator.dupe(u8, current_uri)) orelse return null;
             return DefinitionResult{
                 .uri = uri_copy,
                 .range = range,
@@ -2325,7 +2270,7 @@ pub const SyntaxChecker = struct {
         const maybe_def = module_lookup.findDefinitionByName(mod_env, member);
 
         if (maybe_def) |def_info| {
-            const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(def_info.pattern_idx));
+            const pattern_node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(@backingInt(def_info.pattern_idx)));
             const def_region = mod_env.store.getRegionAt(pattern_node_idx);
             return cir_queries.regionToRange(mod_env, def_region);
         }
@@ -2425,10 +2370,7 @@ pub const SyntaxChecker = struct {
         else
             env.findModuleByNameInPackage(importing_pkg, base_name);
         if (module_state) |mod_state| {
-            const module_uri = uri_util.pathToUri(self.allocator, mod_state.path) catch |err| {
-                oom.* = err;
-                return null;
-            };
+            const module_uri = noteOom(oom, uri_util.pathToUri(self.allocator, mod_state.path)) orelse return null;
 
             var range = LspRange{
                 .start_line = 0,
@@ -2500,17 +2442,8 @@ pub const SyntaxChecker = struct {
                     .range = range,
                 };
             },
-            .external => |ext| {
-                const import_idx_int = @intFromEnum(ext.module_idx);
-                if (import_idx_int < module_env.imports.imports.len()) {
-                    const string_idx = module_env.imports.imports.items.items[import_idx_int];
-                    const module_name = module_env.common.getString(string_idx);
-                    return self.findDefinitionInModule(build_env, doc_path, module_name, type_name, oom);
-                }
-                return self.findModuleByName(build_env, doc_path, type_name, oom);
-            },
-            .pending => |pend| {
-                const import_idx_int = @intFromEnum(pend.module_idx);
+            inline .external, .pending => |ext| {
+                const import_idx_int = @backingInt(ext.module_idx);
                 if (import_idx_int < module_env.imports.imports.len()) {
                     const string_idx = module_env.imports.imports.items.items[import_idx_int];
                     const module_name = module_env.common.getString(string_idx);
@@ -2672,10 +2605,7 @@ pub const SyntaxChecker = struct {
                     if (maybe_type_anno) |type_anno_idx| {
                         if (self.findTypeAnnoAtOffset(build_env, module_env, doc_path, type_anno_idx, target_offset, oom)) |result| {
                             if (result.uri.len == 0) {
-                                const uri_copy = self.allocator.dupe(u8, current_uri) catch |err| {
-                                    oom.* = err;
-                                    return null;
-                                };
+                                const uri_copy = noteOom(oom, self.allocator.dupe(u8, current_uri)) orelse return null;
                                 return DefinitionResult{
                                     .uri = uri_copy,
                                     .range = result.range,
@@ -2803,7 +2733,7 @@ pub const SyntaxChecker = struct {
             .e_for,
             .e_run_low_level,
             => return null,
-            .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
+            .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
         }
     }
 
@@ -3362,7 +3292,7 @@ pub const SyntaxChecker = struct {
 
         var target_binding: ?scope_map.Binding = null;
         for (scopes.bindings.items) |binding| {
-            if (@intFromEnum(binding.pattern_idx) == @intFromEnum(target_pattern)) {
+            if (@backingInt(binding.pattern_idx) == @backingInt(target_pattern)) {
                 target_binding = binding;
                 break;
             }
@@ -3377,7 +3307,7 @@ pub const SyntaxChecker = struct {
         const target = target_binding orelse return .scope_unavailable;
 
         for (scopes.bindings.items) |binding| {
-            if (@intFromEnum(binding.pattern_idx) == @intFromEnum(target_pattern)) continue;
+            if (@backingInt(binding.pattern_idx) == @backingInt(target_pattern)) continue;
             if (!std.mem.eql(u8, module_env.common.idents.getText(binding.ident), new_name)) continue;
             if (binding.visible_from <= target.visible_to and target.visible_from <= binding.visible_to) {
                 return .taken;
@@ -3565,7 +3495,7 @@ pub const SyntaxChecker = struct {
         const module_env = build.getModuleEnv() orelse return &[_]SymbolInformation{};
 
         // Build line offset table
-        const line_offsets = try pos.buildLineOffsets(allocator, source);
+        const line_offsets = try pos.LineOffsets.init(allocator, source);
         defer line_offsets.deinit();
 
         var symbols: std.ArrayList(SymbolInformation) = .empty;
@@ -3666,10 +3596,7 @@ pub const SyntaxChecker = struct {
     fn resolveLocalBindingTypeVar(self: *SyntaxChecker, module_env: *ModuleEnv, name: []const u8, name_start: u32, oom: *?Allocator.Error) ?types.Var {
         var scope = scope_map.ScopeMap.init(self.allocator);
         defer scope.deinit();
-        scope.build(module_env) catch |err| {
-            oom.* = err;
-            return null;
-        };
+        noteOom(oom, scope.build(module_env)) orelse return null;
 
         for (scope.bindings.items) |binding| {
             const binding_name = module_env.getIdentText(binding.ident);
@@ -3735,18 +3662,9 @@ pub const SyntaxChecker = struct {
             var type_var = ModuleEnv.varFrom(def_info.pattern_idx);
             var namespace_prefix = std.ArrayList(u8).empty;
             defer namespace_prefix.deinit(self.allocator);
-            namespace_prefix.appendSlice(self.allocator, first.segment) catch |err| {
-                oom.* = err;
-                return null;
-            };
-            namespace_prefix.append(self.allocator, '.') catch |err| {
-                oom.* = err;
-                return null;
-            };
-            namespace_prefix.appendSlice(self.allocator, member.segment) catch |err| {
-                oom.* = err;
-                return null;
-            };
+            noteOom(oom, namespace_prefix.appendSlice(self.allocator, first.segment)) orelse return null;
+            noteOom(oom, namespace_prefix.append(self.allocator, '.')) orelse return null;
+            noteOom(oom, namespace_prefix.appendSlice(self.allocator, member.segment)) orelse return null;
 
             while (nextChainSegment(access_chain, idx)) |segment| {
                 idx = segment.next;
@@ -3755,14 +3673,8 @@ pub const SyntaxChecker = struct {
                 // falling back to structural field traversal.
                 if (findDefinitionByQualifiedPrefix(self.allocator, resolved_env, namespace_prefix.items, segment.segment, oom)) |next_def| {
                     type_var = ModuleEnv.varFrom(next_def.pattern_idx);
-                    namespace_prefix.append(self.allocator, '.') catch |err| {
-                        oom.* = err;
-                        return null;
-                    };
-                    namespace_prefix.appendSlice(self.allocator, segment.segment) catch |err| {
-                        oom.* = err;
-                        return null;
-                    };
+                    noteOom(oom, namespace_prefix.append(self.allocator, '.')) orelse return null;
+                    noteOom(oom, namespace_prefix.appendSlice(self.allocator, segment.segment)) orelse return null;
                     continue;
                 }
                 if (oom.* != null) return null;
@@ -3770,14 +3682,8 @@ pub const SyntaxChecker = struct {
                 const next_var = builder.getFieldTypeVarFromTypeVar(resolved_env, type_var, segment.segment) orelse return null;
                 type_var = next_var;
 
-                namespace_prefix.append(self.allocator, '.') catch |err| {
-                    oom.* = err;
-                    return null;
-                };
-                namespace_prefix.appendSlice(self.allocator, segment.segment) catch |err| {
-                    oom.* = err;
-                    return null;
-                };
+                noteOom(oom, namespace_prefix.append(self.allocator, '.')) orelse return null;
+                noteOom(oom, namespace_prefix.appendSlice(self.allocator, segment.segment)) orelse return null;
             }
 
             return .{ .module_env = resolved_env, .type_var = type_var };
@@ -3825,10 +3731,7 @@ pub const SyntaxChecker = struct {
         member_name: []const u8,
         oom: *?Allocator.Error,
     ) ?module_lookup.DefinitionInfo {
-        const qualified = std.fmt.allocPrint(allocator, "{s}.{s}", .{ prefix, member_name }) catch |err| {
-            oom.* = err;
-            return null;
-        };
+        const qualified = noteOom(oom, std.fmt.allocPrint(allocator, "{s}.{s}", .{ prefix, member_name })) orelse return null;
         defer allocator.free(qualified);
         return module_lookup.findDefinitionByName(module_env, qualified);
     }
@@ -4275,7 +4178,7 @@ fn renameTargetAt(module_env: *ModuleEnv, offset: u32) ?RenameTarget {
         .underscore,
         .runtime_error,
         => null,
-        .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
+        .deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
     };
 }
 
@@ -4304,4 +4207,21 @@ fn truncateTypeLabel(rendered: []const u8) []const u8 {
     // Back off any UTF-8 continuation bytes so the cut lands on a boundary.
     while (end > 0 and (rendered[end] & 0xC0) == 0x80) : (end -= 1) {}
     return rendered[0..end];
+}
+
+test "bidi diagnostic range uses original UTF-16 source positions" {
+    const source = "# \u{1F642} \u{5D0}\u{5D1}\u{202E}\n";
+    const start = std.mem.find(u8, source, "\u{202E}").?;
+    var report = try reporting.Report.init(std.testing.allocator, "Bidi Test", "A control is forbidden.", .runtime_error);
+    defer report.deinit();
+    try report.document.addSourceRegion(.{
+        .start_line_idx = 0,
+        .start_col_idx = @intCast(start),
+        .end_line_idx = 0,
+        .end_col_idx = @intCast(start + "\u{202E}".len),
+    }, .error_highlight, "Probe.roc", source, &.{0});
+    const range = SyntaxChecker.rangeFromReport(report);
+    try std.testing.expectEqual(@as(u32, 0), range.start.line);
+    try std.testing.expectEqual(@as(u32, 7), range.start.character);
+    try std.testing.expectEqual(@as(u32, 8), range.end.character);
 }

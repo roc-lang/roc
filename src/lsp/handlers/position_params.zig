@@ -18,16 +18,24 @@ pub const PositionParams = struct {
     obj: std.json.ObjectMap,
 };
 
-/// Parse `textDocument.uri` and `position` out of a request.
+/// A document reference, as a request carries it.
+pub const DocumentParams = struct {
+    uri: []const u8,
+    /// The request's params object, so a caller can read the fields specific to
+    /// its request without re-validating what was already checked here.
+    obj: std.json.ObjectMap,
+};
+
+/// Parse `textDocument.uri` out of a request.
 ///
 /// Reports the specific missing or mistyped field to the client and returns
-/// null when the params do not describe a position.
-pub fn parse(
+/// null when the params do not name a document.
+pub fn parseDocument(
     self: anytype,
     id: *protocol.JsonId,
     method: []const u8,
     maybe_params: ?std.json.Value,
-) (Allocator.Error || error{WriteFailed})!?PositionParams {
+) (Allocator.Error || error{WriteFailed})!?DocumentParams {
     // Name the method in the message so a client that sends both requests can
     // tell which one it got wrong.
     var message_buf: [96]u8 = undefined;
@@ -60,6 +68,22 @@ pub fn parse(
         try self.sendError(id, .invalid_params, "uri must be a string");
         return null;
     }
+
+    return DocumentParams{ .uri = uri_value.string, .obj = obj };
+}
+
+/// Parse `textDocument.uri` and `position` out of a request.
+///
+/// Reports the specific missing or mistyped field to the client and returns
+/// null when the params do not describe a position.
+pub fn parse(
+    self: anytype,
+    id: *protocol.JsonId,
+    method: []const u8,
+    maybe_params: ?std.json.Value,
+) (Allocator.Error || error{WriteFailed})!?PositionParams {
+    const document = try parseDocument(self, id, method, maybe_params) orelse return null;
+    const obj = document.obj;
 
     const position_value = obj.get("position") orelse {
         try self.sendError(id, .invalid_params, "missing position");
@@ -98,7 +122,7 @@ pub fn parse(
     };
 
     return PositionParams{
-        .uri = uri_value.string,
+        .uri = document.uri,
         .line = line,
         .character = character,
         .obj = obj,

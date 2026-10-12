@@ -97,26 +97,23 @@ fn readFdInfoFromFile(allocator: std.mem.Allocator, io: std.Io) CoordinationErro
     };
     defer allocator.free(exe_path);
 
-    // Get the directory containing our executable (should be "{temp}/roc/{version}/{random}")
+    // Get the directory containing our executable (should be "{cache}/{version}/tmp/{random}")
     const exe_dir = std.fs.path.dirname(exe_path) orelse {
         std.log.err("Invalid executable path: no directory component", .{});
         return error.FdInfoReadFailed;
     };
 
-    // Verify we're in a roc temp directory structure: {temp}/roc/{version}/{random}
-    // The grandparent of the exe directory should be "roc"
-    const version_dir = std.fs.path.dirname(exe_dir) orelse {
-        std.log.err("Invalid executable path: missing version directory component", .{});
+    // Verify we're in a roc scratch directory: the parent of the exe directory
+    // is the per-version scratch directory, named by
+    // `cache_config.scratch_dir_name` in the compile module.
+    const scratch_dir = std.fs.path.dirname(exe_dir) orelse {
+        std.log.err("Invalid executable path: missing scratch directory component", .{});
         return error.FdInfoReadFailed;
     };
-    const roc_dir = std.fs.path.dirname(version_dir) orelse {
-        std.log.err("Invalid executable path: missing roc directory component", .{});
-        return error.FdInfoReadFailed;
-    };
-    const roc_basename = std.fs.path.basename(roc_dir);
+    const scratch_basename = std.fs.path.basename(scratch_dir);
 
-    if (!std.mem.eql(u8, roc_basename, "roc")) {
-        std.log.err("Unexpected directory structure: expected 'roc' grandparent, got '{s}'", .{roc_basename});
+    if (!std.mem.eql(u8, scratch_basename, "tmp")) {
+        std.log.err("Unexpected directory structure: expected 'tmp' parent, got '{s}'", .{scratch_basename});
         return error.FdInfoReadFailed;
     }
 

@@ -1,4 +1,4 @@
-import NodeValue exposing [NodeValue]
+import NodeValue
 
 ## Pure UI descriptor tree produced by `build`. This is the explicit data the
 ## host ingests. Identity is NOT threaded in Roc: the tree is immutable and pure,

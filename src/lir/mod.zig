@@ -29,13 +29,16 @@ pub const StrAppend = @import("str_append.zig");
 /// Shared proc-body cloning and rewrite-soundness helpers before ARC.
 pub const BodyClone = @import("body_clone.zig");
 /// Struct-typed join parameters split into per-field parameters before ARC.
+pub const PruneJoinParams = @import("prune_join_params.zig");
 pub const ScalarizeJoins = @import("scalarize_joins.zig");
 pub const SingleUseInline = @import("single_use_inline.zig");
 pub const ForwardingJoinInline = @import("forwarding_join_inline.zig");
 pub const TagCaseFusion = @import("tag_case_fusion.zig");
+pub const KnownTagJump = @import("known_tag_jump.zig");
 pub const LoopAppendPromote = @import("loop_append_promote.zig");
 /// Always-safe check elision from proven unsigned value-range facts.
 pub const RangeProve = @import("range_prove.zig");
+pub const BranchExpectation = @import("branch_expectation.zig");
 /// Switch branch pruning from explicit possible-tag analysis.
 pub const TagReachability = @import("tag_reachability.zig");
 /// Demand-driven proc compaction before ARC and backend emission.
@@ -59,6 +62,8 @@ pub const ArcSig = @import("arc_sig.zig");
 pub const ArcSolve = @import("arc_solve.zig");
 /// Debug borrow certifier for ARC-complete LIR.
 pub const ArcCertify = @import("arc_certify.zig");
+/// The ownership unit an owned erased call transfers.
+pub const ErasedOwner = @import("erased_owner.zig");
 /// Field takes from dying aggregates, solved between ARC borrow inference
 /// and RC statement emission.
 pub const ArcDismantle = @import("arc_dismantle.zig");
@@ -70,9 +75,10 @@ test "LIR image tests" {
 }
 
 pub const ImmortalLocals = @import("immortal_locals.zig");
+/// Decides where erased calls left pending by a tail call are run.
+pub const TailDrive = @import("tail_drive.zig");
 /// Final immutable failure-image guards and explicit completion.
 pub const ComptimeValueGuards = @import("comptime_value_guards.zig");
-pub const ComptimeRootAccessors = @import("comptime_root_accessors.zig");
 
 /// Symbol identifiers used throughout statement-only LIR.
 pub const Symbol = LIR.Symbol;
@@ -171,9 +177,9 @@ test "lir tests" {
     std.testing.refAllDecls(ReturnSlot);
     std.testing.refAllDecls(StrAppend);
     std.testing.refAllDecls(BodyClone);
+    std.testing.refAllDecls(PruneJoinParams);
     std.testing.refAllDecls(ScalarizeJoins);
     std.testing.refAllDecls(ComptimeValueGuards);
-    std.testing.refAllDecls(ComptimeRootAccessors);
     std.testing.refAllDecls(RangeProve);
     std.testing.refAllDecls(TagReachability);
     std.testing.refAllDecls(CheckedArithmetic);
@@ -182,6 +188,7 @@ test "lir tests" {
     std.testing.refAllDecls(ArcSig);
     std.testing.refAllDecls(ArcSolve);
     std.testing.refAllDecls(ArcCertify);
+    std.testing.refAllDecls(@import("arc_liveness.zig"));
     std.testing.refAllDecls(ArcDismantle);
     std.testing.refAllDecls(LirImage);
 }

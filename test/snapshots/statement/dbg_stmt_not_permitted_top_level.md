@@ -62,7 +62,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{}")))
+		(patt (type "_a")))
 	(expressions
-		(expr (type "{}"))))
+		(expr (type "_a"))))
 ~~~

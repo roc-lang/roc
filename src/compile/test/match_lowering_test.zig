@@ -76,7 +76,7 @@ fn checkRankProcShape(store: *const lir.LirStore, _: *const layout.Store) harnes
             const stmt = store.getCFStmt(stmt_id);
             if (stmt == .switch_stmt and stmt.switch_stmt.branches.len >= 5) has_multiway_switch = true;
             if (stmt == .assign_ref and stmt.assign_ref.op == .discriminant) discriminant_count += 1;
-            try lir.BodyClone.appendSuccessors(@constCast(store), &work, stmt_id);
+            try lir.BodyClone.appendSuccessors(store, &work, stmt_id, store.allocator);
         }
 
         if (has_multiway_switch) {

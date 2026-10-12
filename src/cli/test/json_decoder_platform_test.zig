@@ -84,7 +84,7 @@ test "JSON parsing platform derives structural parser without runtime allocation
     const tmp_path = try tmp_dir.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(tmp_path);
 
-    const prebuilt_path = try getEnvVarOwnedOrNull(allocator, "ROC_JSON_DECODER_PREBUILT_EXE");
+    const prebuilt_path = @as(?[]u8, try allocator.dupe(u8, @import("prebuilt_paths").app));
     const exe_name = if (builtin.os.tag == .windows) "json_decoder.exe" else "json_decoder";
     const output_path = if (prebuilt_path) |path|
         path
@@ -92,7 +92,7 @@ test "JSON parsing platform derives structural parser without runtime allocation
         try std.fs.path.join(allocator, &.{ tmp_path, exe_name });
     defer allocator.free(output_path);
 
-    const camel_prebuilt_path = try getEnvVarOwnedOrNull(allocator, "ROC_JSON_DECODER_CAMEL_PREBUILT_EXE");
+    const camel_prebuilt_path = @as(?[]u8, try allocator.dupe(u8, @import("prebuilt_paths").camel));
     const camel_exe_name = if (builtin.os.tag == .windows) "json_decoder_camel.exe" else "json_decoder_camel";
     const camel_output_path = if (camel_prebuilt_path) |path|
         path
@@ -100,7 +100,7 @@ test "JSON parsing platform derives structural parser without runtime allocation
         try std.fs.path.join(allocator, &.{ tmp_path, camel_exe_name });
     defer allocator.free(camel_output_path);
 
-    const camel_direct_prebuilt_path = try getEnvVarOwnedOrNull(allocator, "ROC_JSON_DECODER_CAMEL_DIRECT_PREBUILT_EXE");
+    const camel_direct_prebuilt_path = @as(?[]u8, try allocator.dupe(u8, @import("prebuilt_paths").camel_direct));
     const camel_direct_exe_name = if (builtin.os.tag == .windows) "json_decoder_camel_direct.exe" else "json_decoder_camel_direct";
     const camel_direct_output_path = if (camel_direct_prebuilt_path) |path|
         path
@@ -188,13 +188,6 @@ test "JSON parsing platform derives structural parser without runtime allocation
         "{ \"cacheControl\" : \"no-cache\", \"userId\" : \"abc\" }\n",
         "11\n",
     );
-}
-
-fn getEnvVarOwnedOrNull(allocator: std.mem.Allocator, key: []const u8) TestError!?[]u8 {
-    const key_z = try allocator.dupeZ(u8, key);
-    defer allocator.free(key_z);
-    const value = std.c.getenv(key_z) orelse return null;
-    return try allocator.dupe(u8, value[0..std.mem.len(value)]);
 }
 
 fn buildRocApp(
@@ -507,6 +500,12 @@ fn nativeRunnableTargetName() ?[]const u8 {
         .openbsd,
         .netbsd,
         .@"3ds",
+        .wiiu,
+        .@"switch",
+        .gba,
+        .psx,
+        .tios,
+        .ashetos,
         .ps3,
         .ps4,
         .ps5,

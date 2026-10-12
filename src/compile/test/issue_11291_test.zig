@@ -80,7 +80,7 @@ test "issue 11291: imported nominal methods preserve backing arguments" {
     });
     try tmp_dir.dir.writeFile(io, .{ .sub_path = "app.roc", .data =
         \\app [main!] { pf: platform "./platform.roc" }
-        \\import Container exposing [Container]
+        \\import Container
         \\container : Container(U8)
         \\container = { items: Str.to_utf8("x") }
         \\main! = |_args| if Container.to_list(container) == Str.to_utf8("x") Ok({}) else Err(Exit(1))
@@ -112,7 +112,7 @@ fn expectCompleteNominalSubstitutions(plan: *const postcheck.Boxy.Plan.ProgramPl
     // declaration substitutions belong to checked-type bindings.
     for (plan.type_reps.items) |binding| {
         const rep_id = binding.rep orelse continue;
-        const rep = plan.representations.items[@intFromEnum(rep_id)];
+        const rep = plan.representations.items[@backingInt(rep_id)];
         if (rep.kind != .nominal) continue;
         const span = rep.nominal_backing_arg_substitutions;
         var argument_count: u32 = 0;
@@ -127,7 +127,7 @@ fn expectCompleteNominalSubstitutions(plan: *const postcheck.Boxy.Plan.ProgramPl
         while (substitutions.next()) |substitution| {
             try std.testing.expectEqual(next_argument, substitution.arg_index);
             try std.testing.expectEqual(substitution.actual_rep, plan.nominalBackingActual(span, next_argument).?);
-            try std.testing.expect(@intFromEnum(substitution.actual_rep) < plan.representations.items.len);
+            try std.testing.expect(@backingInt(substitution.actual_rep) < plan.representations.items.len);
             next_argument += 1;
         }
     }

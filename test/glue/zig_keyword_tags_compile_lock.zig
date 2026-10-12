@@ -2,8 +2,8 @@
 const abi = @import("abi");
 
 comptime {
-    if (@intFromEnum(abi.TooLargeOrUnreachable.too_large) != 0 or
-        @intFromEnum(abi.TooLargeOrUnreachable.@"unreachable") != 1)
+    if (@backingInt(abi.TooLargeOrUnreachable.too_large) != 0 or
+        @backingInt(abi.TooLargeOrUnreachable.@"unreachable") != 1)
         @compileError("pure enum discriminants changed");
 
     if (!@hasField(abi.DeferOrOtherPayload, "defer") or

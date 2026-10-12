@@ -199,7 +199,7 @@ pub const CFStmtId = enum(u32) {
 pub const InlineScopeId = enum(u32) {
     _,
 
-    pub const none: InlineScopeId = @enumFromInt(std.math.maxInt(u32));
+    pub const none: InlineScopeId = @fromBackingInt(@intCast(std.math.maxInt(u32)));
 };
 
 /// A virtual source frame retained independently of physical procedures.
@@ -450,11 +450,14 @@ pub const LoweringModuleId = enum(u32) {
 pub const LiteralRejectionKind = enum(u8) {
     numeral,
     quote,
+    /// An interpolated string literal, whose conversion sees only the
+    /// literal's segments.
+    interpolation,
 };
 
 /// The source literal a literal-rejection crash reports: the checked
-/// expression, in its owning module, whose `from_numeral` or `from_quote`
-/// conversion returned `Err`.
+/// expression, in its owning module, whose `from_numeral`, `from_quote`, or
+/// `from_interpolation` conversion returned `Err`.
 pub const LiteralRejectionSite = struct {
     owner: LoweringModuleId,
     /// The literal's `CheckedExprId` in `owner`.
@@ -488,8 +491,8 @@ pub const ComptimeProducer = union(enum) {
     /// Feed this producer's tag and index to `hasher`.
     pub fn hash(self: ComptimeProducer, hasher: anytype) void {
         const tag: u8, const index: u32 = switch (self) {
-            .checked => |root| .{ 0, @intFromEnum(root) },
-            .literal => |root| .{ 1, @intFromEnum(root) },
+            .checked => |root| .{ 0, @backingInt(root) },
+            .literal => |root| .{ 1, @backingInt(root) },
         };
         hasher.update(&[_]u8{ tag, @truncate(index), @truncate(index >> 8), @truncate(index >> 16), @truncate(index >> 24) });
     }
@@ -546,7 +549,7 @@ pub const LocalSpan = extern struct {
 /// Span into flat u64 storage.
 pub const U64Span = extern struct {
     start: u32,
-    len: u16,
+    len: u32,
 
     /// Returns an empty u64 span.
     pub fn empty() U64Span {
@@ -582,8 +585,8 @@ pub const BoxyTagPayloadRead = struct {
 /// is the pre-order position among descriptor requirements rooted at the
 /// explicit argument.
 pub const ErasedArgDescKey = extern struct {
-    arg_index: u16,
-    descriptor_index: u16,
+    arg_index: u32,
+    descriptor_index: u32,
 };
 
 /// Capture-storage destination for one keyed erased-call argument descriptor.
@@ -611,12 +614,15 @@ pub const ErasedArgDescParam = extern struct {
     local: LocalId,
     /// For a parameter read from its parent, the descriptor index of that
     /// already-bound parent within the same explicit argument.
-    source_descriptor_index: u16,
+    source_descriptor_index: u32,
     /// Nested descriptor slot or tag payload position read from the parent.
-    source_nested_index: u16,
+    source_nested_index: u32,
     /// Tag whose payload a `tag_payload` read names.
     source_tag_name: BoxyNameId,
     read: ErasedArgDescRead,
+    /// The bytes alignment adds after `read`, declared so that every byte of
+    /// the struct is defined wherever its raw bytes are persisted.
+    _padding: [3]u8 = @as([3]u8, @splat(0)),
 };
 
 /// How a boxy operation observes or transfers its source value.
@@ -699,6 +705,19 @@ pub const U32Span = extern struct {
     pub fn empty() U32Span {
         return .{ .start = 0, .len = 0 };
     }
+};
+
+/// One conditionally unique part of a proc's returned value, as stored in a
+/// `LirProcSpec.rc_ret_conditions` span: the whole return when `field` is
+/// `whole_value`, otherwise original struct field `field` (or bit 0 for a
+/// tag union's single payload), unique whenever every argument position in
+/// `params` was passed a unique value as its caller's last use.
+pub const RcRetCondition = packed struct(u32) {
+    field: u8,
+    params: u16,
+    reserved: u8 = 0,
+
+    pub const whole_value: u8 = 255;
 };
 
 /// Identifier of one interned erased-call argument layout plan.
@@ -804,7 +823,7 @@ fn strMatchDelimiter(source: []const u8, cursor: usize, delimiter: []const u8) ?
 /// Span into flat string-match-step storage.
 pub const StrMatchStepSpan = extern struct {
     start: u32,
-    len: u16,
+    len: u32,
 
     pub fn empty() StrMatchStepSpan {
         return .{ .start = 0, .len = 0 };
@@ -829,7 +848,7 @@ pub const StrMatchArm = struct {
 /// Span into flat string-match-arm storage.
 pub const StrMatchArmSpan = extern struct {
     start: u32,
-    len: u16,
+    len: u32,
 
     pub fn empty() StrMatchArmSpan {
         return .{ .start = 0, .len = 0 };
@@ -886,7 +905,6 @@ pub const LiteralValue = union(enum) {
     },
     static_data: StaticDataId,
     bytes_literal: ListLiteral,
-    null_ptr,
     proc_ref: LirProcSpecId,
 };
 
@@ -911,18 +929,18 @@ pub const RefOp = union(enum) {
     },
     field: struct {
         source: LocalId,
-        field_idx: u16,
+        field_idx: u32,
     },
     tag_payload: struct {
         source: LocalId,
-        payload_idx: u16,
-        variant_index: u16,
-        tag_discriminant: u16,
+        payload_idx: u32,
+        variant_index: u32,
+        tag_discriminant: u32,
     },
     tag_payload_struct: struct {
         source: LocalId,
-        variant_index: u16,
-        tag_discriminant: u16,
+        variant_index: u32,
+        tag_discriminant: u32,
     },
     list_reinterpret: struct {
         backing_ref: LocalId,
@@ -944,7 +962,7 @@ pub const CFSwitchBranch = struct {
 /// Span into flat switch-branch storage.
 pub const CFSwitchBranchSpan = extern struct {
     start: u32,
-    len: u16,
+    len: u32,
 
     /// Returns an empty switch-branch span.
     pub fn empty() CFSwitchBranchSpan {
@@ -962,7 +980,7 @@ pub const JoinPoint = extern struct {
 /// Span into flat join-point storage.
 pub const JoinPointSpan = extern struct {
     start: u32,
-    len: u16,
+    len: u32,
 
     /// Returns an empty join-point span.
     pub fn empty() JoinPointSpan {
@@ -1005,7 +1023,6 @@ pub const ErasedCallableOnDrop = union(enum) {
         capture_layout: layout.Idx,
         desc_field_offset: u32,
     },
-    interpreter_context_drop,
 };
 
 /// Concrete callable ABI used to enter a LIR procedure.
@@ -1013,6 +1030,61 @@ pub const ProcAbi = enum {
     roc,
     erased_callable,
 };
+
+/// Where the erased calls a callee left pending are run. A tail call through
+/// an erased function value cannot replace its caller's frame, because the
+/// erased-call runtime sits between the two and the callee returns its result
+/// differently. Instead the call is recorded as pending and its procedure
+/// returns; whoever is waiting on that procedure's result then makes the
+/// pending call, and repeats while that call leaves another pending.
+pub const PendingDrive = enum(u8) {
+    /// Nothing can be pending after this statement.
+    none,
+    /// A call can be pending, and this procedure returns to a caller that
+    /// makes it. While one is, the statement's target holds no value.
+    handed_up,
+    /// Every pending call is run here, and the last one's result replaces
+    /// this statement's.
+    always,
+    /// In an erased-callable procedure: as `always` when the procedure was
+    /// entered by anything but the erased-call runtime, which runs pending
+    /// calls itself, and as `handed_up` otherwise.
+    unless_caller_drives,
+
+    /// Whether a call can still be pending once the statement has finished,
+    /// leaving its target without a value.
+    pub fn canLeavePending(self: PendingDrive) bool {
+        return switch (self) {
+            .none, .always => false,
+            .handed_up, .unless_caller_drives => true,
+        };
+    }
+
+    /// Whether the statement makes pending calls itself in some invocation of
+    /// its procedure, which needs the procedure's frame afterwards.
+    pub fn canDriveHere(self: PendingDrive) bool {
+        return switch (self) {
+            .none, .handed_up => false,
+            .always, .unless_caller_drives => true,
+        };
+    }
+};
+
+/// What a procedure does when it returns early because a call is pending.
+/// Whoever makes that call converts its result to this procedure's return
+/// layout in the procedure's place.
+pub const PendingReturn = struct {
+    /// The descriptor the last skipped conversion would have stored the
+    /// result as, when it is one the procedure holds before the call.
+    result_desc: ?BoxyDescRef,
+    /// The last skipped conversion stores the result under the descriptor
+    /// the value arrives with, so `result_desc` names none.
+    keeps_own_desc: bool = false,
+};
+
+/// Identity shared by procedures that reach one another through
+/// frame-replacing calls. It names the group only; it is not a procedure id.
+pub const TailGroupId = enum(u32) { _ };
 
 /// Producer-proven sites and their reserved loop identity, consumed before ARC.
 pub const TailCalls = struct {
@@ -1105,6 +1177,20 @@ pub const CFStmt = union(enum) {
         /// Producer-proven self-tail site, linked for procedure finalization.
         /// Consumed before ARC; no backend tail-call inference is required.
         tail_call: ?struct { next: ?CFStmtId } = null,
+        /// Set by ARC emission on a call to a procedure in the caller's own
+        /// call-graph SCC whose next statement returns `target`: the caller
+        /// frame owns nothing afterwards, so every backend must replace that
+        /// frame with the callee's instead of growing the stack.
+        replaces_frame: bool = false,
+        /// Set by the tail-drive pass on a call whose callee can return with
+        /// an erased call pending.
+        drive: PendingDrive = .none,
+        /// Set by the tail-drive pass on a call whose value reaches the
+        /// procedure's return only through representation conversions. When
+        /// a call is still pending after this statement, the procedure
+        /// returns at once without a value: the caller that makes the pending
+        /// call stores its result in the representation that caller reads.
+        returns_pending: ?PendingReturn = null,
         next: CFStmtId,
     },
     assign_call_erased: struct {
@@ -1138,6 +1224,20 @@ pub const CFStmt = union(enum) {
         /// unit. Debug certification proves that allocation identity through
         /// the exact representation-transparent producer chain.
         reuse_source: ?LocalId = null,
+        /// Set by ARC emission on an erased call whose value the procedure
+        /// returns, as it is or after representation conversions only: the
+        /// call is left pending instead of made. The pending call owns the
+        /// reference to `closure` this statement was given, and whoever runs
+        /// it releases that reference afterwards. `target` holds no value
+        /// until a `drive` replaces it.
+        deferred: bool = false,
+        /// Set by the tail-drive pass: where calls pending after this
+        /// statement are run.
+        drive: PendingDrive = .none,
+        /// Set by the tail-drive pass on a deferred call whose value is
+        /// converted before the procedure returns it. When the call is still
+        /// pending after this statement, the procedure returns at once.
+        returns_pending: ?PendingReturn = null,
         next: CFStmtId,
     },
     assign_packed_erased_fn: struct {
@@ -1194,6 +1294,20 @@ pub const CFStmt = union(enum) {
         payload_mode: BoxyTransferMode = .move,
         next: CFStmtId,
     },
+    /// Box a copy of the record `base`, whose layout only `base_desc`
+    /// knows, in which every field `fields_desc` names takes its value from
+    /// the `fields` record payload instead. A record update never changes a
+    /// field's type, so the result has `base`'s exact runtime representation
+    /// and descriptor. `base` is borrowed and `fields` is consumed.
+    assign_boxy_record_update: struct {
+        target: LocalId,
+        base: LocalId,
+        base_desc: BoxyDescRef,
+        fields: LocalId,
+        fields_layout: layout.Idx,
+        fields_desc: BoxyDescRef,
+        next: CFStmtId,
+    },
     assign_boxy_reuse_box: struct {
         target: LocalId,
         source: LocalId,
@@ -1223,6 +1337,28 @@ pub const CFStmt = union(enum) {
         source: LocalId,
         source_desc: BoxyDescRef,
         source_mode: BoxyTransferMode = .borrow,
+        next: CFStmtId,
+    },
+    /// `target` (a Bool) is whether the borrowed `lhs` and `rhs`, both stored
+    /// as `desc` describes, are equal under derived `is_eq`: each component
+    /// whose type declares its own `is_eq` compares with that method, named
+    /// by the descriptor's equality method slot.
+    assign_boxy_eq: struct {
+        target: LocalId,
+        lhs: LocalId,
+        rhs: LocalId,
+        desc: BoxyDescRef,
+        next: CFStmtId,
+    },
+    /// `target` (a Hasher) is `hasher` fed the borrowed `value`, stored as
+    /// `desc` describes, under derived `to_hash`: each component whose type
+    /// declares its own `to_hash` hashes with that method, named by the
+    /// descriptor's hash method slot.
+    assign_boxy_hash: struct {
+        target: LocalId,
+        value: LocalId,
+        hasher: LocalId,
+        desc: BoxyDescRef,
         next: CFStmtId,
     },
     assign_boxy_tag: struct {
@@ -1286,6 +1422,10 @@ pub const CFStmt = union(enum) {
         /// so the in-place branch is never taken there. Target-independent
         /// because both widths are stored; ignored by every other op.
         interchangeable: layout.WidthValues(bool) = layout.WidthValues(bool).both(true, true),
+        /// Committed output element layout for `list_map_can_reuse`. Consumers
+        /// with different storage representations use this explicit fact rather
+        /// than reconstructing the transform function return type.
+        map_output_elem: ?layout.Idx = null,
         /// Exact in-range byte alignment count proved by range analysis.
         /// Only `simd_concat_shift_bytes` uses this; null retains the dynamic
         /// operation. Backends consume this fact without inspecting definitions.
@@ -1310,8 +1450,8 @@ pub const CFStmt = union(enum) {
     assign_tag: struct {
         target: LocalId,
         target_desc: ?BoxyDescRef = null,
-        variant_index: u16,
-        discriminant: u16,
+        variant_index: u32,
+        discriminant: u32,
         payload: ?LocalId,
         next: CFStmtId,
     },
@@ -1324,8 +1464,8 @@ pub const CFStmt = union(enum) {
     store_tag: struct {
         dest: LocalId,
         tag_layout: layout.Idx,
-        variant_index: u16,
-        discriminant: u16,
+        variant_index: u32,
+        discriminant: u32,
         payload: ?LocalId,
         next: CFStmtId,
     },
@@ -1370,7 +1510,7 @@ pub const CFStmt = union(enum) {
     incref: struct {
         value: LocalId,
         rc: RcHelper,
-        count: u16 = 1,
+        count: u32 = 1,
         atomicity: RcAtomicity = .atomic,
         next: CFStmtId,
     },
@@ -1483,6 +1623,10 @@ pub const CFStmt = union(enum) {
         /// compile-time evaluation reports the literal's own diagnostic with
         /// `msg`, the conversion's error message.
         literal_rejection: ?LiteralRejectionSite = null,
+        /// Set when this crash is code checking rejected and already
+        /// reported: compile-time evaluation that reaches it discards the
+        /// result instead of reporting the problem a second time.
+        checked_error: bool = false,
     },
 };
 
@@ -1531,7 +1675,12 @@ pub const ProcShapes = packed struct(u16) {
     struct_build: bool = false,
     /// A tag construction.
     tag_build: bool = false,
-    _padding: u4 = 0,
+    /// An equality or ordering comparison of fixed-width unsigned integers of
+    /// at most 64 bits, the only comparison a value-range proof can decide.
+    unsigned_compare: bool = false,
+    /// A SIMD byte concat-shift, whose count a value-range proof can fix.
+    simd_concat_shift: bool = false,
+    _padding: u2 = 0,
 
     pub fn merged(self: ProcShapes, other: ProcShapes) ProcShapes {
         return @bitCast(@as(u16, @bitCast(self)) | @as(u16, @bitCast(other)));
@@ -1586,6 +1735,11 @@ pub const LirProcSpec = struct {
     erased_arg_desc_params: BoxySpan = .{},
     /// Hidden capture-pointer parameter for an erased callable procedure.
     erased_capture_arg: ?LocalId = null,
+    /// Capture layout of this erased worker's callable values that compile-time
+    /// evaluation froze into static data. No packing statement builds those
+    /// values, so backends register the worker with the Boxy runtime at
+    /// startup, for the capture this layout describes.
+    static_erased_capture_layout: ?layout.Idx = null,
     abi: ProcAbi = .roc,
     /// This callable can be invoked as an external function pointer before a
     /// normal Roc root runs, so its entry must initialize the embedded Boxy
@@ -1603,8 +1757,18 @@ pub const LirProcSpec = struct {
     external: bool = false,
     /// Exact self-tail sites produced by LIR construction, consumed by TRMC/TCE.
     tail_calls: ?TailCalls = null,
+    /// Set by the tail-drive pass on an erased-callable procedure with an
+    /// `unless_caller_drives` statement: its entry records whether the
+    /// erased-call runtime made the call.
+    reads_caller_drives: bool = false,
     /// Tail-recursion rewrite applied by the TRMC pass, if any.
     tail_transform: TailTransform = .none,
+    /// Set by ARC on every procedure that makes or receives a same-SCC tail
+    /// call; procedures connected by such calls share one identity. A value
+    /// passed in memory to a frame-replacing call cannot live in the frame
+    /// being replaced, so a backend that passes arguments that way gives
+    /// every member of a group one storage contract for them.
+    tail_group: ?TailGroupId = null,
     /// What the body contains, for pass admission.
     shapes: ProcShapes = .{},
     /// Explicit native-stack probing requirement for this proc.
@@ -1615,13 +1779,38 @@ pub const LirProcSpec = struct {
     rc_borrowed_params: u64 = 0,
     rc_ret_borrowed: bool = false,
     rc_ret_lenders: u64 = 0,
+    /// The uniqueness facts ARC solved for a base proc, which its callers'
+    /// uniqueness inference reads: borrowed positions the body only reads,
+    /// a return (or returned fields) whose allocation has count 1, and the
+    /// parts of the return that are unique when particular arguments were
+    /// passed unique dying values (each entry an `RcRetCondition`). An
+    /// object-cache entry carries them, and a body-less `external` proc gets
+    /// them back, so callers of a cached proc compile as they would against
+    /// its body.
+    rc_read_only_params: u64 = 0,
+    rc_ret_unique: bool = false,
+    rc_ret_unique_fields: u64 = 0,
+    rc_ret_conditions: U32Span = U32Span.empty(),
+    /// The inline plan inlines this proc's body at its direct calls, so it has
+    /// a procedure only where a call could not inline it or it is a value. A
+    /// program that takes a cache hit for it before inlining (a pack program
+    /// takes hits during specialization) could not inline it, so the object
+    /// cache never offers it.
+    inlined_at_calls: bool = false,
+    /// Set by ARC on a solved base proc when a call to it may demand an
+    /// ownership variant emitted from its body (an owned field take, outcome
+    /// restitution, a same-SCC tail transfer, or, under mode specialization,
+    /// a born-unique seed or an owned return). An object-cache entry carries
+    /// only the base signature and no body, so a proc with this bit set is
+    /// never offered as one.
+    rc_variant_demandable: bool = false,
 };
 
 /// Identifier of a stored LirPattern.
 pub const LirPatternId = enum(u32) {
     _,
 
-    pub const none: LirPatternId = @enumFromInt(std.math.maxInt(u32));
+    pub const none: LirPatternId = @fromBackingInt(@intCast(std.math.maxInt(u32)));
 
     pub fn isNone(self: LirPatternId) bool {
         return self == none;
@@ -1631,7 +1820,7 @@ pub const LirPatternId = enum(u32) {
 /// Span into flat pattern-id storage.
 pub const LirPatternSpan = extern struct {
     start: u32,
-    len: u16,
+    len: u32,
 
     pub fn empty() LirPatternSpan {
         return .{ .start = 0, .len = 0 };
@@ -1662,7 +1851,7 @@ pub const LirPattern = union(enum) {
     },
     str_literal: StringLiteral.Idx,
     tag: struct {
-        discriminant: u16,
+        discriminant: u32,
         union_layout: layout.Idx,
         args: LirPatternSpan,
     },
@@ -1696,11 +1885,11 @@ test "RcHelper distinguishes concrete layout helpers from boxy descriptor helper
     try std.testing.expectEqual(layout.RcOp.incref, concrete_key.op);
     try std.testing.expectEqual(layout.Idx.str, concrete_key.layout_idx);
 
-    const boxy = RcHelper{ .boxy = .{ .static = @enumFromInt(7) } };
+    const boxy = RcHelper{ .boxy = .{ .static = @fromBackingInt(@intCast(7)) } };
     try std.testing.expect(boxy.concreteOrNull() == null);
     switch (boxy) {
         .boxy => |desc| switch (desc) {
-            .static => |id| try std.testing.expectEqual(@as(u32, 7), @intFromEnum(id)),
+            .static => |id| try std.testing.expectEqual(@as(u32, 7), @backingInt(id)),
             .local, .runtime, .dict_method_arg, .dict_method_hidden => return error.TestExpectedEqual,
         },
         .concrete => return error.TestExpectedEqual,

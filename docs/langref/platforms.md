@@ -68,7 +68,7 @@ Many I/O operations can benefit from being run concurrently. Since platforms are
 
 For example, a command-line platform might schedule concurrent operations across all available cores (or some lower number specified by a command-line argument). In contrast, a web server platform might try to balance available cores across multiple request handlers, to prevent undesirable scenarios like one handler getting all the cores (meaning none of the others can progress).
 
-> Note: although platform-implemented scheduling of concurrent operations is theoretically possible today, there are currently some missing pieces to make it practical for platform authors to implement. That work is already in progress, but is not yet complete.
+> Note that although platform-implemented scheduling of concurrent operations is possible in principle, some pieces needed to make it practical for platform authors to implement haven't been built yet.
 
 ## How platforms are implemented
 

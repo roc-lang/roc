@@ -1,12 +1,21 @@
 # Pattern Matching
 
-A pattern describes the shape a value must have and can give names to parts of that value. Patterns are used by [`match`](#match), destructuring assignments, function arguments, and [`for`](loops#for-loops) loops.
+A _pattern_ describes what a value looks like, and can give names to parts of it. For example,
+the pattern `Ok(value)` matches any `Ok` tag, and gives the name `value` to its payload. It
+doesn't match an `Err` tag.
 
-For example, `Ok(value)` matches an `Ok` tag with one payload and gives that payload the name `value`. It does not match an `Err` tag.
+Patterns show up in four places:
+
+- The branches of a [`match`](#match) expression
+- The left side of an `=` [assignment](#destructuring-assignments-with-)
+- Function arguments, like the `{ x, y }` in `|{ x, y }| x + y`
+- The part of a [`for` loop](loops#for-loops) between `for` and `in`
 
 ## `match`
 
-A `match` expression evaluates one value, compares it with each branch from top to bottom, and evaluates the body of the first branch that matches:
+A `match` expression evaluates a value, then goes through its _branches_ from top to bottom,
+looking for the first one whose pattern matches the value. Then it evaluates that branch's body,
+and that's what the whole `match` expression evaluates to:
 
 ```roc
 describe = |result|
@@ -16,9 +25,14 @@ describe = |result|
     }
 ```
 
-The expression after `match` is evaluated once. Every branch pattern must accept the same type, and every branch body must produce the same type. Names introduced by a pattern are in scope in that branch's guard and body, but not in other branches.
+The value after `match` only gets evaluated once. All the branches' patterns have to work on the
+same type (the type of the value being matched), and all the branches' bodies have to evaluate to
+the same type (the type of the whole `match`).
 
-Branch order matters whenever patterns overlap. In this example, `0` reaches the first branch, not the second:
+Names that a pattern introduces, like `value` above, can only be used in that branch.
+
+Since the first matching branch wins, the order of branches matters when more than one could
+match. Here, `0` matches the first branch, not the second:
 
 ```roc
 classify = |number|
@@ -30,7 +44,7 @@ classify = |number|
 
 ### Branch Alternatives
 
-Use `|` to give several patterns the same body:
+You can use `|` to give several patterns the same body:
 
 ```roc
 is_primary = |color|
@@ -40,11 +54,14 @@ is_primary = |color|
     }
 ```
 
-This is equivalent to writing a separate branch with the same body for each alternative. Every alternative must introduce the same names, with compatible types, because the guard and body must be valid regardless of which alternative matched.
+This works the same way as writing out a separate branch for each pattern, each with the same body.
+
+If the alternatives give names to things, they all have to give the same names, with the same
+types. Otherwise the body might refer to a name that the matching alternative didn't provide.
 
 ### `if` Guards on Branches
 
-A branch can have an `if` guard between its pattern and `=>`:
+A branch can have an `if` after its pattern, which is called a _guard_:
 
 ```roc
 describe = |numbers|
@@ -54,15 +71,19 @@ describe = |numbers|
     }
 ```
 
-The guard must evaluate to `Bool`. It runs only after its pattern matches, so it can use names introduced by that pattern. If the guard evaluates to `False`, matching continues with the next branch.
+The guard only runs if the pattern matched, so it can use names from the pattern (like `first`
+here). If the guard is `False`, the branch doesn't count as matching after all, and `match` moves
+on to the next branch.
 
-A guarded branch does not by itself cover any case for exhaustiveness. Even a pattern such as `_ if condition` needs an unguarded branch after it, because the condition can be `False`.
+For [exhaustiveness](#exhaustiveness) purposes, the compiler doesn't count a guarded branch as
+covering anything, since its guard might be `False`. So even `_ if condition => …` needs another
+branch after it.
 
-## Pattern Forms
+## Kinds of Patterns {#pattern-forms}
 
-### Bindings and Wildcards
+### Names and `_`
 
-A lowercase name matches any value and binds that value to the name:
+A lowercase name matches anything, and gives that name to the value:
 
 ```roc
 identity = |value|
@@ -71,11 +92,13 @@ identity = |value|
     }
 ```
 
-`_` also matches any value, but does not bind a name. A name beginning with an underscore, such as `_ignored`, still binds a name; the prefix indicates that leaving it unused is intentional.
+`_` also matches anything, but doesn't give it a name. A name that starts with an underscore, like
+`_ignored`, does give the value a name, but tells the compiler (and anyone reading the code) that
+you don't plan to use it, so you don't get an [unused name](naming#unused-names) warning.
 
-### Literal Patterns
+### Literals
 
-Number and string literals match equal values:
+Number and string literals match values that are equal to them:
 
 ```roc
 describe = |value|
@@ -86,7 +109,11 @@ describe = |value|
     }
 ```
 
-Literal patterns for types with other possible values normally need a catch-all branch. A numeric pattern can have an explicit type suffix, just like a numeric expression:
+Since numbers and strings have way too many possible values to list them all, matching on them
+almost always needs a `_` branch at the end.
+
+Number literal patterns can have [type suffixes](numbers#number-literals), just like number literals
+in expressions:
 
 ```roc
 classify : F32 -> Str
@@ -97,7 +124,7 @@ classify = |number|
     }
 ```
 
-A single-quoted pattern matches one Unicode codepoint. It can also have a numeric type suffix:
+So can single-quoted characters, which are [number literals](strings#single-quote-syntax) too:
 
 ```roc
 is_ascii_a = |byte|
@@ -107,9 +134,12 @@ is_ascii_a = |byte|
     }
 ```
 
-`True` and `False` are tags in the `Bool` type, so they use the same pattern syntax as other tags.
+`True` and `False` are tags, so they're matched the same way as any other tag.
 
-String patterns can contain captures. A capture gives a name to the part of the string in that position:
+### String Patterns with Captures
+
+A string pattern can contain `${…}` with a name inside, which matches any text in that position and
+gives it that name:
 
 ```roc
 user_id = |path|
@@ -119,11 +149,20 @@ user_id = |path|
     }
 ```
 
-Here the literal prefix must match `"users/"`, and `id` receives the remainder of the string. A capture followed by more literal text receives everything up to the first occurrence of that text. Write `${_}` to match that portion without binding it. Two captures cannot be adjacent, because there would be no delimiter showing where the first one ends.
+Here, `"users/42"` matches, with `id` being `"42"`. `"posts/42"` doesn't match, because it doesn't
+start with `"users/"`.
 
-### Tag Patterns
+When there's more text after a capture, the capture stops at the first place that text appears.
+For example, matching `"a/b/c.txt"` against `"${dir}/${file}.txt"` gives `dir` the value `"a"` and
+`file` the value `"b/c"`.
 
-A tag pattern matches a particular tag and can contain a pattern for each payload:
+You can write `${_}` to match some text without naming it. Two captures can't be right next to
+each other, as in `"${a}${b}"`, because there would be no way to tell where `a` should stop and `b`
+should start.
+
+### Tags
+
+A tag pattern matches a particular tag, and has a pattern for each of its payloads:
 
 ```roc
 unwrap_or = |result, fallback|
@@ -133,11 +172,13 @@ unwrap_or = |result, fallback|
     }
 ```
 
-Payload patterns can be nested. For example, `Ok(Pair(left, right))` matches an `Ok` whose payload is a `Pair` with two payloads.
+The payload patterns can be any kind of pattern, including other tags. For example,
+`Ok(Pair(left, right))` matches an `Ok` whose payload is a `Pair` tag, and names the `Pair`'s two
+payloads.
 
-### Record Patterns
+### Records
 
-A record pattern destructures fields by name:
+A record pattern names a record's fields:
 
 ```roc
 full_name = |person| {
@@ -146,7 +187,7 @@ full_name = |person| {
 }
 ```
 
-Use `:` to bind a field to a different name or to match it with another pattern:
+You can use `:` to give a field's value a different name, or to match it against another pattern:
 
 ```roc
 name = |person|
@@ -156,18 +197,22 @@ name = |person|
     }
 ```
 
-A record pattern without `..` describes exactly the listed fields. A bare `..` leaves the remaining fields unmatched. `..rest` additionally binds a record containing those remaining fields:
+A record pattern only matches records with exactly the fields it lists, unless it ends in `..`,
+which means "and any other fields." If you write a name after the `..`, that name gets a record
+containing all the other fields:
 
 ```roc
 remove_name = |person|
     match person {
         { name, ..rest } => Pair(name, rest)
     }
+
+answer = remove_name({ name: "Sam", age: 32 }) # Pair("Sam", { age: 32 })
 ```
 
-### Tuple Patterns
+### Tuples
 
-A tuple pattern has one pattern for each position:
+A tuple pattern has a pattern for each element:
 
 ```roc
 swap = |pair| {
@@ -176,11 +221,12 @@ swap = |pair| {
 }
 ```
 
-Like tuple values, tuple patterns have at least two elements. See [Tuples](tuples#destructuring-tuples).
+Like tuples themselves, tuple patterns have at least two elements. See
+[Destructuring Tuples](tuples#destructuring-tuples).
 
-### List Patterns
+### Lists {#list-patterns}
 
-A list pattern can match an exact number of elements:
+A list pattern matches lists of a particular length:
 
 ```roc
 describe = |items|
@@ -192,18 +238,22 @@ describe = |items|
     }
 ```
 
-`..` matches any number of elements, including none. It can appear once and can have fixed patterns on either side:
+`..` matches any number of elements (including zero), so `[_, _, ..]` matches any list with at
+least two elements. A list pattern can have one `..`, and it can be at the beginning, the middle,
+or the end:
 
 ```roc
 ends = |items|
     match items {
-        [] => None
         [first, .., last] => Some(Pair(first, last))
         _ => None
     }
 ```
 
-Use `.. as name` to bind the matched middle portion as a list:
+(Note that `[first, .., last]` doesn't match a list with only one element, since `first` and `last`
+are two separate elements.)
+
+You can write `.. as name` to give a name to the elements that `..` matched, as a list:
 
 ```roc
 split_first = |items|
@@ -215,17 +265,18 @@ split_first = |items|
 
 ### Nested Patterns and `as`
 
-Patterns can be nested wherever a value can be nested:
+Patterns can go inside other patterns, the same way values can go inside other values:
 
 ```roc
 get_name = |response|
     match response {
-        Ok({ user: { name, } }) => Some(name)
+        Ok({ user: { name } }) => Some(name)
         Err(_) => None
     }
 ```
 
-An `as` pattern gives a name to the whole matched value as well as destructuring its parts:
+You can write `as` and a name after a pattern, to give a name to the whole value in addition to
+its parts:
 
 ```roc
 keep_point = |value|
@@ -234,9 +285,10 @@ keep_point = |value|
     }
 ```
 
-### Nominal Patterns
+### Nominal Types
 
-A nominal value must be destructured through its nominal type. If `Distance` is declared with `Distance := U64`, its backing value is matched with `Distance.(pattern)`:
+To match a [nominal type](types#nominal-types)'s backing value, you write the type's name, then `.`,
+then a pattern in parentheses:
 
 ```roc
 Distance := U64
@@ -248,7 +300,7 @@ unwrap = |distance|
     }
 ```
 
-The same syntax wraps and unwraps tuple, tag-union, and other backing types. Nominal records have the shorthand `Type.{ fields }`, without parentheses:
+For nominal records, you can leave off the parentheses:
 
 ```roc
 Point := { x : U64, y : U64 }
@@ -257,13 +309,17 @@ sum : Point -> U64
 sum = |Point.{ x, y }| x + y
 ```
 
-The general form `Point.({ x, y })` is also accepted, but `Point.{ x, y }` is the conventional record-specific form.
+(`Point.({ x, y })` also works, but `Point.{ x, y }` is the usual way to write it.) For nominal tag
+unions, you can match the tags directly, as in `Red =>` or `Color.Red =>`. See
+[Qualified Tags](tag-unions#qualified-tags).
 
 ## Exhaustiveness
 
-Every possible input to a `match` must be handled. The compiler reports a non-exhaustive match and shows patterns for cases that are missing.
+A `match` has to handle every possible value. If it doesn't, you get a compile-time error that
+shows some example values that aren't handled.
 
-Closed tag unions can be covered by listing every tag:
+For example, this `match` is _exhaustive_ (it handles every possible value), because a `Try` is
+always either `Ok` or `Err`:
 
 ```roc
 is_ok = |result|
@@ -273,30 +329,34 @@ is_ok = |result|
     }
 ```
 
-Types such as numbers and strings have too many possible values to list individually, so matches on their literals generally end with a catch-all pattern.
-
-The compiler also reports redundant patterns. A pattern is redundant when every value it could match was already handled by earlier branches. For example, `Ok(_)` is unreachable after `_`:
+The compiler also tells you about branches that can never match, because every value they'd
+match was already handled by earlier branches. Here, the `Ok(_)` branch can never be reached:
 
 ```roc
 match result {
     _ => "handled"
-    Ok(_) => "unreachable"
+    Ok(_) => "unreachable" # This gives a warning.
 }
 ```
 
 ### Catch-all Patterns (`_`) {#underscore}
 
-`_` is the usual catch-all pattern. A binding such as `other` is also a catch-all, with the difference that it makes the matched value available to the branch body.
+A _catch-all_ pattern matches every value. `_` is the most common one. A plain name, like `other`,
+is also a catch-all; the difference is that `other` gives the value a name you can use in the
+branch's body.
 
-Catch-all branches are often last because any later branch would be redundant.
+Since a catch-all matches everything, any branch after it can never match, which is why catch-all
+branches go last.
 
 ## Destructuring
 
-Patterns also appear outside `match`. In those positions, one pattern must cover every value of the inferred type. If it can fail, the compiler reports a non-exhaustive destructure rather than inserting a runtime failure.
+Patterns outside `match` (in assignments, function arguments, and `for` loops) don't have other
+branches to fall back on. So they have to match every possible value of their type. If one
+doesn't, you get a compile-time error rather than a runtime crash.
 
 ### Destructuring Assignments (with `=`)
 
-The left side of `=` can be a pattern:
+The left side of an `=` can be a pattern:
 
 ```roc
 coordinates = |point| {
@@ -305,7 +365,12 @@ coordinates = |point| {
 }
 ```
 
-Destructuring assignments are useful for records, tuples, nominal values, and tags that are known to be the only possible case. A refutable pattern is rejected when the value's type permits another case. For example, `Ok(value) = result` is rejected if `result` can also be `Err(_)`; use `match` to handle both cases.
+This is useful for records, tuples, nominal types, and tag unions that only have one tag. It
+doesn't work with patterns that might not match. For example, `Ok(value) = result` gives an error
+if `result` could be an `Err`; use a `match` instead, so you can say what to do in that case.
+
+(If the error type is the [empty tag union](tag-unions#void), as in `Try(U64, [])`, then `result`
+can't be an `Err`, so `Ok(value) = result` is allowed.)
 
 Function arguments are patterns too:
 
@@ -313,9 +378,7 @@ Function arguments are patterns too:
 sum_point = |{ x, y }| x + y
 ```
 
-Their patterns must likewise cover every value accepted by the function's argument type.
-
-The binding before `in` in a `for` loop is also a pattern:
+So is the part of a `for` loop between `for` and `in`:
 
 ```roc
 var $total = 0
@@ -324,4 +387,22 @@ for (key, value) in [(1, 2), (3, 4)] {
 }
 ```
 
-That pattern must cover every item produced by the iterator. Use a `match` inside the loop when different item shapes need different behavior.
+If different elements need different handling, use a `match` inside the loop.
+
+## Performance
+
+Matching on a value never allocates memory or copies the value. The compiler turns a whole `match`
+into a single [decision tree](https://en.wikipedia.org/wiki/Decision_tree) that checks each part of
+the value at most once, so having lots of branches doesn't mean checking the same thing over and
+over. Some details for specific kinds of patterns:
+
+- **Tags** compile to a check of the tag union's [discriminant](tag-unions#memory-layout), which is
+  a small number. Matching on many tags can compile to a single jump to the right branch, like a
+  `switch` statement in C.
+- **Records and tuples** cost nothing to destructure. Their fields are at known offsets, so naming
+  a field is just reading it.
+- **Lists** check the list's length first, then the elements the pattern needs. Naming the rest of
+  a list with `.. as rest` doesn't copy any elements; `rest` refers to part of the original list's
+  memory (and keeps that memory alive until `rest` is no longer used).
+- **Strings** compare bytes. A string pattern with captures has to search for the text after each
+  capture, which takes time proportional to the length of the string being matched.

@@ -122,20 +122,6 @@ pub fn Scratch(comptime T: type) type {
             };
         }
 
-        /// Creates a new span starting at start.  Moves the items from scratch
-        /// to extra_data as appropriate.
-        pub fn spanFromStart(self: *Self, start: u32, data: *std.array_list.Managed(u32)) std.mem.Allocator.Error!DataSpan {
-            const end = self.items.len;
-            defer self.items.shrinkRetainingCapacity(start);
-            var i = @as(usize, @intCast(start));
-            const data_start = @as(u32, @intCast(data.items.len));
-            while (i < end) {
-                try data.append(self.items[i].id);
-                i += 1;
-            }
-            return .{ .span = .{ .start = data_start, .len = @as(u32, @intCast(end)) - start } };
-        }
-
         /// Clears any ids added to scratch from start until the end.
         /// Should be used wherever the scratch items will not be used,
         /// as in when parsing fails.

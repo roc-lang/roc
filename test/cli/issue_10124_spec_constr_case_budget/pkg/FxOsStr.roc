@@ -1,4 +1,4 @@
-import FxPath exposing [FxPath]
+import FxPath
 
 FxOsStr := [Utf8(Str), UnixBytes(List(U8)), WindowsU16s(List(U16))].{
     to_raw : FxOsStr -> [Utf8(Str), UnixBytes(List(U8)), WindowsU16s(List(U16))]

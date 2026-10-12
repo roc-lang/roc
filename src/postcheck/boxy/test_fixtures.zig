@@ -20,8 +20,8 @@ pub fn builtinNominal(
     args: checked.CheckedTypeRange,
 ) checked.StoredNominal {
     return .{
-        .name = @enumFromInt(tableIndex(0)),
-        .origin_module = @enumFromInt(tableIndex(0)),
+        .name = @fromBackingInt(@intCast(tableIndex(0))),
+        .origin_module = @fromBackingInt(@intCast(tableIndex(0))),
         .owner_module = .{},
         .builtin = builtin,
         .is_opaque = false,
@@ -37,26 +37,26 @@ pub fn addBoolDeclaration(
     bool_ty: checked.CheckedTypeId,
 ) std.mem.Allocator.Error!void {
     const types = &module.checked_types;
-    const nominal = types.payloads.items[@intFromEnum(bool_ty)].nominal;
-    const empty: checked.CheckedTypeId = @enumFromInt(@as(u32, @intCast(types.payloads.items.len)));
+    const nominal = types.payloads.items[@backingInt(bool_ty)].nominal;
+    const empty: checked.CheckedTypeId = @fromBackingInt(@intCast(@as(u32, @intCast(types.payloads.items.len))));
     try types.payloads.append(allocator, .empty_tag_union);
     const tags_start: u32 = @intCast(types.tag_pool.items.len);
     for ([_][]const u8{ "False", "True" }) |name| {
         const label = try module.canonical_names.internTagLabel(name);
         try types.tag_pool.append(allocator, .{ .name = label, .args_start = 0, .args_len = 0 });
     }
-    const backing: checked.CheckedTypeId = @enumFromInt(@as(u32, @intCast(types.payloads.items.len)));
+    const backing: checked.CheckedTypeId = @fromBackingInt(@intCast(@as(u32, @intCast(types.payloads.items.len))));
     try types.payloads.append(allocator, .{ .tag_union = .{
         .tags = .{ .start = tags_start, .len = 2 },
         .ext = empty,
     } });
     const declaration_index: u32 = @intCast(types.nominal_declarations.items.len);
     try types.nominal_declarations.append(allocator, .{
-        .id = @enumFromInt(declaration_index),
+        .id = @fromBackingInt(@intCast(declaration_index)),
         .nominal = .{ .module = nominal.origin_module, .type_name = nominal.name, .source_decl = nominal.source_decl },
         .source_statement = 0,
         .declaration_root = bool_ty,
         .backing = backing,
     });
-    types.builtin_nominal_declarations[@intFromEnum(checked.CheckedBuiltinNominal.bool)] = declaration_index + 1;
+    types.builtin_nominal_declarations[@backingInt(checked.CheckedBuiltinNominal.bool)] = declaration_index + 1;
 }

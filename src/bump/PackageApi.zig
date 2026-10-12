@@ -189,14 +189,14 @@ pub fn allocator(self: *PackageApi) std.mem.Allocator {
 
 /// Append a type to the pool and return its id.
 pub fn addType(self: *PackageApi, ty: ApiType) std.mem.Allocator.Error!TypeId {
-    const id: TypeId = @enumFromInt(self.types.items.len);
+    const id: TypeId = @fromBackingInt(@intCast(self.types.items.len));
     try self.types.append(self.arena.allocator(), ty);
     return id;
 }
 
 /// The pooled type for an id (mutable; normalization patches variables).
 pub fn getType(self: *const PackageApi, id: TypeId) *ApiType {
-    return &self.types.items[@intFromEnum(id)];
+    return &self.types.items[@backingInt(id)];
 }
 
 /// Returns the index of the added module.
@@ -486,26 +486,6 @@ pub fn itemCanonicalString(self: *const PackageApi, gpa: std.mem.Allocator, item
         error.WriteFailed => return error.OutOfMemory, // Allocating writer only fails on OOM.
     };
     return try out.toOwnedSlice();
-}
-
-/// Write the full API as an S-expression, one line per item. Requires
-/// `normalize` to have run. Used for golden tests and debugging.
-pub fn writeSExpr(self: *const PackageApi, gpa: std.mem.Allocator, writer: *std.Io.Writer) WriteError!void {
-    try writer.writeAll("(package-api");
-    for (self.modules.items) |module| {
-        try writer.writeAll("\n  (module \"");
-        try writeEscaped(writer, module.name);
-        try writer.writeAll("\"");
-        for (module.items.items) |item| {
-            try writer.writeAll("\n    (item \"");
-            try writeEscaped(writer, item.path);
-            try writer.writeAll("\" ");
-            try self.writeItemSExpr(gpa, item, writer);
-            try writer.writeAll(")");
-        }
-        try writer.writeAll(")");
-    }
-    try writer.writeAll(")\n");
 }
 
 /// Render a human-readable signature for one item, for diff output. Variables

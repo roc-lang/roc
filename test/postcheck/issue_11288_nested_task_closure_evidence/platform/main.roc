@@ -24,8 +24,8 @@ platform ""
 
 import Host
 import Files
-import Io exposing [Io]
-import Task exposing [Task]
+import Io
+import Task
 
 # The spawned closure is a zero-argument nested procedure that captures `io`,
 # selects `io.files()`, waits on the hosted read, and hands the contents to the

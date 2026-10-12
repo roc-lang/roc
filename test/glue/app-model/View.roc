@@ -1,4 +1,4 @@
-import Msg exposing [Msg]
+import Msg
 
 View(model) := {
     title : Str,

@@ -52,8 +52,8 @@ pub fn realloc(backing: std.mem.Allocator, ptr: *anyopaque, new_length: usize, a
 }
 
 /// Report an out-of-memory failure from a Roc host allocation callback and
-/// exit. These callbacks use the C ABI and cannot return a Zig error, and a
-/// platform host must not return a real pointer it could not allocate.
+/// exit. These callbacks use the C ABI and cannot return a Zig error, and
+/// they must not return to Roc without an allocation.
 pub fn allocFailed() noreturn {
     std.debug.print("\x1b[31mHost error:\x1b[0m out of memory\n", .{});
     std.process.exit(1);
@@ -64,7 +64,7 @@ pub fn allocFailed() noreturn {
 /// returning the backing allocator.
 pub fn Callbacks(comptime Env: type) type {
     return struct {
-        pub fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+        pub fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
             const host: *Env = @ptrCast(@alignCast(ops.env));
             return alloc(host.rocAllocator(), length, alignment) orelse allocFailed();
         }
@@ -74,7 +74,7 @@ pub fn Callbacks(comptime Env: type) type {
             dealloc(host.rocAllocator(), ptr, alignment);
         }
 
-        pub fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+        pub fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
             const host: *Env = @ptrCast(@alignCast(ops.env));
             return realloc(host.rocAllocator(), ptr, new_length, alignment) orelse allocFailed();
         }
@@ -127,7 +127,7 @@ pub fn exportRuntimeFns(comptime fns: RuntimeFns) void {
 /// that only build their `RocOps` at runtime can participate.)
 pub fn exportRuntimeSymbols(comptime getOps: fn () *RocOps, comptime options: ExportOptions) void {
     const wrappers = struct {
-        fn hostAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+        fn hostAlloc(length: usize, alignment: usize) callconv(.c) *anyopaque {
             if (options.on_alloc) |on_alloc| on_alloc();
             const ops = getOps();
             return ops.roc_alloc(ops, length, alignment);
@@ -138,7 +138,7 @@ pub fn exportRuntimeSymbols(comptime getOps: fn () *RocOps, comptime options: Ex
             ops.roc_dealloc(ops, ptr, alignment);
         }
 
-        fn hostRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+        fn hostRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
             if (options.on_alloc) |on_alloc| on_alloc();
             const ops = getOps();
             return ops.roc_realloc(ops, ptr, new_length, alignment);
@@ -154,9 +154,12 @@ pub fn exportRuntimeSymbols(comptime getOps: fn () *RocOps, comptime options: Ex
             ops.roc_expect_failed(ops, bytes, len);
         }
 
+        // `RocOps.crash` in a platform build calls the `roc_crashed` symbol,
+        // which is this function, so it calls the host's callback itself.
         fn hostCrashed(bytes: [*]const u8, len: usize) callconv(.c) void {
             const ops = getOps();
             ops.roc_crashed(ops, bytes, len);
+            @trap();
         }
     };
 
@@ -231,14 +234,14 @@ test "alloc-count counts exported alloc and realloc but not private callbacks or
         .hosted_fns = builtins.host_abi.emptyHostedFunctions(),
     };
     const exported = builtins.host_abi.extern_host;
-    const private = Host.ops.roc_alloc(&Host.ops, 20, 8).?;
+    const private = Host.ops.roc_alloc(&Host.ops, 20, 8);
     Host.ops.roc_dealloc(&Host.ops, private, 8);
     try std.testing.expectEqual(@as(usize, 0), Host.env.count);
-    const first = exported.roc_alloc(20, 8).?;
+    const first = exported.roc_alloc(20, 8);
     try std.testing.expectEqual(@as(usize, 1), Host.env.count);
-    const grown = exported.roc_realloc(first, 40, 8).?;
+    const grown = exported.roc_realloc(first, 40, 8);
     try std.testing.expectEqual(@as(usize, 2), Host.env.count);
-    const shrunk = exported.roc_realloc(grown, 5, 8).?;
+    const shrunk = exported.roc_realloc(grown, 5, 8);
     try std.testing.expectEqual(@as(usize, 3), Host.env.count);
     exported.roc_dealloc(shrunk, 8);
     try std.testing.expectEqual(@as(usize, 3), Host.env.count);

@@ -1,26 +1,26 @@
 ## A glue script for generating a Zig source file with hosted function bindings.
 app [make_glue] { pf: platform glue }
 
-import pf.Types exposing [Types]
-import pf.File exposing [File]
-import pf.RecordFieldInfo exposing [RecordFieldInfo]
-import pf.TypeRepr exposing [TypeRepr]
-import pf.AbiLayout exposing [AbiLayout]
-import pf.AbiFieldLayout exposing [AbiFieldLayout]
-import pf.AbiTagLayout exposing [AbiTagLayout]
-import pf.AbiWidth exposing [AbiWidth]
-import pf.ArgShape exposing [ArgShape]
-import pf.GlueInput exposing [GlueInput]
-import pf.HostedFunctionInfo exposing [HostedFunctionInfo]
-import pf.TypeNamePlan exposing [TypeNamePlan]
-import pf.RecordRepr exposing [RecordRepr]
-import pf.TagUnionRepr exposing [TagUnionRepr]
-import pf.RecordField exposing [RecordField]
-import pf.TagVariant exposing [TagVariant]
-import pf.ProvidesEntry exposing [ProvidesEntry]
-import pf.TypeInfo exposing [TypeInfo]
-import pf.TypeTable exposing [TypeTable]
-import pf.RocName exposing [RocName]
+import pf.Types
+import pf.File
+import pf.RecordFieldInfo
+import pf.TypeRepr
+import pf.AbiLayout
+import pf.AbiFieldLayout
+import pf.AbiTagLayout
+import pf.AbiWidth
+import pf.ArgShape
+import pf.GlueInput
+import pf.HostedFunctionInfo
+import pf.TypeNamePlan
+import pf.RecordRepr
+import pf.TagUnionRepr
+import pf.RecordField
+import pf.TagVariant
+import pf.ProvidesEntry
+import pf.TypeInfo
+import pf.TypeTable
+import pf.RocName
 
 make_glue : List(Types) -> Try(List(File), Str)
 make_glue = |types_list| {
@@ -1896,9 +1896,11 @@ generate_host_abi_types =
 	\\/// linker symbols declared below (`roc_alloc`, hosted symbols, and provided entrypoints).
 	\\pub const RocHost = extern struct {
 	\\    env: *anyopaque,
-	\\    roc_alloc: *const fn (*RocHost, usize, usize) callconv(.c) ?*anyopaque,
+	\\    /// Never returns null; see `roc_alloc` below.
+	\\    roc_alloc: *const fn (*RocHost, usize, usize) callconv(.c) *anyopaque,
 	\\    roc_dealloc: *const fn (*RocHost, *anyopaque, usize) callconv(.c) void,
-	\\    roc_realloc: *const fn (*RocHost, *anyopaque, usize, usize) callconv(.c) ?*anyopaque,
+	\\    /// Never returns null; see `roc_realloc` below.
+	\\    roc_realloc: *const fn (*RocHost, *anyopaque, usize, usize) callconv(.c) *anyopaque,
 	\\    roc_dbg: *const fn (*RocHost, [*]const u8, usize) callconv(.c) void,
 	\\    roc_expect_failed: *const fn (*RocHost, [*]const u8, usize) callconv(.c) void,
 	\\    roc_crashed: *const fn (*RocHost, [*]const u8, usize) callconv(.c) void,
@@ -2359,11 +2361,17 @@ generate_runtime_symbol_externs =
 	\\//
 	\\// The host defines these linker symbols. Compiled Roc code calls them directly.
 	\\
-	\\pub extern fn roc_alloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque;
+	\\/// Returns `length` bytes aligned to `alignment`. Never returns null: Roc writes through
+	\\/// the result without checking it, so a host that cannot allocate must stop the Roc
+	\\/// program and not return, exactly as `roc_crashed` does.
+	\\pub extern fn roc_alloc(length: usize, alignment: usize) callconv(.c) *anyopaque;
 	\\pub extern fn roc_dealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void;
-	\\pub extern fn roc_realloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque;
+	\\/// Never returns null, under the same rule as `roc_alloc`.
+	\\pub extern fn roc_realloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque;
 	\\pub extern fn roc_dbg(bytes: [*]const u8, len: usize) callconv(.c) void;
 	\\pub extern fn roc_expect_failed(bytes: [*]const u8, len: usize) callconv(.c) void;
+	\\/// Must never return: end the process, or longjmp out of the Roc code that called
+	\\/// it. Roc code traps right after this call, so returning terminates the process.
 	\\pub extern fn roc_crashed(bytes: [*]const u8, len: usize) callconv(.c) void;
 	\\
 
@@ -2462,7 +2470,7 @@ generate_default_allocators =
 	\\/// allocation size (required because `roc_dealloc` receives no length).
 	\\pub const DefaultAllocators = struct {
 	\\    /// Allocate memory for the Roc runtime.
-	\\    pub fn rocAlloc(roc_host: *RocHost, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+	\\    pub fn rocAlloc(roc_host: *RocHost, length: usize, alignment: usize) callconv(.c) *anyopaque {
 	\\        const env: *RocEnv = @ptrCast(@alignCast(roc_host.env));
 	\\        const allocator = env.allocator;
 	\\
@@ -2501,7 +2509,7 @@ generate_default_allocators =
 	\\    }
 	\\
 	\\    /// Reallocate memory, copying existing data to the new allocation.
-	\\    pub fn rocRealloc(roc_host: *RocHost, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+	\\    pub fn rocRealloc(roc_host: *RocHost, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
 	\\        const env: *RocEnv = @ptrCast(@alignCast(roc_host.env));
 	\\        const allocator = env.allocator;
 	\\

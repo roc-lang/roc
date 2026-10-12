@@ -28,54 +28,60 @@ pub const Class = union(enum) {
 };
 
 /// Classify how the value of layout `idx` is passed or returned under the wasm C ABI.
-pub fn classifyType(store: *const Store, idx: Idx) Class {
-    const lay = store.getLayout(idx);
-    std.debug.assert(store.layoutSize(lay) > 0);
+pub fn classifyType(store: *const Store, start: Idx) Class {
+    // Transparent wrappers (single-field structs, single-variant unions,
+    // closures) pass as what they wrap.
+    var idx = start;
+    while (true) {
+        const lay = store.getLayout(idx);
+        std.debug.assert(store.layoutSize(lay) > 0);
 
-    switch (lay.tag) {
-        .scalar => {
-            const scalar = lay.getScalar();
-            switch (scalar.tag) {
-                .int, .frac, .opaque_ptr, .vector => return .{ .direct = idx },
-                // RocStr is a multi-field aggregate.
-                .str => return .indirect,
-            }
-        },
-        .box, .box_of_zst, .erased_box, .ptr => return .{ .direct = idx }, // single pointer
-        .list, .list_of_zst => return .indirect, // multi-field aggregate
-        .struct_ => {
-            const struct_idx = lay.getStruct().idx;
-            const field_count = store.getStructData(struct_idx).fields.count;
-            // A single-field struct is passed as its field; any other aggregate is
-            // indirect. A lone unnamed-padding field is not a real newtype member,
-            // so it is never unwrapped.
-            if (field_count != 1 or store.getStructFieldIsPadding(struct_idx, 0)) return .indirect;
-            return classifyType(store, store.getStructFieldLayout(struct_idx, 0));
-        },
-        .tag_union => {
-            const info = store.getTagUnionInfo(lay);
-            if (info.variants.len == 1) {
-                // Single-variant tag unions have an implicit discriminant, so their C ABI
-                // is exactly the payload's C ABI.
-                return classifyType(store, info.variants.get(0).payload_layout);
-            }
-
-            // A no-payload tag union is an enum—a single integer, passed directly. Any
-            // multi-variant tag union carrying a payload is a multi-field aggregate and is
-            // passed indirectly.
-            var v: usize = 0;
-            while (v < info.variants.len) : (v += 1) {
-                if (store.getLayout(info.variants.get(v).payload_layout).tag != .zst) {
-                    return .indirect;
+        switch (lay.tag) {
+            .scalar => {
+                const scalar = lay.getScalar();
+                switch (scalar.tag) {
+                    .int, .frac, .opaque_ptr, .vector => return .{ .direct = idx },
+                    // RocStr is a multi-field aggregate.
+                    .str => return .indirect,
                 }
-            }
-            return .{ .direct = idx };
-        },
-        .closure => return classifyType(store, lay.getClosure().captures_layout_idx),
-        // Glue exposes an erased callable as `RocErasedCallable`, a pointer
-        // typedef. The pointer value itself is therefore the direct ABI value.
-        .erased_callable => return .{ .direct = idx },
-        .zst => unreachable,
+            },
+            .box, .box_of_zst, .erased_box, .ptr => return .{ .direct = idx }, // single pointer
+            .list, .list_of_zst => return .indirect, // multi-field aggregate
+            .struct_ => {
+                const struct_idx = lay.getStruct().idx;
+                const field_count = store.getStructData(struct_idx).fields.count;
+                // A single-field struct is passed as its field; any other aggregate is
+                // indirect. A lone unnamed-padding field is not a real newtype member,
+                // so it is never unwrapped.
+                if (field_count != 1 or store.getStructFieldIsPadding(struct_idx, 0)) return .indirect;
+                idx = store.getStructFieldLayout(struct_idx, 0);
+            },
+            .tag_union => {
+                const info = store.getTagUnionInfo(lay);
+                if (info.variants.len == 1) {
+                    // Single-variant tag unions have an implicit discriminant, so their C ABI
+                    // is exactly the payload's C ABI.
+                    idx = info.variants.get(0).payload_layout;
+                    continue;
+                }
+
+                // A no-payload tag union is an enum—a single integer, passed directly. Any
+                // multi-variant tag union carrying a payload is a multi-field aggregate and is
+                // passed indirectly.
+                var v: usize = 0;
+                while (v < info.variants.len) : (v += 1) {
+                    if (store.getLayout(info.variants.get(v).payload_layout).tag != .zst) {
+                        return .indirect;
+                    }
+                }
+                return .{ .direct = idx };
+            },
+            .closure => idx = lay.getClosure().captures_layout_idx,
+            // Glue exposes an erased callable as `RocErasedCallable`, a pointer
+            // typedef. The pointer value itself is therefore the direct ABI value.
+            .erased_callable => return .{ .direct = idx },
+            .zst => unreachable,
+        }
     }
 }
 

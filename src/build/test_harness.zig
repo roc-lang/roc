@@ -47,7 +47,8 @@ pub const Timer = struct {
     }
 };
 
-/// Returns a monotonic timestamp in nanoseconds.
+/// Returns a monotonic timestamp in nanoseconds, excluding time suspended so
+/// a laptop's sleep is not charged to in-flight tests as a hang.
 pub fn monotonicNs() u64 {
     if (builtin.os.tag == .linux) {
         var ts: std.os.linux.timespec = undefined;
@@ -55,7 +56,7 @@ pub fn monotonicNs() u64 {
         return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
     } else if (builtin.os.tag == .macos or builtin.os.tag == .freebsd) {
         var ts: std.c.timespec = undefined;
-        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+        _ = std.c.clock_gettime(awake_clock_id, &ts);
         return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
     } else if (builtin.os.tag == .windows) {
         const k32 = struct {
@@ -157,9 +158,13 @@ pub fn milliTimestamp() i64 {
     }
     // POSIX (macOS, BSD, etc.) via libc.
     var ts: std.c.timespec = undefined;
-    _ = std.c.clock_gettime(.MONOTONIC, &ts);
+    _ = std.c.clock_gettime(awake_clock_id, &ts);
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
 }
+
+/// macOS `CLOCK_MONOTONIC` runs across suspend; `UPTIME_RAW` matches minici's
+/// `std.Io` `.awake` clock.
+const awake_clock_id: std.c.CLOCK = if (builtin.os.tag == .macos) .UPTIME_RAW else .MONOTONIC;
 
 /// pipe: returns [2]fd_t or error. Only defined where fork-based pools
 /// exist: mingw declares but does not implement pipe, so it must never be
@@ -735,9 +740,11 @@ pub fn parseStandardArgsFromSlice(raw_args: []const []const u8, allocator: Alloc
     var i: usize = 1;
     while (i < raw_args.len) : (i += 1) {
         const arg = raw_args[i];
-        if (std.mem.eql(u8, arg, "--filter")) {
+        if (std.mem.eql(u8, arg, "--filter") or std.mem.eql(u8, arg, "--test-filter")) {
             i += 1;
             if (i < raw_args.len) try filters.append(allocator, raw_args[i]);
+        } else if (std.mem.startsWith(u8, arg, "--test-filter=")) {
+            try filters.append(allocator, arg["--test-filter=".len..]);
         } else if (std.mem.eql(u8, arg, "--verbose")) {
             args.verbose = true;
         } else if (std.mem.eql(u8, arg, "--llvm") or std.mem.eql(u8, arg, "--include-llvm")) {
@@ -810,6 +817,28 @@ pub fn parseStandardArgs(allocator: Allocator, process_args: std.process.Args) !
     return parseStandardArgsFromSlice(raw_args_plain, allocator);
 }
 
+test "timestamp helpers read the same clock as each other" {
+    // Deadlines mix both helpers, so they have to agree on what "now" means.
+    const ms = milliTimestamp();
+    const ns_as_ms: i64 = @intCast(monotonicNs() / std.time.ns_per_ms);
+    try std.testing.expect(@abs(ns_as_ms - ms) < 1000);
+}
+
+test "harness clock excludes time the machine spent suspended" {
+    // `.awake` is the clock minici measures its steps with; `.boot` keeps
+    // running while the machine is suspended.
+    const awake_ms = std.Io.Clock.awake.now(std.testing.io).toMilliseconds();
+    const boot_ms = std.Io.Clock.boot.now(std.testing.io).toMilliseconds();
+
+    const now = milliTimestamp();
+    try std.testing.expect(@abs(now - awake_ms) < 1000);
+
+    // Only distinguishable once the machine has been suspended since boot.
+    if (boot_ms - awake_ms > 2000) {
+        try std.testing.expect(now < boot_ms - 1000);
+    }
+}
+
 test "parseStandardArgsFromSlice preserves help and explicit timeout" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -837,14 +866,16 @@ test "parseStandardArgsFromSlice treats threads zero as default and keeps repeat
         "0",
         "--filter",
         "alpha",
-        "--filter",
+        "--test-filter",
         "beta",
+        "--test-filter=gamma",
     }, arena.allocator());
 
     try std.testing.expect(args.max_threads == null);
-    try std.testing.expectEqual(@as(usize, 2), args.filters.len);
+    try std.testing.expectEqual(@as(usize, 3), args.filters.len);
     try std.testing.expectEqualStrings("alpha", args.filters[0]);
     try std.testing.expectEqualStrings("beta", args.filters[1]);
+    try std.testing.expectEqualStrings("gamma", args.filters[2]);
     try std.testing.expectEqual(@as(usize, 1), args.positional.len);
     try std.testing.expectEqualStrings("roc-binary", args.positional[0]);
 }
@@ -1322,7 +1353,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             }
 
             if (is_tty) {
-                std.debug.print("\r{s}\r", .{" " ** 72});
+                std.debug.print("\r{s}\r", .{@as([72]u8, @splat(' '))});
             }
         }
 
@@ -1371,9 +1402,11 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 const idx = std.fmt.parseInt(usize, line, 10) catch continue;
                 if (idx >= specs.len) continue;
 
-                _ = arena.reset(.retain_capacity);
                 const result = cfg.runTest(io, arena.allocator(), specs[idx], timeoutForSpec(specs[idx], timeout_ms));
                 cfg.serializeStreamed(stdout_handle, result);
+                // Result bytes have reached the parent. Idle workers must not
+                // retain a previous test's potentially multi-GiB arena.
+                _ = arena.reset(.free_all);
             }
         }
 
@@ -1848,7 +1881,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
 /// Send the forked child's stderr to `<dir>/child_<index>.log`.
 fn redirectChildStderr(dir: []const u8, test_idx: usize) void {
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&path_buf, "{s}/child_{d}.log", .{ dir, test_idx }) catch return;
+    const path = std.mem.printSentinel(&path_buf, "{s}/child_{d}.log", .{ dir, test_idx }, 0) catch return;
     const fd = std.c.open(path.ptr, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(std.c.mode_t, 0o644));
     if (fd < 0) return;
     _ = std.c.dup2(fd, posix.STDERR_FILENO);
@@ -1868,13 +1901,24 @@ fn installFreezeOnCrash() void {
     posix.sigaction(.BUS, &action, null);
 }
 
-fn freezeOnCrash(_: posix.SIG, _: *const posix.siginfo_t, _: ?*anyopaque) callconv(.c) void {
+fn freezeOnCrash(sig: posix.SIG, info: *const posix.siginfo_t, _: ?*anyopaque) callconv(.c) void {
     const linux = std.os.linux;
     // PR_SET_PTRACER with PR_SET_PTRACER_ANY, so `gdb -p` works even when
     // Yama restricts ptrace to descendants.
     _ = linux.prctl(0x59616d61, std.math.maxInt(usize), 0, 0, 0);
-    var buf: [96]u8 = undefined;
-    const message = std.fmt.bufPrint(&buf, "\n[child] frozen after crash, pid={d}\n", .{linux.getpid()}) catch "[child] frozen after crash\n";
+    // `si_code` distinguishes a page fault at `addr` (SEGV_MAPERR/ACCERR) from
+    // a general-protection fault the kernel reports with SI_KERNEL (128) and
+    // address zero. The handler runs on the CPU that took the fault.
+    var cpu: usize = 0;
+    _ = linux.getcpu(&cpu, null);
+    var buf: [192]u8 = undefined;
+    const message = std.fmt.bufPrint(&buf, "\n[child] frozen after crash, pid={d} signo={d} si_code={d} addr=0x{x} cpu={d}\n", .{
+        linux.getpid(),
+        @backingInt(sig),
+        info.code,
+        @intFromPtr(info.fields.sigfault.addr),
+        cpu,
+    }) catch "[child] frozen after crash\n";
     _ = linux.write(posix.STDERR_FILENO, message.ptr, message.len);
     while (true) {
         const nap = linux.timespec{ .sec = 1000, .nsec = 0 };

@@ -58,9 +58,7 @@ pub const Relocation = union(enum) {
     /// Get the offset in the code where this relocation applies
     pub fn getOffset(self: Relocation) u64 {
         return switch (self) {
-            .local_data => |r| r.offset,
-            .linked_function => |r| r.offset,
-            .linked_data => |r| r.offset,
+            inline .local_data, .linked_function, .linked_data => |r| r.offset,
             .jmp_to_return => |r| r.inst_loc,
         };
     }
@@ -68,9 +66,7 @@ pub const Relocation = union(enum) {
     /// Adjust the offset of this relocation by the given amount
     pub fn adjustOffset(self: *Relocation, delta: u64) void {
         switch (self.*) {
-            .local_data => |*r| r.offset += delta,
-            .linked_function => |*r| r.offset += delta,
-            .linked_data => |*r| r.offset += delta,
+            inline .local_data, .linked_function, .linked_data => |*r| r.offset += delta,
             .jmp_to_return => |*r| {
                 r.inst_loc += delta;
                 r.offset += delta;
@@ -97,9 +93,7 @@ pub const IndexedRelocation = union(enum) {
 
     pub fn getOffset(self: IndexedRelocation) u64 {
         return switch (self) {
-            .linked_function => |r| r.offset,
-            .linked_data => |r| r.offset,
-            .local_data => |r| r.offset,
+            inline .linked_function, .linked_data, .local_data => |r| r.offset,
             .jmp_to_return => |r| r.inst_loc,
             .retired => 0,
         };
@@ -107,9 +101,7 @@ pub const IndexedRelocation = union(enum) {
 
     pub fn adjustOffset(self: *IndexedRelocation, delta: u64) void {
         switch (self.*) {
-            .linked_function => |*r| r.offset += delta,
-            .linked_data => |*r| r.offset += delta,
-            .local_data => |*r| r.offset += delta,
+            inline .linked_function, .linked_data, .local_data => |*r| r.offset += delta,
             .jmp_to_return => |*r| {
                 r.inst_loc += delta;
                 r.offset += delta;
