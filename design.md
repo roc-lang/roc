@@ -8608,7 +8608,10 @@ expression's own errors can later be related to the type as it was. A ground
 expected type can change only through an explicit write, so one pristine copy
 serves every later expression expecting a structurally identical type
 (`Check.expectedTypeBackup`); a consumer that needs to unify with a shared
-copy takes its own copy first, so the shared one stays pristine.
+copy takes its own copy first, so the shared one stays pristine. Identity
+compares only the flags a copy carries (`DescriptorFlags.copied`), so a type
+whose classes record a defaulting decision or a rejection is identical to its
+own copy and shares it like any other.
 
 A row the reference itself WRITES as a type argument is decided the same way,
 by composition rather than by inheritance. A declaration's formal stands
@@ -10214,43 +10217,50 @@ eligible and encoded its replay shape, it becomes the source for that shape. A
 replay shape is the selected binding and method plus the receiver and callable
 exactly as stored: descriptor flags and content in depth-first order,
 variables numbered by first appearance, and attached constraints omitted,
-since each is a separate relation settled on its own receiver. Equal shapes
-are equal types up to renaming, so relating a fresh instance to either yields
-the same ground instance, and the instance's requirements have ground
-receivers and final targets, so they select the same targets.
+since each is a separate relation settled on its own receiver. The flags
+exclude `default_decided`, which only the report for a failed requirement
+reads, so a receiver whose type a default chose shares a shape with one the
+program wrote. Equal shapes are equal types up to renaming, so relating a
+fresh instance to either yields the same ground instance, and the instance's
+requirements have ground receivers and final targets, so they select the same
+targets.
 
 A later eligible edge with an equal shape replays the source once every
 requirement the source's instance carried, recursively, has settled without
 rejection. The first replay freezes a copy of the source's instance: fresh
 outermost-rank classes, registered with no solver environment, holding the
-same ground type, and marked frozen in the type store. It does so only while
-the instance is still ground, since a ground type changes later only by being
-poisoned, so a ground instance is still the one the source settled to; an
-instance that is no longer ground, or that holds a row not closed directly, is
-never frozen and its source never replays. The source's scheme-use
-substitution is restated over the copy; its nested-requirement callables stay
-the source's own. The replay walks the frozen instance and the edge's callable
-together. Where the callable already has structure the shapes guarantee it is
-the instance's, so it is kept as is; each callable variable is related to the
-frozen subtree at its position, which is what relating the callable to a fresh
-instance would bind it to, so every replayed edge shares one frozen instance
-rather than copying it. A callable function whose effect is still unbound is
-structure whose effect is not yet the instance's: a frozen instance is ground,
-so its function at that position is pure or effectful, and the callable
-function takes that kind in place, exactly as unifying it with the instance
-would give it, while its arguments and result are paired like any other
-children. A walk that finds the two stored layouts differ at some position
-(equal rows stored in different orders), or that finds a pure instance
-function at a callable function with effect dependencies (which the shape does
-not record, and which relating would have to make pure), replays nothing. The
-edge's scheme-use record is an ordinary dispatch-target record whose
-substitution names the callable node at each instance position, or the frozen
-node where the callable had a variable, and whose nested-requirement callables
-are the source's settled ones, which mention only ground types; evidence
-construction therefore treats it like any other edge's record. Eligibility and
-shape keys are computed only for bindings already proven replayable, so a
-method whose instances never settle ground (one whose result depends on a
-callback's own requirements, for example) pays nothing.
+same ground type with exactly the descriptor flags an instantiated copy
+carries (`DescriptorFlags.copied`), and marked frozen in the type store. The
+copy stands for a fresh instance, so it carries none of the flags that record
+what happened to the source's own classes, such as a defaulting decision or a
+rejection. It does so only while the instance is still ground, since a ground
+type changes later only by being poisoned, so a ground instance is still the
+one the source settled to; an instance that is no longer ground, or that holds
+a row not closed directly, is never frozen and its source never replays. The
+source's scheme-use substitution is restated over the copy; its
+nested-requirement callables stay the source's own. The replay walks the
+frozen instance and the edge's callable together. Where the callable already
+has structure the shapes guarantee it is the instance's, so it is kept as is;
+each callable variable is related to the frozen subtree at its position, which
+is what relating the callable to a fresh instance would bind it to, so every
+replayed edge shares one frozen instance rather than copying it. A callable
+function whose effect is still unbound is structure whose effect is not yet
+the instance's: a frozen instance is ground, so its function at that position
+is pure or effectful, and the callable function takes that kind in place,
+exactly as unifying it with the instance would give it, while its arguments
+and result are paired like any other children. A walk that finds the two
+stored layouts differ at some position (equal rows stored in different
+orders), or that finds a pure instance function at a callable function with
+effect dependencies (which the shape does not record, and which relating would
+have to make pure), replays nothing. The edge's scheme-use record is an
+ordinary dispatch-target record whose substitution names the callable node at
+each instance position, or the frozen node where the callable had a variable,
+and whose nested-requirement callables are the source's settled ones, which
+mention only ground types; evidence construction therefore treats it like any
+other edge's record. Eligibility and shape keys are computed only for bindings
+already proven replayable, so a method whose instances never settle ground
+(one whose result depends on a callback's own requirements, for example) pays
+nothing.
 
 Sharing is safe because the type store keeps a frozen class's meaning fixed
 while uses relate to it. A merge with a frozen class keeps the frozen

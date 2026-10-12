@@ -1050,11 +1050,8 @@ pub const Instantiator = struct {
             }
         }
 
-        const flags: types_mod.DescriptorFlags = .{
-            .empty_tag_union_is_default = resolved.desc.flags.empty_tag_union_is_default,
-            .annotation_tag_ext = self.preserve_annotation_tag_ext and resolved.desc.flags.annotation_tag_ext,
-            .nominal_backing_structure = resolved.desc.flags.nominal_backing_structure,
-        };
+        var flags = resolved.desc.flags.copied();
+        flags.annotation_tag_ext = self.preserve_annotation_tag_ext and resolved.desc.flags.annotation_tag_ext;
         switch (resolved.desc.content) {
             .rigid => |rigid| {
                 // Polarity vars (the deferred open-vs-closed tag union
