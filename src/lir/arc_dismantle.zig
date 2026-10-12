@@ -1153,7 +1153,6 @@ fn fieldObservedAfter(
 /// procedure's join declaration. `stmts` is every statement reachable from the
 /// procedure's body.
 fn collectProcJoinBodies(
-    gpa: Allocator,
     store: *const LirStore,
     stmts: []const LIR.CFStmtId,
     joins: *collections.DenseMap(u32, LIR.CFStmtId),
@@ -1205,9 +1204,9 @@ test "future field uses resolve joins in their procedure" {
     var proc_stmts = std.ArrayList(LIR.CFStmtId).empty;
     defer proc_stmts.deinit(gpa);
     try arc_solve.collectProcStatements(gpa, &store, loop_proc, &proc_stmts);
-    try collectProcJoinBodies(gpa, &store, proc_stmts.items, &loop_joins);
+    try collectProcJoinBodies(&store, proc_stmts.items, &loop_joins);
     try arc_solve.collectProcStatements(gpa, &store, other_proc, &proc_stmts);
-    try collectProcJoinBodies(gpa, &store, proc_stmts.items, &other_joins);
+    try collectProcJoinBodies(&store, proc_stmts.items, &other_joins);
     try std.testing.expectEqual(read, loop_joins.get(0).?);
     try std.testing.expectEqual(exit, other_joins.get(0).?);
 
@@ -3017,7 +3016,7 @@ pub fn compute(
         if (owner == no_index or shared_stmts.isSet(first_read)) continue;
         if (!joins_ready[owner]) {
             joins_ready[owner] = true;
-            try collectProcJoinBodies(gpa, store, solution.procStatements(store, @fromBackingInt(@intCast(owner))), &proc_joins[owner]);
+            try collectProcJoinBodies(store, solution.procStatements(store, @fromBackingInt(@intCast(owner))), &proc_joins[owner]);
             const proc_body = store.getProcSpec(@fromBackingInt(@intCast(owner))).body.?;
             proc_graphs[owner] = try future_fields.buildProcGraph(gpa, store, &.{proc_body}, &proc_joins[owner]);
         }
