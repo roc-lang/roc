@@ -321,6 +321,12 @@ fn hashExplicitRootRequestInput(
 ) void {
     hashByteSlice(hasher, @tagName(root.kind));
     hashRootSource(hasher, root.source);
+    if (root.source_pattern) |pattern| {
+        hasher.update(&[_]u8{1});
+        hashU32(hasher, @backingInt(pattern));
+    } else {
+        hasher.update(&[_]u8{0});
+    }
     hashByteSlice(hasher, @tagName(root.abi));
     hashByteSlice(hasher, @tagName(root.exposure));
 }
@@ -690,6 +696,9 @@ pub const CompileTimeFinalizer = struct {
 pub const ExplicitRootRequestInput = struct {
     kind: RootRequestKind,
     source: RootSource,
+    /// Lexical scheme owner when the producer extracts an executable body.
+    /// This keeps its dispatch evidence attached to the resulting entry wrapper.
+    source_pattern: ?CIR.Pattern.Idx = null,
     abi: RootAbi,
     exposure: RootExposure,
 };
@@ -19532,8 +19541,9 @@ const EvidencePass = struct {
     }
 
     /// The solver root of the scheme a compile-time root evaluates: the
-    /// hoisted root's source pattern or the constant's definition. Expression
-    /// roots, expect bodies and platform-required bindings have no scheme.
+    /// hoisted root's source pattern, an extracted executable body's producer
+    /// pattern, or a constant's definition. Other expression roots, expect
+    /// bodies and platform-required bindings have no scheme.
     fn rootSchemeVar(root: CompileTimeRoot) ?Var {
         if (root.source_pattern) |source_pattern| return ModuleEnv.varFrom(source_pattern);
         return switch (root.source) {
@@ -19544,7 +19554,8 @@ const EvidencePass = struct {
 
     /// The solver root of a template's scheme: its definition's type, or the
     /// scheme of the compile-time root an entry wrapper evaluates. Intrinsic
-    /// and hosted wrappers and expression roots have no scheme.
+    /// and hosted wrappers and expression roots without a producer pattern
+    /// have no scheme.
     fn templateSchemeVar(
         self: *EvidencePass,
         template: CheckedProcedureTemplate,
@@ -19677,8 +19688,8 @@ const EvidencePass = struct {
         return .{ .start = start, .len = params.len };
     }
 
-    /// Only procedure definitions, hoisted source-pattern roots, and callable
-    /// bindings bind an evidence chain. A callable binding's wrapper produces
+    /// Procedure definitions, producer-owned source-pattern roots (including
+    /// extracted REPL bodies), and callable bindings bind an evidence chain. A callable binding's wrapper produces
     /// the binding's callable for a use, which supplies the binding's
     /// dispatch parameters exactly as a use of a procedure does. Constant and
     /// expression entry wrappers evaluate their values without receiving the
@@ -28752,6 +28763,7 @@ pub const CompileTimeRootTable = struct {
                 .module_idx = module.moduleIndex(),
                 .kind = .repl_expr,
                 .source = explicit.source,
+                .source_pattern = explicit.source_pattern,
                 .pattern = null,
                 .expr = checkedExprIdForSource(checked_bodies, expr_idx),
                 .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, module.exprType(expr_idx)),
@@ -28984,6 +28996,15 @@ fn publishCompileTimeRootRequestEligibility(
     roots: []CompileTimeRoot,
 ) Allocator.Error!void {
     for (roots) |*root| {
+        // An explicit REPL expression is an executable entry, not a reusable
+        // constant awaiting a consuming use site's type context. Its checked
+        // literal/row defaults and callable graph are instantiated by entry
+        // lowering, exactly as for a dev expression. Diagnostic publication
+        // still excludes erroneous roots below this boundary.
+        if (root.kind == .repl_expr) {
+            root.request_eligibility = .eligible;
+            continue;
+        }
         const producer_callable_type_is_fixed = switch (root.kind) {
             .callable_binding => true,
             .constant => switch (root.source) {
@@ -40583,8 +40604,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xCB, 0x93, 0x2F, 0x32, 0xE6, 0x50, 0x9F, 0x7C, 0x31, 0xAD, 0x36, 0x9F, 0xDB, 0x72, 0x98, 0xB3,
-        0xA6, 0x9E, 0x0F, 0x89, 0x51, 0x93, 0x19, 0x10, 0x96, 0x60, 0x8C, 0x91, 0x91, 0x79, 0x08, 0x33,
+        0x8C, 0x4A, 0x89, 0xB9, 0xE8, 0x3D, 0x89, 0x21, 0x44, 0xB8, 0x55, 0x53, 0x01, 0x24, 0xE5, 0xF4,
+        0x66, 0x9F, 0x41, 0x45, 0x91, 0x8A, 0xF3, 0xEF, 0xE4, 0xE7, 0xB6, 0x09, 0xB2, 0xDA, 0x65, 0xF9,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
@@ -41360,4 +41381,27 @@ test "checked polarity alias publication erases hidden arguments and preserves b
     const loaded_alias = roundtrip.loaded.payload(root).alias;
     try std.testing.expectEqual(@as(usize, 1), loaded_alias.args.len);
     try std.testing.expectEqual(row.ext, roundtrip.loaded.payload(loaded_alias.backing).tag_union.ext);
+}
+
+test "checking context identity includes the explicit root scheme owner" {
+    // These fixture identities are hashed, never dereferenced.
+    var root: ExplicitRootRequestInput = .{
+        .kind = .repl_expr,
+        .source = .{ .expr = testIndexId(CIR.Expr.Idx, 1) },
+        .abi = .compile_time,
+        .exposure = .private,
+    };
+    var without_owner = base.Sha256.init(.{});
+    hashExplicitRootRequestInput(&without_owner, root);
+    root.source_pattern = testIndexId(CIR.Pattern.Idx, 0);
+    var first_owner = base.Sha256.init(.{});
+    hashExplicitRootRequestInput(&first_owner, root);
+    root.source_pattern = testIndexId(CIR.Pattern.Idx, 1);
+    var second_owner = base.Sha256.init(.{});
+    hashExplicitRootRequestInput(&second_owner, root);
+    const without_hash = without_owner.finalResult();
+    const first_hash = first_owner.finalResult();
+    const second_hash = second_owner.finalResult();
+    try std.testing.expect(!std.meta.eql(without_hash, first_hash));
+    try std.testing.expect(!std.meta.eql(first_hash, second_hash));
 }
