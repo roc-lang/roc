@@ -3362,6 +3362,23 @@ Builtin :: [].{
 		next : Iter(item) -> [One({ item : item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done]
 		next = |iterator| (iterator.step)()
 
+		## Returns the first item of an iterator, or `Err(IterWasEmpty)` if the
+		## iterator is empty.
+		## ```roc
+		## expect [3.I64, 1, 2].iter().first() == Ok(3)
+		##
+		## expect [1.I64, 2, 3, 4].iter().keep_if(|n| n > 2).first() == Ok(3)
+		##
+		## expect [7.I64].iter().drop_first(1).first() == Err(IterWasEmpty)
+		## ```
+		first : Iter(item) -> Try(item, [IterWasEmpty])
+		first = |iterator|
+			match Iter.next(iterator) {
+				Done => Err(IterWasEmpty)
+				One({ item, .. }) => Ok(item)
+				Skip({ rest }) => Iter.first(rest)
+			}
+
 		map : Iter(a), (a -> b) -> Iter(b)
 		map = |iterator, transform|
 			match iterator {
@@ -3455,7 +3472,7 @@ Builtin :: [].{
 			match Iter.next(iterator) {
 				Done => Item.default()
 				Skip({ rest }) => Iter.sum(rest)
-				One({ item: first, rest }) => Iter.fold(rest, first, |acc, item| acc + item)
+				One({ item: initial, rest }) => Iter.fold(rest, initial, |acc, item| acc + item)
 			}
 		}
 
@@ -3479,7 +3496,7 @@ Builtin :: [].{
 			match Iter.next(iterator) {
 				Done => Err(IterWasEmpty)
 				Skip({ rest }) => Iter.product(rest)
-				One({ item: first, rest }) => Ok(Iter.fold(rest, first, |acc, item| acc * item))
+				One({ item: initial, rest }) => Ok(Iter.fold(rest, initial, |acc, item| acc * item))
 			}
 
 		## Find the minimum item of an iterator, or `Err(IterWasEmpty)` if the
@@ -3495,7 +3512,7 @@ Builtin :: [].{
 			match Iter.next(iterator) {
 				Done => Err(IterWasEmpty)
 				Skip({ rest }) => Iter.min(rest)
-				One({ item: first, rest }) => Ok(Iter.fold(rest, first, |best_so_far, item| best_so_far.min(item)))
+				One({ item: initial, rest }) => Ok(Iter.fold(rest, initial, |best_so_far, item| best_so_far.min(item)))
 			}
 
 		## Find the maximum item of an iterator, or `Err(IterWasEmpty)` if the
@@ -3511,7 +3528,7 @@ Builtin :: [].{
 			match Iter.next(iterator) {
 				Done => Err(IterWasEmpty)
 				Skip({ rest }) => Iter.max(rest)
-				One({ item: first, rest }) => Ok(Iter.fold(rest, first, |best_so_far, item| best_so_far.max(item)))
+				One({ item: initial, rest }) => Ok(Iter.fold(rest, initial, |best_so_far, item| best_so_far.max(item)))
 			}
 
 		## Returns the iterator's length if it is known up front, so collections
