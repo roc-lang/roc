@@ -32,3 +32,10 @@ pub fn deinit(unix: Unix) void {
 
     std.posix.tcsetattr(stdin_handle, .NOW, unix.old_termios) catch {};
 }
+
+/// Whether the terminal attached to stdin currently has canonical (line) input
+/// disabled, as it does while a TUI or line editor has put it in raw mode.
+pub fn stdinRawModeActive() bool {
+    const termios = std.posix.tcgetattr(std.Io.File.stdin().handle) catch return false;
+    return !termios.lflag.ICANON;
+}

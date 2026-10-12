@@ -4654,7 +4654,7 @@ fn finishHotReloadRebuild(
     joinWatchChild(rebuild.child);
     if (rebuild.child.output_error) |err| return err;
 
-    try replayWatchChildOutput(ctx, rebuild.child, true);
+    try replayWatchChildOutput(ctx, rebuild.child, hotReloadStatusLinesAllowed());
 
     const rebuild_succeeded = hotReloadRebuildSucceeded(rebuild.child);
     const new_inputs = if (rebuild_succeeded)
@@ -4694,10 +4694,18 @@ fn finishHotReloadRebuild(
     };
 }
 
+/// A running app that has put the terminal in raw mode (such as a TUI) owns the
+/// screen, so hot reload status lines would corrupt what it has drawn.
+fn hotReloadStatusLinesAllowed() bool {
+    return !ReplLine.stdinRawModeActive();
+}
+
 fn reportHotReloadRebuildPublished(ctx: *CliCtx, rebuild: *HotReloadRebuild) CliOutputWriteError!void {
     if (rebuild.published_reported) return;
-    try ctx.io.stderr().print("--- roc watch: hot reload generation {} published ---\n", .{rebuild.generation});
-    ctx.io.flush();
+    if (hotReloadStatusLinesAllowed()) {
+        try ctx.io.stderr().print("--- roc watch: hot reload generation {} published ---\n", .{rebuild.generation});
+        ctx.io.flush();
+    }
     rebuild.published_reported = true;
 }
 
@@ -4717,12 +4725,15 @@ fn reportHotReloadAcknowledgement(
         }
     }
 
-    switch (ack.status) {
+    const outcome = switch (ack.status) {
         .none => return null,
-        .accepted => try ctx.io.stderr().print("--- roc watch: hot reload generation {} accepted by host ---\n", .{generation}),
-        .rejected => try ctx.io.stderr().print("--- roc watch: hot reload generation {} rejected by host; previous code remains active ---\n", .{generation}),
+        .accepted => "accepted by host",
+        .rejected => "rejected by host; previous code remains active",
+    };
+    if (hotReloadStatusLinesAllowed()) {
+        try ctx.io.stderr().print("--- roc watch: hot reload generation {} {s} ---\n", .{ generation, outcome });
+        ctx.io.flush();
     }
-    ctx.io.flush();
     last_reported_ack.* = generation;
     return generation;
 }
