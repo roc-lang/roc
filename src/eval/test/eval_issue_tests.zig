@@ -4870,4 +4870,53 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "A" },
     },
+    .{
+        // https://github.com/roc-lang/roc/issues/12127
+        // `go` captures `kinds`, so `contains` at the tag union's structural
+        // equality is owned by the `go` specialization that lowers it. The
+        // recursive call lowers a second, identical `go` first; the outer
+        // `go`'s own `contains` must not reuse the copy owned by the inner
+        // one, which is discarded when the two merge.
+        .name = "issue 12127: closed direct call does not reuse a caller-owned specialization from another owner",
+        .source_kind = .module,
+        .source =
+        \\count : List(Str) -> U64
+        \\count = |argv| {
+        \\    kinds = Dict.empty().insert("v", Value).insert("f", Flag)
+        \\    go = |args, acc|
+        \\        match args {
+        \\            [] => acc
+        \\            [a, .. as rest] => go(rest, if [Value].contains(kinds.get(a).ok_or(Flag)) acc + 2 else acc + 1)
+        \\        }
+        \\    go(argv, 0)
+        \\}
+        \\
+        \\main = count(["v", "f", "v"])
+        ,
+        .expected = .{ .inspect_str = "5" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/12127
+        // `Dict.update` hands the alteration the stored list, which the
+        // dictionary's entries still hold. Once the call to the lookup is
+        // inlined, the lookup's result is born unique as a whole, but the list
+        // inside it is not, so appending to it must copy rather than write in
+        // place.
+        .name = "issue 12127: appending to a list updated in place inside a dictionary copies the shared list",
+        .source_kind = .module,
+        .source =
+        \\count : List(Str) -> U64
+        \\count = |xs|
+        \\    xs.fold(Dict.empty(), |d, s| d.update(s, |ov| match ov {
+        \\        Ok(vs) => Ok(vs.append(""))
+        \\        Err(Missing) => Ok([""])
+        \\    }))
+        \\        .get("v")
+        \\        .ok_or([])
+        \\        .len()
+        \\
+        \\main = count(["v", "v", "v"])
+        ,
+        .expected = .{ .inspect_str = "3" },
+    },
 };
