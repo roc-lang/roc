@@ -17,7 +17,7 @@ TYPE MISMATCH - list_type_err.md:1:8:1:15
 		(title "Type Mismatch")
 		(region (start 1 8) (end 1 15))
 		(headline
-			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both:"))
+			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both."))
 		(document
 			(source-region (file "list_type_err.md") (start 1 8) (end 1 15) (annotation error) (line-text "[1, 2, \"hello\"]"))
 			(line-break)

@@ -62,7 +62,7 @@ TYPE MISMATCH - literal_patterns.md:3:13:3:20
 		(title "Type Mismatch")
 		(region (start 3 13) (end 3 20))
 		(headline
-			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both:"))
+			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both."))
 		(document
 			(source-region (file "literal_patterns.md") (start 3 13) (end 3 20) (annotation error) (line-text "    Zero => \"hello\""))
 			(line-break)

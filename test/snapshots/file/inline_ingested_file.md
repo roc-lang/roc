@@ -70,7 +70,7 @@ TYPE NOT DETERMINED - inline_ingested_file.md:4:7:4:17
 			(reflow " ")
 			(annotated code "parser_for")
 			(reflow " ")
-			(reflow "method is called on:"))
+			(reflow "method is called on."))
 		(document
 			(source-region (file "inline_ingested_file.md") (start 4 7) (end 4 17) (annotation error) (line-text "foo = Json.parse(data)"))
 			(line-break)

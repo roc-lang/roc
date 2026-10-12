@@ -240,22 +240,32 @@ fn reportRegion(layout: source_region.Layout, index: usize) PrimaryRegion {
 
 /// Source-block hook for report prose below the summary. Nested document
 /// structures keep their normal style; only top-level blocks receive framing.
+/// Prose is buffered until the next source block (or the end of the report),
+/// then emitted word-wrapped. Every block of prose and every source block is
+/// separated from what precedes it by one blank line.
 const BelowContent = struct {
     writer: *std.Io.Writer,
     buffer: *std.Io.Writer.Allocating,
     highlight_color: []const u8,
+    width: usize,
     gpa: Allocator,
-    started: bool = false,
+
+    /// Emit the buffered prose word-wrapped, after a separating blank line.
+    fn flushText(self: *BelowContent) error{WriteFailed}!void {
+        defer self.buffer.clearRetainingCapacity();
+        const trimmed = std.mem.trim(u8, self.buffer.written(), "\n");
+        if (std.mem.trim(u8, trimmed, " \n\r\t").len == 0) return;
+        try self.writer.writeByte('\n');
+        var it = std.mem.splitScalar(u8, trimmed, '\n');
+        while (it.next()) |ln| try wrapAndEmitBelowLine(self.writer, ln, 0, self.width);
+    }
 
     fn writeSource(self: *BelowContent, palette: ColorPalette, layout: source_region.Layout) (Allocator.Error || error{WriteFailed})!void {
         const region = reportRegion(layout, 0);
-        const text = std.mem.trim(u8, self.buffer.written(), " \n\r\t");
-        if (!self.started) {
-            try self.writer.writeByte('\n');
-            self.started = true;
-        }
-        try renderSecondaryRegion(self.writer, palette, self.highlight_color, region.start_line, region.start_column, region.end_line, region.end_column, region.line_text, text, self.gpa);
-        self.buffer.clearRetainingCapacity();
+        try self.flushText();
+        if (region.line_text.len == 0) return;
+        try self.writer.writeByte('\n');
+        try writeReportSnippet(self.writer, palette, self.highlight_color, region.start_line, region.start_column, region.end_line, region.end_column, region.line_text, self.gpa);
     }
 };
 
@@ -519,63 +529,15 @@ fn renderBelowContent(
     defer buf.deinit();
     var ann = std.array_list.Managed(Annotation).init(gpa);
     defer ann.deinit();
-    var below = BelowContent{ .writer = writer, .buffer = &buf, .highlight_color = highlight_color, .gpa = gpa };
+    var below = BelowContent{ .writer = writer, .buffer = &buf, .highlight_color = highlight_color, .width = width, .gpa = gpa };
     var ctx = RenderCtx{ .config = config, .palette = palette, .annotation_stack = &ann, .below_content = &below };
     var idx = @min(below_start, region_idx);
     while (idx < elements.len) : (idx += 1) {
         if (idx == region_idx) continue;
         try renderElementAs(.color_terminal, elements[idx], &buf.writer, &ctx);
     }
-    try flushBelowText(writer, &buf, width, &below.started);
+    try below.flushText();
     try writer.writeByte('\n');
-}
-
-/// Flush accumulated prose (`buf`) as word-wrapped text.
-fn flushBelowText(
-    writer: *std.Io.Writer,
-    buf: *std.Io.Writer.Allocating,
-    width: usize,
-    started: *bool,
-) error{WriteFailed}!void {
-    const trimmed = std.mem.trim(u8, buf.written(), "\n");
-    if (trimmed.len == 0) {
-        buf.clearRetainingCapacity();
-        return;
-    }
-    if (!started.*) {
-        try writer.writeByte('\n');
-        started.* = true;
-    }
-    var it = std.mem.splitScalar(u8, trimmed, '\n');
-    while (it.next()) |ln| try wrapAndEmitBelowLine(writer, ln, 0, width);
-    buf.clearRetainingCapacity();
-}
-
-/// Render a secondary source region after its structured introductory prose.
-fn renderSecondaryRegion(
-    writer: *std.Io.Writer,
-    palette: ColorPalette,
-    highlight_color: []const u8,
-    start_line: u32,
-    start_column: u32,
-    end_line: u32,
-    end_column: u32,
-    line_text: []const u8,
-    preceding_text: []const u8,
-    gpa: Allocator,
-) (Allocator.Error || error{WriteFailed})!void {
-    const body = std.mem.trim(u8, preceding_text, " \n\r\t");
-
-    if (body.len > 0) {
-        try bidi.writeVisible(writer, body);
-        try writer.writeByte('\n');
-    }
-
-    if (line_text.len > 0) {
-        try writer.writeByte('\n');
-
-        writeReportSnippet(writer, palette, highlight_color, start_line, start_column, end_line, end_column, line_text, gpa) catch return error.WriteFailed;
-    }
 }
 
 /// Report framing consumes the shared dedented source layout.

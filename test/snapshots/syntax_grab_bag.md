@@ -1208,7 +1208,7 @@ TYPE NOT DETERMINED - syntax_grab_bag.md:189:26:189:66
 			(reflow " ")
 			(annotated code "static_dispatch_method")
 			(reflow " ")
-			(reflow "method is called on:"))
+			(reflow "method is called on."))
 		(document
 			(source-region (file "syntax_grab_bag.md") (start 189 26) (end 189 40) (annotation error) (line-text "\tstatic_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?"))
 			(line-break)
@@ -1231,7 +1231,7 @@ TYPE NOT DETERMINED - syntax_grab_bag.md:189:26:189:66
 			(reflow " ")
 			(annotated code "next_static_dispatch_method")
 			(reflow " ")
-			(reflow "method is called on:"))
+			(reflow "method is called on."))
 		(document
 			(source-region (file "syntax_grab_bag.md") (start 189 26) (end 189 66) (annotation error) (line-text "\tstatic_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?"))
 			(line-break)

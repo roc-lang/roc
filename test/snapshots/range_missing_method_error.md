@@ -17,7 +17,7 @@ TYPE NOT DETERMINED - range_missing_method_error.md:1:5:1:8
 		(title "Type Not Determined")
 		(region (start 1 5) (end 1 8))
 		(headline
-			(reflow "Nothing in this program determines the type of this string:"))
+			(reflow "Nothing in this program determines the type of this string."))
 		(document
 			(source-region (file "range_missing_method_error.md") (start 1 5) (end 1 8) (annotation error) (line-text "r = \"a\"..<\"z\""))
 			(line-break)

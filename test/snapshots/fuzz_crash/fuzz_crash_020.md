@@ -1360,7 +1360,7 @@ TYPE NOT DETERMINED - fuzz_crash_020.md:105:55:105:72
 			(reflow " ")
 			(annotated code "od")
 			(reflow " ")
-			(reflow "method is called on:"))
+			(reflow "method is called on."))
 		(document
 			(source-region (file "fuzz_crash_020.md") (start 105 55) (end 105 66) (annotation error) (line-text "\tb?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?"))
 			(line-break)
@@ -1383,7 +1383,7 @@ TYPE NOT DETERMINED - fuzz_crash_020.md:105:55:105:72
 			(reflow " ")
 			(annotated code "ned")
 			(reflow " ")
-			(reflow "method is called on:"))
+			(reflow "method is called on."))
 		(document
 			(source-region (file "fuzz_crash_020.md") (start 105 55) (end 105 72) (annotation error) (line-text "\tb?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?"))
 			(line-break)

@@ -104,7 +104,7 @@ TYPE NOT DETERMINED - Adv.md:28:13:28:20
 		(title "Type Not Determined")
 		(region (start 28 13) (end 28 20))
 		(headline
-			(reflow "Nothing in this program determines the type of this string:"))
+			(reflow "Nothing in this program determines the type of this string."))
 		(document
 			(source-region (file "Adv.md") (start 28 13) (end 28 20) (annotation error) (line-text "\tnext_val = \"Hello\".update(100)"))
 			(line-break)

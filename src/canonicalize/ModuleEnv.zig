@@ -3691,13 +3691,15 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addAnnotated("expect", .inline_code);
             try report.headline.addReflowingText(" reassigns ");
             try report.headline.addUnqualifiedSymbol(owned_ident);
-            try report.headline.addReflowingText(", which was declared outside of it:");
+            try report.headline.addReflowingText(", which was declared outside of it.");
 
             try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
 
             try report.document.addLineBreak();
             try report.document.addUnqualifiedSymbol(owned_ident);
-            try report.document.addReflowingText(" was declared here:");
+            try report.document.addReflowingText(" was declared in ");
+            try report.document.addSourceLocation(declaration_region_info, owned_filename);
+            try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try self.addSourceRegionTo(&report.document, declaration_region_info, .dimmed, owned_filename);
 
@@ -3721,29 +3723,30 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             var report = try Report.init(allocator, "Mutually Recursive Type Aliases", "", .runtime_error);
             const owned_type_name = try report.addOwnedString(type_name);
             const owned_other_name = try report.addOwnedString(other_type_name);
-            try report.headline.addReflowingText("The type alias ");
+            try report.headline.addReflowingText("The type aliases ");
             try report.headline.addInlineCode(owned_type_name);
             try report.headline.addReflowingText(" and ");
             try report.headline.addInlineCode(owned_other_name);
             try report.headline.addReflowingText(" form a recursive cycle.");
 
-            try report.document.addReflowingText("Type aliases are transparent synonyms and cannot be mutually recursive. ");
-            try report.document.addReflowingText("If you need recursive types, use nominal types (");
-            try report.document.addAnnotated(":=", .inline_code);
-            try report.document.addReflowingText(") instead.");
-            try report.document.addLineBreaks(2);
-
             const owned_filename = try report.addOwnedString(filename);
             try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
 
             try report.document.addLineBreak();
-            try report.document.addReflowingText("And it references ");
+            try report.document.addType(owned_type_name);
+            try report.document.addReflowingText(" references ");
             try report.document.addType(owned_other_name);
-            try report.document.addReflowingText(" declared in ");
+            try report.document.addReflowingText(", which is declared in ");
             try report.document.addSourceLocation(other_region_info, owned_filename);
             try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try self.addSourceRegionTo(&report.document, other_region_info, .dimmed, owned_filename);
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Type aliases are transparent synonyms and cannot be mutually recursive. ");
+            try report.document.addReflowingText("If you need recursive types, use nominal types (");
+            try report.document.addAnnotated(":=", .inline_code);
+            try report.document.addReflowingText(") instead.");
 
             break :blk report;
         },

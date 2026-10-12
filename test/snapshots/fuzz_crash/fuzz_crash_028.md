@@ -2453,7 +2453,7 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 			(reflow " ")
 			(annotated code "od")
 			(reflow " ")
-			(reflow "method is called on:"))
+			(reflow "method is called on."))
 		(document
 			(source-region (file "fuzz_crash_028.md") (start 133 5) (end 133 12) (annotation error) (line-text "le =(arg1)?.od()?.ned()?.recd?"))
 			(line-break)
@@ -2476,7 +2476,7 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 			(reflow " ")
 			(annotated code "ned")
 			(reflow " ")
-			(reflow "method is called on:"))
+			(reflow "method is called on."))
 		(document
 			(source-region (file "fuzz_crash_028.md") (start 133 5) (end 133 18) (annotation error) (line-text "le =(arg1)?.od()?.ned()?.recd?"))
 			(line-break)
