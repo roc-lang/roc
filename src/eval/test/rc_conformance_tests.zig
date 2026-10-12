@@ -1108,8 +1108,6 @@ const exemptions = [_]Exemption{
     .{ .op = .list_drop_last, .reason = "no producer: List.drop_last lowers through list_sublist" },
     .{ .op = .list_prefetched, .reason = "no LIR producer: lowering splits List.prefetched into an alias of its list and list_prefetch" },
     .{ .op = .list_reverse, .reason = "no producer: List.rev is written in Roc over list_get_unsafe" },
-    .{ .op = .list_split_first, .reason = "no producer: List.split_first is written in Roc" },
-    .{ .op = .list_split_last, .reason = "no producer: List.split_last is written in Roc" },
     .{ .op = .num_to_str, .reason = "no producer: each numeric type maps to its own <type>_to_str op" },
 };
 

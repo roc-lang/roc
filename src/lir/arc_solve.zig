@@ -376,6 +376,20 @@ pub const Solution = struct {
         return self.pinned.isSet(index);
     }
 
+    /// Every statement reachable from `proc`'s body, in the structural
+    /// depth-first order of `collectProcStatements`. The uniqueness structure
+    /// built by the solve owns these lists; the store must not have gained or
+    /// lost statements, locals, or procedures since.
+    pub fn procStatements(self: *const Solution, store: *const LirStore, proc: LIR.LirProcSpecId) []const LIR.CFStmtId {
+        const structure = self.uniqueness_structure orelse solveInvariant("ARC solution has no uniqueness structure");
+        if (structure.store != store or structure.stmt_count != store.cfStmtCount() or
+            structure.local_count != store.localCount() or structure.proc_count != store.procSpecCount())
+        {
+            solveInvariant("ARC procedure statements were read for a different store");
+        }
+        return structure.proc_stmts[@backingInt(proc)].items;
+    }
+
     pub fn leaderOf(self: *const Solution, local: LIR.LocalId) LIR.LocalId {
         const index = @backingInt(local);
         if (index >= self.leader.len) return local;

@@ -784,7 +784,6 @@ fn exprIsSubstitutable(program: *const Ast.Program, allocator: Allocator, expr_i
         .str_lit,
         .bytes_lit,
         .static_data_candidate,
-        .comptime_value,
         => next = null,
         .fn_ref => |fn_ref| {
             next = null;
@@ -795,6 +794,10 @@ fn exprIsSubstitutable(program: *const Ast.Program, allocator: Allocator, expr_i
         },
         .field_access => |field| next = field.receiver,
         .tuple_access => |access| next = access.tuple,
+        // A compile-time value read is where the program evaluates that
+        // value: its final value guard crashes there when the evaluation
+        // failed, so the read is neither dropped nor moved.
+        .comptime_value,
         .typed_boundary,
         .row_widen,
         .@"unreachable",

@@ -11605,14 +11605,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .list_release_excess_capacity => {
             try self.generateLLListReleaseExcessCapacity(args, ll.ret_layout, ll.target, ll.unique_args);
         },
-        // list_split_first(list) -> { first: elem, rest: list }
-        .list_split_first => {
-            try self.generateLLListSplitFirst(args, ll.ret_layout);
-        },
-        // list_split_last(list) -> { rest: list, last: elem }
-        .list_split_last => {
-            try self.generateLLListSplitLast(args, ll.ret_layout);
-        },
         // list_sublist(list, {len: U64, start: U64}) -> list
         .list_sublist, .list_sublist_borrowed => {
             // Shared layout uses canonical alphabetical field indices for records.
@@ -13350,8 +13342,6 @@ fn numericOpFromLowLevel(op: LIR.LowLevel) NumericOp {
         .list_reserve_for_append,
         .list_release_excess_capacity,
         .list_clear,
-        .list_split_first,
-        .list_split_last,
         .list_map_prepare_reuse,
         .list_map_can_reuse,
         .list_map_cast_unsafe,
@@ -18064,136 +18054,6 @@ fn resolveListElementPairLayout(self: *Self, ret_layout: layout.Idx) ListElement
             ls.getStructFieldOffset(record_idx, 1),
         .list_layout = if (field0_is_list) field0_layout else field1_layout,
     };
-}
-
-/// Generate list_split_first: split list into first element and rest
-fn generateLLListSplitFirst(self: *Self, args: anytype, _ret_layout: layout.Idx) Allocator.Error!void {
-    const pair = self.resolveListElementPairLayout(_ret_layout);
-    const list_abi = self.builtinInternalListAbi("wasm.generateLLListSplitFirst.builtin_list_abi", pair.list_layout);
-    const elem_size = list_abi.elem_size;
-    // Generate list arg
-    const list_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
-
-    // Load list fields
-    const old_data = try self.emitLoadAtToNewLocal(list_ptr, .i32, 0);
-
-    const old_len = try self.emitLoadAtToNewLocal(list_ptr, .i32, 4);
-
-    const result_offset = try self.allocStackMemory(pair.result_size, pair.result_align);
-    const result_ptr = try self.emitFpOffsetToNewLocal(result_offset);
-
-    // Copy first element to result
-    const bytes_local = try self.emitI32ConstToNewLocal(@intCast(elem_size));
-
-    const first_dst = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(result_ptr);
-    try self.emitI32Const(@intCast(pair.elem_offset));
-    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-    try self.emitLocalSet(first_dst);
-
-    const zero6 = try self.emitI32ConstToNewLocal(0);
-    try self.emitMemCopyLoop(first_dst, zero6, old_data, bytes_local);
-
-    // Build rest list (pointing to old_data + elem_size, len = old_len - 1)
-    const rest_data = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(old_data);
-    try self.emitI32Const(@intCast(elem_size));
-    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-    try self.emitLocalSet(rest_data);
-
-    const rest_len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(old_len);
-    try self.emitI32Const(1);
-    self.currentCode().append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
-    try self.emitLocalSet(rest_len);
-
-    const encoded_cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitPrepareListSliceMetadata(list_ptr, list_abi.elements_refcounted, encoded_cap);
-
-    // Store rest list in result struct
-    const rest_base = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(result_ptr);
-    try self.emitI32Const(@intCast(pair.list_offset));
-    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-    try self.emitLocalSet(rest_base);
-
-    // ptr
-    try self.emitLocalGet(rest_data);
-    try self.emitStoreToMem(rest_base, 0, .i32);
-    // len
-    try self.emitLocalGet(rest_len);
-    try self.emitStoreToMem(rest_base, 4, .i32);
-    // cap = encoded seamless-slice allocation pointer
-    try self.emitLocalGet(encoded_cap);
-    try self.emitStoreToMem(rest_base, 8, .i32);
-
-    // Push result pointer
-    try self.emitLocalGet(result_ptr);
-}
-
-/// Generate list_split_last: split list into rest and last element
-fn generateLLListSplitLast(self: *Self, args: anytype, _ret_layout: layout.Idx) Allocator.Error!void {
-    const pair = self.resolveListElementPairLayout(_ret_layout);
-    const list_abi = self.builtinInternalListAbi("wasm.generateLLListSplitLast.builtin_list_abi", pair.list_layout);
-    const elem_size = list_abi.elem_size;
-
-    // Generate list arg
-    const list_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
-
-    // Load list fields
-    const old_data = try self.emitLoadAtToNewLocal(list_ptr, .i32, 0);
-
-    const old_len = try self.emitLoadAtToNewLocal(list_ptr, .i32, 4);
-
-    const result_offset = try self.allocStackMemory(pair.result_size, pair.result_align);
-    const result_ptr = try self.emitFpOffsetToNewLocal(result_offset);
-
-    // rest_len = old_len - 1
-    const rest_len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(old_len);
-    try self.emitI32Const(1);
-    self.currentCode().append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
-    try self.emitLocalSet(rest_len);
-
-    // Store rest list in result struct (shares data ptr, but with reduced length)
-    const rest_base = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(result_ptr);
-    try self.emitI32Const(@intCast(pair.list_offset));
-    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-    try self.emitLocalSet(rest_base);
-
-    // ptr (same as old_data)
-    try self.emitLocalGet(old_data);
-    try self.emitStoreToMem(rest_base, 0, .i32);
-    // len
-    try self.emitLocalGet(rest_len);
-    try self.emitStoreToMem(rest_base, 4, .i32);
-    // Preserve source list cap metadata (including seamless-slice encoding).
-    const source_cap = try self.emitLoadAtToNewLocal(list_ptr, .i32, 8);
-    try self.emitLocalGet(source_cap);
-    try self.emitStoreToMem(rest_base, 8, .i32);
-
-    // Copy last element to result
-    // last_src = old_data + rest_len * elem_size
-    const last_src = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGets(.{ old_data, rest_len });
-    try self.emitI32Const(@intCast(elem_size));
-    try self.emitOps(.{ Op.i32_mul, Op.i32_add });
-    try self.emitLocalSet(last_src);
-
-    const bytes_local = try self.emitI32ConstToNewLocal(@intCast(elem_size));
-
-    const last_dst = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(result_ptr);
-    try self.emitI32Const(@intCast(pair.elem_offset));
-    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-    try self.emitLocalSet(last_dst);
-
-    const zero7 = try self.emitI32ConstToNewLocal(0);
-    try self.emitMemCopyLoop(last_dst, zero7, last_src, bytes_local);
-
-    // Push result pointer
-    try self.emitLocalGet(result_ptr);
 }
 
 fn checkedOverflowMessage(op: LIR.LowLevel) []const u8 {
