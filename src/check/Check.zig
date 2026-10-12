@@ -683,6 +683,13 @@ erroneous_value_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void),
 /// become an explicit runtime error before checked-body construction, because
 /// its interface is erroneous independently of any value expression.
 erroneous_statements: std.AutoHashMapUnmanaged(CIR.Statement.Idx, ?CIR.Expr.Idx),
+/// `for` loops whose iterable was not erroneous when the loop was checked.
+/// The iterable's rejection can be decided later (a literal bound converts
+/// only once the loop body relates the item type), and the erroneous-value
+/// sweep then retires the loop exactly as an iterable known to be erroneous
+/// up front would: the loop binds nothing and never iterates, so it evaluates
+/// its iterable and crashes.
+late_rejectable_for_loops: std.ArrayListUnmanaged(LateRejectableForLoop),
 /// Top-level destructuring definitions whose pattern a judgment made after
 /// the pattern was checked rejected (see `rejectPatternFailureOwner`). The
 /// erroneous-value sweep retires each through `rejectTopLevelDestructure`.
@@ -1151,6 +1158,26 @@ scratch_scheme_mint_names: std.ArrayListUnmanaged(MethodNameId) = .empty,
 /// `dispatch_derivations`, whose lineage is a dispatch target's own.
 component_derivations: std.ArrayListUnmanaged(DispatchDerivation) = .empty,
 component_derivation_by_child_fn_var: std.AutoHashMapUnmanaged(Var, Var) = .empty,
+/// The constraint callables of the structural comparisons and hashes whose
+/// component obligations have been derived, in derivation order. A relation's
+/// components are derived exactly once, however many queue entries carry it.
+component_derived_relations: std.ArrayListUnmanaged(Var) = .empty,
+component_derived_relation_set: std.AutoHashMapUnmanaged(Var, void) = .empty,
+/// The scheme that created each dispatch relation, keyed by the relation's
+/// constraint callable: the innermost prospective scheme root active where
+/// the relation was minted or copied, or null outside every scheme. Resolving
+/// a relation runs under this owner, whichever later work grounds its
+/// receiver or drains its queue entry. `dispatch_relation_owner_log` lists the
+/// keys in insertion order so a solver probe can rewind them.
+dispatch_relation_owners: std.AutoHashMapUnmanaged(Var, ?Var) = .empty,
+dispatch_relation_owner_log: std.ArrayListUnmanaged(Var) = .empty,
+/// The scheme root active where each scheme root became active (null at the
+/// top level and in an independently checked group), and the roots whose
+/// boundary has captured their last requirements. A requirement candidate for
+/// a root whose boundary already ran belongs to the innermost enclosing root
+/// still prospective (`prospectiveSchemeOwner`).
+scheme_owner_parents: std.AutoHashMapUnmanaged(Var, ?Var) = .empty,
+captured_scheme_owners: std.AutoHashMapUnmanaged(Var, void) = .empty,
 /// Whether this module declares a method in a function body. Only such a
 /// method can be a local procedure, so no dispatch selects one otherwise.
 module_declares_local_methods: ?bool = null,
@@ -1553,9 +1580,6 @@ const InstantiationDispatcher = struct {
     /// deferred-queue entry carries this instantiation-time group as its
     /// `owner_group_index`, not the enqueuing frame's group.
     owner_group_index: ?u32 = null,
-    /// The scheme whose checking instantiated this relation, independent of
-    /// the frame that later grounds or derives its receiver.
-    owner_scheme_root: ?Var = null,
 
     const Source = enum {
         /// A constraint copied structurally with a generalized flex var. It is
@@ -2035,6 +2059,64 @@ fn constraintIsLiteralConversion(self: *const Self, constraint: StaticDispatchCo
     return literal_defaulting.constraintLiteralKind(self.literalMethodIdents(), constraint) != null;
 }
 
+/// Record the active scheme as the owner of the dispatch relation `fn_var`,
+/// where the relation is minted or copied (`dispatch_relation_owners`). The
+/// first record is the creator's.
+fn recordDispatchRelationOwner(self: *Self, fn_var: Var) Allocator.Error!void {
+    try self.dispatch_relation_owner_log.ensureUnusedCapacity(self.gpa, 1);
+    const entry = try self.dispatch_relation_owners.getOrPut(self.gpa, fn_var);
+    // A relation reached again through a shared callable (an instantiation
+    // shares a leaf rather than copying it) keeps its creator.
+    if (entry.found_existing) return;
+    entry.value_ptr.* = self.active_scheme_root;
+    self.dispatch_relation_owner_log.appendAssumeCapacity(fn_var);
+}
+
+/// Record the active scheme as the owner of a `where` clause's relation, whose
+/// callable is its annotation's own variable. Generating an annotation in
+/// place rebuilds that variable for the scheme being checked (a predeclared
+/// scheme is a disjoint copy of an earlier generation), so the latest
+/// generation owns it.
+fn recordAnnotationDispatchRelationOwner(self: *Self, fn_var: Var) Allocator.Error!void {
+    try self.dispatch_relation_owner_log.ensureUnusedCapacity(self.gpa, 1);
+    const entry = try self.dispatch_relation_owners.getOrPut(self.gpa, fn_var);
+    if (!entry.found_existing) {
+        self.dispatch_relation_owner_log.appendAssumeCapacity(fn_var);
+    } else {
+        // A probe rewinds only the keys it inserted.
+        std.debug.assert(self.probe_depth == 0);
+    }
+    entry.value_ptr.* = self.active_scheme_root;
+}
+
+/// The scheme that created the dispatch relation `fn_var`, or null when it
+/// was created outside every scheme.
+fn dispatchRelationOwner(self: *const Self, fn_var: Var) ?Var {
+    return self.dispatch_relation_owners.get(fn_var) orelse
+        base.invariant("a dispatch relation reached resolution without the owner recorded where it was created", .{});
+}
+
+/// Make `owner` the active scheme root, inside the one active here.
+fn activateSchemeOwner(self: *Self, owner: Var) Allocator.Error!void {
+    if (self.active_scheme_root != owner) {
+        try self.scheme_owner_parents.put(self.gpa, owner, self.active_scheme_root);
+    }
+    _ = self.captured_scheme_owners.remove(owner);
+    self.active_scheme_root = owner;
+}
+
+/// The innermost scheme root at or enclosing `owner` whose boundary has not
+/// yet captured its requirements, or null when there is none.
+fn prospectiveSchemeOwner(self: *const Self, owner: ?Var) ?Var {
+    var current = owner;
+    while (current) |root| {
+        if (!self.captured_scheme_owners.contains(root)) return root;
+        current = self.scheme_owner_parents.get(root) orelse
+            base.invariant("a captured scheme root was never activated", .{});
+    }
+    return null;
+}
+
 fn recordSchemeRequirementCandidate(
     self: *Self,
     receiver_var: Var,
@@ -2043,9 +2125,10 @@ fn recordSchemeRequirementCandidate(
     structural_origin: ?StructuralSchemeRequirementOrigin,
     deferred_generated_codec: bool,
 ) Allocator.Error!void {
+    try self.recordDispatchRelationOwner(constraint.fn_var);
     if (self.constraintIsLiteralConversion(constraint)) return;
     std.debug.assert((source == .creation) == (structural_origin == null));
-    const owner_root = self.active_scheme_root orelse return;
+    const owner_root = self.prospectiveSchemeOwner(self.active_scheme_root) orelse return;
     try self.scheme_requirement_candidates.ensureUnusedCapacity(self.gpa, 1);
     const owner_entry = try self.scheme_requirement_candidate_indices_by_owner.getOrPut(self.gpa, owner_root);
     if (!owner_entry.found_existing) owner_entry.value_ptr.* = .empty;
@@ -2247,7 +2330,6 @@ fn registerInstantiatedSchemeRequirement(
         .source = .scheme_requirement,
         .deferred_enqueued = !receiver_is_flex,
         .owner_group_index = self.currentGroupIndex(),
-        .owner_scheme_root = self.active_scheme_root,
     });
     if (receiver_is_flex) {
         try self.pending_scheme_requirement_dispatchers.append(self.gpa, dispatcher_idx);
@@ -2288,7 +2370,6 @@ fn registerInstantiatedAttachedDispatch(
         .constraints = constraints,
         .instantiation_expr = instantiation_expr,
         .owner_group_index = owner_group_index,
-        .owner_scheme_root = self.active_scheme_root,
     });
     try self.recordAmbiguityCandidate(receiver_var, .instantiation, instantiation_expr);
     // An attached constraint copied by instantiation lives on the fresh
@@ -3728,6 +3809,7 @@ fn initAssumePrepared(
         .nonlocal_value_lookups = .empty,
         .erroneous_value_exprs = .empty,
         .erroneous_statements = .empty,
+        .late_rejectable_for_loops = .empty,
         .rejected_destructure_defs = .empty,
         .call_operand_type_error_exprs = try initNodeSlots(bool, gpa, node_count, false),
         .retired_operand_sequences = .empty,
@@ -3842,7 +3924,7 @@ pub fn deinit(self: *Self) void {
     self.canonical_key_writer.deinit();
     self.owner_envs_by_identity.deinit(self.gpa);
     self.regions.deinit(self.gpa);
-    self.problems.deinit(self.gpa);
+    self.problems.deinit();
     self.snapshots.deinit();
     self.import_mapping.deinit();
     self.unify_scratch.deinit();
@@ -3892,6 +3974,7 @@ pub fn deinit(self: *Self) void {
     self.nonlocal_value_lookups.deinit(self.gpa);
     self.erroneous_value_exprs.deinit(self.gpa);
     self.erroneous_statements.deinit(self.gpa);
+    self.late_rejectable_for_loops.deinit(self.gpa);
     self.rejected_destructure_defs.deinit(self.gpa);
     self.call_operand_type_error_exprs.deinit(self.gpa);
     self.retired_operand_sequences.deinit(self.gpa);
@@ -4122,6 +4205,12 @@ pub fn deinit(self: *Self) void {
     self.scratch_scheme_mint_names.deinit(self.gpa);
     self.component_derivations.deinit(self.gpa);
     self.component_derivation_by_child_fn_var.deinit(self.gpa);
+    self.component_derived_relations.deinit(self.gpa);
+    self.component_derived_relation_set.deinit(self.gpa);
+    self.dispatch_relation_owners.deinit(self.gpa);
+    self.dispatch_relation_owner_log.deinit(self.gpa);
+    self.scheme_owner_parents.deinit(self.gpa);
+    self.captured_scheme_owners.deinit(self.gpa);
     self.local_decl_expr_by_pattern.deinit(self.gpa);
     self.local_method_names.deinit(self.gpa);
     self.dispatch_candidate_frames.deinit(self.gpa);
@@ -4461,7 +4550,7 @@ fn rejectCapturingMethods(self: *Self) Allocator.Error!void {
             if (!captures.isOuterRef(&scope, referenced)) continue;
             const captured = captures.valueReachedBy(referenced) orelse continue;
             if ((try reported.getOrPut(self.gpa, referenced)).found_existing) continue;
-            _ = try self.problems.appendProblem(self.gpa, .{ .capturing_method = .{
+            _ = try self.problems.appendProblem(.{ .capturing_method = .{
                 .method_name = method.name,
                 .referenced_name = self.getPatternIdent(referenced) orelse method.name,
                 .captured_name = self.getPatternIdent(captured) orelse method.name,
@@ -4902,7 +4991,7 @@ fn emitComptimeCondition(self: *Self, expr: CIR.Expr.Idx, kind: @FieldType(probl
     self.var_set.clearRetainingCapacity();
     if (try self.varContainsError(ModuleEnv.varFrom(expr), &self.var_set)) return;
 
-    _ = try self.problems.appendProblem(self.gpa, .{ .comptime_condition = .{
+    _ = try self.problems.appendProblem(.{ .comptime_condition = .{
         .kind = kind,
         .region = self.cir.store.getExprRegion(expr),
     } });
@@ -6805,8 +6894,6 @@ const Env = struct {
 /// constructed per call and inlined.
 fn unifyEnv(self: *Self) unifier.Env {
     return .{
-        // problems is owned by self.gpa.
-        .problems_gpa = self.gpa,
         .ident_store = self.cir.getIdentStoreConst(),
         .self_module_identity = self.cir.selfModuleIdentity(),
         .types = self.types,
@@ -6927,18 +7014,15 @@ fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifi
     // unification owns each obligation's boundary-time resolution.
     const failure_expr = self.discarded_binding_rhs_expr orelse self.instantiation_source_expr;
     for (self.unify_scratch.deferred_constraints.items.items) |deferred_constraint| {
-        var owned_constraint = deferred_constraint;
-        if (failure_expr) |expr_idx| {
-            if (owned_constraint.failure_expr == .none) {
-                for (self.types.sliceStaticDispatchConstraints(owned_constraint.constraints)) |constraint| {
-                    if (constraint.origin == .where_clause) {
-                        owned_constraint.failure_expr = .from(@backingInt(expr_idx));
-                        break;
-                    }
-                }
-            }
+        const expr_idx = failure_expr orelse {
+            try self.enqueueDeferredDispatchConstraint(env, deferred_constraint, owner);
+            continue;
+        };
+        if (deferred_constraint.failure_expr != .none) {
+            try self.enqueueDeferredDispatchConstraint(env, deferred_constraint, owner);
+            continue;
         }
-        try self.enqueueDeferredDispatchConstraint(env, owned_constraint, owner);
+        try self.enqueueUseOwnedDeferredConstraint(env, deferred_constraint, expr_idx, owner);
     }
 
     // Ensure arrays are in sync
@@ -7065,7 +7149,7 @@ fn appendTypeMismatch(
     const actual_snapshot = try self.snapshotVarForError(actual);
     const unify_env = self.unifyEnv();
     const evidence = try unifier.snapshotMismatchEvidence(&unify_env);
-    return self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
+    return self.problems.appendProblem(.{ .type_mismatch = .{
         .types = .{
             .expected_var = expected,
             .expected_snapshot = expected_snapshot,
@@ -7152,7 +7236,7 @@ fn checkForInfiniteType(self: *Self, comptime Idx: anytype, idx: Idx) std.mem.Al
             const err_var = self.occurs_scratch.err_var.?;
 
             const snapshot = try self.snapshotVarForError(err_var);
-            _ = try self.problems.appendProblem(self.gpa, .{ .anonymous_recursion = .{
+            _ = try self.problems.appendProblem(.{ .anonymous_recursion = .{
                 .var_ = var_,
                 .snapshot = snapshot,
                 .def_name = self.bindingRootName(Idx, idx),
@@ -7166,7 +7250,7 @@ fn checkForInfiniteType(self: *Self, comptime Idx: anytype, idx: Idx) std.mem.Al
 
             // Infinite type (like `a = List(a)`)
             const snapshot = try self.snapshotVarForError(err_var);
-            _ = try self.problems.appendProblem(self.gpa, .{ .infinite_recursion = .{
+            _ = try self.problems.appendProblem(.{ .infinite_recursion = .{
                 .var_ = var_,
                 .snapshot = snapshot,
                 .def_name = self.bindingRootName(Idx, idx),
@@ -7320,6 +7404,49 @@ test "settled row reachability uses caller-owned scratch across all seeds" {
     try std.testing.expectEqual(@as(u32, 257), visited.count());
     try std.testing.expectEqual(shared_capacity, checker.var_set.capacity());
     try std.testing.expectEqual(@as(usize, 0), stack.items.len);
+}
+
+test "a default-decided class merged into a frozen class renders its pre-default type" {
+    // A recorded variable can merge into a frozen class a replay shares. The
+    // diagnostic's view of its pre-default type is of that whole class, and
+    // the savepoint it is rendered under restores the frozen class after.
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.initExpr("FrozenPreDefault", "1.U64");
+    defer test_env.deinit();
+    const checker = &test_env.checker;
+    const store = checker.types;
+    const defaulted = try store.fresh();
+    try checker.recordDefaultDecidedVar(defaulted, .chosen);
+    try store.setVarContent(defaulted, .{ .structure = .empty_record });
+
+    const ground = try store.freshFromContent(.{ .structure = .empty_record });
+    const frozen = (try checker.freezeTypeGraph(ground)).?;
+    defer store.thawFrozenClasses() catch unreachable;
+    try store.union_(defaulted, frozen, store.resolveVar(frozen).desc);
+
+    _ = try checker.snapshotPreDefaultType(defaulted);
+    const restored = store.resolveVar(frozen).desc;
+    try std.testing.expect(restored.flags.frozen);
+    try std.testing.expect(restored.content == .structure and restored.content.structure == .empty_record);
+}
+
+test "a frozen copy of a class a default chose is not default-decided" {
+    // Replay shares a frozen copy of a settled instance among later uses. A
+    // default chose the original class, whose record names the original's
+    // variable; no default chose the copy, so no record names it either.
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.initExpr("FrozenDefault", "1.U64");
+    defer test_env.deinit();
+    const checker = &test_env.checker;
+    const store = checker.types;
+    const original = try store.freshFromContent(.{ .structure = .empty_record });
+    try store.markVarDefaultDecided(original);
+
+    const copy = (try checker.freezeTypeGraph(original)).?;
+    defer store.thawFrozenClasses() catch unreachable;
+    try std.testing.expect(store.resolveVar(copy).desc.flags.frozen);
+    try std.testing.expect(!store.varDefaultDecided(copy));
+    try std.testing.expect(store.varDefaultDecided(original));
 }
 
 /// Validate every tag and record row reachable from a checked value after
@@ -7741,7 +7868,7 @@ fn reportRowUnionConflict(self: *Self, row: Var, conflict: RowLabelConflict, val
     const region = self.getRegionAt(row);
     const outer_var = try self.freshFromContent(try self.singleLabelRow(conflict.name, conflict.outer), env, region);
     const inner_var = try self.freshFromContent(try self.singleLabelRow(conflict.name, conflict.inner), env, region);
-    _ = try self.problems.appendProblem(self.gpa, .{ .row_label_conflict = .{
+    _ = try self.problems.appendProblem(.{ .row_label_conflict = .{
         .row_kind = switch (conflict.outer.payload) {
             .tag => .tag_union,
             .field => .record,
@@ -8096,7 +8223,7 @@ fn validateNominalDeclRecursion(self: *Self) std.mem.Allocator.Error!void {
         // which resolves to the bare nominal application and would render as
         // just the type's name).
         const snapshot = try self.snapshotVarForError(decl.backing);
-        _ = try self.problems.appendProblem(self.gpa, .{ .invalid_nominal_decl_recursion = .{
+        _ = try self.problems.appendProblem(.{ .invalid_nominal_decl_recursion = .{
             .decl_var = decl_var,
             .snapshot = snapshot,
             .type_name = decl.ident.ident_idx,
@@ -8416,7 +8543,7 @@ fn reportGrowingNominalDecl(self: *Self, decl_idx: types_mod.NominalDecl.Idx) st
     const decl = self.types.getNominalDecl(decl_idx);
     const decl_var: Var = @fromBackingInt(@intCast(decl.statement()));
     const snapshot = try self.snapshotVarForError(decl.backing);
-    _ = try self.problems.appendProblem(self.gpa, .{ .invalid_nominal_decl_recursion = .{
+    _ = try self.problems.appendProblem(.{ .invalid_nominal_decl_recursion = .{
         .decl_var = decl_var,
         .snapshot = snapshot,
         .type_name = decl.ident.ident_idx,
@@ -8605,7 +8732,7 @@ fn resolvePendingTupleAccess(
                     const result = try self.unifyOwnedRelation(pending.result_var, elems[pending.elem_index], env, .none, .construction);
                     return if (result.isEstablished()) .resolved else .rejected;
                 } else {
-                    _ = try self.problems.appendProblem(self.gpa, .{ .invalid_tuple_access = .{
+                    _ = try self.problems.appendProblem(.{ .invalid_tuple_access = .{
                         .region = self.cir.store.getExprRegion(pending.expr),
                         .elem_index = pending.elem_index,
                         .reason = .{ .index_out_of_bounds = @intCast(elems.len) },
@@ -8622,7 +8749,7 @@ fn resolvePendingTupleAccess(
             .tag_union,
             .empty_tag_union,
             => {
-                _ = try self.problems.appendProblem(self.gpa, .{ .invalid_tuple_access = .{
+                _ = try self.problems.appendProblem(.{ .invalid_tuple_access = .{
                     .region = self.cir.store.getExprRegion(pending.expr),
                     .elem_index = pending.elem_index,
                     .reason = .not_tuple,
@@ -8635,7 +8762,7 @@ fn resolvePendingTupleAccess(
         .flex, .rigid => {
             if (!final) return .pending;
 
-            _ = try self.problems.appendProblem(self.gpa, .{ .tuple_access_needs_annotation = .{
+            _ = try self.problems.appendProblem(.{ .tuple_access_needs_annotation = .{
                 .region = self.cir.store.getExprRegion(pending.expr),
                 .elem_index = pending.elem_index,
             } });
@@ -10188,7 +10315,7 @@ fn enqueueLocalSchemeRequirements(self: *Self, root: Var, env: *Env) Allocator.E
             .var_ = requirement.receiver_var,
             .constraints = range,
             .failure_expr = if (requirement.failure_expr) |expr| .from(@backingInt(expr)) else .none,
-        }, .{ .recorded = .{ .group_index = self.type_schemes.items[scheme_idx].capture_group_index, .scheme_root = self.type_schemes.items[scheme_idx].root_var } });
+        }, .{ .recorded = self.type_schemes.items[scheme_idx].capture_group_index });
     }
 }
 
@@ -10952,6 +11079,7 @@ fn recordOpenLiteralVar(
 ) Allocator.Error!void {
     var has_literal = false;
     for (constraints) |constraint| {
+        try self.recordDispatchRelationOwner(constraint.fn_var);
         if (self.constraintIsLiteralConversion(constraint)) {
             has_literal = true;
         }
@@ -11468,6 +11596,13 @@ const FreshRank = enum { current, target };
 /// Unify `target_var` against freshly-built `content`. When `target_var` is a
 /// root flex placeholder we mutate its descriptor in place (the common case),
 /// saving a typeslot and a full unification run.
+fn isUnconstrainedFlex(content: types_mod.Content) bool {
+    return switch (content) {
+        .flex => |flex| flex.constraints.isEmpty(),
+        .rigid, .alias, .structure, .field_presence, .err => false,
+    };
+}
+
 fn unifyWithFresh(
     self: *Self,
     target_var: Var,
@@ -11481,10 +11616,12 @@ fn unifyWithFresh(
     const resolved_target = self.types.resolveVar(target_var);
     switch (rank_policy) {
         .current => {
-            if (resolved_target.is_root and resolved_target.desc.rank == env.rank() and resolved_target.desc.content == .flex) {
+            if (resolved_target.is_root and resolved_target.desc.rank == env.rank() and isUnconstrainedFlex(resolved_target.desc.content)) {
                 // The vast majority of the time, we call unify with on a placeholder
                 // CIR var. In this case, we can safely replace the type descriptor
-                // directly, saving a typeslot and unifcation run
+                // directly, saving a typeslot and unifcation run. A flex that
+                // carries static-dispatch constraints (a literal's conversion)
+                // must unify, so the constraints are checked against `content`.
                 var desc = resolved_target.desc;
                 desc.content = content;
                 try self.types.dangerousSetVarDesc(target_var, desc);
@@ -11501,7 +11638,7 @@ fn unifyWithFresh(
             _ = try self.unify(target_var, fresh_var, env);
         },
         .target => {
-            if (resolved_target.is_root and resolved_target.desc.content == .flex) {
+            if (resolved_target.is_root and isUnconstrainedFlex(resolved_target.desc.content)) {
                 var desc = resolved_target.desc;
                 desc.content = content;
                 try self.types.dangerousSetVarDesc(target_var, desc);
@@ -11531,6 +11668,15 @@ fn unifyWithTargetRank(self: *Self, target_var: Var, content: types_mod.Content,
 /// Mark the solved class owned by an already-reported erroneous checker node.
 fn markErroneous(self: *Self, target_var: Var) std.mem.Allocator.Error!void {
     try self.types.setVarContent(target_var, .err);
+}
+
+/// Retire the value of a branch that an earlier branch's mismatch left
+/// unrelated to the conditional's or match's result. Only the branch value's
+/// own occurrence is erroneous: a branch whose value reads a binding (a
+/// pattern's payload, a parameter) shares that binding's class, which every
+/// other use of the binding still reads.
+fn retireUncheckedBranchValue(self: *Self, value_var: Var) std.mem.Allocator.Error!void {
+    try self.types.poisonOccurrence(value_var);
 }
 
 /// Give a var, ensure it's not a redirect and set its rank.
@@ -12206,7 +12352,7 @@ fn poisonCheckedStrictDemandCycles(
         var poisoned_defs: std.AutoHashMapUnmanaged(CIR.Def.Idx, void) = .{};
         defer poisoned_defs.deinit(self.gpa);
         for (defs_to_poison.items) |def_to_poison| {
-            _ = try self.problems.appendProblem(self.gpa, .{ .circular_value_definition = .{
+            _ = try self.problems.appendProblem(.{ .circular_value_definition = .{
                 .ident = def_to_poison.ident,
                 .region = def_to_poison.region,
             } });
@@ -13578,8 +13724,15 @@ fn appendHoistedDependencyPatternBinders(
 /// Push `pattern`'s direct subpatterns onto `pending` so that they pop in
 /// source order, for pre-order walks over a pattern tree.
 fn pushCirSubpatterns(self: *const Self, pending: *std.ArrayList(CIR.Pattern.Idx), pattern: CIR.Pattern.Idx) Allocator.Error!void {
+    try self.pushCirPatternChildren(pending, self.cir.store.getPattern(pattern));
+}
+
+/// Push the direct subpatterns of `pattern`, the first one last so it pops
+/// first. A deferred import reference stands for the nominal pattern it
+/// resolves to, so its child is its backing pattern.
+fn pushCirPatternChildren(self: *const Self, pending: *std.ArrayList(CIR.Pattern.Idx), pattern: CIR.Pattern) Allocator.Error!void {
     const start = pending.items.len;
-    switch (self.cir.store.getPattern(pattern)) {
+    switch (pattern) {
         .as => |as_pattern| try pending.append(self.gpa, as_pattern.pattern),
         .tuple => |tuple| try pending.appendSlice(self.gpa, self.cir.store.slicePatterns(tuple.patterns)),
         .record_destructure => |destructure| {
@@ -13590,6 +13743,7 @@ fn pushCirSubpatterns(self: *const Self, pending: *std.ArrayList(CIR.Pattern.Idx
         .applied_tag => |tag| try pending.appendSlice(self.gpa, self.cir.store.slicePatterns(tag.args)),
         .nominal => |nominal| try pending.append(self.gpa, nominal.backing_pattern),
         .nominal_external => |nominal| try pending.append(self.gpa, nominal.backing_pattern),
+        .deferred_import_ref => |deferred| try pending.append(self.gpa, deferred.backing_pattern),
         .list => |list| {
             try pending.appendSlice(self.gpa, self.cir.store.slicePatterns(list.patterns));
             if (list.rest_info) |rest_info| {
@@ -13613,10 +13767,68 @@ fn pushCirSubpatterns(self: *const Self, pending: *std.ArrayList(CIR.Pattern.Idx
         .frac_f32_literal,
         .frac_f64_literal,
         .str_literal,
-        .deferred_import_ref,
         => {},
     }
     std.mem.reverse(CIR.Pattern.Idx, pending.items[start..]);
+}
+
+/// A runtime-error pattern binds nothing, so every binder written in the
+/// pattern it replaced (a nominal destructure whose type does not resolve
+/// keeps its backing pattern as its source) is erroneous, and each use of one
+/// is retired.
+fn markRetiredPatternBindersErroneous(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!void {
+    var pending: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer pending.deinit(self.gpa);
+    const source = self.cir.store.getSourcePattern(pattern_idx);
+    switch (source) {
+        .assign, .var_assign, .as => try self.markErroneousValuePattern(pattern_idx),
+        .applied_tag,
+        .nominal,
+        .nominal_external,
+        .deferred_import_ref,
+        .record_destructure,
+        .list,
+        .tuple,
+        .num_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .num_from_numeral_literal,
+        .str_literal,
+        .str_interpolation,
+        .underscore,
+        .runtime_error,
+        => {},
+    }
+    try self.pushCirPatternChildren(&pending, source);
+    while (pending.pop()) |child| {
+        switch (self.cir.store.getPattern(child)) {
+            .assign, .var_assign, .as => {
+                try self.markErroneousValuePattern(child);
+                try self.markErroneous(ModuleEnv.varFrom(child));
+            },
+            .applied_tag,
+            .nominal,
+            .nominal_external,
+            .deferred_import_ref,
+            .record_destructure,
+            .list,
+            .tuple,
+            .num_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .num_from_numeral_literal,
+            .str_literal,
+            .str_interpolation,
+            .underscore,
+            .runtime_error,
+            => {},
+        }
+        try self.pushCirSubpatterns(&pending, child);
+    }
 }
 
 /// Build the two pinnable sets for one ambiguity-judgment event into
@@ -13780,6 +13992,24 @@ fn instantiatedConstraintUseExpr(self: *const Self, constraint: StaticDispatchCo
         }
     }
     return null;
+}
+
+/// Whether this constraint is a copy an instantiation made out of a
+/// generalized scheme (see `instantiatedConstraintUseExpr`). Only failure
+/// paths ask.
+fn constraintWasInstantiated(self: *const Self, constraint: StaticDispatchConstraint) bool {
+    if (self.constraintIsLiteralConversion(constraint)) {
+        for (self.instantiated_literal_conversion_uses.items) |copied| {
+            if (copied.fn_var == constraint.fn_var) return true;
+        }
+        return false;
+    }
+    for (self.instantiation_dispatchers.items) |dispatcher| {
+        for (self.types.sliceStaticDispatchConstraints(dispatcher.constraints)) |copied| {
+            if (copied.fn_var == constraint.fn_var) return true;
+        }
+    }
+    return false;
 }
 
 /// Constraint provenance can name only expressions. A statement or definition
@@ -14298,6 +14528,16 @@ fn poisonConstraintFailure(
 ) Allocator.Error!void {
     if (explicit_expr) |expr_idx| {
         return self.poisonConstraintFailureSource(dispatcher_var, constraint, expr_idx);
+    }
+    // A dispatch introduced directly by a source expression, and never copied
+    // out of a scheme, is owned by that expression even when it shares its
+    // receiver's obligation with a literal conversion (`"a"..="z"` holds the
+    // quote's conversion beside the operator's `range_inclusive_to`): the
+    // operator is the expression that cannot run.
+    if (constraint.origin != .where_clause and !self.constraintWasInstantiated(constraint)) {
+        if (constraintIntroExpr(constraint)) |expr_idx| {
+            return self.poisonConstraintFailureSource(dispatcher_var, constraint, expr_idx);
+        }
     }
 
     // An ownerless definition-site replay can precede an owned instantiation
@@ -14934,7 +15174,7 @@ fn applyInstantiationAmbiguityVerdict(self: *Self, verdict: AmbiguityVerdict) st
     const snapshot = try self.snapshotVarForError(resolved.var_);
     const is_binop = constraint.origin == .desugared_binop;
 
-    _ = try self.problems.appendProblem(self.gpa, .{ .static_dispatch = .{ .unresolved_dispatcher = .{
+    _ = try self.problems.appendProblem(.{ .static_dispatch = .{ .unresolved_dispatcher = .{
         .region = primary_region,
         .secondary_region = secondary,
         .dispatcher_snapshot = snapshot,
@@ -15154,7 +15394,7 @@ fn checkInstantiatedStaticDispatchConstraints(
                     .from(@backingInt(expr_idx))
                 else
                     .none,
-            }, .{ .recorded = .{ .group_index = current.owner_group_index, .scheme_root = current.owner_scheme_root } });
+            }, .{ .recorded = current.owner_group_index });
             appended_deferred = true;
         }
 
@@ -15275,7 +15515,7 @@ fn applyCreationAmbiguityVerdicts(self: *Self) std.mem.Allocator.Error!void {
 
         const is_binop = constraint.origin == .desugared_binop;
 
-        _ = try self.problems.appendProblem(self.gpa, .{ .static_dispatch = .{ .unresolved_dispatcher = .{
+        _ = try self.problems.appendProblem(.{ .static_dispatch = .{ .unresolved_dispatcher = .{
             .region = region,
             .secondary_region = null,
             .dispatcher_snapshot = snapshot,
@@ -15441,7 +15681,7 @@ fn rejectEffectfulCompileTimeExecutableRoots(self: *Self) Allocator.Error!void {
     for (self.compile_time_executable_roots.items) |root| {
         if (!try self.lambdaBodyIsEffectful(root.lambda)) continue;
 
-        _ = try self.problems.appendProblem(self.gpa, .{ .effectful_comptime_expression = .{
+        _ = try self.problems.appendProblem(.{ .effectful_comptime_expression = .{
             .region = self.cir.store.getExprRegion(root.body),
         } });
         try self.markErroneousValueExpr(root.body);
@@ -15465,7 +15705,7 @@ fn reportPolymorphicValueProblem(
     def_name: ?Ident.Idx,
 ) std.mem.Allocator.Error!void {
     const snapshot = try self.snapshotVarForError(snapshot_var);
-    _ = try self.problems.appendProblem(self.gpa, .{ .polymorphic_value = .{
+    _ = try self.problems.appendProblem(.{ .polymorphic_value = .{
         .var_ = region_var,
         .snapshot = snapshot,
         .def_name = def_name,
@@ -15515,7 +15755,7 @@ fn finalizeExpectEffectSlots(self: *Self) Allocator.Error!void {
 
     for (self.expect_effect_slots.items) |slot| {
         if (!slot.effectful) continue;
-        _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
+        _ = try self.problems.appendProblem(.{ .effectful_expect = .{
             .region = slot.region,
         } });
         // The diagnostic owns the failure, so the condition becomes the
@@ -15798,7 +16038,7 @@ fn checkEffectfulFunctionName(self: *Self, pattern_idx: CIR.Pattern.Idx, expr_id
     if (ident.attributes.effectful) return;
     if (!try self.exprHasEffectfulFunctionBody(expr_idx)) return;
 
-    _ = try self.problems.appendProblem(self.gpa, .{ .effectful_function_name = .{
+    _ = try self.problems.appendProblem(.{ .effectful_function_name = .{
         .region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(pattern_idx)),
     } });
 }
@@ -16058,7 +16298,7 @@ fn checkPlatformHostedSection(self: *Self) std.mem.Allocator.Error!void {
                 const display_name = try hostedEntryDisplayName(self.gpa, self.cir, entry);
                 defer self.gpa.free(display_name);
                 const name_idx = try self.problems.putExtraString(display_name);
-                _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
+                _ = try self.problems.appendProblem(.{ .platform_hosted_section = .{
                     .name = name_idx,
                     .reason = .function_has_implementation,
                 } });
@@ -16068,7 +16308,7 @@ fn checkPlatformHostedSection(self: *Self) std.mem.Allocator.Error!void {
                     const display_name = try hostedEntryDisplayName(self.gpa, self.cir, entry);
                     defer self.gpa.free(display_name);
                     const name_idx = try self.problems.putExtraString(display_name);
-                    _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
+                    _ = try self.problems.appendProblem(.{ .platform_hosted_section = .{
                         .name = name_idx,
                         .reason = .duplicate_function,
                     } });
@@ -16078,7 +16318,7 @@ fn checkPlatformHostedSection(self: *Self) std.mem.Allocator.Error!void {
             const display_name = try hostedEntryDisplayName(self.gpa, self.cir, entry);
             defer self.gpa.free(display_name);
             const name_idx = try self.problems.putExtraString(display_name);
-            _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
+            _ = try self.problems.appendProblem(.{ .platform_hosted_section = .{
                 .name = name_idx,
                 .reason = .unknown_function,
             } });
@@ -16093,7 +16333,7 @@ fn checkPlatformHostedSection(self: *Self) std.mem.Allocator.Error!void {
     while (declared_it.next()) |decl| {
         if (mapped.contains(decl.key_ptr.*)) continue;
         const name_idx = try self.problems.putExtraString(decl.value_ptr.*);
-        _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
+        _ = try self.problems.appendProblem(.{ .platform_hosted_section = .{
             .name = name_idx,
             .reason = .function_not_in_section,
         } });
@@ -16159,12 +16399,12 @@ fn checkProvidesEntryHostBoundaryRows(
 
 fn checkHostBoundaryType(self: *Self, var_: Var, region: Region) std.mem.Allocator.Error!void {
     if (try self.varContainsOpenRowInHostBoundary(var_)) {
-        _ = try self.problems.appendProblem(self.gpa, .{ .host_boundary_open_row = .{
+        _ = try self.problems.appendProblem(.{ .host_boundary_open_row = .{
             .region = region,
         } });
     }
     if (try self.varContainsOptionalFieldInHostBoundary(var_)) {
-        _ = try self.problems.appendProblem(self.gpa, .{ .host_boundary_optional_field = .{
+        _ = try self.problems.appendProblem(.{ .host_boundary_optional_field = .{
             .region = region,
         } });
     }
@@ -16183,7 +16423,7 @@ fn checkHostSymbol(
     if (!isValidHostSymbol(symbol_text)) {
         if (!gop.found_existing) {
             const name_idx = try self.problems.putExtraString(symbol_text);
-            _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
+            _ = try self.problems.appendProblem(.{ .platform_hosted_section = .{
                 .name = name_idx,
                 .reason = .invalid_symbol,
             } });
@@ -16194,7 +16434,7 @@ fn checkHostSymbol(
         if (Ident.textEql(symbol_text, reserved)) {
             if (!gop.found_existing) {
                 const name_idx = try self.problems.putExtraString(symbol_text);
-                _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
+                _ = try self.problems.appendProblem(.{ .platform_hosted_section = .{
                     .name = name_idx,
                     .reason = .reserved_symbol,
                 } });
@@ -16205,7 +16445,7 @@ fn checkHostSymbol(
     if (Ident.textStartsWith(symbol_text, "roc__")) {
         if (!gop.found_existing) {
             const name_idx = try self.problems.putExtraString(symbol_text);
-            _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
+            _ = try self.problems.appendProblem(.{ .platform_hosted_section = .{
                 .name = name_idx,
                 .reason = .reserved_prefix,
             } });
@@ -16214,7 +16454,7 @@ fn checkHostSymbol(
     }
     if (gop.found_existing) {
         const name_idx = try self.problems.putExtraString(symbol_text);
-        _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
+        _ = try self.problems.appendProblem(.{ .platform_hosted_section = .{
             .name = name_idx,
             .reason = .duplicate_symbol,
         } });
@@ -16383,7 +16623,7 @@ fn processAppPlatformRequirements(self: *Self, env: *Env) std.mem.Allocator.Erro
                 self.defPatternRegion(def_idx)
             else
                 self.appModuleRegion();
-            _ = try self.problems.appendProblem(self.gpa, .{ .platform_def_not_found = .{
+            _ = try self.problems.appendProblem(.{ .platform_def_not_found = .{
                 .expected_def_ident = required_ident,
                 .app_region = app_region,
                 .platform_region = required_type.region,
@@ -16597,7 +16837,7 @@ fn collectForClauseAliasBindings(
             const app_type_stmt = self.appTypeDeclByIdent(alias_ident) orelse {
                 const value_region = try self.topLevelValueRegionByIdent(alias_ident);
                 const app_region = value_region orelse self.appModuleRegion();
-                _ = try self.problems.appendProblem(self.gpa, .{ .platform_alias_not_found = .{
+                _ = try self.problems.appendProblem(.{ .platform_alias_not_found = .{
                     .expected_alias_ident = alias_ident,
                     .app_region = app_region,
                     .platform_region = input.env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(alias.alias_stmt_idx)),
@@ -17104,7 +17344,7 @@ fn beginDef(self: *Self, state: *DefActivity, env: *Env) std.mem.Allocator.Error
         ModuleEnv.varFrom(def_expr.e_closure.lambda_idx)
     else
         expr_var;
-    self.active_scheme_root = if (def_is_function or group_prechecked) scheme_owner else state.saved.?.active_scheme_root;
+    if (def_is_function or group_prechecked) try self.activateSchemeOwner(scheme_owner);
     // The annotation bounds the definition's body: a tag it produces beyond
     // an implicitly opened union is an error (design.md "Polarity").
     state.saved.?.bounding_annotation = self.beginBoundedAnnotationRows(self.appliedAnnotation(def.pattern, def.annotation));
@@ -17162,7 +17402,7 @@ fn finishDef(self: *Self, state: *DefActivity, def_does_fx: bool, env: *Env) std
         try self.markErroneousValueExpr(def.expr);
     }
     if (def_does_fx) {
-        _ = try self.problems.appendProblem(self.gpa, .{ .effectful_top_level = .{
+        _ = try self.problems.appendProblem(.{ .effectful_top_level = .{
             .region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(def.expr)),
         } });
         try self.markErroneous(expr_var);
@@ -17411,7 +17651,7 @@ fn predeclareAnnotationSchemeHelp(
     const saved_predeclaring = self.predeclaring_annotation;
     const saved_active_scheme_root = self.active_scheme_root;
     self.predeclaring_annotation = true;
-    self.active_scheme_root = ModuleEnv.varFrom(annotation_idx);
+    try self.activateSchemeOwner(ModuleEnv.varFrom(annotation_idx));
     defer {
         self.predeclaring_annotation = saved_predeclaring;
         self.active_scheme_root = saved_active_scheme_root;
@@ -18915,7 +19155,7 @@ const DeferredDispatchObligationOwner = union(enum) {
     current_group,
     /// The creating group captured when the obligation was first recorded,
     /// replayed here from that record.
-    recorded: struct { group_index: ?u32, scheme_root: ?Var },
+    recorded: ?u32,
 };
 
 /// The single door into the deferred dispatch queue, so an obligation's owning
@@ -18934,16 +19174,54 @@ fn enqueueDeferredDispatchConstraint(
     var owned = deferred;
     owned.owner_group_index = switch (owner) {
         .current_group => self.currentGroupIndex(),
-        .recorded => |recorded| recorded.group_index,
-    };
-    owned.owner_scheme_root = switch (owner) {
-        .current_group => self.active_scheme_root,
-        .recorded => |recorded| recorded.scheme_root,
+        .recorded => |group_index| group_index,
     };
     // The relation whose checking queued the obligation owns what its
     // resolution reports.
     if (owned.relation_owner.kind == .none) owned.relation_owner = self.relation_owner;
     _ = try env.deferred_static_dispatch_constraints.append(self.gpa, owned);
+}
+
+/// Enqueue an obligation that a unification run while checking `use_expr`
+/// made concrete. Its where-clause constraints belong to that use; its other
+/// constraints keep their own creation-time provenance. One receiver can carry
+/// both kinds (a range's item type holds the `..=` operator's own
+/// `range_inclusive_to` beside `Range.iter`'s `range_iter` where-clause), so a
+/// mixed obligation is enqueued as two, and only the where-clause half names
+/// the use as its owner.
+fn enqueueUseOwnedDeferredConstraint(
+    self: *Self,
+    env: *Env,
+    deferred: DeferredConstraintCheck,
+    use_expr: CIR.Expr.Idx,
+    owner: DeferredDispatchObligationOwner,
+) Allocator.Error!void {
+    const constraints = self.types.sliceStaticDispatchConstraints(deferred.constraints);
+    var where_clause_count: usize = 0;
+    for (constraints) |constraint| {
+        if (constraint.origin == .where_clause) where_clause_count += 1;
+    }
+    if (where_clause_count == 0) return try self.enqueueDeferredDispatchConstraint(env, deferred, owner);
+    var use_owned = deferred;
+    use_owned.failure_expr = .from(@backingInt(use_expr));
+    if (where_clause_count == constraints.len) return try self.enqueueDeferredDispatchConstraint(env, use_owned, owner);
+
+    var where_clauses = try std.ArrayList(StaticDispatchConstraint).initCapacity(self.gpa, where_clause_count);
+    defer where_clauses.deinit(self.gpa);
+    var others = try std.ArrayList(StaticDispatchConstraint).initCapacity(self.gpa, constraints.len - where_clause_count);
+    defer others.deinit(self.gpa);
+    for (constraints) |constraint| {
+        if (constraint.origin == .where_clause) {
+            where_clauses.appendAssumeCapacity(constraint);
+        } else {
+            others.appendAssumeCapacity(constraint);
+        }
+    }
+    use_owned.constraints = try self.types.appendStaticDispatchConstraints(where_clauses.items);
+    var self_owned = deferred;
+    self_owned.constraints = try self.types.appendStaticDispatchConstraints(others.items);
+    try self.enqueueDeferredDispatchConstraint(env, self_owned, owner);
+    try self.enqueueDeferredDispatchConstraint(env, use_owned, owner);
 }
 
 /// Re-defer a dispatch obligation whose method target is an unchecked,
@@ -19594,9 +19872,9 @@ const GenTypeAnnoCtx = union(enum) {
 
     /// Generate everything at and beneath this position with a different
     /// opening behaviour. Used for an argument substituted for a formal whose
-    /// declaration is rejected: opening is disabled at every depth, not just
-    /// at the argument's own root: a nested function establishes an output
-    /// return even beneath an input position.
+    /// declaration is rejected or that is invariant: opening is disabled at
+    /// every depth, not just at the argument's own root, because a closing
+    /// polarity reopens one function argument position further down.
     fn withOpening(self: GenTypeAnnoCtx, opening: AnnotationGenCtx.OpeningBehavior) GenTypeAnnoCtx {
         return switch (self) {
             .annotation => |anno_ctx| .{ .annotation = .{
@@ -19656,7 +19934,7 @@ const GenTypeAnnoCtx = union(enum) {
             // decide); a nominal body has no use-site polarity, so its rows
             // close as written.
             .type_decl => |decl| switch (decl.type_) {
-                .alias => .preserve_output,
+                .alias => .preserve_one_sided,
                 .nominal => .close,
             },
         };
@@ -19930,7 +20208,7 @@ fn auditImplicitOpenExts(
     for (self.implicit_open_exts.items[range.start..][0..range.len]) |entry| {
         if (redundant_open_warns) {
             if (entry.explicit_ext_region) |open_region| {
-                _ = try self.problems.appendProblem(self.gpa, .{ .redundant_open_tag_union = .{
+                _ = try self.problems.appendProblem(.{ .redundant_open_tag_union = .{
                     .region = open_region,
                 } });
             }
@@ -20755,7 +21033,7 @@ fn reportImplicitOpenExtExtension(
     // Both snapshots describe the rows as solving left them.
     const actual_snapshot = try self.snapshotVarForError(actual_var);
     const expected_snapshot = try self.snapshotVarForError(expected_var);
-    _ = try self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
+    _ = try self.problems.appendProblem(.{ .type_mismatch = .{
         .types = .{
             .expected_var = expected_var,
             .expected_snapshot = expected_snapshot,
@@ -21014,14 +21292,15 @@ fn declarationPositions(self: *Self, owner: *const ModuleEnv, statement: CIR.Sta
     return entry.value_ptr.*;
 }
 
-fn nominalArgumentPosition(context: *anyopaque, nominal: types_mod.NominalType, index: u32, surrounding: Polarity) std.mem.Allocator.Error!?Polarity {
+fn nominalArgumentPosition(context: *anyopaque, nominal: types_mod.NominalType, index: u32, surrounding: Polarity) std.mem.Allocator.Error!?Instantiator.NominalArgumentPosition {
     const self: *Self = @ptrCast(@alignCast(context));
     // Compiler primitives have no source body; their actuals inherit position.
-    const statement = nominal.sourceDeclOptional() orelse return surrounding;
+    const statement = nominal.sourceDeclOptional() orelse return .{ .at = surrounding };
     const owner = self.moduleEnvForIdentity(self.cir, nominal.origin_module).env;
     const positions = (try self.declarationPositions(owner, @fromBackingInt(@intCast(statement)))) orelse return null; // Rejected source has no position transfer.
     std.debug.assert(index < positions.len);
-    return positions[index].polarity(surrounding);
+    if (positions[index].isInvariant()) return .both;
+    return .{ .at = positions[index].polarity(surrounding) };
 }
 
 fn aliasArgumentUnused(context: *anyopaque, alias: types_mod.Alias, index: u32) std.mem.Allocator.Error!?bool {
@@ -21033,7 +21312,7 @@ fn aliasArgumentUnused(context: *anyopaque, alias: types_mod.Alias, index: u32) 
     }
     const positions = (try self.declarationPositions(owner, @fromBackingInt(@intCast(statement)))) orelse return null; // Rejected source has no argument-usage facts.
     std.debug.assert(index < positions.len);
-    return positions[index].isEmpty();
+    return positions[index].isUnused();
 }
 
 /// Report and poison a type reference that names a where alias, which is a set
@@ -21062,7 +21341,7 @@ fn rejectWhereAliasInTypePosition(
     };
     if (!names_where_alias) return false;
 
-    _ = try self.problems.appendProblem(self.gpa, .{ .where_alias_in_type_position = .{
+    _ = try self.problems.appendProblem(.{ .where_alias_in_type_position = .{
         .name = name,
         .region = anno_region,
     } });
@@ -21140,7 +21419,7 @@ fn resolveWhereAliasReference(
             };
 
             if (!local_generated.?) {
-                _ = try self.problems.appendProblem(self.gpa, .{ .recursive_where_alias = .{
+                _ = try self.problems.appendProblem(.{ .recursive_where_alias = .{
                     .name = name,
                     .region = region,
                 } });
@@ -21228,7 +21507,7 @@ fn rejectUnappliedTypeConstructorInDeclaration(
     if (decl.type_ == .alias and self.isWholeAliasBody(decl.idx, anno_idx)) return false;
     const unapplied = self.unappliedTypeConstructorArity(decl_var);
     if (unapplied == 0) return false;
-    _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+    _ = try self.problems.appendProblem(.{ .type_apply_mismatch_arities = .{
         .type_name = name,
         .region = anno_region,
         .num_expected_args = unapplied,
@@ -21346,7 +21625,7 @@ fn resolveExternalWhereAlias(
 /// Report that a where clause named something other than a where alias. Always
 /// returns null, so resolution can `return` it directly.
 fn reportNotAWhereAlias(self: *Self, name: Ident.Idx, region: Region) std.mem.Allocator.Error!?ResolvedWhereAlias {
-    _ = try self.problems.appendProblem(self.gpa, .{ .not_a_where_alias = .{
+    _ = try self.problems.appendProblem(.{ .not_a_where_alias = .{
         .name = name,
         .region = region,
     } });
@@ -21378,7 +21657,7 @@ fn declareWhereAliasConstraints(
     const arg_vars: []const Var = @ptrCast(self.whereAliasReferenceArgs(alias));
 
     if (arg_vars.len != resolved.params.len) {
-        _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+        _ = try self.problems.appendProblem(.{ .type_apply_mismatch_arities = .{
             .type_name = resolved.name,
             .region = region,
             .num_expected_args = @intCast(resolved.params.len),
@@ -21406,10 +21685,12 @@ fn declareWhereAliasConstraints(
     // appends to the constraint store, so iterate rather than hold a slice.
     var constraints = self.types.iterStaticDispatchConstraints(receiver_rigid.constraints);
     while (constraints.next()) |constraint| {
+        const instantiated = try self.instantiateWhereAliasConstraint(constraint, &subs, region, env);
+        try self.recordDispatchRelationOwner(instantiated.fn_var);
         try self.scratch_static_dispatch_constraints.append(ScratchStaticDispatchConstraint{
             .where_clause = where_idx,
             .var_ = owner_var,
-            .constraint = try self.instantiateWhereAliasConstraint(constraint, &subs, region, env),
+            .constraint = instantiated,
             .state = .completed,
         });
     }
@@ -21849,7 +22130,7 @@ fn stepOwnersGen(self: *Self, frame: *OwnersGenFrame) std.mem.Allocator.Error!Ty
         for (self.cir.store.sliceWhereClausesForOwner(owner)) |where_idx| {
             switch (self.cir.store.getWhereClause(where_idx)) {
                 .w_method => |method| {
-                    _ = try self.problems.appendProblem(self.gpa, .{ .where_clause_receiver_not_introduced = .{
+                    _ = try self.problems.appendProblem(.{ .where_clause_receiver_not_introduced = .{
                         .type_var_name = type_var_name,
                         .method_name = method.method_name,
                         .region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(where_idx)),
@@ -22220,11 +22501,13 @@ const anno_gen_done: TypeGenStep = .{ .done = .anno };
 /// Then, any reference to `b` or `c` are replaced with `a` in `generateAnnoTypeInPlace`.
 ///
 /// `polarity` is the position of this anno within the annotation being
-/// generated: annotations start at `.pos` (output), and each function resets
-/// arguments to `.neg` and its return to `.pos`. Extensionless tag unions are implicitly opened in
-/// `.pos` positions (see `AnnotationGenCtx.opening`); within type
-/// declarations polarity is unused because the open-vs-closed decision is
-/// deferred to use-site instantiation via polarity vars.
+/// generated: annotations start at `.pos` (output), function argument
+/// positions flip it, and returns keep it. Extensionless tag unions are
+/// implicitly opened in `.pos` positions (see `AnnotationGenCtx.opening`);
+/// within an alias declaration body every such union defers the
+/// open-vs-closed decision to use-site instantiation via a polarity var, and
+/// polarity there only places nested declaration references relative to the
+/// body's root.
 fn stepAnnoGen(self: *Self, frame: *AnnoGenFrame, input: ?TypeGenResult, env: *Env) std.mem.Allocator.Error!TypeGenStep {
     const anno_idx = frame.anno_idx;
     const ctx = frame.ctx;
@@ -22288,7 +22571,7 @@ fn stepAnnoGen(self: *Self, frame: *AnnoGenFrame, input: ?TypeGenResult, env: *E
                                     // If it is a recursive ref, check that there are
                                     // no arguments (since this is a lookup, not an apply)
                                     if (this_decl.num_args != 0) {
-                                        _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+                                        _ = try self.problems.appendProblem(.{ .type_apply_mismatch_arities = .{
                                             .type_name = this_decl.name,
                                             .region = anno_region,
                                             .num_expected_args = this_decl.num_args,
@@ -22303,7 +22586,7 @@ fn stepAnnoGen(self: *Self, frame: *AnnoGenFrame, input: ?TypeGenResult, env: *E
                                     switch (this_decl.type_) {
                                         .alias => {
                                             // Recursion is not allowed in aliases - emit error
-                                            _ = try self.problems.appendProblem(self.gpa, .{ .recursive_alias = .{
+                                            _ = try self.problems.appendProblem(.{ .recursive_alias = .{
                                                 .type_name = this_decl.name,
                                                 .region = anno_region,
                                             } });
@@ -22374,7 +22657,7 @@ fn stepAnnoGen(self: *Self, frame: *AnnoGenFrame, input: ?TypeGenResult, env: *E
             const local = lookup.base.local;
 
             if (!input.?.decl) {
-                _ = try self.problems.appendProblem(self.gpa, .{ .recursive_alias = .{
+                _ = try self.problems.appendProblem(.{ .recursive_alias = .{
                     .type_name = lookup.name,
                     .region = anno_region,
                 } });
@@ -22395,13 +22678,14 @@ fn stepAnnoGen(self: *Self, frame: *AnnoGenFrame, input: ?TypeGenResult, env: *E
         },
         .apply => |a| return self.stepApplyAnnoGen(frame, a, input, env),
         .@"fn" => |func| {
-            // Each function establishes its own input and output positions.
+            // Argument positions flip the surrounding polarity; the return
+            // keeps it.
             if (entering) frame.state = .{ .func = .{} };
             const state = &frame.state.func;
             const args_anno_slice = self.cir.store.sliceTypeAnnos(func.args);
             if (frame.index < args_anno_slice.len) {
                 frame.index += 1;
-                return annoGenChild(args_anno_slice[frame.index - 1], ctx.withReach(.nested), .neg);
+                return annoGenChild(args_anno_slice[frame.index - 1], ctx.withReach(.nested), polarity.flip());
             }
             if (!state.ret_requested) {
                 state.ret_requested = true;
@@ -22414,7 +22698,7 @@ fn stepAnnoGen(self: *Self, frame: *AnnoGenFrame, input: ?TypeGenResult, env: *E
                     // `withReach` is a no-op on `.type_decl` (see `withReach`).
                     .type_decl => ctx.withReach(.nested),
                 };
-                return annoGenChild(func.ret, ret_ctx, .pos);
+                return annoGenChild(func.ret, ret_ctx, polarity);
             }
             const args_var_slice: []Var = @ptrCast(args_anno_slice);
             const fn_type = inner_blk: {
@@ -22507,6 +22791,7 @@ fn stepRigidAnnoGen(self: *Self, frame: *AnnoGenFrame, rigid: std.meta.fieldInfo
                     // The annotation owns the callable variable. Declare its identity
                     // before generating its type so recursive constraints can refer to it.
                     const func_var = ModuleEnv.varFrom(method.anno);
+                    try self.recordAnnotationDispatchRelationOwner(func_var);
 
                     try self.scratch_static_dispatch_constraints.append(ScratchStaticDispatchConstraint{
                         .where_clause = where_idx,
@@ -22700,8 +22985,10 @@ fn stepApplyAnnoGen(self: *Self, frame: *AnnoGenFrame, a: CIR.TypeAnno.Apply, in
             frame.index += 1;
             const reached_arg_ctx = ctx.withReach(state.reaches[arg_index]);
             // A null result belongs only to rejected declaration/arity
-            // diagnostics, never to a valid type application.
-            const arg_ctx = if (state.positions == null)
+            // diagnostics, never to a valid type application. An invariant
+            // formal's argument stands on both sides at every depth.
+            const as_written = if (state.positions) |positions| positions[arg_index].isInvariant() else true;
+            const arg_ctx = if (as_written)
                 reached_arg_ctx.withOpening(.as_written)
             else
                 reached_arg_ctx;
@@ -22737,7 +23024,7 @@ fn stepApplyAnnoGen(self: *Self, frame: *AnnoGenFrame, a: CIR.TypeAnno.Apply, in
                             // If it is a recursive ref, check that the args being
                             // applied here match the number of args of the decl
                             if (anno_arg_vars.len != this_decl.num_args) {
-                                _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+                                _ = try self.problems.appendProblem(.{ .type_apply_mismatch_arities = .{
                                     .type_name = this_decl.name,
                                     .region = anno_region,
                                     .num_expected_args = this_decl.num_args,
@@ -22752,7 +23039,7 @@ fn stepApplyAnnoGen(self: *Self, frame: *AnnoGenFrame, a: CIR.TypeAnno.Apply, in
                             switch (this_decl.type_) {
                                 .alias => {
                                     // Recursion is not allowed in aliases - emit error
-                                    _ = try self.problems.appendProblem(self.gpa, .{ .recursive_alias = .{
+                                    _ = try self.problems.appendProblem(.{ .recursive_alias = .{
                                         .type_name = this_decl.name,
                                         .region = anno_region,
                                     } });
@@ -22825,7 +23112,7 @@ fn stepApplyAnnoGen(self: *Self, frame: *AnnoGenFrame, a: CIR.TypeAnno.Apply, in
 
                     // Check for an arity mismatch
                     if (ext_arg_vars.len != anno_arg_vars.len) {
-                        _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+                        _ = try self.problems.appendProblem(.{ .type_apply_mismatch_arities = .{
                             .type_name = ext_name,
                             .region = anno_region,
                             .num_expected_args = @intCast(ext_arg_vars.len),
@@ -22885,7 +23172,7 @@ fn stepApplyAnnoGen(self: *Self, frame: *AnnoGenFrame, a: CIR.TypeAnno.Apply, in
     // The referenced local declaration has been generated.
     const local = a.base.local;
     if (!input.?.decl) {
-        _ = try self.problems.appendProblem(self.gpa, .{ .recursive_alias = .{
+        _ = try self.problems.appendProblem(.{ .recursive_alias = .{
             .type_name = a.name,
             .region = anno_region,
         } });
@@ -22920,7 +23207,7 @@ fn stepApplyAnnoGen(self: *Self, frame: *AnnoGenFrame, a: CIR.TypeAnno.Apply, in
 
     // Check for an arity mismatch
     if (decl_arg_vars.len != anno_arg_vars.len) {
-        _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+        _ = try self.problems.appendProblem(.{ .type_apply_mismatch_arities = .{
             .type_name = decl_name,
             .region = anno_region,
             .num_expected_args = @intCast(decl_arg_vars.len),
@@ -23116,10 +23403,7 @@ fn stepTagUnionAnnoGen(self: *Self, frame: *AnnoGenFrame, tag_union: std.meta.fi
         break :inner_blk switch (ctx) {
             .annotation => try self.freshFromContent(.{ .structure = .empty_tag_union }, env, anno_region),
             .type_decl => |decl| switch (decl.type_) {
-                .alias => if (polarity == .pos)
-                    try self.freshAliasHiddenExt(env, anno_region)
-                else
-                    try self.freshFromContent(.{ .structure = .empty_tag_union }, env, anno_region),
+                .alias => try self.freshAliasHiddenExt(env, anno_region),
                 .nominal => try self.freshFromContent(.{ .structure = .empty_tag_union }, env, anno_region),
             },
         };
@@ -23727,7 +24011,7 @@ fn reportInvalidRow(
     const expected_snapshot = try self.snapshotVarForError(expected_var);
     const actual_snapshot = try self.snapshotVarForError(actual_var);
 
-    return self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
+    return self.problems.appendProblem(.{ .type_mismatch = .{
         .types = .{
             .expected_var = expected_var,
             .expected_snapshot = expected_snapshot,
@@ -23772,7 +24056,7 @@ fn setBuiltinTypeContent(
         .list => {
             // Then check arity
             if (anno_args.len != 1) {
-                _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+                _ = try self.problems.appendProblem(.{ .type_apply_mismatch_arities = .{
                     .type_name = anno_builtin_name,
                     .region = anno_region,
                     .num_expected_args = 1,
@@ -23791,7 +24075,7 @@ fn setBuiltinTypeContent(
         .box => {
             // Then check arity
             if (anno_args.len != 1) {
-                _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+                _ = try self.problems.appendProblem(.{ .type_apply_mismatch_arities = .{
                     .type_name = anno_builtin_name,
                     .region = anno_region,
                     .num_expected_args = 1,
@@ -24436,6 +24720,7 @@ fn stepPatternCheck(
         .runtime_error => {
             valid.* = false;
             try self.markErroneous(pattern_var);
+            try self.markRetiredPatternBindersErroneous(pattern_idx);
         },
         .deferred_import_ref => base.invariant("check invariant violated: deferred import reference pattern reached checking", .{}),
     }
@@ -24806,7 +25091,7 @@ fn unifyMatchAltPatternBindings(
             try self.alt_pattern_current.put(key, binding.pattern_idx);
             const first = self.alt_pattern_baseline.get(key) orelse {
                 const first_branch_pattern = self.cir.store.getMatchBranchPattern(branch_ptrn_idxs[0]);
-                _ = try self.problems.appendProblem(self.gpa, .{ .match_alt_binder_missing = .{
+                _ = try self.problems.appendProblem(.{ .match_alt_binder_missing = .{
                     .match_expr = match_expr,
                     .binder_ident = binding.ident,
                     .missing_pattern = first_branch_pattern.pattern,
@@ -24838,7 +25123,7 @@ fn unifyMatchAltPatternBindings(
         while (baseline_iter.next()) |entry| {
             if (self.alt_pattern_current.contains(entry.key_ptr.*)) continue;
 
-            _ = try self.problems.appendProblem(self.gpa, .{ .match_alt_binder_missing = .{
+            _ = try self.problems.appendProblem(.{ .match_alt_binder_missing = .{
                 .match_expr = match_expr,
                 .binder_ident = @bitCast(entry.key_ptr.*),
                 .missing_pattern = branch_pattern.pattern,
@@ -25556,7 +25841,7 @@ fn beginExprCheckFrame(
 
     frame.should_generalize = !frame.suppress_group_member_generalize and
         self.shouldGeneralize(expr, frame.is_binding_rhs, frame.is_call_arg, frame.is_forwarded_result);
-    if (frame.should_generalize) self.active_scheme_root = expr_var_raw;
+    if (frame.should_generalize) try self.activateSchemeOwner(expr_var_raw);
 
     if (frame.should_generalize) {
         try env.var_pool.pushRank();
@@ -26609,10 +26894,10 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                 else
                     expr_region;
                 switch (anno.kind) {
-                    .ordinary => _ = try self.problems.appendProblem(self.gpa, .{ .annotation_only_value = .{
+                    .ordinary => _ = try self.problems.appendProblem(.{ .annotation_only_value = .{
                         .region = annotation_region,
                     } }),
-                    .unsupported_generated_method => _ = try self.problems.appendProblem(self.gpa, .{ .unsupported_generated_method = .{
+                    .unsupported_generated_method => _ = try self.problems.appendProblem(.{ .unsupported_generated_method = .{
                         .method_name = anno.ident,
                         .region = annotation_region,
                     } }),
@@ -26643,18 +26928,18 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
             if (expected.annotation) |annotation_idx| {
                 const annotation_var = ModuleEnv.varFrom(annotation_idx);
                 if (!hostedAnnotationIsEffectful(self.cir, annotation_idx)) {
-                    _ = try self.problems.appendProblem(self.gpa, .{ .hosted_function_not_effectful = .{
+                    _ = try self.problems.appendProblem(.{ .hosted_function_not_effectful = .{
                         .region = self.cir.store.getAnnotationRegion(annotation_idx),
                     } });
                 }
                 if (try self.varContainsUnboxedFunctionInHostedSignature(annotation_var)) {
                     const region = self.cir.store.getAnnotationRegion(annotation_idx);
-                    _ = try self.problems.appendProblem(self.gpa, .{ .hosted_unboxed_function = .{
+                    _ = try self.problems.appendProblem(.{ .hosted_unboxed_function = .{
                         .region = region,
                     } });
                 }
                 if (try self.varHasUnboxedTypeVariableInHostedSignature(annotation_var)) {
-                    _ = try self.problems.appendProblem(self.gpa, .{ .hosted_type_variable_not_boxed = .{
+                    _ = try self.problems.appendProblem(.{ .hosted_type_variable_not_boxed = .{
                         .region = self.cir.store.getAnnotationRegion(annotation_idx),
                     } });
                 }
@@ -27622,7 +27907,7 @@ fn stepBlockStatements(self: *Self, state: *BlockStatementsCheck, statements: CI
         const stmt_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(stmt_idx));
 
         if (state.warn_unreachable) {
-            _ = try self.problems.appendProblem(self.gpa, .{ .unreachable_code = .{
+            _ = try self.problems.appendProblem(.{ .unreachable_code = .{
                 .region = stmt_region,
             } });
         }
@@ -27829,7 +28114,7 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
             if (decl.decl_fn_frame) {
                 std.debug.assert(self.suppress_generalize_expr == null);
                 self.suppress_generalize_expr = decl_stmt.expr;
-                self.active_scheme_root = decl_pattern_var;
+                try self.activateSchemeOwner(decl_pattern_var);
             }
             decl.saved_bounding_annotation = self.beginBoundedAnnotationRows(self.appliedAnnotation(decl_stmt.pattern, decl_stmt.anno));
             return .{ .expr = decl_stmt.expr, .expected = decl.expectation };
@@ -27850,7 +28135,7 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
             const expectation = blk: {
                 if (var_stmt.anno) |annotation_idx| {
                     if (self.cir.store.getAnnotation(annotation_idx).introduces_type_var) {
-                        _ = try self.problems.appendProblem(self.gpa, .{ .polymorphic_var_annotation = .{ .region = self.cir.store.getAnnotationRegion(annotation_idx) } });
+                        _ = try self.problems.appendProblem(.{ .polymorphic_var_annotation = .{ .region = self.cir.store.getAnnotationRegion(annotation_idx) } });
                         break :blk statement_expected;
                     }
                     break :blk statement_expected.withAnnotation(annotation_idx);
@@ -27876,7 +28161,7 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
             // reassignments instead of cascading into confusing mismatches.
             if (var_stmt.anno) |annotation_idx| {
                 if (self.cir.store.getAnnotation(annotation_idx).introduces_type_var) {
-                    _ = try self.problems.appendProblem(self.gpa, .{ .polymorphic_var_annotation = .{ .region = self.cir.store.getAnnotationRegion(annotation_idx) } });
+                    _ = try self.problems.appendProblem(.{ .polymorphic_var_annotation = .{ .region = self.cir.store.getAnnotationRegion(annotation_idx) } });
                 } else {
                     try self.generateAnnotationType(annotation_idx, env);
                     const annotation_var = ModuleEnv.varFrom(annotation_idx);
@@ -28294,6 +28579,16 @@ const IteratorLoopExpr = struct {
     expr_var: Var,
 };
 
+/// A `for` loop whose iterable a later judgment may still reject (see
+/// `late_rejectable_for_loops`).
+const LateRejectableForLoop = struct {
+    owner: union(enum) {
+        statement: CIR.Statement.Idx,
+        expr: CIR.Expr.Idx,
+    },
+    iterable: CIR.Expr.Idx,
+};
+
 /// A `for` loop suspended on its iterable or its body.
 const ForLoopCheck = struct {
     kind: CIR.ForKind = .iter,
@@ -28347,6 +28642,15 @@ fn resumeForLoop(self: *Self, state: *ForLoopCheck, env: *Env) std.mem.Allocator
         try self.retireCallLikeExprWithErroneousOperands(expr.expr_idx, expr.expr_var, &.{iterable})
     else
         try self.callLikeOperandsContainErroneousValue(&.{iterable});
+    if (!iterable_is_erroneous) {
+        try self.late_rejectable_for_loops.append(self.gpa, .{
+            .owner = if (state.loop_expr) |expr|
+                .{ .expr = expr.expr_idx }
+            else
+                .{ .statement = @fromBackingInt(@intCast(@backingInt(state.loop_node))) },
+            .iterable = iterable,
+        });
+    }
     const iterator_var = try self.mkForLoopSequenceVar(state.kind, item_var, env, iterable_region);
     const iter_method = try @constCast(self.cir).insertIdent(base.Ident.for_text(switch (state.kind) {
         .iter => "iter",
@@ -30019,7 +30323,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
             },
             .after_remaining_body => {
                 const branch = self.cir.store.getIfBranch(branches[state.remaining_index]);
-                try self.markErroneous(ModuleEnv.varFrom(branch.body));
+                try self.retireUncheckedBranchValue(ModuleEnv.varFrom(branch.body));
                 state.remaining_index += 1;
                 state.phase = if (state.remaining_index < branches.len)
                     .schedule_remaining_cond
@@ -30249,7 +30553,7 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
             const branch = self.cir.store.getMatchBranch(branch_idxs[branch_cur_index]);
 
             if (state.checking_other_branches) {
-                try self.markErroneous(ModuleEnv.varFrom(branch.value));
+                try self.retireUncheckedBranchValue(ModuleEnv.varFrom(branch.value));
             } else if (branch_cur_index == 0) {
                 state.val_var = if (self.branchValueIsErroneous(branch.value))
                     try self.fresh(env, expr_region)
@@ -30419,7 +30723,7 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
                 .count = self.problems.missing_patterns_backing.items.len - missing_patterns_start,
             };
 
-            try self.problems.appendPendingStaticExhaustiveness(self.gpa, .match, self.pendingExhaustivenessMode(), .{ .match_expr = expr_idx }, match_region, .{ .non_exhaustive_match = .{
+            try self.problems.appendPendingStaticExhaustiveness(.match, self.pendingExhaustivenessMode(), .{ .match_expr = expr_idx }, match_region, .{ .non_exhaustive_match = .{
                 .match_expr = expr_idx,
                 .condition_type = try self.problems.putExtraString(self.snapshots.getFormattedString(condition_snapshot) orelse unreachable),
                 .missing_patterns = missing_patterns_range,
@@ -30428,7 +30732,7 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
 
         // Report redundant patterns
         for (result.redundant_indices) |idx| {
-            _ = try self.problems.appendProblem(self.gpa, .{ .redundant_pattern = .{
+            _ = try self.problems.appendProblem(.{ .redundant_pattern = .{
                 .match_expr = expr_idx,
                 .num_branches = @intCast(match.branches.span.len),
                 .problem_branch_index = idx,
@@ -30437,7 +30741,7 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
 
         // Report unmatchable patterns (patterns on uninhabited types)
         for (result.unmatchable_indices) |idx| {
-            _ = try self.problems.appendProblem(self.gpa, .{ .unmatchable_pattern = .{
+            _ = try self.problems.appendProblem(.{ .unmatchable_pattern = .{
                 .match_expr = expr_idx,
                 .num_branches = @intCast(match.branches.span.len),
                 .problem_branch_index = idx,
@@ -30522,11 +30826,13 @@ fn beginMatchBranch(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env)
         for (branch_ptrn_idxs, 0..) |other_branch_ptrn_idx, other_cur_ptrn_index| {
             // Check the pattern's sub types
             const other_branch_ptrn = self.cir.store.getMatchBranchPattern(other_branch_ptrn_idx);
-            if (!try self.checkPattern(other_branch_ptrn.pattern, .{ .row_openness = .open, .failure_owner = ModuleEnv.nodeIdxFrom(expr_idx) }, env)) state.had_type_error = true;
+            const valid_pattern = try self.checkPattern(other_branch_ptrn.pattern, .{ .row_openness = .open, .failure_owner = ModuleEnv.nodeIdxFrom(expr_idx) }, env);
+            if (!valid_pattern) state.had_type_error = true;
             if (state.scrutinee_erroneous) try self.markPatternBindingsErroneous(other_branch_ptrn.pattern);
 
-            // Check the pattern against the cond
-            if (!state.cond_always_crashes) {
+            // Check the pattern against the cond. A rejected pattern's class
+            // belongs to the pattern alone.
+            if (valid_pattern and !state.cond_always_crashes) {
                 const other_branch_ptrn_var = ModuleEnv.varFrom(other_branch_ptrn.pattern);
                 _ = try self.unifyInContext(state.ptrn_target_var, other_branch_ptrn_var, env, .{ .match_pattern = .{
                     .branch_index = @intCast(branch_cur_index),
@@ -30548,11 +30854,15 @@ fn beginMatchBranch(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env)
     // pattern unifications short-circuit rather than cascading.)
     for (branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
         const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
-        if (!try self.checkPattern(branch_ptrn.pattern, .{ .row_openness = .open, .failure_owner = ModuleEnv.nodeIdxFrom(expr_idx) }, env)) state.had_type_error = true;
+        const valid_pattern = try self.checkPattern(branch_ptrn.pattern, .{ .row_openness = .open, .failure_owner = ModuleEnv.nodeIdxFrom(expr_idx) }, env);
+        if (!valid_pattern) state.had_type_error = true;
         // Matching an erroneous value binds nothing.
         if (state.scrutinee_erroneous) try self.markPatternBindingsErroneous(branch_ptrn.pattern);
 
-        if (!state.cond_always_crashes) {
+        // A rejected pattern's class is `.err` and belongs to the pattern
+        // alone: relating it would write that error into the scrutinee's
+        // class, which the scrutinee shares with whatever produced it.
+        if (valid_pattern and !state.cond_always_crashes) {
             const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
             const ptrn_result = try self.unifyInContext(state.ptrn_target_var, branch_ptrn_var, env, .{ .match_pattern = .{
                 .branch_index = @intCast(branch_cur_index),
@@ -30891,7 +31201,7 @@ fn rejectValuelessMethodDispatch(
     if (!annotationOnlyValueDef(lookup.env, lookup.binding.def_idx)) return false;
     if (!staticDispatchBindingIsUnsupportedGeneratedMethod(lookup)) {
         if (failure_expr orelse self.constraintSourceExpr(dispatcher_var, constraint)) |expr_idx| {
-            _ = try self.problems.appendProblem(self.gpa, .{ .annotation_only_value_use = .{
+            _ = try self.problems.appendProblem(.{ .annotation_only_value_use = .{
                 .region = self.cir.store.getExprRegion(expr_idx),
             } });
         }
@@ -31280,7 +31590,7 @@ fn rejectValueAnnotation(
     const written = try self.annotationWrittenTypeVariables(annotation.anno);
     const type_region = self.cir.store.getTypeAnnoRegion(annotation.anno);
     const where_region = self.annotationWhereRegion(annotation, type_region);
-    _ = try self.problems.appendProblem(self.gpa, .{ .polymorphic_value_annotation = .{
+    _ = try self.problems.appendProblem(.{ .polymorphic_value_annotation = .{
         .name_region = if (self.cir.store.getPattern(pattern_idx) == .assign) self.cir.store.getPatternRegion(pattern_idx) else null,
         .region = .{
             .start = (annotation.name_region orelse type_region).start,
@@ -31726,7 +32036,7 @@ fn checkPatternExhaustiveness(
         };
 
         const empirical_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(pattern_idx));
-        try self.problems.appendPendingStaticExhaustiveness(self.gpa, .destructure, self.pendingExhaustivenessMode(), .{ .destructure_pattern = pattern_idx }, empirical_region, .{ .non_exhaustive_destructure = .{
+        try self.problems.appendPendingStaticExhaustiveness(.destructure, self.pendingExhaustivenessMode(), .{ .destructure_pattern = pattern_idx }, empirical_region, .{ .non_exhaustive_destructure = .{
             .pattern = pattern_idx,
             .value_type = try self.problems.putExtraString(self.snapshots.getFormattedString(value_snapshot) orelse unreachable),
             .missing_patterns = missing_patterns_range,
@@ -33572,7 +33882,7 @@ fn failAssociatedLookup(
     region: Region,
     _: *Env,
 ) Allocator.Error!void {
-    _ = try self.problems.appendProblem(self.gpa, .{ .associated_item_not_found = .{
+    _ = try self.problems.appendProblem(.{ .associated_item_not_found = .{
         .type_name = type_ident,
         .item_name = item_ident,
         .region = region,
@@ -34051,7 +34361,7 @@ fn prepareNominalTypeUsage(
         // If this nominal type is opaque and we're not in the defining module
         // then report an error
         if (!nominal_type.canLiftInner(self.cir.selfModuleIdentity())) {
-            _ = try self.problems.appendProblem(self.cir.gpa, .{ .cannot_access_opaque_nominal = .{
+            _ = try self.problems.appendProblem(.{ .cannot_access_opaque_nominal = .{
                 .var_ = target_var,
                 .nominal_type_name = nominal_type.ident.ident_idx,
             } });
@@ -34088,7 +34398,7 @@ fn prepareNominalTypeUsage(
     } else {
         // If the nominal type resolves to something other than a nominal_type
         // structure, report the error and set the expression to error type.
-        _ = try self.problems.appendProblem(self.cir.gpa, .{ .nominal_type_resolution_failed = .{
+        _ = try self.problems.appendProblem(.{ .nominal_type_resolution_failed = .{
             .var_ = target_var,
             .nominal_type_decl_var = nominal_type_decl_var,
         } });
@@ -34899,6 +35209,40 @@ fn poisonErroneousValueUses(self: *Self) Allocator.Error!void {
     }
 }
 
+/// Retire each `for` loop whose iterable was rejected after the loop was
+/// checked. Its `iter` and `next` plans were resolved against the iterable's
+/// type, but an erroneous iterable crashes before either runs, so the loop is
+/// replaced by the evaluation of its iterable, as when the iterable is known
+/// to be erroneous while the loop is checked.
+fn retireForLoopsOverLateRejectedIterables(self: *Self) Allocator.Error!void {
+    var index: usize = 0;
+    while (index < self.late_rejectable_for_loops.items.len) {
+        const loop = self.late_rejectable_for_loops.items[index];
+        if (!try self.valueIsErroneous(loop.iterable)) {
+            index += 1;
+            continue;
+        }
+        _ = self.late_rejectable_for_loops.swapRemove(index);
+        // The sweep below replaces the iterable before it retires the
+        // statement that evaluates it.
+        try self.erroneous_value_exprs.put(self.gpa, loop.iterable, {});
+        switch (loop.owner) {
+            .statement => |stmt_idx| {
+                const recorded = try self.erroneous_statements.getOrPut(self.gpa, stmt_idx);
+                if (!recorded.found_existing) recorded.value_ptr.* = loop.iterable;
+            },
+            .expr => |expr_idx| {
+                if (self.cir.store.getExpr(expr_idx) == .e_runtime_error) continue;
+                const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+                    .region = self.cir.store.getExprRegion(expr_idx),
+                } });
+                try self.replaceRejectedOperationWithRuntimeError(expr_idx, diagnostic_idx);
+                try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+            },
+        }
+    }
+}
+
 /// A consumer that rejected a lookup poisoned only that use's own occurrence
 /// (`Store.poisonOnMismatch`), so the referenced binding keeps its type and the
 /// use alone becomes the runtime error.
@@ -34912,6 +35256,8 @@ fn retireErroneousLookupOccurrence(self: *Self, expr_idx: CIR.Expr.Idx) Allocato
 }
 
 fn poisonErroneousValueExprs(self: *Self) Allocator.Error!void {
+    try self.retireForLoopsOverLateRejectedIterables();
+
     var rejected_defs = self.rejected_destructure_defs.keyIterator();
     while (rejected_defs.next()) |def_idx| {
         const def = self.cir.store.getDef(def_idx.*);
@@ -35011,6 +35357,8 @@ const Probe = struct {
     dispatch_target_instantiations_len: usize,
     dispatch_derivations_len: usize,
     component_derivations_len: usize,
+    component_derived_relations_len: usize,
+    dispatch_relation_owner_log_len: usize,
     imported_schemes_len: usize,
     probe_links_len: usize,
     probe_link_copies_len: usize,
@@ -35090,6 +35438,8 @@ const Probe = struct {
         self.check.probe_link_copies.shrinkRetainingCapacity(self.probe_link_copies_len);
         self.check.shrinkDispatchDerivationsTo(self.dispatch_derivations_len);
         self.check.shrinkComponentDerivationsTo(self.component_derivations_len);
+        self.check.shrinkComponentDerivedRelationsTo(self.component_derived_relations_len);
+        self.check.shrinkDispatchRelationOwnersTo(self.dispatch_relation_owner_log_len);
         while (self.check.imported_schemes.items.len > self.imported_schemes_len) {
             const removed = self.check.imported_schemes.pop().?;
             self.check.discardImportedSchemeMetadata(removed.scheme_var);
@@ -35145,6 +35495,8 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
     const dispatch_target_instantiations_len = self.dispatch_target_instantiations.items.len;
     const dispatch_derivations_len = self.dispatch_derivations.items.len;
     const component_derivations_len = self.component_derivations.items.len;
+    const component_derived_relations_len = self.component_derived_relations.items.len;
+    const dispatch_relation_owner_log_len = self.dispatch_relation_owner_log.items.len;
     const imported_schemes_len = self.imported_schemes.items.len;
     const savepoint = try self.types.createSavepoint();
     self.probe_depth += 1;
@@ -35186,6 +35538,8 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .dispatch_target_instantiations_len = dispatch_target_instantiations_len,
         .dispatch_derivations_len = dispatch_derivations_len,
         .component_derivations_len = component_derivations_len,
+        .component_derived_relations_len = component_derived_relations_len,
+        .dispatch_relation_owner_log_len = dispatch_relation_owner_log_len,
         .imported_schemes_len = imported_schemes_len,
         .savepoint = savepoint,
     };
@@ -35295,7 +35649,7 @@ fn probeUnifyResultWithoutRecordingProblems(
     actual: Var,
 ) Allocator.Error!unifier.Result {
     var probe_problems = try ProblemStore.initCapacity(self.gpa, 1);
-    defer probe_problems.deinit(self.gpa);
+    defer probe_problems.deinit();
 
     var probe_snapshots = try SnapshotStore.initCapacity(self.gpa, 8);
     defer probe_snapshots.deinit();
@@ -35395,7 +35749,7 @@ fn judgeOptionalFieldAccesses(self: *Self, env: *Env) std.mem.Allocator.Error!vo
         switch (resolved.desc.content) {
             .field_presence => |field_presence| switch (field_presence) {
                 .required => {
-                    _ = try self.problems.appendProblem(self.gpa, switch (access.use) {
+                    _ = try self.problems.appendProblem(switch (access.use) {
                         .access => .{ .optional_access_of_required_field = .{
                             .region = access.region,
                             .field_name = access.field_name,
@@ -35408,7 +35762,7 @@ fn judgeOptionalFieldAccesses(self: *Self, env: *Env) std.mem.Allocator.Error!vo
                     try self.markErroneousValueExpr(access.owner);
                 },
                 .defaulted => {
-                    _ = try self.problems.appendProblem(self.gpa, switch (access.use) {
+                    _ = try self.problems.appendProblem(switch (access.use) {
                         .access => .{ .optional_access_of_required_field = .{
                             .region = access.region,
                             .field_name = access.field_name,
@@ -35633,7 +35987,7 @@ fn checkPendingDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
         // unpredictable points is rejected here, after callee effects have
         // resolved.
         if (default_does_fx) {
-            _ = try self.problems.appendProblem(self.gpa, .{ .effectful_default_value = .{
+            _ = try self.problems.appendProblem(.{ .effectful_default_value = .{
                 .region = self.getRegionAt(ModuleEnv.varFrom(pending.default_expr)),
                 .field_name = pending.field_name,
             } });
@@ -35866,7 +36220,7 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
     defer self.gpa.free(omitted_defaults);
 
     for (recursive_defaults.items) |pending| {
-        _ = try self.problems.appendProblem(self.gpa, .{ .recursive_default_value = .{
+        _ = try self.problems.appendProblem(.{ .recursive_default_value = .{
             .region = self.cir.store.getExprRegion(pending.default_expr),
             .field_name = pending.field_name,
         } });
@@ -36085,7 +36439,7 @@ fn rejectDefaultParameterConstraint(
     type_param: base.Ident.Idx,
     method_name: ?base.Ident.Idx,
 ) std.mem.Allocator.Error!void {
-    _ = try self.problems.appendProblem(self.gpa, .{ .default_constrains_type_parameter = .{
+    _ = try self.problems.appendProblem(.{ .default_constrains_type_parameter = .{
         .region = self.cir.store.getExprRegion(pending.default_expr),
         .field_name = pending.field_name,
         .method_name = method_name,
@@ -36107,7 +36461,7 @@ fn rejectDefaultParameterAliasing(
     type_param: base.Ident.Idx,
     aliased_param: base.Ident.Idx,
 ) std.mem.Allocator.Error!void {
-    _ = try self.problems.appendProblem(self.gpa, .{ .default_constrains_type_parameter = .{
+    _ = try self.problems.appendProblem(.{ .default_constrains_type_parameter = .{
         .region = self.cir.store.getExprRegion(pending.default_expr),
         .field_name = pending.field_name,
         .method_name = null,
@@ -37722,7 +38076,7 @@ fn emitBoundaryWarningAfterCommit(
     if (pending.kind != .numeral) return;
     if (!pending.leaks_into_signature) return;
     const default_snapshot = try self.snapshotVarForError(snapshot_var);
-    _ = try self.problems.appendProblem(self.gpa, .{ .literal_defaulted = .{
+    _ = try self.problems.appendProblem(.{ .literal_defaulted = .{
         .literal_var = literal_root,
         .kind = pending.kind,
         .default_snapshot = default_snapshot,
@@ -38524,7 +38878,7 @@ fn finalizeTypeSchemeRequirementsAtCheckedBoundary(self: *Self) Allocator.Error!
                     requirement.receiver_var,
                 );
 
-                _ = try self.problems.appendProblem(self.gpa, .{ .static_dispatch = .{ .unresolved_dispatcher = .{
+                _ = try self.problems.appendProblem(.{ .static_dispatch = .{ .unresolved_dispatcher = .{
                     .region = region,
                     .secondary_region = null,
                     .dispatcher_snapshot = snapshot,
@@ -38826,7 +39180,7 @@ fn captureSchemeDispatchRequirements(
                             .dispatcher_var = candidate.receiver_var,
                             .constraint = candidate.constraint,
                             .failure_expr = if (candidate.failure_expr) |expr| .from(@backingInt(expr)) else .none,
-                            .owner = .{ .recorded = .{ .group_index = self.currentGroupIndex(), .scheme_root = candidate.owner_root } },
+                            .owner = .{ .recorded = self.currentGroupIndex() },
                         });
                         // The exact relation has transferred to this boundary;
                         // duplicate candidates cannot schedule it again.
@@ -38901,6 +39255,7 @@ fn captureEscapedSchemeDispatchRequirements(
 ) Allocator.Error!void {
     try self.captureSchemeDispatchRequirements(roots, env, null);
     self.assertSchemeRequirementBoundaryQuiescent(roots);
+    for (roots) |root| try self.captured_scheme_owners.put(self.gpa, root.owner, {});
 }
 
 fn addSchemeDispatchRequirementsToBoundaryReachability(
@@ -39054,7 +39409,7 @@ fn reportDerivedCodecOpenRecord(
         self.getRegionAt(deferred.var_),
     );
     const snapshot = try self.snapshotVarForError(deferred.var_);
-    _ = try self.problems.appendProblem(self.gpa, .{ .derived_codec_open_record = .{
+    _ = try self.problems.appendProblem(.{ .derived_codec_open_record = .{
         .region = region,
         .direction = if (constraint.fn_name.eql(self.cir.idents.parser_for)) .parse else .encode,
         .record_snapshot = snapshot,
@@ -39261,7 +39616,7 @@ fn drainGroundedPendingSchemeRequirementDispatchers(
                 .from(@backingInt(expr_idx))
             else
                 .none,
-        }, .{ .recorded = .{ .group_index = dispatcher.owner_group_index, .scheme_root = dispatcher.owner_scheme_root } });
+        }, .{ .recorded = dispatcher.owner_group_index });
         dispatcher.deferred_enqueued = true;
         appended = true;
     }
@@ -39333,7 +39688,7 @@ fn checkGroundedStoredTypeSchemeRequirementsAtFinalization(
                         .from(@backingInt(expr_idx))
                     else
                         .none,
-                }, .{ .recorded = .{ .group_index = scheme.capture_group_index, .scheme_root = scheme.root_var } });
+                }, .{ .recorded = scheme.capture_group_index });
                 appended = true;
             }
         }
@@ -39902,7 +40257,7 @@ fn snapshotPreDefaultType(self: *Self, var_: Var) Allocator.Error!snapshot_mod.S
     var groups_iter = groups.iterator();
     while (groups_iter.next()) |entry| {
         const constraints = try self.types.appendStaticDispatchConstraints(entry.value_ptr.constraints.items);
-        try self.types.setVarContent(entry.key_ptr.*, .{ .flex = .{
+        try self.types.setClassContentInSavepoint(entry.key_ptr.*, .{ .flex = .{
             .name = entry.value_ptr.name,
             .constraints = constraints,
         } });
@@ -39951,7 +40306,7 @@ fn reportUndeterminedType(
                     self.undeterminedTypeUseRegion(dispatcher_var, constraint, owner_expr),
             },
         };
-        _ = try self.problems.appendProblem(self.gpa, .{ .static_dispatch = .{ .undetermined_type = .{
+        _ = try self.problems.appendProblem(.{ .static_dispatch = .{ .undetermined_type = .{
             .region = literal_region,
             .subject = shared_subject,
             .requirements_snapshot = null,
@@ -39982,7 +40337,7 @@ fn reportUndeterminedType(
     }
 
     const requirements_snapshot = try self.snapshotPreDefaultType(dispatcher_var);
-    _ = try self.problems.appendProblem(self.gpa, .{ .static_dispatch = .{ .undetermined_type = .{
+    _ = try self.problems.appendProblem(.{ .static_dispatch = .{ .undetermined_type = .{
         .region = region,
         .subject = subject,
         .requirements_snapshot = requirements_snapshot,
@@ -41840,6 +42195,22 @@ fn shrinkComponentDerivationsTo(self: *Self, new_len: usize) void {
     }
 }
 
+fn shrinkComponentDerivedRelationsTo(self: *Self, new_len: usize) void {
+    while (self.component_derived_relations.items.len > new_len) {
+        const fn_var = self.component_derived_relations.pop().?;
+        const did_remove = self.component_derived_relation_set.remove(fn_var);
+        std.debug.assert(did_remove);
+    }
+}
+
+fn shrinkDispatchRelationOwnersTo(self: *Self, new_len: usize) void {
+    while (self.dispatch_relation_owner_log.items.len > new_len) {
+        const fn_var = self.dispatch_relation_owner_log.pop().?;
+        const did_remove = self.dispatch_relation_owners.remove(fn_var);
+        std.debug.assert(did_remove);
+    }
+}
+
 fn shrinkDispatchDerivationsTo(self: *Self, new_len: usize) void {
     while (self.dispatch_derivations.items.len > new_len) {
         const derivation = self.dispatch_derivations.pop().?;
@@ -43008,7 +43379,7 @@ fn rejectRecursiveStaticDispatch(
         try self.snapshotVarForError(ancestor_receiver)
     else
         null;
-    _ = try self.problems.appendProblem(self.cir.gpa, .{ .static_dispatch = .{
+    _ = try self.problems.appendProblem(.{ .static_dispatch = .{
         .recursive_dispatch = .{
             .dispatcher_snapshot = snapshot,
             .fn_var = constraint.fn_var,
@@ -43602,9 +43973,13 @@ fn freezeTypeGraphRoots(self: *Self, roots: []const Var, functions: FreezeFuncti
     for (self.scratch_freeze_order.items) |original| {
         const content = try self.frozenContent(&self.scratch_freeze_map, self.types.resolveVar(original).desc.content);
         // The copy holds the original's type, so it keeps the flags that
-        // describe that type; whether it is frozen is set below.
+        // describe that type; whether it is frozen is set below. A defaulting
+        // decision is a fact about the class the default chose, not about
+        // its type, and no default chose the copy, exactly as none chose a
+        // fresh instantiation's copy.
         var flags = self.types.resolveVar(original).desc.flags;
         flags.frozen = false;
+        flags.default_decided = false;
         try self.types.dangerousSetVarDesc(self.scratch_freeze_map.get(original).?, .{ .content = content, .rank = .outermost, .flags = flags });
     }
     for (self.scratch_freeze_order.items) |original| {
@@ -43689,12 +44064,29 @@ fn frozenCopies(self: *Self, copies: *const std.AutoHashMapUnmanaged(Var, Var), 
     return self.scratch_freeze_vars.items;
 }
 
+fn fieldPresenceResolvedRequired(self: *const Self, presence: Var) bool {
+    return switch (self.types.resolveVar(presence).desc.content) {
+        .field_presence => |kind| switch (kind) {
+            .required => true,
+            .optional, .defaulted => false,
+        },
+        .flex, .rigid, .err, .alias, .structure => false,
+    };
+}
+
 /// Append a ground type as a tree: each node's content in depth-first order,
 /// with no variable identities, so two types encode equally exactly when they
-/// are equal.
+/// are equal. A record or tag union row stored across extension records or
+/// unions encodes as one row with its fields or tags sorted by name, and a
+/// field whose kind variable resolved to required encodes as a required field,
+/// so equal rows encode equally however they are stored.
 fn appendReplayTree(self: *Self, root: Var, out: *std.ArrayListUnmanaged(u8)) Allocator.Error!void {
     var stack: std.ArrayListUnmanaged(Var) = .empty;
     defer stack.deinit(self.gpa);
+    var row_fields: std.ArrayListUnmanaged(types_mod.RecordField) = .empty;
+    defer row_fields.deinit(self.gpa);
+    var row_tags: std.ArrayListUnmanaged(types_mod.Tag) = .empty;
+    defer row_tags.deinit(self.gpa);
     try stack.append(self.gpa, root);
     while (stack.pop()) |next| {
         const content = self.types.resolveVar(next).desc.content;
@@ -43751,32 +44143,78 @@ fn appendReplayTree(self: *Self, root: Var, out: *std.ArrayListUnmanaged(u8)) Al
                 },
                 .record => |record| {
                     try out.append(self.gpa, 12);
-                    const fields = self.types.getRecordFieldsSlice(record.fields);
-                    try appendReplayWord(out, self.gpa, @intCast(fields.len));
-                    try stack.append(self.gpa, record.ext);
-                    var index = fields.len;
+                    row_fields.clearRetainingCapacity();
+                    var ext = record.ext;
+                    var fields = self.types.getRecordFieldsSlice(record.fields);
+                    while (true) {
+                        for (fields.items(.name), fields.items(.presence)) |name, presence| {
+                            try row_fields.append(self.gpa, .{ .name = name, .presence = presence });
+                        }
+                        switch (self.types.resolveVar(ext).desc.content) {
+                            .structure => |ext_flat| switch (ext_flat) {
+                                .record => |ext_record| {
+                                    ext = ext_record.ext;
+                                    fields = self.types.getRecordFieldsSlice(ext_record.fields);
+                                    continue;
+                                },
+                                .empty_record, .empty_tag_union, .fn_pure, .fn_effectful, .fn_unbound, .tuple, .nominal_type, .tag_union => {},
+                            },
+                            .flex, .rigid, .err, .field_presence, .alias => {},
+                        }
+                        break;
+                    }
+                    std.mem.sort(types_mod.RecordField, row_fields.items, self.cir.getIdentStore(), types_mod.RecordField.sortByNameAsc);
+                    try appendReplayWord(out, self.gpa, @intCast(row_fields.items.len));
+                    try stack.append(self.gpa, ext);
+                    var index = row_fields.items.len;
                     while (index > 0) {
                         index -= 1;
-                        try appendReplayWord(out, self.gpa, @bitCast(fields.items(.name)[index]));
-                        switch (fields.items(.presence)[index].decode()) {
+                        const field = row_fields.items[index];
+                        try appendReplayWord(out, self.gpa, @bitCast(field.name));
+                        switch (field.presence.decode()) {
                             .required => |field_var| try stack.append(self.gpa, field_var),
                             .unknown => |unknown| {
                                 try stack.append(self.gpa, unknown.var_);
-                                try stack.append(self.gpa, unknown.presence);
+                                // A field whose kind resolved to required is a
+                                // required field, however its row stores it.
+                                if (!self.fieldPresenceResolvedRequired(unknown.presence)) {
+                                    try stack.append(self.gpa, unknown.presence);
+                                }
                             },
                         }
                     }
                 },
                 .tag_union => |tag_union| {
                     try out.append(self.gpa, 13);
-                    const tags = self.types.getTagsSlice(tag_union.tags);
-                    try appendReplayWord(out, self.gpa, @intCast(tags.len));
-                    try stack.append(self.gpa, tag_union.ext);
-                    var index = tags.len;
+                    row_tags.clearRetainingCapacity();
+                    var ext = tag_union.ext;
+                    var tags = self.types.getTagsSlice(tag_union.tags);
+                    while (true) {
+                        for (tags.items(.name), tags.items(.args)) |name, args| {
+                            try row_tags.append(self.gpa, .{ .name = name, .args = args });
+                        }
+                        switch (self.types.resolveVar(ext).desc.content) {
+                            .structure => |ext_flat| switch (ext_flat) {
+                                .tag_union => |ext_union| {
+                                    ext = ext_union.ext;
+                                    tags = self.types.getTagsSlice(ext_union.tags);
+                                    continue;
+                                },
+                                .empty_record, .empty_tag_union, .fn_pure, .fn_effectful, .fn_unbound, .tuple, .nominal_type, .record => {},
+                            },
+                            .flex, .rigid, .err, .field_presence, .alias => {},
+                        }
+                        break;
+                    }
+                    std.mem.sort(types_mod.Tag, row_tags.items, self.cir.getIdentStoreConst(), comptime types_mod.Tag.sortByNameAsc);
+                    try appendReplayWord(out, self.gpa, @intCast(row_tags.items.len));
+                    try stack.append(self.gpa, ext);
+                    var index = row_tags.items.len;
                     while (index > 0) {
                         index -= 1;
-                        const args = self.types.sliceVars(tags.items(.args)[index]);
-                        try appendReplayWord(out, self.gpa, @bitCast(tags.items(.name)[index]));
+                        const tag = row_tags.items[index];
+                        const args = self.types.sliceVars(tag.args);
+                        try appendReplayWord(out, self.gpa, @bitCast(tag.name));
                         try appendReplayWord(out, self.gpa, @intCast(args.len));
                         try appendReplayChildren(&stack, self.gpa, args);
                     }
@@ -45262,10 +45700,12 @@ fn deferredDispatchRelationWasRetained(
 /// Whether every relation of a queued entry was already consumed by an entry
 /// attributing its failure to the same use, so consuming it again could
 /// neither decide, record, nor report anything new. On a concrete receiver,
-/// consuming a relation that is not a generated codec selects its method
-/// target and records that target's instantiation; a relation consumed
-/// before its target was selected is not settled for this entry, which
-/// selects it.
+/// a relation that is not a generated codec is settled once it has selected
+/// its method target and recorded that target's instantiation. A structural
+/// comparison's or hash's components are derived once per relation however
+/// often it is consumed, but having derived them does not settle it: the
+/// receiver they were derived for can later ground to a nominal type whose
+/// own method this entry still has to select.
 fn deferredRelationsAlreadySettled(self: *Self, deferred: DeferredConstraintCheck) bool {
     const constraints = self.types.sliceStaticDispatchConstraints(deferred.constraints);
     if (constraints.len == 0) return false;
@@ -45333,7 +45773,7 @@ fn deferGeneratedCodecConstraintToFinalization(
         .dispatcher_var = deferred.var_,
         .constraint = constraint,
         .failure_expr = deferred.failure_expr,
-        .owner = .{ .recorded = .{ .group_index = deferred.owner_group_index, .scheme_root = deferred.owner_scheme_root } },
+        .owner = .{ .recorded = deferred.owner_group_index },
     });
     return true;
 }
@@ -45645,6 +46085,13 @@ inline fn processDeferredDispatchEntry(
     }
     try self.claimRecordedProblems();
     self.relation_owner = deferred_constraint.relation_owner;
+    // Each relation resolves under the scheme that created it, never under
+    // the boundary whose checking runs the drain or the one whose unification
+    // grounded its receiver: the requirements its method target's
+    // instantiation and its component obligations leave behind are that
+    // scheme's. One entry can carry relations several schemes created.
+    const active_scheme_root_before = self.active_scheme_root;
+    defer self.active_scheme_root = active_scheme_root_before;
     const retained_top = self.scratch_deferred_static_dispatch_constraints.top();
     const scheme_owned_codecs_top = self.scratch_scheme_owned_codec_fns.items.len;
     defer self.scratch_scheme_owned_codec_fns.shrinkRetainingCapacity(scheme_owned_codecs_top);
@@ -45690,6 +46137,7 @@ inline fn processDeferredDispatchEntry(
             // even if the unify below appends and reallocates the backing array.
             var constraints_iter = self.types.static_dispatch_constraints.iterRange(deferred_constraint.constraints);
             while (constraints_iter.next()) |constraint| {
+                self.active_scheme_root = self.dispatchRelationOwner(constraint.fn_var);
                 if (constraint.origin == .from_literal) {
                     if (self.cir.idents.numKindFromTypeIdent(rigid.name)) |num_kind| {
                         if (try self.reportInvalidBuiltinFromNumeralLiteral(
@@ -45837,6 +46285,7 @@ inline fn processDeferredDispatchEntry(
                 // Re-fetch by index each iteration because nested unification can append
                 // constraints and reallocate the backing array.
                 const constraint = self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i];
+                self.active_scheme_root = self.dispatchRelationOwner(constraint.fn_var);
                 if (self.staticDispatchConstraintIsInactive(constraint)) continue;
                 const constraint_fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
                 if (constraint_fn_resolved == .err) {
@@ -45911,7 +46360,7 @@ inline fn processDeferredDispatchEntry(
                             );
                             continue;
                         }
-                        try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .equality, constraint, env, .{ .recorded = .{ .group_index = deferred_constraint.owner_group_index, .scheme_root = deferred_constraint.owner_scheme_root } });
+                        try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .equality, constraint, env, .{ .recorded = deferred_constraint.owner_group_index });
                         try self.satisfyDerivedIsEqConstraint(
                             deferred_constraint.var_,
                             constraint,
@@ -45933,7 +46382,7 @@ inline fn processDeferredDispatchEntry(
                             );
                             continue;
                         }
-                        try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .hash, constraint, env, .{ .recorded = .{ .group_index = deferred_constraint.owner_group_index, .scheme_root = deferred_constraint.owner_scheme_root } });
+                        try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .hash, constraint, env, .{ .recorded = deferred_constraint.owner_group_index });
                         try self.satisfyDerivedToHashConstraint(
                             deferred_constraint.var_,
                             constraint,
@@ -46241,6 +46690,7 @@ inline fn processDeferredDispatchEntry(
             var constraint_i: usize = 0;
             while (constraint_i < constraints_len) : (constraint_i += 1) {
                 const constraint = self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i];
+                self.active_scheme_root = self.dispatchRelationOwner(constraint.fn_var);
                 if (self.staticDispatchConstraintIsInactive(constraint)) continue;
                 const constraint_fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
                 if (constraint_fn_resolved == .err) {
@@ -46272,7 +46722,7 @@ inline fn processDeferredDispatchEntry(
                     if (method_lookup == null or staticDispatchBindingIsDerivedMarker(method_lookup.?)) {
                         const backing_var = self.types.getAliasBackingVar(alias);
                         if (try self.varSupportsIsEq(backing_var)) {
-                            try self.deriveStructuralEqHashComponentObligations(backing_var, .equality, constraint, env, .{ .recorded = .{ .group_index = deferred_constraint.owner_group_index, .scheme_root = deferred_constraint.owner_scheme_root } });
+                            try self.deriveStructuralEqHashComponentObligations(backing_var, .equality, constraint, env, .{ .recorded = deferred_constraint.owner_group_index });
                             try self.satisfyDerivedIsEqConstraint(
                                 deferred_constraint.var_,
                                 constraint,
@@ -46302,7 +46752,7 @@ inline fn processDeferredDispatchEntry(
                     if (method_lookup == null or staticDispatchBindingIsDerivedMarker(method_lookup.?)) {
                         const backing_var = self.types.getAliasBackingVar(alias);
                         if (try self.varSupportsToHash(backing_var)) {
-                            try self.deriveStructuralEqHashComponentObligations(backing_var, .hash, constraint, env, .{ .recorded = .{ .group_index = deferred_constraint.owner_group_index, .scheme_root = deferred_constraint.owner_scheme_root } });
+                            try self.deriveStructuralEqHashComponentObligations(backing_var, .hash, constraint, env, .{ .recorded = deferred_constraint.owner_group_index });
                             try self.satisfyDerivedToHashConstraint(
                                 deferred_constraint.var_,
                                 constraint,
@@ -46565,11 +47015,12 @@ inline fn processDeferredDispatchEntry(
             // satisfyDerivedIsEqConstraint appends and reallocates the backing array.
             var constraints_iter = self.types.static_dispatch_constraints.iterRange(deferred_constraint.constraints);
             while (constraints_iter.next()) |constraint| {
+                self.active_scheme_root = self.dispatchRelationOwner(constraint.fn_var);
                 // Check if this is a call to is_eq (anonymous types have derived is_eq)
                 if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
                     // Check if all components of this anonymous type support is_eq
                     if (try self.typeSupportsIsEq(dispatcher_content.structure)) {
-                        try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .equality, constraint, env, .{ .recorded = .{ .group_index = deferred_constraint.owner_group_index, .scheme_root = deferred_constraint.owner_scheme_root } });
+                        try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .equality, constraint, env, .{ .recorded = deferred_constraint.owner_group_index });
                         try self.satisfyDerivedIsEqConstraint(
                             deferred_constraint.var_,
                             constraint,
@@ -46591,7 +47042,7 @@ inline fn processDeferredDispatchEntry(
                     // Anonymous structural types have derived to_hash if all their
                     // components also support to_hash.
                     if (try self.typeSupportsToHash(dispatcher_content.structure)) {
-                        try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .hash, constraint, env, .{ .recorded = .{ .group_index = deferred_constraint.owner_group_index, .scheme_root = deferred_constraint.owner_scheme_root } });
+                        try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .hash, constraint, env, .{ .recorded = deferred_constraint.owner_group_index });
                         try self.satisfyDerivedToHashConstraint(
                             deferred_constraint.var_,
                             constraint,
@@ -46829,7 +47280,7 @@ inline fn processDeferredDispatchEntry(
 fn recordInterpolationPartTypeMismatch(self: *Self, expected_var: Var, actual_var: Var, actual_before_default: ?SnapshotContentIdx, region: Region) Allocator.Error!void {
     const expected_snapshot = try self.snapshotVarForError(expected_var);
     const actual_snapshot = actual_before_default orelse try self.snapshotVarForError(actual_var);
-    _ = try self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
+    _ = try self.problems.appendProblem(.{ .type_mismatch = .{
         .types = .{
             .expected_var = expected_var,
             .expected_snapshot = expected_snapshot,
@@ -47653,11 +48104,15 @@ fn deriveStructuralEqHashComponentObligations(
     env: *Env,
     owner: DeferredDispatchObligationOwner,
 ) Allocator.Error!void {
+    // The components belong to the relation, not to the queue entry carrying
+    // it: a relation queued both by the unification that grounded its
+    // receiver and by its instantiation dispatcher derives them once.
+    try self.component_derived_relations.ensureUnusedCapacity(self.gpa, 1);
+    const derived = try self.component_derived_relation_set.getOrPut(self.gpa, parent_constraint.fn_var);
+    if (derived.found_existing) return;
+    self.component_derived_relations.appendAssumeCapacity(parent_constraint.fn_var);
     const saved_scheme_root = self.active_scheme_root;
-    self.active_scheme_root = switch (owner) {
-        .current_group => self.active_scheme_root,
-        .recorded => |recorded| recorded.scheme_root,
-    };
+    self.active_scheme_root = self.dispatchRelationOwner(parent_constraint.fn_var);
     defer self.active_scheme_root = saved_scheme_root;
     self.var_set.clearRetainingCapacity();
     try self.varDeriveComponentObligations(dispatcher_var, derivation, &self.var_set, env, parent_constraint, false, owner);
@@ -49091,7 +49546,7 @@ fn appendInvalidBuiltinNumeralProblem(
     num_literal: types_mod.NumeralInfo,
 ) Allocator.Error!void {
     const expected_snapshot = try self.snapshotVarForError(dispatcher_var);
-    _ = try self.problems.appendProblem(self.gpa, .{ .invalid_numeric_literal = .{
+    _ = try self.problems.appendProblem(.{ .invalid_numeric_literal = .{
         .literal_var = dispatcher_var,
         .expected_type = expected_snapshot,
         .is_fractional = num_literal.is_fractional,
@@ -49141,7 +49596,7 @@ fn reportUnmaterializableNumeralLiteral(
     }
 
     const expected_snapshot = try self.snapshotVarForError(dispatcher_var);
-    _ = try self.problems.appendProblem(self.gpa, .{ .invalid_numeric_literal = .{
+    _ = try self.problems.appendProblem(.{ .invalid_numeric_literal = .{
         .literal_var = dispatcher_var,
         .expected_type = expected_snapshot,
         .is_fractional = num_literal.is_fractional,
@@ -49304,7 +49759,8 @@ fn literalTargetIsBuiltinDirect(
 /// have selected the same method. Such a relation's dispatch shares that
 /// relation's instantiation, and checked publication keys it by these exact
 /// raw vars rather than by union-find roots, which unrelated dispatches can
-/// come to share.
+/// come to share. A relation folded into a rejected relation is rejected
+/// instead of published.
 fn publishDispatchRelationMerges(self: *Self) Allocator.Error!void {
     const merges = self.types.static_dispatch_relation_merges.items;
     if (merges.len == 0) return;
@@ -49380,6 +49836,12 @@ fn publishDispatchRelationMerges(self: *Self) Allocator.Error!void {
         }
 
         const retained = selected orelse continue;
+        // A relation folded into a rejected relation shares its rejection:
+        // the method it would dispatch through failed to relate to it.
+        if (self.types.varStaticDispatchRejected(retained)) {
+            try self.markStaticDispatchFnRejected(dropped);
+            continue;
+        }
         self.cir.dispatch_relation_merges.items.appendAssumeCapacity(.{
             .dropped_fn_var = @backingInt(dropped),
             .retained_fn_var = @backingInt(retained),
@@ -51729,7 +52191,7 @@ fn checkDerivedMethodReference(
     env: *Env,
 ) Allocator.Error!void {
     if (self.direct_callee_expr != expr_idx) {
-        _ = try self.problems.appendProblem(self.gpa, .{ .derived_method_value_use = .{
+        _ = try self.problems.appendProblem(.{ .derived_method_value_use = .{
             .method_name = self.derivedMethodName(derived.kind),
             .region = region,
         } });
@@ -51809,7 +52271,7 @@ fn reportValuelessDeclarationUse(
     expr_var: Var,
     region: Region,
 ) Allocator.Error!void {
-    _ = try self.problems.appendProblem(self.gpa, .{ .annotation_only_value_use = .{ .region = region } });
+    _ = try self.problems.appendProblem(.{ .annotation_only_value_use = .{ .region = region } });
     try self.markErroneous(expr_var);
 }
 
@@ -52220,7 +52682,7 @@ fn stepParseSettle(
                     .var_ = dispatcher.dispatcher_var,
                     .constraints = dispatcher.constraints,
                     .failure_expr = failure_expr_idx,
-                }, .{ .recorded = .{ .group_index = dispatcher.owner_group_index, .scheme_root = dispatcher.owner_scheme_root } });
+                }, .{ .recorded = dispatcher.owner_group_index });
                 self.instantiation_dispatchers.items[idx].deferred_enqueued = true;
                 settle.appended = true;
             }
@@ -52991,7 +53453,7 @@ fn reportDerivedParserErrorRow(
         }
         required_fields = try self.problems.putExtraString(joined.items);
     }
-    _ = try self.problems.appendProblem(self.gpa, .{ .derived_parser_error_row = .{
+    _ = try self.problems.appendProblem(.{ .derived_parser_error_row = .{
         .region = owner_region,
         .reason = reason,
         .record_snapshot = record_snapshot,
@@ -55403,7 +55865,7 @@ fn checkFlexVarConstraintCompatibility(
             // the relation as the program actually constrained it.
             const expected_snapshot = try self.snapshotVarForError(imported_scheme);
             const actual_snapshot = try self.snapshotVarForError(constraint.fn_var);
-            _ = try self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
+            _ = try self.problems.appendProblem(.{ .type_mismatch = .{
                 .types = .{
                     .expected_var = imported_scheme,
                     .expected_snapshot = expected_snapshot,
@@ -55454,7 +55916,7 @@ fn checkAllFromNumeralFlexConstraintCompatibility(
 fn recordBranchTypeMismatch(self: *Self, body_var: Var, expected_ret: Var, ctx: problem.Context) std.mem.Allocator.Error!void {
     const expected_snapshot = try self.snapshotVarForError(expected_ret);
     const actual_snapshot = try self.snapshotVarForError(body_var);
-    _ = try self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
+    _ = try self.problems.appendProblem(.{ .type_mismatch = .{
         .types = .{
             .expected_var = expected_ret,
             .expected_snapshot = expected_snapshot,
@@ -55787,7 +56249,7 @@ fn reportConstraintErrorAt(
             },
         } },
     };
-    _ = try self.problems.appendProblem(self.cir.gpa, constraint_problem);
+    _ = try self.problems.appendProblem(constraint_problem);
 
     try self.poisonConstraintFailure(dispatcher_var, constraint, env, explicit_error_expr);
     try self.markStaticDispatchRejected(constraint);
@@ -55844,7 +56306,7 @@ fn reportEqualityError(
             .owner_region = self.constraintOwnerRegion(failure_expr),
         },
     } };
-    _ = try self.problems.appendProblem(self.cir.gpa, equality_problem);
+    _ = try self.problems.appendProblem(equality_problem);
 
     try self.poisonConstraintFailure(dispatcher_var, constraint, env, failure_expr);
     try self.markStaticDispatchRejected(constraint);
@@ -55862,7 +56324,7 @@ fn reportUndeterminedCodecType(
     if (try self.constraintErrorAlreadyReported(dispatcher_var, constraint, env, owner_expr)) return;
 
     const snapshot = try self.snapshotVarForError(dispatcher_var);
-    _ = try self.problems.appendProblem(self.cir.gpa, .{ .static_dispatch = .{
+    _ = try self.problems.appendProblem(.{ .static_dispatch = .{
         .undetermined_codec_type = .{
             .dispatcher_snapshot = snapshot,
             .fn_var = constraint.fn_var,
@@ -55900,7 +56362,7 @@ fn reportDerivedMapError(
     if (try self.constraintErrorAlreadyReported(dispatcher_var, constraint, env, null)) return;
 
     const snapshot = try self.snapshotVarForError(dispatcher_var);
-    _ = try self.problems.appendProblem(self.cir.gpa, .{ .static_dispatch = .{
+    _ = try self.problems.appendProblem(.{ .static_dispatch = .{
         .type_does_not_support_map = .{
             .dispatcher_snapshot = snapshot,
             .fn_var = constraint.fn_var,

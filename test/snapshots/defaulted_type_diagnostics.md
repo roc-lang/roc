@@ -431,18 +431,14 @@ written_method = written.foo()
 						(e-num (value "1")))))))
 	(d-let
 		(p-assign (ident "literal_method"))
-		(e-dispatch-call (method "foo") (constraint-fn-var 339)
-			(receiver
-				(e-runtime-error (tag "erroneous_value_expr")))
-			(args)))
+		(e-runtime-error (tag "erroneous_value_expr")
+			(e-num (value "35"))))
 	(d-let
 		(p-assign (ident "literal_signature"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 356)
-			(receiver
-				(e-runtime-error (tag "erroneous_value_expr")))
-			(args
-				(e-string
-					(e-literal (string "s"))))))
+		(e-runtime-error (tag "erroneous_value_expr")
+			(e-num (value "35"))
+			(e-string
+				(e-literal (string "s")))))
 	(d-let
 		(p-assign (ident "shared_literals"))
 		(e-if
@@ -454,17 +450,16 @@ written_method = written.foo()
 				(e-runtime-error (tag "erroneous_value_expr")))))
 	(d-let
 		(p-assign (ident "string_compare"))
-		(e-dispatch-call (method "is_gt") (constraint-fn-var 395)
-			(receiver
-				(e-runtime-error (tag "erroneous_value_expr")))
-			(args
-				(e-runtime-error (tag "erroneous_value_expr")))))
+		(e-runtime-error (tag "erroneous_value_expr")
+			(e-string
+				(e-literal (string "apple")))
+			(e-string
+				(e-literal (string "banana")))))
 	(d-let
 		(p-assign (ident "string_method"))
-		(e-dispatch-call (method "foo") (constraint-fn-var 405)
-			(receiver
-				(e-runtime-error (tag "erroneous_value_expr")))
-			(args)))
+		(e-runtime-error (tag "erroneous_value_expr")
+			(e-string
+				(e-literal (string "s")))))
 	(d-let
 		(p-assign (ident "written"))
 		(e-num (value "35"))

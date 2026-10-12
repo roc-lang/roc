@@ -5364,8 +5364,6 @@ const Pass = struct {
             .list_reverse,
             .list_sort_with,
             .list_release_excess_capacity,
-            .list_split_first,
-            .list_split_last,
             .list_map_can_reuse,
             .list_map_extract_unsafe,
             .dict_pseudo_seed,

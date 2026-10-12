@@ -95,9 +95,9 @@ import_mapping: ?*const import_mapping_mod.ImportMapping,
 mb_default_source: ?DefaultSourceFn = null,
 default_source_ctx: *const anyopaque = undefined,
 /// The polarity of the position currently being written: `.pos` at the root,
-/// reset to negative arguments and a positive return at every function.
-/// Tag unions in output positions are implicitly open, so an anonymous extension there (the rigid
-/// `..` produces, or its instantiated flex) is not displayed (openness is
+/// flipped through function argument positions and kept through returns.
+/// Tag unions in output positions are implicitly open, so an anonymous
+/// extension there (the rigid `..` produces, or its instantiated flex) is not displayed (openness is
 /// meaningful—and shown—in input positions and for shared, constrained,
 /// or named extensions). Maintained by the func frame: each `FuncFrame` saves
 /// the surrounding polarity and re-asserts the stage-appropriate value before
@@ -214,8 +214,9 @@ const FuncFrame = struct {
     ret: Var,
     arrow: []const u8,
     wrap_in_parens: bool,
-    /// The enclosing position, restored on completion. Function children
-    /// establish their own positions, re-asserted before every request.
+    /// The polarity surrounding this function. Argument positions flip it;
+    /// the return position keeps it. Re-asserted before every child request
+    /// and restored on completion.
     saved_polarity: types_mod.Polarity,
     idx: u32 = 0,
     stage: enum { args, ret, done } = .args,
@@ -517,10 +518,11 @@ fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, var_le
             try tmp_writer.writeAll(self.idents.getText(item.constraint.fn_name));
             try tmp_writer.writeAll(" : ");
 
-            // A where-method is received as a callback. Its function children
-            // establish their own input and output positions.
+            // A where-method signature is its own annotation root, generated
+            // at the output polarity: its arguments are inputs and its return
+            // an output, whatever position the constrained variable occupies.
             const saved_polarity = self.polarity;
-            self.polarity = .neg;
+            self.polarity = .pos;
             try self.writeVar(tmp_writer, item.constraint.fn_var, root_var);
             self.polarity = saved_polarity;
 
@@ -949,8 +951,8 @@ fn stepFunc(self: *TypeWriter, writer: *ByteWrite, frame: *FuncFrame, root_var: 
                     if (frame.idx > 0) try writer.writeAll(", ");
                     const arg = self.varAt(frame.args, frame.idx);
                     frame.idx += 1;
-                    // Each function establishes its own input position.
-                    self.polarity = .neg;
+                    // Argument positions flip the surrounding polarity.
+                    self.polarity = frame.saved_polarity.flip();
                     if (!try self.requestVar(writer, arg, .FunctionArgument, root_var)) return false;
                     continue;
                 }
@@ -961,8 +963,8 @@ fn stepFunc(self: *TypeWriter, writer: *ByteWrite, frame: *FuncFrame, root_var: 
             .ret => {
                 const ret = frame.ret;
                 frame.stage = .done;
-                // Each function establishes its own output position.
-                self.polarity = .pos;
+                // The return position keeps the surrounding polarity.
+                self.polarity = frame.saved_polarity;
                 if (!try self.requestVar(writer, ret, .FunctionReturn, root_var)) return false;
             },
             .done => {
@@ -2145,7 +2147,7 @@ test "TypeWriter counts occurrences across a spine deeper than any native-stack 
     try testing.expectEqual(@as(usize, depth * 2 + "(a, a)".len), rendered.len);
 }
 
-test "TypeWriter polarity resets at functions and restores sibling positions" {
+test "TypeWriter polarity flips through function arguments and restores sibling positions" {
     var env = try TestEnv.init(testing.allocator, 32);
     defer env.deinit();
     const unit = try env.types.freshFromContent(.{ .structure = .empty_record });
@@ -2163,8 +2165,10 @@ test "TypeWriter polarity resets at functions and restores sibling positions" {
         const tuple = try env.tuple(&elems);
         const root = try env.types.freshFromContent(try env.types.mkFuncPure(&.{tuple}, unit));
         const rendered = try env.writer.writeGet(root, .wrap);
-        try testing.expect(std.mem.find(u8, rendered, "[Input, ..]") != null);
-        try testing.expect(std.mem.find(u8, rendered, "[Output]") != null);
+        // The callback stands in an input position, so its argument is an
+        // output (its anonymous extension hidden) and its result an input.
+        try testing.expect(std.mem.find(u8, rendered, "[Input]") != null);
+        try testing.expect(std.mem.find(u8, rendered, "[Output, ..]") != null);
         try testing.expect(std.mem.find(u8, rendered, "[Sibling, ..]") != null);
     }
 }
