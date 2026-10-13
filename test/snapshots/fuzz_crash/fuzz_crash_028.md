@@ -1536,7 +1536,7 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "rest")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_rest")
@@ -1565,7 +1565,7 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "rest")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_rest")
@@ -1607,7 +1607,7 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "rest")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_rest")
@@ -1636,7 +1636,7 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "b")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_b")
@@ -1860,7 +1860,7 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "tag_")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_tag_")
@@ -1874,7 +1874,7 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "i")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_i")
@@ -1888,7 +1888,7 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "t")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_t")
@@ -1902,7 +1902,7 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "rd")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_rd")
@@ -1916,7 +1916,7 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "mle")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_mle")
@@ -1930,7 +1930,7 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "b")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_b")
@@ -1944,7 +1944,7 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "le")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_le")
@@ -1994,7 +1994,7 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "f")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_f")
@@ -2453,7 +2453,7 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 			(reflow " ")
 			(annotated code "od")
 			(reflow " ")
-			(reflow "method is called on:"))
+			(reflow "method is called on."))
 		(document
 			(source-region (file "fuzz_crash_028.md") (start 133 5) (end 133 12) (annotation error) (line-text "le =(arg1)?.od()?.ned()?.recd?"))
 			(line-break)
@@ -2476,7 +2476,7 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 			(reflow " ")
 			(annotated code "ned")
 			(reflow " ")
-			(reflow "method is called on:"))
+			(reflow "method is called on."))
 		(document
 			(source-region (file "fuzz_crash_028.md") (start 133 5) (end 133 18) (annotation error) (line-text "le =(arg1)?.od()?.ned()?.recd?"))
 			(line-break)

@@ -21,7 +21,7 @@ TYPE MISMATCH - basic_tag_union.md:4:11:4:14
 		(title "Type Mismatch")
 		(region (start 4 11) (end 4 14))
 		(headline
-			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both:"))
+			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both."))
 		(document
 			(source-region (file "basic_tag_union.md") (start 4 11) (end 4 14) (annotation error) (line-text "\tGreen => \"3\""))
 			(line-break)

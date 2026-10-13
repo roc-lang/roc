@@ -101,7 +101,7 @@ TYPE NOT DETERMINED - ellipsis_expression_positions.md:59:14:59:17
 		(headline
 			(reflow "It's usually a mistake to use a postfix ")
 			(annotated code "?")
-			(reflow " on values being returned implicitly at the end of a function like this:"))
+			(reflow " on a value being returned implicitly at the end of a function."))
 		(document
 			(source-region (file "ellipsis_expression_positions.md") (start 44 19) (end 44 20) (annotation warning) (line-text "question = |_| ...?"))
 			(line-break)
@@ -226,7 +226,7 @@ TYPE NOT DETERMINED - ellipsis_expression_positions.md:59:14:59:17
 			(reflow " ")
 			(annotated code "==")
 			(reflow " ")
-			(reflow "compares:"))
+			(reflow "compares."))
 		(document
 			(source-region (file "ellipsis_expression_positions.md") (start 39 18) (end 39 21) (annotation error) (line-text "both_sides = |_| ... == ..."))
 			(line-break)
@@ -245,7 +245,7 @@ TYPE NOT DETERMINED - ellipsis_expression_positions.md:59:14:59:17
 			(reflow " ")
 			(annotated code "iter")
 			(reflow " ")
-			(reflow "method is called on:"))
+			(reflow "method is called on."))
 		(document
 			(source-region (file "ellipsis_expression_positions.md") (start 59 14) (end 59 17) (annotation error) (line-text "    for x in ... {"))
 			(line-break)

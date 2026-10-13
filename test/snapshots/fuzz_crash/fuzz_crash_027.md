@@ -1729,7 +1729,7 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "rest")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_rest")
@@ -1758,7 +1758,7 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "rest")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_rest")
@@ -1772,7 +1772,7 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "ist")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_ist")
@@ -1814,7 +1814,7 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "rest")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_rest")
@@ -1843,7 +1843,7 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "b")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_b")
@@ -1927,7 +1927,7 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "tag_with")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_tag_with")
@@ -1941,7 +1941,7 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "ited")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_ited")
@@ -1955,7 +1955,7 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "list")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_list")

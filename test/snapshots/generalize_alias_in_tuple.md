@@ -24,7 +24,7 @@ TYPE MISMATCH - generalize_alias_in_tuple.md:7:14:7:17
 		(title "Type Mismatch")
 		(region (start 7 14) (end 7 17))
 		(headline
-			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both:"))
+			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both."))
 		(document
 			(source-region (file "generalize_alias_in_tuple.md") (start 7 14) (end 7 17) (annotation error) (line-text "    (a(1), a(\"x\"), b(2))"))
 			(line-break)

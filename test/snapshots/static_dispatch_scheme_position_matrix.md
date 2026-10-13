@@ -115,7 +115,7 @@ TYPE NOT DETERMINED - static_dispatch_scheme_position_matrix.md:28:9:28:19
 			(reflow " ")
 			(annotated code "gen")
 			(reflow " ")
-			(reflow "method is called on:"))
+			(reflow "method is called on."))
 		(document
 			(source-region (file "static_dispatch_scheme_position_matrix.md") (start 19 5) (end 19 14) (annotation error) (line-text "    A.gen({})"))
 			(line-break)
@@ -138,7 +138,7 @@ TYPE NOT DETERMINED - static_dispatch_scheme_position_matrix.md:28:9:28:19
 			(reflow " ")
 			(annotated code "show")
 			(reflow " ")
-			(reflow "method is called on:"))
+			(reflow "method is called on."))
 		(document
 			(source-region (file "static_dispatch_scheme_position_matrix.md") (start 28 9) (end 28 19) (annotation error) (line-text "    v = A.parse(s)"))
 			(line-break)

@@ -398,7 +398,7 @@ TYPE NOT DETERMINED - syntax_grab_bag.md:189:26:189:66
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "lower")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_lower")
@@ -412,7 +412,7 @@ TYPE NOT DETERMINED - syntax_grab_bag.md:189:26:189:66
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "rest")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_rest")
@@ -441,7 +441,7 @@ TYPE NOT DETERMINED - syntax_grab_bag.md:189:26:189:66
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "rest")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_rest")
@@ -470,7 +470,7 @@ TYPE NOT DETERMINED - syntax_grab_bag.md:189:26:189:66
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "rest")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_rest")
@@ -512,7 +512,7 @@ TYPE NOT DETERMINED - syntax_grab_bag.md:189:26:189:66
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "rest")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_rest")
@@ -526,7 +526,7 @@ TYPE NOT DETERMINED - syntax_grab_bag.md:189:26:189:66
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "rest")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_rest")
@@ -570,7 +570,7 @@ TYPE NOT DETERMINED - syntax_grab_bag.md:189:26:189:66
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "b")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_b")
@@ -767,7 +767,7 @@ TYPE NOT DETERMINED - syntax_grab_bag.md:189:26:189:66
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "tag_with_payload")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_tag_with_payload")
@@ -781,7 +781,7 @@ TYPE NOT DETERMINED - syntax_grab_bag.md:189:26:189:66
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "record")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_record")
@@ -795,7 +795,7 @@ TYPE NOT DETERMINED - syntax_grab_bag.md:189:26:189:66
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "multiline_tuple")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_multiline_tuple")
@@ -809,7 +809,7 @@ TYPE NOT DETERMINED - syntax_grab_bag.md:189:26:189:66
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "bin_op_result")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_bin_op_result")
@@ -823,7 +823,7 @@ TYPE NOT DETERMINED - syntax_grab_bag.md:189:26:189:66
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "static_dispatch_style")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_static_dispatch_style")
@@ -1208,7 +1208,7 @@ TYPE NOT DETERMINED - syntax_grab_bag.md:189:26:189:66
 			(reflow " ")
 			(annotated code "static_dispatch_method")
 			(reflow " ")
-			(reflow "method is called on:"))
+			(reflow "method is called on."))
 		(document
 			(source-region (file "syntax_grab_bag.md") (start 189 26) (end 189 40) (annotation error) (line-text "\tstatic_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?"))
 			(line-break)
@@ -1231,7 +1231,7 @@ TYPE NOT DETERMINED - syntax_grab_bag.md:189:26:189:66
 			(reflow " ")
 			(annotated code "next_static_dispatch_method")
 			(reflow " ")
-			(reflow "method is called on:"))
+			(reflow "method is called on."))
 		(document
 			(source-region (file "syntax_grab_bag.md") (start 189 26) (end 189 66) (annotation error) (line-text "\tstatic_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?"))
 			(line-break)

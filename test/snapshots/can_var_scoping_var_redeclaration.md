@@ -50,7 +50,7 @@ VAR NAME MISSING `$` - can_var_scoping_var_redeclaration.md:4:6:4:8
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "x_")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "can_var_scoping_var_redeclaration.md") (start 4 6) (end 4 8) (annotation error) (line-text "\tvar x_ = 10 # Redeclare var - should warn but proceed"))
 			(line-break)
@@ -61,7 +61,7 @@ VAR NAME MISSING `$` - can_var_scoping_var_redeclaration.md:4:6:4:8
 				(file "can_var_scoping_var_redeclaration.md")
 				(line 3)
 				(column 6))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "can_var_scoping_var_redeclaration.md") (start 3 6) (end 3 8) (annotation dim) (line-text "\tvar x_ = 5"))))
 	(report

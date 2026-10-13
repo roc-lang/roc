@@ -105,7 +105,7 @@ UNUSED VARIABLE - can_var_scoping_regular_var.md:2:17:2:22
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "items")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_items")

@@ -530,7 +530,7 @@ TYPE NOT DETERMINED - fuzz_crash_020.md:105:55:105:72
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "lue")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_lue")
@@ -557,7 +557,7 @@ TYPE NOT DETERMINED - fuzz_crash_020.md:105:55:105:72
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "er")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_er")
@@ -584,7 +584,7 @@ TYPE NOT DETERMINED - fuzz_crash_020.md:105:55:105:72
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "est")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_est")
@@ -759,7 +759,7 @@ TYPE NOT DETERMINED - fuzz_crash_020.md:105:55:105:72
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "t")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "fuzz_crash_020.md") (start 97 2) (end 97 3) (annotation error) (line-text "\tt = (123, \"World\", tag, O, (nd, t), [1, 2, 3])"))
 			(line-break)
@@ -770,7 +770,7 @@ TYPE NOT DETERMINED - fuzz_crash_020.md:105:55:105:72
 				(file "fuzz_crash_020.md")
 				(line 88)
 				(column 1))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "fuzz_crash_020.md") (start 88 1) (end 88 2) (annotation dim) (line-text "t = ["))))
 	(report
@@ -936,7 +936,7 @@ TYPE NOT DETERMINED - fuzz_crash_020.md:105:55:105:72
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "w")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_w")
@@ -950,7 +950,7 @@ TYPE NOT DETERMINED - fuzz_crash_020.md:105:55:105:72
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "i")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_i")
@@ -964,7 +964,7 @@ TYPE NOT DETERMINED - fuzz_crash_020.md:105:55:105:72
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "rd")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_rd")
@@ -978,7 +978,7 @@ TYPE NOT DETERMINED - fuzz_crash_020.md:105:55:105:72
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "t")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_t")
@@ -1360,7 +1360,7 @@ TYPE NOT DETERMINED - fuzz_crash_020.md:105:55:105:72
 			(reflow " ")
 			(annotated code "od")
 			(reflow " ")
-			(reflow "method is called on:"))
+			(reflow "method is called on."))
 		(document
 			(source-region (file "fuzz_crash_020.md") (start 105 55) (end 105 66) (annotation error) (line-text "\tb?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?"))
 			(line-break)
@@ -1383,7 +1383,7 @@ TYPE NOT DETERMINED - fuzz_crash_020.md:105:55:105:72
 			(reflow " ")
 			(annotated code "ned")
 			(reflow " ")
-			(reflow "method is called on:"))
+			(reflow "method is called on."))
 		(document
 			(source-region (file "fuzz_crash_020.md") (start 105 55) (end 105 72) (annotation error) (line-text "\tb?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?"))
 			(line-break)

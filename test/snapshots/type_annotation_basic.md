@@ -45,7 +45,7 @@ UNUSED VARIABLE - type_annotation_basic.md:21:5:21:9
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "pair")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_pair")

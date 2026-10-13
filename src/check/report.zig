@@ -2835,38 +2835,38 @@ pub const ReportBuilder = struct {
                 try D.renderSliceInto(&.{
                     D.bytes("This call compares values with"),
                     D.bytes(equality_operator).withAnnotation(.inline_code),
-                    D.bytes(", but nothing in this program determines their type:").withNoPrecedingSpace(),
+                    D.bytes(", but nothing in this program determines their type.").withNoPrecedingSpace(),
                 }, self, &report, &report.headline);
             } else if (operator) |operator_text| {
                 try D.renderSliceInto(&.{
                     D.bytes("This call uses the"),
                     D.bytes(operator_text).withAnnotation(.inline_code),
-                    D.bytes("operator, but nothing in this program determines the type it operates on:"),
+                    D.bytes("operator, but nothing in this program determines the type it operates on."),
                 }, self, &report, &report.headline);
             } else {
                 try D.renderSliceInto(&.{
                     D.bytes("This call uses a"),
                     D.ident(data.method_name).withAnnotation(.inline_code),
-                    D.bytes("method, but nothing in this program determines the type it is called on:"),
+                    D.bytes("method, but nothing in this program determines the type it is called on."),
                 }, self, &report, &report.headline);
             }
         } else if (is_equality) {
             try D.renderSliceInto(&.{
                 D.bytes("Nothing in this program determines the type of the values this"),
                 D.bytes(equality_operator).withAnnotation(.inline_code),
-                D.bytes("compares:"),
+                D.bytes("compares."),
             }, self, &report, &report.headline);
         } else if (operator) |operator_text| {
             try D.renderSliceInto(&.{
                 D.bytes("Nothing in this program determines the type this"),
                 D.bytes(operator_text).withAnnotation(.inline_code),
-                D.bytes("operates on:"),
+                D.bytes("operates on."),
             }, self, &report, &report.headline);
         } else {
             try D.renderSliceInto(&.{
                 D.bytes("Nothing in this program determines the type this"),
                 D.ident(data.method_name).withAnnotation(.inline_code),
-                D.bytes("method is called on:"),
+                D.bytes("method is called on."),
             }, self, &report, &report.headline);
         }
 
@@ -3292,9 +3292,9 @@ pub const ReportBuilder = struct {
         var report = try Report.init(self.gpa, "Type Not Determined", "", .runtime_error);
         errdefer report.deinit();
         const headline: []const u8 = switch (data.subject) {
-            .number_literal => "Nothing in this program determines the type of this number:",
-            .string_literal => "Nothing in this program determines the type of this string:",
-            .value => "Nothing in this program determines a type this needs:",
+            .number_literal => "Nothing in this program determines the type of this number.",
+            .string_literal => "Nothing in this program determines the type of this string.",
+            .value => "Nothing in this program determines a type this needs.",
             .string_literal_shared_with_number, .number_literal_shared_with_string => unreachable,
         };
         try D.renderSliceInto(&.{D.bytes(headline)}, self, &report, &report.headline);
@@ -3382,8 +3382,8 @@ pub const ReportBuilder = struct {
         var report = try Report.init(self.gpa, "Type Mismatch", "", .runtime_error);
         errdefer report.deinit();
         const headline: []const u8 = switch (data.subject) {
-            .string_literal_shared_with_number => "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both:",
-            .number_literal_shared_with_string => "This number literal must have the same type as a string literal, and nothing in this program determines a type that can be both:",
+            .string_literal_shared_with_number => "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both.",
+            .number_literal_shared_with_string => "This number literal must have the same type as a string literal, and nothing in this program determines a type that can be both.",
             .number_literal, .string_literal, .value => unreachable,
         };
         try D.renderSliceInto(&.{D.bytes(headline)}, self, &report, &report.headline);
@@ -3419,7 +3419,7 @@ pub const ReportBuilder = struct {
 
         if (tie.interpolation_region) |interpolation_region| {
             try D.renderSliceInto(&.{
-                D.bytes("The values interpolated into this string must all have the same type:"),
+                D.bytes("The values interpolated into this string must all have the same type."),
             }, self, &report, &report.headline);
             try self.addSourceHighlightRegion(&report, interpolation_region);
             try report.document.addLineBreak();
@@ -3429,7 +3429,7 @@ pub const ReportBuilder = struct {
             try report.document.addLineBreak();
         } else {
             try D.renderSliceInto(&.{
-                D.bytes("This use gives different types to values that are interpolated into the same string, so they must all have the same type:"),
+                D.bytes("This use gives different types to values that are interpolated into the same string, so they must all have the same type."),
             }, self, &report, &report.headline);
             try self.addSourceHighlightRegion(&report, tie.use_region);
         }
@@ -3906,7 +3906,7 @@ pub const ReportBuilder = struct {
         try D.renderSliceInto(&.{
             D.bytes("This"),
             D.bytes(action),
-            D.bytes("a record whose full set of fields is not known:"),
+            D.bytes("a record whose full set of fields is not known."),
         }, self, &report, &report.headline);
 
         const region_info = self.module_env.calcRegionInfo(data.region);
@@ -5160,7 +5160,7 @@ pub const ReportBuilder = struct {
                 D.bytes("method uses"),
                 D.ident(data.captured_name).withAnnotation(.inline_code),
                 D.bytes(",").withNoPrecedingSpace(),
-                D.bytes("which is defined in the function body around this method's type:"),
+                D.bytes("which is defined in the function body around this method's type."),
             }, self, &report, &report.headline);
         } else {
             try D.renderSliceInto(&.{
@@ -5172,7 +5172,7 @@ pub const ReportBuilder = struct {
                 D.bytes("which uses"),
                 D.ident(data.captured_name).withAnnotation(.inline_code),
                 D.bytes(",").withNoPrecedingSpace(),
-                D.bytes("which is defined in the function body around this method's type:"),
+                D.bytes("which is defined in the function body around this method's type."),
             }, self, &report, &report.headline);
         }
 
