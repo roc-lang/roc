@@ -7,15 +7,20 @@
  * argument register (x0 / rdi). `Call`'s extern layout fixes the byte offsets (8 bytes per
  * field): target@0 gp@8 sse@16 stack@24 stack_size@32 sret@40 res_gp@48 res_sse@56.
  *
- * Both the bare and underscore-prefixed symbols are defined so the Zig `extern` resolves on
- * ELF (no prefix) and Mach-O (leading underscore) alike. */
+ * The symbol is spelled the way the object format spells a C symbol, so the Zig `extern`
+ * resolves on ELF and COFF (no prefix) and on Mach-O (leading underscore), and no second
+ * name is left over for a platform link to trip on. */
+
+#if defined(__APPLE__)
+#define ROC_CALL_TRAMPOLINE _rocCallTrampoline
+#else
+#define ROC_CALL_TRAMPOLINE rocCallTrampoline
+#endif
 
 #if defined(__aarch64__)
 
-.global rocCallTrampoline
-.global _rocCallTrampoline
-rocCallTrampoline:
-_rocCallTrampoline:
+.global ROC_CALL_TRAMPOLINE
+ROC_CALL_TRAMPOLINE:
 	stp x29, x30, [sp, #-32]!
 	stp x19, x20, [sp, #16]
 	mov x29, sp
@@ -57,10 +62,8 @@ _rocCallTrampoline:
 
 #elif defined(__x86_64__)
 
-.global rocCallTrampoline
-.global _rocCallTrampoline
-rocCallTrampoline:
-_rocCallTrampoline:
+.global ROC_CALL_TRAMPOLINE
+ROC_CALL_TRAMPOLINE:
 #if defined(_WIN64)
 	push %rbp
 	mov %rsp, %rbp

@@ -55,15 +55,26 @@ the shim views that image without running semantic compiler stages.
 
 `roc` embeds one shim archive, built for the target `roc` itself runs on, and
 links it into any platform target with the same OS and architecture. The shim
-calls the OS directly and brings its own compiler-rt, so the platform's C ABI
-does not matter: the same archive serves `x64win` and `x64mingw`.
+calls the OS directly, so the platform's C ABI does not matter: the same
+archive serves `x64win` and `x64mingw`.
 
-On Windows the shim's compiler-rt is private. A platform host carries the same
-helpers (`compiler_builtins` in a Rust host, compiler-rt in a Zig or C host),
-and a COFF link rejects the duplicate weak definitions that ELF and Mach-O let
-coexist. The build gives every global in the shim's `compiler_rt.obj` a
-shim-only name (see `src/build/coff_private_compiler_rt.zig`) and then links the
-result beside a platform object that defines the same helpers.
+The archive holds to the boundary the machine-code shim does, and the same
+build-time verifier (`src/machine_code_shim/archive_check.zig`) checks it
+before it is embedded:
+
+- It defines its three entrypoints and nothing else a platform could collide
+  with.
+- It leaves the Roc host callbacks, the C memory and math routines of
+  `shim_symbols`, `log`, and the OS for the platform link to supply.
+- It neither bundles a compiler-rt nor depends on the platform's. A platform
+  host carries its own (`compiler_builtins` in a Rust host, compiler-rt in a
+  Zig or C one). ELF and Mach-O would let either copy answer for the other,
+  and a COFF link rejects the second definition outright. The 128-bit helpers
+  the shim's code calls are the libcall-free ones in
+  `builtins/native_runtime_libcalls.zig`, and its stack probe is
+  `src/shim_stack_probe.zig`; both are compiled into the shim under names
+  local to its object. A 32-bit target adds the 64-bit helpers of
+  `src/shim_compiler_rt.zig` the same way.
 
 ## Key Symbols
 

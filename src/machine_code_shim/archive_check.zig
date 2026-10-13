@@ -1,10 +1,17 @@
-//! Build-time preparation and verification of the machine-code shim's complete symbol contract.
+//! Build-time preparation and verification of a shim archive's complete symbol contract.
 //! This tool is a dependency of embedding/installing the archive, never a part
 //! of Roc's runtime. Unknown imports and non-interface exports are errors even
 //! when weak or hidden: a platform must not supply or interpose Roc internals.
+//!
+//! Both shims hold to the same boundary: three entrypoints out, and the Roc
+//! host callbacks, the platform's C memory and math routines, and the OS in.
+//! Compiler-rt helpers are on neither side. The interpreter shim differs in
+//! what it is made of, a second member holding its call trampoline and
+//! thread-local state, and in a few routines only it calls.
 const std = @import("std");
 const symbols = @import("shim_symbols");
 const Os = enum { linux, macos, windows };
+const Kind = enum { @"machine-code", interpreter };
 
 const ArchiveError = std.fmt.ParseIntError || error{
     DuplicateExport,
@@ -30,7 +37,7 @@ const ArchiveError = std.fmt.ParseIntError || error{
 const PrepareError = ArchiveError || std.mem.Allocator.Error || error{NoSpaceLeft};
 const MainError = PrepareError || std.process.Args.ToSliceError ||
     std.Io.Dir.ReadFileAllocError || std.Io.Dir.WriteFileError || error{
-    ExpectedOsInputAndOutputPaths,
+    ExpectedKindOsInputAndOutputPaths,
     UnsupportedTarget,
 };
 
@@ -39,6 +46,26 @@ const exports = [_][]const u8{
     symbols.roc_entrypoint,
     symbols.roc_shim_default_main,
 };
+const interpreter_exports = [_][]const u8{
+    symbols.roc_shim_get_ops,
+    symbols.roc_entrypoint,
+    symbols.roc_entrypoint_from_image,
+};
+/// Defined by one member of the interpreter archive for another to call.
+const interpreter_internal = [_][]const u8{"rocCallTrampoline"};
+/// What only the interpreter asks of the platform's C library and the OS: the
+/// one transcendental function it evaluates directly, the dynamic thread-local
+/// resolvers, and on macOS the non-local exit its crash boundary uses.
+const interpreter_c_imports = [_][]const u8{"log"};
+const interpreter_linux_imports = [_][]const u8{ "__tls_get_addr", "___tls_get_addr" };
+const interpreter_darwin_imports = [_][]const u8{ "_setjmp", "_longjmp" };
+
+fn exportsOf(kind: Kind) *const [3][]const u8 {
+    return switch (kind) {
+        .@"machine-code" => &exports,
+        .interpreter => &interpreter_exports,
+    };
+}
 const imports = symbols.runtime_set ++ .{
     symbols.roc_shim_hosted_fns,
     symbols.roc_shim_hosted_count,
@@ -81,13 +108,41 @@ const windows_imports = c_imports ++ .{
 };
 const Check = struct {
     os: Os,
+    kind: Kind = .@"machine-code",
     found: [exports.len]bool = @splat(false),
     members: usize = 0,
+
+    /// Whether the interpreter archive may leave `name` for the link to supply
+    /// beyond what the machine-code shim may.
+    fn interpreterImport(self: *const Check, name: []const u8) bool {
+        if (self.kind != .interpreter) return false;
+        if (contains(&interpreter_internal, name) or contains(&interpreter_c_imports, name)) return true;
+        return switch (self.os) {
+            .linux => contains(&interpreter_linux_imports, name),
+            .macos => contains(&interpreter_darwin_imports, name),
+            .windows => false,
+        };
+    }
+
+    /// Whether `name` is a definition the interpreter archive may carry beside
+    /// its entrypoints. On Windows the compiler gives two kinds of constant a
+    /// global COMDAT definition, which the linker folds with any identical
+    /// one: the cell holding an imported symbol's address, and a literal pool
+    /// entry named for its own bytes.
+    fn interpreterDefinition(self: *const Check, name: []const u8) bool {
+        if (self.kind != .interpreter) return false;
+        if (contains(&interpreter_internal, name)) return true;
+        if (self.os != .windows) return false;
+        if (std.mem.cutPrefix(u8, name, ".refptr.")) |target| return contains(&imports, target);
+        return std.mem.startsWith(u8, name, "__real@") or std.mem.startsWith(u8, name, "__xmm@") or
+            std.mem.startsWith(u8, name, "__ymm@");
+    }
 
     fn symbol(self: *Check, name: []const u8, defined: bool, global: bool) ArchiveError!void {
         if (!global) return;
         if (defined) {
-            for (exports, 0..) |expected, i| {
+            if (self.interpreterDefinition(name)) return;
+            for (exportsOf(self.kind), 0..) |expected, i| {
                 if (std.mem.eql(u8, name, expected)) {
                     if (self.found[i]) return error.DuplicateExport;
                     self.found[i] = true;
@@ -97,7 +152,7 @@ const Check = struct {
             if (!@import("builtin").is_test) std.debug.print("unexpected global definition: {s}\n", .{name});
             return error.UnexpectedExport;
         }
-        if (contains(&imports, name)) return;
+        if (contains(&imports, name) or self.interpreterImport(name)) return;
         const permitted = switch (self.os) {
             .linux => contains(&linux_imports, name),
             .macos => contains(&darwin_imports, name) or contains(&c_imports, name),
@@ -111,7 +166,7 @@ const Check = struct {
 
     fn finish(self: *const Check) ArchiveError!void {
         if (self.members == 0) return error.NoObjectMembers;
-        for (exports, self.found) |name, found| {
+        for (exportsOf(self.kind), self.found) |name, found| {
             if (!found) {
                 if (!@import("builtin").is_test) std.debug.print("missing shim export: {s}\n", .{name});
                 return error.MissingExport;
@@ -129,19 +184,23 @@ fn contains(names: []const []const u8, name: []const u8) bool {
 pub fn main(init: std.process.Init) MainError!void {
     const gpa = init.gpa;
     const args = try init.minimal.args.toSlice(init.arena.allocator());
-    if (args.len != 4) return error.ExpectedOsInputAndOutputPaths;
-    const os = std.meta.stringToEnum(Os, args[1]) orelse return error.UnsupportedTarget;
-    const bytes = try std.Io.Dir.cwd().readFileAlloc(init.io, args[2], gpa, .unlimited);
+    if (args.len != 5) return error.ExpectedKindOsInputAndOutputPaths;
+    const kind = std.meta.stringToEnum(Kind, args[1]) orelse return error.UnsupportedTarget;
+    const os = std.meta.stringToEnum(Os, args[2]) orelse return error.UnsupportedTarget;
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(init.io, args[3], gpa, .unlimited);
     defer gpa.free(bytes);
-    const prepared = if (os == .windows) try prepareCoffArchive(gpa, bytes) else bytes;
+    // The machine-code shim is one object, so its COFF form can have every
+    // private definition localized. The interpreter's members refer to each
+    // other, and it is checked as built.
+    const prepared = if (os == .windows and kind == .@"machine-code") try prepareCoffArchive(gpa, bytes) else bytes;
     defer if (prepared.ptr != bytes.ptr) gpa.free(prepared);
-    var check: Check = .{ .os = os };
+    var check: Check = .{ .os = os, .kind = kind };
     scanArchive(prepared, &check) catch |err| {
-        std.debug.print("FAILED: {s}: {s}\n", .{ args[2], @errorName(err) });
+        std.debug.print("FAILED: {s}: {s}\n", .{ args[3], @errorName(err) });
         return err;
     };
     try check.finish();
-    try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[3], .data = prepared });
+    try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[4], .data = prepared });
 }
 
 // All byte access is checked. Truncated files, missing symbol tables, unknown
@@ -233,7 +292,7 @@ fn scanElfClass(comptime Word: type, bytes: []const u8, check: *Check) ArchiveEr
     var found_table = false;
     for (0..shnum) |i| {
         const sh = sections[i * shsize ..][0..section_size];
-        if (try int(Word, sh, 8) & std.elf.SHF_TLS != 0) return error.UnexpectedTls;
+        if (check.kind == .@"machine-code" and try int(Word, sh, 8) & std.elf.SHF_TLS != 0) return error.UnexpectedTls;
         if (try int(u32, sh, 4) != std.elf.SHT_SYMTAB) continue;
         found_table = true;
         const link = try int(u32, sh, if (wide) 40 else 24);
@@ -249,7 +308,7 @@ fn scanElfClass(comptime Word: type, bytes: []const u8, check: *Check) ArchiveEr
             const info = sym[if (wide) 4 else 12];
             // Local TLS is equally invalid: it still needs the host to install
             // a TLS image, even when codegen does not call a global resolver.
-            if (info & 0xf == std.elf.STT_TLS) return error.UnexpectedTls;
+            if (check.kind == .@"machine-code" and info & 0xf == std.elf.STT_TLS) return error.UnexpectedTls;
             const bind = info >> 4;
             if (bind == std.elf.STB_LOCAL) continue;
             const name = try string(strings, try int(u32, sym, 0));
@@ -351,6 +410,51 @@ test "OS dependencies are explicit and target specific" {
     try darwin.symbol("sys_icache_invalidate", false, true);
     try windows.symbol("__imp_FlushInstructionCache", false, true);
     try std.testing.expectError(error.UnexpectedImport, windows.symbol("__imp_unknown", false, true));
+}
+
+test "the interpreter contract differs only in what that shim is made of" {
+    var interpreter: Check = .{ .os = .linux, .kind = .interpreter };
+    var machine_code: Check = .{ .os = .linux };
+
+    // Its second member defines the call trampoline for the first to call.
+    try interpreter.symbol("rocCallTrampoline", true, true);
+    try interpreter.symbol("rocCallTrampoline", false, true);
+    try std.testing.expectError(error.UnexpectedExport, machine_code.symbol("rocCallTrampoline", true, true));
+    try std.testing.expectError(error.UnexpectedImport, machine_code.symbol("rocCallTrampoline", false, true));
+
+    // It evaluates a logarithm and keeps thread-local state.
+    try interpreter.symbol("log", false, true);
+    try interpreter.symbol("__tls_get_addr", false, true);
+    try std.testing.expectError(error.UnexpectedImport, machine_code.symbol("log", false, true));
+    try std.testing.expectError(error.UnexpectedImport, machine_code.symbol("__tls_get_addr", false, true));
+
+    // Compiler-rt stays on neither side of either boundary.
+    for ([_]*Check{ &interpreter, &machine_code }) |check| {
+        try std.testing.expectError(error.UnexpectedImport, check.symbol("__udivti3", false, true));
+        try std.testing.expectError(error.UnexpectedExport, check.symbol("__udivti3", true, true));
+        try std.testing.expectError(error.UnexpectedExport, check.symbol("memcpy", true, true));
+    }
+
+    // Each shim has its own third entrypoint.
+    try std.testing.expectError(error.UnexpectedExport, interpreter.symbol(symbols.roc_shim_default_main, true, true));
+    try std.testing.expectError(error.UnexpectedExport, machine_code.symbol(symbols.roc_entrypoint_from_image, true, true));
+    for (interpreter_exports) |name| try interpreter.symbol(name, true, true);
+    interpreter.members = 2;
+    try interpreter.finish();
+}
+
+test "the interpreter's Windows constants are the only extra definitions" {
+    var windows: Check = .{ .os = .windows, .kind = .interpreter };
+    try windows.symbol(".refptr." ++ symbols.roc_shim_hosted_fns, true, true);
+    try windows.symbol("__real@3ff0000000000000", true, true);
+    try std.testing.expectError(error.UnexpectedExport, windows.symbol(".refptr.unknown_future_helper", true, true));
+    try std.testing.expectError(error.UnexpectedExport, windows.symbol("__chkstk", true, true));
+    try std.testing.expectError(error.UnexpectedImport, windows.symbol("___chkstk_ms", false, true));
+
+    var linux: Check = .{ .os = .linux, .kind = .interpreter };
+    try std.testing.expectError(error.UnexpectedExport, linux.symbol("__real@3ff0000000000000", true, true));
+    var machine_code: Check = .{ .os = .windows };
+    try std.testing.expectError(error.UnexpectedExport, machine_code.symbol("__real@3ff0000000000000", true, true));
 }
 
 test "empty and malformed archives cannot pass" {

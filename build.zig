@@ -120,8 +120,6 @@ fn copyMingwRuntimeToTestPlatform(
 /// `*mingw` target; the startup archive is built from
 /// `src/default_platform/msvc_runtime/`.
 const msvc_runtime = @import("src/echo_platform/msvc_runtime.zig");
-/// The name prefix that keeps the Windows interpreter shim's compiler-rt private.
-const coff_private_compiler_rt = @import("src/build/coff_private_compiler_rt.zig");
 
 /// One startup archive per architecture, shared by every platform it is copied to.
 var msvc_runtime_libs: [2]?*Step.Compile = .{ null, null };
@@ -6028,6 +6026,98 @@ fn wasmObjectArtifact(b: *std.Build, obj: *Step.Compile) std.Build.LazyPath {
     return obj.getEmittedBinDirectory().path(b, zcu_name);
 }
 
+/// The 64-bit arithmetic and AAPCS helpers a shim's own code calls on a
+/// 32-bit target, to be compiled into it with local binding (see
+/// src/shim_compiler_rt.zig).
+///
+/// Reuses the toolchain's arithmetic and AAPCS implementations without
+/// importing its public compiler-rt root, which exports every helper.
+fn shimCompilerRtModule(b: *std.Build, target: ResolvedTarget) *std.Build.Module {
+    const private_rt = b.addWriteFiles();
+    const root = private_rt.addCopyFile(b.path("src/shim_compiler_rt.zig"), "compiler_rt.zig");
+    for ([_][]const u8{
+        "int.zig",             "udivmod.zig",             "arm.zig",
+        "udivmodsi4_test.zig", "udivmoddi4_test.zig",     "udivmodti4_test.zig",
+        "divti3_test.zig",     "modti3_test.zig",         "float_from_int.zig",
+        "int_from_float.zig",  "float_from_int_test.zig", "int_from_float_test.zig",
+    }) |file| {
+        _ = private_rt.addCopyFile(std.Build.LazyPath.zig_lib.path(b, b.pathJoin(&.{ "compiler_rt", file })), b.pathJoin(&.{ "compiler_rt", file }));
+    }
+    return b.createModule(.{
+        .root_source_file = root,
+        .target = target,
+        .optimize = .fast,
+    });
+}
+
+/// The interpreter shim archive `roc` embeds and links into a platform
+/// executable. It is static and calls the OS directly, so it never depends on
+/// a libc being present.
+fn addInterpreterShimLib(
+    b: *std.Build,
+    roc_modules: modules.RocModules,
+    target: ResolvedTarget,
+    optimize: OptimizeMode,
+    strip: bool,
+    omit_frame_pointer: ?bool,
+    shim_host_abi_module: *std.Build.Module,
+    compiled_builtins_module: *std.Build.Module,
+    write_compiled_builtins: *Step.WriteFile,
+) *Step.Compile {
+    const interpreter_shim_lib = b.addLibrary(.{
+        .name = "roc_interpreter_shim",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/interpreter_shim/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = strip,
+            .omit_frame_pointer = omit_frame_pointer,
+            .pic = true, // Enable Position Independent Code for PIE compatibility
+        }),
+        .linkage = .static,
+    });
+    configureBackend(interpreter_shim_lib, target);
+    // Keep compiler-only modules out of this runtime archive. In particular,
+    // bundle links libc through zstd even when its source is never imported.
+    interpreter_shim_lib.root_module.addImport("base", roc_modules.base);
+    interpreter_shim_lib.root_module.addImport("builtins", roc_modules.builtins);
+    interpreter_shim_lib.root_module.addImport("eval", roc_modules.eval);
+    interpreter_shim_lib.root_module.addImport("ipc", roc_modules.ipc);
+    interpreter_shim_lib.root_module.addImport("layout", roc_modules.layout);
+    interpreter_shim_lib.root_module.addImport("lir", roc_modules.lir);
+    if (target.result.os.tag == .linux) interpreter_shim_lib.root_module.link_libc = false;
+    interpreter_shim_lib.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+    interpreter_shim_lib.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
+    interpreter_shim_lib.root_module.addImport("shim_io", b.createModule(.{
+        .root_source_file = b.path("src/shim_io.zig"),
+    }));
+    interpreter_shim_lib.root_module.addImport("shim_host_abi", shim_host_abi_module);
+    // Add compiled builtins module for loading builtin types
+    interpreter_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    interpreter_shim_lib.step.dependOn(&write_compiled_builtins.step);
+    if (target.result.os.tag == .linux and target.result.cpu.arch.isArm()) {
+        // As for the machine-code shim: a crash aborts in the platform host
+        // and shim_io disables stack tracing, so nothing unwinds through this
+        // archive and it must not depend on EHABI personalities.
+        interpreter_shim_lib.root_module.unwind_tables = .none;
+    }
+    // A platform host carries its own compiler-rt. Bundling the complete
+    // public one here would let either copy answer for the other on ELF and
+    // Mach-O, and COFF rejects the second definition outright. The helpers
+    // this archive's code calls are compiled into it with local binding
+    // instead, and its symbol contract is checked before it is embedded.
+    interpreter_shim_lib.bundle_compiler_rt = false;
+    if (target.result.os.tag == .linux and
+        (target.result.cpu.arch == .x86 or target.result.cpu.arch.isArm()))
+    {
+        interpreter_shim_lib.root_module.addImport("shim_compiler_rt", shimCompilerRtModule(b, target));
+    }
+    interpreter_shim_lib.root_module.addImport("shim_stack_probe", b.createModule(.{
+        .root_source_file = b.path("src/shim_stack_probe.zig"),
+    }));
+    return interpreter_shim_lib;
+}
+
 /// The run shim uses builtin function addresses directly. It must not link the
 /// exported builtins payload used by compiled object output: those exports would
 /// expose compiler internals to the platform linker.
@@ -6085,26 +6175,13 @@ fn addMachineCodeShimLib(
     machine_code_shim_lib.root_module.addImport("shim_host_abi", shim_host_abi_module);
     machine_code_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
     machine_code_shim_lib.step.dependOn(&write_compiled_builtins.step);
+    machine_code_shim_lib.root_module.addImport("shim_stack_probe", b.createModule(.{
+        .root_source_file = b.path("src/shim_stack_probe.zig"),
+    }));
     if (target.result.os.tag == .linux and
         (target.result.cpu.arch == .x86 or target.result.cpu.arch.isArm()))
     {
-        // Reuse the toolchain's arithmetic and AAPCS implementations without
-        // importing its public compiler-rt root (which exports every helper).
-        const private_rt = b.addWriteFiles();
-        const root = private_rt.addCopyFile(b.path("src/machine_code_shim/compiler_rt.zig"), "compiler_rt.zig");
-        for ([_][]const u8{
-            "int.zig",             "udivmod.zig",             "arm.zig",
-            "udivmodsi4_test.zig", "udivmoddi4_test.zig",     "udivmodti4_test.zig",
-            "divti3_test.zig",     "modti3_test.zig",         "float_from_int.zig",
-            "int_from_float.zig",  "float_from_int_test.zig", "int_from_float_test.zig",
-        }) |file| {
-            _ = private_rt.addCopyFile(std.Build.LazyPath.zig_lib.path(b, b.pathJoin(&.{ "compiler_rt", file })), b.pathJoin(&.{ "compiler_rt", file }));
-        }
-        machine_code_shim_lib.root_module.addImport("private_compiler_rt", b.createModule(.{
-            .root_source_file = root,
-            .target = target,
-            .optimize = .fast,
-        }));
+        machine_code_shim_lib.root_module.addImport("private_compiler_rt", shimCompilerRtModule(b, target));
     }
     // The shim defines its compiler-private stack probe internally. Do not
     // bundle the complete compiler-rt object: its broad set of weak definitions
@@ -6360,43 +6437,7 @@ fn addMainExe(
     shim_host_abi_module.addImport("builtins", roc_modules.builtins);
     shim_host_abi_module.addImport("roc_args", roc_modules.roc_args);
 
-    // Create LIR interpreter shim static library at build time - fully static without libc
-    //
-    // NOTE we do NOT link libC here to avoid dynamic dependency on libC
-    const interpreter_shim_lib = b.addLibrary(.{
-        .name = "roc_interpreter_shim",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/interpreter_shim/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .strip = strip,
-            .omit_frame_pointer = omit_frame_pointer,
-            .pic = true, // Enable Position Independent Code for PIE compatibility
-        }),
-        .linkage = .static,
-    });
-    configureBackend(interpreter_shim_lib, target);
-    // Keep compiler-only modules out of this runtime archive. In particular,
-    // bundle links libc through zstd even when its source is never imported.
-    interpreter_shim_lib.root_module.addImport("base", roc_modules.base);
-    interpreter_shim_lib.root_module.addImport("builtins", roc_modules.builtins);
-    interpreter_shim_lib.root_module.addImport("eval", roc_modules.eval);
-    interpreter_shim_lib.root_module.addImport("ipc", roc_modules.ipc);
-    interpreter_shim_lib.root_module.addImport("layout", roc_modules.layout);
-    interpreter_shim_lib.root_module.addImport("lir", roc_modules.lir);
-    if (target.result.os.tag == .linux) interpreter_shim_lib.root_module.link_libc = false;
-    interpreter_shim_lib.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    interpreter_shim_lib.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    interpreter_shim_lib.root_module.addImport("shim_io", b.createModule(.{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    interpreter_shim_lib.root_module.addImport("shim_host_abi", shim_host_abi_module);
-    // Add compiled builtins module for loading builtin types
-    interpreter_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
-    interpreter_shim_lib.step.dependOn(&write_compiled_builtins.step);
-    // Include the pre-built builtins object
-    interpreter_shim_lib.root_module.addObjectFile(builtins_obj.getEmittedBin());
-    interpreter_shim_lib.bundle_compiler_rt = true;
+    const interpreter_shim_lib = addInterpreterShimLib(b, roc_modules, target, optimize, strip, omit_frame_pointer, shim_host_abi_module, compiled_builtins_module, write_compiled_builtins);
     // Zig names archive members after the paths of the objects it packed,
     // which puts a `.zig-cache` key and the build machine's home directory
     // into the archive; `roc` embeds the archive, so strip the names to bare
@@ -6432,54 +6473,27 @@ fn addMainExe(
     const embedded_digests = b.addRunArtifact(embedded_digests_tool);
     const embedded_digests_source = embedded_digests.addOutputFileArg("embedded_digests.zig");
     const interpreter_shim_filename = if (target.result.os.tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a";
+    // Build-time only: validate the exact archives that will be installed and
+    // embedded. This executable is never linked into Roc or a user's program.
+    const archive_checker = b.addExecutable(.{
+        .name = "machine_code_shim_archive_check",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/machine_code_shim/archive_check.zig"),
+            .target = hostToolTarget(b, .debug),
+            .optimize = .debug,
+        }),
+    });
+    archive_checker.root_module.addAnonymousImport("shim_symbols", .{
+        .root_source_file = b.path("src/builtins/shim_symbols.zig"),
+    });
+    configureBackend(archive_checker, b.graph.host);
+    const check_interpreter_archive = b.addRunArtifact(archive_checker);
+    check_interpreter_archive.addArgs(&.{ "interpreter", @tagName(target.result.os.tag) });
+    check_interpreter_archive.addFileArg(interpreter_shim_lib.getEmittedBin());
+    const checked_interpreter_shim = check_interpreter_archive.addOutputFileArg(interpreter_shim_filename);
     const strip_interpreter_shim_names = b.addRunArtifact(archive_member_names_tool);
     strip_interpreter_shim_names.addArg(@tagName(target.result.os.tag));
-    if (target.result.os.tag == .windows) {
-        // A COFF link rejects two definitions of a compiler-rt helper where
-        // ELF and Mach-O let weak definitions coexist, so on Windows the
-        // shim's bundled compiler-rt gets names private to the shim. Otherwise
-        // it collides with the compiler-rt a platform host carries (see
-        // src/build/coff_private_compiler_rt.zig).
-        const seal_tool = b.addExecutable(.{
-            .name = "coff_private_compiler_rt",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/build/coff_private_compiler_rt.zig"),
-                .target = hostToolTarget(b, .debug),
-                .optimize = .debug,
-            }),
-        });
-        configureBackend(seal_tool, b.graph.host);
-        const seal_interpreter_shim = b.addRunArtifact(seal_tool);
-        seal_interpreter_shim.addFileArg(interpreter_shim_lib.getEmittedBin());
-        const sealed_interpreter_shim = seal_interpreter_shim.addOutputFileArg("roc_interpreter_shim.lib");
-
-        // Prove it on the archive that gets embedded: link the shim's
-        // compiler-rt, the way an MSVC-ABI link does, beside a platform object
-        // defining the same helpers. A name the seal missed is a duplicate
-        // symbol here.
-        const platform_compiler_rt = b.addObject(.{
-            .name = "platform_compiler_rt",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/interpreter_shim/test/platform_compiler_rt.zig"),
-                .target = target,
-                .optimize = .safe,
-            }),
-        });
-        platform_compiler_rt.bundle_compiler_rt = false;
-        configureBackend(platform_compiler_rt, target);
-        const link_beside_platform = b.addSystemCommand(&.{ b.graph.zig_exe, "lld-link", "/nodefaultlib", "/dll", "/noentry" });
-        link_beside_platform.addArg(if (target.result.cpu.arch == .aarch64) "/machine:arm64" else "/machine:x64");
-        link_beside_platform.addArg("/include:" ++ coff_private_compiler_rt.private_prefix ++ "memcpy");
-        _ = link_beside_platform.addPrefixedOutputFileArg("/out:", "interpreter_shim_beside_platform.dll");
-        link_beside_platform.addFileArg(platform_compiler_rt.getEmittedBin());
-        link_beside_platform.addFileArg(sealed_interpreter_shim);
-        link_beside_platform.expectExitCode(0);
-
-        strip_interpreter_shim_names.step.dependOn(&link_beside_platform.step);
-        strip_interpreter_shim_names.addFileArg(sealed_interpreter_shim);
-    } else {
-        strip_interpreter_shim_names.addFileArg(interpreter_shim_lib.getEmittedBin());
-    }
+    strip_interpreter_shim_names.addFileArg(checked_interpreter_shim);
     const bare_interpreter_shim = strip_interpreter_shim_names.addOutputFileArg(interpreter_shim_filename);
     embedded_digests.addArg("interpreter_shim");
     embedded_digests.addFileArg(bare_interpreter_shim);
@@ -6518,6 +6532,9 @@ fn addMainExe(
             .root_source_file = b.path("src/shim_io.zig"),
         }));
         machine_code_shim_test.root_module.addImport("shim_host_abi", shim_host_abi_module);
+        machine_code_shim_test.root_module.addImport("shim_stack_probe", b.createModule(.{
+            .root_source_file = b.path("src/shim_stack_probe.zig"),
+        }));
         machine_code_shim_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
         machine_code_shim_test.step.dependOn(&write_compiled_builtins.step);
         machine_code_shim_test.root_module.addObjectFile(builtins_obj.getEmittedBin());
@@ -6559,22 +6576,8 @@ fn addMainExe(
         }
     }
 
-    // Build-time only: validate the exact archive that will be installed and
-    // embedded. This executable is never linked into Roc or a user's program.
-    const archive_checker = b.addExecutable(.{
-        .name = "machine_code_shim_archive_check",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/machine_code_shim/archive_check.zig"),
-            .target = hostToolTarget(b, .debug),
-            .optimize = .debug,
-        }),
-    });
-    archive_checker.root_module.addAnonymousImport("shim_symbols", .{
-        .root_source_file = b.path("src/builtins/shim_symbols.zig"),
-    });
-    configureBackend(archive_checker, b.graph.host);
     const check_archive = b.addRunArtifact(archive_checker);
-    check_archive.addArg(@tagName(target.result.os.tag));
+    check_archive.addArgs(&.{ "machine-code", @tagName(target.result.os.tag) });
     check_archive.addFileArg(machine_code_shim_lib.getEmittedBin());
     const machine_code_shim_filename = if (target.result.os.tag == .windows) "roc_machine_code_shim.lib" else "libroc_machine_code_shim.a";
     const checked_machine_code_shim = check_archive.addOutputFileArg(machine_code_shim_filename);
@@ -6601,6 +6604,7 @@ fn addMainExe(
     if (add_machine_code_shim_test) {
         const checks = b.step("check-machine-code-shim-targets", "Check all shipped shim symbol contracts");
         checks.dependOn(&check_archive.step);
+        checks.dependOn(&check_interpreter_archive.step);
         const queries = [_]std.Target.Query{
             .{ .cpu_arch = .x86, .os_tag = .linux, .abi = .musl },
             .{ .cpu_arch = .arm, .os_tag = .linux, .abi = .musleabihf },
@@ -6622,7 +6626,7 @@ fn addMainExe(
                 target.result.abi == cross_target.result.abi) continue;
             const cross_shim = addMachineCodeShimLib(b, roc_modules, cross_target, optimize, strip, omit_frame_pointer, shim_host_abi_module, compiled_builtins_module, write_compiled_builtins);
             const check_cross = b.addRunArtifact(archive_checker);
-            check_cross.addArg(@tagName(cross_target.result.os.tag));
+            check_cross.addArgs(&.{ "machine-code", @tagName(cross_target.result.os.tag) });
             check_cross.addFileArg(cross_shim.getEmittedBin());
             const checked_cross = check_cross.addOutputFileArg(if (cross_target.result.os.tag == .windows) "roc_machine_code_shim.lib" else "libroc_machine_code_shim.a");
             checks.dependOn(&check_cross.step);
@@ -6632,6 +6636,17 @@ fn addMainExe(
                 const link_check = addMachineCodeShimLinkCheck(b, roc_modules, cross_target, optimize, checked_cross);
                 checks.dependOn(&link_check.step);
             }
+
+            // The interpreter shim hashes with the SHA-256 instructions `roc`
+            // requires of its target, which the bare query leaves out.
+            var interpreter_query = query;
+            addSha256Floor(&interpreter_query);
+            const cross_interpreter_shim = addInterpreterShimLib(b, roc_modules, b.resolveTargetQuery(interpreter_query), optimize, strip, omit_frame_pointer, shim_host_abi_module, compiled_builtins_module, write_compiled_builtins);
+            const check_cross_interpreter = b.addRunArtifact(archive_checker);
+            check_cross_interpreter.addArgs(&.{ "interpreter", @tagName(cross_target.result.os.tag) });
+            check_cross_interpreter.addFileArg(cross_interpreter_shim.getEmittedBin());
+            _ = check_cross_interpreter.addOutputFileArg(if (cross_target.result.os.tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a");
+            checks.dependOn(&check_cross_interpreter.step);
         }
         // Link real COFF consumers with deliberate platform/private collisions.
         // Both target ABIs must accept the prepared archive and its rebuilt index.
@@ -6645,7 +6660,7 @@ fn addMainExe(
             fixture.root_module.addCSourceFile(.{ .file = b.path("src/machine_code_shim/test/private_symbols.c") });
             fixture.bundle_compiler_rt = false;
             const prepare_fixture = b.addRunArtifact(archive_checker);
-            prepare_fixture.addArg("windows");
+            prepare_fixture.addArgs(&.{ "machine-code", "windows" });
             prepare_fixture.addFileArg(fixture.getEmittedBin());
             const prepared_fixture = prepare_fixture.addOutputFileArg("shim.lib");
             const consumer = b.addExecutable(.{

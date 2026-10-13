@@ -159,6 +159,35 @@ pub fn exportLibcalls(comptime linkage: std.builtin.GlobalLinkage) void {
     }
 }
 
+/// Bind every libcall in `entries` to its implementation here under a name
+/// local to the object being compiled, for an archive that is linked into a
+/// platform it must stay independent of.
+///
+/// `exportLibcalls` would not do: a platform host carries its own compiler-rt,
+/// and a global definition here either answers for the host's or collides
+/// with it. A local one resolves the calls the compiler emits in this object
+/// and takes no part in the link.
+///
+/// LLVM introduces these calls during instruction selection, after it has
+/// dropped definitions nothing refers to, so the names are given in the
+/// assembler, which also keeps the implementations alive. Call this from a
+/// function the object is certain to contain.
+pub inline fn bindLocally() void {
+    // Mach-O spells a C symbol with a leading underscore.
+    const prefix = if (builtin.object_format == .macho) "_" else "";
+    const operand = if (builtin.cpu.arch.isArm() or builtin.cpu.arch.isAarch64()) "%[helper]" else "%[helper:P]";
+    inline for (entries) |entry| {
+        const name = prefix ++ entry[0];
+        // ELF states the binding. COFF and Mach-O have no `.local` directive
+        // and bind a symbol locally unless it is declared global.
+        asm volatile ((if (builtin.object_format == .elf) ".local " ++ name ++ "\n" else "") ++
+                ".set " ++ name ++ ", " ++ operand
+            :
+            : [helper] "X" (entry[1]),
+        );
+    }
+}
+
 test "resolve maps known compiler-rt symbols and rejects others" {
     try std.testing.expect(resolve("__divti3") != null);
     try std.testing.expect(resolve("__fixsfti") != null);

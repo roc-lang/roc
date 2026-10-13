@@ -1,4 +1,4 @@
-//! Private 32-bit libcall support for the machine-code shim.
+//! Private 32-bit libcall support for the shim archives.
 //! The build places unmodified Zig compiler-rt sources beside this root.
 //! The explicit helpers below have local binding and cannot be supplied or
 //! interposed by the platform. Arithmetic remains owned by the Zig toolchain.
@@ -122,6 +122,8 @@ const arm_helpers = .{
     .{ "__aeabi_memclr", &arm.__aeabi_memclr },
     .{ "__aeabi_memclr4", &arm.__aeabi_memclr4 },
     .{ "__aeabi_memclr8", &arm.__aeabi_memclr8 },
+    .{ "__aeabi_l2d", &l2d },
+    .{ "__aeabi_l2f", &l2f },
     .{ "__aeabi_ul2d", &ul2d },
     .{ "__aeabi_ul2f", &ul2f },
     .{ "__aeabi_d2lz", &d2lz },
@@ -133,6 +135,12 @@ const helpers = integer_helpers ++ (if (want_aeabi) arm_helpers else .{});
 
 // AAPCS libcalls use core registers even on hard-float targets. The upstream
 // public C wrappers use the target C convention, so adapt only the ABI here.
+fn l2d(a: i64) callconv(.{ .arm_aapcs = .{} }) f64 {
+    return float_from_int.f64_floatFromInt_i64(a);
+}
+fn l2f(a: i64) callconv(.{ .arm_aapcs = .{} }) f32 {
+    return float_from_int.f32_floatFromInt_i64(a);
+}
 fn ul2d(a: u64) callconv(.{ .arm_aapcs = .{} }) f64 {
     return float_from_int.f64_floatFromInt_u64(a);
 }

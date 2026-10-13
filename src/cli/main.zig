@@ -3575,7 +3575,7 @@ fn spawnExecutableWithArgv0(
     app_args: []const []const u8,
 ) (CliError || Allocator.Error)!std.process.Child {
     if (comptime is_windows) {
-        const exe_path_w = std.unicode.utf8ToUtf16LeAllocZ(ctx.arena, exe_path) catch |err| switch (err) {
+        const exe_path_w = std.unicode.utf8ToUtf16LeAllocZ(ctx.arena, try windowsSpawnPath(ctx.arena, exe_path)) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.InvalidUtf8 => return ctx.fail(.{ .child_process_spawn_failed = .{
                 .command = exe_path,
@@ -4131,6 +4131,52 @@ fn appendWindowsQuotedArg(cmd_builder: *std.array_list.Managed(u8), arg: []const
     try cmd_builder.append('"');
 }
 
+/// The spelling of `exe_path` that `CreateProcessW` starts whatever its length.
+///
+/// `CreateProcessW` reads its application name with the Win32 path parser,
+/// which gives up at `MAX_PATH` (260 characters) with `PATH_NOT_FOUND` unless
+/// the machine has opted into long paths. The executable `roc` runs lives
+/// several directories into the cache, under a compatibility digest and a
+/// random directory, so a cache below a deep project is enough to cross that.
+/// The extended-length spelling (`\\?\C:\...`) skips that parser.
+///
+/// A path that fits is returned as it is: the child reads its own path back
+/// from the OS, and a program that prints it should see the usual spelling.
+fn windowsSpawnPath(arena: std.mem.Allocator, exe_path: []const u8) Allocator.Error![]const u8 {
+    // Every UTF-16 path is at most as long as its UTF-8 spelling.
+    if (exe_path.len < std.os.windows.MAX_PATH) return exe_path;
+    // The extended-length form is passed to the filesystem untouched, so it
+    // has to be absolute, backslash-separated, and free of `.` and `..`.
+    const resolved = try std.fs.path.resolveWindows(arena, &.{exe_path});
+    const drive_absolute = resolved.len >= 3 and std.ascii.isAlphabetic(resolved[0]) and
+        resolved[1] == ':' and resolved[2] == '\\';
+    if (!drive_absolute) return exe_path;
+    return std.mem.concat(arena, u8, &.{ "\\\\?\\", resolved });
+}
+
+test "windowsSpawnPath spells only paths past MAX_PATH in extended-length form" {
+    var arena_impl = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    const short = "C:\\Users\\someone\\AppData\\Local\\roc\\tmp\\app.roc.exe";
+    try std.testing.expectEqualStrings(short, try windowsSpawnPath(arena, short));
+
+    var middle = std.ArrayList(u8).empty;
+    for (0..30) |_| try middle.appendSlice(arena, "directory\\");
+
+    const deep = try std.mem.concat(arena, u8, &.{ "C:\\cache/", middle.items, "nested\\..\\app.roc.exe" });
+    try std.testing.expect(deep.len >= std.os.windows.MAX_PATH);
+    try std.testing.expectEqualStrings(
+        try std.mem.concat(arena, u8, &.{ "\\\\?\\C:\\cache\\", middle.items, "app.roc.exe" }),
+        try windowsSpawnPath(arena, deep),
+    );
+
+    // Already in a device or UNC namespace: left for the caller's spelling.
+    const unc = try std.mem.concat(arena, u8, &.{ "\\\\server\\share\\", middle.items, "app.roc.exe" });
+    try std.testing.expectEqualStrings(unc, try windowsSpawnPath(arena, unc));
+}
+
 /// Run child process using Windows handle inheritance (idiomatic Windows approach)
 fn runWithWindowsHandleInheritance(
     ctx: *CliCtx,
@@ -4148,7 +4194,7 @@ fn runWithWindowsHandleInheritance(
     }
 
     // Convert paths to Windows wide strings
-    const exe_path_w = std.unicode.utf8ToUtf16LeAllocZ(ctx.arena, exe_path) catch |err| switch (err) {
+    const exe_path_w = std.unicode.utf8ToUtf16LeAllocZ(ctx.arena, try windowsSpawnPath(ctx.arena, exe_path)) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.InvalidUtf8 => return ctx.fail(.{ .child_process_spawn_failed = .{
             .command = exe_path,
