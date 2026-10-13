@@ -348,6 +348,10 @@ pub fn reportPanicToStderr() void {
     const report = currentThreadReport(&cwd_buf, true);
     var buffer: [512]u8 = undefined;
     const stderr = std.debug.lockStderr(&buffer);
+    // Another thread panicking at the same time reports through this lock
+    // too, and the default handler waits for that thread to abort, so the
+    // lock is released before the default handler runs.
+    defer std.debug.unlockStderr();
     const w = &stderr.file_writer.interface;
     writeReport(w, report) catch return;
     w.flush() catch return;
