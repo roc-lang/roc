@@ -340,7 +340,6 @@ pub const ProgramSession = struct {
             if (comptime field == .timing or
                 field == .work_metrics or
                 field == .post_check_executor or
-                field == .debug_materialized_out or
                 field == .solved_lir_parallel_metrics_out or
                 field == .lifted_expr_count_out or
                 field == .completed_scalar_values)
@@ -2151,28 +2150,16 @@ fn lowerEvalAndFinishRoots(
         finalizationInvariant("compile-time finalization request/root-id batch length mismatch");
     }
 
-    if (comptime !compilerHostMustUseInterpreterForCtfe()) {
-        if (comptime !backend.host_lir_codegen_available) return error.UnsupportedPlatform;
-        return lowerDevEvalAndFinishRoots(
-            allocator,
-            module,
-            lowering_imports,
-            relation_modules,
-            requests,
-            root_ids,
-            state,
-            problem_store,
-            coverage,
-            options,
-        );
-    }
+    const use_interpreter = comptime compilerHostMustUseInterpreterForCtfe();
+    if (comptime !use_interpreter and !backend.host_lir_codegen_available) return error.UnsupportedPlatform;
 
+    const lowering_modules: lir.CheckedPipeline.CheckedModuleSet = .{
+        .root = checked.loweringViewWithRelations(module, relation_modules),
+        .imports = lowering_imports,
+    };
     var lowered = try lowerFinalizationModulesToLir(
         allocator,
-        .{
-            .root = checked.loweringViewWithRelations(module, relation_modules),
-            .imports = lowering_imports,
-        },
+        lowering_modules,
         .{ .requests = requests },
         .{
             .target_usize = base.target.TargetUsize.native,
@@ -2186,28 +2173,19 @@ fn lowerEvalAndFinishRoots(
 
     var owners = try ModuleOwners.init(allocator, &lowered.lir_result, &.{.{ .module = module, .problem_store = problem_store }});
     defer owners.deinit(allocator);
-    return evalInterpreterLoweredRoots(allocator, module, lowering_imports, relation_modules, requests, root_ids, state, problem_store, coverage, &owners, options, &lowered, lowered.lir_result.const_roots.items);
-}
-
-/// Execute borrowed LIR on compiler hosts that cannot run native generated code.
-fn evalInterpreterLoweredRoots(
-    allocator: Allocator,
-    module: *checked.CheckedModuleArtifact,
-    lowering_imports: []const checked.ImportedModuleView,
-    relation_modules: []const checked.ImportedModuleView,
-    requests: []const checked.RootRequest,
-    root_ids: []const checked.ComptimeRootId,
-    state: *RootCompletionState,
-    problem_store: ?*check.problem.Store,
-    coverage: *ComptimeCoverage,
-    owners: *const ModuleOwners,
-    options: Options,
-    lowered: *lir.CheckedPipeline.LoweredProgram,
-    const_roots: []const LirProgram.ConstRootPlan,
-) FinalizeError!bool {
-    const program = try InterpreterProgram.init(allocator, .{ .root = checked.loweringViewWithRelations(module, relation_modules), .imports = lowering_imports }, lowered, options);
-    defer program.deinit();
-    return evalInterpreterProgramRoots(allocator, module, requests, root_ids, state, problem_store, coverage, owners, options, lowered, const_roots, program);
+    const const_roots = lowered.lir_result.const_roots.items;
+    if (comptime use_interpreter) {
+        const program = try InterpreterProgram.init(allocator, lowering_modules, &lowered, options);
+        defer program.deinit();
+        return evalInterpreterProgramRoots(allocator, module, requests, root_ids, state, problem_store, coverage, &owners, options, &lowered, const_roots, program);
+    }
+    if (const_roots.len != requests.len) {
+        finalizationInvariant("LIR lowering returned a different number of compile-time roots than requested");
+    }
+    var native = try DevProgram.init(allocator, lowering_modules, &lowered, options);
+    defer native.deinit();
+    native.codegen.static_strings = native.static_strings.view();
+    return evalDevProgramRoots(allocator, module, requests, root_ids, state, problem_store, coverage, &owners, options, &lowered, const_roots, &native);
 }
 
 fn evalInterpreterProgramRoots(
@@ -2278,10 +2256,7 @@ fn evalInterpreterProgramRoots(
                     };
                 };
                 defer interpreter.dropValue(eval_result.value, root.ret_layout);
-                const stored: checked.CompileTimeRootPayload = if (compile_time_root.kind == .hoisted_validation)
-                    .discarded
-                else
-                    try writer.storeRoot(root, eval_result.value);
+                const stored = try storeRootValue(&writer, root, compile_time_root, eval_result.value);
                 if (options.publish_shared_slots) try program.publishRoot(lowered, root.owner, .{ .checked = root_id }, root.shape(), eval_result.value);
                 succeeded = true;
                 break :blk stored;
@@ -2292,10 +2267,7 @@ fn evalInterpreterProgramRoots(
             switch (eval_result) {
                 .value => |value| {
                     defer interpreter.dropValue(value.value, root.ret_layout);
-                    const stored: checked.CompileTimeRootPayload = if (compile_time_root.kind == .hoisted_validation)
-                        .discarded
-                    else
-                        try writer.storeRoot(root, value.value);
+                    const stored = try storeRootValue(&writer, root, compile_time_root, value.value);
                     if (options.publish_shared_slots) try program.publishRoot(lowered, root.owner, .{ .checked = root_id }, root.shape(), value.value);
                     succeeded = true;
                     break :blk stored;
@@ -2330,19 +2302,7 @@ fn evalInterpreterProgramRoots(
             host.debugMessages(),
         );
 
-        module.compile_time_roots.fillPayload(root_id, payload);
-        const stored_root_type = switch (compile_time_root.kind) {
-            .constant, .hoisted_constant => try writer.storeRootType(root),
-            .hoisted_validation,
-            .callable_binding,
-            .expect,
-            .numeral_conversion,
-            .quote_conversion,
-            .repl_expr,
-            => null,
-        };
-        finishConstRoot(module, compile_time_root, payload, stored_root_type);
-        state.markDone(root_id);
+        try completeRoot(module, &writer, state, root, root_id, compile_time_root, payload);
     }
     if (options.timing) |timing| timing.finishExecution(execution_started_ns, program.suspended_ns);
 
@@ -3113,40 +3073,6 @@ const DevProgressReporter = struct {
     }
 };
 
-fn lowerDevEvalAndFinishRoots(
-    allocator: Allocator,
-    module: *checked.CheckedModuleArtifact,
-    lowering_imports: []const checked.ImportedModuleView,
-    relation_modules: []const checked.ImportedModuleView,
-    requests: []const checked.RootRequest,
-    root_ids: []const checked.ComptimeRootId,
-    state: *RootCompletionState,
-    problem_store: ?*check.problem.Store,
-    coverage: *ComptimeCoverage,
-    options: Options,
-) FinalizeError!bool {
-    var lowered = try lowerFinalizationModulesToLir(
-        allocator,
-        .{
-            .root = checked.loweringViewWithRelations(module, relation_modules),
-            .imports = lowering_imports,
-        },
-        .{ .requests = requests },
-        .{
-            .target_usize = base.target.TargetUsize.native,
-            .specialization_strategy = .lss,
-            .checked_module_state = .checking_finalization,
-            .post_check_executor = options.post_check_executor,
-            .timing = if (options.timing) |timing| &timing.lowering else null,
-        },
-    );
-    defer lowered.deinit();
-
-    var owners = try ModuleOwners.init(allocator, &lowered.lir_result, &.{.{ .module = module, .problem_store = problem_store }});
-    defer owners.deinit(allocator);
-    return evalDevLoweredRoots(allocator, module, lowering_imports, relation_modules, requests, root_ids, state, problem_store, coverage, &owners, options, &lowered, lowered.lir_result.const_roots.items);
-}
-
 const CompletedNativeRoot = struct {
     exports: []static_data_exports.StaticDataExport,
     image: backend.StaticDataImage,
@@ -3909,33 +3835,6 @@ const DevProgram = struct {
 };
 
 /// Execute borrowed LIR; the compilation owner retains the lowered program.
-fn evalDevLoweredRoots(
-    allocator: Allocator,
-    module: *checked.CheckedModuleArtifact,
-    lowering_imports: []const checked.ImportedModuleView,
-    relation_modules: []const checked.ImportedModuleView,
-    requests: []const checked.RootRequest,
-    root_ids: []const checked.ComptimeRootId,
-    state: *RootCompletionState,
-    problem_store: ?*check.problem.Store,
-    coverage: *ComptimeCoverage,
-    owners: *const ModuleOwners,
-    options: Options,
-    lowered: *lir.CheckedPipeline.LoweredProgram,
-    const_roots: []const LirProgram.ConstRootPlan,
-) FinalizeError!bool {
-    if (const_roots.len != requests.len) {
-        finalizationInvariant("LIR lowering returned a different number of compile-time roots than requested");
-    }
-    var native = try DevProgram.init(allocator, .{
-        .root = checked.loweringViewWithRelations(module, relation_modules),
-        .imports = lowering_imports,
-    }, lowered, options);
-    defer native.deinit();
-    native.codegen.static_strings = native.static_strings.view();
-    return evalDevProgramRoots(allocator, module, requests, root_ids, state, problem_store, coverage, owners, options, lowered, const_roots, &native);
-}
-
 fn evalProgramRoots(
     allocator: Allocator,
     module: *checked.CheckedModuleArtifact,
@@ -4168,10 +4067,7 @@ fn evalDevProgramRoots(
                 &lowered.lir_result,
                 &had_problem,
             ),
-            .success => if (job.compile_time_root.kind == .hoisted_validation)
-                .discarded
-            else
-                try writer.storeRoot(job.root, .{ .ptr = job.ret_buf.ptr }),
+            .success => try storeRootValue(&writer, job.root, job.compile_time_root, .{ .ptr = job.ret_buf.ptr }),
         };
 
         const failure_message: ?[]const u8 = switch (job.result) {
@@ -4191,19 +4087,7 @@ fn evalDevProgramRoots(
             had_problem = true;
         }
 
-        module.compile_time_roots.fillPayload(job.root_id, payload);
-        const stored_root_type = switch (job.compile_time_root.kind) {
-            .constant, .hoisted_constant => try writer.storeRootType(job.root),
-            .hoisted_validation,
-            .callable_binding,
-            .expect,
-            .numeral_conversion,
-            .quote_conversion,
-            .repl_expr,
-            => null,
-        };
-        finishConstRoot(module, job.compile_time_root, payload, stored_root_type);
-        state.markDone(job.root_id);
+        try completeRoot(module, &writer, state, job.root, job.root_id, job.compile_time_root, payload);
     }
     if (options.timing) |timing| timing.finish(store_results_started_ns, .store_results);
 
@@ -4223,8 +4107,7 @@ fn devRootWorker(_: Allocator, context: *DevRunContext, item_id: usize) void {
 
     var crash_boundary = job.host.enterCrashBoundary();
     const entered = builtins.in_process_host.enter(job.host.ops(), null);
-    const sj = crash_boundary.set();
-    if (sj == 0) {
+    if (crash_boundary.set() == 0) {
         context.executable.callRocABIAt(
             job.entry_offset,
             @ptrCast(job.ret_buf.ptr),
@@ -5136,6 +5019,42 @@ fn compileTimeRootForRequest(
     return root_id;
 }
 
+/// Store an evaluated root's value; a hoisted validation keeps no value.
+fn storeRootValue(
+    writer: *ConstStoreWriter.Writer,
+    root: LirProgram.ConstRootPlan,
+    compile_time_root: checked.CompileTimeRoot,
+    value: @import("value.zig").Value,
+) ConstStoreWriter.Error!checked.CompileTimeRootPayload {
+    if (compile_time_root.kind == .hoisted_validation) return .discarded;
+    return writer.storeRoot(root, value);
+}
+
+/// Record a root's final payload and stored type and mark it done.
+fn completeRoot(
+    module: *checked.CheckedModuleArtifact,
+    writer: *ConstStoreWriter.Writer,
+    state: *RootCompletionState,
+    root: LirProgram.ConstRootPlan,
+    root_id: checked.ComptimeRootId,
+    compile_time_root: checked.CompileTimeRoot,
+    payload: checked.CompileTimeRootPayload,
+) ConstStoreWriter.Error!void {
+    module.compile_time_roots.fillPayload(root_id, payload);
+    const stored_root_type = switch (compile_time_root.kind) {
+        .constant, .hoisted_constant => try writer.storeRootType(root),
+        .hoisted_validation,
+        .callable_binding,
+        .expect,
+        .numeral_conversion,
+        .quote_conversion,
+        .repl_expr,
+        => null,
+    };
+    finishConstRoot(module, compile_time_root, payload, stored_root_type);
+    state.markDone(root_id);
+}
+
 fn finishConstRoot(
     module: *checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
@@ -5893,9 +5812,10 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
         try std.testing.expect(dev_result.results[0].outcome.passed);
     }
     if (comptime builtin.os.tag != .freestanding) {
-        const llvm_result = try Inspected.llvmEvalBoolRootModules(allocator, &.{module}, .speed);
-        defer Inspected.deinitBoolRootEvalResults(allocator, llvm_result);
-        try std.testing.expect(llvm_result[0].outcome.passed);
+        const llvm_batch = try Inspected.llvmEvalBoolRootModules(allocator, &.{module}, .speed, .{});
+        defer allocator.free(llvm_batch.expect_counts);
+        defer Inspected.deinitBoolRootEvalResults(allocator, llvm_batch.results);
+        try std.testing.expect(llvm_batch.results[0].outcome.passed);
     }
     // Exercise the inspected-run ownership path with procedure and drop-helper
     // relocations, then return a separate frozen string through its Str ABI.
@@ -6022,7 +5942,9 @@ test "LLVM test roots run a float remainder in process" {
 
     const module = Inspected.BoolRootModule{ .store = &program.store, .layouts = &program.layouts, .tables = Interpreter.BoxyTables.fromResult(&program), .roots = &roots };
     inline for (.{ Inspected.LlvmTestOpt.size, Inspected.LlvmTestOpt.speed }) |opt| {
-        const results = try Inspected.llvmEvalBoolRootModules(allocator, &.{module}, opt);
+        const batch = try Inspected.llvmEvalBoolRootModules(allocator, &.{module}, opt, .{});
+        defer allocator.free(batch.expect_counts);
+        const results = batch.results;
         defer Inspected.deinitBoolRootEvalResults(allocator, results);
         try std.testing.expectEqual(roots.len, results.len);
         for (results) |result| {

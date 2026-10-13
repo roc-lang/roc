@@ -113,7 +113,6 @@ fn expectCallBuiltRecordListSetHasNoRetain(
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
@@ -141,8 +140,6 @@ fn expectCallBuiltRecordListSetHasNoRetain(
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .loop_continue,
-                .loop_break,
                 => {},
             }
         },

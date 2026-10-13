@@ -9,7 +9,6 @@ const std = @import("std");
 const i128h = @import("compiler_rt_128.zig");
 const parse_float = @import("vendor_parse_float");
 const decimal_parse = @import("decimal_parse.zig");
-const float_bits = @import("float_bits.zig");
 
 const WithOverflow = @import("utils.zig").WithOverflow;
 const RocOps = @import("utils.zig").RocOps;
@@ -26,20 +25,6 @@ pub fn NumParseResult(comptime T: type) type {
         errorcode: u8, // 0 indicates success
     };
 }
-
-/// Bitwise parts of a 32-bit float.
-pub const F32Parts = extern struct {
-    fraction: u32,
-    exponent: u8,
-    sign: bool,
-};
-
-/// Bitwise parts of a 64-bit float.
-pub const F64Parts = extern struct {
-    fraction: u64,
-    exponent: u16,
-    sign: bool,
-};
 
 /// 256-bit unsigned integer, as two 128-bit values.
 pub const U256 = struct {
@@ -568,26 +553,6 @@ pub fn exportMulWithOverflow(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-/// Returns the bit pattern of an f32 as u32.
-pub fn f32ToBits(self: f32) callconv(.c) u32 {
-    return float_bits.normalizeF32NanBits(@bitCast(self));
-}
-
-/// Returns the bit pattern of an f64 as u64.
-pub fn f64ToBits(self: f64) callconv(.c) u64 {
-    return float_bits.normalizeF64NanBits(@bitCast(self));
-}
-
-/// Constructs an f32 from its bit pattern.
-pub fn f32FromBits(bits: u32) callconv(.c) f32 {
-    return @as(f32, @bitCast(bits));
-}
-
-/// Constructs an f64 from its bit pattern.
-pub fn f64FromBits(bits: u64) callconv(.c) f64 {
-    return @as(f64, @bitCast(bits));
-}
-
 fn signedMinText(comptime T: type) []const u8 {
     if (T == i8) return "-128";
     if (T == i16) return "-32768";
@@ -1051,43 +1016,6 @@ test "mul_u128 basic functionality" {
     // 1000000 * 2000000 = 2000000000000, which fits in u128
     try std.testing.expectEqual(@as(u128, 0), result.hi);
     try std.testing.expectEqual(@as(u128, 2000000000000), result.lo);
-}
-
-test "f32ToBits and f32FromBits roundtrip" {
-    const values = [_]f32{ 0.0, 1.0, -1.0, 3.14159, -42.5 };
-
-    for (values) |val| {
-        const bits = f32ToBits(val);
-        const reconstructed = f32FromBits(bits);
-        try std.testing.expectEqual(val, reconstructed);
-    }
-}
-
-test "f64ToBits and f64FromBits roundtrip" {
-    const values = [_]f64{ 0.0, 1.0, -1.0, 3.141592653589793, -42.5 };
-
-    for (values) |val| {
-        const bits = f64ToBits(val);
-        const reconstructed = f64FromBits(bits);
-        try std.testing.expectEqual(val, reconstructed);
-    }
-}
-
-test "float to bits normalizes every NaN representation" {
-    const f32_nan_bits = [_]u32{ 0x7f80_0001, 0x7fc1_2345, 0xff80_0001, 0xffc1_2345 };
-    for (f32_nan_bits) |bits| {
-        try std.testing.expectEqual(float_bits.normalized_f32_nan_bits, f32ToBits(f32FromBits(bits)));
-    }
-
-    const f64_nan_bits = [_]u64{
-        0x7ff0_0000_0000_0001,
-        0x7ff9_2345_6789_abcd,
-        0xfff0_0000_0000_0001,
-        0xfff9_2345_6789_abcd,
-    };
-    for (f64_nan_bits) |bits| {
-        try std.testing.expectEqual(float_bits.normalized_f64_nan_bits, f64ToBits(f64FromBits(bits)));
-    }
 }
 
 test "mul_u128 large values" {

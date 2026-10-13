@@ -201,7 +201,6 @@ comptime {
     const names = [_][:0]const u8{
         "roc_boxy_static_desc",
         "roc_boxy_static_dict",
-        "roc_boxy_dict_method_arg_desc",
         "roc_boxy_dict_method_hidden_desc",
         "roc_boxy_nested_desc",
         "roc_boxy_box_payload_desc",

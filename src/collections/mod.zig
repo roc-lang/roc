@@ -32,6 +32,7 @@ pub const validateRelocatedSpan = @import("safe_list.zig").validateRelocatedSpan
 pub const GuardedList = @import("GuardedList.zig");
 
 pub const IndexedStack = @import("IndexedStack.zig").IndexedStack;
+pub const WorkStacks = @import("WorkStacks.zig").WorkStacks;
 
 pub const DenseMap = @import("DenseMap.zig").DenseMap;
 /// A direct-indexed map over dense IDs that takes its allocator per call.
@@ -44,6 +45,12 @@ pub const ScopedBitSet = @import("ScopedBitSet.zig");
 pub const RekeyingHashMap = @import("RekeyingHashMap.zig").RekeyingHashMap;
 /// Loop-nesting forest of a reducible directed graph.
 pub const LoopForest = @import("LoopForest.zig");
+/// Union-find over dense indices.
+pub const DisjointSets = @import("DisjointSets.zig");
+/// Strongly connected components in topological order.
+pub const scc = @import("scc.zig");
+/// Compressed adjacency lists.
+pub const csr = @import("csr.zig");
 
 /// Any/all evaluation over nested groups of leaves on explicit stacks.
 pub const AnyAll = @import("any_all.zig");
@@ -105,7 +112,11 @@ test "collections tests" {
     std.testing.refAllDecls(@import("any_all.zig"));
     std.testing.refAllDecls(@import("VersionedMap.zig"));
     std.testing.refAllDecls(@import("IndexedStack.zig"));
+    std.testing.refAllDecls(@import("WorkStacks.zig"));
     std.testing.refAllDecls(@import("ScopedBitSet.zig"));
     std.testing.refAllDecls(@import("RekeyingHashMap.zig"));
     std.testing.refAllDecls(@import("LoopForest.zig"));
+    std.testing.refAllDecls(@import("DisjointSets.zig"));
+    std.testing.refAllDecls(@import("scc.zig"));
+    std.testing.refAllDecls(@import("csr.zig"));
 }

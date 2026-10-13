@@ -73,7 +73,6 @@ pub fn main(init: std.process.Init) ViolationError!void {
     if (std.mem.eql(u8, case_name, "mono_exprs")) return monoExprs();
     if (std.mem.eql(u8, case_name, "mono_type_spans")) return monoTypeSpans();
     if (std.mem.eql(u8, case_name, "mono_type_fields")) return monoTypeFields();
-    if (std.mem.eql(u8, case_name, "lambda_mono_expr_ids")) return lambdaMonoExprIds();
     if (std.mem.eql(u8, case_name, "lambda_mono_type_spans")) return lambdaMonoTypeSpans();
 
     return error.UnknownCaseName;
@@ -280,29 +279,6 @@ fn monoTypeFields() ViolationError!void {
     const span = try store.addFields(&.{dummyMonoTypeField(1, ty)});
     const borrow = store.fields.borrowSpan(span.start, span.len);
     _ = try store.addFields(&.{dummyMonoTypeField(2, ty)});
-    _ = GuardedList.at(borrow, 0);
-    return error.ExpectedGuardedListPanic;
-}
-
-fn lambdaMonoExprIds() ViolationError!void {
-    var move_allocator = MoveAllocator{};
-    const allocator = move_allocator.allocator();
-    var program = LambdaMono.Ast.Program.init(
-        allocator,
-        check.CheckedNames.NameStore.init(allocator),
-        .empty,
-        .empty,
-        .empty,
-    );
-    defer program.deinit();
-
-    const ty = try program.types.add(.zst);
-    const first_expr = try program.addExpr(.{ .ty = ty, .data = .unit });
-    const second_expr = try program.addExpr(.{ .ty = ty, .data = .unit });
-    try program.expr_ids.ensureTotalCapacityPrecise(allocator, 1);
-    const span = try program.addExprSpan(&.{first_expr});
-    const borrow = program.expr_ids.borrowSpan(span.start, span.len);
-    _ = try program.addExprSpan(&.{second_expr});
     _ = GuardedList.at(borrow, 0);
     return error.ExpectedGuardedListPanic;
 }

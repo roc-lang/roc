@@ -4921,11 +4921,11 @@ pub const InstGraph = struct {
             },
             .tag_union => {
                 if (private_content != .tag_union) Common.invariant("opaque interface relation received different type structure");
-                try self.relateOpaqueTagRows(public_node, private_node, pair.row_width, pending);
+                try self.relateOpaqueRows(.tag_union, public_node, private_node, pair.row_width, pending);
             },
             .record => {
                 if (private_content != .record) Common.invariant("opaque interface relation received different type structure");
-                try self.relateOpaqueRecordRows(public_node, private_node, pair.row_width, pending);
+                try self.relateOpaqueRows(.record, public_node, private_node, pair.row_width, pending);
             },
             .empty_tag_union => if (private_content != .empty_tag_union)
                 Common.invariant("opaque interface relation received different type structure"),
@@ -4949,208 +4949,122 @@ pub const InstGraph = struct {
         }
     }
 
-    /// Relate row-polymorphic tag structure without merging a row that carries
-    /// generated-private evidence into its checked-public counterpart. Labels
-    /// present on only one side are ordinary checker-produced row widening;
-    /// their payloads must not themselves introduce private evidence.
-    fn relateOpaqueTagRows(
+    /// Relate row-polymorphic structure of `kind` without merging a row that
+    /// carries generated-private evidence into its checked-public counterpart.
+    /// Labels present on only one side are ordinary checker-produced row
+    /// widening; their payloads must not themselves introduce private evidence.
+    fn relateOpaqueRows(
         self: *InstGraph,
+        comptime kind: RowKind,
         public_node: NodeId,
         private_node: NodeId,
         row_width: RowWidthRelation,
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
-        const flat_public = try self.flattenTagRow(public_node);
-        const flat_private = try self.flattenTagRow(private_node);
-        var only_public = std.ArrayList(InstTag).empty;
+        const Entry = RowEntry(kind);
+        const row_name = switch (kind) {
+            .tag_union => "tag",
+            .record => "record",
+        };
+        const public_entries, const public_ext = try self.flattenRowOfKind(kind, public_node);
+        const private_entries, const private_ext = try self.flattenRowOfKind(kind, private_node);
+        var only_public = std.ArrayList(Entry).empty;
         defer only_public.deinit(self.allocator);
-        var only_private = std.ArrayList(InstTag).empty;
+        var only_private = std.ArrayList(Entry).empty;
         defer only_private.deinit(self.allocator);
 
-        // Each private label's position in the generation-stamped label
-        // slots, so every public label pairs in constant time. The pairing is
-        // read out completely before any payload relation runs, since a
-        // relation can pair rows of its own and claim the next generation.
-        const generation = try self.claimTagLabelGeneration(flat_public.tags, flat_private.tags);
-        for (flat_private.tags, 0..) |private_tag, index| {
-            const slot: usize = @backingInt(private_tag.name);
-            if (self.row_label_slots[slot].right_generation == generation) {
-                Common.invariant("opaque interface relation received duplicate private tag labels");
-            }
-            self.row_label_slots[slot].right_generation = generation;
-            self.row_label_slots[slot].right_index = @intCast(index);
+        // Each private label's position, so every public label pairs in
+        // constant time.
+        var private_positions: std.AutoHashMapUnmanaged(@FieldType(Entry, "name"), u32) = .empty;
+        defer private_positions.deinit(self.allocator);
+        try private_positions.ensureTotalCapacity(self.allocator, @intCast(private_entries.len));
+        for (private_entries, 0..) |private_entry, index| {
+            const entry = private_positions.getOrPutAssumeCapacity(private_entry.name);
+            if (entry.found_existing) Common.invariant("opaque interface relation received duplicate private " ++ row_name ++ " labels");
+            entry.value_ptr.* = @intCast(index);
         }
-        const public_positions = try self.allocator.alloc(?u32, flat_public.tags.len);
-        defer self.allocator.free(public_positions);
-        const private_shared = try self.allocator.alloc(bool, flat_private.tags.len);
+        const private_shared = try self.allocator.alloc(bool, private_entries.len);
         defer self.allocator.free(private_shared);
         @memset(private_shared, false);
-        for (flat_public.tags, public_positions) |public_tag, *position| {
-            const slot: usize = @backingInt(public_tag.name);
-            if (self.row_label_slots[slot].right_generation == generation) {
-                const index = self.row_label_slots[slot].right_index;
-                position.* = index;
-                private_shared[index] = true;
-            } else {
-                position.* = null;
-            }
-        }
 
-        for (flat_public.tags, public_positions) |public_tag, position| {
-            const matched: ?InstTag = if (position) |index| flat_private.tags[index] else null;
-            if (matched) |private_tag| {
-                if (public_tag.payloads.len != private_tag.payloads.len) {
-                    Common.invariant("opaque interface relation received one tag at two payload arities");
-                }
-                for (public_tag.payloads, private_tag.payloads) |public_payload, private_payload| {
-                    try self.relateOpaqueChild(public_payload, private_payload, row_width, pending);
-                }
-            } else {
-                try only_public.append(self.allocator, public_tag);
+        for (public_entries) |public_entry| {
+            const position = private_positions.get(public_entry.name) orelse {
+                try only_public.append(self.allocator, public_entry);
+                continue;
+            };
+            private_shared[position] = true;
+            const private_entry = private_entries[position];
+            switch (kind) {
+                .tag_union => {
+                    if (public_entry.payloads.len != private_entry.payloads.len) {
+                        Common.invariant("opaque interface relation received one tag at two payload arities");
+                    }
+                    for (public_entry.payloads, private_entry.payloads) |public_payload, private_payload| {
+                        try self.relateOpaqueChild(public_payload, private_payload, row_width, pending);
+                    }
+                },
+                .record => {
+                    _ = self.unifyFieldKinds(
+                        public_entry.kind,
+                        public_entry.default,
+                        private_entry.kind,
+                        private_entry.default,
+                    );
+                    try self.relateOpaqueChild(
+                        public_entry.value_ty orelse public_entry.ty,
+                        private_entry.value_ty orelse private_entry.ty,
+                        row_width,
+                        pending,
+                    );
+                    try self.relateOpaqueChild(public_entry.ty, private_entry.ty, row_width, pending);
+                },
             }
         }
-        for (flat_private.tags, private_shared) |private_tag, shared| {
-            if (!shared) {
-                for (private_tag.payloads) |payload| {
+        for (private_entries, private_shared) |private_entry, shared| {
+            if (shared) continue;
+            switch (kind) {
+                .tag_union => for (private_entry.payloads) |payload| {
                     if (try self.containsGeneratedPrivate(payload)) {
                         Common.invariant("opaque interface row widening introduced unmatched generated-private tag payload");
                     }
-                }
-                try only_private.append(self.allocator, private_tag);
-            }
-        }
-
-        if (self.rowAdditionConflicts(flat_public.ext, only_private.items.len, .tag_union) or
-            self.rowAdditionConflicts(flat_private.ext, only_public.items.len, .tag_union))
-        {
-            // Not `invariant`: a closed tag union that grows here changes the tag
-            // discriminants the backend emits, so a release build would silently
-            // read the wrong variant instead of hitting undefined behavior.
-            Common.compilerBug("opaque interface relation widened a closed tag union");
-        }
-        if (only_public.items.len == 0 and only_private.items.len == 0) {
-            try self.relateOpaqueChild(flat_public.ext, flat_private.ext, row_width, pending);
-        } else if (only_public.items.len == 0) {
-            try self.writeOrQueueTagRest(flat_public.ext, only_private.items, flat_private.ext, row_width, pending);
-        } else if (only_private.items.len == 0) {
-            try self.writeOrQueueTagRest(flat_private.ext, only_public.items, flat_public.ext, row_width, pending);
-        } else {
-            const new_ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) });
-            if (self.find(flat_public.ext) == self.find(flat_private.ext)) {
-                var rest = std.ArrayList(InstTag).empty;
-                defer rest.deinit(self.allocator);
-                try rest.appendSlice(self.allocator, only_public.items);
-                try rest.appendSlice(self.allocator, only_private.items);
-                try self.writeOrQueueTagRest(flat_public.ext, rest.items, new_ext, row_width, pending);
-            } else {
-                try self.writeOrQueueTagRest(flat_public.ext, only_private.items, new_ext, row_width, pending);
-                try self.writeOrQueueTagRest(flat_private.ext, only_public.items, new_ext, row_width, pending);
-            }
-        }
-    }
-
-    /// Record-row counterpart of `relateOpaqueTagRows`.
-    fn relateOpaqueRecordRows(
-        self: *InstGraph,
-        public_node: NodeId,
-        private_node: NodeId,
-        row_width: RowWidthRelation,
-        pending: *std.ArrayList(NodePair),
-    ) Allocator.Error!void {
-        const flat_public = try self.flattenRecordRow(public_node);
-        const flat_private = try self.flattenRecordRow(private_node);
-        var only_public = std.ArrayList(InstField).empty;
-        defer only_public.deinit(self.allocator);
-        var only_private = std.ArrayList(InstField).empty;
-        defer only_private.deinit(self.allocator);
-
-        // Each private label's position in the generation-stamped label
-        // slots, so every public label pairs in constant time. The pairing is
-        // read out completely before any field relation runs, since a
-        // relation can pair rows of its own and claim the next generation.
-        const generation = try self.claimRowLabelGeneration(flat_public.fields, flat_private.fields);
-        for (flat_private.fields, 0..) |private_field, index| {
-            const slot: usize = @backingInt(private_field.name);
-            if (self.row_label_slots[slot].right_generation == generation) {
-                Common.invariant("opaque interface relation received duplicate private record labels");
-            }
-            self.row_label_slots[slot].right_generation = generation;
-            self.row_label_slots[slot].right_index = @intCast(index);
-        }
-        const public_positions = try self.allocator.alloc(?u32, flat_public.fields.len);
-        defer self.allocator.free(public_positions);
-        const private_shared = try self.allocator.alloc(bool, flat_private.fields.len);
-        defer self.allocator.free(private_shared);
-        @memset(private_shared, false);
-        for (flat_public.fields, public_positions) |public_field, *position| {
-            const slot: usize = @backingInt(public_field.name);
-            if (self.row_label_slots[slot].right_generation == generation) {
-                const index = self.row_label_slots[slot].right_index;
-                position.* = index;
-                private_shared[index] = true;
-            } else {
-                position.* = null;
-            }
-        }
-
-        for (flat_public.fields, public_positions) |public_field, position| {
-            const matched: ?InstField = if (position) |index| flat_private.fields[index] else null;
-            if (matched) |private_field| {
-                _ = self.unifyFieldKinds(
-                    public_field.kind,
-                    public_field.default,
-                    private_field.kind,
-                    private_field.default,
-                );
-                try self.relateOpaqueChild(
-                    public_field.value_ty orelse public_field.ty,
-                    private_field.value_ty orelse private_field.ty,
-                    row_width,
-                    pending,
-                );
-                try self.relateOpaqueChild(public_field.ty, private_field.ty, row_width, pending);
-            } else {
-                try only_public.append(self.allocator, public_field);
-            }
-        }
-        for (flat_private.fields, private_shared) |private_field, shared| {
-            if (!shared) {
-                if (try self.containsGeneratedPrivate(private_field.ty)) {
+                },
+                .record => if (try self.containsGeneratedPrivate(private_entry.ty)) {
                     Common.invariant("opaque interface row widening introduced unmatched generated-private record field");
-                }
-                try only_private.append(self.allocator, private_field);
+                },
             }
+            try only_private.append(self.allocator, private_entry);
         }
 
-        const public_absorbs_private = self.closedRecordAbsorbsFields(flat_public.ext, only_private.items, row_width);
-        const private_absorbs_public = self.closedRecordAbsorbsFields(flat_private.ext, only_public.items, row_width);
-        if ((!public_absorbs_private and self.rowAdditionConflicts(flat_public.ext, only_private.items.len, .record)) or
-            (!private_absorbs_public and self.rowAdditionConflicts(flat_private.ext, only_public.items.len, .record)))
+        const public_absorbs_private, const private_absorbs_public = switch (kind) {
+            .tag_union => .{ false, false },
+            .record => .{
+                self.closedRecordAbsorbsFields(public_ext, only_private.items, row_width),
+                self.closedRecordAbsorbsFields(private_ext, only_public.items, row_width),
+            },
+        };
+        if ((!public_absorbs_private and self.rowAdditionConflicts(public_ext, only_private.items.len, kind)) or
+            (!private_absorbs_public and self.rowAdditionConflicts(private_ext, only_public.items.len, kind)))
         {
-            Common.invariant("opaque interface relation widened a closed record");
-        }
-
-        const add_to_public = if (public_absorbs_private) &.{} else only_private.items;
-        const add_to_private = if (private_absorbs_public) &.{} else only_public.items;
-        if (add_to_public.len == 0 and add_to_private.len == 0) {
-            try self.relateOpaqueChild(flat_public.ext, flat_private.ext, row_width, pending);
-        } else if (add_to_private.len == 0) {
-            try self.writeOrQueueRecordRest(flat_public.ext, add_to_public, flat_private.ext, row_width, pending);
-        } else if (add_to_public.len == 0) {
-            try self.writeOrQueueRecordRest(flat_private.ext, add_to_private, flat_public.ext, row_width, pending);
-        } else {
-            const new_ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_record) });
-            if (self.find(flat_public.ext) == self.find(flat_private.ext)) {
-                var rest = std.ArrayList(InstField).empty;
-                defer rest.deinit(self.allocator);
-                try rest.appendSlice(self.allocator, add_to_private);
-                try rest.appendSlice(self.allocator, add_to_public);
-                try self.writeOrQueueRecordRest(flat_public.ext, rest.items, new_ext, row_width, pending);
-            } else {
-                try self.writeOrQueueRecordRest(flat_public.ext, add_to_public, new_ext, row_width, pending);
-                try self.writeOrQueueRecordRest(flat_private.ext, add_to_private, new_ext, row_width, pending);
+            switch (kind) {
+                // Not `invariant`: a closed tag union that grows here changes the tag
+                // discriminants the backend emits, so a release build would silently
+                // read the wrong variant instead of hitting undefined behavior.
+                .tag_union => Common.compilerBug("opaque interface relation widened a closed tag union"),
+                .record => Common.invariant("opaque interface relation widened a closed record"),
             }
         }
+
+        _ = try self.joinRowRests(
+            kind,
+            relateOpaqueChild,
+            .right_additions_first,
+            public_ext,
+            private_ext,
+            if (public_absorbs_private) &.{} else only_private.items,
+            if (private_absorbs_public) &.{} else only_public.items,
+            row_width,
+            pending,
+        );
     }
 
     fn relateOpaqueChild(
@@ -6902,6 +6816,20 @@ pub const InstGraph = struct {
         ext: NodeId,
     };
 
+    /// The flattened entries and extension of a row of `kind`.
+    fn flattenRowOfKind(self: *InstGraph, comptime kind: RowKind, node: NodeId) Allocator.Error!struct { []RowEntry(kind), NodeId } {
+        switch (kind) {
+            .tag_union => {
+                const flat = try self.flattenTagRow(node);
+                return .{ flat.tags, flat.ext };
+            },
+            .record => {
+                const flat = try self.flattenRecordRow(node);
+                return .{ flat.fields, flat.ext };
+            },
+        }
+    }
+
     /// Chase a tag row's extension chain and rewrite the root to a single
     /// flattened row. The returned extension is unresolved (open), an empty tag
     /// union (closed), or compressed out.
@@ -7064,16 +6992,6 @@ pub const InstGraph = struct {
         return self.claimLabelGeneration(needed);
     }
 
-    /// Start a tag-row pairing whose label slots cover both rows. Tag and
-    /// record label ids share the slot columns: a pairing is over one row
-    /// kind, and every pairing claims a fresh generation.
-    fn claimTagLabelGeneration(self: *InstGraph, left: []const InstTag, right: []const InstTag) Allocator.Error!u32 {
-        var needed: usize = self.row_label_slots.len;
-        for (left) |tag| needed = @max(needed, @as(usize, @backingInt(tag.name)) + 1);
-        for (right) |tag| needed = @max(needed, @as(usize, @backingInt(tag.name)) + 1);
-        return self.claimLabelGeneration(needed);
-    }
-
     /// Claim a fresh label generation over `needed` label slots. Reading the
     /// slots of a generation must finish before any relation that can pair
     /// rows runs, since that relation claims the next generation.
@@ -7158,30 +7076,17 @@ pub const InstGraph = struct {
             Common.compilerBug("instantiation widened a closed tag union");
         }
 
-        var merged_ext = flat_left.ext;
-        if (only_left.items.len == 0 and only_right.items.len == 0) {
-            try pending.append(self.allocator, .{ .left = flat_left.ext, .right = flat_right.ext, .row_width = row_width });
-        } else if (only_left.items.len == 0) {
-            // Left lacks tags: its extension absorbs the right-only tags.
-            try self.writeOrQueueTagRest(flat_left.ext, only_right.items, flat_right.ext, row_width, pending);
-            merged_ext = flat_right.ext;
-        } else if (only_right.items.len == 0) {
-            try self.writeOrQueueTagRest(flat_right.ext, only_left.items, flat_left.ext, row_width, pending);
-            merged_ext = flat_left.ext;
-        } else {
-            const new_ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) });
-            if (self.find(flat_left.ext) == self.find(flat_right.ext)) {
-                var rest = std.ArrayList(InstTag).empty;
-                defer rest.deinit(row_allocator);
-                try rest.appendSlice(row_allocator, only_left.items);
-                try rest.appendSlice(row_allocator, only_right.items);
-                try self.writeOrQueueTagRest(flat_left.ext, rest.items, new_ext, row_width, pending);
-            } else {
-                try self.writeOrQueueTagRest(flat_left.ext, only_right.items, new_ext, row_width, pending);
-                try self.writeOrQueueTagRest(flat_right.ext, only_left.items, new_ext, row_width, pending);
-            }
-            merged_ext = new_ext;
-        }
+        const merged_ext = try self.joinRowRests(
+            .tag_union,
+            queueExtPair,
+            .right_additions_first,
+            flat_left.ext,
+            flat_right.ext,
+            only_right.items,
+            only_left.items,
+            row_width,
+            pending,
+        );
 
         try self.setContent(left, .{ .tag_union = .{
             .tags = try self.arena().dupe(InstTag, merged.items),
@@ -7191,37 +7096,128 @@ pub const InstGraph = struct {
         try self.union_(left, right);
     }
 
-    fn writeOrQueueTagRest(
+    /// The row entries of `kind`.
+    fn RowEntry(comptime kind: RowKind) type {
+        return switch (kind) {
+            .tag_union => InstTag,
+            .record => InstField,
+        };
+    }
+
+    /// A row of `kind` holding `entries` and extended by `ext`.
+    fn rowNode(self: *InstGraph, comptime kind: RowKind, entries: []const RowEntry(kind), ext: NodeId) Allocator.Error!InstNode {
+        const owned = try self.arena().dupe(RowEntry(kind), entries);
+        return switch (kind) {
+            .tag_union => .{ .tag_union = .{ .tags = owned, .ext = ext } },
+            .record => .{ .record = .{ .fields = owned, .ext = ext } },
+        };
+    }
+
+    /// Give `ext` the row `entries .. tail_ext`: written in place when `ext`
+    /// is an open row variable, otherwise queued as a relation against a
+    /// fresh row node.
+    fn writeOrQueueRowRest(
         self: *InstGraph,
+        comptime kind: RowKind,
         ext: NodeId,
-        tags: []const InstTag,
+        entries: []const RowEntry(kind),
         tail_ext: NodeId,
         row_width: RowWidthRelation,
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
+        const row_name, const other_row_name = switch (kind) {
+            .tag_union => .{ "tag", "record" },
+            .record => .{ "record", "tag" },
+        };
         const ext_root = self.find(ext);
         const ext_content = self.nodes.items[@backingInt(ext_root)];
         if (ext_content == .unresolved) {
             const variable = ext_content.unresolved;
             if (variable.numeric_default_phase != null) {
-                Common.invariant("instantiation tried to write a tag row into a numeric variable");
+                Common.invariant("instantiation tried to write a " ++ row_name ++ " row into a numeric variable");
             }
             if (variable.row_default) |default| {
-                if (default != .empty_tag_union) {
-                    Common.invariant("instantiation tried to write a tag row into a record row variable");
+                const expected_default: checked.RowDefault = switch (kind) {
+                    .tag_union => .empty_tag_union,
+                    .record => .empty_record,
+                };
+                if (default != expected_default) {
+                    Common.invariant("instantiation tried to write a " ++ row_name ++ " row into a " ++ other_row_name ++ " row variable");
                 }
             }
-            try self.setContent(ext_root, .{ .tag_union = .{
-                .tags = try self.arena().dupe(InstTag, tags),
-                .ext = tail_ext,
-            } });
+            try self.setContent(ext_root, try self.rowNode(kind, entries, tail_ext));
         } else {
-            const rest = try self.newNode(.{ .tag_union = .{
-                .tags = try self.arena().dupe(InstTag, tags),
-                .ext = tail_ext,
-            } });
+            const rest = try self.newNode(try self.rowNode(kind, entries, tail_ext));
             try pending.append(self.allocator, .{ .left = ext_root, .right = rest, .row_width = row_width });
         }
+    }
+
+    /// The order two rows' additions take when both extend one shared
+    /// extension.
+    const SharedRestOrder = enum {
+        right_additions_first,
+        left_additions_first,
+    };
+
+    /// Join two flattened rows' extensions once each side's missing entries
+    /// are known: `add_to_left` extends the left row and `add_to_right` the
+    /// right one. Two extensions with nothing to add relate through
+    /// `relate_exts`; otherwise the side lacking entries absorbs them, or
+    /// both extend a fresh row variable. Returns the joined extension.
+    fn joinRowRests(
+        self: *InstGraph,
+        comptime kind: RowKind,
+        comptime relate_exts: fn (*InstGraph, NodeId, NodeId, RowWidthRelation, *std.ArrayList(NodePair)) Allocator.Error!void,
+        comptime shared_rest_order: SharedRestOrder,
+        left_ext: NodeId,
+        right_ext: NodeId,
+        add_to_left: []const RowEntry(kind),
+        add_to_right: []const RowEntry(kind),
+        row_width: RowWidthRelation,
+        pending: *std.ArrayList(NodePair),
+    ) Allocator.Error!NodeId {
+        if (add_to_left.len == 0 and add_to_right.len == 0) {
+            try relate_exts(self, left_ext, right_ext, row_width, pending);
+            return left_ext;
+        }
+        if (add_to_right.len == 0) {
+            // Left lacks entries: its extension absorbs the right-only ones.
+            try self.writeOrQueueRowRest(kind, left_ext, add_to_left, right_ext, row_width, pending);
+            return right_ext;
+        }
+        if (add_to_left.len == 0) {
+            try self.writeOrQueueRowRest(kind, right_ext, add_to_right, left_ext, row_width, pending);
+            return left_ext;
+        }
+        const new_ext = try self.newNode(.{ .unresolved = InstVariable.row(switch (kind) {
+            .tag_union => .empty_tag_union,
+            .record => .empty_record,
+        }) });
+        if (self.find(left_ext) == self.find(right_ext)) {
+            // The rest lists below live only for this call and are usually
+            // short, so they start in a buffer on this frame.
+            var stack_first_buffer: [2048]u8 align(@alignOf(usize)) = undefined;
+            var stack_first = std.heap.BufferFirstAllocator.init(&stack_first_buffer, self.allocator);
+            const row_allocator = stack_first.allocator();
+            var rest = std.ArrayList(RowEntry(kind)).empty;
+            defer rest.deinit(row_allocator);
+            const first, const second = switch (shared_rest_order) {
+                .right_additions_first => .{ add_to_right, add_to_left },
+                .left_additions_first => .{ add_to_left, add_to_right },
+            };
+            try rest.appendSlice(row_allocator, first);
+            try rest.appendSlice(row_allocator, second);
+            try self.writeOrQueueRowRest(kind, left_ext, rest.items, new_ext, row_width, pending);
+        } else {
+            try self.writeOrQueueRowRest(kind, left_ext, add_to_left, new_ext, row_width, pending);
+            try self.writeOrQueueRowRest(kind, right_ext, add_to_right, new_ext, row_width, pending);
+        }
+        return new_ext;
+    }
+
+    /// Queue two row extensions as a pending pair.
+    fn queueExtPair(self: *InstGraph, left: NodeId, right: NodeId, row_width: RowWidthRelation, pending: *std.ArrayList(NodePair)) Allocator.Error!void {
+        try pending.append(self.allocator, .{ .left = left, .right = right, .row_width = row_width });
     }
 
     fn unifyRecordRows(
@@ -7308,70 +7304,23 @@ pub const InstGraph = struct {
             Common.invariant("instantiation widened a closed record");
         }
 
-        const add_to_left = if (left_absorbs_right) &.{} else only_right.items;
-        const add_to_right = if (right_absorbs_left) &.{} else only_left.items;
-        var merged_ext = flat_left.ext;
-        if (add_to_left.len == 0 and add_to_right.len == 0) {
-            try pending.append(self.allocator, .{ .left = flat_left.ext, .right = flat_right.ext, .row_width = row_width });
-        } else if (add_to_right.len == 0) {
-            try self.writeOrQueueRecordRest(flat_left.ext, add_to_left, flat_right.ext, row_width, pending);
-            merged_ext = flat_right.ext;
-        } else if (add_to_left.len == 0) {
-            try self.writeOrQueueRecordRest(flat_right.ext, add_to_right, flat_left.ext, row_width, pending);
-            merged_ext = flat_left.ext;
-        } else {
-            const new_ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_record) });
-            if (self.find(flat_left.ext) == self.find(flat_right.ext)) {
-                var rest = std.ArrayList(InstField).empty;
-                defer rest.deinit(row_allocator);
-                try rest.appendSlice(row_allocator, add_to_left);
-                try rest.appendSlice(row_allocator, add_to_right);
-                try self.writeOrQueueRecordRest(flat_left.ext, rest.items, new_ext, row_width, pending);
-            } else {
-                try self.writeOrQueueRecordRest(flat_left.ext, add_to_left, new_ext, row_width, pending);
-                try self.writeOrQueueRecordRest(flat_right.ext, add_to_right, new_ext, row_width, pending);
-            }
-            merged_ext = new_ext;
-        }
+        const merged_ext = try self.joinRowRests(
+            .record,
+            queueExtPair,
+            .left_additions_first,
+            flat_left.ext,
+            flat_right.ext,
+            if (left_absorbs_right) &.{} else only_right.items,
+            if (right_absorbs_left) &.{} else only_left.items,
+            row_width,
+            pending,
+        );
 
         try self.setContent(left, .{ .record = .{
             .fields = try self.arena().dupe(InstField, merged.items),
             .ext = merged_ext,
         } });
         try self.union_(left, right);
-    }
-
-    fn writeOrQueueRecordRest(
-        self: *InstGraph,
-        ext: NodeId,
-        fields: []const InstField,
-        tail_ext: NodeId,
-        row_width: RowWidthRelation,
-        pending: *std.ArrayList(NodePair),
-    ) Allocator.Error!void {
-        const ext_root = self.find(ext);
-        const ext_content = self.nodes.items[@backingInt(ext_root)];
-        if (ext_content == .unresolved) {
-            const variable = ext_content.unresolved;
-            if (variable.numeric_default_phase != null) {
-                Common.invariant("instantiation tried to write a record row into a numeric variable");
-            }
-            if (variable.row_default) |default| {
-                if (default != .empty_record) {
-                    Common.invariant("instantiation tried to write a record row into a tag row variable");
-                }
-            }
-            try self.setContent(ext_root, .{ .record = .{
-                .fields = try self.arena().dupe(InstField, fields),
-                .ext = tail_ext,
-            } });
-        } else {
-            const rest = try self.newNode(.{ .record = .{
-                .fields = try self.arena().dupe(InstField, fields),
-                .ext = tail_ext,
-            } });
-            try pending.append(self.allocator, .{ .left = ext_root, .right = rest, .row_width = row_width });
-        }
     }
 
     /// Import a finished Monotype into the current ownership scope. Active

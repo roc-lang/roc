@@ -105,7 +105,7 @@ DOES NOT EXIST - can_import_exposing_types.md:50:33:50:44
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "Json")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "can_import_exposing_types.md") (start 1 1) (end 1 49) (annotation error) (line-text "import json.Json exposing [Value, Error, Config]"))
 			(line-break)
@@ -116,7 +116,7 @@ DOES NOT EXIST - can_import_exposing_types.md:50:33:50:44
 				(file "can_import_exposing_types.md")
 				(line 1)
 				(column 1))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "can_import_exposing_types.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import json.Json exposing [Value, Error, Config]"))))
 	(report
@@ -126,7 +126,7 @@ DOES NOT EXIST - can_import_exposing_types.md:50:33:50:44
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "Try")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "can_import_exposing_types.md") (start 3 1) (end 3 32) (annotation error) (line-text "import utils.Try exposing [Try]"))
 			(line-break)
@@ -137,7 +137,7 @@ DOES NOT EXIST - can_import_exposing_types.md:50:33:50:44
 				(file "can_import_exposing_types.md")
 				(line 1)
 				(column 1))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "can_import_exposing_types.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import json.Json exposing [Value, Error, Config]"))))
 	(report

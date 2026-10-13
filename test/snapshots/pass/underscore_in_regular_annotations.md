@@ -95,7 +95,7 @@ UNUSED VARIABLE - underscore_in_regular_annotations.md:9:12:9:16
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "list")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_list")

@@ -2,8 +2,9 @@
 //! solved by loop structure into persistent rows.
 //!
 //! A node's row holds every bit read on some path from the node before a node
-//! on that path defines it: the least solution of
-//! `row(n) = reads(n) | (union of row(s) over successors s, minus defs(n))`.
+//! on that path defines it or an edge on that path kills it: the least
+//! solution of `row(n) = reads(n) | (union over successors s of row(s) minus
+//! kills(n -> s), minus defs(n))`.
 //! A loop nest keeps an outer value live through every inner node, so rows
 //! hold quadratic content in the nest depth. They are therefore never built
 //! per node: inside a cyclic component, a bit that a whole loop carries (the
@@ -14,53 +15,119 @@
 //! finished rows and share their structure.
 
 const std = @import("std");
+const builtin = @import("builtin");
+const base = @import("base");
 const collections = @import("collections");
 const ArcSnapshot = @import("arc_state.zig").Snapshot;
+
+const invariant = base.invariant;
 
 const Allocator = std.mem.Allocator;
 const LoopForest = collections.LoopForest;
 
-/// A persistent bit row. Copies share structure; changing a bit allocates
-/// only that bit's path.
+/// A persistent bit row over an exact bit domain. Copies share structure;
+/// changing a bit allocates only that bit's path.
 pub const Row = struct {
+    bit_len: usize,
     words: ArcSnapshot(u64, 0),
 
     pub fn initEmpty(allocator: Allocator, bit_len: usize) Row {
-        return .{ .words = ArcSnapshot(u64, 0).init(allocator, (bit_len + 63) / 64) };
+        const word_len = (bit_len + 63) / 64;
+        std.debug.assert(word_len == 0 or word_len - 1 <= std.math.maxInt(u32));
+        return .{ .bit_len = bit_len, .words = ArcSnapshot(u64, 0).init(allocator, word_len) };
+    }
+
+    /// The same bits, with further changes allocated in `allocator`.
+    pub fn clone(self: *const Row, allocator: Allocator) Row {
+        var cloned = self.*;
+        cloned.words.allocator = allocator;
+        return cloned;
     }
 
     pub fn set(self: *Row, bit: usize) Allocator.Error!void {
+        std.debug.assert(bit < self.bit_len);
         const word: u32 = @intCast(bit / 64);
         const mask = @as(u64, 1) << @intCast(bit % 64);
         try self.words.put(word, self.words.get(word) | mask);
     }
 
     pub fn unset(self: *Row, bit: usize) Allocator.Error!void {
+        std.debug.assert(bit < self.bit_len);
         const word: u32 = @intCast(bit / 64);
         const mask = @as(u64, 1) << @intCast(bit % 64);
         try self.words.put(word, self.words.get(word) & ~mask);
     }
 
     pub fn isSet(self: *const Row, bit: usize) bool {
+        std.debug.assert(bit < self.bit_len);
         const word: u32 = @intCast(bit / 64);
         return self.words.get(word) & (@as(u64, 1) << @intCast(bit % 64)) != 0;
     }
 
+    /// Exact range existence, without enumerating either members or live bits.
+    pub fn anySetInRange(self: *const Row, start: usize, end: usize) bool {
+        std.debug.assert(start <= end and end <= self.bit_len);
+        if (start == end) return false;
+        const first_word: u32 = @intCast(start / 64);
+        const last_word: u32 = @intCast((end - 1) / 64);
+        const first_mask = @as(u64, std.math.maxInt(u64)) << @as(u6, @intCast(start % 64));
+        const last_mask = @as(u64, std.math.maxInt(u64)) >> @as(u6, @intCast(63 - (end - 1) % 64));
+        if (first_word == last_word) return self.words.get(first_word) & first_mask & last_mask != 0;
+        if (self.words.get(first_word) & first_mask != 0) return true;
+        if (self.words.get(last_word) & last_mask != 0) return true;
+        return self.words.hasNonEmptyInRange(first_word + 1, last_word);
+    }
+
+    pub fn unsetAll(self: *Row) void {
+        self.words.clear();
+    }
+
     pub fn setUnion(self: *Row, other: *const Row) Allocator.Error!void {
+        std.debug.assert(self.bit_len == other.bit_len);
         _ = try self.words.joinWith(&other.words, {}, unionWord);
     }
 
+    pub fn setIntersection(self: *Row, other: *const Row) Allocator.Error!void {
+        std.debug.assert(self.bit_len == other.bit_len);
+        _ = try self.words.meetWith(&other.words, {}, intersectWord);
+    }
+
+    /// Whether any bit is set. The snapshot answers from its structure, so
+    /// this costs the tree depth rather than the domain's width.
+    pub fn isEmpty(self: *const Row) bool {
+        return !self.words.hasNonEmptyInRange(0, (self.bit_len + 63) / 64);
+    }
+
+    pub fn count(self: *const Row) usize {
+        var total: usize = 0;
+        for (0..(self.bit_len + 63) / 64) |word| total += @popCount(self.words.get(@intCast(word)));
+        return total;
+    }
+
     pub fn eql(self: *const Row, other: *const Row) bool {
-        return self.words.eql(&other.words);
+        return self.bit_len == other.bit_len and self.words.eql(&other.words);
     }
 
     /// Set bits in ascending order, skipping absent subtrees.
     pub fn iterator(self: *const Row) Iterator {
-        return .{ .words = self.words.iterator() };
+        return self.iteratorRange(0, self.bit_len);
+    }
+
+    /// Set bits in a half-open range, skipping absent and excluded word
+    /// subtrees rather than looking up every word in the domain.
+    pub fn iteratorRange(self: *const Row, start: usize, end: usize) Iterator {
+        std.debug.assert(start <= end and end <= self.bit_len);
+        return .{
+            .words = self.words.iteratorRange(@intCast(start / 64), if (start == end) start / 64 else @as(u64, @intCast(end / 64)) + @intFromBool(end % 64 != 0)),
+            .start = start,
+            .end = end,
+        };
     }
 
     pub const Iterator = struct {
-        words: ArcSnapshot(u64, 0).Iterator,
+        words: ArcSnapshot(u64, 0).RangeIterator,
+        start: usize,
+        end: usize,
         base: usize = 0,
         pending: u64 = 0,
 
@@ -69,6 +136,8 @@ pub const Row = struct {
                 const entry = self.words.next() orelse return null;
                 self.base = @as(usize, entry.index) * 64;
                 self.pending = entry.value;
+                if (self.start > self.base) self.pending &= @as(u64, std.math.maxInt(u64)) << @as(u6, @intCast(self.start - self.base));
+                if (self.end - self.base < 64) self.pending &= @as(u64, std.math.maxInt(u64)) >> @as(u6, @intCast(64 - (self.end - self.base)));
             }
             const bit = self.base + @ctz(self.pending);
             self.pending &= self.pending - 1;
@@ -79,12 +148,18 @@ pub const Row = struct {
     fn unionWord(_: void, lhs: u64, rhs: u64) u64 {
         return lhs | rhs;
     }
+
+    fn intersectWord(_: void, lhs: u64, rhs: u64) u64 {
+        return lhs & rhs;
+    }
 };
 
 /// A control graph in compressed adjacency form, with the bits each node
-/// reads and defines. `read_starts[n]..read_starts[n + 1]` indexes node n's
-/// read bits in `reads`, and likewise for successors, predecessors, and
-/// defined bits.
+/// reads and defines and the bits each edge kills. `read_starts[n]..
+/// read_starts[n + 1]` indexes node n's read bits in `reads`, and likewise
+/// for successors, predecessors, and defined bits; `kill_starts[e]..
+/// kill_starts[e + 1]` indexes the bits killed on edge `e`, a position in
+/// `succs`, and is empty when no edge kills anything.
 pub const Graph = struct {
     succ_starts: []const u32,
     succs: []const u32,
@@ -94,35 +169,97 @@ pub const Graph = struct {
     reads: []const u32,
     def_starts: []const u32,
     defs: []const u32,
+    kill_starts: []const u32 = &.{},
+    kills: []const u32 = &.{},
     bit_len: usize,
 
-    fn nodeCount(self: *const Graph) usize {
+    pub fn nodeCount(self: *const Graph) usize {
         return self.succ_starts.len - 1;
     }
 
-    fn successorsOf(self: *const Graph, node: u32) []const u32 {
+    pub fn successorsOf(self: *const Graph, node: usize) []const u32 {
         return self.succs[self.succ_starts[node]..self.succ_starts[node + 1]];
     }
 
-    fn predecessorsOf(self: *const Graph, node: u32) []const u32 {
+    pub fn predecessorsOf(self: *const Graph, node: usize) []const u32 {
         return self.preds[self.pred_starts[node]..self.pred_starts[node + 1]];
     }
 
-    fn readsOf(self: *const Graph, node: u32) []const u32 {
+    fn readsOf(self: *const Graph, node: usize) []const u32 {
         return self.reads[self.read_starts[node]..self.read_starts[node + 1]];
     }
 
-    fn defsOf(self: *const Graph, node: u32) []const u32 {
+    fn defsOf(self: *const Graph, node: usize) []const u32 {
         return self.defs[self.def_starts[node]..self.def_starts[node + 1]];
     }
 
+    fn killsOf(self: *const Graph, edge: usize) []const u32 {
+        if (self.kill_starts.len == 0) return &.{};
+        return self.kills[self.kill_starts[edge]..self.kill_starts[edge + 1]];
+    }
+
     fn defines(self: *const Graph, node: u32, bit: u32) bool {
-        for (self.defsOf(node)) |defined| {
-            if (defined == bit) return true;
+        return std.mem.findScalar(u32, self.defsOf(node), bit) != null;
+    }
+
+    fn reads_(self: *const Graph, node: u32, bit: u32) bool {
+        return std.mem.findScalar(u32, self.readsOf(node), bit) != null;
+    }
+
+    /// Whether the bit exposed at `successor` is exposed at `predecessor`:
+    /// the predecessor does not define it, and some edge between them does
+    /// not kill it.
+    fn passes(self: *const Graph, predecessor: u32, successor: u32, bit: u32) bool {
+        if (self.defines(predecessor, bit)) return false;
+        if (self.kill_starts.len == 0) return true;
+        for (self.successorsOf(predecessor), self.succ_starts[predecessor]..) |candidate, edge| {
+            if (candidate == successor and std.mem.findScalar(u32, self.killsOf(edge), bit) == null) return true;
         }
         return false;
     }
 };
+
+/// The right-hand side of `node`'s equation over the rows `rowOf` answers:
+/// each successor's row less the bits its edge kills, less the node's
+/// defined bits, plus its reads. The result lives in `allocator`.
+pub fn equationRow(
+    graph: *const Graph,
+    node: usize,
+    allocator: Allocator,
+    rows: anytype,
+    comptime rowOf: fn (@TypeOf(rows), u32) *const Row,
+) Allocator.Error!Row {
+    var row = Row.initEmpty(allocator, graph.bit_len);
+    for (graph.successorsOf(node), graph.succ_starts[node]..) |successor, edge| {
+        const kills = graph.killsOf(edge);
+        if (kills.len == 0) {
+            try row.setUnion(rowOf(rows, successor));
+            continue;
+        }
+        var exposed = rowOf(rows, successor).clone(allocator);
+        for (kills) |bit| try exposed.unset(bit);
+        try row.setUnion(&exposed);
+    }
+    for (graph.defsOf(node)) |bit| try row.unset(bit);
+    for (graph.readsOf(node)) |bit| try row.set(bit);
+    return row;
+}
+
+fn rowAt(rows: []const Row, node: u32) *const Row {
+    return &rows[node];
+}
+
+/// Debug-only check that every row satisfies its equation, independently of
+/// how the rows were solved.
+pub fn certify(scratch_allocator: Allocator, graph: *const Graph, rows: []const Row) Allocator.Error!void {
+    if (builtin.mode != .debug) return;
+    var arena = std.heap.ArenaAllocator.init(scratch_allocator);
+    defer arena.deinit();
+    for (rows, 0..) |*row, node| {
+        const candidate = try equationRow(graph, node, arena.allocator(), rows, rowAt);
+        if (!candidate.eql(row)) invariant("ARC liveness row did not satisfy its equation", .{});
+    }
+}
 
 /// Solves every node's row. Rows and their shared subtrees live in
 /// `allocator`; all other work uses `scratch_allocator` and is freed.
@@ -168,14 +305,25 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
         side_entry_starts[loop_count] = @intCast(cursor);
     }
 
-    // Bits each loop defines: a node's definitions belong to its innermost
-    // loop and to every loop around it.
+    // Bits each loop defines or kills: a node's definitions belong to its
+    // innermost loop and to every loop around it, and an edge's kills to the
+    // innermost loop holding both its ends.
     const written = try scratch.alloc(Row, loop_count);
     for (written) |*bits| bits.* = Row.initEmpty(scratch, graph.bit_len);
     for (0..node_count) |node_index| {
         const loop = forest.innermost[node_index];
         if (loop == no_loop) continue;
-        for (graph.defsOf(@intCast(node_index))) |bit| try written[loop].set(bit);
+        for (graph.defsOf(node_index)) |bit| try written[loop].set(bit);
+        for (graph.successorsOf(node_index), graph.succ_starts[node_index]..) |successor, edge| {
+            const kills = graph.killsOf(edge);
+            if (kills.len == 0) continue;
+            const target_loop = forest.innermost[successor];
+            if (target_loop == no_loop) continue;
+            var common = loop;
+            while (common != no_loop and !forest.contains(common, target_loop)) common = forest.loops[common].parent;
+            if (common == no_loop) continue;
+            for (kills) |bit| try written[common].set(bit);
+        }
     }
     {
         var preorder_index = loop_count;
@@ -188,57 +336,8 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
     }
 
     // Components in an order that solves every successor component first.
-    const no_component = std.math.maxInt(u32);
-    const component_of = try scratch.alloc(u32, node_count);
-    @memset(component_of, no_component);
-    var component_nodes = std.ArrayList(u32).empty;
-    var component_starts = std.ArrayList(u32).empty;
-    {
-        const Frame = struct { node: u32, next_successor: u32 };
-        var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(scratch, node_count);
-        var frames = std.ArrayList(Frame).empty;
-        var finish_order = std.ArrayList(u32).empty;
-        for (0..node_count) |root| {
-            if (seen.isSet(root)) continue;
-            seen.set(root);
-            try frames.append(scratch, .{ .node = @intCast(root), .next_successor = 0 });
-            while (frames.items.len != 0) {
-                const frame = &frames.items[frames.items.len - 1];
-                const successors = graph.successorsOf(frame.node);
-                if (frame.next_successor < successors.len) {
-                    const successor = successors[frame.next_successor];
-                    frame.next_successor += 1;
-                    if (!seen.isSet(successor)) {
-                        seen.set(successor);
-                        try frames.append(scratch, .{ .node = successor, .next_successor = 0 });
-                    }
-                    continue;
-                }
-                try finish_order.append(scratch, frame.node);
-                _ = frames.pop();
-            }
-        }
-        var reverse_work = std.ArrayList(u32).empty;
-        var order_index = finish_order.items.len;
-        while (order_index > 0) {
-            order_index -= 1;
-            const root = finish_order.items[order_index];
-            if (component_of[root] != no_component) continue;
-            const component: u32 = @intCast(component_starts.items.len);
-            try component_starts.append(scratch, @intCast(component_nodes.items.len));
-            component_of[root] = component;
-            try reverse_work.append(scratch, root);
-            while (reverse_work.pop()) |member| {
-                try component_nodes.append(scratch, member);
-                for (graph.predecessorsOf(member)) |predecessor| {
-                    if (component_of[predecessor] != no_component) continue;
-                    component_of[predecessor] = component;
-                    try reverse_work.append(scratch, predecessor);
-                }
-            }
-        }
-        try component_starts.append(scratch, @intCast(component_nodes.items.len));
-    }
+    const components = try collections.scc.compute(scratch, graph.succ_starts, graph.succs, graph.pred_starts, graph.preds);
+    const component_of = components.component_of;
 
     // Inside a cyclic component, one backward search per bit. A unit is a
     // node, or the largest loop around a node that defines nothing of the
@@ -282,7 +381,7 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
         fn reachPredecessorsOf(search: *@This(), target: u32, outside: ?u32) Allocator.Error!void {
             for (search.graph_.predecessorsOf(target)) |predecessor| {
                 if (outside) |loop| if (search.forest_.containsNode(loop, predecessor)) continue;
-                if (!search.graph_.defines(predecessor, search.bit)) try search.reach(predecessor);
+                if (search.graph_.passes(predecessor, target, search.bit)) try search.reach(predecessor);
             }
         }
     };
@@ -310,13 +409,14 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
     }.lessThan;
     var seeds = std.ArrayList(BitAt).empty;
 
-    var component_cursor = component_starts.items.len - 1;
+    var component_cursor = components.count();
     while (component_cursor > 0) {
         component_cursor -= 1;
-        const members = component_nodes.items[component_starts.items[component_cursor]..component_starts.items[component_cursor + 1]];
+        const members = components.membersOf(component_cursor);
         const first = members[0];
         if (members.len == 1 and forest.innermost[first] == no_loop) {
-            try solveAcyclicNode(graph, rows, first);
+            // One exact equation step from the solved successors' rows.
+            rows[first] = try equationRow(graph, first, allocator, @as([]const Row, rows), rowAt);
             continue;
         }
         const component: u32 = @intCast(component_cursor);
@@ -329,10 +429,14 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
         seeds.clearRetainingCapacity();
         for (members) |member| {
             for (graph.readsOf(member)) |bit| try seeds.append(scratch, .{ .index = member, .bit = bit });
-            for (graph.successorsOf(member)) |successor| {
+            for (graph.successorsOf(member), graph.succ_starts[member]..) |successor, edge| {
                 if (component_of[successor] == component) continue;
+                const kills = graph.killsOf(edge);
                 var exposed = rows[successor].iterator();
-                while (exposed.next()) |bit| try seeds.append(scratch, .{ .index = member, .bit = @intCast(bit) });
+                while (exposed.next()) |bit| {
+                    if (std.mem.findScalar(u32, kills, @intCast(bit)) != null) continue;
+                    try seeds.append(scratch, .{ .index = member, .bit = @intCast(bit) });
+                }
             }
         }
         std.mem.sort(BitAt, seeds.items, {}, byBit);
@@ -343,7 +447,7 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
                 const seed = seeds.items[seed_index].index;
                 // An exit seed is exposed at its node only through the node's
                 // definition; a read is exposed regardless.
-                if (nodeReads(graph, seed, search.bit) or !graph.defines(seed, search.bit)) try search.reach(seed);
+                if (graph.reads_(seed, search.bit) or !graph.defines(seed, search.bit)) try search.reach(seed);
             }
             while (search.work.pop()) |unit| {
                 if (unit.loop) {
@@ -351,7 +455,7 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
                     try search.reachPredecessorsOf(forest.loops[unit.index].header, unit.index);
                     for (side_entries.items[side_entry_starts[unit.index]..side_entry_starts[unit.index + 1]]) |entry| {
                         if (component_of[entry.predecessor] != component) continue;
-                        if (!graph.defines(entry.predecessor, search.bit)) try search.reach(entry.predecessor);
+                        if (graph.passes(entry.predecessor, entry.target, search.bit)) try search.reach(entry.predecessor);
                     }
                 } else {
                     try search.node_bits.append(scratch, .{ .index = unit.index, .bit = search.bit });
@@ -391,24 +495,8 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
             rows[member] = row;
         }
     }
+    try certify(scratch_allocator, graph, rows);
     return rows;
-}
-
-fn nodeReads(graph: *const Graph, node: u32, bit: u32) bool {
-    for (graph.readsOf(node)) |read| {
-        if (read == bit) return true;
-    }
-    return false;
-}
-
-/// One exact equation step for a node outside every cycle, whose successors
-/// are all solved.
-fn solveAcyclicNode(graph: *const Graph, rows: []Row, node: u32) Allocator.Error!void {
-    var row = rows[node];
-    for (graph.successorsOf(node)) |successor| try row.setUnion(&rows[successor]);
-    for (graph.defsOf(node)) |bit| try row.unset(bit);
-    for (graph.readsOf(node)) |bit| try row.set(bit);
-    rows[node] = row;
 }
 
 const TestGraph = struct {
@@ -420,17 +508,25 @@ const TestGraph = struct {
     reads: std.ArrayList(u32) = .empty,
     def_starts: std.ArrayList(u32) = .empty,
     defs: std.ArrayList(u32) = .empty,
+    kill_starts: std.ArrayList(u32) = .empty,
+    kills: std.ArrayList(u32) = .empty,
 
-    const Node = struct { succs: []const u32 = &.{}, reads: []const u32 = &.{}, defs: []const u32 = &.{} };
+    /// `kills[i]` lists the bits killed on the edge to `succs[i]`.
+    const Node = struct { succs: []const u32 = &.{}, reads: []const u32 = &.{}, defs: []const u32 = &.{}, kills: []const []const u32 = &.{} };
 
     fn build(allocator: Allocator, nodes: []const Node) Allocator.Error!TestGraph {
         var graph = TestGraph{};
         try graph.succ_starts.append(allocator, 0);
         try graph.read_starts.append(allocator, 0);
         try graph.def_starts.append(allocator, 0);
+        try graph.kill_starts.append(allocator, 0);
         for (nodes) |node| {
             try graph.succs.appendSlice(allocator, node.succs);
             try graph.succ_starts.append(allocator, @intCast(graph.succs.items.len));
+            for (node.succs, 0..) |_, edge| {
+                if (edge < node.kills.len) try graph.kills.appendSlice(allocator, node.kills[edge]);
+                try graph.kill_starts.append(allocator, @intCast(graph.kills.items.len));
+            }
             try graph.reads.appendSlice(allocator, node.reads);
             try graph.read_starts.append(allocator, @intCast(graph.reads.items.len));
             try graph.defs.appendSlice(allocator, node.defs);
@@ -458,6 +554,8 @@ const TestGraph = struct {
             .reads = self.reads.items,
             .def_starts = self.def_starts.items,
             .defs = self.defs.items,
+            .kill_starts = if (self.kills.items.len == 0) &.{} else self.kill_starts.items,
+            .kills = self.kills.items,
             .bit_len = bit_len,
         };
     }
@@ -511,4 +609,76 @@ test "liveness stops at definitions inside a loop" {
     try expectRowBits(&rows[1], &.{0});
     try expectRowBits(&rows[2], &.{});
     try expectRowBits(&rows[3], &.{0});
+}
+
+test "liveness stops at a kill on one edge but not the other" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // 0 -> 1 (kills 0), 0 -> 2; 1: reads 0; 2: reads 0, 1
+    const graph = try TestGraph.build(arena.allocator(), &.{
+        .{ .succs = &.{ 1, 2 }, .kills = &.{&.{0}} },
+        .{ .reads = &.{0} },
+        .{ .reads = &.{ 0, 1 } },
+    });
+    const view = graph.view(2);
+    const rows = try solve(arena.allocator(), std.testing.allocator, &view);
+    try expectRowBits(&rows[0], &.{ 0, 1 });
+    try expectRowBits(&rows[1], &.{0});
+    try expectRowBits(&rows[2], &.{ 0, 1 });
+}
+
+test "liveness carries a bit through a loop whose exit edge kills it" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // 0 -> 1; 1: header -> 2, 3 (kills 0); 2: reads 0 -> 1; 3: reads 0
+    const graph = try TestGraph.build(arena.allocator(), &.{
+        .{ .succs = &.{1} },
+        .{ .succs = &.{ 2, 3 }, .kills = &.{ &.{}, &.{0} } },
+        .{ .succs = &.{1}, .reads = &.{0} },
+        .{ .reads = &.{0} },
+    });
+    const view = graph.view(1);
+    const rows = try solve(arena.allocator(), std.testing.allocator, &view);
+    try expectRowBits(&rows[0], &.{0});
+    try expectRowBits(&rows[1], &.{0});
+    try expectRowBits(&rows[2], &.{0});
+    try expectRowBits(&rows[3], &.{0});
+}
+
+test "liveness does not carry a bit a loop kills on its back edge" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // 0 -> 1; 1: header -> 2, 3; 2 -> 1 (kills 0); 3: reads 0
+    const graph = try TestGraph.build(arena.allocator(), &.{
+        .{ .succs = &.{1} },
+        .{ .succs = &.{ 2, 3 } },
+        .{ .succs = &.{1}, .kills = &.{&.{0}} },
+        .{ .reads = &.{0} },
+    });
+    const view = graph.view(1);
+    const rows = try solve(arena.allocator(), std.testing.allocator, &view);
+    try expectRowBits(&rows[0], &.{0});
+    try expectRowBits(&rows[1], &.{0});
+    try expectRowBits(&rows[2], &.{});
+    try expectRowBits(&rows[3], &.{0});
+}
+
+test "rows preserve operations across persistent forks" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    for ([_]usize{ 64, 65 }) |bit_len| {
+        var left = Row.initEmpty(arena.allocator(), bit_len);
+        var right = Row.initEmpty(arena.allocator(), bit_len);
+        try left.set(0);
+        try left.set(bit_len - 1);
+        try right.set(bit_len - 1);
+        try left.setIntersection(&right);
+        try std.testing.expectEqual(@as(usize, 1), left.count());
+        try std.testing.expect(left.isSet(bit_len - 1));
+        const cloned = left.clone(arena.allocator());
+        try std.testing.expect(cloned.eql(&left));
+        // A domain whose width is not a whole number of words must not
+        // enumerate the padding bits above it.
+        try expectRowBits(&cloned, &.{bit_len - 1});
+    }
 }

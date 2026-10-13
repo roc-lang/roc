@@ -252,15 +252,6 @@ pub fn CallBuilder(comptime EmitType: type) type {
             } });
         }
 
-        /// Add a by-value stack argument copied from memory, rounded up to
-        /// eightbyte slots. This is used for x86_64 SysV memory-class
-        /// aggregate arguments; Win64/AAPCS64 pass those aggregates by pointer.
-        pub fn addStackMemArg(self: *Self, base_reg: GeneralReg, offset: i32, size: usize) Allocator.Error!void {
-            const start = std.mem.alignForward(u32, self.stack_arg_size, 8);
-            try self.addStackMemPieces(start, base_reg, offset, size);
-            self.stack_arg_size = std.mem.alignForward(u32, @intCast(start + size), 8);
-        }
-
         /// Add a by-value argument at an ABI-assigned byte offset in the
         /// outgoing stack argument area. Unassigned alignment gaps are left
         /// untouched because the ABI gives them no value semantics.
@@ -866,10 +857,10 @@ pub fn CallBuilder(comptime EmitType: type) type {
             }
         }
 
-        /// Emit call instruction and handle cleanup.
-        /// If R12 save was configured via init(), R12 is automatically
-        /// restored after the call returns.
-        pub fn call(self: *Self, fn_addr: usize) Allocator.Error!void {
+        /// Reserve the outgoing argument area, store the stack arguments, and
+        /// move the register arguments into place. Returns the reserved size
+        /// for `finishCall`.
+        fn beginCall(self: *Self) Allocator.Error!u32 {
             // Calculate total stack space needed
             const stack_args_space: u32 = self.stack_arg_size;
             const total_unaligned: u32 = CC_EMIT.SHADOW_SPACE + stack_args_space;
@@ -914,21 +905,12 @@ pub fn CallBuilder(comptime EmitType: type) type {
             // so the parallel move doesn't clobber stack arg source registers.
             try self.emitDeferredRegArgs();
 
-            // Load function address into scratch register
-            if (comptime is_aarch64) {
-                try self.emit.movRegImm64(CC_EMIT.SCRATCH_REG, fn_addr);
-            } else {
-                try self.emit.movRegImm64(CC_EMIT.SCRATCH_REG, @bitCast(@as(i64, @intCast(fn_addr))));
-            }
+            return total_space;
+        }
 
-            // Call through scratch register
-            if (comptime is_aarch64) {
-                try self.emit.blrReg(CC_EMIT.SCRATCH_REG);
-            } else {
-                try self.emit.callReg(CC_EMIT.SCRATCH_REG);
-            }
-
-            // Cleanup
+        /// Release the argument area reserved by `beginCall` and restore R12
+        /// if `init()` configured a save slot for it.
+        fn finishCall(self: *Self, total_space: u32) Allocator.Error!void {
             if (comptime is_x86_64) {
                 // Restore stack pointer
                 if (total_space > 0) {
@@ -946,48 +928,29 @@ pub fn CallBuilder(comptime EmitType: type) type {
             }
         }
 
+        /// Emit call instruction and handle cleanup.
+        /// If R12 save was configured via init(), R12 is automatically
+        /// restored after the call returns.
+        pub fn call(self: *Self, fn_addr: usize) Allocator.Error!void {
+            const total_space = try self.beginCall();
+
+            // Load function address into scratch register and call through it
+            if (comptime is_aarch64) {
+                try self.emit.movRegImm64(CC_EMIT.SCRATCH_REG, fn_addr);
+                try self.emit.blrReg(CC_EMIT.SCRATCH_REG);
+            } else {
+                try self.emit.movRegImm64(CC_EMIT.SCRATCH_REG, @bitCast(@as(i64, @intCast(fn_addr))));
+                try self.emit.callReg(CC_EMIT.SCRATCH_REG);
+            }
+
+            try self.finishCall(total_space);
+        }
+
         /// Call through a register (for indirect calls).
         /// If R12 save was configured via init(), R12 is automatically
         /// restored after the call returns.
         pub fn callReg(self: *Self, target: GeneralReg) Allocator.Error!void {
-            // Calculate total stack space needed
-            const stack_args_space: u32 = self.stack_arg_size;
-            const total_unaligned: u32 = CC_EMIT.SHADOW_SPACE + stack_args_space;
-            // Round up to 16-byte alignment (Windows x64 ABI requirement)
-            const total_space: u32 = (total_unaligned + 15) & ~@as(u32, 15);
-
-            // Assert stack is 16-byte aligned
-            std.debug.assert(total_space % 16 == 0);
-            // Assert shadow space is included when we have stack args
-            std.debug.assert(self.stack_args.items.len == 0 or total_space >= CC_EMIT.SHADOW_SPACE + self.stack_arg_size);
-
-            if (comptime is_x86_64) {
-                // Save SCRATCH_REG if it conflicts with stack arg processing
-                try self.saveScratchIfConflict();
-
-                // Allocate all stack space at once
-                if (total_space > 0) {
-                    try self.emit.subRegImm32(.w64, CC_EMIT.STACK_PTR, std.math.cast(i32, total_space) orelse return error.OutOfMemory);
-                }
-
-                // Store stack arguments BEFORE resolving deferred register args
-                for (self.stack_args.items) |arg| {
-                    try self.emitStackArgX86(arg);
-                }
-            } else if (comptime is_aarch64) {
-                if (total_space > 0) {
-                    try self.adjustStackPointerAarch64(.down, total_space);
-                }
-
-                for (self.stack_args.items) |arg| {
-                    try self.emitStackArgAarch64(arg);
-                }
-            }
-
-            try self.stabilizeDeferredMemorySources();
-
-            // Resolve deferred register args AFTER stack args are stored
-            try self.emitDeferredRegArgs();
+            const total_space = try self.beginCall();
 
             if (comptime is_aarch64) {
                 try self.emit.blrReg(target);
@@ -995,22 +958,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
                 try self.emit.callReg(target);
             }
 
-            // Cleanup
-            if (comptime is_x86_64) {
-                // Restore stack pointer
-                if (total_space > 0) {
-                    try self.emit.addRegImm32(.w64, CC_EMIT.STACK_PTR, std.math.cast(i32, total_space) orelse return error.OutOfMemory);
-                }
-
-                // Restore R12 if we saved it (Windows x64 only)
-                if (self.r12_save_offset) |offset| {
-                    try self.emit.movRegMem(.w64, .R12, CC_EMIT.BASE_PTR, offset);
-                }
-            } else if (comptime is_aarch64) {
-                if (total_space > 0) {
-                    try self.adjustStackPointerAarch64(.up, total_space);
-                }
-            }
+            try self.finishCall(total_space);
         }
 
         /// Call a function by symbol name, emitting a relocatable call instruction.
@@ -1028,41 +976,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// call's relocation and, on aarch64, registers the site so a far
         /// image can redirect it to a stub.
         pub fn callRelocatable(self: *Self, symbol: SymbolTable.Id, codegen: anytype) Allocator.Error!void {
-            // Calculate total stack space needed (same as call/callReg)
-            const stack_args_space: u32 = self.stack_arg_size;
-            const total_unaligned: u32 = CC_EMIT.SHADOW_SPACE + stack_args_space;
-            const total_space: u32 = (total_unaligned + 15) & ~@as(u32, 15);
-
-            std.debug.assert(total_space % 16 == 0);
-            std.debug.assert(self.stack_args.items.len == 0 or total_space >= CC_EMIT.SHADOW_SPACE + self.stack_arg_size);
-
-            if (comptime is_x86_64) {
-                // Save SCRATCH_REG if it conflicts with stack arg processing
-                try self.saveScratchIfConflict();
-
-                // Allocate all stack space at once
-                if (total_space > 0) {
-                    try self.emit.subRegImm32(.w64, CC_EMIT.STACK_PTR, std.math.cast(i32, total_space) orelse return error.OutOfMemory);
-                }
-
-                // Store stack arguments BEFORE resolving deferred register args
-                for (self.stack_args.items) |arg| {
-                    try self.emitStackArgX86(arg);
-                }
-            } else if (comptime is_aarch64) {
-                if (total_space > 0) {
-                    try self.adjustStackPointerAarch64(.down, total_space);
-                }
-
-                for (self.stack_args.items) |arg| {
-                    try self.emitStackArgAarch64(arg);
-                }
-            }
-
-            try self.stabilizeDeferredMemorySources();
-
-            // Resolve deferred register args AFTER stack args are stored
-            try self.emitDeferredRegArgs();
+            const total_space = try self.beginCall();
 
             // Emit relocatable call instruction
             if (comptime is_aarch64) {
@@ -1081,20 +995,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
                 });
             }
 
-            // Cleanup
-            if (comptime is_x86_64) {
-                if (total_space > 0) {
-                    try self.emit.addRegImm32(.w64, CC_EMIT.STACK_PTR, std.math.cast(i32, total_space) orelse return error.OutOfMemory);
-                }
-
-                if (self.r12_save_offset) |offset| {
-                    try self.emit.movRegMem(.w64, .R12, CC_EMIT.BASE_PTR, offset);
-                }
-            } else if (comptime is_aarch64) {
-                if (total_space > 0) {
-                    try self.adjustStackPointerAarch64(.up, total_space);
-                }
-            }
+            try self.finishCall(total_space);
         }
     };
 }
@@ -2540,7 +2441,7 @@ test "x86_64 by-value stack arguments of any size copy every piece" {
     var builder = try Builder.init(&emit, &stack_offset);
     defer builder.deinit();
     // A 64 KiB aggregate passed in memory is 8,192 eightbyte copies.
-    try builder.addStackMemArg(.RBP, -65536, 65536);
+    try builder.addStackMemArgAt(0, .RBP, -65536, 65536, .none);
     try std.testing.expectEqual(@as(usize, 8192), builder.stack_args.items.len);
     try std.testing.expectEqual(@as(u32, 65536), builder.stack_arg_size);
     try builder.call(0x12345678);

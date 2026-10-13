@@ -206,10 +206,6 @@ pub const BuiltinIdents = struct {
 pub const HumanIndex = struct {
     value: u32, // 0-based internally
 
-    pub fn fromZeroBased(index: u32) HumanIndex {
-        return .{ .value = index };
-    }
-
     /// Returns the 1-based index number
     pub fn toHuman(self: HumanIndex) u32 {
         return self.value + 1;
@@ -409,11 +405,6 @@ pub const ListArity = union(enum) {
             .exact => |n| n,
             .slice => |s| s.prefix + s.suffix,
         };
-    }
-
-    /// Does this arity cover all lengths that `other` covers?
-    pub fn coversAritiesOf(self: ListArity, other: ListArity) bool {
-        return self.coversLength(other.minLen());
     }
 
     pub fn coversLength(self: ListArity, length: usize) bool {

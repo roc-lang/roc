@@ -374,7 +374,6 @@ pub const Payload = extern union {
     expr_type_method_call: ExprTypeMethodCall,
     expr_type_dispatch_call: ExprTypeDispatchCall,
     expr_hosted_lambda: ExprHostedLambda,
-    expr_low_level: ExprLowLevel,
     expr_run_low_level: ExprRunLowLevel,
     expr_zero_argument_tag: ExprZeroArgumentTag,
     expr_for: ExprFor,
@@ -453,7 +452,6 @@ pub const Payload = extern union {
     ty_record_field_defaulted: TyRecordFieldDefaulted,
     exposed_item: ExposedItem,
     if_branch: IfBranch,
-    type_var_slot: TypeVarSlot,
 
     // Payload struct definitions - all must be exactly 16 bytes, with every byte declared
 
@@ -836,12 +834,6 @@ pub const Payload = extern union {
         symbol_name: u32,
         args_span2_idx: u32, // Index into span2_data: (args.start, args.len)
         _reserved: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
-    };
-
-    pub const ExprLowLevel = extern struct {
-        op: u32,
-        args_body_idx: u32, // Index into span_with_node_data: (args.start, args.len, body)
-        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     pub const ExprRunLowLevel = extern struct {
@@ -1372,11 +1364,6 @@ pub const Payload = extern union {
         cond: u32,
         body: u32,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
-    };
-
-    pub const TypeVarSlot = extern struct {
-        parent_node_idx: u32,
-        _padding: [12]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     // Compile-time size and byte-coverage verification.

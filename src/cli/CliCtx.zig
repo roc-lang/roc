@@ -382,11 +382,6 @@ pub const CliCtx = struct {
         return count;
     }
 
-    /// Get the number of warnings
-    pub fn warningCount(self: *const Self) usize {
-        return self.problemCount() - self.errorCount();
-    }
-
     /// Render all problems to a writer
     pub fn renderProblemsTo(self: *Self, writer: anytype) (Allocator.Error || error{WriteFailed})!void {
         const config = self.reportConfig(.stderr);
@@ -518,7 +513,6 @@ test "CliCtx counts errors vs warnings correctly" {
     try ctx.addProblem(.{ .file_read_failed = .{ .path = "b.roc", .err = error.OutOfMemory } }); // runtime_error
 
     try std.testing.expectEqual(@as(usize, 2), ctx.errorCount());
-    try std.testing.expectEqual(@as(usize, 0), ctx.warningCount());
 }
 
 test "CliCtx clear resets state" {

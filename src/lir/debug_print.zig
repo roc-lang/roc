@@ -256,13 +256,6 @@ const Printer = struct {
                     try writer.writeAll("\n");
                     current = s.next;
                 },
-                .assign_boxy_reuse_box => |s| {
-                    try self.writeTarget(s.target, indent, writer);
-                    try writer.print("boxy_reuse_box source=l{d} desc=", .{@backingInt(s.source)});
-                    try writeBoxyDescRef(s.desc, writer);
-                    try writer.writeAll("\n");
-                    current = s.next;
-                },
                 .assign_boxy_unbox => |s| {
                     try self.writeTarget(s.target, indent, writer);
                     try writer.print("boxy_unbox source=l{d} desc=", .{@backingInt(s.source)});
@@ -639,16 +632,6 @@ const Printer = struct {
                     try writer.print("comptime_exhaustiveness_failed site={d}\n", .{@backingInt(s.site)});
                     return;
                 },
-                .loop_continue => {
-                    try writeIndent(indent, writer);
-                    try writer.writeAll("loop_continue\n");
-                    return;
-                },
-                .loop_break => {
-                    try writeIndent(indent, writer);
-                    try writer.writeAll("loop_break\n");
-                    return;
-                },
             }
         }
     }
@@ -715,10 +698,6 @@ fn writeBoxyDescRef(desc: LIR.BoxyDescRef, writer: *std.Io.Writer) Error!void {
         .static => |id| try writer.print("desc#{d}", .{@backingInt(id)}),
         .local => |local| try writer.print("desc=l{d}", .{@backingInt(local)}),
         .runtime => |id| try writer.print("desc@runtime#{d}", .{id}),
-        .dict_method_arg => |projection| try writer.print(
-            "desc=dict-arg(l{d},method={d},slot={d},arg={d})",
-            .{ @backingInt(projection.dict), @backingInt(projection.method), projection.method_slot, projection.arg_index },
-        ),
         .dict_method_hidden => |projection| try writer.print(
             "desc=dict-hidden(l{d},method={d},slot={d},hidden={d},shape={s})",
             .{ @backingInt(projection.dict), @backingInt(projection.method), projection.method_slot, projection.hidden_index, @tagName(projection.shape) },
@@ -971,7 +950,6 @@ test "debug print includes boxy statement surface" {
     const desc = try store.addLocal(.{ .layout_idx = .opaque_ptr });
     const dict = try store.addLocal(.{ .layout_idx = .opaque_ptr });
     const boxed = try store.addLocal(.{ .layout_idx = .opaque_ptr });
-    const reused = try store.addLocal(.{ .layout_idx = .opaque_ptr });
     const unboxed = try store.addLocal(.{ .layout_idx = .str });
     const adapted = try store.addLocal(.{ .layout_idx = .opaque_ptr });
     const result = try store.addLocal(.{ .layout_idx = .u64 });
@@ -1009,17 +987,11 @@ test "debug print includes boxy statement surface" {
     } }, .test_fixture);
     const unbox = try store.addCFStmt(.{ .assign_boxy_unbox = .{
         .target = unboxed,
-        .source = reused,
+        .source = boxed,
         .source_desc = .{ .local = desc },
         .target_layout = .str,
         .source_mode = .borrow,
         .next = adapt,
-    } }, .test_fixture);
-    const reuse = try store.addCFStmt(.{ .assign_boxy_reuse_box = .{
-        .target = reused,
-        .source = boxed,
-        .desc = .{ .local = desc },
-        .next = unbox,
     } }, .test_fixture);
     const box = try store.addCFStmt(.{ .assign_boxy_box = .{
         .target = boxed,
@@ -1027,7 +999,7 @@ test "debug print includes boxy statement surface" {
         .payload_layout = .str,
         .payload_desc = .{ .local = desc },
         .payload_mode = .copy,
-        .next = reuse,
+        .next = unbox,
     } }, .test_fixture);
     const desc_ref = try store.addCFStmt(.{ .assign_boxy_desc_ref = .{
         .target = desc,
@@ -1055,9 +1027,8 @@ test "debug print includes boxy statement surface" {
     try std.testing.expect(std.mem.find(u8, printed, "l2:opaque_ptr = boxy_dict_ref dict#7\n") != null);
     try std.testing.expect(std.mem.find(u8, printed, "l1:opaque_ptr = boxy_desc_ref desc#4\n") != null);
     try std.testing.expect(std.mem.find(u8, printed, "l3:opaque_ptr = boxy_box payload=l0 layout=str desc=desc=l1 mode=copy\n") != null);
-    try std.testing.expect(std.mem.find(u8, printed, "l4:opaque_ptr = boxy_reuse_box source=l3 desc=desc=l1\n") != null);
-    try std.testing.expect(std.mem.find(u8, printed, "l5:str = boxy_unbox source=l4 desc=desc=l1 target_layout=str mode=borrow\n") != null);
-    try std.testing.expect(std.mem.find(u8, printed, "l6:opaque_ptr = boxy_adapt source=l5 adapter=5 source_desc=desc=l1 target_desc=desc=l1 mode=move\n") != null);
-    try std.testing.expect(std.mem.find(u8, printed, "l7:u64 = boxy_inspect source=l6 desc=desc=l1 mode=borrow\n") != null);
-    try std.testing.expect(std.mem.find(u8, printed, "l7:u64 = call_dict dict=l2 method=0 slot=2 args=[l6] arg_descs=[] hidden=[l1] result_desc=desc=l1 cold=true\n") != null);
+    try std.testing.expect(std.mem.find(u8, printed, "l4:str = boxy_unbox source=l3 desc=desc=l1 target_layout=str mode=borrow\n") != null);
+    try std.testing.expect(std.mem.find(u8, printed, "l5:opaque_ptr = boxy_adapt source=l4 adapter=5 source_desc=desc=l1 target_desc=desc=l1 mode=move\n") != null);
+    try std.testing.expect(std.mem.find(u8, printed, "l6:u64 = boxy_inspect source=l5 desc=desc=l1 mode=borrow\n") != null);
+    try std.testing.expect(std.mem.find(u8, printed, "l6:u64 = call_dict dict=l2 method=0 slot=2 args=[l5] arg_descs=[] hidden=[l1] result_desc=desc=l1 cold=true\n") != null);
 }

@@ -21,7 +21,7 @@ TYPE MISMATCH - can_list_multiline_mismatch.md:3:5:3:18
 		(title "Type Mismatch")
 		(region (start 3 5) (end 3 18))
 		(headline
-			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both:"))
+			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both."))
 		(document
 			(source-region (file "can_list_multiline_mismatch.md") (start 3 5) (end 3 18) (annotation error) (line-text "    \"hello world\","))
 			(line-break)

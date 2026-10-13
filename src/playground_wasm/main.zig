@@ -158,7 +158,6 @@ const CompilerStageData = struct {
     parse_ast: ?*parse.AST = null,
     solver: ?Check = null,
     bool_stmt: ?can.CIR.Statement.Idx = null,
-    builtin_types: ?eval.BuiltinTypes = null,
     imported_modules: ?[]const *const ModuleEnv = null,
     auto_imported_types: ?*std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType) = null,
 
@@ -1034,7 +1033,7 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
     errdefer root_artifact.deinitRetainingModuleEnv(allocator);
 
     var import_artifacts = [_]check.CheckedArtifact.CheckedModuleArtifact{builtin_artifact};
-    const lowered = try eval.Inspected.lowerCheckedModuleSetToLir(allocator, @as(std.Io, undefined), &root_artifact, &import_artifacts, .u32);
+    const lowered = try eval.Inspected.lowerCheckedModuleSetToLir(allocator, @as(std.Io, undefined), &root_artifact, &import_artifacts, .u32, .{});
 
     root_artifact.deinitRetainingModuleEnv(allocator);
     import_artifacts[0].deinitRetainingModuleEnv(allocator);
@@ -1352,9 +1351,8 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
     logDebug("compileSource: Using Result statement from Builtin module, idx={}\n", .{@backingInt(try_stmt_in_builtin_module)});
     logDebug("compileSource: Builtin injection complete\n", .{});
 
-    // Store bool_stmt and builtin_types in result for later use (e.g., in test runner)
+    // Store bool_stmt in result for later use (e.g., in test runner)
     result.bool_stmt = bool_stmt_in_builtin_module;
-    result.builtin_types = eval.BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
 
     const str_stmt_in_builtin_module = builtin_indices.str_type;
 
@@ -1794,11 +1792,12 @@ fn argLayoutsForProc(
 }
 
 fn buildEvaluateTestsHtml(data: CompilerStageData) PlaygroundEvaluateTestsError![]u8 {
-    var resources = try eval.Inspected.parseAndCanonicalizeProgramPublishedRoots(
+    var resources = try eval.Inspected.parseProgram(
         allocator,
         .module,
         data.module_env.common.source,
         &.{},
+        .{ .roots = .published_only },
     );
     defer eval.Inspected.cleanupParseAndCanonical(allocator, resources);
 

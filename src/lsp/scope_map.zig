@@ -12,6 +12,8 @@ const base = @import("base");
 const can = @import("can");
 
 const CIR = can.CIR;
+const CirVisitor = @import("cir_visitor.zig").CirVisitor;
+const VisitAction = @import("cir_visitor.zig").VisitAction;
 const ModuleEnv = can.ModuleEnv;
 const Ident = base.Ident;
 const Allocator = std.mem.Allocator;
@@ -50,21 +52,25 @@ pub const ScopeMap = struct {
 
     /// Build scope map by traversing all CIR structures in the module.
     pub fn build(self: *ScopeMap, module_env: *ModuleEnv) Allocator.Error!void {
-        // Process top-level definitions
-        const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
-        for (defs_slice) |def_idx| {
-            const def = module_env.store.getDef(def_idx);
-            // Top-level defs are visible from their definition to the end of the module
-            try self.extractBindingsFromPattern(module_env, def.pattern, 0, std.math.maxInt(u32), false, 0);
+        var walk = ScopeWalk{ .scope_map = self, .module_env = module_env };
+        var visitor = CirVisitor(ScopeWalk).init(&walk, .{
+            .visit_expr_pre = ScopeWalk.visitExpr,
+            .visit_stmt_pre = ScopeWalk.visitStmt,
+        });
+        const store = &module_env.store;
 
-            // Also traverse the expression to find nested scopes
-            try self.traverseExpr(module_env, def.expr, std.math.maxInt(u32), 0);
+        // Top-level defs are visible from their definition to the end of the module
+        for (store.sliceDefs(module_env.all_defs)) |def_idx| {
+            const def = store.getDef(def_idx);
+            try self.extractBindingsFromPattern(module_env, def.pattern, 0, std.math.maxInt(u32), false);
+            visitor.walkExpr(store, def.expr);
+            if (walk.oom) |err| return err;
         }
 
-        // Process top-level statements
-        const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
-        for (statements_slice) |stmt_idx| {
-            try self.processStatement(module_env, stmt_idx, std.math.maxInt(u32), 0);
+        for (store.sliceStatements(module_env.all_statements)) |stmt_idx| {
+            try self.extractStatementBindings(module_env, stmt_idx, std.math.maxInt(u32));
+            visitor.walkStatement(store, stmt_idx);
+            if (walk.oom) |err| return err;
         }
 
         // Sort bindings by visible_from offset for efficient querying
@@ -80,272 +86,171 @@ pub const ScopeMap = struct {
         return binding.visible_from <= offset and offset < binding.visible_to;
     }
 
-    /// Process a statement and extract any bindings it introduces.
-    fn processStatement(self: *ScopeMap, module_env: *ModuleEnv, stmt_idx: CIR.Statement.Idx, scope_end: u32, depth: usize) Allocator.Error!void {
-        if (depth > 128) return;
+    /// Visitor context that records the bindings each scope-introducing node
+    /// adds as the CIR walk reaches it.
+    const ScopeWalk = struct {
+        scope_map: *ScopeMap,
+        module_env: *ModuleEnv,
+        oom: ?Allocator.Error = null,
 
-        const stmt = module_env.store.getSourceStatement(stmt_idx);
-        const stmt_region = module_env.store.getStatementRegion(stmt_idx);
-
-        switch (stmt) {
-            .s_decl => |decl| {
-                // Variable binding - visible from definition to end of scope
-                try self.extractBindingsFromPattern(module_env, decl.pattern, stmt_region.start.offset, scope_end, false, depth + 1);
-                // Traverse the expression for nested scopes
-                try self.traverseExpr(module_env, decl.expr, scope_end, depth + 1);
-            },
-
-            .s_var => |var_decl| {
-                // Mutable variable binding
-                try self.extractBindingsFromPattern(module_env, var_decl.pattern_idx, stmt_region.start.offset, scope_end, false, depth + 1);
-                try self.traverseExpr(module_env, var_decl.expr, scope_end, depth + 1);
-            },
-            .s_var_uninitialized => |var_decl| {
-                try self.extractBindingsFromPattern(module_env, var_decl.pattern_idx, stmt_region.start.offset, scope_end, false, depth + 1);
-            },
-            .s_reassign => |reassign| {
-                // Reassignment doesn't introduce new bindings, but traverse the expr
-                try self.traverseExpr(module_env, reassign.expr, scope_end, depth + 1);
-            },
-            .s_for => |for_stmt| {
-                // For loop - pattern is visible within the body
-                const body_region = module_env.store.getExprRegion(for_stmt.body);
-                try self.extractBindingsFromPattern(module_env, for_stmt.patt, body_region.start.offset, body_region.end.offset, false, depth + 1);
-                // Traverse the iterable expression and body
-                try self.traverseExpr(module_env, for_stmt.expr, scope_end, depth + 1);
-                try self.traverseExpr(module_env, for_stmt.body, body_region.end.offset, depth + 1);
-            },
-            inline .s_while, .s_infinite_loop, .s_breakable_loop => |while_stmt| {
-                try self.traverseExpr(module_env, while_stmt.cond, scope_end, depth + 1);
-                try self.traverseExpr(module_env, while_stmt.body, scope_end, depth + 1);
-            },
-            .s_expr => |expr_stmt| {
-                try self.traverseExpr(module_env, expr_stmt.expr, scope_end, depth + 1);
-            },
-            .s_expect => |expect_stmt| {
-                try self.traverseExpr(module_env, expect_stmt.body, scope_end, depth + 1);
-            },
-            inline .s_dbg, .s_return => |dbg_stmt| {
-                try self.traverseExpr(module_env, dbg_stmt.expr, scope_end, depth + 1);
-            },
-            // Type declarations, imports, etc. don't introduce variable bindings
-            .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_crash, .s_break, .s_type_anno, .s_type_var_alias, .s_runtime_error => {},
+        fn visitExpr(walk: *ScopeWalk, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) VisitAction {
+            walk.recordExprBindings(expr_idx, expr) catch |err| {
+                walk.oom = err;
+                return .stop;
+            };
+            return .continue_traversal;
         }
-    }
 
-    /// Traverse an expression and extract bindings from nested scopes.
-    fn traverseExpr(self: *ScopeMap, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, scope_end: u32, depth: usize) Allocator.Error!void {
-        if (depth > 128) return;
-
-        const expr = module_env.store.getSourceExpr(expr_idx);
-
-        switch (expr) {
-            .e_block => |block| {
-                // Block introduces a new scope
-                const block_region = module_env.store.getExprRegion(expr_idx);
-                const block_end = block_region.end.offset;
-
-                // Process statements in order - each binding is visible to subsequent statements
-                const stmts = module_env.store.sliceStatements(block.stmts);
-                for (stmts) |stmt_idx| {
-                    try self.processStatement(module_env, stmt_idx, block_end, depth + 1);
-                }
-
-                // Traverse the final expression
-                try self.traverseExpr(module_env, block.final_expr, block_end, depth + 1);
-            },
-            .e_lambda => |lambda| {
-                // Lambda parameters are visible within the body
-                const body_region = module_env.store.getExprRegion(lambda.body);
-                const args = module_env.store.slicePatterns(lambda.args);
-                for (args) |arg_pattern| {
-                    try self.extractBindingsFromPattern(module_env, arg_pattern, body_region.start.offset, body_region.end.offset, true, depth + 1);
-                }
-                // Traverse the body
-                try self.traverseExpr(module_env, lambda.body, body_region.end.offset, depth + 1);
-            },
-            .e_closure => |closure| {
-                // Closure wraps a lambda - get the lambda and process it
-                const lambda_expr = module_env.store.getSourceExpr(closure.lambda_idx);
-                if (lambda_expr == .e_lambda) {
-                    const lambda = lambda_expr.e_lambda;
-                    const body_region = module_env.store.getExprRegion(lambda.body);
-                    const args = module_env.store.slicePatterns(lambda.args);
-                    for (args) |arg_pattern| {
-                        try self.extractBindingsFromPattern(module_env, arg_pattern, body_region.start.offset, body_region.end.offset, true, depth + 1);
-                    }
-                    try self.traverseExpr(module_env, lambda.body, body_region.end.offset, depth + 1);
-                }
-            },
-            .e_match => |match| {
-                // Traverse the condition
-                try self.traverseExpr(module_env, match.cond, scope_end, depth + 1);
-
-                // Each branch's patterns introduce bindings visible in that branch's body
-                const branches = module_env.store.sliceMatchBranches(match.branches);
-                for (branches) |branch_idx| {
-                    const branch = module_env.store.getMatchBranch(branch_idx);
-                    const body_region = module_env.store.getExprRegion(branch.value);
-
-                    // Extract bindings from all patterns in this branch
-                    const patterns = module_env.store.sliceMatchBranchPatterns(branch.patterns);
-                    for (patterns) |branch_pattern_idx| {
-                        const branch_pattern = module_env.store.getMatchBranchPattern(branch_pattern_idx);
-                        try self.extractBindingsFromPattern(module_env, branch_pattern.pattern, body_region.start.offset, body_region.end.offset, false, depth + 1);
-                    }
-
-                    // Traverse the guard if present
-                    if (branch.guard) |guard_idx| {
-                        try self.traverseExpr(module_env, guard_idx, body_region.end.offset, depth + 1);
-                    }
-
-                    // Traverse the branch body
-                    try self.traverseExpr(module_env, branch.value, body_region.end.offset, depth + 1);
-                }
-            },
-            .e_if => |if_expr| {
-                // Traverse all branches
-                const branches = module_env.store.sliceIfBranches(if_expr.branches);
-                for (branches) |branch_idx| {
-                    const branch = module_env.store.getIfBranch(branch_idx);
-                    try self.traverseExpr(module_env, branch.cond, scope_end, depth + 1);
-                    try self.traverseExpr(module_env, branch.body, scope_end, depth + 1);
-                }
-                // Traverse the else branch
-                try self.traverseExpr(module_env, if_expr.final_else, scope_end, depth + 1);
-            },
-            .e_call => |call| {
-                try self.traverseExpr(module_env, call.func, scope_end, depth + 1);
-                const args = module_env.store.sliceExpr(call.args);
-                for (args) |arg_idx| {
-                    try self.traverseExpr(module_env, arg_idx, scope_end, depth + 1);
-                }
-            },
-            .e_binop => |binop| {
-                try self.traverseExpr(module_env, binop.lhs, scope_end, depth + 1);
-                try self.traverseExpr(module_env, binop.rhs, scope_end, depth + 1);
-            },
-            .e_unary_minus => |unary| {
-                try self.traverseExpr(module_env, unary.expr, scope_end, depth + 1);
-            },
-            inline .e_list, .e_tuple => |list| {
-                const elems = module_env.store.sliceExpr(list.elems);
-                for (elems) |elem_idx| {
-                    try self.traverseExpr(module_env, elem_idx, scope_end, depth + 1);
-                }
-            },
-            .e_record => |record| {
-                const fields = module_env.store.sliceRecordFields(record.fields);
-                for (fields) |field_idx| {
-                    const field = module_env.store.getRecordField(field_idx);
-                    try self.traverseExpr(module_env, field.value, scope_end, depth + 1);
-                }
-            },
-            .e_field_access => |field_access| {
-                try self.traverseExpr(module_env, field_access.receiver, scope_end, depth + 1);
-            },
-            inline .e_method_call, .e_dispatch_call => |method_call| {
-                try self.traverseExpr(module_env, method_call.receiver, scope_end, depth + 1);
-                const args = module_env.store.sliceExpr(method_call.args);
-                for (args) |arg_idx| {
-                    try self.traverseExpr(module_env, arg_idx, scope_end, depth + 1);
-                }
-            },
-            .e_interpolation => |interpolation| {
-                try self.traverseExpr(module_env, interpolation.first, scope_end, depth + 1);
-                for (module_env.store.sliceExpr(interpolation.parts)) |part_idx| {
-                    try self.traverseExpr(module_env, part_idx, scope_end, depth + 1);
-                }
-            },
-            .e_structural_eq => |eq| {
-                try self.traverseExpr(module_env, eq.lhs, scope_end, depth + 1);
-                try self.traverseExpr(module_env, eq.rhs, scope_end, depth + 1);
-            },
-            .e_structural_hash => |h| {
-                try self.traverseExpr(module_env, h.value, scope_end, depth + 1);
-                try self.traverseExpr(module_env, h.hasher, scope_end, depth + 1);
-            },
-            .e_method_eq => |eq| {
-                try self.traverseExpr(module_env, eq.lhs, scope_end, depth + 1);
-                try self.traverseExpr(module_env, eq.rhs, scope_end, depth + 1);
-            },
-            inline .e_type_method_call, .e_type_dispatch_call => |method_call| {
-                const args = module_env.store.sliceExpr(method_call.args);
-                for (args) |arg_idx| {
-                    try self.traverseExpr(module_env, arg_idx, scope_end, depth + 1);
-                }
-            },
-            .e_tuple_access => |ta| {
-                try self.traverseExpr(module_env, ta.tuple, scope_end, depth + 1);
-            },
-            .e_str => |str| {
-                const segments = module_env.store.sliceExpr(str.span);
-                for (segments) |seg_idx| {
-                    try self.traverseExpr(module_env, seg_idx, scope_end, depth + 1);
-                }
-            },
-            .e_tag => |tag| {
-                const args = module_env.store.sliceExpr(tag.args);
-                for (args) |arg_idx| {
-                    try self.traverseExpr(module_env, arg_idx, scope_end, depth + 1);
-                }
-            },
-            inline .e_nominal, .e_nominal_external => |nominal| {
-                try self.traverseExpr(module_env, nominal.backing_expr, scope_end, depth + 1);
-            },
-            .e_hosted_lambda => {},
-            .e_for => |for_expr| {
-                // For loop variable is visible within the body
-                const body_region = module_env.store.getExprRegion(for_expr.body);
-                try self.extractBindingsFromPattern(module_env, for_expr.patt, body_region.start.offset, body_region.end.offset, false, depth + 1);
-                try self.traverseExpr(module_env, for_expr.expr, scope_end, depth + 1);
-                try self.traverseExpr(module_env, for_expr.body, body_region.end.offset, depth + 1);
-            },
-            inline .e_dbg, .e_expect_err => |dbg_expr| {
-                try self.traverseExpr(module_env, dbg_expr.expr, scope_end, depth + 1);
-            },
-            .e_expect => |expect_expr| {
-                try self.traverseExpr(module_env, expect_expr.body, scope_end, depth + 1);
-            },
-            .e_return => |ret| {
-                try self.traverseExpr(module_env, ret.expr, scope_end, depth + 1);
-            },
-            .e_run_low_level => |low_level| {
-                const args = module_env.store.sliceExpr(low_level.args);
-                for (args) |arg_idx| {
-                    try self.traverseExpr(module_env, arg_idx, scope_end, depth + 1);
-                }
-            },
-            // Leaf expressions - no nested scopes
-            .e_num,
-            .e_frac_f32,
-            .e_frac_f64,
-            .e_dec,
-            .e_dec_small,
-            .e_num_from_numeral,
-            .e_typed_int,
-            .e_typed_frac,
-            .e_typed_num_from_numeral,
-            .e_str_segment,
-            .e_lookup_local,
-            .e_lookup_external,
-            .e_lookup_associated_local,
-            .e_lookup_associated,
-            .e_lookup_associated_resolved,
-            .e_lookup_required,
-            .e_empty_list,
-            .e_empty_record,
-            .e_zero_argument_tag,
-            .e_runtime_error,
-            .e_crash,
-            .e_ellipsis,
-            .e_anno_only,
-            .e_derived_method,
-            .e_break,
-            .e_bytes_literal,
-            => {},
-            .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
+        fn visitStmt(walk: *ScopeWalk, _: CIR.Statement.Idx, stmt: CIR.Statement) VisitAction {
+            switch (stmt) {
+                .s_for => |for_stmt| walk.bindInBody(for_stmt.patt, for_stmt.body, false) catch |err| {
+                    walk.oom = err;
+                    return .stop;
+                },
+                .s_decl,
+                .s_var,
+                .s_var_uninitialized,
+                .s_reassign,
+                .s_while,
+                .s_infinite_loop,
+                .s_breakable_loop,
+                .s_expr,
+                .s_expect,
+                .s_dbg,
+                .s_return,
+                .s_import,
+                .s_alias_decl,
+                .s_nominal_decl,
+                .s_where_alias_decl,
+                .s_crash,
+                .s_break,
+                .s_type_anno,
+                .s_type_var_alias,
+                .s_runtime_error,
+                => {},
+            }
+            return .continue_traversal;
         }
+
+        /// Records `pattern`'s bindings as visible throughout `body`.
+        fn bindInBody(walk: *ScopeWalk, pattern: CIR.Pattern.Idx, body: CIR.Expr.Idx, is_parameter: bool) Allocator.Error!void {
+            const body_region = walk.module_env.store.getExprRegion(body);
+            try walk.scope_map.extractBindingsFromPattern(walk.module_env, pattern, body_region.start.offset, body_region.end.offset, is_parameter);
+        }
+
+        fn recordExprBindings(walk: *ScopeWalk, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) Allocator.Error!void {
+            const store = &walk.module_env.store;
+            switch (expr) {
+                .e_block => |block| {
+                    // Each statement binding is visible from its statement to the end of the block
+                    const block_end = store.getExprRegion(expr_idx).end.offset;
+                    for (store.sliceStatements(block.stmts)) |stmt_idx| {
+                        try walk.scope_map.extractStatementBindings(walk.module_env, stmt_idx, block_end);
+                    }
+                },
+                .e_lambda => |lambda| {
+                    for (store.slicePatterns(lambda.args)) |arg_pattern| {
+                        try walk.bindInBody(arg_pattern, lambda.body, true);
+                    }
+                },
+                .e_match => |match| {
+                    // Each branch's patterns introduce bindings visible in that branch's body
+                    for (store.sliceMatchBranches(match.branches)) |branch_idx| {
+                        const branch = store.getMatchBranch(branch_idx);
+                        for (store.sliceMatchBranchPatterns(branch.patterns)) |branch_pattern_idx| {
+                            try walk.bindInBody(store.getMatchBranchPattern(branch_pattern_idx).pattern, branch.value, false);
+                        }
+                    }
+                },
+                .e_for => |for_expr| try walk.bindInBody(for_expr.patt, for_expr.body, false),
+                .e_closure,
+                .e_if,
+                .e_call,
+                .e_binop,
+                .e_unary_minus,
+                .e_list,
+                .e_tuple,
+                .e_record,
+                .e_field_access,
+                .e_method_call,
+                .e_dispatch_call,
+                .e_interpolation,
+                .e_structural_eq,
+                .e_structural_hash,
+                .e_method_eq,
+                .e_type_method_call,
+                .e_type_dispatch_call,
+                .e_tuple_access,
+                .e_str,
+                .e_tag,
+                .e_nominal,
+                .e_nominal_external,
+                .e_hosted_lambda,
+                .e_dbg,
+                .e_expect_err,
+                .e_expect,
+                .e_return,
+                .e_run_low_level,
+                .e_num,
+                .e_frac_f32,
+                .e_frac_f64,
+                .e_dec,
+                .e_dec_small,
+                .e_num_from_numeral,
+                .e_typed_int,
+                .e_typed_frac,
+                .e_typed_num_from_numeral,
+                .e_str_segment,
+                .e_lookup_local,
+                .e_lookup_external,
+                .e_lookup_associated_local,
+                .e_lookup_associated,
+                .e_lookup_associated_resolved,
+                .e_lookup_required,
+                .e_empty_list,
+                .e_empty_record,
+                .e_zero_argument_tag,
+                .e_runtime_error,
+                .e_crash,
+                .e_ellipsis,
+                .e_anno_only,
+                .e_derived_method,
+                .e_break,
+                .e_bytes_literal,
+                => {},
+                .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
+            }
+        }
+    };
+
+    /// Record the bindings a declaration statement introduces, visible from the
+    /// statement to `scope_end`.
+    fn extractStatementBindings(self: *ScopeMap, module_env: *ModuleEnv, stmt_idx: CIR.Statement.Idx, scope_end: u32) Allocator.Error!void {
+        const pattern = switch (module_env.store.getSourceStatement(stmt_idx)) {
+            .s_decl => |decl| decl.pattern,
+            inline .s_var, .s_var_uninitialized => |var_decl| var_decl.pattern_idx,
+            .s_reassign,
+            .s_for,
+            .s_while,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_expr,
+            .s_expect,
+            .s_dbg,
+            .s_return,
+            .s_import,
+            .s_alias_decl,
+            .s_nominal_decl,
+            .s_where_alias_decl,
+            .s_crash,
+            .s_break,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => return,
+        };
+        const visible_from = module_env.store.getStatementRegion(stmt_idx).start.offset;
+        try self.extractBindingsFromPattern(module_env, pattern, visible_from, scope_end, false);
     }
 
     /// Extract bindings from a pattern (handles destructuring, as-patterns, etc.)
@@ -356,10 +261,7 @@ pub const ScopeMap = struct {
         visible_from: u32,
         visible_to: u32,
         is_parameter: bool,
-        depth: usize,
     ) Allocator.Error!void {
-        if (depth > 128) return;
-
         const pattern = module_env.store.getSourcePattern(pattern_idx);
 
         switch (pattern) {
@@ -382,21 +284,21 @@ pub const ScopeMap = struct {
                     .is_parameter = is_parameter,
                 });
                 // Also extract from the nested pattern
-                try self.extractBindingsFromPattern(module_env, p.pattern, visible_from, visible_to, is_parameter, depth + 1);
+                try self.extractBindingsFromPattern(module_env, p.pattern, visible_from, visible_to, is_parameter);
             },
             .applied_tag => |p| {
                 // Extract bindings from tag arguments
                 const args = module_env.store.slicePatterns(p.args);
                 for (args) |arg_pattern| {
-                    try self.extractBindingsFromPattern(module_env, arg_pattern, visible_from, visible_to, is_parameter, depth + 1);
+                    try self.extractBindingsFromPattern(module_env, arg_pattern, visible_from, visible_to, is_parameter);
                 }
             },
             .nominal => |p| {
                 // Extract bindings from the backing pattern
-                try self.extractBindingsFromPattern(module_env, p.backing_pattern, visible_from, visible_to, is_parameter, depth + 1);
+                try self.extractBindingsFromPattern(module_env, p.backing_pattern, visible_from, visible_to, is_parameter);
             },
             .nominal_external => |p| {
-                try self.extractBindingsFromPattern(module_env, p.backing_pattern, visible_from, visible_to, is_parameter, depth + 1);
+                try self.extractBindingsFromPattern(module_env, p.backing_pattern, visible_from, visible_to, is_parameter);
             },
             .record_destructure => |p| {
                 const destructs = module_env.store.sliceRecordDestructs(p.destructs);
@@ -413,10 +315,10 @@ pub const ScopeMap = struct {
 
                     switch (destruct.kind) {
                         .SubPattern => |nested_pattern| {
-                            try self.extractBindingsFromPattern(module_env, nested_pattern, visible_from, visible_to, is_parameter, depth + 1);
+                            try self.extractBindingsFromPattern(module_env, nested_pattern, visible_from, visible_to, is_parameter);
                         },
                         .Rest => |nested_pattern| {
-                            try self.extractBindingsFromPattern(module_env, nested_pattern, visible_from, visible_to, is_parameter, depth + 1);
+                            try self.extractBindingsFromPattern(module_env, nested_pattern, visible_from, visible_to, is_parameter);
                         },
                         .Required => {},
                     }
@@ -425,19 +327,19 @@ pub const ScopeMap = struct {
             .list => |p| {
                 const patterns = module_env.store.slicePatterns(p.patterns);
                 for (patterns) |elem_pattern| {
-                    try self.extractBindingsFromPattern(module_env, elem_pattern, visible_from, visible_to, is_parameter, depth + 1);
+                    try self.extractBindingsFromPattern(module_env, elem_pattern, visible_from, visible_to, is_parameter);
                 }
                 // Handle rest pattern if present (e.g., [first, .. as rest])
                 if (p.rest_info) |rest_info| {
                     if (rest_info.pattern) |rest_pattern| {
-                        try self.extractBindingsFromPattern(module_env, rest_pattern, visible_from, visible_to, is_parameter, depth + 1);
+                        try self.extractBindingsFromPattern(module_env, rest_pattern, visible_from, visible_to, is_parameter);
                     }
                 }
             },
             .tuple => |p| {
                 const patterns = module_env.store.slicePatterns(p.patterns);
                 for (patterns) |elem_pattern| {
-                    try self.extractBindingsFromPattern(module_env, elem_pattern, visible_from, visible_to, is_parameter, depth + 1);
+                    try self.extractBindingsFromPattern(module_env, elem_pattern, visible_from, visible_to, is_parameter);
                 }
             },
             .str_interpolation => |p| {
@@ -445,7 +347,7 @@ pub const ScopeMap = struct {
                 while (i < p.steps.span.len) : (i += 1) {
                     const step = module_env.store.getStrPatternStep(p.steps, i);
                     if (step.capture) |capture| {
-                        try self.extractBindingsFromPattern(module_env, capture, visible_from, visible_to, is_parameter, depth + 1);
+                        try self.extractBindingsFromPattern(module_env, capture, visible_from, visible_to, is_parameter);
                     }
                 }
             },
@@ -494,7 +396,10 @@ test "ScopeMap traverses a flattened field access receiver" {
 
     var scope_map = ScopeMap.init(allocator);
     defer scope_map.deinit();
-    try scope_map.traverseExpr(&module_env, access, std.math.maxInt(u32), 0);
+    var walk = ScopeMap.ScopeWalk{ .scope_map = &scope_map, .module_env = &module_env };
+    var visitor = CirVisitor(ScopeMap.ScopeWalk).init(&walk, .{ .visit_expr_pre = ScopeMap.ScopeWalk.visitExpr });
+    visitor.walkExpr(&module_env.store, access);
+    try std.testing.expectEqual(@as(?Allocator.Error, null), walk.oom);
 
     try std.testing.expectEqual(@as(usize, 1), scope_map.bindings.items.len);
     const binding = scope_map.bindings.items[0];

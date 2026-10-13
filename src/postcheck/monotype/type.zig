@@ -29,17 +29,14 @@ pub fn StoreSpanBorrow(comptime T: type, comptime field_name: []const u8) type {
 pub const TypeId = enum(u32) { _ };
 
 /// Slice descriptor for type, field, or tag arrays in this store.
-pub const SidePoolSpan = extern struct {
+pub const Span = extern struct {
     start: u32,
     len: u32,
 
-    pub fn empty() SidePoolSpan {
+    pub fn empty() Span {
         return .{ .start = 0, .len = 0 };
     }
 };
-
-/// Compatibility name for existing Monotype type side-pool spans.
-pub const Span = SidePoolSpan;
 
 /// Primitive type copied from checked module data.
 pub const Primitive = checked.CheckedPrimitive;
@@ -218,7 +215,7 @@ pub const FieldKindState = enum(u8) {
 };
 
 /// Record field type entry.
-pub const MonoTypeField = struct {
+pub const Field = struct {
     name: names.RecordFieldNameId,
     ty: TypeId,
     /// Source value type for an optional slot. This is explicit post-check
@@ -233,18 +230,12 @@ pub const MonoTypeField = struct {
     default: ?FieldDefault,
 };
 
-/// Compatibility name for existing Monotype record field entries.
-pub const Field = MonoTypeField;
-
 /// Tag-union variant type entry.
-pub const MonoTypeTag = struct {
+pub const Tag = struct {
     name: names.TagNameId,
     checked_name: names.TagNameId,
     payloads: Span,
 };
-
-/// Compatibility name for existing Monotype tag-union variant entries.
-pub const Tag = MonoTypeTag;
 
 /// One entry of a nominal record's declared fields. The backing row is always
 /// lexicographic; this separate source order supports boxy descriptor planning,
@@ -260,7 +251,7 @@ pub const DeclaredField = union(enum(u8)) {
 };
 
 /// Durable monomorphic type node.
-pub const MonoTypeNode = union(enum(u8)) {
+pub const Content = union(enum(u8)) {
     primitive: Primitive,
     named: struct {
         named_type: NamedType,
@@ -286,8 +277,8 @@ pub const MonoTypeNode = union(enum(u8)) {
     zst,
 };
 
-/// Compatibility name for existing Monotype type-node content.
-pub const Content = MonoTypeNode;
+/// Payload stored by `Content.named`.
+pub const NamedContent = std.meta.fieldInfo(Content, .named).type;
 
 /// A type node as the store keeps it. A named payload and an erased digest
 /// are far larger than every other variant, so they live in side lists and
@@ -300,13 +291,10 @@ pub const StoredNode = union(enum(u8)) {
     tag_union: Span,
     list: TypeId,
     box: TypeId,
-    func: @FieldType(MonoTypeNode, "func"),
+    func: @FieldType(Content, "func"),
     erased: u32,
     zst,
 };
-
-/// Payload stored by `MonoTypeNode.named`.
-pub const NamedContent = std.meta.fieldInfo(MonoTypeNode, .named).type;
 
 /// Store for monomorphic types and their shared spans.
 pub const Store = struct {

@@ -136,16 +136,6 @@ pub const BoxyDictId = enum(u32) { _ };
 /// Identifier for one explicit boxy representation adapter plan.
 pub const BoxyAdapterId = enum(u32) { _ };
 
-/// Runtime projection of one explicit argument descriptor from a dictionary
-/// method adapter. The dictionary value is frame-local; the remaining fields
-/// identify the checked method slot and operand exactly.
-pub const BoxyDictMethodArgDesc = struct {
-    dict: LocalId,
-    method: names.MethodNameId,
-    method_slot: u32,
-    arg_index: u32,
-};
-
 /// Runtime lookup of one hidden descriptor carried by a dictionary method
 /// slot. This is the exact descriptor passed to the selected method worker.
 pub const BoxyDictMethodHiddenDesc = struct {
@@ -163,12 +153,11 @@ pub const BoxyDescRef = union(enum) {
     static: BoxyTypeDescId,
     local: LocalId,
     runtime: u32,
-    dict_method_arg: BoxyDictMethodArgDesc,
     dict_method_hidden: BoxyDictMethodHiddenDesc,
 
     pub fn localOrNull(self: BoxyDescRef) ?LocalId {
         return switch (self) {
-            .static, .runtime, .dict_method_arg, .dict_method_hidden => null,
+            .static, .runtime, .dict_method_hidden => null,
             .local => |local| local,
         };
     }
@@ -632,50 +621,6 @@ pub const BoxyTransferMode = enum {
     move,
 };
 
-/// One explicit step in a boxy representation adapter plan.
-pub const BoxyAdaptStep = union(enum) {
-    copy_bytes: struct {
-        source_offset: u32,
-        target_offset: u32,
-        layout_idx: layout.Idx,
-    },
-    dynamic_payload: struct {
-        source_offset: u32,
-        target_offset: u32,
-        source_desc: ?BoxyDescRef = null,
-        target_desc: ?BoxyDescRef = null,
-        mode: BoxyTransferMode,
-    },
-    nested_adapter: struct {
-        source_offset: u32,
-        target_offset: u32,
-        adapter: BoxyAdapterId,
-        mode: BoxyTransferMode,
-    },
-};
-
-/// Explicit runtime operation needed for a dynamic boxy payload.
-pub const BoxyPayloadOp = enum {
-    copy,
-    incref,
-    decref,
-    drop,
-    free,
-};
-
-/// One explicitly planned payload operation. It never asks a backend to infer
-/// reference-counting behavior from a pointer-shaped value.
-pub const BoxyPayloadStep = union(enum) {
-    concrete: struct {
-        op: BoxyPayloadOp,
-        layout_idx: layout.Idx,
-    },
-    dynamic: struct {
-        op: BoxyPayloadOp,
-        desc: BoxyDescRef,
-    },
-};
-
 /// Explicit helper selected by ARC/lowering for one RC statement.
 ///
 /// `.concrete` is the canonical layout-keyed helper used by the LSS pipeline.
@@ -1008,7 +953,6 @@ pub const RcAtomicity = enum(u1) {
 
 /// Why a `set_local` writes its target.
 pub const SetLocalWriteMode = enum {
-    initialize_join_result,
     replace_existing,
     initialize_join_param,
 };
@@ -1310,12 +1254,6 @@ pub const CFStmt = union(enum) {
         fields_desc: BoxyDescRef,
         next: CFStmtId,
     },
-    assign_boxy_reuse_box: struct {
-        target: LocalId,
-        source: LocalId,
-        desc: BoxyDescRef,
-        next: CFStmtId,
-    },
     assign_boxy_unbox: struct {
         target: LocalId,
         source: LocalId,
@@ -1589,8 +1527,6 @@ pub const CFStmt = union(enum) {
         arms: StrMatchArmSpan,
         on_miss: CFStmtId,
     },
-    loop_continue: void,
-    loop_break: void,
     join: struct {
         id: JoinPointId,
         params: LocalSpan,
@@ -1808,74 +1744,6 @@ pub const LirProcSpec = struct {
     rc_variant_demandable: bool = false,
 };
 
-/// Identifier of a stored LirPattern.
-pub const LirPatternId = enum(u32) {
-    _,
-
-    pub const none: LirPatternId = @fromBackingInt(@intCast(std.math.maxInt(u32)));
-
-    pub fn isNone(self: LirPatternId) bool {
-        return self == none;
-    }
-};
-
-/// Span into flat pattern-id storage.
-pub const LirPatternSpan = extern struct {
-    start: u32,
-    len: u32,
-
-    pub fn empty() LirPatternSpan {
-        return .{ .start = 0, .len = 0 };
-    }
-
-    pub fn isEmpty(self: LirPatternSpan) bool {
-        return self.len == 0;
-    }
-};
-
-/// Pattern in the LIR.
-pub const LirPattern = union(enum) {
-    bind: struct {
-        symbol: Symbol,
-        layout_idx: layout.Idx,
-        reassignable: bool = false,
-    },
-    wildcard: struct {
-        layout_idx: layout.Idx,
-    },
-    int_literal: struct {
-        value: i128,
-        layout_idx: layout.Idx,
-    },
-    float_literal: struct {
-        value: f64,
-        layout_idx: layout.Idx,
-    },
-    str_literal: StringLiteral.Idx,
-    tag: struct {
-        discriminant: u32,
-        union_layout: layout.Idx,
-        args: LirPatternSpan,
-    },
-    struct_: struct {
-        struct_layout: layout.Idx,
-        fields: LirPatternSpan,
-    },
-    list: struct {
-        list_layout: layout.Idx,
-        elem_layout: layout.Idx,
-        prefix: LirPatternSpan,
-        rest: LirPatternId,
-        suffix: LirPatternSpan,
-    },
-    as_pattern: struct {
-        symbol: Symbol,
-        layout_idx: layout.Idx,
-        reassignable: bool = false,
-        inner: LirPatternId,
-    },
-};
-
 test "Symbol size and alignment" {
     try std.testing.expectEqual(@as(usize, 8), @sizeOf(Symbol));
     try std.testing.expectEqual(@as(usize, 8), @alignOf(Symbol));
@@ -1892,7 +1760,7 @@ test "RcHelper distinguishes concrete layout helpers from boxy descriptor helper
     switch (boxy) {
         .boxy => |desc| switch (desc) {
             .static => |id| try std.testing.expectEqual(@as(u32, 7), @backingInt(id)),
-            .local, .runtime, .dict_method_arg, .dict_method_hidden => return error.TestExpectedEqual,
+            .local, .runtime, .dict_method_hidden => return error.TestExpectedEqual,
         },
         .concrete => return error.TestExpectedEqual,
     }

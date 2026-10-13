@@ -183,11 +183,6 @@ const CliBuildEnvOptions = struct {
     timings: bool = false,
     resolution_config: compile.package_resolution.Config = .{},
     track_watch_inputs: bool = false,
-    /// Identity-only synthetic marking for staged default-app roots (check
-    /// sites). Sites that also need diagnostics remapped call
-    /// `setSyntheticRootSourceMappingWithLineOffset` themselves, which
-    /// implies these identities.
-    synthetic_default_app: bool = false,
     source_dir_override: ?[]const u8 = null,
     post_check_publication_mode: compile.build.PostCheckPublicationMode = .executable_artifacts,
     runtime_lowering: ?compile.build.RuntimeLoweringConfig = null,
@@ -223,13 +218,6 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
     build_env.setWatchInputTracking(opts.track_watch_inputs);
     build_env.setPostCheckPublicationMode(opts.post_check_publication_mode);
     if (opts.runtime_lowering) |config| build_env.setRuntimeLowering(config);
-    if (opts.synthetic_default_app) {
-        // Staged default-app roots and their synthesized platform live in a
-        // per-invocation temp dir; identity must be the stable synthetic one
-        // so cache keys and nominal identity match across runs and pipelines.
-        build_env.setSyntheticRootPackageIdentity();
-        build_env.setSyntheticRootPlatformPackageIdentity();
-    }
     if (opts.source_dir_override) |source_dir| {
         build_env.setRootSourceDirOverride(source_dir);
     }
@@ -577,94 +565,103 @@ fn shimLibraryCacheFilename(ctx: *CliCtx, kind: ShimLibraryKind, target: RocTarg
         std.fmt.allocPrint(ctx.arena, "lib{s}_{s}_{s}.a", .{ stem, @tagName(target), digest_hex[0..] });
 }
 
-/// Embedded pre-compiled builtins object files for each target.
-/// These contain the wrapper functions needed by the dev backend for string/list operations.
-/// Used by `roc build --opt=dev` to link the app object with builtins.
-/// Now using static libraries instead of object files to include compiler_rt
-/// (needed for 128-bit integer operations used by Dec type).
-const BuiltinsObjects = struct {
-    /// Native builtins (for host platform builds)
-    const native = if (builtin.is_test)
-        &[_]u8{}
-    else if (builtin.os.tag == .windows)
-        @import("embedded_assets").file("roc_builtins.obj")
-    else
-        @import("embedded_assets").file("roc_builtins.o");
-
-    /// Cross-compilation target builtins (Linux musl targets)
-    const x64musl = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64musl/roc_builtins.o");
-    const arm64musl = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64musl/roc_builtins.o");
-
-    /// Cross-compilation target builtins (Linux glibc targets)
-    const x64glibc = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64glibc/roc_builtins.o");
-    const arm64glibc = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64glibc/roc_builtins.o");
-
-    /// WebAssembly target builtins (wasm32-freestanding)
-    const wasm32 = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/wasm32/roc_builtins.o");
-
-    /// Cross-compilation target builtins (Windows targets)
-    const x64win = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64win/roc_builtins.obj");
-    const x64mingw = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64mingw/roc_builtins.obj");
-    const arm64win = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64win/roc_builtins.obj");
-    const arm64mingw = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64mingw/roc_builtins.obj");
-
-    /// Cross-compilation target builtins (macOS targets)
-    const x64mac = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64mac/roc_builtins.o");
-    const arm64mac = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64mac/roc_builtins.o");
-
-    /// Cross-compilation target builtins (BSD targets)
-    const x64freebsd = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64freebsd/roc_builtins.o");
-    const x64openbsd = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64openbsd/roc_builtins.o");
-    const x64netbsd = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64netbsd/roc_builtins.o");
-
+/// The link inputs embedded in `roc` for one target. Cross-compilation
+/// inputs live under `targets/<name>/` in the embedded assets; a target
+/// without its own builtins uses the native ones.
+const EmbeddedTargetObjects = struct {
     /// Extern-symbol-mode builtins: host operations are linker-resolved
-    /// symbols (the symbol ABI) instead of RocOps vtable calls.
-    const native_extern = if (builtin.is_test)
-        &[_]u8{}
-    else if (builtin.os.tag == .windows)
-        @import("embedded_assets").file("roc_builtins_extern.obj")
-    else
-        @import("embedded_assets").file("roc_builtins_extern.o");
+    /// symbols (the symbol ABI) instead of RocOps vtable calls. Used by
+    /// `roc build --opt=dev` to link the app object with builtins.
+    builtins_extern: []const u8,
+    /// The default platform's runtime library object.
+    default_runtime: ?[]const u8 = null,
+    /// The default platform's executable object.
+    default_platform: ?[]const u8 = null,
+    default_runtime_digest: ?[32]u8 = null,
+    /// The default platform's compiler-rt carrier: compiler-rt and the C math
+    /// and memory routines code generation calls, for the targets whose
+    /// default platform is freestanding and so has no platform runtime library
+    /// to provide them. Every other default platform links its target's C
+    /// runtime, which does, and has no carrier.
+    default_compiler_rt: ?[]const u8 = null,
+    default_compiler_rt_digest: ?[32]u8 = null,
+    /// Prebuilt boxy runtime object (the `roc_boxy_*` C-ABI wrappers plus
+    /// `roc_boxy_init_embedded`), linked by `roc build --opt=dev` into
+    /// programs that emit boxy statements. Shipped for every target that
+    /// carries its own builtins, so a standalone dev build of a generic
+    /// program works wherever a standalone dev build works at all.
+    boxy_runtime: ?[]const u8 = null,
 
-    const x64musl_extern = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64musl/roc_builtins_extern.o");
-    const arm64musl_extern = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64musl/roc_builtins_extern.o");
-    const x64glibc_extern = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64glibc/roc_builtins_extern.o");
-    const arm64glibc_extern = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64glibc/roc_builtins_extern.o");
-    const wasm32_extern = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/wasm32/roc_builtins_extern.o");
-    const x64win_extern = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64win/roc_builtins_extern.obj");
-    const x64mingw_extern = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64mingw/roc_builtins_extern.obj");
-    const arm64win_extern = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64win/roc_builtins_extern.obj");
-    const arm64mingw_extern = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64mingw/roc_builtins_extern.obj");
-    const x64mac_extern = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64mac/roc_builtins_extern.o");
-    const arm64mac_extern = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64mac/roc_builtins_extern.o");
-    const x64freebsd_extern = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64freebsd/roc_builtins_extern.o");
-    const x64openbsd_extern = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64openbsd/roc_builtins_extern.o");
-    const x64netbsd_extern = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64netbsd/roc_builtins_extern.o");
+    const DefaultPlatform = enum { none, runtime, runtime_and_compiler_rt };
 
-    /// Get the appropriate builtins object bytes for the given target
+    fn embedded(comptime path: []const u8) []const u8 {
+        return if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file(path);
+    }
+
+    const native: EmbeddedTargetObjects = .{
+        .builtins_extern = embedded(if (builtin.os.tag == .windows) "roc_builtins_extern.obj" else "roc_builtins_extern.o"),
+    };
+
+    fn cross(comptime target: RocTarget, comptime default_platform: DefaultPlatform) EmbeddedTargetObjects {
+        const name = @tagName(target);
+        const dir = "targets/" ++ name ++ "/";
+        const ext = if (target.isWindows()) ".obj" else ".o";
+        var objects: EmbeddedTargetObjects = .{
+            .builtins_extern = embedded(dir ++ "roc_builtins_extern" ++ ext),
+            .boxy_runtime = embedded(dir ++ "roc_boxy_runtime" ++ ext),
+        };
+        switch (default_platform) {
+            .none => {},
+            .runtime, .runtime_and_compiler_rt => {
+                objects.default_runtime = embedded(dir ++ "roc_default_runtime" ++ ext);
+                objects.default_platform = embedded(dir ++ "roc_default_platform" ++ ext);
+                objects.default_runtime_digest = embeddedDigest("default_runtime_" ++ name);
+            },
+        }
+        switch (default_platform) {
+            .none, .runtime => {},
+            .runtime_and_compiler_rt => {
+                objects.default_compiler_rt = embedded(dir ++ "roc_default_compiler_rt.o");
+                objects.default_compiler_rt_digest = embeddedDigest("default_compiler_rt_" ++ name);
+            },
+        }
+        return objects;
+    }
+
+    /// A generic Linux target uses the native builtins and its glibc twin's
+    /// default platform and boxy runtime.
+    fn linuxAlias(comptime glibc: EmbeddedTargetObjects) EmbeddedTargetObjects {
+        var objects = glibc;
+        objects.builtins_extern = native.builtins_extern;
+        return objects;
+    }
+
+    /// The embedded objects for `requested`.
     ///
-    /// A `v1` target uses its default twin's object. The cross-compile target
+    /// A `v1` target uses its default twin's objects. The cross-compile target
     /// queries in `build.zig` name no CPU model, so Zig resolves them to the
     /// architecture baseline and these objects already contain no instruction
     /// above it. `assertCrossTargetsAreBaseline` in `build.zig` keeps that true.
-    pub fn forTarget(requested: RocTarget) []const u8 {
-        const target = requested.defaultCpuTarget();
-        return switch (target) {
-            .x64musl => x64musl,
-            .arm64musl => arm64musl,
-            .x64glibc => x64glibc,
-            .arm64glibc => arm64glibc,
-            .wasm32 => wasm32,
-            .x64win => x64win,
-            .x64mingw => x64mingw,
-            .arm64win => arm64win,
-            .arm64mingw => arm64mingw,
-            .x64mac => x64mac,
-            .arm64mac => arm64mac,
-            .x64freebsd => x64freebsd,
-            .x64openbsd => x64openbsd,
-            .x64netbsd => x64netbsd,
-            .x64linux,
+    fn forTarget(requested: RocTarget) EmbeddedTargetObjects {
+        return switch (requested.defaultCpuTarget()) {
+            inline .x64musl,
+            .arm64musl,
+            .x64glibc,
+            .arm64glibc,
+            .x64freebsd,
+            .x64netbsd,
+            => |target| comptime cross(target, .runtime_and_compiler_rt),
+            inline .x64mac,
+            .arm64mac,
+            .x64win,
+            .x64mingw,
+            .arm64win,
+            .arm64mingw,
+            .x64openbsd,
+            => |target| comptime cross(target, .runtime),
+            .wasm32 => comptime cross(.wasm32, .none),
+            .x64linux => comptime linuxAlias(cross(.x64glibc, .runtime_and_compiler_rt)),
+            .arm64linux => comptime linuxAlias(cross(.arm64glibc, .runtime_and_compiler_rt)),
             .x64elf,
             .x64v1mac,
             .x64v1win,
@@ -676,7 +673,6 @@ const BuiltinsObjects = struct {
             .x64v1glibc,
             .x64v1linux,
             .x64v1elf,
-            .arm64linux,
             .arm64v1win,
             .arm64v1mingw,
             .arm64v1linux,
@@ -689,64 +685,9 @@ const BuiltinsObjects = struct {
         };
     }
 
-    /// Get the extern-symbol-mode builtins object bytes for the given target.
-    /// See `forTarget` for why a `v1` target shares its twin's object.
-    pub fn forTargetExtern(requested: RocTarget) []const u8 {
-        const target = requested.defaultCpuTarget();
-        return switch (target) {
-            .x64musl => x64musl_extern,
-            .arm64musl => arm64musl_extern,
-            .x64glibc => x64glibc_extern,
-            .arm64glibc => arm64glibc_extern,
-            .wasm32 => wasm32_extern,
-            .x64win => x64win_extern,
-            .x64mingw => x64mingw_extern,
-            .arm64win => arm64win_extern,
-            .arm64mingw => arm64mingw_extern,
-            .x64mac => x64mac_extern,
-            .arm64mac => arm64mac_extern,
-            .x64freebsd => x64freebsd_extern,
-            .x64openbsd => x64openbsd_extern,
-            .x64netbsd => x64netbsd_extern,
-            .x64linux,
-            .x64elf,
-            .x64v1mac,
-            .x64v1win,
-            .x64v1mingw,
-            .x64v1freebsd,
-            .x64v1openbsd,
-            .x64v1netbsd,
-            .x64v1musl,
-            .x64v1glibc,
-            .x64v1linux,
-            .x64v1elf,
-            .arm64linux,
-            .arm64v1win,
-            .arm64v1mingw,
-            .arm64v1linux,
-            .arm64v1musl,
-            .arm64v1glibc,
-            .arm32linux,
-            .arm32musl,
-            .wasm32v1,
-            => native_extern,
-        };
-    }
-
-    /// Get the filename for builtins object on given target
-    pub fn filename(target: RocTarget) []const u8 {
-        return switch (target.toOsTag()) {
-            .windows => "roc_builtins.obj",
-            .freestanding, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos, .uefi, .@"3ds", .wiiu, .@"switch", .gba, .psx, .tios, .ashetos, .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => "roc_builtins.o",
-        };
-    }
-
-    /// Get the filename for the extern-symbol-mode builtins object on given target
-    pub fn filenameExtern(target: RocTarget) []const u8 {
-        return switch (target.toOsTag()) {
-            .windows => "roc_builtins_extern.obj",
-            .freestanding, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos, .uefi, .@"3ds", .wiiu, .@"switch", .gba, .psx, .tios, .ashetos, .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => "roc_builtins_extern.o",
-        };
+    /// The scratch-directory filename to write an embedded object under.
+    fn filename(comptime base_name: []const u8, target: RocTarget) []const u8 {
+        return if (target.isWindows()) base_name ++ ".obj" else base_name ++ ".o";
     }
 };
 
@@ -755,279 +696,6 @@ const BuiltinsObjects = struct {
 /// in symbol resolution; it is never linked as a public archive member.
 const WasmCompilerRtObject = struct {
     const bytes = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/wasm32/roc_compiler_rt.o");
-};
-
-fn DefaultPlatformObjects(comptime base_name: []const u8) type {
-    return struct {
-        const x64musl = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64musl/" ++ base_name ++ ".o");
-        const arm64musl = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64musl/" ++ base_name ++ ".o");
-        const x64glibc = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64glibc/" ++ base_name ++ ".o");
-        const arm64glibc = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64glibc/" ++ base_name ++ ".o");
-        const x64mac = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64mac/" ++ base_name ++ ".o");
-        const arm64mac = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64mac/" ++ base_name ++ ".o");
-        const x64win = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64win/" ++ base_name ++ ".obj");
-        const x64mingw = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64mingw/" ++ base_name ++ ".obj");
-        const arm64win = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64win/" ++ base_name ++ ".obj");
-        const arm64mingw = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64mingw/" ++ base_name ++ ".obj");
-        const x64freebsd = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64freebsd/" ++ base_name ++ ".o");
-        const x64openbsd = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64openbsd/" ++ base_name ++ ".o");
-        const x64netbsd = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64netbsd/" ++ base_name ++ ".o");
-
-        pub fn forTarget(requested: RocTarget) ?[]const u8 {
-            const target = requested.defaultCpuTarget();
-            return switch (target) {
-                .x64musl => x64musl,
-                .arm64musl => arm64musl,
-                .x64glibc, .x64linux => x64glibc,
-                .arm64glibc, .arm64linux => arm64glibc,
-                .x64mac => x64mac,
-                .arm64mac => arm64mac,
-                .x64win => x64win,
-                .x64mingw => x64mingw,
-                .arm64win => arm64win,
-                .arm64mingw => arm64mingw,
-                .x64freebsd => x64freebsd,
-                .x64openbsd => x64openbsd,
-                .x64netbsd => x64netbsd,
-                .x64elf,
-                .x64v1mac,
-                .x64v1win,
-                .x64v1mingw,
-                .x64v1freebsd,
-                .x64v1openbsd,
-                .x64v1netbsd,
-                .x64v1musl,
-                .x64v1glibc,
-                .x64v1linux,
-                .x64v1elf,
-                .arm64v1win,
-                .arm64v1mingw,
-                .arm64v1linux,
-                .arm64v1musl,
-                .arm64v1glibc,
-                .arm32linux,
-                .arm32musl,
-                .wasm32,
-                .wasm32v1,
-                => null,
-            };
-        }
-
-        pub fn filename(target: RocTarget) []const u8 {
-            return if (target.isWindows()) base_name ++ ".obj" else base_name ++ ".o";
-        }
-    };
-}
-
-const DefaultPlatformRuntimeObjects = DefaultPlatformObjects("roc_default_runtime");
-const DefaultPlatformExecutableObjects = DefaultPlatformObjects("roc_default_platform");
-
-/// The digest of `DefaultPlatformRuntimeObjects.forTarget(requested)`.
-fn defaultRuntimeDigest(requested: RocTarget) ?[32]u8 {
-    return switch (requested.defaultCpuTarget()) {
-        inline .x64musl,
-        .arm64musl,
-        .x64glibc,
-        .arm64glibc,
-        .x64mac,
-        .arm64mac,
-        .x64win,
-        .x64mingw,
-        .arm64win,
-        .arm64mingw,
-        .x64freebsd,
-        .x64openbsd,
-        .x64netbsd,
-        => |target| embeddedDigest("default_runtime_" ++ @tagName(target)),
-        .x64linux => embeddedDigest("default_runtime_x64glibc"),
-        .arm64linux => embeddedDigest("default_runtime_arm64glibc"),
-        .x64elf,
-        .x64v1mac,
-        .x64v1win,
-        .x64v1mingw,
-        .x64v1freebsd,
-        .x64v1openbsd,
-        .x64v1netbsd,
-        .x64v1musl,
-        .x64v1glibc,
-        .x64v1linux,
-        .x64v1elf,
-        .arm64v1win,
-        .arm64v1mingw,
-        .arm64v1linux,
-        .arm64v1musl,
-        .arm64v1glibc,
-        .arm32linux,
-        .arm32musl,
-        .wasm32,
-        .wasm32v1,
-        => null,
-    };
-}
-
-/// The digest of `DefaultPlatformCompilerRtObjects.forTarget(requested)`.
-fn defaultCompilerRtDigest(requested: RocTarget) ?[32]u8 {
-    return switch (requested.defaultCpuTarget()) {
-        inline .x64musl,
-        .arm64musl,
-        .x64glibc,
-        .arm64glibc,
-        .x64freebsd,
-        .x64netbsd,
-        => |target| embeddedDigest("default_compiler_rt_" ++ @tagName(target)),
-        .x64linux => embeddedDigest("default_compiler_rt_x64glibc"),
-        .arm64linux => embeddedDigest("default_compiler_rt_arm64glibc"),
-        .x64mac,
-        .arm64mac,
-        .x64win,
-        .arm64win,
-        .x64mingw,
-        .arm64mingw,
-        .x64openbsd,
-        .x64elf,
-        .x64v1mac,
-        .x64v1win,
-        .x64v1mingw,
-        .x64v1freebsd,
-        .x64v1openbsd,
-        .x64v1netbsd,
-        .x64v1musl,
-        .x64v1glibc,
-        .x64v1linux,
-        .x64v1elf,
-        .arm64v1win,
-        .arm64v1mingw,
-        .arm64v1linux,
-        .arm64v1musl,
-        .arm64v1glibc,
-        .arm32linux,
-        .arm32musl,
-        .wasm32,
-        .wasm32v1,
-        => null,
-    };
-}
-
-/// The default platform's compiler-rt carrier: compiler-rt and the C math and
-/// memory routines code generation calls, for the targets whose default
-/// platform is freestanding and so has no platform runtime library to provide
-/// them. Every other default platform links its target's C runtime, which
-/// does, and has no carrier.
-const DefaultPlatformCompilerRtObjects = struct {
-    const x64musl = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64musl/roc_default_compiler_rt.o");
-    const arm64musl = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64musl/roc_default_compiler_rt.o");
-    const x64glibc = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64glibc/roc_default_compiler_rt.o");
-    const arm64glibc = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64glibc/roc_default_compiler_rt.o");
-    const x64freebsd = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64freebsd/roc_default_compiler_rt.o");
-    const x64netbsd = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64netbsd/roc_default_compiler_rt.o");
-
-    pub fn forTarget(requested: RocTarget) ?[]const u8 {
-        return switch (requested.defaultCpuTarget()) {
-            .x64musl => x64musl,
-            .arm64musl => arm64musl,
-            .x64glibc, .x64linux => x64glibc,
-            .arm64glibc, .arm64linux => arm64glibc,
-            .x64freebsd => x64freebsd,
-            .x64netbsd => x64netbsd,
-            .x64mac,
-            .arm64mac,
-            .x64win,
-            .arm64win,
-            .x64mingw,
-            .arm64mingw,
-            .x64openbsd,
-            .x64elf,
-            .x64v1mac,
-            .x64v1win,
-            .x64v1mingw,
-            .x64v1freebsd,
-            .x64v1openbsd,
-            .x64v1netbsd,
-            .x64v1musl,
-            .x64v1glibc,
-            .x64v1linux,
-            .x64v1elf,
-            .arm64v1win,
-            .arm64v1mingw,
-            .arm64v1linux,
-            .arm64v1musl,
-            .arm64v1glibc,
-            .arm32linux,
-            .arm32musl,
-            .wasm32,
-            .wasm32v1,
-            => null,
-        };
-    }
-};
-
-/// Prebuilt boxy runtime objects (the `roc_boxy_*` C-ABI wrappers plus
-/// `roc_boxy_init_embedded`), linked by `roc build --opt=dev` into programs that
-/// emit boxy statements. Shipped for every target that carries a builtins
-/// object, so a standalone dev build of a generic program works wherever a
-/// standalone dev build works at all.
-const BoxyRuntimeObjects = struct {
-    const x64musl = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64musl/roc_boxy_runtime.o");
-    const arm64musl = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64musl/roc_boxy_runtime.o");
-    const x64glibc = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64glibc/roc_boxy_runtime.o");
-    const arm64glibc = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64glibc/roc_boxy_runtime.o");
-    const x64mac = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64mac/roc_boxy_runtime.o");
-    const arm64mac = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64mac/roc_boxy_runtime.o");
-    const x64win = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64win/roc_boxy_runtime.obj");
-    const arm64win = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64win/roc_boxy_runtime.obj");
-    const x64freebsd = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64freebsd/roc_boxy_runtime.o");
-    const x64openbsd = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64openbsd/roc_boxy_runtime.o");
-    const x64netbsd = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64netbsd/roc_boxy_runtime.o");
-    const x64mingw = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64mingw/roc_boxy_runtime.obj");
-    const arm64mingw = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64mingw/roc_boxy_runtime.obj");
-    const wasm32 = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/wasm32/roc_boxy_runtime.o");
-
-    /// The boxy runtime object bytes for `target`, or null when the target has
-    /// no runtime and boxy programs cannot be built standalone for it.
-    pub fn forTarget(requested: RocTarget) ?[]const u8 {
-        const target = requested.defaultCpuTarget();
-        return switch (target) {
-            .x64musl => x64musl,
-            .arm64musl => arm64musl,
-            .x64glibc, .x64linux => x64glibc,
-            .arm64glibc, .arm64linux => arm64glibc,
-            .x64mac => x64mac,
-            .arm64mac => arm64mac,
-            .x64win => x64win,
-            .arm64win => arm64win,
-            .x64mingw => x64mingw,
-            .arm64mingw => arm64mingw,
-            .x64freebsd => x64freebsd,
-            .x64openbsd => x64openbsd,
-            .x64netbsd => x64netbsd,
-            .wasm32 => wasm32,
-            .x64elf,
-            .x64v1mac,
-            .x64v1win,
-            .x64v1mingw,
-            .x64v1freebsd,
-            .x64v1openbsd,
-            .x64v1netbsd,
-            .x64v1musl,
-            .x64v1glibc,
-            .x64v1linux,
-            .x64v1elf,
-            .arm64v1win,
-            .arm64v1mingw,
-            .arm64v1linux,
-            .arm64v1musl,
-            .arm64v1glibc,
-            .arm32linux,
-            .arm32musl,
-            .wasm32v1,
-            => null,
-        };
-    }
-
-    /// The scratch-directory filename to write the runtime object under.
-    pub fn filename(target: RocTarget) []const u8 {
-        return if (target.isWindows()) "roc_boxy_runtime.obj" else "roc_boxy_runtime.o";
-    }
 };
 
 // Workaround for Zig standard library compilation issue on macOS ARM64.
@@ -2613,8 +2281,9 @@ fn defaultRunCheckedHostIdentity(
 }
 
 fn defaultRunLinkInputsIdentity(target: RocTarget) ?[32]u8 {
-    const runtime_digest = defaultRuntimeDigest(target) orelse return null;
-    const compiler_rt_digest = defaultCompilerRtDigest(target) orelse return null;
+    const objects = EmbeddedTargetObjects.forTarget(target);
+    const runtime_digest = objects.default_runtime_digest orelse return null;
+    const compiler_rt_digest = objects.default_compiler_rt_digest orelse return null;
 
     var hasher = base.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-run-default-link-inputs-v3");
@@ -3842,12 +3511,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, staged: *default_app.S
         ctx,
         app_path,
         original_source_dir,
-        .{
-            .original_path = args.path,
-            .original_source = staged.original_source,
-            .header_len = staged.header_len,
-            .header_lines = staged.header_lines,
-        },
+        SyntheticDefaultAppMapping.fromStaged(args.path, staged),
         args.max_threads,
         args.opt,
         currentRuntimeSpecializationStrategy(args.specialization_strategy),
@@ -3910,7 +3574,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
         return error.UnsupportedTarget;
     }
 
-    if (DefaultPlatformRuntimeObjects.forTarget(selected_target) == null) {
+    if (EmbeddedTargetObjects.forTarget(selected_target).default_runtime == null) {
         return rejectRunTargetNotExecutable(ctx, selected_target);
     }
 
@@ -3956,12 +3620,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
         .{ .dev_run_image = .{ .target = selected_target, .hot_reload = false } },
         app_path,
         original_source_dir,
-        .{
-            .original_path = args.path,
-            .original_source = staged.original_source,
-            .header_len = staged.header_len,
-            .header_lines = staged.header_lines,
-        },
+        SyntheticDefaultAppMapping.fromStaged(args.path, staged),
         args.max_threads,
         args.opt,
         currentRuntimeSpecializationStrategy(args.specialization_strategy),
@@ -5946,50 +5605,22 @@ fn renderSummaryHeaderLine(
     try writer.writeAll("\n\n");
 }
 
-fn writeDiagnosticCounts(writer: *std.Io.Writer, error_count: anytype, warning_count: anytype, use_color: bool) std.Io.Writer.Error!void {
-    const error_suffix = if (error_count == 1) "" else "s";
-    const warning_suffix = if (warning_count == 1) "" else "s";
-    const red = if (use_color) ansi_term.red else "";
-    const yellow = if (use_color) ansi_term.yellow else "";
-    const reset = if (use_color) ansi_term.reset else "";
-
-    try writer.print("{s}{} error{s}{s} and {s}{} warning{s}{s}", .{
-        red,
-        error_count,
-        error_suffix,
-        reset,
-        yellow,
-        warning_count,
-        warning_suffix,
-        reset,
-    });
-}
-
 fn writeNoErrors(writer: *std.Io.Writer, use_color: bool) std.Io.Writer.Error!void {
     const green = if (use_color) ansi_term.green else "";
     const reset = if (use_color) ansi_term.reset else "";
     try writer.print("{s}No errors{s}", .{ green, reset });
 }
 
-test "diagnostic summaries support colored and plain output" {
+test "no-errors summary supports colored and plain output" {
     var output = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer output.deinit();
 
-    try writeDiagnosticCounts(&output.writer, 1, 0, true);
-    try output.writer.writeByte('\n');
-    try writeDiagnosticCounts(&output.writer, 2, 3, false);
-    try output.writer.writeByte('\n');
-    try writeDiagnosticCounts(&output.writer, 0, 1, true);
-    try output.writer.writeByte('\n');
     try writeNoErrors(&output.writer, true);
     try output.writer.writeByte('\n');
     try writeNoErrors(&output.writer, false);
 
     try std.testing.expectEqualStrings(
-        ansi_term.red ++ "1 error" ++ ansi_term.reset ++ " and " ++ ansi_term.yellow ++ "0 warnings" ++ ansi_term.reset ++ "\n" ++
-            "2 errors and 3 warnings\n" ++
-            ansi_term.red ++ "0 errors" ++ ansi_term.reset ++ " and " ++ ansi_term.yellow ++ "1 warning" ++ ansi_term.reset ++ "\n" ++
-            ansi_term.green ++ "No errors" ++ ansi_term.reset ++ "\n" ++
+        ansi_term.green ++ "No errors" ++ ansi_term.reset ++ "\n" ++
             "No errors",
         output.written(),
     );
@@ -6151,7 +5782,7 @@ fn useDefaultAppSharedMemoryShim(args: cli_args.RunArgs) bool {
     const default_target = defaultRunShimTarget(native_target);
     return devShimTargetCompatible(default_target, native_target) and
         default_target.toOsTag() == .linux and
-        DefaultPlatformRuntimeObjects.forTarget(default_target) != null;
+        EmbeddedTargetObjects.forTarget(default_target).default_runtime != null;
 }
 
 /// The Linux target the default app runs on, keeping the CPU level
@@ -6412,12 +6043,7 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
         .{ .dev_run_image = .{ .target = selected_target, .hot_reload = true } },
         args.path,
         if (source_rewrite) |rewrite| rewrite.source_dir_override else null,
-        if (source_rewrite) |rewrite| .{
-            .original_path = rewrite.source_path,
-            .original_source = staged_owned.?.original_source,
-            .header_len = staged_owned.?.header_len,
-            .header_lines = staged_owned.?.header_lines,
-        } else null,
+        if (source_rewrite) |rewrite| SyntheticDefaultAppMapping.fromStaged(rewrite.source_path, &staged_owned.?) else null,
         args.max_threads,
         .dev,
         args.specialization_strategy,
@@ -6828,7 +6454,23 @@ const SyntheticDefaultAppMapping = struct {
     /// `default_app.Staged`.
     header_len: usize,
     header_lines: u32,
+
+    fn fromStaged(original_path: []const u8, staged: *const default_app.Staged) SyntheticDefaultAppMapping {
+        return .{
+            .original_path = original_path,
+            .original_source = staged.original_source,
+            .header_len = staged.header_len,
+            .header_lines = staged.header_lines,
+        };
+    }
 };
+
+/// Point a staged default app's diagnostics at the user's real file and line
+/// numbers; the mapping also pins the stable synthetic package identities.
+fn applySyntheticDefaultAppMapping(build_env: *BuildEnv, mapping: ?SyntheticDefaultAppMapping) void {
+    const m = mapping orelse return;
+    build_env.setSyntheticRootSourceMappingWithLineOffset(m.original_path, m.original_source, m.header_len, m.header_lines);
+}
 
 const PlatformEntrypointArtifact = union(enum) {
     /// Pointer-width-independent LIR consumed directly by the interpreter.
@@ -6895,17 +6537,7 @@ fn initRunBuildEnv(ctx: *CliCtx, opts: RunBuildEnvOptions) CliMainError!BuildEnv
         .source_dir_override = opts.source_dir_override,
         .post_check_publication_mode = .executable_artifacts,
     });
-    if (opts.synthetic_default_app) |mapping| {
-        // Diagnostics for a staged default app must point at the user's real
-        // file (and its real line numbers) rather than the staged copy; the
-        // mapping also pins the stable synthetic package identities.
-        build_env.setSyntheticRootSourceMappingWithLineOffset(
-            mapping.original_path,
-            mapping.original_source,
-            mapping.header_len,
-            mapping.header_lines,
-        );
-    }
+    applySyntheticDefaultAppMapping(&build_env, opts.synthetic_default_app);
     return build_env;
 }
 
@@ -7164,44 +6796,6 @@ fn publishLirImage(ctx: *CliCtx, lowered_result: *const LoweredCoordinatorResult
     );
 }
 
-/// Get the roc cache directory for downloaded packages, creating it if needed.
-/// Standard cache locations by platform:
-/// - Linux/macOS: ~/.cache/roc/packages/ (respects XDG_CACHE_HOME if set)
-/// - Windows: %LOCALAPPDATA%\roc\packages\
-fn getRocCacheDir(allocator: std.mem.Allocator) (Allocator.Error || error{NoCacheDir})![]const u8 {
-    // Check XDG_CACHE_HOME first (Linux/macOS)
-    if (try getEnvVar(allocator, "XDG_CACHE_HOME")) |xdg_cache| {
-        defer allocator.free(xdg_cache);
-        return std.fs.path.join(allocator, &.{ xdg_cache, "roc", "packages" });
-    }
-
-    // Fall back to %LOCALAPPDATA%\roc\packages (Windows)
-    if (comptime builtin.os.tag == .windows) {
-        if (try getEnvVar(allocator, "LOCALAPPDATA")) |local_app_data| {
-            defer allocator.free(local_app_data);
-            return std.fs.path.join(allocator, &.{ local_app_data, "roc", "packages" });
-        }
-    }
-
-    // Fall back to ~/.cache/roc/packages (Unix)
-    if (try getEnvVar(allocator, "HOME")) |home| {
-        defer allocator.free(home);
-        return std.fs.path.join(allocator, &.{ home, ".cache", "roc", "packages" });
-    }
-
-    return error.NoCacheDir;
-}
-
-/// Cross-platform helper to get environment variable.
-/// Returns null if the variable is not set. Caller must free the returned slice.
-fn getEnvVar(allocator: std.mem.Allocator, key: []const u8) std.mem.Allocator.Error!?[]const u8 {
-    const key_z = try allocator.dupeSentinel(u8, key, 0);
-    defer allocator.free(key_z);
-    const value = std.c.getenv(key_z) orelse return null;
-    const len = std.mem.len(value);
-    return try allocator.dupe(u8, value[0..len]);
-}
-
 /// Convert parsed CLI size-limit flags to a resolution config.
 fn resolutionConfigFromLimits(limits: cli_args.ResolveLimitArgs) compile.package_resolution.Config {
     var config = compile.package_resolution.Config{};
@@ -7282,7 +6876,7 @@ fn resolveUrlBundle(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemor
     const base58_hash = parsed_url.hash;
 
     // 2. Get cache directory
-    const cache_dir_path = getRocCacheDir(ctx.arena) catch {
+    const cache_dir_path = compile.build.packagesCacheDir(ctx.coreCtx(), ctx.arena) catch {
         return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = "Could not determine cache directory" } });
     };
     const package_dir_path = try std.fs.path.join(ctx.arena, &.{ cache_dir_path, base58_hash });
@@ -7311,13 +6905,13 @@ fn resolveUrlBundle(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemor
                 .err = make_err,
             } });
         };
-        sweepStalePackageStagingDirs(ctx.io.std_io, cache_dir_path);
+        compile.package_resolution.sweepStalePackageStaging(ctx.coreCtx(), ctx.arena, cache_dir_path);
 
         // Download into a staging directory and publish it with a rename, so
         // the hash-named directory never exists half-written. Other processes
         // read this cache while we fill it, and a directory under the hash is
         // their only signal that the bundle is complete.
-        const staging_dir_path = try packageStagingDirPath(ctx, package_dir_path);
+        const staging_dir_path = try compile.package_resolution.packageStagingDirPath(ctx.io.std_io, ctx.arena, package_dir_path);
         std.Io.Dir.cwd().createDir(ctx.io.std_io, staging_dir_path, .default_dir) catch |make_err| {
             return ctx.fail(.{ .directory_create_failed = .{
                 .path = staging_dir_path,
@@ -7337,7 +6931,19 @@ fn resolveUrlBundle(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemor
             } });
         };
 
-        try publishPackageDir(ctx, url, staging_dir_path, package_dir_path, platform_source_path);
+        _ = compile.package_resolution.publishStagedPackage(ctx.coreCtx(), ctx.arena, staging_dir_path, package_dir_path, platform_source_path) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            // The CLI's CoreCtx renames through `std.Io.Dir`, whose errors it
+            // passes through unchanged.
+            error.IoError => {
+                if (builtin.mode == .debug) base.invariant("CLI CoreCtx rename reported a non-std error", .{});
+                unreachable;
+            },
+            else => |rename_err| return ctx.fail(.{ .download_failed = .{
+                .url = url,
+                .err = rename_err,
+            } }),
+        };
 
         std.log.info("Bundle cached at {s}", .{package_dir_path});
     }
@@ -7357,87 +6963,6 @@ fn resolveUrlBundle(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemor
     return .{
         .source_path = platform_source_path,
     };
-}
-
-/// A staging path next to the final hash-named directory, so publishing is a
-/// rename within one directory rather than a copy across filesystems. The
-/// random component keeps concurrent downloads of the same bundle out of
-/// each other's way, and the `.tmp` suffix is what the stale sweep matches.
-fn packageStagingDirPath(ctx: *CliCtx, package_dir_path: []const u8) error{OutOfMemory}![]u8 {
-    var suffix: [8]u8 = undefined;
-    ctx.io.std_io.random(&suffix);
-    return std.fmt.allocPrint(ctx.arena, "{s}.{s}.tmp", .{ package_dir_path, std.fmt.bytesToHex(suffix, .lower) });
-}
-
-/// Move a finished staging directory into its hash-named slot in the package
-/// cache. Mirrors the publish step of the compiler's package resolution,
-/// which shares this cache: losing the rename to a concurrent process is
-/// success, since bundles are content-addressed and hash-verified, and a
-/// slot holding a directory with no entry point is an interrupted
-/// extraction's leftover that gets moved aside and deleted. Moving rather
-/// than deleting in place matters when a concurrent process publishes a good
-/// copy between our check and our repair: a rename cannot tear that copy
-/// out from under whoever is already reading it.
-fn publishPackageDir(
-    ctx: *CliCtx,
-    url: []const u8,
-    staging_dir_path: []const u8,
-    package_dir_path: []const u8,
-    entry_point_path: []const u8,
-) (CliError || error{OutOfMemory})!void {
-    std.Io.Dir.cwd().rename(staging_dir_path, std.Io.Dir.cwd(), package_dir_path, ctx.io.std_io) catch {
-        const entry_point_exists = exists: {
-            std.Io.Dir.cwd().access(ctx.io.std_io, entry_point_path, .{}) catch break :exists false;
-            break :exists true;
-        };
-        if (entry_point_exists) {
-            std.Io.Dir.cwd().deleteTree(ctx.io.std_io, staging_dir_path) catch {};
-            return;
-        }
-
-        const trash_dir_path = try packageStagingDirPath(ctx, package_dir_path);
-        std.Io.Dir.cwd().rename(package_dir_path, std.Io.Dir.cwd(), trash_dir_path, ctx.io.std_io) catch {};
-        defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, trash_dir_path) catch {};
-        std.Io.Dir.cwd().rename(staging_dir_path, std.Io.Dir.cwd(), package_dir_path, ctx.io.std_io) catch |rename_err| {
-            std.Io.Dir.cwd().deleteTree(ctx.io.std_io, staging_dir_path) catch {};
-            // Someone published in the gap between that move and this retry.
-            // Their copy is as good as ours.
-            const published_by_another = published: {
-                std.Io.Dir.cwd().access(ctx.io.std_io, entry_point_path, .{}) catch break :published false;
-                break :published true;
-            };
-            if (published_by_another) return;
-            return ctx.fail(.{ .download_failed = .{
-                .url = url,
-                .err = rename_err,
-            } });
-        };
-    };
-}
-
-/// Reclaim package cache staging directories stranded by processes that died
-/// mid-download. Nothing ever reads them again, and one older than a day
-/// cannot belong to a live download. The compiler's package resolution runs
-/// the same sweep over this cache with the same naming scheme, so either
-/// downloader cleans up after the other. Best-effort: any failure just
-/// leaves the sweep to a future download.
-fn sweepStalePackageStagingDirs(std_io: std.Io, cache_dir_path: []const u8) void {
-    var dir = std.Io.Dir.cwd().openDir(std_io, cache_dir_path, .{ .iterate = true }) catch return;
-    defer dir.close(std_io);
-
-    const now_ns: i128 = std.Io.Timestamp.now(std_io, .real).nanoseconds;
-    var it = dir.iterate();
-    while (true) {
-        const entry = (it.next(std_io) catch break) orelse break;
-        if (entry.kind != .directory) continue;
-        if (!std.mem.endsWith(u8, entry.name, ".tmp")) continue;
-
-        const info = dir.statFile(std_io, entry.name, .{}) catch continue;
-        const mtime_ns: i128 = @intCast(info.mtime.nanoseconds);
-        if (now_ns - mtime_ns <= stale_staging_max_age_ns) continue;
-
-        dir.deleteTree(std_io, entry.name) catch {};
-    }
 }
 
 /// Default output basename for `roc build <url>`: the last path segment of
@@ -8359,14 +7884,7 @@ fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, staged: *default_a
         return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
     };
 
-    if (args.keep_temp) {
-        const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-        const config = reporting.ReportingConfig.initColorTerminal();
-        const headline = try std.fmt.allocPrint(ctx.arena, "Kept temporary directory: {s}.", .{temp_dir});
-        var report = try reporting.Report.init(ctx.arena, "Kept Temporary Directory", headline, .warning);
-        defer report.deinit();
-        reporting.renderReportToTerminal(&report, ctx.io.stderr(), palette, config) catch {};
-    }
+    if (args.keep_temp) try reportKeptTempDir(ctx, temp_dir);
     defer if (!args.keep_temp) std.Io.Dir.cwd().deleteTree(ctx.io.std_io, temp_dir) catch {};
 
     const platform_dir = try std.fs.path.join(ctx.arena, &.{ temp_dir, default_app.platform_dir_name });
@@ -9411,8 +8929,8 @@ fn verifyHostInputSymbols(
 }
 
 fn writeDefaultPlatformRuntimeObject(ctx: *CliCtx, artifact_dir: []const u8, target: RocTarget) CliMainError!?[]const u8 {
-    const bytes = DefaultPlatformRuntimeObjects.forTarget(target) orelse return null;
-    const runtime_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, DefaultPlatformRuntimeObjects.filename(target) });
+    const bytes = EmbeddedTargetObjects.forTarget(target).default_runtime orelse return null;
+    const runtime_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, EmbeddedTargetObjects.filename("roc_default_runtime", target) });
     backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, bytes) catch |err| {
         std.log.err("Failed to write default platform runtime object {s}: {}", .{ runtime_path, err });
         return err;
@@ -9421,7 +8939,7 @@ fn writeDefaultPlatformRuntimeObject(ctx: *CliCtx, artifact_dir: []const u8, tar
 }
 
 fn writeDefaultPlatformCompilerRtObject(ctx: *CliCtx, artifact_dir: []const u8, target: RocTarget) CliMainError!?[]const u8 {
-    const bytes = DefaultPlatformCompilerRtObjects.forTarget(target) orelse return null;
+    const bytes = EmbeddedTargetObjects.forTarget(target).default_compiler_rt orelse return null;
     const object_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, "roc_default_compiler_rt.o" });
     backend.writeFileWindowsAvSafe(ctx.io.std_io, object_path, bytes) catch |err| {
         std.log.err("Failed to write default platform compiler-rt object {s}: {}", .{ object_path, err });
@@ -9446,7 +8964,7 @@ fn appendBoxyRuntimeLinkInputs(
     target: RocTarget,
     lir_result: *const lir.Program.Result,
 ) CliMainError!void {
-    const runtime_bytes = BoxyRuntimeObjects.forTarget(target) orelse {
+    const runtime_bytes = EmbeddedTargetObjects.forTarget(target).boxy_runtime orelse {
         try ctx.io.stderr().print(
             "Error: standalone dev builds of generic (boxy) programs are not supported for the '{s}' target.\n",
             .{@tagName(target)},
@@ -9454,7 +8972,7 @@ fn appendBoxyRuntimeLinkInputs(
         return error.UnsupportedTarget;
     };
 
-    const runtime_path = try std.fs.path.join(ctx.arena, &.{ scratch_dir, BoxyRuntimeObjects.filename(target) });
+    const runtime_path = try std.fs.path.join(ctx.arena, &.{ scratch_dir, EmbeddedTargetObjects.filename("roc_boxy_runtime", target) });
     backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, runtime_bytes) catch {
         return error.NativeCompilationFailed;
     };
@@ -9527,7 +9045,7 @@ fn writeSealedWasmObject(
     try compiler_inputs.append(unsealed_path);
     try compiler_inputs.append(compiler_rt_path);
     if (lirResultNeedsBoxyRuntime(lir_result)) {
-        const runtime_bytes = BoxyRuntimeObjects.forTarget(.wasm32) orelse return error.UnsupportedTarget;
+        const runtime_bytes = EmbeddedTargetObjects.forTarget(.wasm32).boxy_runtime orelse return error.UnsupportedTarget;
         const runtime_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, "roc_boxy_runtime_support.o" });
         backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, runtime_bytes) catch return error.WasmOutputWriteFailed;
         try compiler_inputs.append(runtime_path);
@@ -9556,8 +9074,8 @@ fn writeSealedWasmObject(
 }
 
 fn writeDefaultPlatformExecutableObject(ctx: *CliCtx, artifact_dir: []const u8, target: RocTarget) CliMainError!?[]const u8 {
-    const bytes = DefaultPlatformExecutableObjects.forTarget(target) orelse return null;
-    const runtime_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, DefaultPlatformExecutableObjects.filename(target) });
+    const bytes = EmbeddedTargetObjects.forTarget(target).default_platform orelse return null;
+    const runtime_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, EmbeddedTargetObjects.filename("roc_default_platform", target) });
     backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, bytes) catch |err| {
         std.log.err("Failed to write default platform executable object {s}: {}", .{ runtime_path, err });
         return err;
@@ -9879,7 +9397,7 @@ fn writeDevWasmObject(
     try codegen.registerHostedSymbolTargets(lowered.lir_result.store.getProcSpecs());
     if (lirResultNeedsBoxyRuntime(&lowered.lir_result)) try codegen.registerBoxySymbolTargets();
 
-    const builtins_bytes = BuiltinsObjects.forTargetExtern(.wasm32);
+    const builtins_bytes = EmbeddedTargetObjects.forTarget(.wasm32).builtins_extern;
     if (builtins_bytes.len > 0) {
         var builtins_module = backend.wasm.WasmModule.preload(ctx.gpa, builtins_bytes, .relocatable_for_merge) catch |err| {
             std.log.err("Failed to preload wasm builtins: {}", .{err});
@@ -9927,6 +9445,52 @@ fn writeDevWasmObject(
         try sharedLibraryAppExports(ctx, entrypoints, static_data_exports),
         try wasmRocHostRequirements(ctx.arena, &lowered.lir_result.store),
     );
+}
+
+/// Links one relocatable wasm app object against the platform's wasm inputs
+/// into `final_output_path`.
+fn linkWasmOutput(
+    ctx: *CliCtx,
+    args: cli_args.BuildArgs,
+    target: RocTarget,
+    link_inputs: PlatformLinkInputs,
+    final_output_path: []const u8,
+    obj_path: []const u8,
+    scratch_dir: []const u8,
+) CliMainError!void {
+    const object_files = try ctx.arena.alloc([]const u8, 1);
+    object_files[0] = obj_path;
+    const link_config = linker.LinkConfig{
+        .target_format = .wasm,
+        .target_abi = null,
+        .target_os = .freestanding,
+        .target_arch = .wasm32,
+        .output_path = final_output_path,
+        .object_files = object_files,
+        .platform_files_pre = link_inputs.platform_files_pre,
+        .platform_files_post = link_inputs.platform_files_post,
+        .extra_args = &.{},
+        .can_exit_early = false,
+        .disable_output = false,
+        .wasm_initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm),
+        .wasm_maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null,
+        .wasm_stack_size = configuredWasmStackBytes(args, link_inputs.wasm),
+        .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory.importsMemory() else false,
+        .wasm_zero_filled_memory = configuredWasmZeroFilledMemory(link_inputs.wasm),
+        .wasm_debug_info = args.debug,
+        .wasm_optimize = wasmOptimizeMode(args.opt),
+        .wasm_cpu_level = target.cpuLevel(),
+        .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
+        .wasm_exports = requiredWasmPlatformExports(link_inputs),
+        .platform_files_dir = link_inputs.platform_files_dir,
+        .scratch_dir = scratch_dir,
+    };
+    linker.link(ctx, link_config) catch |err| {
+        return ctx.fail(.{ .linker_failed = .{
+            .err = err,
+            .target = link_inputs.target_name,
+        } });
+    };
 }
 
 fn rocBuildWasm(
@@ -9982,40 +9546,7 @@ fn rocBuildWasm(
         target.cpuLevel(),
     );
 
-    const object_files = try ctx.arena.alloc([]const u8, 1);
-    object_files[0] = obj_path;
-    const wasm_exports = requiredWasmPlatformExports(link_inputs);
-    const link_config = linker.LinkConfig{
-        .target_format = .wasm,
-        .target_abi = null,
-        .target_os = .freestanding,
-        .target_arch = .wasm32,
-        .output_path = final_output_path,
-        .object_files = object_files,
-        .platform_files_pre = link_inputs.platform_files_pre,
-        .platform_files_post = link_inputs.platform_files_post,
-        .extra_args = &.{},
-        .can_exit_early = false,
-        .disable_output = false,
-        .wasm_initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm),
-        .wasm_maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null,
-        .wasm_stack_size = configuredWasmStackBytes(args, link_inputs.wasm),
-        .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory.importsMemory() else false,
-        .wasm_zero_filled_memory = configuredWasmZeroFilledMemory(link_inputs.wasm),
-        .wasm_debug_info = args.debug,
-        .wasm_optimize = wasmOptimizeMode(args.opt),
-        .wasm_cpu_level = target.cpuLevel(),
-        .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
-        .wasm_exports = wasm_exports,
-        .platform_files_dir = link_inputs.platform_files_dir,
-        .scratch_dir = scratch_dir,
-    };
-    linker.link(ctx, link_config) catch |err| {
-        return ctx.fail(.{ .linker_failed = .{
-            .err = err,
-            .target = link_inputs.target_name,
-        } });
-    };
+    try linkWasmOutput(ctx, args, target, link_inputs, final_output_path, obj_path, scratch_dir);
 }
 
 const LlvmObjectPaths = struct {
@@ -10504,58 +10035,34 @@ fn rocBuildWasmLlvm(
     }
 
     const combined_obj = try writeCombinedLlvmWasmObject(ctx, app_object.artifact_dir, app_object.object_path, &lowered.lir_result, entrypoints, static_data_exports, args.opt, &owned_inputs);
-    const object_files = try ctx.arena.alloc([]const u8, 1);
-    object_files[0] = combined_obj;
-    const wasm_exports = requiredWasmPlatformExports(link_inputs);
-
-    const link_config = linker.LinkConfig{
-        .target_format = .wasm,
-        .target_abi = null,
-        .target_os = .freestanding,
-        .target_arch = .wasm32,
-        .output_path = final_output_path,
-        .object_files = object_files,
-        .platform_files_pre = link_inputs.platform_files_pre,
-        .platform_files_post = link_inputs.platform_files_post,
-        .extra_args = &.{},
-        .can_exit_early = false,
-        .disable_output = false,
-        .wasm_initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm),
-        .wasm_maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null,
-        .wasm_stack_size = configuredWasmStackBytes(args, link_inputs.wasm),
-        .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory.importsMemory() else false,
-        .wasm_zero_filled_memory = configuredWasmZeroFilledMemory(link_inputs.wasm),
-        .wasm_debug_info = args.debug,
-        .wasm_optimize = wasmOptimizeMode(args.opt),
-        .wasm_cpu_level = target.cpuLevel(),
-        .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
-        .wasm_exports = wasm_exports,
-        .platform_files_dir = link_inputs.platform_files_dir,
-        .scratch_dir = app_object.artifact_dir,
-    };
-
-    linker.link(ctx, link_config) catch |err| {
-        return ctx.fail(.{ .linker_failed = .{
-            .err = err,
-            .target = link_inputs.target_name,
-        } });
-    };
+    try linkWasmOutput(ctx, args, target, link_inputs, final_output_path, combined_obj, app_object.artifact_dir);
 }
 
-fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult {
-    const timer_start_ns = std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds;
+/// Base output path for `roc build`: `--output`, else the synthetic
+/// basename, else the module name.
+fn buildOutputBasePath(ctx: *CliCtx, args: cli_args.BuildArgs) Allocator.Error![]const u8 {
+    if (args.output) |output| return ctx.arena.dupe(u8, output);
+    if (args.synthetic_output_basename) |basename| return ctx.arena.dupe(u8, basename);
+    return base.module_path.getModuleNameAlloc(ctx.arena, args.path);
+}
 
-    var reporter = makeReporter(ctx, "roc build", args.timings);
-    defer reporter.deinit();
-    reporter.start();
+/// Final output path for `roc build`: an explicit `--output` is used as-is,
+/// otherwise the target's default extension for `link_type` is appended.
+fn buildFinalOutputPath(
+    ctx: *CliCtx,
+    args: cli_args.BuildArgs,
+    output_path: []const u8,
+    link_type: roc_target.OutputKind,
+    target: RocTarget,
+) Allocator.Error![]const u8 {
+    if (args.output != null) return output_path;
+    const ext = target_selection.defaultBuildOutputExtension(link_type, target);
+    return std.fmt.allocPrint(ctx.arena, "{s}{s}", .{ output_path, ext });
+}
 
-    const output_path = if (args.output) |output|
-        try ctx.arena.dupe(u8, output)
-    else if (args.synthetic_output_basename) |basename|
-        try ctx.arena.dupe(u8, basename)
-    else
-        try base.module_path.getModuleNameAlloc(ctx.arena, args.path);
-
+/// Creates the `BuildEnv` for a `roc build` invocation, including the
+/// synthetic root source mapping when the root was staged.
+fn initBuildCommandEnv(ctx: *CliCtx, args: cli_args.BuildArgs) InitCliBuildEnvError!BuildEnv {
     var build_env = try initCliBuildEnv(ctx, .{
         .max_threads = args.max_threads,
         .no_cache = args.no_cache,
@@ -10571,20 +10078,26 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
             build_env.setSyntheticRootSourceMappingWithLineOffset(original_path, original_source, args.synthetic_root_header_len, args.synthetic_root_header_lines);
         }
     }
-    defer build_env.deinit();
-    // Registered after build_env.deinit() so it runs first (LIFO), while build_env is still
-    // valid: records discovered source inputs for `roc build --watch` on every exit path.
-    defer writeBuildWatchInputsOnExit(ctx, args, &build_env);
+    return build_env;
+}
 
+/// Discovers the build's dependencies and selects the platform target,
+/// returning the platform directory and the selected target.
+fn resolveBuildCommandPlatform(
+    ctx: *CliCtx,
+    args: cli_args.BuildArgs,
+    build_env: *BuildEnv,
+    reporter: *progress.Reporter,
+) CliMainError!struct { []const u8, target_selection.SelectedTarget } {
     reporter.begin("Resolving Dependencies");
     build_env.discoverDependencies(args.path) catch |err| {
         reporter.fail();
-        try renderDiagnostics(ctx, &build_env);
+        try renderDiagnostics(ctx, build_env);
         return err;
     };
     reporter.end();
 
-    const platform = try requirePlatformTargets(ctx, &build_env, args.path);
+    const platform = try requirePlatformTargets(ctx, build_env, args.path);
     const targets_config = platform.config;
     const platform_source = platform.root_file;
     const platform_dir = std.fs.path.dirname(platform_source) orelse ".";
@@ -10593,6 +10106,149 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         try selectRunPlatformTarget(ctx, targets_config, platform_source, args.target)
     else
         try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
+    return .{ platform_dir, selected };
+}
+
+/// Type checks the discovered modules of a `roc build` and renders their
+/// diagnostics, returning the diagnostic counts (warnings include optimized
+/// `dbg` warnings) and the platform's targets config.
+fn typeCheckBuildCommand(
+    ctx: *CliCtx,
+    args: cli_args.BuildArgs,
+    build_env: *BuildEnv,
+    reporter: *progress.Reporter,
+) CliMainError!struct { CheckDiagnosticCounts, roc_target.TargetsConfig } {
+    reporter.begin("Type Checking");
+    build_env.compileDiscovered() catch |err| {
+        reporter.fail();
+        try renderDiagnostics(ctx, build_env);
+        return err;
+    };
+    finishFrontEndPhase(reporter, build_env.getTimingInfo());
+
+    const diag = try build_env.renderDiagnostics(ctx.io.stderr(), ctx.reportConfig(.stderr));
+    const total_warning_count = diag.warnings + try optimizedDbgWarningsForBuild(ctx, build_env, args.opt);
+    const resolved_targets_config = build_env.getPlatformTargetsConfig() orelse {
+        try renderProblem(ctx, .{
+            .no_platform_found = .{ .app_path = args.path },
+        });
+        return error.NoPlatformSource;
+    };
+    return .{ .{ .errors = diag.errors, .warnings = total_warning_count }, resolved_targets_config };
+}
+
+/// Finishes progress reporting for a successful `roc build`, prints the
+/// build summary unless suppressed, and returns the build result.
+fn finishBuildCommand(
+    ctx: *CliCtx,
+    args: cli_args.BuildArgs,
+    build_env: *BuildEnv,
+    reporter: *progress.Reporter,
+    final_output_path: []const u8,
+    diag: CheckDiagnosticCounts,
+    timer_start_ns: i96,
+) CliMainError!BuildResult {
+    const elapsed_ns = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - timer_start_ns));
+    reporter.finish();
+    if (!args.suppress_build_status) {
+        try printBuildSuccess(ctx, final_output_path, diag.errors, diag.warnings, elapsed_ns, args.verbose, build_env.getBuildStats());
+    }
+    return .{ .output_path = final_output_path, .diagnostics = diag };
+}
+
+/// Lowers a checked `roc build` program to LIR, reporting the post-check
+/// lowering phase.
+fn lowerBuildCommandToLir(
+    ctx: *CliCtx,
+    args: cli_args.BuildArgs,
+    build_env: *BuildEnv,
+    reporter: *progress.Reporter,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    imported_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+    relation_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+    roots: CheckedLirRoots,
+    target: RocTarget,
+    proc_debug_names: bool,
+    spec_cache: ?postcheck.Common.SpecCacheLookup,
+    code_provision: lir.CheckedPipeline.CodeProvision,
+) eval.CompileTimeFinalization.RuntimeMaterializationError!lir.CheckedPipeline.LoweredProgram {
+    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+    reporter.begin(loweringProgressLabel(specialization_strategy));
+    var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
+    if (args.timings) spec_timing.enableDetailedMonotypeBody();
+    const lowered = try lowerCheckedSourceToLir(
+        ctx.gpa,
+        ctx.gpa,
+        root_artifact,
+        imported_artifacts,
+        relation_artifacts,
+        roots,
+        args.opt,
+        specialization_strategy,
+        base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()),
+        proc_debug_names,
+        build_env.postCheckExecutor(),
+        &spec_timing,
+        build_env.runtimeProgramSession(),
+        spec_cache,
+        code_provision,
+    );
+    finishPostCheckLowering(reporter, &spec_timing, specialization_strategy);
+    return lowered;
+}
+
+/// Builds the readonly data symbols of a linked `roc build`, including the
+/// platform's provided constants, reporting the static data phase.
+fn buildCommandStaticData(
+    ctx: *CliCtx,
+    reporter: *progress.Reporter,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    imported_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+    relation_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    target: RocTarget,
+) CliMainError![]compile.static_data_exports.StaticDataExport {
+    reporter.begin("Static Data");
+    const static_data_exports = try compile.static_data_exports.buildStaticData(
+        ctx.gpa,
+        .{
+            .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+            .imports = imported_artifacts,
+        },
+        lowered,
+        target,
+        .{ .include_provided_exports = true },
+    );
+    reporter.end();
+    return static_data_exports;
+}
+
+/// Reports that `--keep-temp` kept the temporary directory `dir`.
+fn reportKeptTempDir(ctx: *CliCtx, dir: []const u8) Allocator.Error!void {
+    const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+    const config = reporting.ReportingConfig.initColorTerminal();
+    const headline = try std.fmt.allocPrint(ctx.arena, "Kept temporary directory: {s}.", .{dir});
+    var report = try reporting.Report.init(ctx.arena, "Kept Temporary Directory", headline, .warning);
+    defer report.deinit();
+    reporting.renderReportToTerminal(&report, ctx.io.stderr(), palette, config) catch {};
+}
+
+fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult {
+    const timer_start_ns = std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds;
+
+    var reporter = makeReporter(ctx, "roc build", args.timings);
+    defer reporter.deinit();
+    reporter.start();
+
+    const output_path = try buildOutputBasePath(ctx, args);
+
+    var build_env = try initBuildCommandEnv(ctx, args);
+    defer build_env.deinit();
+    // Registered after build_env.deinit() so it runs first (LIFO), while build_env is still
+    // valid: records discovered source inputs for `roc build --watch` on every exit path.
+    defer writeBuildWatchInputsOnExit(ctx, args, &build_env);
+
+    const platform_dir, const selected = try resolveBuildCommandPlatform(ctx, args, &build_env, &reporter);
     const target = selected.target;
     const link_type = selected.output;
 
@@ -10634,12 +10290,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         unreachable;
     }
 
-    const final_output_path = if (args.output != null)
-        output_path
-    else blk: {
-        const ext = target_selection.defaultBuildOutputExtension(link_type, target);
-        break :blk try std.fmt.allocPrint(ctx.arena, "{s}{s}", .{ output_path, ext });
-    };
+    const final_output_path = try buildFinalOutputPath(ctx, args, output_path, link_type, target);
 
     build_env.setTarget(target);
     build_env.setRuntimeLowering(checkedRuntimeLoweringConfig(
@@ -10651,23 +10302,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
     ));
     build_env.setValidateTargetFilesForSelectedTarget(true);
     build_env.setDetailedLoweringTiming(args.timings);
-    reporter.begin("Type Checking");
-    build_env.compileDiscovered() catch |err| {
-        reporter.fail();
-        try renderDiagnostics(ctx, &build_env);
-        return err;
-    };
-    finishFrontEndPhase(&reporter, build_env.getTimingInfo());
-
-    const diag = try build_env.renderDiagnostics(ctx.io.stderr(), ctx.reportConfig(.stderr));
-    var total_warning_count = diag.warnings;
-    total_warning_count += try optimizedDbgWarningsForBuild(ctx, &build_env, args.opt);
-    const resolved_targets_config = build_env.getPlatformTargetsConfig() orelse {
-        try renderProblem(ctx, .{
-            .no_platform_found = .{ .app_path = args.path },
-        });
-        return error.NoPlatformSource;
-    };
+    const diag, const resolved_targets_config = try typeCheckBuildCommand(ctx, args, &build_env, &reporter);
 
     const root_artifact = try checkedArtifactForBuild(ctx, &build_env, args.path);
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
@@ -10675,47 +10310,13 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(relation_artifacts);
 
-    const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
-
-    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
-    reporter.begin(loweringProgressLabel(specialization_strategy));
-    var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
-    if (args.timings) spec_timing.enableDetailedMonotypeBody();
-    var lowered = try lowerCheckedSourceToLir(
-        ctx.gpa,
-        ctx.gpa,
-        root_artifact,
-        imported_artifacts,
-        relation_artifacts,
-        .linked_output,
-        args.opt,
-        specialization_strategy,
-        target_usize,
-        args.synthetic_default_platform,
-        build_env.postCheckExecutor(),
-        &spec_timing,
-        build_env.runtimeProgramSession(),
-        null,
-        .source_bodies,
-    );
+    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, args.synthetic_default_platform, null, .source_bodies);
     defer lowered.deinit();
-    finishPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
     defer ctx.gpa.free(entrypoints);
 
-    reporter.begin("Static Data");
-    const static_data_exports = try compile.static_data_exports.buildStaticData(
-        ctx.gpa,
-        .{
-            .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
-            .imports = imported_artifacts,
-        },
-        &lowered,
-        target,
-        .{ .include_provided_exports = true },
-    );
-    reporter.end();
+    const static_data_exports = try buildCommandStaticData(ctx, &reporter, root_artifact, imported_artifacts, relation_artifacts, &lowered, target);
     defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
 
     if (entrypoints.len == 0 and static_data_exports.len == 0) {
@@ -10744,7 +10345,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
     } else {
         reporter.begin("LLVM IR Generation");
         const hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store);
-        const enable_default_platform_runtime = args.synthetic_default_platform and DefaultPlatformExecutableObjects.forTarget(target) != null;
+        const enable_default_platform_runtime = args.synthetic_default_platform and EmbeddedTargetObjects.forTarget(target).default_platform != null;
 
         const app_object = try compileLlvmAppObject(
             ctx,
@@ -10759,14 +10360,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
             &reporter,
         );
 
-        if (args.keep_temp) {
-            const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-            const config = reporting.ReportingConfig.initColorTerminal();
-            const headline = try std.fmt.allocPrint(ctx.arena, "Kept temporary directory: {s}.", .{app_object.artifact_dir});
-            var report = try reporting.Report.init(ctx.arena, "Kept Temporary Directory", headline, .warning);
-            defer report.deinit();
-            reporting.renderReportToTerminal(&report, ctx.io.stderr(), palette, config) catch {};
-        }
+        if (args.keep_temp) try reportKeptTempDir(ctx, app_object.artifact_dir);
         defer if (!args.keep_temp) std.Io.Dir.cwd().deleteTree(ctx.io.std_io, app_object.artifact_dir) catch {};
 
         var static_data_obj_path: ?[]const u8 = null;
@@ -10868,22 +10462,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         reporter.end();
     }
 
-    const elapsed_ns = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - timer_start_ns));
-    reporter.finish();
-    const cache_stats = build_env.getBuildStats();
-    const cache_percent = if (cache_stats.modules_total > 0)
-        @as(u32, @intCast((cache_stats.cache_hits * 100) / cache_stats.modules_total))
-    else
-        0;
-
-    if (!args.suppress_build_status) {
-        try printBuildSuccess(ctx, final_output_path, diag.errors, total_warning_count, elapsed_ns, args.verbose, cache_stats, cache_percent);
-    }
-
-    return .{
-        .output_path = final_output_path,
-        .diagnostics = .{ .errors = diag.errors, .warnings = total_warning_count },
-    };
+    return finishBuildCommand(ctx, args, &build_env, &reporter, final_output_path, diag, timer_start_ns);
 }
 
 fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult {
@@ -10893,12 +10472,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     defer reporter.deinit();
     reporter.start();
 
-    const output_path = if (args.output) |output|
-        try ctx.arena.dupe(u8, output)
-    else if (args.synthetic_output_basename) |basename|
-        try ctx.arena.dupe(u8, basename)
-    else
-        try base.module_path.getModuleNameAlloc(ctx.arena, args.path);
+    const output_path = try buildOutputBasePath(ctx, args);
 
     const cache_config = CacheConfig{
         .enabled = !args.no_cache,
@@ -10910,43 +10484,13 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
     try ensureCompilerCacheDirExists(ctx.io.std_io, build_cache_dir);
 
-    var build_env = try initCliBuildEnv(ctx, .{
-        .max_threads = args.max_threads,
-        .no_cache = args.no_cache,
-        .verbose_cache = args.verbose,
-        .timings = args.timings,
-        .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
-        .track_watch_inputs = args.watch_inputs_file != null,
-        .source_dir_override = args.source_dir_override,
-        .root_source_url = args.root_source_url,
-    });
-    if (args.synthetic_root_original_path) |original_path| {
-        if (args.synthetic_root_original_source) |original_source| {
-            build_env.setSyntheticRootSourceMappingWithLineOffset(original_path, original_source, args.synthetic_root_header_len, args.synthetic_root_header_lines);
-        }
-    }
+    var build_env = try initBuildCommandEnv(ctx, args);
     defer build_env.deinit();
     // Registered after build_env.deinit() so it runs first (LIFO), while build_env is still
     // valid: records discovered source inputs for `roc build --watch` on every exit path.
     defer writeBuildWatchInputsOnExit(ctx, args, &build_env);
 
-    reporter.begin("Resolving Dependencies");
-    build_env.discoverDependencies(args.path) catch |err| {
-        reporter.fail();
-        try renderDiagnostics(ctx, &build_env);
-        return err;
-    };
-    reporter.end();
-
-    const platform = try requirePlatformTargets(ctx, &build_env, args.path);
-    const targets_config = platform.config;
-    const platform_source = platform.root_file;
-    const platform_dir = std.fs.path.dirname(platform_source) orelse ".";
-
-    const selected = if (args.require_host_runnable_output)
-        try selectRunPlatformTarget(ctx, targets_config, platform_source, args.target)
-    else
-        try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
+    const platform_dir, const selected = try resolveBuildCommandPlatform(ctx, args, &build_env, &reporter);
     const target = selected.target;
     const link_type = selected.output;
 
@@ -10976,12 +10520,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     }
     const code_generation_phase_name = devBackendPhaseName(target_arch);
 
-    const final_output_path = if (args.output != null)
-        output_path
-    else blk: {
-        const ext = target_selection.defaultBuildOutputExtension(link_type, target);
-        break :blk try std.fmt.allocPrint(ctx.arena, "{s}{s}", .{ output_path, ext });
-    };
+    const final_output_path = try buildFinalOutputPath(ctx, args, output_path, link_type, target);
 
     build_env.setTarget(target);
     // `ROC_DEV_PACK_HITS` names a directory of pack files to serve closed
@@ -11039,23 +10578,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     build_env.setRuntimeLowering(runtime_lowering);
     build_env.setValidateTargetFilesForSelectedTarget(true);
     build_env.setDetailedLoweringTiming(args.timings);
-    reporter.begin("Type Checking");
-    build_env.compileDiscovered() catch |err| {
-        reporter.fail();
-        try renderDiagnostics(ctx, &build_env);
-        return err;
-    };
-    finishFrontEndPhase(&reporter, build_env.getTimingInfo());
-
-    const diag = try build_env.renderDiagnostics(ctx.io.stderr(), ctx.reportConfig(.stderr));
-    var total_warning_count = diag.warnings;
-    total_warning_count += try optimizedDbgWarningsForBuild(ctx, &build_env, args.opt);
-    const resolved_targets_config = build_env.getPlatformTargetsConfig() orelse {
-        try renderProblem(ctx, .{
-            .no_platform_found = .{ .app_path = args.path },
-        });
-        return error.NoPlatformSource;
-    };
+    const diag, const resolved_targets_config = try typeCheckBuildCommand(ctx, args, &build_env, &reporter);
 
     const root_artifact = try checkedArtifactForBuild(ctx, &build_env, args.path);
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
@@ -11063,31 +10586,8 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(relation_artifacts);
 
-    const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
-
-    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
-    reporter.begin(loweringProgressLabel(specialization_strategy));
-    var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
-    if (args.timings) spec_timing.enableDetailedMonotypeBody();
-    var lowered = try lowerCheckedSourceToLir(
-        ctx.gpa,
-        ctx.gpa,
-        root_artifact,
-        imported_artifacts,
-        relation_artifacts,
-        .linked_output,
-        args.opt,
-        specialization_strategy,
-        target_usize,
-        args.synthetic_default_platform,
-        build_env.postCheckExecutor(),
-        &spec_timing,
-        build_env.runtimeProgramSession(),
-        if (loaded_packs) |packs| packs.specCacheLookup() else null,
-        nativeObjectCodeProvision(target, args.opt, loaded_packs != null),
-    );
+    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, args.synthetic_default_platform, if (loaded_packs) |packs| packs.specCacheLookup() else null, nativeObjectCodeProvision(target, args.opt, loaded_packs != null));
     defer lowered.deinit();
-    finishPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
     // Cache statistics are diagnostic output. Ordinary successful builds must
     // leave stderr empty so build runners do not report false warnings.
     if (loaded_packs != null and std.c.getenv("ROC_PACK_STATS") != null) {
@@ -11104,18 +10604,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
     defer ctx.gpa.free(entrypoints);
 
-    reporter.begin("Static Data");
-    const static_data_exports = try compile.static_data_exports.buildStaticData(
-        ctx.gpa,
-        .{
-            .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
-            .imports = imported_artifacts,
-        },
-        &lowered,
-        target,
-        .{ .include_provided_exports = true },
-    );
-    reporter.end();
+    const static_data_exports = try buildCommandStaticData(ctx, &reporter, root_artifact, imported_artifacts, relation_artifacts, &lowered, target);
     defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
 
     if (target_arch == .wasm32) {
@@ -11134,21 +10623,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         );
         reporter.end();
 
-        const elapsed_ns = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - timer_start_ns));
-        reporter.finish();
-        const cache_stats = build_env.getBuildStats();
-        const cache_percent = if (cache_stats.modules_total > 0)
-            @as(u32, @intCast((cache_stats.cache_hits * 100) / cache_stats.modules_total))
-        else
-            0;
-
-        if (!args.suppress_build_status) {
-            try printBuildSuccess(ctx, final_output_path, diag.errors, total_warning_count, elapsed_ns, args.verbose, cache_stats, cache_percent);
-        }
-        return .{
-            .output_path = final_output_path,
-            .diagnostics = .{ .errors = diag.errors, .warnings = total_warning_count },
-        };
+        return finishBuildCommand(ctx, args, &build_env, &reporter, final_output_path, diag, timer_start_ns);
     }
 
     reporter.begin(code_generation_phase_name);
@@ -11208,8 +10683,8 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     reporter.begin("Preparing Link Inputs");
     const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, resolved_targets_config, target, link_type);
 
-    const builtins_path = try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, BuiltinsObjects.filenameExtern(target) });
-    backend.writeFileWindowsAvSafe(ctx.io.std_io, builtins_path, BuiltinsObjects.forTargetExtern(target)) catch {
+    const builtins_path = try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, EmbeddedTargetObjects.filename("roc_builtins_extern", target) });
+    backend.writeFileWindowsAvSafe(ctx.io.std_io, builtins_path, EmbeddedTargetObjects.forTarget(target).builtins_extern) catch {
         return error.BuiltinsExtractionFailed;
     };
 
@@ -11283,22 +10758,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     }
     reporter.end();
 
-    const elapsed_ns = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - timer_start_ns));
-    reporter.finish();
-    const cache_stats = build_env.getBuildStats();
-    const cache_percent = if (cache_stats.modules_total > 0)
-        @as(u32, @intCast((cache_stats.cache_hits * 100) / cache_stats.modules_total))
-    else
-        0;
-
-    if (!args.suppress_build_status) {
-        try printBuildSuccess(ctx, final_output_path, diag.errors, total_warning_count, elapsed_ns, args.verbose, cache_stats, cache_percent);
-    }
-
-    return .{
-        .output_path = final_output_path,
-        .diagnostics = .{ .errors = diag.errors, .warnings = total_warning_count },
-    };
+    return finishBuildCommand(ctx, args, &build_env, &reporter, final_output_path, diag, timer_start_ns);
 }
 
 /// Build a standalone binary with the interpreter and an embedded LIR image.
@@ -11310,12 +10770,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     defer reporter.deinit();
     reporter.start();
 
-    const output_path = if (args.output) |output|
-        try ctx.arena.dupe(u8, output)
-    else if (args.synthetic_output_basename) |basename|
-        try ctx.arena.dupe(u8, basename)
-    else
-        try base.module_path.getModuleNameAlloc(ctx.arena, args.path);
+    const output_path = try buildOutputBasePath(ctx, args);
 
     const cache_config = CacheConfig{
         .enabled = true,
@@ -11327,43 +10782,13 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
     try ensureCompilerCacheDirExists(ctx.io.std_io, build_cache_dir);
 
-    var build_env = try initCliBuildEnv(ctx, .{
-        .max_threads = args.max_threads,
-        .no_cache = args.no_cache,
-        .verbose_cache = args.verbose,
-        .timings = args.timings,
-        .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
-        .track_watch_inputs = args.watch_inputs_file != null,
-        .source_dir_override = args.source_dir_override,
-        .root_source_url = args.root_source_url,
-    });
-    if (args.synthetic_root_original_path) |original_path| {
-        if (args.synthetic_root_original_source) |original_source| {
-            build_env.setSyntheticRootSourceMappingWithLineOffset(original_path, original_source, args.synthetic_root_header_len, args.synthetic_root_header_lines);
-        }
-    }
+    var build_env = try initBuildCommandEnv(ctx, args);
     defer build_env.deinit();
     // Registered after build_env.deinit() so it runs first (LIFO), while build_env is still
     // valid: records discovered source inputs for `roc build --watch` on every exit path.
     defer writeBuildWatchInputsOnExit(ctx, args, &build_env);
 
-    reporter.begin("Resolving Dependencies");
-    build_env.discoverDependencies(args.path) catch |err| {
-        reporter.fail();
-        try renderDiagnostics(ctx, &build_env);
-        return err;
-    };
-    reporter.end();
-
-    const platform = try requirePlatformTargets(ctx, &build_env, args.path);
-    const targets_config = platform.config;
-    const platform_source = platform.root_file;
-    const platform_dir = std.fs.path.dirname(platform_source) orelse ".";
-
-    const selected = if (args.require_host_runnable_output)
-        try selectRunPlatformTarget(ctx, targets_config, platform_source, args.target)
-    else
-        try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
+    const platform_dir, const selected = try resolveBuildCommandPlatform(ctx, args, &build_env, &reporter);
     const target = selected.target;
     const link_type = selected.output;
 
@@ -11383,12 +10808,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
 
     const target_arch = target.toCpuArch();
     const target_os = target.toOsTag();
-    const final_output_path = if (args.output != null)
-        output_path
-    else blk: {
-        const ext = target_selection.defaultBuildOutputExtension(link_type, target);
-        break :blk try std.fmt.allocPrint(ctx.arena, "{s}{s}", .{ output_path, ext });
-    };
+    const final_output_path = try buildFinalOutputPath(ctx, args, output_path, link_type, target);
 
     build_env.setTarget(target);
     build_env.setRuntimeLowering(checkedRuntimeLoweringConfig(
@@ -11400,23 +10820,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     ));
     build_env.setValidateTargetFilesForSelectedTarget(true);
     build_env.setDetailedLoweringTiming(args.timings);
-    reporter.begin("Type Checking");
-    build_env.compileDiscovered() catch |err| {
-        reporter.fail();
-        try renderDiagnostics(ctx, &build_env);
-        return err;
-    };
-    finishFrontEndPhase(&reporter, build_env.getTimingInfo());
-
-    const diag = try build_env.renderDiagnostics(ctx.io.stderr(), ctx.reportConfig(.stderr));
-    var total_warning_count = diag.warnings;
-    total_warning_count += try optimizedDbgWarningsForBuild(ctx, &build_env, args.opt);
-    const resolved_targets_config = build_env.getPlatformTargetsConfig() orelse {
-        try renderProblem(ctx, .{
-            .no_platform_found = .{ .app_path = args.path },
-        });
-        return error.NoPlatformSource;
-    };
+    const diag, const resolved_targets_config = try typeCheckBuildCommand(ctx, args, &build_env, &reporter);
 
     const root_artifact = try checkedArtifactForBuild(ctx, &build_env, args.path);
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
@@ -11431,29 +10835,8 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     const shm_allocator = shm.allocator();
     const image_header = try shm_allocator.create(lir.LirImage.Header);
 
-    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
-    reporter.begin(loweringProgressLabel(specialization_strategy));
-    var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
-    if (args.timings) spec_timing.enableDetailedMonotypeBody();
-    var lowered = try lowerCheckedSourceToLir(
-        ctx.gpa,
-        ctx.gpa,
-        root_artifact,
-        imported_artifacts,
-        relation_artifacts,
-        .{ .platform_entrypoints = .lir_image },
-        args.opt,
-        specialization_strategy,
-        base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()),
-        false,
-        build_env.postCheckExecutor(),
-        &spec_timing,
-        build_env.runtimeProgramSession(),
-        null,
-        .source_bodies,
-    );
+    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .{ .platform_entrypoints = .lir_image }, target, false, null, .source_bodies);
     defer lowered.deinit();
-    finishPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
 
     reporter.begin("LIR Image Generation");
     const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
@@ -11500,14 +10883,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     const build_scratch_dir = createUniqueTempDir(ctx) catch |err| {
         return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
     };
-    if (args.keep_temp) {
-        const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-        const config = reporting.ReportingConfig.initColorTerminal();
-        const headline = try std.fmt.allocPrint(ctx.arena, "Kept temporary directory: {s}.", .{build_scratch_dir});
-        var report = try reporting.Report.init(ctx.arena, "Kept Temporary Directory", headline, .warning);
-        defer report.deinit();
-        reporting.renderReportToTerminal(&report, ctx.io.stderr(), palette, config) catch {};
-    }
+    if (args.keep_temp) try reportKeptTempDir(ctx, build_scratch_dir);
     defer if (!args.keep_temp) compile.CacheCleanup.deleteTempDir(ctx.io.std_io, build_scratch_dir);
 
     const shim_filename = try shimLibraryCacheFilename(ctx, .lir, target);
@@ -11590,22 +10966,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     }
     reporter.end();
 
-    const elapsed_ns_embed = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - timer_start_ns));
-    reporter.finish();
-    const cache_stats = build_env.getBuildStats();
-    const cache_percent = if (cache_stats.modules_total > 0)
-        @as(u32, @intCast((cache_stats.cache_hits * 100) / cache_stats.modules_total))
-    else
-        0;
-
-    if (!args.suppress_build_status) {
-        try printBuildSuccess(ctx, final_output_path, diag.errors, total_warning_count, elapsed_ns_embed, args.verbose, cache_stats, cache_percent);
-    }
-
-    return .{
-        .output_path = final_output_path,
-        .diagnostics = .{ .errors = diag.errors, .warnings = total_warning_count },
-    };
+    return finishBuildCommand(ctx, args, &build_env, &reporter, final_output_path, diag, timer_start_ns);
 }
 
 // Test cache blob format
@@ -14246,7 +13607,7 @@ fn appendOwnedWatchPath(
     return true;
 }
 
-fn collectWatchPaths(ctx: *CliCtx, build_env: ?*BuildEnv, extra_paths: []const []const u8) WatchCollectPathsError![]const []const u8 {
+fn collectWatchPaths(ctx: *CliCtx, extra_paths: []const []const u8) WatchCollectPathsError![]const []const u8 {
     var paths = std.ArrayList([]const u8).empty;
     errdefer {
         for (paths.items) |path| ctx.gpa.free(path);
@@ -14255,15 +13616,6 @@ fn collectWatchPaths(ctx: *CliCtx, build_env: ?*BuildEnv, extra_paths: []const [
 
     var seen: std.StringHashMapUnmanaged(void) = .{};
     defer seen.deinit(ctx.gpa);
-
-    if (build_env) |env| {
-        const inputs = try env.collectWatchInputs();
-        defer env.freeWatchInputs(inputs);
-
-        for (inputs) |path| {
-            _ = try appendOwnedWatchPath(ctx, &paths, &seen, path);
-        }
-    }
 
     for (extra_paths) |path| {
         _ = try appendOwnedWatchPath(ctx, &paths, &seen, path);
@@ -14350,7 +13702,7 @@ fn collectWatchInputSet(ctx: *CliCtx, build_env: ?*BuildEnv, extra_paths: []cons
         return collectWatchInputSetFromCompilerInputs(ctx, inputs, extra_paths);
     }
 
-    const paths = try collectWatchPaths(ctx, null, extra_paths);
+    const paths = try collectWatchPaths(ctx, extra_paths);
     return captureWatchInputSet(ctx, paths);
 }
 
@@ -14755,19 +14107,6 @@ fn refreshWatchState(
     new_watcher = null;
 
     return changed_during_refresh;
-}
-
-fn watchStateHasByteChanges(ctx: *CliCtx, state: *WatchState) WatchChangeError!bool {
-    if (state.inputs.len == 0) return true;
-    const current = try computeWatchSnapshot(ctx, state.inputs);
-    if (!watchSnapshotChanged(state.snapshot, current)) {
-        ctx.gpa.free(current);
-        return false;
-    }
-
-    ctx.gpa.free(state.snapshot);
-    state.snapshot = current;
-    return true;
 }
 
 fn consumeDebouncedWatchChange(ctx: *CliCtx, signal: *WatchEventSignal, state: *WatchState) WatchChangeError!bool {
@@ -17672,9 +17011,12 @@ fn printBuildSuccess(
     warning_count: usize,
     elapsed_ns: u64,
     verbose: bool,
-    cache_stats: anytype,
-    cache_percent: u32,
+    cache_stats: BuildEnv.BuildStats,
 ) std.Io.Writer.Error!void {
+    const cache_percent = if (cache_stats.modules_total > 0)
+        @as(u32, @intCast((cache_stats.cache_hits * 100) / cache_stats.modules_total))
+    else
+        0;
     const stdout = ctx.io.stdout();
     const use_color = ctx.usesColor(.stdout);
     const green = if (use_color) ansi_term.green else "";
@@ -17908,149 +17250,6 @@ const DrainedReport = struct {
     }
 };
 
-fn remapDefaultAppSourceRegion(
-    allocator: Allocator,
-    region: *reporting.SourceCodeDisplayRegion,
-    original_path: []const u8,
-    original_source: []const u8,
-    original_line_starts: []const u32,
-    synthetic_header_lines: u32,
-    staged_app_path: ?[]const u8,
-) Allocator.Error!void {
-    if (!defaultAppElementNamesStagedApp(region.filename, staged_app_path)) return;
-    if (region.start_line <= synthetic_header_lines or region.end_line <= synthetic_header_lines) return;
-    if (original_line_starts.len == 0) return;
-    if (region.end_line - synthetic_header_lines > original_line_starts.len) return;
-
-    const original_start_line = region.start_line - synthetic_header_lines;
-    const original_end_line = region.end_line - synthetic_header_lines;
-    const region_info = base.RegionInfo{
-        .start_line_idx = original_start_line - 1,
-        .start_col_idx = region.start_column - 1,
-        .end_line_idx = original_end_line - 1,
-        .end_col_idx = region.end_column - 1,
-    };
-
-    const line_text = try allocator.dupe(u8, region_info.calculateLineText(original_source, original_line_starts));
-    errdefer allocator.free(line_text);
-    const filename = try allocator.dupe(u8, original_path);
-    errdefer allocator.free(filename);
-
-    allocator.free(region.line_text);
-    if (region.filename) |old_filename| allocator.free(old_filename);
-
-    region.line_text = line_text;
-    region.filename = filename;
-    region.start_line = original_start_line;
-    region.end_line = original_end_line;
-}
-
-/// Whether a report element belongs to the staged app: either the caller
-/// already matched the module it came from (`staged_app_path` is null), or the
-/// element names the staged file itself, which is how reports the workspace
-/// emitted before any module was registered—header parsing, dependency
-/// resolution—are attributed.
-fn defaultAppElementNamesStagedApp(filename: ?[]const u8, staged_app_path: ?[]const u8) bool {
-    const staged = staged_app_path orelse return true;
-    const named = filename orelse return false;
-    return std.mem.eql(u8, named, staged);
-}
-
-fn remapDefaultAppDocumentElement(
-    allocator: Allocator,
-    element: *reporting.DocumentElement,
-    original_path: []const u8,
-    original_source: []const u8,
-    original_line_starts: []const u32,
-    synthetic_header_lines: u32,
-    staged_app_path: ?[]const u8,
-) Allocator.Error!void {
-    if (element.* == .source_code_region) {
-        try remapDefaultAppSourceRegion(
-            allocator,
-            &element.source_code_region,
-            original_path,
-            original_source,
-            original_line_starts,
-            synthetic_header_lines,
-            staged_app_path,
-        );
-    } else if (element.* == .source_code_with_underlines) {
-        const underlines = &element.source_code_with_underlines;
-        const old_start_line = underlines.display_region.start_line;
-        const old_filename_matched = defaultAppElementNamesStagedApp(underlines.display_region.filename, staged_app_path);
-        try remapDefaultAppSourceRegion(
-            allocator,
-            &underlines.display_region,
-            original_path,
-            original_source,
-            original_line_starts,
-            synthetic_header_lines,
-            staged_app_path,
-        );
-        if (!old_filename_matched) return;
-        if (old_start_line <= synthetic_header_lines) return;
-        for (underlines.underline_regions) |*underline| {
-            if (underline.start_line > synthetic_header_lines) {
-                underline.start_line -= synthetic_header_lines;
-            }
-            if (underline.end_line > synthetic_header_lines) {
-                underline.end_line -= synthetic_header_lines;
-            }
-        }
-    } else if (element.* == .source_location) {
-        const location = &element.source_location;
-        if (!defaultAppElementNamesStagedApp(location.filename, staged_app_path)) return;
-        if (location.line <= synthetic_header_lines) return;
-
-        const filename = try allocator.dupe(u8, original_path);
-        if (location.filename) |old_filename| allocator.free(old_filename);
-        location.filename = filename;
-        location.line -= synthetic_header_lines;
-    }
-}
-
-fn remapDefaultAppCheckReports(
-    ctx: *CliCtx,
-    check_result: *CheckResult,
-    synthetic_app_path: []const u8,
-    original_path: []const u8,
-    original_source: []const u8,
-    synthetic_header_lines: u32,
-) Allocator.Error!void {
-    var original_line_starts = try base.RegionInfo.findLineStarts(ctx.gpa, original_source);
-    defer original_line_starts.deinit(ctx.gpa);
-
-    for (check_result.reports) |*module| {
-        const module_is_staged_app = std.mem.eql(u8, module.file_path, synthetic_app_path);
-        // A report the workspace emitted before any module was registered has
-        // no module path of its own; the file its regions name is what says
-        // whether it belongs to the staged app.
-        if (!module_is_staged_app and module.file_path.len != 0) continue;
-
-        if (module_is_staged_app) {
-            const remapped_file_path = try ctx.gpa.dupe(u8, original_path);
-            errdefer ctx.gpa.free(remapped_file_path);
-            ctx.gpa.free(module.file_path);
-            module.file_path = remapped_file_path;
-        }
-
-        for (module.reports) |*report| {
-            for (report.document.elements.items) |*element| {
-                try remapDefaultAppDocumentElement(
-                    report.document.allocator,
-                    element,
-                    original_path,
-                    original_source,
-                    original_line_starts.items.items,
-                    synthetic_header_lines,
-                    if (module_is_staged_app) null else synthetic_app_path,
-                );
-            }
-        }
-    }
-}
-
 /// Timing information for check phases
 const CheckTimingInfo = if (builtin.target.cpu.arch == .wasm32) struct {} else TimingInfo;
 
@@ -18176,7 +17375,7 @@ fn checkFileWithBuildEnvPreserved(
     resolution_config: compile.package_resolution.Config,
     source_dir_override: ?[]const u8,
     track_watch_inputs: bool,
-    synthetic_default_app: bool,
+    synthetic_default_app: ?SyntheticDefaultAppMapping,
     reporter: ?*progress.Reporter,
 ) CheckFileWithBuildEnvPreservedError!CheckResultWithBuildEnv {
     const trace = tracy.trace(@src());
@@ -18191,115 +17390,25 @@ fn checkFileWithBuildEnvPreserved(
         .timings = timings,
         .resolution_config = resolution_config,
         .track_watch_inputs = track_watch_inputs,
-        .synthetic_default_app = synthetic_default_app,
         .source_dir_override = source_dir_override,
         .root_source_url = root_source_url,
         .main_source_url = main_source_url,
     });
 
     errdefer build_env.deinit();
+    applySyntheticDefaultAppMapping(&build_env, synthetic_default_app);
 
     buildForCheckWithOptionalMain(&build_env, filepath, main_filepath, reporter) catch |err| {
         try requireReportableCheckFailure(err);
-
         const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-
-        var error_count: u32 = 0;
-        var warning_count: u32 = 0;
-        for (drained) |mod| {
-            for (mod.reports) |report| {
-                if (report.severity.isError()) error_count += 1 else warning_count += 1;
-            }
-        }
-
-        var reports = try ctx.gpa.alloc(DrainedReport, drained.len);
-        for (drained, 0..) |mod, i| {
-            reports[i] = .{
-                .file_path = try ctx.gpa.dupe(u8, mod.abs_path),
-                .reports = mod.reports,
-            };
-        }
-        build_env.freeDrainedReportsPathsOnly(drained);
-
-        const timing = if (builtin.target.cpu.arch == .wasm32)
-            CheckTimingInfo{}
-        else
-            build_env.getTimingInfo();
-        const cache_stats = build_env.getBuildStats();
-
         return CheckResultWithBuildEnv{
-            .check_result = .{
-                .reports = reports,
-                .timing = timing,
-                .error_count = error_count,
-                .warning_count = warning_count,
-                .modules_total = cache_stats.modules_total,
-                .cache_hits = cache_stats.cache_hits,
-                .cache_misses = cache_stats.cache_misses,
-                .canonicalized_cache_hits = cache_stats.canonicalized_cache_hits,
-                .canonicalized_cache_misses = cache_stats.canonicalized_cache_misses,
-                .canonicalized_cache_stores = cache_stats.canonicalized_cache_stores,
-                .modules_compiled = cache_stats.modules_compiled,
-                .module_time_min_ns = cache_stats.module_time_min_ns,
-                .module_time_max_ns = cache_stats.module_time_max_ns,
-                .module_time_sum_ns = cache_stats.module_time_sum_ns,
-            },
+            .check_result = try collectCheckResult(ctx, &build_env, drained, true),
             .build_env = build_env,
         };
     };
 
-    // Drain all reports
-    const drained = try build_env.drainReports();
-
-    // Count errors and warnings
-    var error_count: u32 = 0;
-    var warning_count: u32 = 0;
-
-    for (drained) |mod| {
-        for (mod.reports) |report| {
-            if (report.severity.isError()) error_count += 1 else warning_count += 1;
-        }
-    }
-
-    // Convert BuildEnv drained reports to our format
-    var reports = try ctx.gpa.alloc(DrainedReport, drained.len);
-    for (drained, 0..) |mod, i| {
-        reports[i] = .{
-            .file_path = try ctx.gpa.dupe(u8, mod.abs_path),
-            .reports = mod.reports, // Transfer ownership
-        };
-    }
-
-    // Free the original drained reports (abs_path strings and outer slice only)
-    // Note: reports ownership was transferred above, abs_path was duped
-    build_env.freeDrainedReportsPathsOnly(drained);
-
-    // Get timing information from BuildEnv
-    const timing = if (builtin.target.cpu.arch == .wasm32)
-        CheckTimingInfo{}
-    else
-        build_env.getTimingInfo();
-    const cache_stats = build_env.getBuildStats();
-
-    const check_result = CheckResult{
-        .reports = reports,
-        .timing = timing,
-        .error_count = error_count,
-        .warning_count = warning_count,
-        .modules_total = cache_stats.modules_total,
-        .cache_hits = cache_stats.cache_hits,
-        .cache_misses = cache_stats.cache_misses,
-        .canonicalized_cache_hits = cache_stats.canonicalized_cache_hits,
-        .canonicalized_cache_misses = cache_stats.canonicalized_cache_misses,
-        .canonicalized_cache_stores = cache_stats.canonicalized_cache_stores,
-        .modules_compiled = cache_stats.modules_compiled,
-        .module_time_min_ns = cache_stats.module_time_min_ns,
-        .module_time_max_ns = cache_stats.module_time_max_ns,
-        .module_time_sum_ns = cache_stats.module_time_sum_ns,
-    };
-
     return CheckResultWithBuildEnv{
-        .check_result = check_result,
+        .check_result = try collectCheckResult(ctx, &build_env, try build_env.drainReports(), true),
         .build_env = build_env,
     };
 }
@@ -18316,7 +17425,7 @@ fn checkFileWithBuildEnv(
     max_threads: ?usize,
     resolution_config: compile.package_resolution.Config,
     source_dir_override: ?[]const u8,
-    synthetic_default_app: bool,
+    synthetic_default_app: ?SyntheticDefaultAppMapping,
     reporter: ?*progress.Reporter,
 ) CheckFileWithBuildEnvPreservedError!CheckResult {
     const trace = tracy.trace(@src());
@@ -18329,7 +17438,6 @@ fn checkFileWithBuildEnv(
         .timings = timings,
         .resolution_config = resolution_config,
         .source_dir_override = source_dir_override,
-        .synthetic_default_app = synthetic_default_app,
         .root_source_url = root_source_url,
         .main_source_url = main_source_url,
         // Checking is not complete until the platform/app relation output
@@ -18339,48 +17447,27 @@ fn checkFileWithBuildEnv(
         .post_check_publication_mode = .executable_artifacts,
     });
     defer build_env.deinit();
+    applySyntheticDefaultAppMapping(&build_env, synthetic_default_app);
 
     buildForCheckWithOptionalMain(&build_env, filepath, main_filepath, reporter) catch |err| {
         try requireReportableCheckFailure(err);
-
         const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-        defer build_env.freeDrainedReportsPathsOnly(drained);
-
-        var error_count: u32 = 0;
-        var warning_count: u32 = 0;
-        for (drained) |mod| {
-            for (mod.reports) |report| {
-                if (report.severity.isError()) error_count += 1 else warning_count += 1;
-            }
-        }
-
-        var reports = try ctx.gpa.alloc(DrainedReport, drained.len);
-        for (drained, 0..) |mod, i| {
-            reports[i] = .{
-                .file_path = try ctx.gpa.dupe(u8, mod.abs_path),
-                .reports = mod.reports,
-            };
-        }
-
-        const cache_stats = build_env.getBuildStats();
-        return CheckResult{
-            .reports = reports,
-            .error_count = error_count,
-            .warning_count = warning_count,
-            .modules_total = cache_stats.modules_total,
-            .cache_hits = cache_stats.cache_hits,
-            .cache_misses = cache_stats.cache_misses,
-            .canonicalized_cache_hits = cache_stats.canonicalized_cache_hits,
-            .canonicalized_cache_misses = cache_stats.canonicalized_cache_misses,
-            .canonicalized_cache_stores = cache_stats.canonicalized_cache_stores,
-            .modules_compiled = cache_stats.modules_compiled,
-            .module_time_min_ns = cache_stats.module_time_min_ns,
-            .module_time_max_ns = cache_stats.module_time_max_ns,
-            .module_time_sum_ns = cache_stats.module_time_sum_ns,
-        };
+        return collectCheckResult(ctx, &build_env, drained, false);
     };
 
-    const drained = try build_env.drainReports();
+    return collectCheckResult(ctx, &build_env, try build_env.drainReports(), true);
+}
+
+/// Collects a check's drained reports (taking ownership of the reports and
+/// freeing the drained paths), their error and warning counts, and the build
+/// statistics of `build_env` into a `CheckResult`. Phase timings are included
+/// only when `include_timing` is set.
+fn collectCheckResult(
+    ctx: *CliCtx,
+    build_env: *BuildEnv,
+    drained: []const BuildEnv.DrainedModuleReports,
+    include_timing: bool,
+) CheckFileWithBuildEnvPreservedError!CheckResult {
     defer build_env.freeDrainedReportsPathsOnly(drained);
 
     var error_count: u32 = 0;
@@ -18390,7 +17477,7 @@ fn checkFileWithBuildEnv(
             if (report.severity.isError()) error_count += 1 else warning_count += 1;
         }
     }
-    if (error_count == 0) try publishCompileTimePack(ctx, &build_env);
+    if (error_count == 0) try publishCompileTimePack(ctx, build_env);
 
     var reports = try ctx.gpa.alloc(DrainedReport, drained.len);
     for (drained, 0..) |mod, i| {
@@ -18400,15 +17487,9 @@ fn checkFileWithBuildEnv(
         };
     }
 
-    const timing = if (builtin.target.cpu.arch == .wasm32)
-        CheckTimingInfo{}
-    else
-        build_env.getTimingInfo();
     const cache_stats = build_env.getBuildStats();
-
-    return CheckResult{
+    var result = CheckResult{
         .reports = reports,
-        .timing = timing,
         .error_count = error_count,
         .warning_count = warning_count,
         .modules_total = cache_stats.modules_total,
@@ -18422,6 +17503,8 @@ fn checkFileWithBuildEnv(
         .module_time_max_ns = cache_stats.module_time_max_ns,
         .module_time_sum_ns = cache_stats.module_time_sum_ns,
     };
+    if (builtin.target.cpu.arch != .wasm32 and include_timing) result.timing = build_env.getTimingInfo();
+    return result;
 }
 
 fn finishRocCheck(
@@ -18475,17 +17558,12 @@ fn finishRocCheck(
     }
 }
 
-const DefaultAppCheckSourceFiles = struct {
-    app_path: []const u8,
-    header_lines: u32,
-};
-
 fn writeDefaultAppCheckSourceFiles(
     ctx: *CliCtx,
     temp_dir: []const u8,
     original_path: []const u8,
     staged: *const default_app.Staged,
-) (Allocator.Error || std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)!DefaultAppCheckSourceFiles {
+) (Allocator.Error || std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)![]const u8 {
     const platform_dir = try std.fs.path.join(ctx.arena, &.{ temp_dir, default_app.platform_dir_name });
     try std.Io.Dir.cwd().createDirPath(ctx.io.std_io, platform_dir);
 
@@ -18498,10 +17576,7 @@ fn writeDefaultAppCheckSourceFiles(
     try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = platform_main_path, .data = echo_platform.platform_main_source });
     try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = echo_module_path, .data = echo_platform.echo_module_source });
 
-    return .{
-        .app_path = app_path,
-        .header_lines = staged.header_lines,
-    };
+    return app_path;
 }
 
 fn rocCheckDefaultApp(
@@ -18518,12 +17593,12 @@ fn rocCheckDefaultApp(
     };
     defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, temp_dir) catch {};
 
-    const files = try writeDefaultAppCheckSourceFiles(ctx, temp_dir, args.path, staged);
+    const app_path = try writeDefaultAppCheckSourceFiles(ctx, temp_dir, args.path, staged);
     const original_source_dir = std.fs.path.dirname(args.path) orelse ".";
 
     var check_result = try checkFileWithBuildEnv(
         ctx,
-        files.app_path,
+        app_path,
         null,
         null,
         null,
@@ -18532,19 +17607,10 @@ fn rocCheckDefaultApp(
         args.max_threads,
         resolutionConfigFromLimits(args.resolve_limits),
         original_source_dir,
-        true,
+        SyntheticDefaultAppMapping.fromStaged(args.path, staged),
         reporter,
     );
     errdefer check_result.deinit(ctx.gpa);
-
-    try remapDefaultAppCheckReports(
-        ctx,
-        &check_result,
-        files.app_path,
-        args.path,
-        staged.original_source,
-        files.header_lines,
-    );
 
     return check_result;
 }
@@ -18573,12 +17639,12 @@ fn rocCheckDefaultAppPreserved(
     };
     defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, temp_dir) catch {};
 
-    const files = try writeDefaultAppCheckSourceFiles(ctx, temp_dir, args.path, staged);
+    const app_path = try writeDefaultAppCheckSourceFiles(ctx, temp_dir, args.path, staged);
     const original_source_dir = std.fs.path.dirname(args.path) orelse ".";
 
     var result_with_env = try checkFileWithBuildEnvPreserved(
         ctx,
-        files.app_path,
+        app_path,
         null,
         null,
         null,
@@ -18588,23 +17654,14 @@ fn rocCheckDefaultAppPreserved(
         resolutionConfigFromLimits(args.resolve_limits),
         original_source_dir,
         track_watch_inputs,
-        true,
+        SyntheticDefaultAppMapping.fromStaged(args.path, staged),
         reporter,
     );
     errdefer result_with_env.deinit(ctx.gpa);
 
-    try remapDefaultAppCheckReports(
-        ctx,
-        &result_with_env.check_result,
-        files.app_path,
-        args.path,
-        staged.original_source,
-        files.header_lines,
-    );
-
     return .{
         .result_with_env = result_with_env,
-        .synthetic_app_path = files.app_path,
+        .synthetic_app_path = app_path,
     };
 }
 
@@ -18697,7 +17754,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
             resolutionConfigFromLimits(args.resolve_limits),
             null,
             true,
-            false,
+            null,
             &reporter,
         ) catch |err| {
             reporter.fail();
@@ -18736,7 +17793,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
             args.max_threads,
             resolutionConfigFromLimits(args.resolve_limits),
             null,
-            false,
+            null,
             &reporter,
         ) catch |err| {
             reporter.fail();
@@ -19136,7 +18193,7 @@ fn bumpCheckSide(
         resolutionConfigFromLimits(args.resolve_limits),
         null,
         false,
-        false,
+        null,
         null,
     ) catch |err| {
         try handleProcessFileError(err, stderr, path);
@@ -19168,7 +18225,7 @@ fn extractBundleForBump(ctx: *CliCtx, archive_path: []const u8) CliMainError![]c
     const basename = std.fs.path.basename(archive_path);
     const hash = basename[0 .. basename.len - ".tar.zst".len];
 
-    const cache_dir_path = getRocCacheDir(ctx.arena) catch {
+    const cache_dir_path = compile.build.packagesCacheDir(ctx.coreCtx(), ctx.arena) catch {
         return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = "Could not determine cache directory" } });
     };
     const package_dir_path = try std.fs.path.join(ctx.arena, &.{ cache_dir_path, hash });
@@ -19620,7 +18677,7 @@ fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
         resolutionConfigFromLimits(args.resolve_limits),
         null,
         false,
-        false,
+        null,
         null,
     ) catch |err| {
         return handleProcessFileError(err, stderr, args.path);
@@ -20072,40 +19129,6 @@ test "refreshWatchState reports stale snapshot for existing watch set" {
     });
 
     try testing.expect(changed);
-}
-
-test "watch byte change advances snapshot before rebuild completes" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-
-    var io_state = Io.create(testing.io);
-    var ctx = CliCtx.init(allocator, arena.allocator(), &io_state, .check);
-    ctx.initIo();
-    defer ctx.deinit();
-
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const tmp_root = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
-    defer allocator.free(tmp_root);
-    const watched_path = try std.fs.path.join(allocator, &.{ tmp_root, "watched.txt" });
-    defer allocator.free(watched_path);
-
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "watched.txt", .data = "old" });
-
-    var signal = WatchEventSignal{};
-    var state = WatchState{};
-    defer state.deinit(&ctx);
-    const initial_inputs = try collectWatchInputSet(&ctx, null, &.{watched_path});
-    try testing.expect(!try refreshWatchState(&ctx, &state, &signal, initial_inputs));
-
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "watched.txt", .data = "new" });
-
-    try testing.expect(try watchStateHasByteChanges(&ctx, &state));
-    try testing.expect(!try watchStateHasByteChanges(&ctx, &state));
 }
 
 test "watch exact inputs recover missing directories and atomic replacement" {

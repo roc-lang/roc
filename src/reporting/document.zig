@@ -9,10 +9,7 @@ const std = @import("std");
 const base = @import("base");
 
 const Allocator = std.mem.Allocator;
-const ReportingConfig = @import("config.zig").ReportingConfig;
-const RenderTarget = @import("renderer.zig").RenderTarget;
 const RegionInfo = base.RegionInfo;
-const renderDocument = @import("renderer.zig").renderDocument;
 
 /// A source code region with highlighting information.
 pub const SourceRegion = struct {
@@ -640,11 +637,6 @@ pub const Document = struct {
     /// Clear all elements from the document.
     pub fn clear(self: *Document) void {
         self.elements.clearRetainingCapacity();
-    }
-
-    /// Render the document to the specified writer and target format.
-    pub fn render(self: *const Document, writer: anytype, target: RenderTarget, _: ReportingConfig) std.mem.Allocator.Error!void {
-        try renderDocument(self, writer, target);
     }
 };
 

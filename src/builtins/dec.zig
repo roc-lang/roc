@@ -1382,12 +1382,6 @@ pub fn modC(
     return @call(.always_inline, RocDec.mod, .{ arg1, arg2, roc_ops }).num;
 }
 
-/// C ABI natural-log wrapper. The caller must provide a positive Dec; arithmetic
-/// failures crash through RocOps.
-pub fn logC(arg: RocDec, roc_ops: *RocOps) callconv(.c) i128 {
-    return @call(.always_inline, RocDec.log, .{ arg, roc_ops }).num;
-}
-
 /// C ABI power wrapper. Domain errors, division by zero, and overflow crash
 /// through RocOps.
 pub fn powC(

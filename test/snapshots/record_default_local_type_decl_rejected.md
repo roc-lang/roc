@@ -38,7 +38,7 @@ UNUSED VARIABLE - record_default_local_type_decl_rejected.md:1:6:1:7
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "n")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_n")

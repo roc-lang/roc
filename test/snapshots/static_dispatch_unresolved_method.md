@@ -23,7 +23,7 @@ TYPE NOT DETERMINED - static_dispatch_unresolved_method.md:3:10:3:16
 			(reflow " ")
 			(annotated code "to_i128")
 			(reflow " ")
-			(reflow "method is called on:"))
+			(reflow "method is called on."))
 		(document
 			(source-region (file "static_dispatch_unresolved_method.md") (start 3 10) (end 3 16) (annotation error) (line-text "result = poly().to_i128()"))
 			(line-break)

@@ -830,8 +830,6 @@ const FutureFields = struct {
     const ProcGraph = struct {
         predecessors_start: u32,
         predecessors_len: u32,
-        exits_start: u32,
-        exits_len: u32,
     };
 
     indices: collections.DenseMap(LIR.CFStmtId, u32),
@@ -840,8 +838,6 @@ const FutureFields = struct {
     /// Every built procedure's edges, grouped by procedure and sorted by
     /// target within each group.
     predecessors: std.ArrayList(Predecessor) = .empty,
-    /// Every built procedure's `loop_continue` and `loop_break` statements.
-    exits: std.ArrayList(LIR.CFStmtId) = .empty,
     seen: collections.DenseMap(LIR.CFStmtId, void),
     stack: std.ArrayList(LIR.CFStmtId) = .empty,
 
@@ -857,7 +853,6 @@ const FutureFields = struct {
         self.nodes.deinit(gpa);
         self.work.deinit(gpa);
         self.predecessors.deinit(gpa);
-        self.exits.deinit(gpa);
         self.seen.deinit();
         self.stack.deinit(gpa);
     }
@@ -882,7 +877,6 @@ const FutureFields = struct {
         joins: *const collections.DenseMap(u32, LIR.CFStmtId),
     ) Error!ProcGraph {
         const predecessors_start = self.predecessors.items.len;
-        const exits_start = self.exits.items.len;
         self.seen.clearRetainingCapacity();
         self.stack.clearRetainingCapacity();
         try self.stack.appendSlice(gpa, roots);
@@ -903,7 +897,6 @@ const FutureFields = struct {
                     }
                     try self.addPredecessor(gpa, cursor, stmt.default_branch, .default_branch, 0);
                 },
-                .loop_continue, .loop_break => try self.exits.append(gpa, cursor),
                 .init_uninitialized,
                 .assign_ref,
                 .assign_literal,
@@ -914,7 +907,6 @@ const FutureFields = struct {
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
@@ -922,6 +914,7 @@ const FutureFields = struct {
                 .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
+                .boxy_tag_match,
                 .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
@@ -931,6 +924,9 @@ const FutureFields = struct {
                 .store_tag,
                 .debug,
                 .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
                 .comptime_branch_taken,
                 .incref,
                 .decref,
@@ -939,12 +935,8 @@ const FutureFields = struct {
                 .switch_initialized_payload,
                 .str_match,
                 .str_match_set,
-                .boxy_tag_match,
                 .ret,
                 .crash,
-                .expect_err,
-                .runtime_error,
-                .comptime_exhaustiveness_failed,
                 => for (self.stack.items[reached..]) |next| try self.addPredecessor(gpa, cursor, next, .plain, 0),
             }
         }
@@ -953,8 +945,6 @@ const FutureFields = struct {
         return .{
             .predecessors_start = @intCast(predecessors_start),
             .predecessors_len = @intCast(group.len),
-            .exits_start = @intCast(exits_start),
-            .exits_len = @intCast(self.exits.items.len - exits_start),
         };
     }
 
@@ -1022,12 +1012,6 @@ const FutureFields = struct {
         while (read_it.next()) |read| {
             if (redefinition) |def_stmt| if (read.key_ptr.* == def_stmt) continue;
             try self.observe(gpa, read.key_ptr.*, read.value_ptr.bit);
-        }
-        if (graph.exits_len != 0 and solution.isJoinParam(local)) {
-            for (self.exits.items[graph.exits_start..][0..graph.exits_len]) |exit| {
-                if (redefinition) |def_stmt| if (exit == def_stmt) continue;
-                try self.observe(gpa, exit, ~@as(u64, 0));
-            }
         }
         while (self.work.pop()) |index| {
             const bits = self.nodes.items[index].pending;
@@ -1100,7 +1084,6 @@ fn fieldObservedAfter(
                     try work.append(gpa, stmt.default_branch);
                 }
             },
-            .loop_continue, .loop_break => if (solution.isJoinParam(local)) return true,
             .init_uninitialized,
             .assign_ref,
             .assign_literal,
@@ -1111,7 +1094,6 @@ fn fieldObservedAfter(
             .assign_boxy_dict_ref,
             .assign_boxy_box,
             .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
@@ -1119,6 +1101,7 @@ fn fieldObservedAfter(
             .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
+            .boxy_tag_match,
             .assign_call_dict,
             .assign_low_level,
             .assign_list,
@@ -1128,6 +1111,9 @@ fn fieldObservedAfter(
             .store_tag,
             .debug,
             .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
             .comptime_branch_taken,
             .incref,
             .decref,
@@ -1136,12 +1122,8 @@ fn fieldObservedAfter(
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .boxy_tag_match,
             .ret,
             .crash,
-            .expect_err,
-            .runtime_error,
-            .comptime_exhaustiveness_failed,
             => try body_clone.appendSuccessors(store, &work, cursor, gpa),
         }
     }
@@ -1224,14 +1206,14 @@ test "future field uses resolve joins in their procedure" {
     try std.testing.expect(future.observed(back_edge) & 1 == 0);
 }
 
-test "future field observations agree with per-read traversal across joins rebinds loops and outcomes" {
+test "future field observations agree with per-read traversal across joins rebinds and outcomes" {
     const gpa = std.testing.allocator;
     var store = LirStore.init(gpa);
     defer store.deinit();
     const local = try store.addLocal(.{ .layout_idx = .str });
     const other = try store.addLocal(.{ .layout_idx = .str });
     const exit = try store.addCFStmt(.{ .ret = .{ .value = other } }, .test_fixture);
-    const boundary = try store.addCFStmt(.loop_continue, .test_fixture);
+    const boundary = try store.addCFStmt(.runtime_error, .test_fixture);
     // Reserve the two procedure-local join identities before building their
     // bodies, which contain forward references to the enclosing joins.
     var join_ids: [2]LIR.JoinPointId = undefined;
@@ -1317,12 +1299,10 @@ test "future field observations agree with per-read traversal across joins rebin
     for (0..128) |configuration| {
         for (&outcomes, 0..) |*outcome, index| outcome.restituted_params = @intCast((configuration >> @intCast(index)) & 1);
         if (configuration & 16 != 0) solution.join_param.set(0) else solution.join_param.unset(0);
-        store.getCFStmtPtr(boundary).* = if (configuration & 1 != 0) .loop_break else .loop_continue;
         store.getCFStmtPtr(rebind).set_local.target = if (configuration & 32 != 0) local else other;
         try joins.put(0, if (configuration & 64 != 0) nested else exit);
         const graph = try future.buildProcGraph(gpa, &store, &probes, &joins);
         try future.compute(gpa, &store, &solution, local, graph, &reads, &receipts, null);
-        try std.testing.expectEqual(if (configuration & 16 != 0) ~@as(u64, 0) else @as(u64, 0), future.observed(boundary));
         for (starts) |start| {
             for ([_]u64{ 1, 2, 4 }) |bit| {
                 var visits: usize = 0;
@@ -2027,7 +2007,7 @@ fn classifyStatement(
             try analysis.noteDef(stmt.target, current);
             analysis.disqualify(stmt.target);
         },
-        inline .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect => |stmt| {
+        inline .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect => |stmt| {
             try analysis.useWhole(current, stmt.source);
             try analysis.noteDef(stmt.target, current);
             analysis.disqualify(stmt.target);
@@ -2117,7 +2097,7 @@ fn classifyStatement(
             try analysis.useWhole(current, stmt.condition);
         },
         .expect_err => |stmt| try analysis.useWhole(current, stmt.message),
-        .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break, .jump => {},
+        .runtime_error, .comptime_exhaustiveness_failed, .jump => {},
         .comptime_branch_taken => {},
         // The input contract is RC-free LIR; if RC statements ever appear
         // here, classifying their operands as whole uses stays sound.
@@ -2306,7 +2286,6 @@ const StatementFacts = struct {
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
@@ -2336,8 +2315,6 @@ const StatementFacts = struct {
                 .switch_initialized_payload,
                 .str_match,
                 .str_match_set,
-                .loop_continue,
-                .loop_break,
                 .join,
                 .jump,
                 .ret,
@@ -2718,8 +2695,6 @@ pub fn compute(
             .str_match,
             .boxy_tag_match,
             .str_match_set,
-            .loop_continue,
-            .loop_break,
             .ret,
             .crash,
             .expect_err,
@@ -2837,7 +2812,6 @@ pub fn compute(
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
@@ -2863,8 +2837,6 @@ pub fn compute(
                 .switch_initialized_payload,
                 .str_match,
                 .str_match_set,
-                .loop_continue,
-                .loop_break,
                 .join,
                 .jump,
                 .ret,
@@ -3091,7 +3063,7 @@ pub fn compute(
                     continue :chain;
                 }
                 switch (store.getCFStmtImmediate(cursor).*) {
-                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
+                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
                     .set_local => |stmt| {
                         // The value operand above still observes the old
                         // definition. Only the explicit write starts a fresh
@@ -3152,10 +3124,6 @@ pub fn compute(
                             try flow_frames.append(gpa, .{ .cursor = GuardedList.at(arms, i).on_match, .state = state });
                         }
                         cursor = stmt.on_miss;
-                    },
-                    .loop_continue, .loop_break => {
-                        if (solution.isJoinParam(local)) poison |= state.may;
-                        break :chain;
                     },
                     .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed => {
                         break :chain;

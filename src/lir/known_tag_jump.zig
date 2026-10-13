@@ -475,29 +475,16 @@ fn edgeStatement(stmt: LIR.CFStmt) bool {
     return false;
 }
 
-/// The local an edge definition binds.
+/// The local an edge definition binds; a join-parameter write rebinds one
+/// instead.
 fn edgeTarget(stmt: LIR.CFStmt) ?LocalId {
-    if (stmt == .assign_ref) return stmt.assign_ref.target;
-    if (stmt == .assign_tag) return stmt.assign_tag.target;
-    if (stmt == .assign_literal) return stmt.assign_literal.target;
-    if (stmt == .assign_struct) return stmt.assign_struct.target;
-    return null;
+    return if (stmt == .set_local) null else body_clone.definedTarget(stmt);
 }
 
 /// An edge definition continuing at `next` instead.
 fn withNext(stmt: LIR.CFStmt, next: CFStmtId) LIR.CFStmt {
     var updated = stmt;
-    if (updated == .assign_ref) {
-        updated.assign_ref.next = next;
-    } else if (updated == .assign_tag) {
-        updated.assign_tag.next = next;
-    } else if (updated == .assign_literal) {
-        updated.assign_literal.next = next;
-    } else if (updated == .assign_struct) {
-        updated.assign_struct.next = next;
-    } else {
-        unreachable;
-    }
+    body_clone.setLinearNext(&updated, next);
     return updated;
 }
 

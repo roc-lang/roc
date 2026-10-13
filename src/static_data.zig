@@ -339,7 +339,6 @@ const StaticInitializerMachine = struct {
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
@@ -361,8 +360,6 @@ const StaticInitializerMachine = struct {
                 .switch_initialized_payload,
                 .str_match,
                 .str_match_set,
-                .loop_continue,
-                .loop_break,
                 .join,
                 .jump,
                 .crash,
@@ -481,7 +478,6 @@ const StaticInitializerMachine = struct {
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
@@ -503,8 +499,6 @@ const StaticInitializerMachine = struct {
                 .switch_initialized_payload,
                 .str_match,
                 .str_match_set,
-                .loop_continue,
-                .loop_break,
                 .join,
                 .jump,
                 .crash,
@@ -541,7 +535,7 @@ const StaticInitializerMachine = struct {
         const value = try self.newValue(target_layout);
         switch (literal) {
             .i64_literal => |int| self.writeSigned(value.bytes, int.value),
-            .i128_literal => |int| self.writeSigned128(value.bytes, int.value),
+            .i128_literal => |int| self.writeSigned(value.bytes, int.value),
             .f64_literal => |float| std.mem.writeInt(u64, value.bytes[0..8], @bitCast(float), .little),
             .f32_literal => |float| std.mem.writeInt(u32, value.bytes[0..4], @bitCast(float), .little),
             .dec_literal => |dec| std.mem.writeInt(i128, value.bytes[0..16], dec, .little),
@@ -560,28 +554,20 @@ const StaticInitializerMachine = struct {
         return value;
     }
 
-    fn writeSigned(_: *StaticInitializerMachine, bytes: []u8, value: i64) void {
-        const bits: u64 = @bitCast(value);
-        switch (bytes.len) {
-            0 => {},
-            1 => std.mem.writeInt(u8, bytes[0..1], @truncate(bits), .little),
-            2 => std.mem.writeInt(u16, bytes[0..2], @truncate(bits), .little),
-            4 => std.mem.writeInt(u32, bytes[0..4], @truncate(bits), .little),
-            8 => std.mem.writeInt(u64, bytes[0..8], bits, .little),
-            else => staticDataInvariant("i64 static initializer literal had unsupported layout size"),
-        }
-    }
-
-    fn writeSigned128(_: *StaticInitializerMachine, bytes: []u8, value: i128) void {
-        const bits: u128 = @bitCast(value);
+    fn writeSigned(_: *StaticInitializerMachine, bytes: []u8, value: anytype) void {
+        const Bits = @Int(.unsigned, @bitSizeOf(@TypeOf(value)));
+        const bits: Bits = @bitCast(value);
         switch (bytes.len) {
             0 => {},
             1 => std.mem.writeInt(u8, bytes[0..1], @truncate(bits), .little),
             2 => std.mem.writeInt(u16, bytes[0..2], @truncate(bits), .little),
             4 => std.mem.writeInt(u32, bytes[0..4], @truncate(bits), .little),
             8 => std.mem.writeInt(u64, bytes[0..8], @truncate(bits), .little),
-            16 => std.mem.writeInt(u128, bytes[0..16], bits, .little),
-            else => staticDataInvariant("i128 static initializer literal had unsupported layout size"),
+            16 => if (Bits == u128)
+                std.mem.writeInt(u128, bytes[0..16], bits, .little)
+            else
+                staticDataInvariant(@typeName(@TypeOf(value)) ++ " static initializer literal had unsupported layout size"),
+            else => staticDataInvariant(@typeName(@TypeOf(value)) ++ " static initializer literal had unsupported layout size"),
         }
     }
 

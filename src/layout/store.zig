@@ -3,7 +3,6 @@
 const std = @import("std");
 const TypeDigestHasher = @import("base").TypeDigestHasher;
 const Allocator = std.mem.Allocator;
-const builtin = @import("builtin");
 const tracy = @import("tracy");
 const base = @import("base");
 const collections = @import("collections");
@@ -80,14 +79,6 @@ pub const ModuleVarKey = work_mod.ModuleVarKey;
 fn nextRowPosition(comptime Position: type, len: u64) std.mem.Allocator.Error!Position {
     if (len > std.math.maxInt(Position)) return error.OutOfMemory;
     return @intCast(len);
-}
-
-fn assertAppendIdx(expected: usize, idx: anytype) void {
-    if (comptime builtin.mode == .debug) {
-        std.debug.assert(@backingInt(idx) == expected);
-    } else if (@backingInt(idx) != expected) {
-        unreachable;
-    }
 }
 
 /// Errors that can occur during layout computation
@@ -212,12 +203,12 @@ pub const Store = struct {
         {
             const expected_idx = tag_union_variants.len();
             const idx = try tag_union_variants.append(allocator, .{ .payload_layout = .zst });
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = tag_union_variants.len();
             const idx = try tag_union_variants.append(allocator, .{ .payload_layout = .zst });
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = tag_union_data.items.items.len;
@@ -233,7 +224,7 @@ pub const Store = struct {
                 // two-nullary enum contains no refcounted data.
                 .contains_refcounted = false,
             });
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
 
         // Pre-populate primitive type layouts in order matching the Idx enum.
@@ -241,92 +232,92 @@ pub const Store = struct {
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.boolType());
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.str());
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.int(.u8));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.int(.i8));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.int(.u16));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.int(.i16));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.int(.u32));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.int(.i32));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.int(.u64));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.int(.i64));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.int(.u128));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.int(.i128));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.frac(.f32));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.frac(.f64));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.frac(.dec));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.opaquePtr());
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.zst());
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         inline for (std.enums.values(layout_mod.Vector)) |vector| {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.vector(vector));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
 
         std.debug.assert(layouts.len() == num_primitives);
@@ -575,7 +566,7 @@ pub const Store = struct {
         for (fields) |field| {
             const expected_idx = self.struct_fields.items.len;
             const idx = try self.struct_fields.append(self.allocator, field);
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         try self.appendStructFieldPlacement(fields);
 
@@ -590,7 +581,7 @@ pub const Store = struct {
             },
             .contains_refcounted = contains_refcounted,
         });
-        assertAppendIdx(expected_idx, struct_data_idx);
+        std.debug.assert(@backingInt(struct_data_idx) == expected_idx);
 
         const layout_idx = try self.reserveLayout(Layout.struct_(sort_key, struct_idx));
         try self.rememberScratchInternKey(layout_idx);
@@ -618,7 +609,7 @@ pub const Store = struct {
             const idx = try self.tag_union_variants.append(self.allocator, .{
                 .payload_layout = variant_layout_idx,
             });
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
 
         const contains_refcounted = self.computeTagUnionContainsRefcounted(variant_layouts);
@@ -635,7 +626,7 @@ pub const Store = struct {
                 },
                 .contains_refcounted = contains_refcounted,
             });
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
 
         const layout_idx = try self.reserveLayout(Layout.tagUnion(sort_key, .{ .int_idx = @intCast(tag_union_data_idx) }));
@@ -725,7 +716,7 @@ pub const Store = struct {
         defer trace.end();
 
         if (fields.len == 0) {
-            return self.getEmptyStructLayout();
+            return self.ensureZstLayout();
         }
 
         // Most records have a handful of fields; those stay on the stack.
@@ -756,7 +747,7 @@ pub const Store = struct {
     /// slice order is the source declaration order.
     pub fn putNominalStructFields(self: *Self, fields: []const StructField) std.mem.Allocator.Error!Idx {
         if (fields.len == 0) {
-            return self.getEmptyStructLayout();
+            return self.ensureZstLayout();
         }
 
         const sizes = self.structSizes(fields);
@@ -866,7 +857,7 @@ pub const Store = struct {
         for (temp_fields.items) |field| {
             const expected_idx = self.struct_fields.items.len;
             const idx = try self.struct_fields.append(self.allocator, field);
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         try self.appendStructFieldPlacement(temp_fields.items);
 
@@ -881,7 +872,7 @@ pub const Store = struct {
             },
             .contains_refcounted = contains_refcounted,
         });
-        assertAppendIdx(expected_idx, struct_data_idx);
+        std.debug.assert(@backingInt(struct_data_idx) == expected_idx);
 
         return Layout.struct_(self.structFieldsSortKey(temp_fields.items), struct_idx);
     }
@@ -904,7 +895,7 @@ pub const Store = struct {
             const idx = try self.tag_union_variants.append(self.allocator, .{
                 .payload_layout = variant_layout_idx,
             });
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
 
         const contains_refcounted = self.computeTagUnionContainsRefcounted(variant_layouts);
@@ -921,7 +912,7 @@ pub const Store = struct {
                 },
                 .contains_refcounted = contains_refcounted,
             });
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
 
         return Layout.tagUnion(self.tagUnionVariantsSortKey(variant_layouts, discriminant_size), .{ .int_idx = @intCast(tag_union_data_idx) });
@@ -1649,11 +1640,7 @@ pub const Store = struct {
         for (analysis.keys, 0..) |maybe_key, i| {
             const key = maybe_key orelse continue;
             if (self.interned_recursive_graphs.get(key)) |existing| {
-                if (comptime builtin.mode == .debug) {
-                    std.debug.assert(existing == value_layouts[i]);
-                } else if (existing != value_layouts[i]) {
-                    unreachable;
-                }
+                std.debug.assert(existing == value_layouts[i]);
             } else {
                 try self.interned_recursive_graphs.put(key, value_layouts[i]);
             }
@@ -2454,11 +2441,7 @@ pub const Store = struct {
 
         for (graph.nodes.items, 0..) |_, i| {
             const finalized = try finalizer.finalizeNode(@fromBackingInt(@intCast(i)));
-            if (comptime builtin.mode == .debug) {
-                std.debug.assert(finalized == value_layouts[i]);
-            } else if (finalized != value_layouts[i]) {
-                unreachable;
-            }
+            std.debug.assert(finalized == value_layouts[i]);
         }
 
         for (graph.nodes.items, 0..) |_, i| {
@@ -2841,11 +2824,6 @@ pub const Store = struct {
         return self.target_usize;
     }
 
-    /// Get or create an empty struct layout (for closures with no captures, empty records, etc.)
-    fn getEmptyStructLayout(self: *Self) Allocator.Error!Idx {
-        return self.ensureZstLayout();
-    }
-
     /// The zero-sized type layout, which every store holds at a fixed index.
     pub fn ensureZstLayout(self: *Self) Allocator.Error!Idx {
         // The store is created holding the zero-sized layout at its fixed index.
@@ -2908,13 +2886,10 @@ pub const Store = struct {
         var max_alignment: u32 = 1;
         var current_offset: u32 = 0;
         for (fields) |field| {
-            const field_align: u32 = if (field.is_padding)
-                1
-            else
-                @intCast(self.getLayout(field.layout).alignment(target_usize).toByteUnits());
+            const size_align = self.layoutSizeAlignAt(self.getLayout(field.layout), target_usize);
+            const field_align = structFieldAlignmentBytes(field, size_align);
             max_alignment = @max(max_alignment, field_align);
-            current_offset = @intCast(std.mem.alignForward(u32, current_offset, field_align));
-            current_offset += self.sizeAt(self.getLayout(field.layout), target_usize);
+            current_offset = std.mem.alignForward(u32, current_offset, field_align) + size_align.size;
         }
         return @intCast(std.mem.alignForward(u32, current_offset, max_alignment));
     }

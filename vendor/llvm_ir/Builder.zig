@@ -82,12 +82,6 @@ pub const expected_args_len = 16;
 pub const expected_attrs_len = 16;
 /// Default capacity for struct fields in internal buffers.
 pub const expected_fields_len = 32;
-/// Default capacity for GEP indices in internal buffers.
-pub const expected_gep_indices_len = 8;
-/// Default capacity for switch cases in internal buffers.
-pub const expected_cases_len = 8;
-/// Default capacity for phi incoming values in internal buffers.
-pub const expected_incoming_len = 8;
 
 /// Configuration options for initializing the LLVM IR builder.
 pub const Options = struct {
@@ -797,47 +791,6 @@ pub const DataLayout = struct {
         data_layout.pointer_specs.deinit(gpa);
     }
 
-    pub fn getIntegerSpec(data_layout: *const DataLayout, bit_width: PrimitiveSpec.BitWidth) PrimitiveSpec {
-        const specs = data_layout.int_specs.keys();
-        return specs[
-            @min(std.sort.lowerBound(PrimitiveSpec, specs, bit_width, struct {
-                fn order(ctx: PrimitiveSpec.BitWidth, spec: PrimitiveSpec) std.math.Order {
-                    return std.math.order(ctx, spec.bit_width);
-                }
-            }.order), specs.len - 1)
-        ];
-    }
-
-    pub fn getFloatSpec(data_layout: *const DataLayout, bit_width: PrimitiveSpec.BitWidth) PrimitiveSpec {
-        if (data_layout.float_specs.getEntry(.{
-            .bit_width = bit_width,
-            .abi_align = .default,
-            .pref_align = .default,
-        })) |entry| return entry.key_ptr.*;
-        const default_align: Alignment = .fromByteUnits(
-            std.math.ceilPowerOfTwoAssert(PrimitiveSpec.BitWidth, bit_width / 8),
-        );
-        return .{ .bit_width = bit_width, .abi_align = default_align, .pref_align = default_align };
-    }
-
-    pub fn getVectorSpec(
-        data_layout: *const DataLayout,
-        bit_width: PrimitiveSpec.BitWidth,
-        store_size: Type.Size,
-    ) PrimitiveSpec {
-        if (data_layout.float_specs.getEntry(.{
-            .bit_width = bit_width,
-            .abi_align = .default,
-            .pref_align = .default,
-        })) |entry| return entry.key_ptr.*;
-        const default_align: Alignment = .fromByteUnits(
-            std.math.ceilPowerOfTwoAssert(PrimitiveSpec.BitWidth, switch (store_size) {
-                .fixed, .scalable => |known_min| known_min,
-            }),
-        );
-        return .{ .bit_width = bit_width, .abi_align = default_align, .pref_align = default_align };
-    }
-
     pub fn getPointerSpec(data_layout: *const DataLayout, addr_space: AddrSpace) PointerSpec {
         return data_layout.pointer_specs.get(addr_space) orelse data_layout.pointer_specs.values()[0];
     }
@@ -1217,28 +1170,6 @@ pub const Type = enum(u32) {
         };
     }
 
-    pub fn isStruct(self: Type, builder: *const Builder) bool {
-        return switch (self.tag(builder)) {
-            .structure, .packed_structure, .named_structure => true,
-            else => false,
-        };
-    }
-
-    pub fn structKind(self: Type, builder: *const Builder) Type.Structure.Kind {
-        return switch (self.unnamedTag(builder)) {
-            .structure => .normal,
-            .packed_structure => .@"packed",
-            else => unreachable,
-        };
-    }
-
-    pub fn isAggregate(self: Type, builder: *const Builder) bool {
-        return switch (self.tag(builder)) {
-            .small_array, .array, .structure, .packed_structure, .named_structure => true,
-            else => false,
-        };
-    }
-
     pub fn scalarBits(self: Type, builder: *const Builder) u24 {
         return switch (self) {
             .void, .label, .token, .metadata, .none, .x86_amx => unreachable,
@@ -1390,21 +1321,6 @@ pub const Type = enum(u32) {
                 .aggregateLen(builder),
             else => unreachable,
         };
-    }
-
-    pub fn structFields(self: Type, builder: *const Builder) []const Type {
-        const item = builder.type_items.items[@backingInt(self)];
-        switch (item.tag) {
-            .structure,
-            .packed_structure,
-            => {
-                var extra = builder.typeExtraDataTrail(Type.Structure, item.data);
-                return extra.trail.next(extra.data.fields_len, Type, builder);
-            },
-            .named_structure => return builder.typeExtraData(Type.NamedStructure, item.data).body
-                .structFields(builder),
-            else => unreachable,
-        }
     }
 
     pub fn childTypeAt(self: Type, indices: []const u32, builder: *const Builder) Type {
@@ -1699,65 +1615,6 @@ pub const Type = enum(u32) {
     }
 
     const Size = union(enum) { fixed: u64, scalable: u64 };
-    pub fn bits(ty: Type, builder: *const Builder) Size {
-        const item = builder.type_items.items[@backingInt(ty)];
-        return switch (item.tag) {
-            else => unreachable,
-            .simple => switch (@as(Simple, @fromBackingInt(@intCast(item.data)))) {
-                else => unreachable,
-                .label => .{ .fixed = builder.data_layout.getPointerSpec(.default).bit_width },
-                .half, .bfloat => .{ .fixed = 16 },
-                .float => .{ .fixed = 32 },
-                .double => .{ .fixed = 64 },
-                .ppc_fp128, .fp128 => .{ .fixed = 128 },
-                .x86_amx => .{ .fixed = 8192 },
-                .x86_fp80 => .{ .fixed = 80 },
-            },
-            .integer => .{ .fixed = item.data },
-            .pointer => .{
-                .fixed = builder.data_layout.getPointerSpec(@fromBackingInt(@intCast(item.data))).bit_width,
-            },
-        };
-    }
-
-    pub fn alignment(ty: Type, kind: enum { abi, pref }, builder: *const Builder) Alignment {
-        const item = builder.type_items.items[@backingInt(ty)];
-        switch (item.tag) {
-            else => unreachable,
-            .simple => switch (@as(Simple, @fromBackingInt(@intCast(item.data)))) {
-                else => unreachable,
-                .label => {
-                    const spec = builder.data_layout.getPointerSpec(.default);
-                    return switch (kind) {
-                        .abi => spec.flags.abi_align,
-                        .pref => spec.flags.pref_align,
-                    };
-                },
-                .half, .bfloat, .float, .double, .ppc_fp128, .fp128, .x86_fp80 => {
-                    const spec = builder.data_layout.getFloatSpec(@intCast(ty.bits(builder).fixed));
-                    return switch (kind) {
-                        .abi => spec.abi_align,
-                        .pref => spec.pref_align,
-                    };
-                },
-                .x86_amx => return comptime .fromByteUnits(64),
-            },
-            .integer => {
-                const spec = builder.data_layout.getIntegerSpec(@intCast(item.data));
-                return switch (kind) {
-                    .abi => spec.abi_align,
-                    .pref => spec.pref_align,
-                };
-            },
-            .pointer => {
-                const spec = builder.data_layout.getPointerSpec(@fromBackingInt(@intCast(item.data)));
-                return switch (kind) {
-                    .abi => spec.flags.abi_align,
-                    .pref => spec.flags.pref_align,
-                };
-            },
-        }
-    }
 };
 
 /// LLVM function and parameter attributes affecting calling conventions and optimization.
@@ -2133,9 +1990,6 @@ pub const Attribute = union(Kind) {
                 },
                 .none => unreachable,
             }
-        }
-        pub fn fmt(self: Index, builder: *const Builder, flags: FormatData.Flags) std.fmt.Alt(FormatData, format) {
-            return .{ .data = .{ .attribute_index = self, .builder = builder, .flags = flags } };
         }
 
         fn toStorage(self: Index, builder: *const Builder) Storage {
@@ -2597,34 +2451,6 @@ pub const FunctionAttributes = enum(u32) {
             try self.addAttr(function_index, attribute, builder);
         }
 
-        pub fn addFnAttrIndex(
-            self: *Wip,
-            attribute_index: Attribute.Index,
-            builder: *const Builder,
-        ) Allocator.Error!void {
-            try self.addAttrIndex(function_index, attribute_index, builder);
-        }
-
-        pub fn removeFnAttr(self: *Wip, attribute_kind: Attribute.Kind) Allocator.Error!bool {
-            return self.removeAttr(function_index, attribute_kind);
-        }
-
-        pub fn addRetAttr(self: *Wip, attribute: Attribute, builder: *Builder) Allocator.Error!void {
-            try self.addAttr(return_index, attribute, builder);
-        }
-
-        pub fn addRetAttrIndex(
-            self: *Wip,
-            attribute_index: Attribute.Index,
-            builder: *const Builder,
-        ) Allocator.Error!void {
-            try self.addAttrIndex(return_index, attribute_index, builder);
-        }
-
-        pub fn removeRetAttr(self: *Wip, attribute_kind: Attribute.Kind) Allocator.Error!bool {
-            return self.removeAttr(return_index, attribute_kind);
-        }
-
         pub fn addParamAttr(
             self: *Wip,
             param_index: usize,
@@ -2632,23 +2458,6 @@ pub const FunctionAttributes = enum(u32) {
             builder: *Builder,
         ) Allocator.Error!void {
             try self.addAttr(params_index + param_index, attribute, builder);
-        }
-
-        pub fn addParamAttrIndex(
-            self: *Wip,
-            param_index: usize,
-            attribute_index: Attribute.Index,
-            builder: *const Builder,
-        ) Allocator.Error!void {
-            try self.addAttrIndex(params_index + param_index, attribute_index, builder);
-        }
-
-        pub fn removeParamAttr(
-            self: *Wip,
-            param_index: usize,
-            attribute_kind: Attribute.Kind,
-        ) Allocator.Error!bool {
-            return self.removeAttr(params_index + param_index, attribute_kind);
         }
 
         pub fn finish(self: *const Wip, builder: *Builder) Allocator.Error!FunctionAttributes {
@@ -2669,29 +2478,10 @@ pub const FunctionAttributes = enum(u32) {
             try map.put(builder.gpa, attribute.getKind(), try builder.attr(attribute));
         }
 
-        fn addAttrIndex(
-            self: *Wip,
-            index: usize,
-            attribute_index: Attribute.Index,
-            builder: *const Builder,
-        ) Allocator.Error!void {
-            const map = try self.getOrPutMap(builder.gpa, index);
-            try map.put(builder.gpa, attribute_index.getKind(builder), attribute_index);
-        }
-
-        fn removeAttr(self: *Wip, index: usize, attribute_kind: Attribute.Kind) Allocator.Error!bool {
-            const map = self.getMap(index) orelse return false;
-            return map.swapRemove(attribute_kind);
-        }
-
         fn getOrPutMap(self: *Wip, allocator: Allocator, index: usize) Allocator.Error!*Map {
             if (index >= self.maps.items.len)
                 try self.maps.appendNTimes(allocator, .{}, index + 1 - self.maps.items.len);
             return &self.maps.items[index];
-        }
-
-        fn getMap(self: *Wip, index: usize) ?*Map {
-            return if (index >= self.maps.items.len) null else &self.maps.items[index];
         }
     };
 
@@ -2705,22 +2495,6 @@ pub const FunctionAttributes = enum(u32) {
 
     pub fn param(self: FunctionAttributes, param_index: usize, builder: *const Builder) Attributes {
         return self.get(params_index + param_index, builder);
-    }
-
-    pub fn toWip(self: FunctionAttributes, builder: *const Builder) Allocator.Error!Wip {
-        var wip: Wip = .{};
-        errdefer wip.deinit(builder);
-        const attributes_slice = self.slice(builder);
-        try wip.maps.ensureTotalCapacityPrecise(builder.gpa, attributes_slice.len);
-        for (attributes_slice) |attributes| {
-            const map = wip.maps.addOneAssumeCapacity();
-            map.* = .{};
-            const attribute_slice = attributes.slice(builder);
-            try map.ensureTotalCapacity(builder.gpa, attribute_slice.len);
-            for (attributes.slice(builder)) |attribute|
-                map.putAssumeCapacityNoClobber(attribute.getKind(builder), attribute);
-        }
-        return wip;
     }
 
     fn get(self: FunctionAttributes, index: usize, builder: *const Builder) Attributes {
@@ -2777,14 +2551,6 @@ pub const Visibility = enum(u2) {
     default = 0,
     hidden = 1,
     protected = 2,
-
-    pub fn fromSymbolVisibility(sv: std.lang.SymbolVisibility) Visibility {
-        return switch (sv) {
-            .default => .default,
-            .hidden => .hidden,
-            .protected => .protected,
-        };
-    }
 
     pub fn format(self: Visibility, writer: *Writer) Writer.Error!void {
         if (self != .default) try writer.print(" {s}", .{@tagName(self)});
@@ -2862,10 +2628,6 @@ pub const AddrSpace = enum(u24) {
         pub const gs: AddrSpace = @fromBackingInt(256);
         pub const fs: AddrSpace = @fromBackingInt(257);
         pub const ss: AddrSpace = @fromBackingInt(258);
-
-        pub const ptr32_sptr: AddrSpace = @fromBackingInt(270);
-        pub const ptr32_uptr: AddrSpace = @fromBackingInt(271);
-        pub const ptr64: AddrSpace = @fromBackingInt(272);
     };
     pub const x86_64 = x86;
 
@@ -2873,11 +2635,6 @@ pub const AddrSpace = enum(u24) {
     pub const avr = struct {
         pub const data: AddrSpace = @fromBackingInt(0);
         pub const program: AddrSpace = @fromBackingInt(1);
-        pub const program1: AddrSpace = @fromBackingInt(2);
-        pub const program2: AddrSpace = @fromBackingInt(3);
-        pub const program3: AddrSpace = @fromBackingInt(4);
-        pub const program4: AddrSpace = @fromBackingInt(5);
-        pub const program5: AddrSpace = @fromBackingInt(6);
     };
 
     // See llvm/lib/Target/NVPTX/NVPTX.h
@@ -2898,39 +2655,12 @@ pub const AddrSpace = enum(u24) {
         pub const local: AddrSpace = @fromBackingInt(3);
         pub const constant: AddrSpace = @fromBackingInt(4);
         pub const private: AddrSpace = @fromBackingInt(5);
-        pub const constant_32bit: AddrSpace = @fromBackingInt(6);
-        pub const buffer_fat_pointer: AddrSpace = @fromBackingInt(7);
-        pub const buffer_resource: AddrSpace = @fromBackingInt(8);
-        pub const buffer_strided_pointer: AddrSpace = @fromBackingInt(9);
-        pub const param_d: AddrSpace = @fromBackingInt(6);
-        pub const param_i: AddrSpace = @fromBackingInt(7);
-        pub const constant_buffer_0: AddrSpace = @fromBackingInt(8);
-        pub const constant_buffer_1: AddrSpace = @fromBackingInt(9);
-        pub const constant_buffer_2: AddrSpace = @fromBackingInt(10);
-        pub const constant_buffer_3: AddrSpace = @fromBackingInt(11);
-        pub const constant_buffer_4: AddrSpace = @fromBackingInt(12);
-        pub const constant_buffer_5: AddrSpace = @fromBackingInt(13);
-        pub const constant_buffer_6: AddrSpace = @fromBackingInt(14);
-        pub const constant_buffer_7: AddrSpace = @fromBackingInt(15);
-        pub const constant_buffer_8: AddrSpace = @fromBackingInt(16);
-        pub const constant_buffer_9: AddrSpace = @fromBackingInt(17);
-        pub const constant_buffer_10: AddrSpace = @fromBackingInt(18);
-        pub const constant_buffer_11: AddrSpace = @fromBackingInt(19);
-        pub const constant_buffer_12: AddrSpace = @fromBackingInt(20);
-        pub const constant_buffer_13: AddrSpace = @fromBackingInt(21);
-        pub const constant_buffer_14: AddrSpace = @fromBackingInt(22);
-        pub const constant_buffer_15: AddrSpace = @fromBackingInt(23);
-        pub const streamout_register: AddrSpace = @fromBackingInt(128);
     };
 
     pub const spirv = struct {
         pub const function: AddrSpace = @fromBackingInt(0);
-        pub const cross_workgroup: AddrSpace = @fromBackingInt(1);
-        pub const uniform_constant: AddrSpace = @fromBackingInt(2);
         pub const workgroup: AddrSpace = @fromBackingInt(3);
         pub const generic: AddrSpace = @fromBackingInt(4);
-        pub const device_only_intel: AddrSpace = @fromBackingInt(5);
-        pub const host_only_intel: AddrSpace = @fromBackingInt(6);
         pub const input: AddrSpace = @fromBackingInt(7);
     };
 
@@ -2938,7 +2668,6 @@ pub const AddrSpace = enum(u24) {
     pub const wasm = struct {
         pub const default: AddrSpace = @fromBackingInt(0);
         pub const variable: AddrSpace = @fromBackingInt(1);
-        pub const externref: AddrSpace = @fromBackingInt(10);
         pub const funcref: AddrSpace = @fromBackingInt(20);
     };
 
@@ -2992,13 +2721,6 @@ pub const Alignment = enum(u6) {
                 else => |offset_index| b.alignment_forward_references.items[offset_index - maxInt(u6)],
             };
         }
-
-        fn fromFwdRefIndex(index: usize) Lazy {
-            return @fromBackingInt(@intCast(index + maxInt(u6)));
-        }
-        fn toFwdRefIndex(l: Lazy) usize {
-            return @backingInt(l) - maxInt(u6);
-        }
     };
 
     pub fn fromByteUnits(bytes: u64) Alignment {
@@ -3013,20 +2735,6 @@ pub const Alignment = enum(u6) {
             .default => null,
             else => @as(u64, 1) << @backingInt(self),
         };
-    }
-
-    /// Asserts that neither `lhs` nor `rhs` is `.default`.
-    pub fn max(lhs: Alignment, rhs: Alignment) Alignment {
-        assert(lhs != .default);
-        assert(rhs != .default);
-        return @fromBackingInt(@max(@backingInt(lhs), @backingInt(rhs)));
-    }
-
-    /// Asserts that neither `lhs` nor `rhs` is `.default`.
-    pub fn order(lhs: Alignment, rhs: Alignment) std.math.Order {
-        assert(lhs != .default);
-        assert(rhs != .default);
-        return std.math.order(@backingInt(lhs), @backingInt(rhs));
     }
 
     pub fn toLlvm(self: Alignment) u6 {
@@ -3258,13 +2966,6 @@ pub fn strtabString(self: *Builder, bytes: []const u8) Allocator.Error!StrtabStr
     return StrtabString.fromIndex(gop.index);
 }
 
-/// Returns an existing string table entry if it exists, without allocating.
-pub fn strtabStringIfExists(self: *const Builder, bytes: []const u8) ?StrtabString {
-    return StrtabString.fromIndex(
-        self.strtab_string_map.getIndexAdapted(bytes, StrtabString.Adapter{ .builder = self }) orelse return null,
-    );
-}
-
 /// Creates a formatted string in the string table using printf-style formatting.
 pub fn strtabStringFmt(self: *Builder, comptime fmt_str: []const u8, fmt_args: anytype) Allocator.Error!StrtabString {
     try self.strtab_string_map.ensureUnusedCapacity(self.gpa, 1);
@@ -3332,10 +3033,6 @@ pub const Global = struct {
             }
         }
 
-        pub fn eql(self: Index, other: Index, builder: *const Builder) bool {
-            return self.unwrap(builder) == other.unwrap(builder);
-        }
-
         pub fn ptr(self: Index, builder: *Builder) *Global {
             return &builder.globals.values()[@backingInt(self.unwrap(builder))];
         }
@@ -3372,17 +3069,8 @@ pub const Global = struct {
             return @fromBackingInt(@backingInt(Constant.first_global) + @backingInt(global));
         }
 
-        pub fn toValue(global: Index) Value {
-            return global.toConst().toValue();
-        }
-
         pub fn setLinkage(self: Index, linkage: Linkage, builder: *Builder) void {
             self.ptr(builder).linkage = linkage;
-            self.updateDsoLocal(builder);
-        }
-
-        pub fn setVisibility(self: Index, visibility: Visibility, builder: *Builder) void {
-            self.ptr(builder).visibility = visibility;
             self.updateDsoLocal(builder);
         }
 
@@ -3390,16 +3078,8 @@ pub const Global = struct {
             self.ptr(builder).dll_storage_class = class;
         }
 
-        pub fn setUnnamedAddr(self: Index, unnamed_addr: UnnamedAddr, builder: *Builder) void {
-            self.ptr(builder).unnamed_addr = unnamed_addr;
-        }
-
         pub fn setDebugMetadata(self: Index, dbg: Metadata, builder: *Builder) void {
             self.ptr(builder).dbg = dbg.toOptional();
-        }
-
-        pub fn getDebugMetadata(self: Index, builder: *const Builder) Metadata.Optional {
-            return self.ptrConst(builder).dbg;
         }
 
         const FormatData = struct {
@@ -3413,61 +3093,6 @@ pub const Global = struct {
         }
         pub fn fmt(self: Index, builder: *const Builder) std.fmt.Alt(FormatData, format) {
             return .{ .data = .{ .global = self, .builder = builder } };
-        }
-
-        pub fn rename(self: Index, new_name: StrtabString, builder: *Builder) Allocator.Error!void {
-            try builder.ensureUnusedGlobalCapacity(new_name);
-            self.renameAssumeCapacity(new_name, builder);
-        }
-
-        pub fn takeName(self: Index, other: Index, builder: *Builder) Allocator.Error!void {
-            try builder.ensureUnusedGlobalCapacity(.empty);
-            self.takeNameAssumeCapacity(other, builder);
-        }
-
-        pub fn replace(self: Index, other: Index, builder: *Builder) Allocator.Error!void {
-            try builder.ensureUnusedGlobalCapacity(.empty);
-            self.replaceAssumeCapacity(other, builder);
-        }
-
-        pub fn delete(self: Index, builder: *Builder) void {
-            self.ptr(builder).kind = .{ .replaced = .none };
-        }
-
-        /// Replaces whatever this `Global` currently contains with a new `Function`. Similar to
-        /// `Builder.addFunction`, but the same `Global` is reused.
-        pub fn toNewFunction(global: Index, builder: *Builder) Allocator.Error!Function.Index {
-            try builder.functions.ensureUnusedCapacity(builder.gpa, 1);
-            errdefer comptime unreachable;
-            const function: Function.Index = @fromBackingInt(@intCast(builder.functions.items.len));
-            builder.functions.appendAssumeCapacity(.{
-                .global = global,
-                .strip = undefined,
-            });
-            global.ptr(builder).kind = .{ .function = function };
-            return function;
-        }
-
-        /// Replaces whatever this `Global` currently contains with a new `Variable`. Similar to
-        /// `Builder.addVariable`, but the same `Global` is reused.
-        pub fn toNewVariable(global: Index, builder: *Builder) Allocator.Error!Variable.Index {
-            try builder.variables.ensureUnusedCapacity(builder.gpa, 1);
-            errdefer comptime unreachable;
-            const variable: Variable.Index = @fromBackingInt(@intCast(builder.variables.items.len));
-            builder.variables.appendAssumeCapacity(.{ .global = global });
-            global.ptr(builder).kind = .{ .variable = variable };
-            return variable;
-        }
-
-        /// Replaces whatever this `Global` currently contains with a new `Alias`. Similar to
-        /// `Builder.addAlias`, but the same `Global` is reused.
-        pub fn toNewAlias(global: Index, builder: *Builder) Allocator.Error!Alias.Index {
-            try builder.aliases.ensureUnusedCapacity(builder.gpa, 1);
-            errdefer comptime unreachable;
-            const alias: Alias.Index = @fromBackingInt(@intCast(builder.aliases.items.len));
-            builder.aliass.appendAssumeCapacity(.{ .global = global, .aliasee = .none });
-            global.ptr(builder).kind = .{ .alias = alias };
-            return alias;
         }
 
         fn updateDsoLocal(self: Index, builder: *Builder) void {
@@ -3489,30 +3114,6 @@ pub const Global = struct {
                 },
             }
         }
-
-        fn renameAssumeCapacity(self: Index, new_name: StrtabString, builder: *Builder) void {
-            const old_name = self.name(builder);
-            if (new_name == old_name) return;
-            const index = @backingInt(self.unwrap(builder));
-            builder.globals.setKey(index, new_name);
-            if (!old_name.isAnon()) return;
-            builder.next_unnamed_global = @fromBackingInt(@backingInt(builder.next_unnamed_global) - 1);
-            if (builder.next_unnamed_global == old_name) return;
-            builder.getGlobal(builder.next_unnamed_global).?.renameAssumeCapacity(old_name, builder);
-        }
-
-        fn takeNameAssumeCapacity(self: Index, other: Index, builder: *Builder) void {
-            const other_name = other.name(builder);
-            other.renameAssumeCapacity(.empty, builder);
-            self.renameAssumeCapacity(other_name, builder);
-        }
-
-        fn replaceAssumeCapacity(self: Index, other: Index, builder: *Builder) void {
-            if (self.eql(other, builder)) return;
-            builder.next_replaced_global = @fromBackingInt(@backingInt(builder.next_replaced_global) - 1);
-            self.renameAssumeCapacity(builder.next_replaced_global, builder);
-            self.ptr(builder).kind = .{ .replaced = other.unwrap(builder) };
-        }
     };
 };
 
@@ -3525,44 +3126,6 @@ pub const Alias = struct {
     pub const Index = enum(u32) {
         none = maxInt(u32),
         _,
-
-        pub fn ptr(self: Index, builder: *Builder) *Alias {
-            return &builder.aliases.items[@backingInt(self)];
-        }
-
-        pub fn ptrConst(self: Index, builder: *const Builder) *const Alias {
-            return &builder.aliases.items[@backingInt(self)];
-        }
-
-        pub fn name(self: Index, builder: *const Builder) StrtabString {
-            return self.ptrConst(builder).global.name(builder);
-        }
-
-        pub fn rename(self: Index, new_name: StrtabString, builder: *Builder) Allocator.Error!void {
-            return self.ptrConst(builder).global.rename(new_name, builder);
-        }
-
-        pub fn typeOf(self: Index, builder: *const Builder) Type {
-            return self.ptrConst(builder).global.typeOf(builder);
-        }
-
-        pub fn toConst(self: Index, builder: *const Builder) Constant {
-            return self.ptrConst(builder).global.toConst();
-        }
-
-        pub fn toValue(self: Index, builder: *const Builder) Value {
-            return self.toConst(builder).toValue();
-        }
-
-        pub fn getAliasee(self: Index, builder: *const Builder) Global.Index {
-            const aliasee = self.ptrConst(builder).aliasee.getBase(builder);
-            assert(aliasee != .none);
-            return aliasee;
-        }
-
-        pub fn setAliasee(self: Index, aliasee: Constant, builder: *Builder) void {
-            self.ptr(builder).aliasee = aliasee;
-        }
     };
 };
 
@@ -3587,28 +3150,12 @@ pub const Variable = struct {
             return &builder.variables.items[@backingInt(self)];
         }
 
-        pub fn name(self: Index, builder: *const Builder) StrtabString {
-            return self.ptrConst(builder).global.name(builder);
-        }
-
-        pub fn rename(self: Index, new_name: StrtabString, builder: *Builder) Allocator.Error!void {
-            return self.ptrConst(builder).global.rename(new_name, builder);
-        }
-
-        pub fn typeOf(self: Index, builder: *const Builder) Type {
-            return self.ptrConst(builder).global.typeOf(builder);
-        }
-
         pub fn toConst(self: Index, builder: *const Builder) Constant {
             return self.ptrConst(builder).global.toConst();
         }
 
         pub fn toValue(self: Index, builder: *const Builder) Value {
             return self.toConst(builder).toValue();
-        }
-
-        pub fn setThreadLocal(self: Index, thread_local: ThreadLocal, builder: *Builder) void {
-            self.ptr(builder).thread_local = thread_local;
         }
 
         pub fn setMutability(self: Index, mutability: Mutability, builder: *Builder) void {
@@ -3629,24 +3176,8 @@ pub const Variable = struct {
             self.ptr(builder).init = initializer;
         }
 
-        pub fn setSection(self: Index, section: String, builder: *Builder) void {
-            self.ptr(builder).section = section;
-        }
-
         pub fn setAlignment(self: Index, alignment: Alignment, builder: *Builder) void {
             self.ptr(builder).alignment = alignment;
-        }
-
-        pub fn getAlignment(self: Index, builder: *Builder) Alignment {
-            return self.ptr(builder).alignment;
-        }
-
-        pub fn setGlobalVariableExpression(self: Index, expression: Metadata, builder: *Builder) void {
-            self.ptrConst(builder).global.setDebugMetadata(expression, builder);
-        }
-
-        pub fn getGlobalVariableExpression(self: Index, builder: *Builder) Metadata.Optional {
-            return self.ptrConst(builder).global.getDebugMetadata(builder);
         }
     };
 };
@@ -5257,10 +4788,6 @@ pub const Function = struct {
             return self.ptrConst(builder).global.name(builder);
         }
 
-        pub fn rename(self: Index, new_name: StrtabString, builder: *Builder) Allocator.Error!void {
-            return self.ptrConst(builder).global.rename(new_name, builder);
-        }
-
         pub fn typeOf(self: Index, builder: *const Builder) Type {
             return self.ptrConst(builder).global.typeOf(builder);
         }
@@ -5277,10 +4804,6 @@ pub const Function = struct {
             return self.ptrConst(builder).global.setLinkage(linkage, builder);
         }
 
-        pub fn setUnnamedAddr(self: Index, unnamed_addr: UnnamedAddr, builder: *Builder) void {
-            return self.ptrConst(builder).global.setUnnamedAddr(unnamed_addr, builder);
-        }
-
         pub fn setCallConv(self: Index, call_conv: CallConv, builder: *Builder) void {
             self.ptr(builder).call_conv = call_conv;
         }
@@ -5293,24 +4816,8 @@ pub const Function = struct {
             self.ptr(builder).attributes = new_function_attributes;
         }
 
-        pub fn getAttributes(self: Index, builder: *Builder) FunctionAttributes {
-            return self.ptr(builder).attributes;
-        }
-
-        pub fn setSection(self: Index, section: String, builder: *Builder) void {
-            self.ptr(builder).section = section;
-        }
-
-        pub fn setAlignment(self: Index, alignment: Alignment, builder: *Builder) void {
-            self.ptr(builder).alignment = alignment;
-        }
-
         pub fn setSubprogram(self: Index, subprogram: Metadata, builder: *Builder) void {
             self.ptrConst(builder).global.setDebugMetadata(subprogram, builder);
-        }
-
-        pub fn getSubprogram(self: Index, builder: *const Builder) Metadata.Optional {
-            return self.ptrConst(builder).global.getDebugMetadata(builder);
         }
     };
 
@@ -6294,12 +5801,6 @@ pub const Function = struct {
     const ExtraDataTrail = struct {
         index: Instruction.ExtraIndex,
 
-        fn nextMut(self: *ExtraDataTrail, len: u32, comptime Item: type, function: *Function) []Item {
-            const items: []Item = @ptrCast(function.extra[self.index..][0..len]);
-            self.index += @intCast(len);
-            return items;
-        }
-
         fn next(
             self: *ExtraDataTrail,
             len: u32,
@@ -6362,18 +5863,6 @@ pub const DebugLocation = union(enum) {
         scope: Builder.Metadata.Optional,
         inlined_at: Builder.Metadata.Optional,
     };
-
-    pub fn toMetadata(self: DebugLocation, builder: *Builder) Allocator.Error!Metadata.Optional {
-        return switch (self) {
-            .no_location => .none,
-            .location => |location| (try builder.debugLocation(
-                location.line,
-                location.column,
-                location.scope.unwrap().?,
-                location.inlined_at.unwrap(),
-            )).toOptional(),
-        };
-    }
 };
 
 /// Work-in-progress function being constructed with mutable instruction lists.
@@ -6582,24 +6071,6 @@ pub const WipFunction = struct {
         _ = self.extra.addManyAsSliceAssumeCapacity(cases_len * 2);
         default.ptr(self).branches += 1;
         return .{ .index = 0, .instruction = instruction };
-    }
-
-    pub fn indirectbr(
-        self: *WipFunction,
-        addr: Value,
-        targets: []const Block.Index,
-    ) Allocator.Error!Instruction.Index {
-        try self.ensureUnusedExtraCapacity(1, Instruction.IndirectBr, targets.len);
-        const instruction = try self.addInst(null, .{
-            .tag = .indirectbr,
-            .data = self.addExtraAssumeCapacity(Instruction.IndirectBr{
-                .addr = addr,
-                .targets_len = @intCast(targets.len),
-            }),
-        });
-        _ = self.extra.appendSliceAssumeCapacity(@ptrCast(targets));
-        for (targets) |target| target.ptr(self).branches += 1;
-        return instruction;
     }
 
     pub fn @"unreachable"(self: *WipFunction) Allocator.Error!Instruction.Index {
@@ -6981,97 +6452,6 @@ pub const WipFunction = struct {
         return instruction;
     }
 
-    pub fn fence(
-        self: *WipFunction,
-        sync_scope: SyncScope,
-        ordering: AtomicOrdering,
-    ) Allocator.Error!Instruction.Index {
-        assert(ordering != .none);
-        try self.ensureUnusedExtraCapacity(1, NoExtra, 0);
-        const instruction = try self.addInst(null, .{
-            .tag = .fence,
-            .data = @bitCast(MemoryAccessInfo{
-                .sync_scope = sync_scope,
-                .success_ordering = ordering,
-            }),
-        });
-        return instruction;
-    }
-
-    pub fn cmpxchg(
-        self: *WipFunction,
-        kind: Instruction.CmpXchg.Kind,
-        access_kind: MemoryAccessKind,
-        ptr: Value,
-        cmp: Value,
-        new: Value,
-        sync_scope: SyncScope,
-        success_ordering: AtomicOrdering,
-        failure_ordering: AtomicOrdering,
-        alignment: Alignment,
-        name: []const u8,
-    ) Allocator.Error!Value {
-        assert(ptr.typeOfWip(self).isPointer(self.builder));
-        const ty = cmp.typeOfWip(self);
-        assert(ty == new.typeOfWip(self));
-        assert(success_ordering != .none);
-        assert(failure_ordering != .none);
-
-        _ = try self.builder.structType(.normal, &.{ ty, .i1 });
-        try self.ensureUnusedExtraCapacity(1, Instruction.CmpXchg, 0);
-        const instruction = try self.addInst(name, .{
-            .tag = switch (kind) {
-                .strong => .cmpxchg,
-                .weak => .@"cmpxchg weak",
-            },
-            .data = self.addExtraAssumeCapacity(Instruction.CmpXchg{
-                .info = .{
-                    .access_kind = access_kind,
-                    .sync_scope = sync_scope,
-                    .success_ordering = success_ordering,
-                    .failure_ordering = failure_ordering,
-                    .alignment = alignment,
-                },
-                .ptr = ptr,
-                .cmp = cmp,
-                .new = new,
-            }),
-        });
-        return instruction.toValue();
-    }
-
-    pub fn atomicrmw(
-        self: *WipFunction,
-        access_kind: MemoryAccessKind,
-        operation: Instruction.AtomicRmw.Operation,
-        ptr: Value,
-        val: Value,
-        sync_scope: SyncScope,
-        ordering: AtomicOrdering,
-        alignment: Alignment,
-        name: []const u8,
-    ) Allocator.Error!Value {
-        assert(ptr.typeOfWip(self).isPointer(self.builder));
-        assert(ordering != .none);
-
-        try self.ensureUnusedExtraCapacity(1, Instruction.AtomicRmw, 0);
-        const instruction = try self.addInst(name, .{
-            .tag = .atomicrmw,
-            .data = self.addExtraAssumeCapacity(Instruction.AtomicRmw{
-                .info = .{
-                    .access_kind = access_kind,
-                    .atomic_rmw_operation = operation,
-                    .sync_scope = sync_scope,
-                    .success_ordering = ordering,
-                    .alignment = alignment,
-                },
-                .ptr = ptr,
-                .val = val,
-            }),
-        });
-        return instruction.toValue();
-    }
-
     pub fn gep(
         self: *WipFunction,
         kind: Instruction.GetElementPtr.Kind,
@@ -7129,17 +6509,6 @@ pub const WipFunction = struct {
         });
         self.extra.appendSliceAssumeCapacity(@ptrCast(indices));
         return instruction.toValue();
-    }
-
-    pub fn gepStruct(
-        self: *WipFunction,
-        ty: Type,
-        base: Value,
-        index: usize,
-        name: []const u8,
-    ) Allocator.Error!Value {
-        assert(ty.isStruct(self.builder));
-        return self.gep(.inbounds, ty, base, &.{ .@"0", try self.builder.intValue(.i32, index) }, name);
     }
 
     pub fn conv(
@@ -7249,10 +6618,6 @@ pub const WipFunction = struct {
 
     pub fn phi(self: *WipFunction, ty: Type, name: []const u8) Allocator.Error!WipPhi {
         return self.phiTag(.phi, ty, name);
-    }
-
-    pub fn phiFast(self: *WipFunction, ty: Type, name: []const u8) Allocator.Error!WipPhi {
-        return self.phiTag(.@"phi fast", ty, name);
     }
 
     pub fn select(
@@ -7374,21 +6739,6 @@ pub const WipFunction = struct {
         );
     }
 
-    pub fn callIntrinsicAssumeCold(self: *WipFunction) Allocator.Error!Value {
-        const intrinsic = try self.builder.getIntrinsic(.assume, &.{});
-        return self.callInner(
-            .normal,
-            CallConv.default,
-            .none,
-            intrinsic.typeOf(self.builder),
-            intrinsic.toValue(self.builder),
-            &.{try self.builder.intValue(.i1, 1)},
-            "",
-            true,
-            false,
-        );
-    }
-
     pub fn callMemCpy(
         self: *WipFunction,
         dst: Value,
@@ -7410,36 +6760,6 @@ pub const WipFunction = struct {
                 try self.builder.attrs(&src_attrs),
             }),
             if (@"inline") .@"memcpy.inline" else .memcpy,
-            &.{ dst.typeOfWip(self), src.typeOfWip(self), len.typeOfWip(self) },
-            &.{ dst, src, len, switch (kind) {
-                .normal => Value.false,
-                .@"volatile" => Value.true,
-            } },
-            undefined,
-        );
-        return value.unwrap().instruction;
-    }
-
-    pub fn callMemMove(
-        self: *WipFunction,
-        dst: Value,
-        dst_align: Alignment,
-        src: Value,
-        src_align: Alignment,
-        len: Value,
-        kind: MemoryAccessKind,
-    ) Allocator.Error!Instruction.Index {
-        var dst_attrs = [_]Attribute.Index{try self.builder.attr(.{ .@"align" = .wrap(dst_align) })};
-        var src_attrs = [_]Attribute.Index{try self.builder.attr(.{ .@"align" = .wrap(src_align) })};
-        const value = try self.callIntrinsic(
-            .normal,
-            try self.builder.fnAttrs(&.{
-                .none,
-                .none,
-                try self.builder.attrs(&dst_attrs),
-                try self.builder.attrs(&src_attrs),
-            }),
-            .memmove,
             &.{ dst.typeOfWip(self), src.typeOfWip(self), len.typeOfWip(self) },
             &.{ dst, src, len, switch (kind) {
                 .normal => Value.false,
@@ -7472,18 +6792,6 @@ pub const WipFunction = struct {
             undefined,
         );
         return value.unwrap().instruction;
-    }
-
-    pub fn vaArg(self: *WipFunction, list: Value, ty: Type, name: []const u8) Allocator.Error!Value {
-        try self.ensureUnusedExtraCapacity(1, Instruction.VaArg, 0);
-        const instruction = try self.addInst(name, .{
-            .tag = .va_arg,
-            .data = self.addExtraAssumeCapacity(Instruction.VaArg{
-                .list = list,
-                .type = ty,
-            }),
-        });
-        return instruction.toValue();
     }
 
     pub fn debugValue(self: *WipFunction, value: Value) Allocator.Error!Metadata.Optional {
@@ -8619,13 +7927,6 @@ pub const Constant = enum(u32) {
             unsigned,
             signed,
             unneeded,
-
-            pub fn fromStdLang(signedness: std.lang.Signedness) Signedness {
-                return switch (signedness) {
-                    .unsigned => .unsigned,
-                    .signed => .signed,
-                };
-            }
         };
     };
 
@@ -8807,41 +8108,6 @@ pub const Constant = enum(u32) {
             },
             .global => return false,
         }
-    }
-
-    pub fn getBase(self: Constant, builder: *const Builder) Global.Index {
-        var cur = self;
-        while (true) switch (cur.unwrap()) {
-            .constant => |constant| {
-                const item = builder.constant_items.get(constant);
-                switch (item.tag) {
-                    .ptrtoint,
-                    .inttoptr,
-                    .bitcast,
-                    => cur = builder.constantExtraData(Cast, item.data).val,
-                    .getelementptr => cur = builder.constantExtraData(GetElementPtr, item.data).base,
-                    .add => {
-                        const extra = builder.constantExtraData(Binary, item.data);
-                        const lhs_base = extra.lhs.getBase(builder);
-                        const rhs_base = extra.rhs.getBase(builder);
-                        return if (lhs_base != .none and rhs_base != .none)
-                            .none
-                        else if (lhs_base != .none) lhs_base else rhs_base;
-                    },
-                    .sub => {
-                        const extra = builder.constantExtraData(Binary, item.data);
-                        if (extra.rhs.getBase(builder) != .none) return .none;
-                        cur = extra.lhs;
-                    },
-                    else => return .none,
-                }
-            },
-            .global => |global| switch (global.ptrConst(builder).kind) {
-                .alias => |alias| cur = alias.ptrConst(builder).aliasee,
-                .variable, .function => return global,
-                .replaced => unreachable,
-            },
-        };
     }
 
     const FormatData = struct {
@@ -9231,9 +8497,6 @@ pub const Metadata = packed struct(u32) {
         pub fn toValue(metadata: Metadata.Optional) Value {
             return if (metadata.unwrap()) |m| m.toValue() else .none;
         }
-        pub fn toString(metadata: Metadata.Optional) Metadata.String.Optional {
-            return if (metadata.unwrap()) |m| m.toString().toOptional() else .none;
-        }
     };
     pub fn toOptional(metadata: Metadata) Metadata.Optional {
         return .{ .index = metadata.index, .kind = metadata.kind, .is_none = false };
@@ -9399,10 +8662,6 @@ pub const Metadata = packed struct(u32) {
         return builder.metadata_items.get(metadata.index);
     }
 
-    pub fn isInline(metadata: Metadata, builder: *const Builder) bool {
-        return metadata.tag(builder).isInline();
-    }
-
     pub fn unwrap(metadata: Metadata, builder: *const Builder) Metadata {
         switch (metadata.kind) {
             .string, .node, .local => return metadata,
@@ -9548,21 +8807,6 @@ pub const Metadata = packed struct(u32) {
         di_flags: DIFlags,
         compile_unit: Metadata.Optional,
     };
-    pub fn getSubprogram(metadata: Metadata, builder: *const Builder) Subprogram {
-        const metadata_item = metadata.item(builder);
-        switch (metadata_item.tag) {
-            else => unreachable,
-            .subprogram,
-            .@"subprogram local",
-            .@"subprogram definition",
-            .@"subprogram local definition",
-            .@"subprogram optimized",
-            .@"subprogram optimized local",
-            .@"subprogram optimized definition",
-            .@"subprogram optimized local definition",
-            => return builder.metadataExtraData(Metadata.Subprogram, metadata_item.data),
-        }
-    }
 
     pub const LexicalBlock = struct {
         scope: Metadata.Optional,
@@ -10079,55 +9323,6 @@ pub fn init(options: Options) Allocator.Error!Builder {
     return self;
 }
 
-/// Clears all data and frees all memory, leaving the builder in a reusable state.
-pub fn clearAndFree(self: *Builder) void {
-    self.module_asm.clearAndFree(self.gpa);
-
-    self.string_map.clearAndFree(self.gpa);
-    self.string_indices.clearAndFree(self.gpa);
-    self.string_bytes.clearAndFree(self.gpa);
-
-    self.types.clearAndFree(self.gpa);
-    self.next_unique_type_id.clearAndFree(self.gpa);
-    self.type_map.clearAndFree(self.gpa);
-    self.type_items.clearAndFree(self.gpa);
-    self.type_extra.clearAndFree(self.gpa);
-
-    self.attributes.clearAndFree(self.gpa);
-    self.attributes_map.clearAndFree(self.gpa);
-    self.attributes_indices.clearAndFree(self.gpa);
-    self.attributes_extra.clearAndFree(self.gpa);
-
-    self.function_attributes_set.clearAndFree(self.gpa);
-
-    self.globals.clearAndFree(self.gpa);
-    self.next_unique_global_id.clearAndFree(self.gpa);
-    self.aliases.clearAndFree(self.gpa);
-    self.variables.clearAndFree(self.gpa);
-    for (self.functions.items) |*function| function.deinit(self.gpa);
-    self.functions.clearAndFree(self.gpa);
-
-    self.strtab_string_map.clearAndFree(self.gpa);
-    self.strtab_string_indices.clearAndFree(self.gpa);
-    self.strtab_string_bytes.clearAndFree(self.gpa);
-
-    self.constant_map.clearAndFree(self.gpa);
-    self.constant_items.shrinkAndFree(self.gpa, 0);
-    self.constant_extra.clearAndFree(self.gpa);
-    self.constant_limbs.clearAndFree(self.gpa);
-
-    self.metadata_map.clearAndFree(self.gpa);
-    self.metadata_items.shrinkAndFree(self.gpa, 0);
-    self.metadata_extra.clearAndFree(self.gpa);
-    self.metadata_limbs.clearAndFree(self.gpa);
-    self.metadata_forward_references.clearAndFree(self.gpa);
-    self.metadata_named.clearAndFree(self.gpa);
-
-    self.metadata_string_map.clearAndFree(self.gpa);
-    self.metadata_string_indices.clearAndFree(self.gpa);
-    self.metadata_string_bytes.clearAndFree(self.gpa);
-}
-
 pub fn deinit(self: *Builder) void {
     const gpa = self.gpa;
 
@@ -10215,18 +9410,6 @@ pub fn string(self: *Builder, bytes: []const u8) Allocator.Error!String {
     return String.fromIndex(gop.index);
 }
 
-/// Interns a null-terminated string including the null byte.
-pub fn stringNull(self: *Builder, bytes: [:0]const u8) Allocator.Error!String {
-    return self.string(bytes[0 .. bytes.len + 1]);
-}
-
-/// Returns an existing string handle if the string is already interned.
-pub fn stringIfExists(self: *const Builder, bytes: []const u8) ?String {
-    return String.fromIndex(
-        self.string_map.getIndexAdapted(bytes, String.Adapter{ .builder = self }) orelse return null,
-    );
-}
-
 /// Creates a formatted string using printf-style formatting and interns it.
 pub fn fmt(self: *Builder, comptime fmt_str: []const u8, fmt_args: anytype) Allocator.Error!String {
     try self.string_map.ensureUnusedCapacity(self.gpa, 1);
@@ -10238,13 +9421,6 @@ pub fn fmt(self: *Builder, comptime fmt_str: []const u8, fmt_args: anytype) Allo
 /// Creates a formatted string assuming capacity has been pre-allocated.
 pub fn fmtAssumeCapacity(self: *Builder, comptime fmt_str: []const u8, fmt_args: anytype) String {
     self.string_bytes.printAssumeCapacity(fmt_str, fmt_args);
-    return self.trailingStringAssumeCapacity();
-}
-
-/// Interns bytes already appended to the string buffer as a new entry.
-pub fn trailingString(self: *Builder) Allocator.Error!String {
-    try self.string_indices.ensureUnusedCapacity(self.gpa, 1);
-    try self.string_map.ensureUnusedCapacity(self.gpa, 1);
     return self.trailingStringAssumeCapacity();
 }
 
@@ -10318,31 +9494,6 @@ pub fn structType(
     }
 }
 
-/// Creates a named opaque struct type that can have its body set later.
-pub fn opaqueType(self: *Builder, name: String) Allocator.Error!Type {
-    try self.string_map.ensureUnusedCapacity(self.gpa, 1);
-    if (name.slice(self)) |id| {
-        const count: usize = comptime std.fmt.count("{d}", .{maxInt(u32)});
-        try self.string_bytes.ensureUnusedCapacity(self.gpa, id.len + count);
-    }
-    try self.string_indices.ensureUnusedCapacity(self.gpa, 1);
-    try self.types.ensureUnusedCapacity(self.gpa, 1);
-    try self.next_unique_type_id.ensureUnusedCapacity(self.gpa, 1);
-    try self.ensureUnusedTypeCapacity(1, Type.NamedStructure, 0);
-    return self.opaqueTypeAssumeCapacity(name);
-}
-
-/// Sets the body of a previously created named opaque type.
-pub fn namedTypeSetBody(
-    self: *Builder,
-    named_type: Type,
-    body_type: Type,
-) void {
-    const named_item = self.type_items.items[@backingInt(named_type)];
-    self.type_extra.items[named_item.data + std.meta.fieldIndex(Type.NamedStructure, "body").?] =
-        @backingInt(body_type);
-}
-
 /// Interns an attribute and returns its index for use in attribute lists.
 pub fn attr(self: *Builder, attribute: Attribute) Allocator.Error!Attribute.Index {
     try self.attributes.ensureUnusedCapacity(self.gpa, 1);
@@ -10379,14 +9530,6 @@ pub fn fnAttrs(self: *Builder, fn_attributes: []const Attributes) Allocator.Erro
     return function_attributes;
 }
 
-/// Adds a new global value to the module with the given name and properties.
-pub fn addGlobal(self: *Builder, name: StrtabString, global: Global) Allocator.Error!Global.Index {
-    assert(!name.isAnon());
-    try self.ensureUnusedTypeCapacity(1, NoExtra, 0);
-    try self.ensureUnusedGlobalCapacity(name);
-    return self.addGlobalAssumeCapacity(name, global);
-}
-
 /// Adds a global value assuming capacity has been pre-allocated.
 pub fn addGlobalAssumeCapacity(self: *Builder, name: StrtabString, global: Global) Global.Index {
     _ = self.ptrTypeAssumeCapacity(global.addr_space);
@@ -10415,38 +9558,6 @@ pub fn addGlobalAssumeCapacity(self: *Builder, name: StrtabString, global: Globa
 /// Looks up a global value by name, returning null if not found.
 pub fn getGlobal(self: *const Builder, name: StrtabString) ?Global.Index {
     return @fromBackingInt(@intCast(self.globals.getIndex(name) orelse return null));
-}
-
-/// Adds a new alias to the module that refers to another global value.
-pub fn addAlias(
-    self: *Builder,
-    name: StrtabString,
-    ty: Type,
-    addr_space: AddrSpace,
-    aliasee: Constant,
-) Allocator.Error!Alias.Index {
-    assert(!name.isAnon());
-    try self.ensureUnusedTypeCapacity(1, NoExtra, 0);
-    try self.ensureUnusedGlobalCapacity(name);
-    try self.aliases.ensureUnusedCapacity(self.gpa, 1);
-    return self.addAliasAssumeCapacity(name, ty, addr_space, aliasee);
-}
-
-/// Adds an alias assuming capacity has been pre-allocated.
-pub fn addAliasAssumeCapacity(
-    self: *Builder,
-    name: StrtabString,
-    ty: Type,
-    addr_space: AddrSpace,
-    aliasee: Constant,
-) Alias.Index {
-    const alias_index: Alias.Index = @fromBackingInt(@intCast(self.aliases.items.len));
-    self.aliases.appendAssumeCapacity(.{ .global = self.addGlobalAssumeCapacity(name, .{
-        .addr_space = addr_space,
-        .type = ty,
-        .kind = .{ .alias = alias_index },
-    }), .aliasee = aliasee });
-    return alias_index;
 }
 
 /// Adds a new global variable to the module.
@@ -10639,71 +9750,6 @@ pub fn bigIntConst(self: *Builder, ty: Type, value: std.math.big.int.Const) Allo
     return self.bigIntConstAssumeCapacity(ty, value);
 }
 
-/// Creates an integer value from a big integer.
-pub fn bigIntValue(self: *Builder, ty: Type, value: std.math.big.int.Const) Allocator.Error!Value {
-    return (try self.bigIntConst(ty, value)).toValue();
-}
-
-/// Creates a floating-point constant from a compile-time float.
-pub fn fpConst(self: *Builder, ty: Type, comptime val: comptime_float) Allocator.Error!Constant {
-    return switch (ty) {
-        .half => try self.halfConst(val),
-        .bfloat => try self.bfloatConst(val),
-        .float => try self.floatConst(val),
-        .double => try self.doubleConst(val),
-        .fp128 => try self.fp128Const(val),
-        .x86_fp80 => try self.x86_fp80Const(val),
-        .ppc_fp128 => try self.ppc_fp128Const(.{ val, -0.0 }),
-        else => unreachable,
-    };
-}
-
-/// Creates a floating-point value from a compile-time float.
-pub fn fpValue(self: *Builder, ty: Type, comptime value: comptime_float) Allocator.Error!Value {
-    return (try self.fpConst(ty, value)).toValue();
-}
-
-/// Creates a NaN (Not a Number) constant for the given floating-point type.
-pub fn nanConst(self: *Builder, ty: Type) Allocator.Error!Constant {
-    return switch (ty) {
-        .half => try self.halfConst(std.math.nan(f16)),
-        .bfloat => try self.bfloatConst(std.math.nan(f32)),
-        .float => try self.floatConst(std.math.nan(f32)),
-        .double => try self.doubleConst(std.math.nan(f64)),
-        .fp128 => try self.fp128Const(std.math.nan(f128)),
-        .x86_fp80 => try self.x86_fp80Const(std.math.nan(f80)),
-        .ppc_fp128 => try self.ppc_fp128Const(@splat(std.math.nan(f64))),
-        else => unreachable,
-    };
-}
-
-/// Creates a NaN value for the given floating-point type.
-pub fn nanValue(self: *Builder, ty: Type) Allocator.Error!Value {
-    return (try self.nanConst(ty)).toValue();
-}
-
-/// Creates a half-precision (f16) floating-point constant.
-pub fn halfConst(self: *Builder, val: f16) Allocator.Error!Constant {
-    try self.ensureUnusedConstantCapacity(1, NoExtra, 0);
-    return self.halfConstAssumeCapacity(val);
-}
-
-/// Creates a half-precision (f16) floating-point value.
-pub fn halfValue(self: *Builder, value: f16) Allocator.Error!Value {
-    return (try self.halfConst(value)).toValue();
-}
-
-/// Creates a bfloat16 floating-point constant.
-pub fn bfloatConst(self: *Builder, val: f32) Allocator.Error!Constant {
-    try self.ensureUnusedConstantCapacity(1, NoExtra, 0);
-    return self.bfloatConstAssumeCapacity(val);
-}
-
-/// Creates a bfloat16 floating-point value.
-pub fn bfloatValue(self: *Builder, value: f32) Allocator.Error!Value {
-    return (try self.bfloatConst(value)).toValue();
-}
-
 /// Creates a single-precision (f32) floating-point constant.
 pub fn floatConst(self: *Builder, val: f32) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, NoExtra, 0);
@@ -10726,39 +9772,6 @@ pub fn doubleValue(self: *Builder, value: f64) Allocator.Error!Value {
     return (try self.doubleConst(value)).toValue();
 }
 
-/// Creates a quad-precision (f128) floating-point constant.
-pub fn fp128Const(self: *Builder, val: f128) Allocator.Error!Constant {
-    try self.ensureUnusedConstantCapacity(1, Constant.Fp128, 0);
-    return self.fp128ConstAssumeCapacity(val);
-}
-
-/// Creates a quad-precision (f128) floating-point value.
-pub fn fp128Value(self: *Builder, value: f128) Allocator.Error!Value {
-    return (try self.fp128Const(value)).toValue();
-}
-
-/// Creates an x86 extended precision (f80) floating-point constant.
-pub fn x86_fp80Const(self: *Builder, val: f80) Allocator.Error!Constant {
-    try self.ensureUnusedConstantCapacity(1, Constant.Fp80, 0);
-    return self.x86_fp80ConstAssumeCapacity(val);
-}
-
-/// Creates an x86 extended precision (f80) floating-point value.
-pub fn x86_fp80Value(self: *Builder, value: f80) Allocator.Error!Value {
-    return (try self.x86_fp80Const(value)).toValue();
-}
-
-/// Creates a PowerPC double-double (ppc_fp128) floating-point constant.
-pub fn ppc_fp128Const(self: *Builder, val: [2]f64) Allocator.Error!Constant {
-    try self.ensureUnusedConstantCapacity(1, Constant.Fp128, 0);
-    return self.ppc_fp128ConstAssumeCapacity(val);
-}
-
-/// Creates a PowerPC double-double (ppc_fp128) floating-point value.
-pub fn ppc_fp128Value(self: *Builder, value: [2]f64) Allocator.Error!Value {
-    return (try self.ppc_fp128Const(value)).toValue();
-}
-
 /// Creates a null pointer constant for the given pointer type.
 pub fn nullConst(self: *Builder, ty: Type) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, NoExtra, 0);
@@ -10776,20 +9789,10 @@ pub fn noneConst(self: *Builder, ty: Type) Allocator.Error!Constant {
     return self.noneConstAssumeCapacity(ty);
 }
 
-/// Creates a none/undef value for the given type.
-pub fn noneValue(self: *Builder, ty: Type) Allocator.Error!Value {
-    return (try self.noneConst(ty)).toValue();
-}
-
 /// Creates a struct constant with the given field values.
 pub fn structConst(self: *Builder, ty: Type, vals: []const Constant) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, Constant.Aggregate, vals.len);
     return self.structConstAssumeCapacity(ty, vals);
-}
-
-/// Creates a struct value with the given field values.
-pub fn structValue(self: *Builder, ty: Type, vals: []const Constant) Allocator.Error!Value {
-    return (try self.structConst(ty, vals)).toValue();
 }
 
 /// Creates an array constant with the given element values.
@@ -10798,21 +9801,11 @@ pub fn arrayConst(self: *Builder, ty: Type, vals: []const Constant) Allocator.Er
     return self.arrayConstAssumeCapacity(ty, vals);
 }
 
-/// Creates an array value with the given element values.
-pub fn arrayValue(self: *Builder, ty: Type, vals: []const Constant) Allocator.Error!Value {
-    return (try self.arrayConst(ty, vals)).toValue();
-}
-
 /// Creates a string constant from an interned string.
 pub fn stringConst(self: *Builder, val: String) Allocator.Error!Constant {
     try self.ensureUnusedTypeCapacity(1, Type.Array, 0);
     try self.ensureUnusedConstantCapacity(1, NoExtra, 0);
     return self.stringConstAssumeCapacity(val);
-}
-
-/// Creates a string value from an interned string.
-pub fn stringValue(self: *Builder, val: String) Allocator.Error!Value {
-    return (try self.stringConst(val)).toValue();
 }
 
 /// Creates a vector constant with the given element values.
@@ -10852,17 +9845,6 @@ pub fn zeroInitValue(self: *Builder, ty: Type) Allocator.Error!Value {
     return (try self.zeroInitConst(ty)).toValue();
 }
 
-/// Creates an undefined constant for the given type.
-pub fn undefConst(self: *Builder, ty: Type) Allocator.Error!Constant {
-    try self.ensureUnusedConstantCapacity(1, NoExtra, 0);
-    return self.undefConstAssumeCapacity(ty);
-}
-
-/// Creates an undefined value for the given type.
-pub fn undefValue(self: *Builder, ty: Type) Allocator.Error!Value {
-    return (try self.undefConst(ty)).toValue();
-}
-
 /// Creates a poison constant for the given type.
 pub fn poisonConst(self: *Builder, ty: Type) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, NoExtra, 0);
@@ -10872,66 +9854,6 @@ pub fn poisonConst(self: *Builder, ty: Type) Allocator.Error!Constant {
 /// Creates a poison value for the given type.
 pub fn poisonValue(self: *Builder, ty: Type) Allocator.Error!Value {
     return (try self.poisonConst(ty)).toValue();
-}
-
-/// Creates a block address constant for indirect branching.
-pub fn blockAddrConst(
-    self: *Builder,
-    function: Function.Index,
-    block: Function.Block.Index,
-) Allocator.Error!Constant {
-    try self.ensureUnusedConstantCapacity(1, Constant.BlockAddress, 0);
-    return self.blockAddrConstAssumeCapacity(function, block);
-}
-
-/// Creates a block address value for indirect branching.
-pub fn blockAddrValue(
-    self: *Builder,
-    function: Function.Index,
-    block: Function.Block.Index,
-) Allocator.Error!Value {
-    return (try self.blockAddrConst(function, block)).toValue();
-}
-
-/// Creates a DSO-local equivalent constant for a function.
-pub fn dsoLocalEquivalentConst(self: *Builder, function: Function.Index) Allocator.Error!Constant {
-    try self.ensureUnusedConstantCapacity(1, NoExtra, 0);
-    return self.dsoLocalEquivalentConstAssumeCapacity(function);
-}
-
-/// Creates a DSO-local equivalent value for a function.
-pub fn dsoLocalEquivalentValue(self: *Builder, function: Function.Index) Allocator.Error!Value {
-    return (try self.dsoLocalEquivalentConst(function)).toValue();
-}
-
-/// Creates a no-CFI constant bypassing control flow integrity checks.
-pub fn noCfiConst(self: *Builder, function: Function.Index) Allocator.Error!Constant {
-    try self.ensureUnusedConstantCapacity(1, NoExtra, 0);
-    return self.noCfiConstAssumeCapacity(function);
-}
-
-/// Creates a no-CFI value bypassing control flow integrity checks.
-pub fn noCfiValue(self: *Builder, function: Function.Index) Allocator.Error!Value {
-    return (try self.noCfiConst(function)).toValue();
-}
-
-/// Creates a type conversion constant expression.
-pub fn convConst(
-    self: *Builder,
-    val: Constant,
-    ty: Type,
-) Allocator.Error!Constant {
-    try self.ensureUnusedConstantCapacity(1, Constant.Cast, 0);
-    return self.convConstAssumeCapacity(val, ty);
-}
-
-/// Creates a type conversion value expression.
-pub fn convValue(
-    self: *Builder,
-    val: Constant,
-    ty: Type,
-) Allocator.Error!Value {
-    return (try self.convConst(val, ty)).toValue();
 }
 
 /// Creates a cast constant expression with a specific operation.
@@ -10959,34 +9881,6 @@ pub fn gepConst(
     return self.gepConstAssumeCapacity(kind, ty, base, inrange, indices);
 }
 
-/// Creates a getelementptr value expression for address calculation.
-pub fn gepValue(
-    self: *Builder,
-    comptime kind: Constant.GetElementPtr.Kind,
-    ty: Type,
-    base: Constant,
-    inrange: ?u16,
-    indices: []const Constant,
-) Allocator.Error!Value {
-    return (try self.gepConst(kind, ty, base, inrange, indices)).toValue();
-}
-
-/// Creates a binary operation constant expression.
-pub fn binConst(
-    self: *Builder,
-    tag: Constant.Tag,
-    lhs: Constant,
-    rhs: Constant,
-) Allocator.Error!Constant {
-    try self.ensureUnusedConstantCapacity(1, Constant.Binary, 0);
-    return self.binConstAssumeCapacity(tag, lhs, rhs);
-}
-
-/// Creates a binary operation value expression.
-pub fn binValue(self: *Builder, tag: Constant.Tag, lhs: Constant, rhs: Constant) Allocator.Error!Value {
-    return (try self.binConst(tag, lhs, rhs)).toValue();
-}
-
 /// Creates an inline assembly constant.
 pub fn asmConst(
     self: *Builder,
@@ -11008,43 +9902,6 @@ pub fn asmValue(
     constraints: String,
 ) Allocator.Error!Value {
     return (try self.asmConst(ty, info, assembly, constraints)).toValue();
-}
-
-/// The initial "resolved" value of the forward reference is `Alignment.default`.
-pub fn alignmentForwardReference(b: *Builder) Allocator.Error!Alignment.Lazy {
-    const index = b.alignment_forward_references.items.len;
-    try b.alignment_forward_references.append(b.gpa, .default);
-    return .fromFwdRefIndex(index);
-}
-
-/// Updates the "resolved" value of the alignment forward reference `fwd_ref` to `value`.
-///
-/// Asserts that `fwd_ref` is a forward reference, as opposed to a resolved alignment value.
-pub fn resolveAlignmentForwardReference(b: *Builder, fwd_ref: Alignment.Lazy, value: Alignment) void {
-    const index = fwd_ref.toFwdRefIndex();
-    b.alignment_forward_references.items[index] = value;
-}
-
-/// Dumps the LLVM IR to stderr for debugging.
-pub fn dump(b: *Builder, io: Io) void {
-    var buffer: [4000]u8 = undefined;
-    const stderr: Io.File = .stderr();
-    b.printToFile(io, stderr, &buffer) catch {};
-}
-
-/// Prints the LLVM IR to a file at the given path.
-pub fn printToFilePath(b: *Builder, io: Io, dir: Io.Dir, path: []const u8) !void {
-    var buffer: [4000]u8 = undefined;
-    const file = try dir.createFile(io, path, .{});
-    defer file.close(io);
-    try b.printToFile(io, file, &buffer);
-}
-
-/// Prints the LLVM IR to a file handle.
-pub fn printToFile(b: *Builder, io: Io, file: Io.File, buffer: []u8) !void {
-    var fw = file.writer(io, buffer);
-    try print(b, &fw.interface);
-    try fw.interface.flush();
 }
 
 /// Prints the LLVM IR to a writer.
@@ -12344,53 +11201,6 @@ fn structTypeAssumeCapacity(
     return @fromBackingInt(@intCast(gop.index));
 }
 
-fn opaqueTypeAssumeCapacity(self: *Builder, name: String) Type {
-    const Adapter = struct {
-        builder: *const Builder,
-        pub fn hash(_: @This(), key: String) u32 {
-            return @truncate(std.hash.Wyhash.hash(
-                comptime std.hash.int(@backingInt(Type.Tag.named_structure)),
-                std.mem.asBytes(&key),
-            ));
-        }
-        pub fn eql(ctx: @This(), lhs_key: String, _: void, rhs_index: usize) bool {
-            const rhs_data = ctx.builder.type_items.items[rhs_index];
-            return rhs_data.tag == .named_structure and
-                lhs_key == ctx.builder.typeExtraData(Type.NamedStructure, rhs_data.data).id;
-        }
-    };
-    var id = name;
-    if (name == .empty) {
-        id = self.next_unnamed_type;
-        assert(id != .none);
-        self.next_unnamed_type = @fromBackingInt(@backingInt(id) + 1);
-    } else assert(!name.isAnon());
-    while (true) {
-        const type_gop = self.types.getOrPutAssumeCapacity(id);
-        if (!type_gop.found_existing) {
-            const gop = self.type_map.getOrPutAssumeCapacityAdapted(id, Adapter{ .builder = self });
-            assert(!gop.found_existing);
-            gop.key_ptr.* = {};
-            gop.value_ptr.* = {};
-            self.type_items.appendAssumeCapacity(.{
-                .tag = .named_structure,
-                .data = self.addTypeExtraAssumeCapacity(Type.NamedStructure{
-                    .id = id,
-                    .body = .none,
-                }),
-            });
-            const result: Type = @fromBackingInt(@intCast(gop.index));
-            type_gop.value_ptr.* = result;
-            return result;
-        }
-
-        const unique_gop = self.next_unique_type_id.getOrPutAssumeCapacity(name);
-        if (!unique_gop.found_existing) unique_gop.value_ptr.* = 2;
-        id = self.fmtAssumeCapacity("{s}.{d}", .{ name.slice(self).?, unique_gop.value_ptr.* });
-        unique_gop.value_ptr.* += 1;
-    }
-}
-
 fn ensureUnusedTypeCapacity(
     self: *Builder,
     count: usize,
@@ -12445,12 +11255,6 @@ fn addTypeExtraAssumeCapacity(self: *Builder, extra: anytype) Type.Item.ExtraInd
 
 const TypeExtraDataTrail = struct {
     index: Type.Item.ExtraIndex,
-
-    fn nextMut(self: *TypeExtraDataTrail, len: u32, comptime Item: type, builder: *Builder) []Item {
-        const items: []Item = @ptrCast(builder.type_extra.items[self.index..][0..len]);
-        self.index += @intCast(len);
-        return items;
-    }
 
     fn next(
         self: *TypeExtraDataTrail,
@@ -12909,21 +11713,6 @@ fn zeroInitConstAssumeCapacity(self: *Builder, ty: Type) Constant {
     return result.constant;
 }
 
-fn undefConstAssumeCapacity(self: *Builder, ty: Type) Constant {
-    switch (self.type_items.items[@backingInt(ty)].tag) {
-        .simple => switch (ty) {
-            .void, .label => unreachable,
-            else => {},
-        },
-        .function, .vararg_function => unreachable,
-        else => {},
-    }
-    const result = self.getOrPutConstantNoExtraAssumeCapacity(
-        .{ .tag = .undef, .data = @backingInt(ty) },
-    );
-    return result.constant;
-}
-
 fn poisonConstAssumeCapacity(self: *Builder, ty: Type) Constant {
     switch (self.type_items.items[@backingInt(ty)].tag) {
         .simple => switch (ty) {
@@ -12935,53 +11724,6 @@ fn poisonConstAssumeCapacity(self: *Builder, ty: Type) Constant {
     }
     const result = self.getOrPutConstantNoExtraAssumeCapacity(
         .{ .tag = .poison, .data = @backingInt(ty) },
-    );
-    return result.constant;
-}
-
-fn blockAddrConstAssumeCapacity(
-    self: *Builder,
-    function: Function.Index,
-    block: Function.Block.Index,
-) Constant {
-    const Adapter = struct {
-        builder: *const Builder,
-        pub fn hash(_: @This(), key: Constant.BlockAddress) u32 {
-            return @truncate(std.hash.Wyhash.hash(
-                comptime std.hash.int(@backingInt(Constant.Tag.blockaddress)),
-                std.mem.asBytes(&key),
-            ));
-        }
-        pub fn eql(ctx: @This(), lhs_key: Constant.BlockAddress, _: void, rhs_index: usize) bool {
-            if (ctx.builder.constant_items.items(.tag)[rhs_index] != .blockaddress) return false;
-            const rhs_data = ctx.builder.constant_items.items(.data)[rhs_index];
-            const rhs_extra = ctx.builder.constantExtraData(Constant.BlockAddress, rhs_data);
-            return std.meta.eql(lhs_key, rhs_extra);
-        }
-    };
-    const data = Constant.BlockAddress{ .function = function, .block = block };
-    const gop = self.constant_map.getOrPutAssumeCapacityAdapted(data, Adapter{ .builder = self });
-    if (!gop.found_existing) {
-        gop.key_ptr.* = {};
-        gop.value_ptr.* = {};
-        self.constant_items.appendAssumeCapacity(.{
-            .tag = .blockaddress,
-            .data = self.addConstantExtraAssumeCapacity(data),
-        });
-    }
-    return @fromBackingInt(@intCast(gop.index));
-}
-
-fn dsoLocalEquivalentConstAssumeCapacity(self: *Builder, function: Function.Index) Constant {
-    const result = self.getOrPutConstantNoExtraAssumeCapacity(
-        .{ .tag = .dso_local_equivalent, .data = @backingInt(function) },
-    );
-    return result.constant;
-}
-
-fn noCfiConstAssumeCapacity(self: *Builder, function: Function.Index) Constant {
-    const result = self.getOrPutConstantNoExtraAssumeCapacity(
-        .{ .tag = .no_cfi, .data = @backingInt(function) },
     );
     return result.constant;
 }
@@ -13036,40 +11778,6 @@ fn convTag(
         },
         else => unreachable,
     };
-}
-
-fn convConstTag(
-    self: *Builder,
-    val_ty: Type,
-    ty: Type,
-) Constant.Tag {
-    assert(val_ty != ty);
-    return switch (val_ty.scalarTag(self)) {
-        .integer => switch (ty.scalarTag(self)) {
-            .integer => switch (std.math.order(val_ty.scalarBits(self), ty.scalarBits(self))) {
-                .gt => .trunc,
-                else => unreachable,
-            },
-            .pointer => .inttoptr,
-            else => unreachable,
-        },
-        .pointer => switch (ty.scalarTag(self)) {
-            .integer => .ptrtoint,
-            .pointer => .addrspacecast,
-            else => unreachable,
-        },
-        else => unreachable,
-    };
-}
-
-fn convConstAssumeCapacity(
-    self: *Builder,
-    val: Constant,
-    ty: Type,
-) Constant {
-    const val_ty = val.typeOf(self);
-    if (val_ty == ty) return val;
-    return self.castConstAssumeCapacity(self.convConstTag(val_ty, ty), val, ty);
 }
 
 fn castConstAssumeCapacity(self: *Builder, tag: Constant.Tag, val: Constant, ty: Type) Constant {
@@ -13190,53 +11898,6 @@ fn gepConstAssumeCapacity(
             }),
         });
         self.constant_extra.appendSliceAssumeCapacity(@ptrCast(indices));
-    }
-    return @fromBackingInt(@intCast(gop.index));
-}
-
-fn binConstAssumeCapacity(
-    self: *Builder,
-    tag: Constant.Tag,
-    lhs: Constant,
-    rhs: Constant,
-) Constant {
-    switch (tag) {
-        .add,
-        .@"add nsw",
-        .@"add nuw",
-        .sub,
-        .@"sub nsw",
-        .@"sub nuw",
-        .shl,
-        .xor,
-        => {},
-        else => unreachable,
-    }
-    const Key = struct { tag: Constant.Tag, extra: Constant.Binary };
-    const Adapter = struct {
-        builder: *const Builder,
-        pub fn hash(_: @This(), key: Key) u32 {
-            return @truncate(std.hash.Wyhash.hash(
-                std.hash.int(@backingInt(key.tag)),
-                std.mem.asBytes(&key.extra),
-            ));
-        }
-        pub fn eql(ctx: @This(), lhs_key: Key, _: void, rhs_index: usize) bool {
-            if (lhs_key.tag != ctx.builder.constant_items.items(.tag)[rhs_index]) return false;
-            const rhs_data = ctx.builder.constant_items.items(.data)[rhs_index];
-            const rhs_extra = ctx.builder.constantExtraData(Constant.Binary, rhs_data);
-            return std.meta.eql(lhs_key.extra, rhs_extra);
-        }
-    };
-    const data: Key = .{ .tag = tag, .extra = .{ .lhs = lhs, .rhs = rhs } };
-    const gop = self.constant_map.getOrPutAssumeCapacityAdapted(data, Adapter{ .builder = self });
-    if (!gop.found_existing) {
-        gop.key_ptr.* = {};
-        gop.value_ptr.* = {};
-        self.constant_items.appendAssumeCapacity(.{
-            .tag = tag,
-            .data = self.addConstantExtraAssumeCapacity(data.extra),
-        });
     }
     return @fromBackingInt(@intCast(gop.index));
 }
@@ -13384,12 +12045,6 @@ fn addConstantExtraAssumeCapacity(self: *Builder, extra: anytype) Constant.Item.
 const ConstantExtraDataTrail = struct {
     index: Constant.Item.ExtraIndex,
 
-    fn nextMut(self: *ConstantExtraDataTrail, len: u32, comptime Item: type, builder: *Builder) []Item {
-        const items: []Item = @ptrCast(builder.constant_extra.items[self.index..][0..len]);
-        self.index += @intCast(len);
-        return items;
-    }
-
     fn next(
         self: *ConstantExtraDataTrail,
         len: u32,
@@ -13462,12 +12117,6 @@ fn addMetadataExtraAssumeCapacity(self: *Builder, extra: anytype) Metadata.Item.
 const MetadataExtraDataTrail = struct {
     index: Metadata.Item.ExtraIndex,
 
-    fn nextMut(self: *MetadataExtraDataTrail, len: u32, comptime Item: type, builder: *Builder) []Item {
-        const items: []Item = @ptrCast(builder.metadata_extra.items[self.index..][0..len]);
-        self.index += @intCast(len);
-        return items;
-    }
-
     fn next(
         self: *MetadataExtraDataTrail,
         len: u32,
@@ -13528,14 +12177,6 @@ pub fn metadataString(self: *Builder, bytes: []const u8) Allocator.Error!Metadat
     return @fromBackingInt(@intCast(gop.index));
 }
 
-/// Creates a metadata string from a string table string.
-pub fn metadataStringFromStrtabString(
-    self: *Builder,
-    str: StrtabString,
-) Allocator.Error!Metadata.String {
-    return try self.metadataString(str.slice(self).?);
-}
-
 /// Creates a formatted metadata string using printf-style formatting.
 pub fn metadataStringFmt(
     self: *Builder,
@@ -13558,13 +12199,6 @@ pub fn metadataStringFmtAssumeCapacity(
     fmt_args: anytype,
 ) Metadata.String {
     self.metadata_string_bytes.printAssumeCapacity(fmt_str, fmt_args);
-    return self.trailingMetadataStringAssumeCapacity();
-}
-
-/// Interns trailing bytes as a new metadata string entry.
-pub fn trailingMetadataString(self: *Builder) Allocator.Error!Metadata.String {
-    try self.metadata_string_indices.ensureUnusedCapacity(self.gpa, 1);
-    try self.metadata_string_map.ensureUnusedCapacity(self.gpa, 1);
     return self.trailingMetadataStringAssumeCapacity();
 }
 
@@ -13637,18 +12271,6 @@ pub fn debugSubprogram(
     );
 }
 
-/// Creates a debug info lexical block scope metadata entry.
-pub fn debugLexicalBlock(
-    self: *Builder,
-    scope: ?Metadata,
-    file: ?Metadata,
-    line: u32,
-    column: u32,
-) Allocator.Error!Metadata {
-    try self.ensureUnusedMetadataCapacity(1, Metadata.LexicalBlock, 0);
-    return self.debugLexicalBlockAssumeCapacity(scope, file, line, column);
-}
-
 /// Creates a debug info source location metadata entry.
 pub fn debugLocation(
     self: *Builder,
@@ -13659,16 +12281,6 @@ pub fn debugLocation(
 ) Allocator.Error!Metadata {
     try self.ensureUnusedMetadataCapacity(1, Metadata.Location, 0);
     return self.debugLocationAssumeCapacity(line, column, scope, inlined_at);
-}
-
-/// Creates a debug info boolean type metadata entry.
-pub fn debugBoolType(
-    self: *Builder,
-    name: ?Metadata.String,
-    size_in_bits: u64,
-) Allocator.Error!Metadata {
-    try self.ensureUnusedMetadataCapacity(1, Metadata.BasicType, 0);
-    return self.debugBoolTypeAssumeCapacity(name, size_in_bits);
 }
 
 /// Creates a debug info unsigned integer type metadata entry.
@@ -13721,81 +12333,6 @@ pub fn debugStructType(
 ) Allocator.Error!Metadata {
     try self.ensureUnusedMetadataCapacity(1, Metadata.CompositeType, 0);
     return self.debugStructTypeAssumeCapacity(
-        name,
-        file,
-        scope,
-        line,
-        underlying_type,
-        size_in_bits,
-        align_in_bits,
-        fields_tuple,
-    );
-}
-
-/// Creates a debug info union type metadata entry.
-pub fn debugUnionType(
-    self: *Builder,
-    name: ?Metadata.String,
-    file: ?Metadata,
-    scope: ?Metadata,
-    line: u32,
-    underlying_type: ?Metadata,
-    size_in_bits: u64,
-    align_in_bits: u64,
-    fields_tuple: ?Metadata,
-) Allocator.Error!Metadata {
-    try self.ensureUnusedMetadataCapacity(1, Metadata.CompositeType, 0);
-    return self.debugUnionTypeAssumeCapacity(
-        name,
-        file,
-        scope,
-        line,
-        underlying_type,
-        size_in_bits,
-        align_in_bits,
-        fields_tuple,
-    );
-}
-
-/// Creates a debug info enumeration type metadata entry.
-pub fn debugEnumerationType(
-    self: *Builder,
-    name: ?Metadata.String,
-    file: ?Metadata,
-    scope: ?Metadata,
-    line: u32,
-    underlying_type: ?Metadata,
-    size_in_bits: u64,
-    align_in_bits: u64,
-    fields_tuple: ?Metadata,
-) Allocator.Error!Metadata {
-    try self.ensureUnusedMetadataCapacity(1, Metadata.CompositeType, 0);
-    return self.debugEnumerationTypeAssumeCapacity(
-        name,
-        file,
-        scope,
-        line,
-        underlying_type,
-        size_in_bits,
-        align_in_bits,
-        fields_tuple,
-    );
-}
-
-/// Creates a debug info array type metadata entry.
-pub fn debugArrayType(
-    self: *Builder,
-    name: ?Metadata.String,
-    file: ?Metadata,
-    scope: ?Metadata,
-    line: u32,
-    underlying_type: ?Metadata,
-    size_in_bits: u64,
-    align_in_bits: u64,
-    fields_tuple: ?Metadata,
-) Allocator.Error!Metadata {
-    try self.ensureUnusedMetadataCapacity(1, Metadata.CompositeType, 0);
-    return self.debugArrayTypeAssumeCapacity(
         name,
         file,
         scope,
@@ -13882,59 +12419,10 @@ pub fn debugMemberType(
     );
 }
 
-/// Creates debug info metadata for a typedef derived type.
-pub fn debugTypedefType(
-    self: *Builder,
-    name: ?Metadata.String,
-    file: ?Metadata,
-    scope: ?Metadata,
-    line: u32,
-    underlying_type: ?Metadata,
-    size_in_bits: u64,
-    align_in_bits: u64,
-    offset_in_bits: u64,
-) Allocator.Error!Metadata {
-    try self.ensureUnusedMetadataCapacity(1, Metadata.DerivedType, 0);
-    return self.debugTypedefTypeAssumeCapacity(
-        name,
-        file,
-        scope,
-        line,
-        underlying_type,
-        size_in_bits,
-        align_in_bits,
-        offset_in_bits,
-    );
-}
-
 /// Creates a debug info subroutine (function) type metadata entry.
 pub fn debugSubroutineType(self: *Builder, types_tuple: ?Metadata) Allocator.Error!Metadata {
     try self.ensureUnusedMetadataCapacity(1, Metadata.SubroutineType, 0);
     return self.debugSubroutineTypeAssumeCapacity(types_tuple);
-}
-
-/// Creates a debug info enumerator (enum value) metadata entry.
-pub fn debugEnumerator(
-    self: *Builder,
-    name: ?Metadata.String,
-    unsigned: bool,
-    bit_width: u32,
-    value: std.math.big.int.Const,
-) Allocator.Error!Metadata {
-    assert(!(unsigned and !value.positive));
-    try self.ensureUnusedMetadataCapacity(1, Metadata.Enumerator, 0);
-    try self.metadata_limbs.ensureUnusedCapacity(self.gpa, value.limbs.len);
-    return self.debugEnumeratorAssumeCapacity(name, unsigned, bit_width, value);
-}
-
-/// Creates a debug info subrange metadata entry for array bounds.
-pub fn debugSubrange(
-    self: *Builder,
-    lower_bound: ?Metadata,
-    count: ?Metadata,
-) Allocator.Error!Metadata {
-    try self.ensureUnusedMetadataCapacity(1, Metadata.Subrange, 0);
-    return self.debugSubrangeAssumeCapacity(lower_bound, count);
 }
 
 /// Creates a debug info expression metadata entry for variable locations.
@@ -13968,55 +12456,6 @@ pub fn debugLocalVar(
 ) Allocator.Error!Metadata {
     try self.ensureUnusedMetadataCapacity(1, Metadata.LocalVar, 0);
     return self.debugLocalVarAssumeCapacity(name, file, scope, line, ty);
-}
-
-/// Creates a debug info function parameter metadata entry.
-pub fn debugParameter(
-    self: *Builder,
-    name: ?Metadata.String,
-    file: ?Metadata,
-    scope: ?Metadata,
-    line: u32,
-    ty: ?Metadata,
-    arg_no: u32,
-) Allocator.Error!Metadata {
-    try self.ensureUnusedMetadataCapacity(1, Metadata.Parameter, 0);
-    return self.debugParameterAssumeCapacity(name, file, scope, line, ty, arg_no);
-}
-
-/// Creates a debug info global variable metadata entry.
-pub fn debugGlobalVar(
-    self: *Builder,
-    name: ?Metadata.String,
-    linkage_name: ?Metadata.String,
-    file: ?Metadata,
-    scope: ?Metadata,
-    line: u32,
-    ty: ?Metadata,
-    variable: Variable.Index,
-    options: Metadata.GlobalVar.Options,
-) Allocator.Error!Metadata {
-    try self.ensureUnusedMetadataCapacity(1, Metadata.GlobalVar, 0);
-    return self.debugGlobalVarAssumeCapacity(
-        name,
-        linkage_name,
-        file,
-        scope,
-        line,
-        ty,
-        variable,
-        options,
-    );
-}
-
-/// Creates a debug info global variable expression metadata entry.
-pub fn debugGlobalVarExpression(
-    self: *Builder,
-    variable: ?Metadata,
-    expression: ?Metadata,
-) Allocator.Error!Metadata {
-    try self.ensureUnusedMetadataCapacity(1, Metadata.GlobalVarExpression, 0);
-    return self.debugGlobalVarExpressionAssumeCapacity(variable, expression);
 }
 
 /// Creates a metadata entry wrapping a constant value.
@@ -14153,22 +12592,6 @@ fn debugSubprogramAssumeCapacity(
     });
 }
 
-fn debugLexicalBlockAssumeCapacity(
-    self: *Builder,
-    scope: ?Metadata,
-    file: ?Metadata,
-    line: u32,
-    column: u32,
-) Metadata {
-    assert(!self.strip);
-    return self.metadataSimpleAssumeCapacity(.lexical_block, Metadata.LexicalBlock{
-        .scope = .wrap(scope),
-        .file = .wrap(file),
-        .line = line,
-        .column = column,
-    });
-}
-
 fn debugLocationAssumeCapacity(
     self: *Builder,
     line: u32,
@@ -14182,15 +12605,6 @@ fn debugLocationAssumeCapacity(
         .column = column,
         .scope = scope,
         .inlined_at = .wrap(inlined_at),
-    });
-}
-
-fn debugBoolTypeAssumeCapacity(self: *Builder, name: ?Metadata.String, size_in_bits: u64) Metadata {
-    assert(!self.strip);
-    return self.metadataSimpleAssumeCapacity(.basic_bool_type, Metadata.BasicType{
-        .name = .wrap(name),
-        .size_in_bits_lo = @truncate(size_in_bits),
-        .size_in_bits_hi = @truncate(size_in_bits >> 32),
     });
 }
 
@@ -14242,81 +12656,6 @@ fn debugStructTypeAssumeCapacity(
     assert(!self.strip);
     return self.debugCompositeTypeAssumeCapacity(
         .composite_struct_type,
-        name,
-        file,
-        scope,
-        line,
-        underlying_type,
-        size_in_bits,
-        align_in_bits,
-        fields_tuple,
-    );
-}
-
-fn debugUnionTypeAssumeCapacity(
-    self: *Builder,
-    name: ?Metadata.String,
-    file: ?Metadata,
-    scope: ?Metadata,
-    line: u32,
-    underlying_type: ?Metadata,
-    size_in_bits: u64,
-    align_in_bits: u64,
-    fields_tuple: ?Metadata,
-) Metadata {
-    assert(!self.strip);
-    return self.debugCompositeTypeAssumeCapacity(
-        .composite_union_type,
-        name,
-        file,
-        scope,
-        line,
-        underlying_type,
-        size_in_bits,
-        align_in_bits,
-        fields_tuple,
-    );
-}
-
-fn debugEnumerationTypeAssumeCapacity(
-    self: *Builder,
-    name: ?Metadata.String,
-    file: ?Metadata,
-    scope: ?Metadata,
-    line: u32,
-    underlying_type: ?Metadata,
-    size_in_bits: u64,
-    align_in_bits: u64,
-    fields_tuple: ?Metadata,
-) Metadata {
-    assert(!self.strip);
-    return self.debugCompositeTypeAssumeCapacity(
-        .composite_enumeration_type,
-        name,
-        file,
-        scope,
-        line,
-        underlying_type,
-        size_in_bits,
-        align_in_bits,
-        fields_tuple,
-    );
-}
-
-fn debugArrayTypeAssumeCapacity(
-    self: *Builder,
-    name: ?Metadata.String,
-    file: ?Metadata,
-    scope: ?Metadata,
-    line: u32,
-    underlying_type: ?Metadata,
-    size_in_bits: u64,
-    align_in_bits: u64,
-    fields_tuple: ?Metadata,
-) Metadata {
-    assert(!self.strip);
-    return self.debugCompositeTypeAssumeCapacity(
-        .composite_array_type,
         name,
         file,
         scope,
@@ -14434,118 +12773,10 @@ fn debugMemberTypeAssumeCapacity(
     });
 }
 
-fn debugTypedefTypeAssumeCapacity(
-    self: *Builder,
-    name: ?Metadata.String,
-    file: ?Metadata,
-    scope: ?Metadata,
-    line: u32,
-    underlying_type: ?Metadata,
-    size_in_bits: u64,
-    align_in_bits: u64,
-    offset_in_bits: u64,
-) Metadata {
-    assert(!self.strip);
-    return self.metadataSimpleAssumeCapacity(.derived_typedef_type, Metadata.DerivedType{
-        .name = .wrap(name),
-        .file = .wrap(file),
-        .scope = .wrap(scope),
-        .line = line,
-        .underlying_type = .wrap(underlying_type),
-        .size_in_bits_lo = @truncate(size_in_bits),
-        .size_in_bits_hi = @truncate(size_in_bits >> 32),
-        .align_in_bits_lo = @truncate(align_in_bits),
-        .align_in_bits_hi = @truncate(align_in_bits >> 32),
-        .offset_in_bits_lo = @truncate(offset_in_bits),
-        .offset_in_bits_hi = @truncate(offset_in_bits >> 32),
-    });
-}
-
 fn debugSubroutineTypeAssumeCapacity(self: *Builder, types_tuple: ?Metadata) Metadata {
     assert(!self.strip);
     return self.metadataSimpleAssumeCapacity(.subroutine_type, Metadata.SubroutineType{
         .types_tuple = .wrap(types_tuple),
-    });
-}
-
-fn debugEnumeratorAssumeCapacity(
-    self: *Builder,
-    name: ?Metadata.String,
-    unsigned: bool,
-    bit_width: u32,
-    value: std.math.big.int.Const,
-) Metadata {
-    assert(!self.strip);
-    const Key = struct {
-        tag: Metadata.Tag,
-        name: Metadata.String.Optional,
-        bit_width: u32,
-        value: std.math.big.int.Const,
-    };
-    const Adapter = struct {
-        builder: *const Builder,
-        pub fn hash(_: @This(), key: Key) u32 {
-            var hasher = std.hash.Wyhash.init(std.hash.int(@backingInt(key.tag)));
-            hasher.update(std.mem.asBytes(&key.name));
-            hasher.update(std.mem.asBytes(&key.bit_width));
-            hasher.update(std.mem.sliceAsBytes(key.value.limbs));
-            return @truncate(hasher.final());
-        }
-
-        pub fn eql(ctx: @This(), lhs_key: Key, _: void, rhs_index: usize) bool {
-            if (lhs_key.tag != ctx.builder.metadata_items.items(.tag)[rhs_index]) return false;
-            const rhs_data = ctx.builder.metadata_items.items(.data)[rhs_index];
-            const rhs_extra = ctx.builder.metadataExtraData(Metadata.Enumerator, rhs_data);
-            const limbs = ctx.builder.metadata_limbs
-                .items[rhs_extra.limbs_index..][0..rhs_extra.limbs_len];
-            const rhs_value = std.math.big.int.Const{
-                .limbs = limbs,
-                .positive = lhs_key.value.positive,
-            };
-            return lhs_key.name == rhs_extra.name and
-                lhs_key.bit_width == rhs_extra.bit_width and
-                lhs_key.value.eql(rhs_value);
-        }
-    };
-
-    const tag: Metadata.Tag = if (unsigned)
-        .enumerator_unsigned
-    else if (value.positive)
-        .enumerator_signed_positive
-    else
-        .enumerator_signed_negative;
-
-    assert(!(tag == .enumerator_unsigned and !value.positive));
-
-    const gop = self.metadata_map.getOrPutAssumeCapacityAdapted(Key{
-        .tag = tag,
-        .name = .wrap(name),
-        .bit_width = bit_width,
-        .value = value,
-    }, Adapter{ .builder = self });
-
-    if (!gop.found_existing) {
-        gop.key_ptr.* = {};
-        gop.value_ptr.* = {};
-        self.metadata_items.appendAssumeCapacity(.{
-            .tag = tag,
-            .data = self.addMetadataExtraAssumeCapacity(Metadata.Enumerator{
-                .name = .wrap(name),
-                .bit_width = bit_width,
-                .limbs_index = @intCast(self.metadata_limbs.items.len),
-                .limbs_len = @intCast(value.limbs.len),
-            }),
-        });
-        self.metadata_limbs.appendSliceAssumeCapacity(value.limbs);
-    }
-    return .{ .index = @intCast(gop.index), .kind = .node };
-}
-
-fn debugSubrangeAssumeCapacity(self: *Builder, lower_bound: ?Metadata, count: ?Metadata) Metadata {
-    assert(!self.strip);
-    return self.metadataSimpleAssumeCapacity(.subrange, Metadata.Subrange{
-        .lower_bound = .wrap(lower_bound),
-        .count = .wrap(count),
     });
 }
 
@@ -14653,64 +12884,6 @@ fn debugLocalVarAssumeCapacity(
         .scope = .wrap(scope),
         .line = line,
         .ty = .wrap(ty),
-    });
-}
-
-fn debugParameterAssumeCapacity(
-    self: *Builder,
-    name: ?Metadata.String,
-    file: ?Metadata,
-    scope: ?Metadata,
-    line: u32,
-    ty: ?Metadata,
-    arg_no: u32,
-) Metadata {
-    assert(!self.strip);
-    return self.metadataSimpleAssumeCapacity(.parameter, Metadata.Parameter{
-        .name = .wrap(name),
-        .file = .wrap(file),
-        .scope = .wrap(scope),
-        .line = line,
-        .ty = .wrap(ty),
-        .arg_no = arg_no,
-    });
-}
-
-fn debugGlobalVarAssumeCapacity(
-    self: *Builder,
-    name: ?Metadata.String,
-    linkage_name: ?Metadata.String,
-    file: ?Metadata,
-    scope: ?Metadata,
-    line: u32,
-    ty: ?Metadata,
-    variable: Variable.Index,
-    options: Metadata.GlobalVar.Options,
-) Metadata {
-    assert(!self.strip);
-    return self.metadataDistinctAssumeCapacity(
-        if (options.local) .@"global_var local" else .global_var,
-        Metadata.GlobalVar{
-            .name = .wrap(name),
-            .linkage_name = .wrap(linkage_name),
-            .file = .wrap(file),
-            .scope = .wrap(scope),
-            .line = line,
-            .ty = .wrap(ty),
-            .variable = variable,
-        },
-    );
-}
-
-fn debugGlobalVarExpressionAssumeCapacity(
-    self: *Builder,
-    variable: ?Metadata,
-    expression: ?Metadata,
-) Metadata {
-    assert(!self.strip);
-    return self.metadataSimpleAssumeCapacity(.global_var_expression, Metadata.GlobalVarExpression{
-        .variable = .wrap(variable),
-        .expression = .wrap(expression),
     });
 }
 

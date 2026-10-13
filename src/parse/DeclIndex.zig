@@ -251,7 +251,6 @@ type_path_intern: std.AutoHashMapUnmanaged(TypePathKey, TypePathIdx),
 type_path_by_statement: collections.DenseMap(u32, TypePathIdx),
 type_decls_by_path: std.AutoHashMapUnmanaged(TypePathIdx, NameBucket),
 assoc_value_decls: std.AutoHashMapUnmanaged(AssocValue, NameBucket),
-assoc_owner_value_decls: std.AutoHashMapUnmanaged(TypePathIdx, NameBucket),
 package_header_modules: std.ArrayList(PackageHeaderModule),
 imports: std.ArrayList(Import),
 explicit_unqualified_imports: std.AutoHashMapUnmanaged(Ident.Idx, void),
@@ -274,7 +273,6 @@ pub fn init(gpa: std.mem.Allocator) DeclIndex {
         .type_path_by_statement = .init(gpa),
         .type_decls_by_path = .{},
         .assoc_value_decls = .{},
-        .assoc_owner_value_decls = .{},
         .package_header_modules = .empty,
         .imports = .empty,
         .explicit_unqualified_imports = .{},
@@ -290,7 +288,6 @@ pub fn deinit(self: *DeclIndex) void {
         deinitNameBuckets(Ident.Idx, self.gpa, &scope.import_alias_decls);
     }
     deinitNameBuckets(AssocValue, self.gpa, &self.assoc_value_decls);
-    deinitNameBuckets(TypePathIdx, self.gpa, &self.assoc_owner_value_decls);
     self.open_scope_decls.deinit(self.gpa);
     self.open_scope_decl_starts.deinit(self.gpa);
     self.scopes.deinit(self.gpa);
@@ -400,7 +397,6 @@ pub fn addDecl(self: *DeclIndex, decl: Decl) std.mem.Allocator.Error!DeclIdx {
                     .owner = owner_path,
                     .item = ident,
                 }, idx);
-                try addDeclToBucket(TypePathIdx, self.gpa, &self.assoc_owner_value_decls, owner_path, idx);
             }
         } else if (declKindMayBindType(decl.kind)) {
             try addDeclToBucket(Ident.Idx, self.gpa, &self.scopes.items[@backingInt(decl.scope)].type_decls, ident, idx);
@@ -478,12 +474,6 @@ fn declKindMayBindType(kind: DeclKind) bool {
     };
 }
 
-/// Return whether a scope directly declares a value-like name.
-pub fn scopeDeclaresValue(self: *const DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx) bool {
-    const scope = &self.scopes.items[@backingInt(scope_idx)];
-    return scope.value_decls.contains(ident);
-}
-
 /// Return all value-like declarations for a name in a scope.
 pub fn scopeValueDecls(self: *const DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx) NameBucket {
     const scope = &self.scopes.items[@backingInt(scope_idx)];
@@ -495,20 +485,9 @@ pub fn addImportAliasDecl(self: *DeclIndex, scope_idx: ScopeIdx, ident: Ident.Id
     try addDeclToBucket(Ident.Idx, self.gpa, &self.scopes.items[@backingInt(scope_idx)].import_alias_decls, ident, decl_idx);
 }
 
-/// Return all import declarations that introduce an alias in a scope.
-pub fn scopeImportAliasDecls(self: *const DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx) NameBucket {
-    const scope = &self.scopes.items[@backingInt(scope_idx)];
-    return scope.import_alias_decls.get(ident) orelse .{};
-}
-
 /// Return all associated value declarations for an owner type path and item name.
 pub fn assocValueDecls(self: *const DeclIndex, owner: TypePathIdx, item: Ident.Idx) NameBucket {
     return self.assoc_value_decls.get(.{ .owner = owner, .item = item }) orelse .{};
-}
-
-/// Return all associated value declarations owned by one type path.
-pub fn assocOwnerValueDecls(self: *const DeclIndex, owner: TypePathIdx) NameBucket {
-    return self.assoc_owner_value_decls.get(owner) orelse .{};
 }
 
 /// Record a package-header upper expose that canonicalization should consider
@@ -625,11 +604,6 @@ pub fn declForStatement(self: *const DeclIndex, statement: u32) ?DeclIdx {
     return self.decl_by_statement.get(statement);
 }
 
-/// Return the first parser type declaration recorded for a type path.
-pub fn typeDeclForPath(self: *const DeclIndex, path: TypePathIdx) ?DeclIdx {
-    return self.typeDeclsForPath(path).at(0);
-}
-
 /// Return all parser type declarations recorded for a type path in source order.
 pub fn typeDeclsForPath(self: *const DeclIndex, path: TypePathIdx) NameBucket {
     return self.type_decls_by_path.get(path) orelse .{};
@@ -653,12 +627,6 @@ pub fn typeDependencyTop(self: *const DeclIndex) TypeDependencyMark {
         .dependencies_top = @intCast(self.type_dependencies.items.len),
         .segments_top = @intCast(self.type_dependency_segments.items.len),
     };
-}
-
-/// Append one syntactic type dependency to the side table.
-pub fn addTypeDependency(self: *DeclIndex, ident: Ident.Idx) std.mem.Allocator.Error!void {
-    const segments = [_]Ident.Idx{ident};
-    try self.addTypeDependencySegments(&segments);
 }
 
 /// Append one syntactic type dependency path to the side table.
@@ -705,7 +673,7 @@ pub fn scopeCount(self: *const DeclIndex) usize {
     return self.scopes.items.len;
 }
 
-test "scopeDeclaresValue records only value-binding declarations" {
+test "scopeValueDecls records only value-binding declarations" {
     const gpa = std.testing.allocator;
 
     var index = DeclIndex.init(gpa);
@@ -785,13 +753,13 @@ test "scopeDeclaresValue records only value-binding declarations" {
 
     try index.exitScope(scope_idx, TokenRegion.empty());
 
-    try std.testing.expect(index.scopeDeclaresValue(scope_idx, value_ident));
-    try std.testing.expect(index.scopeDeclaresValue(scope_idx, value_anno_ident));
-    try std.testing.expect(index.scopeDeclaresValue(scope_idx, var_decl_ident));
-    try std.testing.expect(index.scopeDeclaresValue(scope_idx, var_anno_ident));
-    try std.testing.expect(!index.scopeDeclaresValue(scope_idx, import_ident));
-    try std.testing.expect(!index.scopeDeclaresValue(scope_idx, type_ident));
-    const import_alias_decls = index.scopeImportAliasDecls(scope_idx, import_ident);
+    try std.testing.expect(index.scopeValueDecls(scope_idx, value_ident).count() != 0);
+    try std.testing.expect(index.scopeValueDecls(scope_idx, value_anno_ident).count() != 0);
+    try std.testing.expect(index.scopeValueDecls(scope_idx, var_decl_ident).count() != 0);
+    try std.testing.expect(index.scopeValueDecls(scope_idx, var_anno_ident).count() != 0);
+    try std.testing.expect(index.scopeValueDecls(scope_idx, import_ident).count() == 0);
+    try std.testing.expect(index.scopeValueDecls(scope_idx, type_ident).count() == 0);
+    const import_alias_decls = index.scopes.items[@backingInt(scope_idx)].import_alias_decls.get(import_ident).?;
     try std.testing.expectEqual(@as(usize, 1), import_alias_decls.count());
     try std.testing.expectEqual(import_decl_idx, import_alias_decls.first.?);
 }
@@ -807,8 +775,8 @@ test "type dependency spans preserve parser-recorded type references" {
     const second_ident = Ident.Idx{ .attributes = attrs, .idx = 2 };
 
     const start = index.typeDependencyTop();
-    try index.addTypeDependency(first_ident);
-    try index.addTypeDependency(second_ident);
+    try index.addTypeDependencySegments(&.{first_ident});
+    try index.addTypeDependencySegments(&.{second_ident});
     try index.addTypeDependencySegments(&.{ first_ident, second_ident });
     const span = index.typeDependencySpanFrom(start);
 
@@ -924,10 +892,6 @@ test "associated value declarations are keyed by structural owner path" {
     try std.testing.expectEqual(@as(usize, 1), nested_decls.count());
     try std.testing.expectEqual(decl_idx, nested_decls.at(0).?);
 
-    const owner_decls = index.assocOwnerValueDecls(nested_path);
-    try std.testing.expectEqual(@as(usize, 1), owner_decls.count());
-    try std.testing.expectEqual(decl_idx, owner_decls.at(0).?);
-
     const parent_decls = index.assocValueDecls(parent_path, value_ident);
     try std.testing.expectEqual(@as(usize, 0), parent_decls.count());
 }
@@ -970,5 +934,5 @@ test "type path buckets preserve duplicate declarations in source order" {
     try std.testing.expectEqual(@as(usize, 2), decls.count());
     try std.testing.expectEqual(first, decls.at(0).?);
     try std.testing.expectEqual(second, decls.at(1).?);
-    try std.testing.expectEqual(first, index.typeDeclForPath(path).?);
+    try std.testing.expectEqual(first, index.typeDeclsForPath(path).at(0).?);
 }

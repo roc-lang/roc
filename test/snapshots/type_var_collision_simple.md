@@ -41,7 +41,7 @@ UNUSED VARIABLE - type_var_collision_simple.md:20:5:20:12
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "result3")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_result3")

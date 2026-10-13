@@ -349,11 +349,7 @@ pub fn calcLineStarts(self: *CommonEnv, gpa: std.mem.Allocator) Allocator.Error!
     {
         const expected_idx = self.line_starts.items.items.len;
         const idx = try self.line_starts.append(gpa, 0);
-        if (comptime builtin.mode == .debug) {
-            std.debug.assert(@backingInt(idx) == expected_idx);
-        } else if (@backingInt(idx) != expected_idx) {
-            unreachable;
-        }
+        std.debug.assert(@backingInt(idx) == expected_idx);
     }
 
     // Each newline starts the next line after it; the search is vectorized.
@@ -362,11 +358,7 @@ pub fn calcLineStarts(self: *CommonEnv, gpa: std.mem.Allocator) Allocator.Error!
     while (std.mem.findScalarPos(u8, source, search_from, '\n')) |newline| {
         const expected_idx = self.line_starts.items.items.len;
         const idx = try self.line_starts.append(gpa, @intCast(newline + 1));
-        if (comptime builtin.mode == .debug) {
-            std.debug.assert(@backingInt(idx) == expected_idx);
-        } else if (@backingInt(idx) != expected_idx) {
-            unreachable;
-        }
+        std.debug.assert(@backingInt(idx) == expected_idx);
         search_from = newline + 1;
     }
 }
@@ -425,29 +417,17 @@ test "CommonEnv.Serialized roundtrip" {
     {
         const expected_idx = original.line_starts.items.items.len;
         const idx = try original.line_starts.append(gpa, 0);
-        if (comptime builtin.mode == .debug) {
-            std.debug.assert(@backingInt(idx) == expected_idx);
-        } else if (@backingInt(idx) != expected_idx) {
-            unreachable;
-        }
+        std.debug.assert(@backingInt(idx) == expected_idx);
     }
     {
         const expected_idx = original.line_starts.items.items.len;
         const idx = try original.line_starts.append(gpa, 10);
-        if (comptime builtin.mode == .debug) {
-            std.debug.assert(@backingInt(idx) == expected_idx);
-        } else if (@backingInt(idx) != expected_idx) {
-            unreachable;
-        }
+        std.debug.assert(@backingInt(idx) == expected_idx);
     }
     {
         const expected_idx = original.line_starts.items.items.len;
         const idx = try original.line_starts.append(gpa, 20);
-        if (comptime builtin.mode == .debug) {
-            std.debug.assert(@backingInt(idx) == expected_idx);
-        } else if (@backingInt(idx) != expected_idx) {
-            unreachable;
-        }
+        std.debug.assert(@backingInt(idx) == expected_idx);
     }
 
     // Create a CompactWriter

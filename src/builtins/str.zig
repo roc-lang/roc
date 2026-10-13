@@ -1984,14 +1984,6 @@ pub fn validateUtf8Bytes(
 }
 
 /// TODO
-pub fn validateUtf8BytesX(
-    str: RocList,
-    roc_ops: *RocOps,
-) FromUtf8Try {
-    return fromUtf8(str, .Immutable, roc_ops);
-}
-
-/// TODO
 pub fn sliceHelp(
     bytes: [*]const u8,
     length: usize,
@@ -2055,6 +2047,62 @@ pub fn strTrim(
     update_mode: UpdateMode,
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
+    return trimWhitespace(true, true, input_string, update_mode, roc_ops);
+}
+
+/// Str.trim_start - removes leading whitespace.
+///
+/// ## Ownership
+/// - `input_string`: **consumes** - caller loses ownership
+/// - Returns: **copy-on-write** or **seamless-slice** depending on input
+///
+/// Behavior depends on input state:
+/// - Empty string: returns empty (decrefs input if heap-allocated)
+/// - Small string: creates new small string with trimmed bytes
+/// - Unique with no leading whitespace: returns same allocation unchanged
+/// - Otherwise: creates seamless slice pointing to trimmed region
+///
+/// An `.InPlace` update mode means the caller proved the string unique, so
+/// the big-string runtime uniqueness check is skipped.
+pub fn strTrimStart(
+    input_string: RocStr,
+    update_mode: UpdateMode,
+    roc_ops: *RocOps,
+) callconv(.c) RocStr {
+    return trimWhitespace(true, false, input_string, update_mode, roc_ops);
+}
+
+/// Str.trim_end - removes trailing whitespace.
+///
+/// ## Ownership
+/// - `input_string`: **consumes** - caller loses ownership
+/// - Returns: **copy-on-write** - may be same allocation if unique
+///
+/// Behavior depends on input state:
+/// - Empty string: returns empty (decrefs input if heap-allocated)
+/// - Small string: creates new small string with trimmed bytes
+/// - Unique: shrinks length in place (same allocation)
+/// - Shared: creates seamless slice pointing to trimmed region
+///
+/// An `.InPlace` update mode means the caller proved the string unique, so
+/// the big-string runtime uniqueness check is skipped.
+pub fn strTrimEnd(
+    input_string: RocStr,
+    update_mode: UpdateMode,
+    roc_ops: *RocOps,
+) callconv(.c) RocStr {
+    return trimWhitespace(false, true, input_string, update_mode, roc_ops);
+}
+
+/// Shared body of `strTrim`, `strTrimStart`, and `strTrimEnd`, removing
+/// leading whitespace when `trim_start` and trailing whitespace when `trim_end`.
+inline fn trimWhitespace(
+    comptime trim_start: bool,
+    comptime trim_end: bool,
+    input_string: RocStr,
+    update_mode: UpdateMode,
+    roc_ops: *RocOps,
+) RocStr {
     var string = input_string;
 
     if (string.isEmpty()) {
@@ -2063,16 +2111,20 @@ pub fn strTrim(
     }
 
     const bytes_ptr = string.asU8ptrMut();
-
-    const leading_bytes = countLeadingWhitespaceBytes(string);
     const original_len = string.len();
 
-    if (original_len == leading_bytes) {
+    const leading_bytes = if (trim_start) countLeadingWhitespaceBytes(string) else 0;
+    if (trim_start and original_len == leading_bytes) {
         string.decref(roc_ops);
         return RocStr.empty();
     }
 
-    const trailing_bytes = countTrailingWhitespaceBytes(string);
+    const trailing_bytes = if (trim_end) countTrailingWhitespaceBytes(string) else 0;
+    if (!trim_start and original_len == trailing_bytes) {
+        string.decref(roc_ops);
+        return RocStr.empty();
+    }
+
     const new_len = original_len - leading_bytes - trailing_bytes;
 
     if (string.isSmallStr()) {
@@ -2097,138 +2149,6 @@ pub fn strTrim(
         // Not unique or removing leading bytes, just make a slice.
         return RocStr{
             .bytes = bytes_ptr + leading_bytes,
-            .capacity_or_alloc_ptr = RocStr.encodeSliceAllocationPtr(bytes_ptr),
-            .length = new_len,
-        };
-    }
-}
-
-/// Str.trim_start - removes leading whitespace.
-///
-/// ## Ownership
-/// - `input_string`: **consumes** - caller loses ownership
-/// - Returns: **copy-on-write** or **seamless-slice** depending on input
-///
-/// Behavior depends on input state:
-/// - Empty string: returns empty (decrefs input if heap-allocated)
-/// - Small string: creates new small string with trimmed bytes
-/// - Unique with no leading whitespace: returns same allocation unchanged
-/// - Otherwise: creates seamless slice pointing to trimmed region
-///
-/// An `.InPlace` update mode means the caller proved the string unique, so
-/// the big-string runtime uniqueness check is skipped.
-pub fn strTrimStart(
-    input_string: RocStr,
-    update_mode: UpdateMode,
-    roc_ops: *RocOps,
-) callconv(.c) RocStr {
-    var string = input_string;
-
-    if (string.isEmpty()) {
-        string.decref(roc_ops);
-        return RocStr.empty();
-    }
-
-    const bytes_ptr = string.asU8ptrMut();
-
-    const leading_bytes = countLeadingWhitespaceBytes(string);
-    const original_len = string.len();
-
-    if (original_len == leading_bytes) {
-        string.decref(roc_ops);
-        return RocStr.empty();
-    }
-
-    const new_len = original_len - leading_bytes;
-
-    if (string.isSmallStr()) {
-        // Just create another small string of the correct bytes.
-        // No need to decref because it is a small string.
-        return smallStringFromPtr(string.asU8ptr() + leading_bytes, new_len);
-    } else if (leading_bytes == 0 and string.canReuseAllocation(update_mode)) {
-        // Big and unique with no leading bytes to remove.
-        // Just take ownership and shrink the length.
-        var new_string = string;
-        new_string.length = new_len;
-
-        return new_string;
-    } else if (string.isSeamlessSlice()) {
-        // Already a seamless slice, just update the range.
-        return RocStr{
-            .bytes = bytes_ptr + leading_bytes,
-            .capacity_or_alloc_ptr = string.capacity_or_alloc_ptr,
-            .length = new_len,
-        };
-    } else {
-        // Not unique or removing leading bytes, just make a slice.
-        return RocStr{
-            .bytes = bytes_ptr + leading_bytes,
-            .capacity_or_alloc_ptr = RocStr.encodeSliceAllocationPtr(bytes_ptr),
-            .length = new_len,
-        };
-    }
-}
-
-/// Str.trim_end - removes trailing whitespace.
-///
-/// ## Ownership
-/// - `input_string`: **consumes** - caller loses ownership
-/// - Returns: **copy-on-write** - may be same allocation if unique
-///
-/// Behavior depends on input state:
-/// - Empty string: returns empty (decrefs input if heap-allocated)
-/// - Small string: creates new small string with trimmed bytes
-/// - Unique: shrinks length in place (same allocation)
-/// - Shared: creates seamless slice pointing to trimmed region
-///
-/// An `.InPlace` update mode means the caller proved the string unique, so
-/// the big-string runtime uniqueness check is skipped.
-pub fn strTrimEnd(
-    input_string: RocStr,
-    update_mode: UpdateMode,
-    roc_ops: *RocOps,
-) callconv(.c) RocStr {
-    var string = input_string;
-
-    if (string.isEmpty()) {
-        string.decref(roc_ops);
-        return RocStr.empty();
-    }
-
-    const bytes_ptr = string.asU8ptrMut();
-
-    const trailing_bytes = countTrailingWhitespaceBytes(string);
-    const original_len = string.len();
-
-    if (original_len == trailing_bytes) {
-        string.decref(roc_ops);
-        return RocStr.empty();
-    }
-
-    const new_len = original_len - trailing_bytes;
-
-    if (string.isSmallStr()) {
-        // Just create another small string of the correct bytes.
-        // No need to decref because it is a small string.
-        return smallStringFromPtr(string.asU8ptr(), new_len);
-    } else if (string.canReuseAllocation(update_mode)) {
-        // Big and unique with no leading bytes to remove.
-        // Just take ownership and shrink the length.
-        var new_string = string;
-        new_string.length = new_len;
-
-        return new_string;
-    } else if (string.isSeamlessSlice()) {
-        // Already a seamless slice, just update the range.
-        return RocStr{
-            .bytes = bytes_ptr,
-            .capacity_or_alloc_ptr = string.capacity_or_alloc_ptr,
-            .length = new_len,
-        };
-    } else {
-        // Not unique, just make a slice.
-        return RocStr{
-            .bytes = bytes_ptr,
             .capacity_or_alloc_ptr = RocStr.encodeSliceAllocationPtr(bytes_ptr),
             .length = new_len,
         };
@@ -2267,6 +2187,31 @@ fn countTrailingWhitespaceBytes(string: RocStr) usize {
     return byte_count;
 }
 
+/// Shared body of `strWithAsciiLowercased` and `strWithAsciiUppercased`,
+/// mapping every byte through `convert`.
+inline fn strWithAsciiCase(
+    comptime convert: fn (u8) u8,
+    string: RocStr,
+    update_mode: UpdateMode,
+    roc_ops: *RocOps,
+) RocStr {
+    // Exclusive seamless slices may edit bytes inside their visible window: Str
+    // elements are plain bytes, and refcount 1 means no other value can observe
+    // the backing allocation. This is not an allocation-reuse decision.
+    var new_str = if (string.isExclusive(update_mode))
+        string
+    else blk: {
+        string.decref(roc_ops);
+        break :blk RocStr.fromSlice(string.asSlice(), roc_ops);
+    };
+
+    const new_str_bytes = new_str.asU8ptrMut()[0..string.len()];
+    for (new_str_bytes) |*c| {
+        c.* = convert(c.*);
+    }
+    return new_str;
+}
+
 /// Str.with_ascii_lowercased
 ///
 /// Returns a string with all ASCII letters converted to lowercase.
@@ -2286,21 +2231,7 @@ pub fn strWithAsciiLowercased(
     update_mode: UpdateMode,
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
-    // Exclusive seamless slices may edit bytes inside their visible window: Str
-    // elements are plain bytes, and refcount 1 means no other value can observe
-    // the backing allocation. This is not an allocation-reuse decision.
-    var new_str = if (string.isExclusive(update_mode))
-        string
-    else blk: {
-        string.decref(roc_ops);
-        break :blk RocStr.fromSlice(string.asSlice(), roc_ops);
-    };
-
-    const new_str_bytes = new_str.asU8ptrMut()[0..string.len()];
-    for (new_str_bytes) |*c| {
-        c.* = ascii.toLower(c.*);
-    }
-    return new_str;
+    return strWithAsciiCase(ascii.toLower, string, update_mode, roc_ops);
 }
 
 /// Str.with_ascii_uppercased
@@ -2322,21 +2253,7 @@ pub fn strWithAsciiUppercased(
     update_mode: UpdateMode,
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
-    // Exclusive seamless slices may edit bytes inside their visible window: Str
-    // elements are plain bytes, and refcount 1 means no other value can observe
-    // the backing allocation. This is not an allocation-reuse decision.
-    var new_str = if (string.isExclusive(update_mode))
-        string
-    else blk: {
-        string.decref(roc_ops);
-        break :blk RocStr.fromSlice(string.asSlice(), roc_ops);
-    };
-
-    const new_str_bytes = new_str.asU8ptrMut()[0..string.len()];
-    for (new_str_bytes) |*c| {
-        c.* = ascii.toUpper(c.*);
-    }
-    return new_str;
+    return strWithAsciiCase(ascii.toUpper, string, update_mode, roc_ops);
 }
 
 /// TODO: Document strCaselessAsciiEquals.
@@ -3982,7 +3899,7 @@ test "validateUtf8Bytes: ascii" {
     const ptr: [*]const u8 = @as([*]const u8, @ptrCast(raw));
     const list = sliceHelp(ptr, raw.len, test_env.getOps());
 
-    const str_result = validateUtf8BytesX(list, test_env.getOps());
+    const str_result = fromUtf8(list, .Immutable, test_env.getOps());
     defer str_result.string.decref(test_env.getOps());
     try expectOk(str_result);
 }
@@ -3995,7 +3912,7 @@ test "validateUtf8Bytes: unicode œ" {
     const ptr: [*]const u8 = @as([*]const u8, @ptrCast(raw));
     const list = sliceHelp(ptr, raw.len, test_env.getOps());
 
-    const str_result = validateUtf8BytesX(list, test_env.getOps());
+    const str_result = fromUtf8(list, .Immutable, test_env.getOps());
     defer str_result.string.decref(test_env.getOps());
     try expectOk(str_result);
 }
@@ -4008,7 +3925,7 @@ test "validateUtf8Bytes: unicode ∆" {
     const ptr: [*]const u8 = @as([*]const u8, @ptrCast(raw));
     const list = sliceHelp(ptr, raw.len, test_env.getOps());
 
-    const str_result = validateUtf8BytesX(list, test_env.getOps());
+    const str_result = fromUtf8(list, .Immutable, test_env.getOps());
     defer str_result.string.decref(test_env.getOps());
     try expectOk(str_result);
 }
@@ -4021,7 +3938,7 @@ test "validateUtf8Bytes: emoji" {
     const ptr: [*]const u8 = @as([*]const u8, @ptrCast(raw));
     const list = sliceHelp(ptr, raw.len, test_env.getOps());
 
-    const str_result = validateUtf8BytesX(list, test_env.getOps());
+    const str_result = fromUtf8(list, .Immutable, test_env.getOps());
     defer str_result.string.decref(test_env.getOps());
     try expectOk(str_result);
 }
@@ -4034,7 +3951,7 @@ test "validateUtf8Bytes: unicode ∆ in middle of array" {
     const ptr: [*]const u8 = @as([*]const u8, @ptrCast(raw));
     const list = sliceHelp(ptr, raw.len, test_env.getOps());
 
-    const str_result = validateUtf8BytesX(list, test_env.getOps());
+    const str_result = fromUtf8(list, .Immutable, test_env.getOps());
     defer str_result.string.decref(test_env.getOps());
     try expectOk(str_result);
 }

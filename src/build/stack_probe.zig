@@ -151,17 +151,6 @@ pub fn generateStackProbeObject(allocator: std.mem.Allocator) Allocator.Error![]
     return output.toOwnedSlice(allocator);
 }
 
-/// Write the stack probe object file to a path.
-pub fn writeStackProbeObject(allocator: std.mem.Allocator, std_io: std.Io, path: []const u8) (std.mem.Allocator.Error || std.Io.Dir.WriteFileError)!void {
-    const obj_bytes = try generateStackProbeObject(allocator);
-    defer allocator.free(obj_bytes);
-
-    try std.Io.Dir.cwd().writeFile(std_io, .{
-        .sub_path = path,
-        .data = obj_bytes,
-    });
-}
-
 test "generate stack probe object" {
     const obj_bytes = try generateStackProbeObject(std.testing.allocator);
     defer std.testing.allocator.free(obj_bytes);

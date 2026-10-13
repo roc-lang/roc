@@ -264,20 +264,6 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             return self.entries.items.len;
         }
 
-        /// Check if there are no duplicates (assumes sorted)
-        pub fn isDeduplicated(self: *const Self) bool {
-            const entries = self.entries.items;
-            if (entries.len <= 1) return true;
-
-            for (1..entries.len) |i| {
-                if (keyEql(entries[i - 1].key, entries[i].key)) {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
         /// Serialized representation of SortedArrayBuilder
         /// Uses extern struct to guarantee consistent field layout across optimization levels.
         pub const Serialized = extern struct {

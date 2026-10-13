@@ -24,7 +24,7 @@ TYPE MISMATCH - generalize_alias_assoc_fn_record.md:8:42:8:45
 		(title "Type Mismatch")
 		(region (start 8 42) (end 8 45))
 		(headline
-			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both:"))
+			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both."))
 		(document
 			(source-region (file "generalize_alias_assoc_fn_record.md") (start 8 42) (end 8 45) (annotation error) (line-text "main = ((bag.run)([1, 2, 3]), (bag.run)([\"a\", \"b\"]))"))
 			(line-break)

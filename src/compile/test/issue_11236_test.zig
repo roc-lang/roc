@@ -40,7 +40,6 @@ fn hasTerminalCheckedError(store: *const lir.LirStore) bool {
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
@@ -64,7 +63,7 @@ fn hasTerminalCheckedError(store: *const lir.LirStore) bool {
                 .decref_if_initialized,
                 .free,
                 => |stmt| current = stmt.next,
-                .boxy_tag_match, .expect_err, .comptime_exhaustiveness_failed, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret => break,
+                .boxy_tag_match, .expect_err, .comptime_exhaustiveness_failed, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret => break,
             }
         }
     }

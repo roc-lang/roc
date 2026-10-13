@@ -426,12 +426,8 @@ fn checkedU32(value: usize, comptime invariant_name: []const u8) u32 {
 }
 
 fn assertAppendRange(expected_start: usize, expected_len: usize, actual_start: usize, actual_len: usize) void {
-    if (comptime builtin.mode == .debug) {
-        std.debug.assert(actual_start == expected_start);
-        std.debug.assert(actual_len == expected_len);
-    } else if (actual_start != expected_start or actual_len != expected_len) {
-        unreachable;
-    }
+    std.debug.assert(actual_start == expected_start);
+    std.debug.assert(actual_len == expected_len);
 }
 
 fn expectedNextStringContentStart(previous_end: *usize, string_len: usize) u32 {

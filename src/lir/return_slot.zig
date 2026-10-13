@@ -23,8 +23,6 @@
 //! `out` with an explicit destination store instead of building a temporary.
 
 const std = @import("std");
-const invariant = @import("base").invariant;
-const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const core = @import("lir_core");
 const layout_mod = @import("layout");
@@ -42,106 +40,23 @@ pub const ResourceError = Allocator.Error;
 
 /// Rewrite eligible aggregate returns to destination-slot helper calls.
 pub fn run(store: *LirStore, layouts: *layout_mod.Store) ResourceError!void {
-    var pass = ReturnSlotPass{
-        .store = store,
-        .layouts = layouts,
-        .variants = std.AutoHashMap(VariantKey, LIR.LirProcSpecId).init(store.allocator),
-    };
-    defer pass.variants.deinit();
-
-    const proc_count = store.procSpecCount();
-    var proc_index: usize = 0;
-    while (proc_index < proc_count) : (proc_index += 1) {
-        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(proc_index));
-        // Only a body with the shape's flag can carry the caller shape; Debug
-        // builds run the excluded procedures too and verify nothing rewrites.
-        const admitted = store.getProcSpecImmediate(proc_id).shapes.interned_call_result;
-        if (!admitted and builtin.mode != .debug) continue;
-        const rewrote = try pass.transformProc(proc_id);
-        if (rewrote and !admitted) invariant("{s}", .{"return-slot pass rewrote a procedure whose shapes excluded it"});
-    }
+    try body_clone.CallResultFusion(Spec).run(store, layouts);
 }
 
-const VariantKey = struct {
-    source: LIR.LirProcSpecId,
-    result_layout: layout_mod.Idx,
-};
+/// The consumer this pass fuses: a `ptr_store` of the call result into a
+/// destination pointing at the result's own layout.
+const Spec = struct {
+    pub const name = "return-slot";
+    pub const shape = "interned_call_result";
+    pub const origin_kind: LIR.OriginKind = .return_slot;
+    pub const State = *layout_mod.Store;
+    pub const VariantKey = struct {
+        source: LIR.LirProcSpecId,
+        result_layout: layout_mod.Idx,
+    };
 
-const ReturnSlotPass = struct {
-    store: *LirStore,
-    layouts: *layout_mod.Store,
-    variants: std.AutoHashMap(VariantKey, LIR.LirProcSpecId),
-
-    fn transformProc(self: *ReturnSlotPass, proc_id: LIR.LirProcSpecId) ResourceError!bool {
-        const body = body_clone.rewritableProcBody(self.store, proc_id) orelse return false;
-
-        var stmts = try body_clone.ReachableStmts.init(self.store, body);
-        defer stmts.deinit();
-        var rewrote = false;
-        while (try stmts.next()) |stmt_id| {
-            if (try self.rewriteAt(body, stmt_id)) rewrote = true;
-        }
-        return rewrote;
-    }
-
-    fn rewriteAt(self: *ReturnSlotPass, proc_body: CFStmtId, call_stmt_id: CFStmtId) ResourceError!bool {
-        const call_stmt_node = self.store.getCFStmt(call_stmt_id);
-        if (call_stmt_node != .assign_call) return false;
-        const call_stmt = call_stmt_node.assign_call;
-
-        const result_layout = self.store.getLocal(call_stmt.target).layout_idx;
-        if (!self.returnSlotEligible(result_layout)) return false;
-
-        const callee = self.store.getProcSpec(call_stmt.proc);
-        if (callee.body == null or callee.hosted != null or callee.abi != .roc) return false;
-        if (callee.ret_layout != result_layout) return false;
-
-        var chain = std.ArrayList(LocalId).empty;
-        defer chain.deinit(self.store.allocator);
-        const stored_alias = try body_clone.forwardLocalAliasChainInto(self.store, self.store.allocator, call_stmt.target, call_stmt.next, &chain);
-        const stored_value = stored_alias.value;
-        const store_stmt_id = stored_alias.next;
-        const store_stmt_node = self.store.getCFStmt(store_stmt_id);
-        if (store_stmt_node != .assign_low_level) return false;
-        const store_stmt = store_stmt_node.assign_low_level;
-        if (store_stmt.op != .ptr_store) return false;
-        if (self.store.getLocal(store_stmt.target).layout_idx != .zst) return false;
-
-        const store_args = self.store.getLocalSpan(store_stmt.args);
-        if (store_args.len != 2) return false;
-        const destination = GuardedList.at(store_args, 0);
-        if (GuardedList.at(store_args, 1) != stored_value) return false;
-
-        const destination_layout = self.layouts.getLayout(self.store.getLocal(destination).layout_idx);
-        if (destination_layout.tag != .ptr) return false;
-        if (destination_layout.getIdx() != result_layout) return false;
-
-        if (!try body_clone.chainIsSingleUse(self.store, proc_body, chain.items)) return false;
-
-        const variant = try self.returnSlotVariant(call_stmt.proc, result_layout);
-
-        var args = std.ArrayList(LocalId).empty;
-        defer args.deinit(self.store.allocator);
-        try args.append(self.store.allocator, destination);
-        const call_args = self.store.getLocalSpan(call_stmt.args);
-        for (0..call_args.len) |index| {
-            try args.append(self.store.allocator, GuardedList.at(call_args, index));
-        }
-
-        const slot_args = try self.store.addLocalSpan(args.items);
-        try self.store.replaceCFStmt(call_stmt_id, .{ .assign_call = .{
-            .target = store_stmt.target,
-            .proc = variant,
-            .args = slot_args,
-            .is_cold = call_stmt.is_cold,
-            .next = store_stmt.next,
-        } }, slotOrigin(self.store.stmtOrigin(call_stmt_id)));
-
-        return true;
-    }
-
-    fn returnSlotEligible(self: *const ReturnSlotPass, result_layout: layout_mod.Idx) bool {
-        return switch (self.layouts.getLayout(result_layout).tag) {
+    pub fn resultEligible(layouts: State, result_layout: layout_mod.Idx) bool {
+        return switch (layouts.getLayout(result_layout).tag) {
             .struct_, .tag_union => true,
             .scalar,
             .box,
@@ -157,30 +72,43 @@ const ReturnSlotPass = struct {
         };
     }
 
-    fn returnSlotVariant(
-        self: *ReturnSlotPass,
-        source: LIR.LirProcSpecId,
+    pub fn match(
+        layouts: State,
+        store: *const LirStore,
+        call: @FieldType(LIR.CFStmt, "assign_call"),
         result_layout: layout_mod.Idx,
-    ) ResourceError!LIR.LirProcSpecId {
-        const key = VariantKey{ .source = source, .result_layout = result_layout };
-        if (self.variants.get(key)) |variant| return variant;
+        stored: body_clone.ForwardedAlias,
+    ) ?body_clone.CallResultFusion(Spec).Match {
+        const store_stmt_node = store.getCFStmt(stored.next);
+        if (store_stmt_node != .assign_low_level) return null;
+        const store_stmt = store_stmt_node.assign_low_level;
+        if (store_stmt.op != .ptr_store) return null;
+        if (store.getLocal(store_stmt.target).layout_idx != .zst) return null;
 
-        const variant = try self.createReturnSlotVariant(source, result_layout);
-        try self.variants.put(key, variant);
-        return variant;
+        const store_args = store.getLocalSpan(store_stmt.args);
+        if (store_args.len != 2) return null;
+        const destination = GuardedList.at(store_args, 0);
+        if (GuardedList.at(store_args, 1) != stored.value) return null;
+
+        const destination_layout = layouts.getLayout(store.getLocal(destination).layout_idx);
+        if (destination_layout.tag != .ptr) return null;
+        if (destination_layout.getIdx() != result_layout) return null;
+
+        return .{
+            .key = .{ .source = call.proc, .result_layout = result_layout },
+            .leading_arg = destination,
+            .target = store_stmt.target,
+            .next = store_stmt.next,
+        };
     }
 
-    fn createReturnSlotVariant(
-        self: *ReturnSlotPass,
-        source: LIR.LirProcSpecId,
-        result_layout: layout_mod.Idx,
-    ) ResourceError!LIR.LirProcSpecId {
-        const out_ptr = try self.store.addLocal(.{ .layout_idx = try self.layouts.insertPtr(result_layout) });
-        const store_unit = try self.store.addLocal(.{ .layout_idx = .zst });
+    pub fn createVariant(layouts: State, store: *LirStore, key: VariantKey) ResourceError!LIR.LirProcSpecId {
+        const out_ptr = try store.addLocal(.{ .layout_idx = try layouts.insertPtr(key.result_layout) });
+        const store_unit = try store.addLocal(.{ .layout_idx = .zst });
         return try body_clone.cloneCallVariant(
             ReturnSlotRewriter,
-            self.store,
-            source,
+            store,
+            key.source,
             .{ .out_ptr = out_ptr, .store_unit = store_unit },
             .{
                 .leading_args = &.{out_ptr},

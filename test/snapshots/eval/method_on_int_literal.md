@@ -9,7 +9,7 @@ type=repl
 ~~~
 # OUTPUT
 **Type Not Determined**
-Nothing in this program determines the type of this number:
+Nothing in this program determines the type of this number.
 ```roc
 35.foo()
 ```

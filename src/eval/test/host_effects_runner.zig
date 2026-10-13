@@ -494,7 +494,7 @@ fn matchesExpectation(run: RuntimeHostEnv.RecordedRun, tc: TestCase) bool {
 }
 
 fn runSingleTest(io: std.Io, allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
-    var compiled = helpers.compileProgram(allocator, io, tc.source_kind, tc.source, tc.imports) catch |err| {
+    var compiled = helpers.compileProgram(allocator, io, tc.source_kind, tc.source, tc.imports, .{}) catch |err| {
         return .{
             .status = .fail,
             .message = allocator.dupe(u8, @errorName(err)) catch null,

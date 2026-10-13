@@ -906,6 +906,45 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: 
     return success;
 }
 
+/// Start canonicalizing `env` as a snapshot entry module that auto-imports the builtin module.
+fn initSnapshotCan(allocator: Allocator, env: *ModuleEnv, parse_ast: *AST, builtin_env: *const ModuleEnv, config: *const Config) Allocator.Error!Can {
+    return Can.initModule(CoreCtx.default(allocator, allocator, app_io), env, parse_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_env,
+            .builtin_indices = config.builtin_indices,
+        },
+        .is_entry_module = true,
+    });
+}
+
+/// Resolve `env`'s imports against `imported_envs` and create a type checker for it.
+/// The caller calls `fixupTypeWriter` once the checker is at its final address.
+fn initSnapshotChecker(
+    allocator: Allocator,
+    env: *ModuleEnv,
+    imported_envs: []const *const ModuleEnv,
+    module_envs: *std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
+    config: *const Config,
+) SnapshotError!Check {
+    if (config.builtin_module) |builtin_env| {
+        try Can.populateModuleEnvs(module_envs, env, builtin_env, config.builtin_indices);
+    }
+    try can.resolveDeferredFileImports(env, .{ .read = .{ .ctx = CoreCtx.default(allocator, allocator, app_io) } });
+    env.imports.clearResolvedModules();
+    try env.imports.resolveImportsByExactModuleName(env, imported_envs);
+    env.imports.markUnresolvedImportsFailedBeforeChecking();
+    try can.resolveDeferredImports(env, .{
+        .imports = .{ .resolved_store = imported_envs },
+    });
+    return Check.init(allocator, &env.types, env, imported_envs, module_envs, &env.store.regions, .{
+        .bool_stmt = config.builtin_indices.bool_type,
+        .try_stmt = config.builtin_indices.try_type,
+        .str_stmt = config.builtin_indices.str_type,
+        .builtin_module = config.builtin_module,
+        .builtin_indices = config.builtin_indices,
+    });
+}
+
 fn processSnapshotContent(
     allocator: Allocator,
     input_content: Content,
@@ -988,14 +1027,6 @@ fn processSnapshotContent(
     // Snapshot evaluation must honor the same whole-source rejection as the CLI.
     if (parse_ast.source_rejected) return error.ParseFailed;
 
-    const builtin_ctx: Check.BuiltinContext = .{
-        .bool_stmt = config.builtin_indices.bool_type,
-        .try_stmt = config.builtin_indices.try_type,
-        .str_stmt = config.builtin_indices.str_type,
-        .builtin_module = config.builtin_module,
-        .builtin_indices = config.builtin_indices,
-    };
-
     var maybe_expr_idx: ?Can.CanonicalizedExpr = null;
 
     switch (content.meta.node_type) {
@@ -1006,14 +1037,7 @@ fn processSnapshotContent(
             // Snippet, mono, and reporting tests are full modules
             const builtin_env = config.builtin_module orelse return error.MissingBuiltinModule;
 
-            const roc_ctx = CoreCtx.default(allocator, allocator, app_io);
-            var czer = try Can.initModule(roc_ctx, can_ir, parse_ast, .{
-                .builtin_types = .{
-                    .builtin_module_env = builtin_env,
-                    .builtin_indices = config.builtin_indices,
-                },
-                .is_entry_module = true,
-            });
+            var czer = try initSnapshotCan(allocator, can_ir, parse_ast, builtin_env, config);
             defer czer.deinit();
             try czer.canonicalizeFile();
         },
@@ -1024,14 +1048,7 @@ fn processSnapshotContent(
             // Expr and statement tests use different canonicalization methods
             const builtin_env = config.builtin_module orelse return error.MissingBuiltinModule;
 
-            const roc_ctx = CoreCtx.default(allocator, allocator, app_io);
-            var czer = try Can.initModule(roc_ctx, can_ir, parse_ast, .{
-                .builtin_types = .{
-                    .builtin_module_env = builtin_env,
-                    .builtin_indices = config.builtin_indices,
-                },
-                .is_entry_module = true,
-            });
+            var czer = try initSnapshotCan(allocator, can_ir, parse_ast, builtin_env, config);
             defer czer.deinit();
 
             switch (content.meta.node_type) {
@@ -1118,42 +1135,13 @@ fn processSnapshotContent(
 
     // Use the shared type checking function to ensure identical behavior with roc check
     // We need to keep module_envs alive until after we're done with the checker (for type printing)
-    var module_envs_for_repl_expr: ?std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType) = null;
-    defer if (module_envs_for_repl_expr) |*envs| envs.deinit();
-
-    var module_envs_for_snippet: ?std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType) = null;
-    defer if (module_envs_for_snippet) |*envs| envs.deinit();
-
-    var module_envs_for_file: ?std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType) = null;
-    defer if (module_envs_for_file) |*envs| envs.deinit();
+    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+    defer module_envs.deinit();
 
     var solver = if (maybe_expr_idx) |expr_idx| blk: {
-        // For REPL/expr tests, create module_envs for type checking
-        var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
-
-        if (config.builtin_module) |builtin_env| {
-            try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
-        }
-        try can.resolveDeferredFileImports(can_ir, .{ .read = .{ .ctx = CoreCtx.default(allocator, allocator, app_io) } });
-        can_ir.imports.clearResolvedModules();
-        try can_ir.imports.resolveImportsByExactModuleName(can_ir, builtin_modules.items);
-        can_ir.imports.markUnresolvedImportsFailedBeforeChecking();
-        try can.resolveDeferredImports(can_ir, .{
-            .imports = .{ .resolved_store = builtin_modules.items },
-        });
-
-        var checker = try Check.init(
-            allocator,
-            &can_ir.types,
-            can_ir,
-            builtin_modules.items,
-            &module_envs,
-            &can_ir.store.regions,
-            builtin_ctx,
-        );
+        var checker = try initSnapshotChecker(allocator, can_ir, builtin_modules.items, &module_envs, config);
         checker.fixupTypeWriter();
         try checker.checkExprRepl(expr_idx.idx);
-        module_envs_for_repl_expr = module_envs; // Keep alive
         break :blk checker;
     } else switch (content.meta.node_type) {
         .file, .package, .platform, .app => blk: {
@@ -1167,10 +1155,6 @@ fn processSnapshotContent(
             const builtin_env_nonconst: *ModuleEnv = @constCast(builtin_env);
             const imported_envs_for_file: []const *ModuleEnv = &[_]*ModuleEnv{builtin_env_nonconst};
 
-            // Initialize module_envs_for_file and pass it to the function
-            // This way it stays alive until the defer at line 1249
-            module_envs_for_file = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
-
             const roc_ctx_for_check = CoreCtx.default(allocator, allocator, app_io);
             const checker = try compile.package.canonicalizeAndTypeCheckModule(
                 roc_ctx_for_check,
@@ -1180,7 +1164,7 @@ fn processSnapshotContent(
                 builtin_env,
                 config.builtin_indices,
                 imported_envs_for_file,
-                &module_envs_for_file.?,
+                &module_envs,
                 std.fs.path.dirname(output_path),
                 if (content.meta.include_module_validation_diagnostics) .checking else .none,
             );
@@ -1188,31 +1172,9 @@ fn processSnapshotContent(
         },
         .snippet, .statement, .header, .expr, .mono, .reporting => blk: {
             // For snippet/statement/header/expr/mono tests, type check the already-canonicalized IR
-            var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
-
-            if (config.builtin_module) |builtin_env| {
-                try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
-            }
-            try can.resolveDeferredFileImports(can_ir, .{ .read = .{ .ctx = CoreCtx.default(allocator, allocator, app_io) } });
-            can_ir.imports.clearResolvedModules();
-            try can_ir.imports.resolveImportsByExactModuleName(can_ir, builtin_modules.items);
-            can_ir.imports.markUnresolvedImportsFailedBeforeChecking();
-            try can.resolveDeferredImports(can_ir, .{
-                .imports = .{ .resolved_store = builtin_modules.items },
-            });
-
-            var checker = try Check.init(
-                allocator,
-                &can_ir.types,
-                can_ir,
-                builtin_modules.items,
-                &module_envs,
-                &can_ir.store.regions,
-                builtin_ctx,
-            );
+            var checker = try initSnapshotChecker(allocator, can_ir, builtin_modules.items, &module_envs, config);
             checker.fixupTypeWriter();
             try checker.checkFile();
-            module_envs_for_snippet = module_envs; // Keep alive
             break :blk checker;
         },
         .repl, .dev_object, .docs => unreachable, // Should never reach here - handled earlier
@@ -2179,17 +2141,7 @@ fn generateExpectedSection(
                 \\                <div class="expected">
             );
 
-            // For HTML, escape the expected content
-            for (expected) |char| {
-                switch (char) {
-                    '<' => try writer.writer.writeAll("&lt;"),
-                    '>' => try writer.writer.writeAll("&gt;"),
-                    '&' => try writer.writer.writeAll("&amp;"),
-                    '"' => try writer.writer.writeAll("&quot;"),
-                    '\'' => try writer.writer.writeAll("&#39;"),
-                    else => try writer.writer.writeByte(char),
-                }
-            }
+            try escapeHtmlText(&writer.writer, expected);
 
             try writer.writer.writeAll(
                 \\
@@ -2784,14 +2736,7 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
     };
 
     // Canonicalize the parsed MONO output
-    const mono_roc_ctx = CoreCtx.default(allocator, allocator, app_io);
-    var czer = Can.initModule(mono_roc_ctx, &validation_env, validation_ast, .{
-        .builtin_types = .{
-            .builtin_module_env = builtin_env,
-            .builtin_indices = config.builtin_indices,
-        },
-        .is_entry_module = true,
-    }) catch |err| {
+    var czer = initSnapshotCan(allocator, &validation_env, validation_ast, builtin_env, config) catch |err| {
         std.log.err("MONO VALIDATION ERROR in {s}: Failed to initialize canonicalizer: {}", .{ source_path, err });
         return false;
     };
@@ -2834,50 +2779,10 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
     }
 
     // Type-check the canonicalized MONO output
-    // Create a BuiltinContext using the config's builtin information
-    const builtin_ctx: Check.BuiltinContext = .{
-        .bool_stmt = config.builtin_indices.bool_type,
-        .try_stmt = config.builtin_indices.try_type,
-        .str_stmt = config.builtin_indices.str_type,
-        .builtin_module = config.builtin_module,
-        .builtin_indices = config.builtin_indices,
-    };
-
     var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
     defer module_envs_map.deinit();
 
-    Can.populateModuleEnvs(&module_envs_map, &validation_env, builtin_env, config.builtin_indices) catch |err| {
-        std.log.err("MONO VALIDATION ERROR in {s}: Failed to populate auto-imported types: {}", .{ source_path, err });
-        return false;
-    };
-
-    const imported_modules: []const *const ModuleEnv = &.{builtin_env};
-    can.resolveDeferredFileImports(&validation_env, .{ .read = .{ .ctx = mono_roc_ctx } }) catch |err| {
-        std.log.err("MONO VALIDATION ERROR in {s}: Failed to read file imports: {}", .{ source_path, err });
-        return false;
-    };
-    validation_env.imports.clearResolvedModules();
-    validation_env.imports.resolveImportsByExactModuleName(&validation_env, imported_modules) catch |err| {
-        std.log.err("MONO VALIDATION ERROR in {s}: Failed to resolve imports: {}", .{ source_path, err });
-        return false;
-    };
-    validation_env.imports.markUnresolvedImportsFailedBeforeChecking();
-    can.resolveDeferredImports(&validation_env, .{
-        .imports = .{ .resolved_store = imported_modules },
-    }) catch |err| {
-        std.log.err("MONO VALIDATION ERROR in {s}: Failed to resolve deferred imports: {}", .{ source_path, err });
-        return false;
-    };
-
-    var checker = Check.init(
-        allocator,
-        &validation_env.types,
-        &validation_env,
-        imported_modules,
-        &module_envs_map,
-        &validation_env.store.regions,
-        builtin_ctx,
-    ) catch |err| {
+    var checker = initSnapshotChecker(allocator, &validation_env, &.{builtin_env}, &module_envs_map, config) catch |err| {
         std.log.err("MONO VALIDATION ERROR in {s}: Failed to initialize type checker: {}", .{ source_path, err });
         return false;
     };
@@ -3435,6 +3340,73 @@ pub fn extractSections(gpa: Allocator, content: []const u8) (Allocator.Error || 
 
 // Docs Snapshot Processing
 
+/// A multi-file snapshot's sources written to a fresh temp directory.
+const StagedSnapshotSources = struct {
+    tmp_dir_name: []const u8,
+    app_path: []const u8,
+
+    fn deinit(self: StagedSnapshotSources, allocator: Allocator) void {
+        allocator.free(self.app_path);
+        std.Io.Dir.cwd().deleteTree(app_io, self.tmp_dir_name) catch {};
+        allocator.free(self.tmp_dir_name);
+    }
+};
+
+/// Writes a multi-file snapshot's `## filename.roc` sources to a fresh temp
+/// directory and picks `app.roc` (or else the first file) as the app. Returns
+/// null after logging why the sources could not be staged.
+fn stageMultiFileSnapshot(
+    allocator: Allocator,
+    content: Content,
+    output_path: []const u8,
+    comptime kind: []const u8,
+    comptime tmp_prefix: []const u8,
+) SnapshotError!?StagedSnapshotSources {
+    const source_files = try parseMultiFileSource(allocator, content.source);
+    defer allocator.free(source_files);
+
+    if (source_files.len == 0) {
+        std.log.err(kind ++ " snapshot has no source files (need ## filename.roc sub-headings)", .{});
+        return null;
+    }
+
+    const tmp_dir_name = makeSnapshotTempDir(allocator, tmp_prefix, output_path) catch |err| {
+        std.log.err("Failed to resolve temp directory for {s}: {}", .{ output_path, err });
+        return null;
+    };
+    errdefer allocator.free(tmp_dir_name);
+
+    std.Io.Dir.cwd().createDirPath(app_io, tmp_dir_name) catch |err| {
+        std.log.err("Failed to create temp directory {s}: {}", .{ tmp_dir_name, err });
+        allocator.free(tmp_dir_name);
+        return null;
+    };
+    errdefer std.Io.Dir.cwd().deleteTree(app_io, tmp_dir_name) catch {};
+
+    var app_filename: ?[]const u8 = null;
+    for (source_files) |sf| {
+        const sub_path = try std.fs.path.join(allocator, &.{ tmp_dir_name, sf.filename });
+        defer allocator.free(sub_path);
+        std.Io.Dir.cwd().writeFile(app_io, .{
+            .sub_path = sub_path,
+            .data = sf.content,
+        }) catch |err| {
+            std.log.err("Failed to write {s}: {}", .{ sf.filename, err });
+            std.Io.Dir.cwd().deleteTree(app_io, tmp_dir_name) catch {};
+            allocator.free(tmp_dir_name);
+            return null;
+        };
+        if (std.mem.eql(u8, sf.filename, "app.roc") or app_filename == null) {
+            app_filename = sf.filename;
+        }
+    }
+
+    return .{
+        .tmp_dir_name = tmp_dir_name,
+        .app_path = try std.fs.path.join(allocator, &.{ tmp_dir_name, app_filename.? }),
+    };
+}
+
 /// Process a docs snapshot: parse multi-file source, compile with BuildEnv,
 /// extract documentation from compiled modules, and serialize to S-expressions.
 fn processDocsSnapshot(
@@ -3445,49 +3417,11 @@ fn processDocsSnapshot(
 ) SnapshotError!bool {
     log("Processing docs snapshot: {s}", .{output_path});
 
-    // 1. Parse multi-file source
-    const source_files = try parseMultiFileSource(allocator, content.source);
-    defer allocator.free(source_files);
+    const staged = try stageMultiFileSnapshot(allocator, content, output_path, "docs", "roc_snapshot_docs") orelse return false;
+    defer staged.deinit(allocator);
+    const app_path = staged.app_path;
 
-    if (source_files.len == 0) {
-        std.log.err("docs snapshot has no source files (need ## filename.roc sub-headings)", .{});
-        return false;
-    }
-
-    // 2. Write source files to a temp directory
-    const tmp_dir_name = makeSnapshotTempDir(allocator, "roc_snapshot_docs", output_path) catch |err| {
-        std.log.err("Failed to resolve temp directory for {s}: {}", .{ output_path, err });
-        return false;
-    };
-    defer allocator.free(tmp_dir_name);
-
-    std.Io.Dir.cwd().createDirPath(app_io, tmp_dir_name) catch |err| {
-        std.log.err("Failed to create temp directory {s}: {}", .{ tmp_dir_name, err });
-        return false;
-    };
-    defer std.Io.Dir.cwd().deleteTree(app_io, tmp_dir_name) catch {};
-
-    // Find the app file (first .roc file, or explicitly "app.roc")
-    var app_filename: ?[]const u8 = null;
-    for (source_files) |sf| {
-        const sub_path = try std.fs.path.join(allocator, &.{ tmp_dir_name, sf.filename });
-        defer allocator.free(sub_path);
-        std.Io.Dir.cwd().writeFile(app_io, .{
-            .sub_path = sub_path,
-            .data = sf.content,
-        }) catch |err| {
-            std.log.err("Failed to write {s}: {}", .{ sf.filename, err });
-            return false;
-        };
-        if (std.mem.eql(u8, sf.filename, "app.roc") or app_filename == null) {
-            app_filename = sf.filename;
-        }
-    }
-
-    const app_path = try std.fs.path.join(allocator, &.{ tmp_dir_name, app_filename.? });
-    defer allocator.free(app_path);
-
-    // 3. Build with BuildEnv
+    // 1. Build with BuildEnv
     const BuildEnv = compile.BuildEnv;
     const native_target = roc_target.RocTarget.detectNative();
 
@@ -3505,7 +3439,7 @@ fn processDocsSnapshot(
         return false;
     };
 
-    // 4. Get documentable modules and extract docs
+    // 2. Get documentable modules and extract docs
     const modules = build_env.getDocumentationModules(allocator) catch |err| {
         std.log.err("Failed to get documentable modules: {}", .{err});
         return false;
@@ -3588,7 +3522,7 @@ fn processDocsSnapshot(
     };
     defer package_docs.deinit(allocator);
 
-    // 5. Serialize to S-expression
+    // 3. Serialize to S-expression
     var sexpr_buffer = std.ArrayList(u8).empty;
     defer sexpr_buffer.deinit(allocator);
     var sexpr_writer: std.Io.Writer.Allocating = .fromArrayList(allocator, &sexpr_buffer);
@@ -3599,7 +3533,7 @@ fn processDocsSnapshot(
     const new_docs_text = try snapshotSafeMarkdownAlloc(allocator, sexpr_buffer.items);
     defer allocator.free(new_docs_text);
 
-    // 6. Compare against existing DOCS section and decide what to write
+    // 4. Compare against existing DOCS section and decide what to write
     var success = true;
     const write_new_docs = blk: {
         if (content.docs_output == null) {
@@ -3631,7 +3565,7 @@ fn processDocsSnapshot(
         }
     };
 
-    // 7. Generate output file
+    // 5. Generate output file
     var md_buffer = std.ArrayList(u8).empty;
     defer md_buffer.deinit(allocator);
     var md_writer: std.Io.Writer.Allocating = .fromArrayList(allocator, &md_buffer);
@@ -3925,44 +3859,9 @@ fn processDevObjectSnapshot(
 ) SnapshotError!bool {
     log("Processing dev_object snapshot: {s}", .{output_path});
 
-    const source_files = try parseMultiFileSource(allocator, content.source);
-    defer allocator.free(source_files);
-
-    if (source_files.len == 0) {
-        std.log.err("dev_object snapshot has no source files (need ## filename.roc sub-headings)", .{});
-        return false;
-    }
-
-    const tmp_dir_name = makeSnapshotTempDir(allocator, "roc_snapshot_dev", output_path) catch |err| {
-        std.log.err("Failed to resolve temp directory for {s}: {}", .{ output_path, err });
-        return false;
-    };
-    defer allocator.free(tmp_dir_name);
-
-    std.Io.Dir.cwd().createDirPath(app_io, tmp_dir_name) catch |err| {
-        std.log.err("Failed to create temp directory {s}: {}", .{ tmp_dir_name, err });
-        return false;
-    };
-    defer std.Io.Dir.cwd().deleteTree(app_io, tmp_dir_name) catch {};
-
-    var app_filename: ?[]const u8 = null;
-    for (source_files) |sf| {
-        const sub_path = try std.fs.path.join(allocator, &.{ tmp_dir_name, sf.filename });
-        defer allocator.free(sub_path);
-        std.Io.Dir.cwd().writeFile(app_io, .{
-            .sub_path = sub_path,
-            .data = sf.content,
-        }) catch |err| {
-            std.log.err("Failed to write {s}: {}", .{ sf.filename, err });
-            return false;
-        };
-        if (std.mem.eql(u8, sf.filename, "app.roc") or app_filename == null) {
-            app_filename = sf.filename;
-        }
-    }
-
-    const app_path = try std.fs.path.join(allocator, &.{ tmp_dir_name, app_filename.? });
-    defer allocator.free(app_path);
+    const staged = try stageMultiFileSnapshot(allocator, content, output_path, "dev_object", "roc_snapshot_dev") orelse return false;
+    defer staged.deinit(allocator);
+    const app_path = staged.app_path;
 
     const BuildEnv = compile.BuildEnv;
     const native_target = roc_target.RocTarget.detectNative();
@@ -4756,22 +4655,7 @@ fn renderSnapshotReplTypeProblems(
     // Snapshot evaluation must honor the same whole-source rejection as the CLI.
     if (parse_ast.source_rejected) return error.ParseFailed;
 
-    const builtin_ctx: Check.BuiltinContext = .{
-        .bool_stmt = config.builtin_indices.bool_type,
-        .try_stmt = config.builtin_indices.try_type,
-        .str_stmt = config.builtin_indices.str_type,
-        .builtin_module = config.builtin_module,
-        .builtin_indices = config.builtin_indices,
-    };
-
-    const roc_ctx_repl = CoreCtx.default(allocator, allocator, app_io);
-    var czer = try Can.initModule(roc_ctx_repl, can_ir, parse_ast, .{
-        .builtin_types = .{
-            .builtin_module_env = builtin_env,
-            .builtin_indices = config.builtin_indices,
-        },
-        .is_entry_module = true,
-    });
+    var czer = try initSnapshotCan(allocator, can_ir, parse_ast, builtin_env, config);
     defer czer.deinit();
 
     const repl_expr = switch (source_kind) {
@@ -4821,25 +4705,7 @@ fn renderSnapshotReplTypeProblems(
 
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
     defer module_envs.deinit();
-    try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
-
-    try can.resolveDeferredFileImports(can_ir, .{ .read = .{ .ctx = roc_ctx_repl } });
-    can_ir.imports.clearResolvedModules();
-    try can_ir.imports.resolveImportsByExactModuleName(can_ir, imported_envs.items);
-    can_ir.imports.markUnresolvedImportsFailedBeforeChecking();
-    try can.resolveDeferredImports(can_ir, .{
-        .imports = .{ .resolved_store = imported_envs.items },
-    });
-
-    var checker = try Check.init(
-        allocator,
-        &can_ir.types,
-        can_ir,
-        imported_envs.items,
-        &module_envs,
-        &can_ir.store.regions,
-        builtin_ctx,
-    );
+    var checker = try initSnapshotChecker(allocator, can_ir, imported_envs.items, &module_envs, config);
     checker.fixupTypeWriter();
     defer checker.deinit();
 
