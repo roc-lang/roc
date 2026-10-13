@@ -7536,7 +7536,7 @@ test "a replay shape records every flag relating can observe and no defaulting d
     const checker = &test_env.checker;
     const store = checker.types;
     const Shape = struct {
-        fn of(c: *Self, var_: Var) ![]u8 {
+        fn of(c: *Self, var_: Var) Allocator.Error![]u8 {
             c.scratch_replay_shape.clearRetainingCapacity();
             c.scratch_replay_shape_vars.clearRetainingCapacity();
             c.scratch_ground_vars.clearRetainingCapacity();
