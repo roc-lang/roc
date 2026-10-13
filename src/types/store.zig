@@ -972,8 +972,7 @@ pub const Store = struct {
     /// Whether two descriptors agree on every flag an instantiated copy
     /// carries over.
     fn sameCopiedFlags(a: types.DescriptorFlags, b: types.DescriptorFlags) bool {
-        return a.empty_tag_union_is_default == b.empty_tag_union_is_default and
-            a.nominal_backing_structure == b.nominal_backing_structure;
+        return @as(u8, @bitCast(a.copied())) == @as(u8, @bitCast(b.copied()));
     }
 
     pub fn groundEpoch(self: *const Self) u64 {

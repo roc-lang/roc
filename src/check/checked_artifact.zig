@@ -18323,6 +18323,14 @@ const EvidencePass = struct {
                     try self.appendReturnedCallableEvidenceParams(schema.params)
                 else
                     schema.params;
+                const template_params = self.evidence_params_pool.items[template.evidence_params.start..][0..template.evidence_params.len];
+                if (static_dispatch.procedureEvidenceSchema(template_params) == .from_callable) {
+                    // Only a callable-derived schema consults this; every other
+                    // schema already requires checked per-use evidence.
+                    const signature_vars = try self.identity_writer.identityVarsFromVarIgnoringConstraints(scheme_var);
+                    defer self.allocator.free(signature_vars);
+                    template.callable_determines_scheme = signature_vars.len == schema.vars.len;
+                }
             } else {
                 // Constant-evaluation wrappers retain the value's type variables,
                 // but have no caller-supplied dispatch parameters of their own.
@@ -20552,7 +20560,8 @@ const EvidencePass = struct {
             .direct => |id| switch (self.evidence_nodes.items[@backingInt(id)].target.kind) {
                 .procedure => switch (self.procedureEvidenceSchema(self.evidence_nodes.items[@backingInt(id)].target)) {
                     .none => false,
-                    .from_callable => self.procedureHasCodecEvidenceParam(self.evidence_nodes.items[@backingInt(id)].target),
+                    .from_callable => self.procedureHasCodecEvidenceParam(self.evidence_nodes.items[@backingInt(id)].target) or
+                        !self.procedureEvidenceView(self.evidence_nodes.items[@backingInt(id)].target).template.callable_determines_scheme,
                     .from_target, .requires_record => true,
                 },
                 .local_proc, .structural => true,
@@ -22025,6 +22034,13 @@ pub const CheckedProcedureTemplate = struct {
     /// specialization of this template is the template plus one monomorphic
     /// type per entry; every obligation's receiver is one of these entries.
     scheme_vars: artifact_serialize.Span = .{},
+    /// Whether the procedure's own signature reaches every quantified
+    /// variable of its scheme. A variable reached only through a dispatch
+    /// constraint's callable (such as the error row of a forwarded method's
+    /// result) is fixed only by the selected targets' full evidence chain, so
+    /// an independent callable of such a target needs its own checked
+    /// instantiation instead of deriving one from its callable.
+    callable_determines_scheme: bool = true,
 };
 
 fn checkedTypeIsClosedTagRow(
@@ -38702,8 +38718,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x29, 0xC0, 0xEF, 0xEE, 0x1A, 0x24, 0x0F, 0x07, 0xA8, 0xF0, 0x76, 0x46, 0xE0, 0x0C, 0x77, 0xFE,
-        0x0B, 0x47, 0x27, 0x94, 0x8A, 0x48, 0xF8, 0x67, 0x38, 0x95, 0xD6, 0x25, 0x0B, 0xEE, 0xF9, 0x33,
+        0xE1, 0xB2, 0xFD, 0xF3, 0xA2, 0xB4, 0x0F, 0xBA, 0x02, 0x9A, 0x9C, 0xD2, 0xE5, 0x31, 0x1E, 0x12,
+        0xB4, 0x77, 0x3E, 0xFD, 0xE2, 0xAF, 0xF7, 0xE2, 0x4D, 0x46, 0x46, 0x8D, 0x0D, 0x3E, 0x8B, 0xB1,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

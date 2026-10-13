@@ -620,6 +620,12 @@ pub const Annotation = struct {
     /// ignored. A hole is inferred from the def's body, so an annotation
     /// containing one does not on its own determine a generalized scheme.
     contains_underscore: bool = false,
+    /// Whether type checking generated an erroneous type for this annotation,
+    /// for example because it names an undeclared type. An erroneous annotation
+    /// declares no type, so nothing may be related to it. Recorded by
+    /// `NodeStore.markAnnotationErroneous` and populated on read by
+    /// `getAnnotation`; the value passed at construction is ignored.
+    erroneous: bool = false,
 
     pub fn pushToSExprTree(self: *const @This(), env: anytype, tree: *SExprTree, idx: Annotation.Idx) Allocator.Error!void {
         const annotation = self.*;
