@@ -34352,7 +34352,7 @@ pub const CheckedModuleArtifact = struct {
             .owner_only_fields = &.{
                 "module_env", // Written as the checked-cache env blob and injected during artifact deserialize.
                 "serialized_backing", // Runtime ownership for relocated cache/static bytes, not checked data.
-                "pairing_arena",
+                "pairing_arena", // Runtime ownership of an installed platform pairing's relocated bytes.
                 "reopened_arena", // Runtime ownership for reopened evaluation columns, not checked data.
                 "evaluation_state", // Process-local preparation state; cached output is finalized.
                 "serialized_backing_is_static", // Runtime ownership mode for `serialized_backing`.
