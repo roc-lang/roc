@@ -1524,7 +1524,7 @@ const Lowerer = struct {
 
         if (self.lowersLayoutRequests()) try self.lowerLayoutRequests();
         if (self.lowersRuntimeSchemaRequests()) try self.lowerRuntimeSchemaRequests();
-        if (self.lowersLiteralRoots()) try self.summarizeDiscoveryFns();
+        if (self.lowersLiteralRoots()) try self.summarizeDiscoveryOutcomes();
         try self.recordLiteralMaterializerReads();
     }
 
@@ -1546,19 +1546,22 @@ const Lowerer = struct {
         }
     }
 
-    /// Each specialization lowered only for discovery whose demand closure is
+    /// Each keyed specialization lowered here whose demand closure is
     /// complete publishes its discovery outcome. The closure reaches every
     /// body it requested: discovery bodies through their solved edges, and
     /// object-cache bodies through their published demand. Its literal roots
     /// are evaluated with this program; the outcome is published only when
     /// every one of them converted without an error or a message.
-    fn summarizeDiscoveryFns(self: *Lowerer) Common.LowerError!void {
+    fn summarizeDiscoveryOutcomes(self: *Lowerer) Common.LowerError!void {
         for (0..self.solved.lifted.fnCount()) |index| {
             const fn_id: Lifted.FnId = @fromBackingInt(@intCast(index));
             const source_fn = self.solved.lifted.getFn(fn_id);
             const template = source_fn.source orelse continue;
-            if (!template.discovery or source_fn.spec_constr_pattern != null) continue;
-            const key = template.discovery_key orelse continue;
+            if (source_fn.body != .roc or source_fn.spec_constr_pattern != null) continue;
+            // A body lowered here for evaluation or for the runtime registered
+            // the same literal roots a discovery body of its key would, and
+            // this program evaluated them, so it settles that key too.
+            const key = (if (template.discovery) template.discovery_key else template.spec_key) orelse continue;
             var summary = try self.demandSummary(fn_id);
             defer summary.deinit(self.allocator);
             if (!summary.complete) continue;
