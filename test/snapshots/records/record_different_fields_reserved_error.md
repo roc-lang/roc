@@ -546,18 +546,17 @@ EndOfFile,
 ~~~roc
 {
 	if  "conditional"
-	
+
 	when :
-			
+
 	expect
 	"test assertion"
-	
-			"mod load"
-	
-		Bool.true
-	
-		Bool.false
-	
+
+	"mod load"
+
+	Bool.true
+
+	Bool.false
 }
 ~~~
 # CANONICALIZE
