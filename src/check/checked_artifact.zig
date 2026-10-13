@@ -32828,6 +32828,7 @@ pub const CheckedModuleArtifact = struct {
             artifact.serialized_backing = backing;
             artifact.serialized_backing_is_static = backing_is_static;
             artifact.pairing_arena = null;
+            artifact.reopened_arena = null;
             artifact.evaluation_state = .finalized;
             inline for (sub_store_fields) |name| {
                 // Stores that retain an allocator for their build-only fields
