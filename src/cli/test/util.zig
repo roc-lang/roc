@@ -73,11 +73,15 @@ pub fn putIsolatedTempEnv(env_map: *std.process.Environ.Map, temp_dir: []const u
 }
 
 /// Absolute path to the declared compiler artifact used by CLI tests.
-pub const roc_binary_path = blk: {
-    const options = @import("fixture_options");
-    if (std.fs.path.isAbsolute(options.roc_binary_build_path)) break :blk options.roc_binary_build_path;
-    break :blk options.build_root ++ "/" ++ options.roc_binary_build_path;
-};
+pub const roc_binary_path = buildRootPath(@import("fixture_options").roc_binary_build_path);
+
+/// A build-system path as an absolute path. Generated build paths are
+/// relative to the build root, while a fixture-rooted test runs in its own
+/// working directory.
+pub fn buildRootPath(comptime build_path: []const u8) []const u8 {
+    if (std.fs.path.isAbsolute(build_path)) return build_path;
+    return @import("fixture_options").build_root ++ "/" ++ build_path;
+}
 
 /// Errors that can occur while setting up a temporary CLI test directory.
 pub const TestDirError = std.mem.Allocator.Error || std.Io.Dir.CreateDirPathError || std.Io.Dir.CreateDirError || std.Io.Dir.RealPathFileAllocError;
