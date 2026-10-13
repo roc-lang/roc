@@ -7902,23 +7902,98 @@ test "a default-decided class merged into a frozen class renders its pre-default
     try std.testing.expect(restored.content == .structure and restored.content.structure == .empty_record);
 }
 
-test "a frozen copy of a class a default chose is not default-decided" {
-    // Replay shares a frozen copy of a settled instance among later uses. A
-    // default chose the original class, whose record names the original's
-    // variable; no default chose the copy, so no record names it either.
+test "a frozen copy carries exactly the flags an instantiated copy carries" {
+    // Replay shares a frozen copy of a settled instance among later uses in
+    // place of a fresh instance. The copy keeps the flags that describe the
+    // type and none that record what happened to the original class: a
+    // default chose the original, whose record names the original's
+    // variable, and no default chose the copy, so no record names it either.
     const TestEnv = @import("test/TestEnv.zig");
-    var test_env = try TestEnv.initExpr("FrozenDefault", "1.U64");
+    var test_env = try TestEnv.initExpr("FrozenFlags", "1.U64");
     defer test_env.deinit();
     const checker = &test_env.checker;
     const store = checker.types;
     const original = try store.freshFromContent(.{ .structure = .empty_record });
-    try store.markVarDefaultDecided(original);
+    const original_flags: types_mod.types.DescriptorFlags = .{
+        .empty_tag_union_is_default = true,
+        .static_dispatch_rejected = true,
+        .annotation_tag_ext = true,
+        .nominal_backing_structure = true,
+        .bounded_row_ext = true,
+        .default_decided = true,
+    };
+    var desc = store.resolveVar(original).desc;
+    desc.flags = original_flags;
+    try store.dangerousSetVarDesc(original, desc);
 
     const copy = (try checker.freezeTypeGraph(original)).?;
     defer store.thawFrozenClasses() catch unreachable;
-    try std.testing.expect(store.resolveVar(copy).desc.flags.frozen);
+    var expected = original_flags.copied();
+    expected.frozen = true;
+    try std.testing.expectEqual(expected, store.resolveVar(copy).desc.flags);
     try std.testing.expect(!store.varDefaultDecided(copy));
-    try std.testing.expect(store.varDefaultDecided(original));
+    try std.testing.expectEqual(original_flags, store.resolveVar(original).desc.flags);
+}
+
+test "an expected type a default chose reuses its pristine backup" {
+    // The backup is an instantiated copy, which carries no defaulting
+    // decision, so the next expected type identical to the first is handed
+    // that same copy.
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.initExpr("DefaultedBackup", "1.U64");
+    defer test_env.deinit();
+    const checker = &test_env.checker;
+    const store = checker.types;
+    var env = try checker.env_pool.acquire();
+    defer checker.env_pool.release(env);
+    const elem = try checker.freshFromContent(.{ .structure = .empty_record }, &env, Region.zero());
+    const expected = try checker.freshFromContent(.{ .structure = .{ .tuple = .{
+        .elems = try store.appendVars(&.{ elem, elem }),
+    } } }, &env, Region.zero());
+    try store.markVarDefaultDecided(elem);
+
+    const first = try checker.expectedTypeBackup(expected, &env);
+    const second = try checker.expectedTypeBackup(expected, &env);
+    try std.testing.expect(second.shared);
+    try std.testing.expectEqual(first.var_, second.var_);
+}
+
+test "a replay shape records every flag relating can observe and no defaulting decision" {
+    // Whether a default chose a class is read only when a requirement on it
+    // fails, and a replay source settled without failing, so a receiver a
+    // default chose shares the shape of one the program wrote. A flag that
+    // relating does observe still tells shapes apart.
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.initExpr("ShapeFlags", "1.U64");
+    defer test_env.deinit();
+    const checker = &test_env.checker;
+    const store = checker.types;
+    const Shape = struct {
+        fn of(c: *Self, var_: Var) Allocator.Error![]u8 {
+            c.scratch_replay_shape.clearRetainingCapacity();
+            c.scratch_replay_shape_vars.clearRetainingCapacity();
+            c.scratch_ground_vars.clearRetainingCapacity();
+            try c.scratch_ground_vars.append(c.gpa, var_);
+            (try c.appendReplayShapeWalk()).?;
+            return std.testing.allocator.dupe(u8, c.scratch_replay_shape.items);
+        }
+    };
+    const written = try store.freshFromContent(.{ .structure = .empty_record });
+    const defaulted = try store.freshFromContent(.{ .structure = .empty_record });
+    try store.markVarDefaultDecided(defaulted);
+    const backing = try store.freshFromContent(.{ .structure = .empty_record });
+    var backing_desc = store.resolveVar(backing).desc;
+    backing_desc.flags.nominal_backing_structure = true;
+    try store.dangerousSetVarDesc(backing, backing_desc);
+
+    const written_shape = try Shape.of(checker, written);
+    defer std.testing.allocator.free(written_shape);
+    const defaulted_shape = try Shape.of(checker, defaulted);
+    defer std.testing.allocator.free(defaulted_shape);
+    const backing_shape = try Shape.of(checker, backing);
+    defer std.testing.allocator.free(backing_shape);
+    try std.testing.expectEqualSlices(u8, written_shape, defaulted_shape);
+    try std.testing.expect(std.mem.order(u8, written_shape, backing_shape) != .eq);
 }
 
 /// Validate every tag and record row reachable from a checked value after
@@ -10060,7 +10135,7 @@ fn groundTypeHash(self: *Self, var_: Var) std.mem.Allocator.Error!?u64 {
             continue;
         }
         visit.value_ptr.* = @intCast(seen.count() - 1);
-        std.hash.autoHash(&hasher, @as(u8, @bitCast(resolved.desc.flags)));
+        std.hash.autoHash(&hasher, @as(u8, @bitCast(resolved.desc.flags.copied())));
         std.hash.autoHash(&hasher, std.meta.activeTag(resolved.desc.content));
         switch (resolved.desc.content) {
             .flex, .rigid, .field_presence, .err => return null,
@@ -10123,8 +10198,9 @@ fn groundTypeHash(self: *Self, var_: Var) std.mem.Allocator.Error!?u64 {
 }
 
 /// Whether `left` and `right` are ground types with identical structure and
-/// descriptor flags, compared node by node. Any variable leaf makes the
-/// answer false.
+/// copied descriptor flags (`DescriptorFlags.copied`), compared node by node,
+/// so a type equals the copy `expectedTypeBackup` takes of it. Any variable
+/// leaf makes the answer false.
 fn groundTypesIdentical(self: *Self, left: Var, right: Var) std.mem.Allocator.Error!bool {
     const Pair = struct { left: Var, right: Var };
     var pending: std.ArrayListUnmanaged(Pair) = .empty;
@@ -10136,7 +10212,7 @@ fn groundTypesIdentical(self: *Self, left: Var, right: Var) std.mem.Allocator.Er
         const l = self.types.resolveVar(pair.left);
         const r = self.types.resolveVar(pair.right);
         if ((try seen.getOrPut(.{ .left = l.var_, .right = r.var_ })).found_existing) continue;
-        if (@as(u8, @bitCast(l.desc.flags)) != @as(u8, @bitCast(r.desc.flags))) return false;
+        if (@as(u8, @bitCast(l.desc.flags.copied())) != @as(u8, @bitCast(r.desc.flags.copied()))) return false;
         switch (l.desc.content) {
             .flex, .rigid, .field_presence, .err => return false,
             .alias => |la| {
@@ -20715,6 +20791,15 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: 
 
     // Redirect the root annotation to inner annotation
     _ = try self.unify(annotation_var, ModuleEnv.varFrom(annotation.anno), env);
+
+    // An erroneous annotation declares no type. Record that on the annotation
+    // itself, before anything is related to it, so every consumer (including
+    // importers, which read this module's annotations) can refuse to relate
+    // anything to it.
+    self.var_set.clearRetainingCapacity();
+    if (try self.varContainsError(annotation_var, &self.var_set)) {
+        self.cir.store.markAnnotationErroneous(annotation_idx);
+    }
 }
 
 /// One implicitly opened tag-union extension minted while generating an
@@ -26333,10 +26418,16 @@ const ExprCheckFrame = struct {
                 // child. The kept wrapper's checked type is the annotation's, so
                 // this requires an annotation that itself declares a function; a
                 // wrapper whose function shape came only from a `_` hole filled by
-                // the erroneous body has no declared callable type. Other annotated
-                // values are the executable boundary and must themselves become
-                // the runtime error.
-                const is_method_callable = isFunctionDef(&checker.cir.store, checker.cir.store.getExpr(self.expr_idx)) and
+                // the erroneous body has no declared callable type, and neither
+                // does an annotation that is itself erroneous (for example, one
+                // naming an undeclared type). Other annotated values are the
+                // executable boundary and must themselves become the runtime error.
+                const annotation_erroneous = if (self.annotation) |annotation_idx|
+                    checker.cir.store.getAnnotation(annotation_idx).erroneous
+                else
+                    false;
+                const is_method_callable = !annotation_erroneous and
+                    isFunctionDef(&checker.cir.store, checker.cir.store.getExpr(self.expr_idx)) and
                     checker.varIsFunctionType(anno_vars.anno_var_backup) and
                     checker.exprDefinesMethod(self.expr_idx);
                 if (!is_method_callable) {
@@ -29173,6 +29264,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
         },
         .s_for => {
             if (try self.resumeForLoop(&statement.kind.for_, env)) |request| return request;
+            self.assertLoopBodyHasNoFinalExpr(statement.kind.for_.body);
             // Every `for!` pulls its items with the effectful `next!`.
             if (statement.kind.for_.kind == .stream) block_state.does_fx = true;
             const for_region = self.cir.store.getStatementRegion(stmt_idx);
@@ -29194,6 +29286,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
                 // }
                 return .{ .expr = while_stmt.body, .expected = statement_expected.guardHoistSelection() };
             }
+            self.assertLoopBodyHasNoFinalExpr(while_stmt.body);
             if (stmt == .s_infinite_loop) {
                 try self.unifyWith(stmt_var, .{ .flex = Flex.init() }, env);
                 block_state.diverges = true;
@@ -29224,6 +29317,14 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
             // rejection owns the diagnostic and retires the expression and
             // the statement without poisoning that class.
             const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, stmt_region);
+            if (try self.discardedVarUpdate(expr.expr, empty_rec)) |var_ident| {
+                _ = try self.problems.appendProblem(.{ .discarded_var_update = .{
+                    .expr_region = self.cir.store.getExprRegion(expr.expr),
+                    .var_ident = var_ident,
+                } });
+                _ = try self.unify(stmt_var, empty_rec, env);
+                return null;
+            }
             const statement_result = try self.unifyOwnedRelation(empty_rec, expr_var, env, .statement_value, .construction);
             if (statement_result.isProblem()) {
                 try self.markErroneousValueExpr(expr.expr);
@@ -29312,6 +29413,49 @@ const ForLoopCheck = struct {
     valid_pattern: bool = false,
     phase: enum { start, iterable, body } = .start,
 };
+
+/// design.md "Discarded Var Update": a statement written as a method call on
+/// a `var` binding, whose value is not `{}` but could be assigned back to that
+/// binding, discards an updated copy of it. The statement is accepted with a
+/// warning, and its value is discarded. Returns the binding's name when the
+/// rule applies.
+fn discardedVarUpdate(self: *Self, expr_idx: CIR.Expr.Idx, empty_rec: Var) std.mem.Allocator.Error!?Ident.Idx {
+    const expr = self.cir.store.getExpr(expr_idx);
+    const receiver = if (expr == .e_method_call)
+        expr.e_method_call.receiver
+    else if (expr == .e_dispatch_call and expr.e_dispatch_call.surface_origin == .method_call)
+        expr.e_dispatch_call.receiver
+    else
+        return null;
+    const receiver_expr = self.cir.store.getExpr(receiver);
+    if (receiver_expr != .e_lookup_local) return null;
+    const binding = receiver_expr.e_lookup_local.pattern_idx;
+    const binding_pattern = self.cir.store.getPattern(binding);
+    if (binding_pattern != .var_assign) return null;
+
+    const expr_var = ModuleEnv.varFrom(expr_idx);
+    if (try self.probeCanUseAs(empty_rec, expr_var)) return null;
+    if (!try self.probeCanUseAs(ModuleEnv.varFrom(binding), expr_var)) return null;
+    return binding_pattern.var_assign.ident;
+}
+
+/// Whether `actual_var` could be used where `expected_var` is expected, decided
+/// by a unification that is rolled back and records no problems. The gating
+/// probe for Discarded Var Update (`discardedVarUpdate`).
+fn probeCanUseAs(self: *Self, expected_var: Var, actual_var: Var) std.mem.Allocator.Error!bool {
+    var probe = try self.beginProbe(null);
+    defer probe.rollback();
+    return try self.probeUnifyWithoutRecordingProblems(expected_var, actual_var);
+}
+
+/// Canonicalization gives a loop body no final expression: the body is a block
+/// of statements whose final expression is `{}`.
+fn assertLoopBodyHasNoFinalExpr(self: *const Self, body: CIR.Expr.Idx) void {
+    const body_expr = self.cir.store.getExpr(body);
+    const final_is_empty_record = body_expr == .e_block and
+        self.cir.store.getExpr(body_expr.e_block.final_expr) == .e_empty_record;
+    if (!final_is_empty_record) base.invariant("check invariant violated: loop body has a final expression", .{});
+}
 
 fn startForLoop(self: *Self, state: *ForLoopCheck, env: *Env) std.mem.Allocator.Error!ExprChildRequest {
     std.debug.assert(state.phase == .start);
@@ -29426,9 +29570,9 @@ fn resumeForExprCheck(self: *Self, task: *ExprTask, state: *ForLoopCheck, env: *
         // Every `for!` pulls its items with the effectful `next!`.
         if (state.kind == .stream) task.does_fx = true;
 
-        // Like cor, loop bodies are ordinary expressions whose final value is
-        // discarded by the loop construct itself. The loop expression still
-        // evaluates to {}, but the body is not required to produce {}.
+        // A loop body only includes statements, so each of its expressions
+        // was checked as a statement, and the loop evaluates to {}.
+        self.assertLoopBodyHasNoFinalExpr(state.body);
         try self.unifyWith(frame.expr_var, .{ .structure = .empty_record }, env);
         return .done;
     }
@@ -31910,7 +32054,9 @@ fn rejectValuelessMethodDispatch(
     env: *Env,
     failure_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!bool {
-    if (hostedDeclarationIsNotEffectful(lookup.env, lookup.binding.def_idx)) {
+    if (hostedDeclarationIsNotEffectful(lookup.env, lookup.binding.def_idx) or
+        methodAnnotationErroneous(lookup))
+    {
         try self.poisonConstraintFailure(dispatcher_var, constraint, env, failure_expr);
         try self.markStaticDispatchRejected(constraint);
         return true;
@@ -31926,6 +32072,16 @@ fn rejectValuelessMethodDispatch(
     try self.poisonConstraintFailure(dispatcher_var, constraint, env, failure_expr);
     try self.markStaticDispatchRejected(constraint);
     return true;
+}
+
+/// A method whose annotation is erroneous has no declared type, so relating a
+/// dispatch's constraint callable to it would carry the error into every
+/// instantiation that dispatch reaches. The dispatch is rejected instead. The
+/// method's own module records this on the annotation when it generates the
+/// annotation's type, which happens before any dispatch can select the method.
+fn methodAnnotationErroneous(lookup: StaticDispatchMethodBinding) bool {
+    const annotation_idx = lookup.env.store.getDef(lookup.binding.def_idx).annotation orelse return false;
+    return lookup.env.store.getAnnotation(annotation_idx).erroneous;
 }
 
 fn lookupStaticDispatchMethodBinding(
@@ -44242,12 +44398,13 @@ fn dispatchReplayBinding(method_lookup: StaticDispatchMethodBinding) DispatchRep
 /// Encode an edge's replay shape into `scratch_replay_shape` and return its
 /// hash, or null when the shape holds an error. The shape is the selected
 /// binding and method, then the receiver and callable exactly as stored:
-/// every node's descriptor flags and content in depth-first order, each
-/// variable numbered by first appearance, and attached constraints left out
-/// (each is its own relation, settled on its own receiver). Equal shapes are
-/// equal types up to renaming their variables, so relating either to a fresh
-/// instance of the binding has the same result; two equal types stored
-/// differently merely encode differently.
+/// every node's relational descriptor flags (`DescriptorFlags.relational`)
+/// and content in depth-first order, each variable numbered by first
+/// appearance, and attached constraints left out (each is its own relation,
+/// settled on its own receiver). Equal shapes are equal types up to renaming
+/// their variables, so relating either to a fresh instance of the binding has
+/// the same result; two equal types stored differently merely encode
+/// differently.
 fn encodeDispatchReplayShape(
     self: *Self,
     dispatcher_var: Var,
@@ -44293,7 +44450,7 @@ fn appendReplayShapeWalk(self: *Self) Allocator.Error!?void {
             continue;
         }
         seen.value_ptr.* = self.scratch_replay_shape_vars.count() - 1;
-        try out.append(self.gpa, @bitCast(resolved.desc.flags));
+        try out.append(self.gpa, @bitCast(resolved.desc.flags.relational()));
         // Children are pushed in reverse, so they are encoded in order.
         switch (resolved.desc.content) {
             .err => return null,
@@ -44667,14 +44824,10 @@ fn freezeTypeGraphRoots(self: *Self, roots: []const Var, functions: FreezeFuncti
     }
     for (self.scratch_freeze_order.items) |original| {
         const content = try self.frozenContent(&self.scratch_freeze_map, self.types.resolveVar(original).desc.content);
-        // The copy holds the original's type, so it keeps the flags that
-        // describe that type; whether it is frozen is set below. A defaulting
-        // decision is a fact about the class the default chose, not about
-        // its type, and no default chose the copy, exactly as none chose a
-        // fresh instantiation's copy.
-        var flags = self.types.resolveVar(original).desc.flags;
-        flags.frozen = false;
-        flags.default_decided = false;
+        // The copy stands for a fresh instance of the original's type, so it
+        // keeps exactly the flags an instantiated copy keeps; it is frozen
+        // below.
+        const flags = self.types.resolveVar(original).desc.flags.copied();
         try self.types.dangerousSetVarDesc(self.scratch_freeze_map.get(original).?, .{ .content = content, .rank = .outermost, .flags = flags });
     }
     for (self.scratch_freeze_order.items) |original| {

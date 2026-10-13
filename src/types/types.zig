@@ -143,6 +143,29 @@ pub const DescriptorFlags = packed struct(u8) {
     /// requirement records; the checker links it to the callable's copy
     /// before anything reads it, and reading it unlinked is a compiler bug.
     deferred_callable: bool = false,
+
+    /// The flags a copy of this class carries: those that describe its type.
+    /// The others record what happened to this class itself—a rejection, a
+    /// defaulting decision, a freeze, the annotation that opened its row, a
+    /// deferred copy—and a copy is a new class none of that happened to.
+    /// Instantiation carries these (and `annotation_tag_ext` when asked to
+    /// preserve it), and so does a frozen replay copy, which stands for a
+    /// fresh instance (design.md "Concrete dispatch replay").
+    pub fn copied(self: DescriptorFlags) DescriptorFlags {
+        return .{
+            .empty_tag_union_is_default = self.empty_tag_union_is_default,
+            .nominal_backing_structure = self.nominal_backing_structure,
+        };
+    }
+
+    /// The flags a successful relation of this class can observe: all but
+    /// `default_decided`, which only the report for a failed requirement
+    /// reads (design.md "Diagnostics About Defaulted Types").
+    pub fn relational(self: DescriptorFlags) DescriptorFlags {
+        var flags = self;
+        flags.default_decided = false;
+        return flags;
+    }
 };
 
 /// A type descriptor
