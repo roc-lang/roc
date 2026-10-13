@@ -17290,6 +17290,17 @@ const StaticDataCandidateAddress = struct {
     owner: DraftOwner,
 };
 
+/// The static-data candidate whose runtime expression is being restored,
+/// while its restore walks the candidate's constructor spine: the records,
+/// tuples, tags, and nominals reachable from its root through constructor
+/// edges alone.
+const StaticDataPartRoot = struct {
+    module: checked.ModuleId,
+    node: checked.ConstNodeId,
+    const_locator: checked.ConstLocator,
+    checked_type: checked.CheckedTypeId,
+};
+
 /// Draft-local static-data identity. Graph types remain qualified by the body
 /// that owns them until ordered commit seals the request into program storage.
 const DraftStaticDataRequestAddress = struct {
@@ -20536,6 +20547,13 @@ const BodyContext = struct {
     /// restored from the constant lower their bodies against this chain
     /// (their plans' `constraint(k)` refs index the constant's scheme).
     restore_evidence: EvidenceChain,
+    /// While restoring a static-data candidate's runtime expression along its
+    /// constructor spine, that candidate. Each non-empty list or box on the
+    /// spine restores as its own nested candidate (`restoredStaticDataPart`),
+    /// so a constructor-specialization read of that part names its static
+    /// data instead of rebuilding it on the heap. Restoring a part, or a
+    /// function value, clears it: neither has a spine of its own.
+    static_data_part_root: ?StaticDataPartRoot = null,
     /// The stored form of the last chain this body converted, which is
     /// almost always `evidence` itself: every nested procedure and body-local
     /// function created under the same chain shares one conversion instead
@@ -45118,11 +45136,12 @@ const BodyContext = struct {
     fn startConstRestore(
         self: *BodyContext,
         store_view: ModuleView,
-        _: ModuleView,
+        type_view: ModuleView,
         node: checked.ConstNodeId,
         ty: Type.TypeId,
         static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!ConstRestoreStart(DraftExprId) {
+        if (self.isStaticDataPart(store_view, node)) return .{ .done = try self.restoredStaticDataPart(store_view, type_view, node, ty) };
         const value = store_view.const_store.get(node);
         const representation: ActiveConstNodeRepresentation = .{ .sealed = ty };
         const cell = DraftTypeCell.fromSealed(ty);
@@ -45144,6 +45163,9 @@ const BodyContext = struct {
         try self.reserveConstNodeBinding(store_view, node, representation, cell);
         switch (value) {
             .fn_value => |fn_id| {
+                const part_root = self.static_data_part_root;
+                self.static_data_part_root = null;
+                defer self.static_data_part_root = part_root;
                 const lowered = try self.restoreConstFn(store_view, fn_id, ty, static_data_const_locator);
                 return .{ .done = try self.finishRestoredConstNode(store_view, node, ty, lowered, static_data_const_locator) };
             },
@@ -45225,6 +45247,9 @@ const BodyContext = struct {
             };
             if (self.draft.static_data_candidate_exprs.get(address)) |existing| return existing;
 
+            const previous_part_root = self.static_data_part_root;
+            self.static_data_part_root = staticDataPartRootFor(store_view, node, const_locator, checked_type);
+            defer self.static_data_part_root = previous_part_root;
             const runtime_expr = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, node, ty, const_locator);
             const candidate_expr = try self.addExpr(.{ .ty = ty, .data = .{ .static_data_candidate = .{
                 .static_data = id,
@@ -45250,18 +45275,23 @@ const BodyContext = struct {
         if (!moduleBytesEqual(checked.constModuleId(const_locator).bytes, store_view.key.bytes)) {
             Common.invariant("static-data const context referenced a different ConstStore module");
         }
-        const runtime_expr = try self.restoreConstNodeAtNodeWithStaticRoot(
-            store_view,
-            type_view,
-            node,
-            request_node,
-            const_locator,
-        );
-        if (self.constRestorationIsClosed() and
+        const candidate = self.constRestorationIsClosed() and
             self.builder.static_data_literals and
             try self.builder.constNodeHasStableStaticDataRepresentation(store_view, node) and
-            self.builder.constNodeMayUseStaticDataCandidate(store_view, node, bare_fn))
-        {
+            self.builder.constNodeMayUseStaticDataCandidate(store_view, node, bare_fn);
+        const previous_part_root = self.static_data_part_root;
+        self.static_data_part_root = if (candidate) staticDataPartRootFor(store_view, node, const_locator, checked_type) else null;
+        const runtime_expr = runtime: {
+            defer self.static_data_part_root = previous_part_root;
+            break :runtime try self.restoreConstNodeAtNodeWithStaticRoot(
+                store_view,
+                type_view,
+                node,
+                request_node,
+                const_locator,
+            );
+        };
+        if (candidate) {
             const id = try self.draftStaticDataRequest(
                 const_locator,
                 node,
@@ -45275,6 +45305,100 @@ const BodyContext = struct {
             } });
         }
         return runtime_expr;
+    }
+
+    /// The part root a candidate's restore runs under: the candidate itself
+    /// when its value has a constructor spine. A candidate whose value is a
+    /// list or a box has none; its items and payload are not parts.
+    fn staticDataPartRootFor(
+        store_view: ModuleView,
+        node: checked.ConstNodeId,
+        const_locator: checked.ConstLocator,
+        checked_type: checked.CheckedTypeId,
+    ) ?StaticDataPartRoot {
+        return switch (store_view.const_store.get(node)) {
+            .tuple, .record, .tag, .nominal => .{
+                .module = store_view.key,
+                .node = node,
+                .const_locator = const_locator,
+                .checked_type = checked_type,
+            },
+            .pending, .zst, .scalar, .str, .list, .box, .crash, .checked_error, .fn_value => null,
+        };
+    }
+
+    /// Whether `node` is a part of the candidate being restored: a non-empty
+    /// list or a box on its constructor spine. Every other spine node is a
+    /// constructor whose own parts are decided as they are reached, or a leaf
+    /// that restores as a literal.
+    fn isStaticDataPart(self: *const BodyContext, store_view: ModuleView, node: checked.ConstNodeId) bool {
+        const root = self.static_data_part_root orelse return false;
+        if (node == root.node or !moduleBytesEqual(root.module.bytes, store_view.key.bytes)) return false;
+        return switch (store_view.const_store.get(node)) {
+            .list => |list| switch (list) {
+                .nodes => |items| items.len != 0,
+                .empty, .packed_bytes => false,
+            },
+            .box => true,
+            .pending, .zst, .scalar, .str, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => false,
+        };
+    }
+
+    /// A part of a static-data candidate, as a candidate of its own nested in
+    /// the enclosing candidate's runtime expression. The enclosing candidate's
+    /// initializer lowers it as its runtime expression; anywhere else it is
+    /// the part's static data, so reading the part out of the enclosing
+    /// value never rebuilds it. The part's identity is its node under the
+    /// enclosing candidate's checked type. The enclosing candidate's stable
+    /// representation leaves its node graph acyclic, so the part reads no
+    /// binding of a node enclosing it and its restore is closed.
+    fn restoredStaticDataPart(
+        self: *BodyContext,
+        store_view: ModuleView,
+        type_view: ModuleView,
+        node: checked.ConstNodeId,
+        ty: Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        const root = self.static_data_part_root.?;
+        const id = try self.draftStaticDataRequest(root.const_locator, node, root.checked_type, DraftTypeCell.fromSealed(ty));
+        const address: StaticDataCandidateAddress = .{
+            .static_data = id,
+            .owner = self.draft.current_owner,
+        };
+        if (self.draft.static_data_candidate_exprs.get(address)) |existing| return existing;
+
+        self.static_data_part_root = null;
+        defer self.static_data_part_root = root;
+        const runtime_expr = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, node, ty, root.const_locator);
+        const candidate_expr = try self.addExpr(.{ .ty = ty, .data = .{ .static_data_candidate = .{
+            .static_data = id,
+            .storage = constStaticDataStorage(store_view, node),
+            .runtime_expr = runtime_expr,
+        } } });
+        try self.draft.static_data_candidate_exprs.put(address, candidate_expr);
+        return candidate_expr;
+    }
+
+    /// `restoredStaticDataPart` restoring at a graph node.
+    fn restoredStaticDataPartAtNode(
+        self: *BodyContext,
+        store_view: ModuleView,
+        node: checked.ConstNodeId,
+        request_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        const root = self.static_data_part_root.?;
+        const runtime_expr = runtime: {
+            self.static_data_part_root = null;
+            defer self.static_data_part_root = root;
+            break :runtime try self.restoreConstNodeAtNodeWithStaticRoot(store_view, store_view, node, request_node, root.const_locator);
+        };
+        const cell = DraftTypeCell.fromGraphNode(request_node);
+        const id = try self.draftStaticDataRequest(root.const_locator, node, root.checked_type, cell);
+        return try self.addExprWithTypeCell(cell, .{ .static_data_candidate = .{
+            .static_data = id,
+            .storage = constStaticDataStorage(store_view, node),
+            .runtime_expr = runtime_expr,
+        } });
     }
 
     fn restoreConstNodeAtNode(
@@ -45370,6 +45494,7 @@ const BodyContext = struct {
         request_node: NodeId,
         static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!?DraftExprId {
+        if (self.isStaticDataPart(store_view, node)) return try self.restoredStaticDataPartAtNode(store_view, node, request_node);
         const value = store_view.const_store.get(node);
         const representation: ActiveConstNodeRepresentation = .{ .graph = request_node };
         const cell = DraftTypeCell.fromGraphNode(request_node);
@@ -45382,6 +45507,9 @@ const BodyContext = struct {
         errdefer if (frame_owned) frame.deinit(self.allocator);
         switch (value) {
             .fn_value => |fn_id| {
+                const part_root = self.static_data_part_root;
+                self.static_data_part_root = null;
+                defer self.static_data_part_root = part_root;
                 const lowered = try self.restoreConstFnAtNodeWithStaticRoot(
                     store_view,
                     fn_id,
