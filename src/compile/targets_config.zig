@@ -85,15 +85,6 @@ pub const WasmTargetConfig = struct {
         if (self.initial_stack_size_ident) |ident| allocator.free(ident);
         if (self.global_base_ident) |ident| allocator.free(ident);
     }
-
-    /// Whether any settings still need to be resolved from top-level constants.
-    pub fn hasIdentifierBackedValues(self: WasmTargetConfig) bool {
-        return self.import_memory_ident != null or
-            self.minimum_memory_ident != null or
-            self.maximum_memory_ident != null or
-            self.initial_stack_size_ident != null or
-            self.global_base_ident != null;
-    }
 };
 
 /// Reason an identifier-backed target config field could not be resolved.
@@ -767,10 +758,10 @@ fn resolveWasmCheckedConstants(
     diagnostic: *TargetConfigResolveDiagnostic,
 ) error{TargetConfigInvalid}!void {
     try resolveWasmImportMemoryField(allocator, checked_module, target, output, "import_memory", &wasm.import_memory, &wasm.import_memory_ident, diagnostic);
-    try resolveWasmUsizeField(allocator, checked_module, target, output, "minimum_memory", &wasm.minimum_memory, &wasm.minimum_memory_ident, diagnostic);
-    try resolveWasmUsizeField(allocator, checked_module, target, output, "maximum_memory", &wasm.maximum_memory, &wasm.maximum_memory_ident, diagnostic);
-    try resolveWasmUsizeField(allocator, checked_module, target, output, "initial_stack_size", &wasm.initial_stack_size, &wasm.initial_stack_size_ident, diagnostic);
-    try resolveWasmU32Field(allocator, checked_module, target, output, "global_base", &wasm.global_base, &wasm.global_base_ident, diagnostic);
+    try resolveWasmUnsignedField(usize, allocator, checked_module, target, output, "minimum_memory", &wasm.minimum_memory, &wasm.minimum_memory_ident, diagnostic);
+    try resolveWasmUnsignedField(usize, allocator, checked_module, target, output, "maximum_memory", &wasm.maximum_memory, &wasm.maximum_memory_ident, diagnostic);
+    try resolveWasmUnsignedField(usize, allocator, checked_module, target, output, "initial_stack_size", &wasm.initial_stack_size, &wasm.initial_stack_size_ident, diagnostic);
+    try resolveWasmUnsignedField(u32, allocator, checked_module, target, output, "global_base", &wasm.global_base, &wasm.global_base_ident, diagnostic);
 }
 
 fn resolveWasmImportMemoryField(
@@ -798,13 +789,16 @@ fn resolveWasmImportMemoryField(
     ident_slot.* = null;
 }
 
-fn resolveWasmUsizeField(
+/// Resolves an unsigned wasm config field named by `ident_slot` to a value
+/// that fits in `T`.
+fn resolveWasmUnsignedField(
+    comptime T: type,
     allocator: Allocator,
     checked_module: *const checked.CheckedModuleArtifact,
     target: RocTarget,
     output: OutputKind,
     field_name: []const u8,
-    out: *?usize,
+    out: *?T,
     ident_slot: *?[]const u8,
     diagnostic: *TargetConfigResolveDiagnostic,
 ) error{TargetConfigInvalid}!void {
@@ -818,32 +812,7 @@ fn resolveWasmUsizeField(
         diagnostic.* = .{ .target = target, .output = output, .field_name = field_name, .ident_name = ident, .reason = reason };
         return error.TargetConfigInvalid;
     };
-    out.* = value;
-    allocator.free(ident);
-    ident_slot.* = null;
-}
-
-fn resolveWasmU32Field(
-    allocator: Allocator,
-    checked_module: *const checked.CheckedModuleArtifact,
-    target: RocTarget,
-    output: OutputKind,
-    field_name: []const u8,
-    out: *?u32,
-    ident_slot: *?[]const u8,
-    diagnostic: *TargetConfigResolveDiagnostic,
-) error{TargetConfigInvalid}!void {
-    const ident = ident_slot.* orelse return;
-    var reason: TargetConfigResolveReason = .expected_unsigned_integer;
-    const node = topLevelConstNode(checked_module, ident, &reason) orelse {
-        diagnostic.* = .{ .target = target, .output = output, .field_name = field_name, .ident_name = ident, .reason = reason };
-        return error.TargetConfigInvalid;
-    };
-    const value = constUnsigned(checked_module, node, &reason) orelse {
-        diagnostic.* = .{ .target = target, .output = output, .field_name = field_name, .ident_name = ident, .reason = reason };
-        return error.TargetConfigInvalid;
-    };
-    const narrowed = std.math.cast(u32, value) orelse {
+    const narrowed = std.math.cast(T, value) orelse {
         diagnostic.* = .{ .target = target, .output = output, .field_name = field_name, .ident_name = ident, .reason = .integer_out_of_range };
         return error.TargetConfigInvalid;
     };
@@ -1108,7 +1077,6 @@ test "fromAST captures punned wasm identifier config" {
     try testing.expectEqual(@as(usize, 1), config.targets.len);
     try testing.expectEqual(OutputKind.shared, config.targets[0].output);
     const wasm = config.targets[0].wasm orelse return error.TestUnexpectedResult;
-    try testing.expect(wasm.hasIdentifierBackedValues());
     try testing.expectEqualStrings("import_memory", wasm.import_memory_ident.?);
     try testing.expectEqualStrings("minimum_memory", wasm.minimum_memory_ident.?);
     try testing.expectEqualStrings("maximum_memory", wasm.maximum_memory_ident.?);

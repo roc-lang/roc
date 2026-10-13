@@ -434,7 +434,7 @@ fn renderHeaderLine(
     var loc_len: usize = 0;
     const fname = filename;
     if (fname) |f| {
-        loc_len = 1 + source_region.displayWidth(f) + 1 + decimalWidth(start_line) + 1 + decimalWidth(start_column);
+        loc_len = 1 + source_region.displayWidth(f) + 1 + source_region.calculateLineNumberWidth(start_line) + 1 + source_region.calculateLineNumberWidth(start_column);
     }
 
     const dashes = @max(total_w -| prefix_w -| loc_len, 1);
@@ -1368,12 +1368,9 @@ const LspStyle = struct {
 };
 
 /// Number of decimal digits needed to print `n` (e.g. 1 for 7, 4 for 1242).
-fn decimalWidth(n: u32) usize {
-    if (n == 0) return 1;
-    return std.math.log10(n) + 1;
-}
-
-fn writeEscapedHtml(writer: *std.Io.Writer, text: []const u8) error{WriteFailed}!void {
+/// Writes `text` with HTML special characters escaped and each bidirectional
+/// control character replaced by its visible spelling.
+pub fn writeEscapedHtml(writer: *std.Io.Writer, text: []const u8) error{WriteFailed}!void {
     var i: usize = 0;
     while (i < text.len) : (i += 1) {
         if (bidi.at(text[i..])) |control| {

@@ -24,6 +24,23 @@ fn stderrWriter() *std.Io.Writer {
     return &stderr_file_writer.interface;
 }
 
+/// Renders a builder failure report to stderr.
+fn renderReportToStderr(report: *reporting.Report, config: reporting.ReportingConfig) void {
+    reporting.renderReportToTerminal(
+        report,
+        stderrWriter(),
+        reporting.ColorUtils.getPaletteForConfig(config),
+        config,
+    ) catch {};
+}
+
+/// Appends the `LLVM error: <message>` line to a builder failure report.
+fn addLlvmErrorLine(report: *reporting.Report, llvm_message: []const u8) Allocator.Error!void {
+    try report.document.addText("LLVM error: ");
+    try report.document.addAnnotated(llvm_message, .error_highlight);
+    try report.document.addLineBreak();
+}
+
 /// Set to true locally to have the LLVM backend also write the optimized IR for
 /// each object into the current directory. Always committed as false.
 const dump_llvm_artifacts = false;
@@ -821,12 +838,7 @@ fn renderLLVMNotAvailableError(allocator: Allocator, config: reporting.Reporting
     try report.document.addText("To use this feature, rebuild roc with LLVM enabled.");
     try report.document.addLineBreak();
 
-    reporting.renderReportToTerminal(
-        &report,
-        stderrWriter(),
-        reporting.ColorUtils.getPaletteForConfig(config),
-        config,
-    ) catch {};
+    renderReportToStderr(&report, config);
 }
 
 fn renderFileNotAccessibleError(
@@ -846,12 +858,7 @@ fn renderFileNotAccessibleError(
     try report.document.addAnnotated(@errorName(err), .error_highlight);
     try report.document.addLineBreak();
 
-    reporting.renderReportToTerminal(
-        &report,
-        stderrWriter(),
-        reporting.ColorUtils.getPaletteForConfig(config),
-        config,
-    ) catch {};
+    renderReportToStderr(&report, config);
 }
 
 fn renderLLVMError(
@@ -865,16 +872,9 @@ fn renderLLVMError(
     defer report.deinit();
 
     try report.document.addLineBreak();
-    try report.document.addText("LLVM error: ");
-    try report.document.addAnnotated(llvm_message, .error_highlight);
-    try report.document.addLineBreak();
+    try addLlvmErrorLine(&report, llvm_message);
 
-    reporting.renderReportToTerminal(
-        &report,
-        stderrWriter(),
-        reporting.ColorUtils.getPaletteForConfig(config),
-        config,
-    ) catch {};
+    renderReportToStderr(&report, config);
 }
 
 fn renderTargetError(
@@ -890,16 +890,9 @@ fn renderTargetError(
     try report.document.addText("    ");
     try report.document.addAnnotated(triple, .emphasized);
     try report.document.addLineBreaks(2);
-    try report.document.addText("LLVM error: ");
-    try report.document.addAnnotated(llvm_message, .error_highlight);
-    try report.document.addLineBreak();
+    try addLlvmErrorLine(&report, llvm_message);
 
-    reporting.renderReportToTerminal(
-        &report,
-        stderrWriter(),
-        reporting.ColorUtils.getPaletteForConfig(config),
-        config,
-    ) catch {};
+    renderReportToStderr(&report, config);
 }
 
 fn renderTargetMachineError(
@@ -933,12 +926,7 @@ fn renderTargetMachineError(
     try report.document.addText("This may indicate an unsupported target configuration.");
     try report.document.addLineBreak();
 
-    reporting.renderReportToTerminal(
-        &report,
-        stderrWriter(),
-        reporting.ColorUtils.getPaletteForConfig(config),
-        config,
-    ) catch {};
+    renderReportToStderr(&report, config);
 }
 
 fn renderEmitError(
@@ -954,14 +942,7 @@ fn renderEmitError(
     try report.document.addText("    Output: ");
     try report.document.addAnnotated(output_path, .path);
     try report.document.addLineBreaks(2);
-    try report.document.addText("LLVM error: ");
-    try report.document.addAnnotated(llvm_message, .error_highlight);
-    try report.document.addLineBreak();
+    try addLlvmErrorLine(&report, llvm_message);
 
-    reporting.renderReportToTerminal(
-        &report,
-        stderrWriter(),
-        reporting.ColorUtils.getPaletteForConfig(config),
-        config,
-    ) catch {};
+    renderReportToStderr(&report, config);
 }

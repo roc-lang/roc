@@ -5,6 +5,7 @@
 //! index page lists all modules in the package.
 
 const std = @import("std");
+const reporting = @import("reporting");
 const Allocator = std.mem.Allocator;
 const DocModel = @import("DocModel.zig");
 const render_markdown = @import("render_markdown.zig");
@@ -146,12 +147,12 @@ fn writeBuiltinTypeUrl(w: Writer, type_name: []const u8) (Allocator.Error || err
     try w.writeAll(builtins_docs_base_url);
     for (builtin_nested_type_owners) |nested| {
         if (std.mem.eql(u8, nested.name, type_name)) {
-            try writeHtmlEscaped(w, nested.owner);
+            try reporting.writeEscapedHtml(w, nested.owner);
             try w.writeAll("#");
             break;
         }
     }
-    try writeHtmlEscaped(w, type_name);
+    try reporting.writeEscapedHtml(w, type_name);
 }
 
 /// A `[Name]` shorthand reference that resolved to an HTML anchor that does
@@ -704,7 +705,7 @@ fn writeModulePageToDir(ctx: *const RenderContext, gpa: Allocator, io: std.Io, d
     // Main content
     try writeMainOpen(w, ctx, gpa, base);
     try w.writeAll("        <h1 class=\"module-name\">");
-    try writeHtmlEscaped(w, mod.name);
+    try reporting.writeEscapedHtml(w, mod.name);
     try w.writeAll("</h1>\n");
     try writeDocsStreamChunk(w);
 
@@ -725,7 +726,7 @@ fn writeModulePageToDir(ctx: *const RenderContext, gpa: Allocator, io: std.Io, d
             }
         } else if (entry.kind == .@"opaque") {
             try w.writeAll("        <pre class=\"entry-type-def\"><code class=\"entry-type-def-code\">");
-            try writeHtmlEscaped(w, entry.type_header orelse entry.name);
+            try reporting.writeEscapedHtml(w, entry.type_header orelse entry.name);
             try w.writeAll(" :: # (opaque)</code></pre>\n");
             try writeDocsStreamChunk(w);
         }
@@ -758,7 +759,7 @@ fn writeHtmlHead(w: Writer, title: []const u8, base: []const u8) (Allocator.Erro
     try w.writeAll("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n");
     try w.writeAll("    <meta charset=\"utf-8\">\n");
     try w.writeAll("    <title>");
-    try writeHtmlEscaped(w, title);
+    try reporting.writeEscapedHtml(w, title);
     try w.writeAll("</title>\n");
     try w.writeAll("    <meta name=\"viewport\" content=\"width=device-width\">\n");
     try w.writeAll("    <link rel=\"icon\" type=\"image/svg+xml\" href=\"");
@@ -1121,7 +1122,7 @@ fn renderEntryTree(
             try w.writeAll("<article class=\"entry ");
             try w.writeAll(type_class);
             try w.writeAll("\" id=\"");
-            try writeHtmlEscaped(w, node.full_path);
+            try reporting.writeEscapedHtml(w, node.full_path);
             try w.writeAll("\">\n");
 
             const anchor_id = node.full_path;
@@ -1132,16 +1133,16 @@ fn renderEntryTree(
                 try writeIndent(w, base + 1);
                 try w.print("<h{d}>", .{heading_level});
                 try w.writeAll("<a href=\"#");
-                try writeHtmlEscaped(w, anchor_id);
+                try reporting.writeEscapedHtml(w, anchor_id);
                 try w.writeAll("\" class=\"entry-anchor\" aria-label=\"Permalink to ");
-                try writeHtmlEscaped(w, node.name);
+                try reporting.writeEscapedHtml(w, node.name);
                 try w.writeAll("\">");
                 try w.writeAll(link_svg_use);
                 try w.writeAll("</a> ");
                 try w.writeAll("<a href=\"#");
-                try writeHtmlEscaped(w, anchor_id);
+                try reporting.writeEscapedHtml(w, anchor_id);
                 try w.writeAll("\" class=\"entry-name-link\">");
-                try writeHtmlEscaped(w, node.name);
+                try reporting.writeEscapedHtml(w, node.name);
                 try w.writeAll("</a>");
                 try w.print("</h{d}>\n", .{heading_level});
 
@@ -1158,7 +1159,7 @@ fn renderEntryTree(
                 } else if (entry.kind == .@"opaque") {
                     try writeIndent(w, base + 1);
                     try w.writeAll("<pre class=\"entry-type-def\"><code class=\"entry-type-def-code\">");
-                    try writeHtmlEscaped(w, entry.type_header orelse entry.name);
+                    try reporting.writeEscapedHtml(w, entry.type_header orelse entry.name);
                     try w.writeAll(" :: # (opaque)</code></pre>\n");
                 }
             } else {
@@ -1167,9 +1168,9 @@ fn renderEntryTree(
                 try w.writeAll("<div class=\"entry-signature\">\n");
                 try writeIndent(w, base + 2);
                 try w.writeAll("<a href=\"#");
-                try writeHtmlEscaped(w, anchor_id);
+                try reporting.writeEscapedHtml(w, anchor_id);
                 try w.writeAll("\" class=\"entry-anchor\" aria-label=\"Permalink to ");
-                try writeHtmlEscaped(w, node.name);
+                try reporting.writeEscapedHtml(w, node.name);
                 try w.writeAll("\">");
                 try w.writeAll(link_svg_use);
                 try w.writeAll("</a>\n");
@@ -1213,12 +1214,12 @@ fn renderEntryTree(
         // Non-leaf group node—render a group header and recurse at deeper depth
         try writeIndent(w, base);
         try w.writeAll("<section class=\"entry-group\" id=\"");
-        try writeHtmlEscaped(w, node.full_path);
+        try reporting.writeEscapedHtml(w, node.full_path);
         try w.writeAll("\">\n");
         const heading_level: u8 = @intCast(@min(depth + 1, 6));
         try writeIndent(w, base + 1);
         try w.print("<h{d} class=\"entry-group-header\">", .{heading_level});
-        try writeHtmlEscaped(w, node.name);
+        try reporting.writeEscapedHtml(w, node.name);
         try w.print("</h{d}>\n", .{heading_level});
         for (node.children.items) |child| {
             try renderEntryTree(w, ctx, gpa, child, depth + 1);
@@ -1269,9 +1270,9 @@ fn renderSidebarTree(
             try w.writeAll("  <a class=\"sidebar-type-name\" href=\"");
             try w.writeAll(module_link_prefix);
             try w.writeAll("#");
-            try writeHtmlEscaped(w, node.full_path);
+            try reporting.writeEscapedHtml(w, node.full_path);
             try w.writeAll("\">");
-            try writeHtmlEscaped(w, node.name);
+            try reporting.writeEscapedHtml(w, node.name);
             try w.writeAll("</a>\n");
             try w.writeAll("                        ");
             for (0..depth - 1) |_| {
@@ -1305,9 +1306,9 @@ fn renderSidebarTree(
                 try w.writeAll("  <a class=\"sidebar-type-name\" href=\"");
                 try w.writeAll(module_link_prefix);
                 try w.writeAll("#");
-                try writeHtmlEscaped(w, node.full_path);
+                try reporting.writeEscapedHtml(w, node.full_path);
                 try w.writeAll("\">");
-                try writeHtmlEscaped(w, node.name);
+                try reporting.writeEscapedHtml(w, node.name);
                 try w.writeAll("</a>\n");
                 try w.writeAll("                        ");
                 try w.writeAll("</li>\n");
@@ -1321,9 +1322,9 @@ fn renderSidebarTree(
                 try w.writeAll("<li><a class=\"sidebar-value\" href=\"");
                 try w.writeAll(module_link_prefix);
                 try w.writeAll("#");
-                try writeHtmlEscaped(w, node.full_path);
+                try reporting.writeEscapedHtml(w, node.full_path);
                 try w.writeAll("\">");
-                try writeHtmlEscaped(w, node.name);
+                try reporting.writeEscapedHtml(w, node.name);
                 try w.writeAll("</a></li>\n");
             }
         }
@@ -1379,7 +1380,7 @@ fn renderSidebarModuleEntry(w: Writer, ctx: *const RenderContext, gpa: Allocator
     try w.writeAll("                    <a class=\"sidebar-module-link");
     if (is_active) try w.writeAll(" active");
     try w.writeAll("\" data-module-name=\"");
-    try writeHtmlEscaped(w, mod.name);
+    try reporting.writeEscapedHtml(w, mod.name);
     try w.writeAll("\" href=\"");
     if (module_link_prefix.items.len == 0) {
         try w.writeAll(".");
@@ -1387,13 +1388,13 @@ fn renderSidebarModuleEntry(w: Writer, ctx: *const RenderContext, gpa: Allocator
         try w.writeAll(module_link_prefix.items);
     }
     try w.writeAll("\"><span>");
-    try writeHtmlEscaped(w, mod.name);
+    try reporting.writeEscapedHtml(w, mod.name);
     try w.writeAll("</span></a>\n");
     try w.writeAll("                    <details");
     if (is_active) try w.writeAll(" open");
     try w.writeAll(">\n");
     try w.writeAll("                        <summary class=\"sidebar-module-summary\" aria-label=\"");
-    try writeHtmlEscaped(w, mod.name);
+    try reporting.writeEscapedHtml(w, mod.name);
     try w.writeAll(" entries\"><span class=\"entry-toggle\" aria-hidden=\"true\"></span></summary>\n");
 
     // Sub-entries - grouped hierarchically
@@ -1429,7 +1430,7 @@ fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
     if (ctx.langref != null) {
         try w.writeAll("Documentation");
     } else {
-        try writeHtmlEscaped(w, ctx.package_docs.name);
+        try reporting.writeEscapedHtml(w, ctx.package_docs.name);
     }
     try w.writeAll("</a></h1>\n");
     try w.writeAll("        </div>\n");
@@ -1471,7 +1472,7 @@ fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
             rendered_builtin_group = true;
             try w.writeAll("                <li class=\"sidebar-entry\">\n");
             try w.writeAll("                    <a class=\"sidebar-module-link active prose-label\" data-module-name=\"__builtin_types__\" href=\"");
-            try writeHtmlEscaped(w, base);
+            try reporting.writeEscapedHtml(w, base);
             try w.writeAll("\"><span>Builtin Types</span></a>\n");
             try w.writeAll("                    <details open>\n");
             try w.writeAll("                        <summary class=\"sidebar-module-summary\" aria-label=\"Builtin Types entries\"><span class=\"entry-toggle\" aria-hidden=\"true\"></span></summary>\n");
@@ -1512,7 +1513,7 @@ fn renderLangRefSidebar(
     try w.writeAll("                    <a class=\"sidebar-module-link active prose-label\" data-module-name=\"");
     try w.writeAll(langref_sidebar_id);
     try w.writeAll("\" href=\"");
-    try writeHtmlEscaped(w, base);
+    try reporting.writeEscapedHtml(w, base);
     try w.writeAll("langref/\"><span>Language Reference</span></a>\n");
     try w.writeAll("                    <details open>\n");
     try w.writeAll("                        <summary class=\"sidebar-module-summary\" aria-label=\"Language Reference entries\"><span class=\"entry-toggle\" aria-hidden=\"true\"></span></summary>\n");
@@ -1522,14 +1523,14 @@ fn renderLangRefSidebar(
         if (article.is_index) continue; // the README is the section landing page
 
         try w.writeAll("                        <li><a href=\"");
-        try writeHtmlEscaped(w, base);
+        try reporting.writeEscapedHtml(w, base);
         try w.writeAll("langref/");
         // Slugs contain only filename-safe characters, but escape defensively.
         // No `.html`: each article is served from `<slug>/index.html`. The
         // trailing slash matches the module links above (`<Module>/`) and keeps
         // the article's own relative links resolving correctly even when the
         // server doesn't redirect the extensionless URL to its slashed form.
-        try writeHtmlEscaped(w, article.slug);
+        try reporting.writeEscapedHtml(w, article.slug);
         try w.writeAll("/\">");
         // Render the title inline so backtick spans (e.g. the "`if` / `else`"
         // heading) become inline `<code>` rather than literal backticks.
@@ -1565,10 +1566,10 @@ fn renderSearchTree(
             try w.writeAll("#");
         } else {
             try w.writeAll(base);
-            try writeHtmlEscaped(w, module_name);
+            try reporting.writeEscapedHtml(w, module_name);
             try w.writeAll("/#");
         }
-        try writeHtmlEscaped(w, node.full_path);
+        try reporting.writeEscapedHtml(w, node.full_path);
         try w.writeAll("\">");
 
         // Build the display prefix from full_path minus the last component (node.name).
@@ -1594,17 +1595,17 @@ fn renderSearchTree(
         if (has_prefix) {
             try w.writeAll("<span class=\"type-ahead-module-name\">");
             if (!ctx.single_module_at_root) {
-                try writeHtmlEscaped(w, module_name);
+                try reporting.writeEscapedHtml(w, module_name);
                 if (display_prefix.len > 0) {
                     try w.writeAll(".");
                 }
             }
-            try writeHtmlEscaped(w, display_prefix);
+            try reporting.writeEscapedHtml(w, display_prefix);
             try w.writeAll("</span>");
             try w.writeAll(".");
         }
         try w.writeAll("<span class=\"type-ahead-def-name\">");
-        try writeHtmlEscaped(w, node.name);
+        try reporting.writeEscapedHtml(w, node.name);
         try w.writeAll("</span>");
         if (entry.type_signature) |sig| {
             // Suppress type links inside search entries to avoid invalid
@@ -1645,9 +1646,9 @@ fn renderEntrySignature(w: Writer, ctx: *const RenderContext, gpa: Allocator, en
         entry.name;
 
     try w.writeAll("<a href=\"#");
-    try writeHtmlEscaped(w, anchor_id);
+    try reporting.writeEscapedHtml(w, anchor_id);
     try w.writeAll("\" class=\"entry-name-link\"><strong>");
-    try writeHtmlEscaped(w, display_name);
+    try reporting.writeEscapedHtml(w, display_name);
     try w.writeAll("</strong></a>");
 
     if (entry.type_signature) |sig| {
@@ -1716,7 +1717,7 @@ fn renderShorthandRef(
         try writeMissingDocRefHref(w, ctx, ref.label);
     }
     try w.writeAll("\"><code>");
-    try writeHtmlEscaped(w, ref.label);
+    try reporting.writeEscapedHtml(w, ref.label);
     try w.writeAll("</code></a>");
     return ref.end;
 }
@@ -1752,7 +1753,7 @@ fn writeDocRefHref(
     switch (ref.target) {
         .local_anchor => |anchor| {
             try w.writeAll("#");
-            try writeHtmlEscaped(w, anchor);
+            try reporting.writeEscapedHtml(w, anchor);
             try validateAnchor(ctx, ref.label, anchor, ref.byte_offset);
         },
         .module_page => |module| {
@@ -1760,7 +1761,7 @@ fn writeDocRefHref(
         },
         .module_anchor => |target| {
             try writeModuleAnchorPrefix(w, ctx, target.module);
-            try writeHtmlEscaped(w, target.anchor);
+            try reporting.writeEscapedHtml(w, target.anchor);
             try validateAnchor(ctx, ref.label, target.anchor, ref.byte_offset);
         },
         .builtin_type => |builtin_ref| {
@@ -1768,7 +1769,7 @@ fn writeDocRefHref(
         },
         .unresolved_anchor => |anchor| {
             try w.writeAll("#");
-            try writeHtmlEscaped(w, anchor);
+            try reporting.writeEscapedHtml(w, anchor);
             try validateAnchor(ctx, ref.label, anchor, ref.byte_offset);
         },
     }
@@ -1784,7 +1785,7 @@ fn writeMissingDocRefHref(
     label: []const u8,
 ) (Allocator.Error || error{WriteFailed})!void {
     try w.writeAll("#");
-    try writeHtmlEscaped(w, label);
+    try reporting.writeEscapedHtml(w, label);
     try ctx.reportBrokenLink(label, label, 0);
 }
 
@@ -1797,7 +1798,7 @@ fn writeModuleRefPrefix(w: Writer, ctx: *const RenderContext, module: []const u8
     if (ctx.current_module != null and !ctx.single_module_at_root) {
         try w.writeAll("../");
     }
-    try writeHtmlEscaped(w, module);
+    try reporting.writeEscapedHtml(w, module);
     try w.writeAll("/");
 }
 
@@ -1810,7 +1811,7 @@ fn writeModuleAnchorPrefix(w: Writer, ctx: *const RenderContext, module: []const
     if (ctx.current_module != null and !ctx.single_module_at_root) {
         try w.writeAll("../");
     }
-    try writeHtmlEscaped(w, module);
+    try reporting.writeEscapedHtml(w, module);
     try w.writeAll("/#");
 }
 
@@ -1822,21 +1823,21 @@ fn writeBuiltinDocRefUrl(w: Writer, builtin_ref: []const u8) (Allocator.Error ||
     try w.writeAll(builtins_docs_base_url);
     for (builtin_nested_type_owners) |nested| {
         if (std.mem.eql(u8, nested.name, head)) {
-            try writeHtmlEscaped(w, nested.owner);
+            try reporting.writeEscapedHtml(w, nested.owner);
             try w.writeAll("#");
-            try writeHtmlEscaped(w, head);
+            try reporting.writeEscapedHtml(w, head);
             if (tail.len > 0) {
                 try w.writeAll(".");
-                try writeHtmlEscaped(w, tail);
+                try reporting.writeEscapedHtml(w, tail);
             }
             return;
         }
     }
 
-    try writeHtmlEscaped(w, head);
+    try reporting.writeEscapedHtml(w, head);
     if (tail.len > 0) {
         try w.writeAll("#");
-        try writeHtmlEscaped(w, tail);
+        try reporting.writeEscapedHtml(w, tail);
     }
 }
 
@@ -2010,10 +2011,41 @@ fn renderDocTypeHtml(
         type_ref: DocType.TypeRef,
     };
 
+    const RenderFrames = std.ArrayList(RenderFrame);
+    const pushTypeList = struct {
+        /// Pushes the opening paren and the comma-separated `values` of a
+        /// parenthesized type list, in reverse because frames pop LIFO.
+        fn push(
+            allocator: Allocator,
+            stack: *RenderFrames,
+            values: []const *const DocType,
+            indent: usize,
+            multiline: bool,
+        ) Allocator.Error!void {
+            if (multiline) try stack.append(allocator, .{ .indent = indent });
+            var i = values.len;
+            while (i > 0) {
+                i -= 1;
+                if (multiline) try stack.append(allocator, .{ .html = ",\n" });
+                try stack.append(allocator, .{ .doc_type = .{
+                    .value = values[i],
+                    .needs_parens = false,
+                    .indent = if (multiline) indent + 1 else indent,
+                } });
+                if (multiline) {
+                    try stack.append(allocator, .{ .indent = indent + 1 });
+                } else if (i > 0) {
+                    try stack.append(allocator, .{ .html = ", " });
+                }
+            }
+            try stack.append(allocator, .{ .html = if (multiline) "(\n" else "(" });
+        }
+    }.push;
+
     var multiline_layouts = try MultilineLayoutSet.init(gpa, doc_type);
     defer multiline_layouts.deinit(gpa);
 
-    var frames = std.ArrayList(RenderFrame).empty;
+    var frames = RenderFrames.empty;
     defer frames.deinit(gpa);
 
     try frames.append(gpa, .{ .doc_type = .{
@@ -2025,7 +2057,7 @@ fn renderDocTypeHtml(
         switch (frame) {
             .html => |html| try w.writeAll(html),
             .indent => |level| for (0..level) |_| try w.writeAll("    "),
-            .escaped => |text| try writeHtmlEscaped(w, text),
+            .escaped => |text| try reporting.writeEscapedHtml(w, text),
             .type_ref => |ref| {
                 const display_name = if (std.mem.findScalarLast(u8, ref.type_name, '.')) |idx|
                     ref.type_name[idx + 1 ..]
@@ -2036,11 +2068,11 @@ fn renderDocTypeHtml(
                     try w.writeAll("<a href=\"");
                     try writeTypeLink(w, ctx, ref.module_path, ref.type_name);
                     try w.writeAll("\"><span class=\"type\">");
-                    try writeHtmlEscaped(w, display_name);
+                    try reporting.writeEscapedHtml(w, display_name);
                     try w.writeAll("</span></a>");
                 } else {
                     try w.writeAll("<span class=\"type\">");
-                    try writeHtmlEscaped(w, display_name);
+                    try reporting.writeEscapedHtml(w, display_name);
                     try w.writeAll("</span>");
                 }
             },
@@ -2213,65 +2245,11 @@ fn renderDocTypeHtml(
                     },
                     .tuple => |tup| {
                         try frames.append(gpa, .{ .html = ")" });
-                        const multiline = !ctx.single_line_signatures and multiline_layouts.contains(item.value);
-                        if (multiline) {
-                            try frames.append(gpa, .{ .indent = item.indent });
-                            var i = tup.elems.len;
-                            while (i > 0) {
-                                i -= 1;
-                                try frames.append(gpa, .{ .html = ",\n" });
-                                try frames.append(gpa, .{ .doc_type = .{
-                                    .value = tup.elems[i],
-                                    .needs_parens = false,
-                                    .indent = item.indent + 1,
-                                } });
-                                try frames.append(gpa, .{ .indent = item.indent + 1 });
-                            }
-                            try frames.append(gpa, .{ .html = "(\n" });
-                        } else {
-                            var i = tup.elems.len;
-                            while (i > 0) {
-                                i -= 1;
-                                try frames.append(gpa, .{ .doc_type = .{
-                                    .value = tup.elems[i],
-                                    .needs_parens = false,
-                                    .indent = item.indent,
-                                } });
-                                if (i > 0) try frames.append(gpa, .{ .html = ", " });
-                            }
-                            try frames.append(gpa, .{ .html = "(" });
-                        }
+                        try pushTypeList(gpa, &frames, tup.elems, item.indent, !ctx.single_line_signatures and multiline_layouts.contains(item.value));
                     },
                     .apply => |app| {
                         try frames.append(gpa, .{ .html = ")" });
-                        const multiline = !ctx.single_line_signatures and multiline_layouts.contains(item.value);
-                        if (multiline) {
-                            try frames.append(gpa, .{ .indent = item.indent });
-                            var i = app.args.len;
-                            while (i > 0) {
-                                i -= 1;
-                                try frames.append(gpa, .{ .html = ",\n" });
-                                try frames.append(gpa, .{ .doc_type = .{
-                                    .value = app.args[i],
-                                    .needs_parens = false,
-                                    .indent = item.indent + 1,
-                                } });
-                                try frames.append(gpa, .{ .indent = item.indent + 1 });
-                            }
-                            try frames.append(gpa, .{ .html = "(\n" });
-                        } else {
-                            var i = app.args.len;
-                            while (i > 0) {
-                                i -= 1;
-                                try frames.append(gpa, .{ .doc_type = .{
-                                    .value = app.args[i],
-                                    .needs_parens = false,
-                                    .indent = item.indent,
-                                } });
-                                if (i > 0) try frames.append(gpa, .{ .html = ", " });
-                            }
-                            try frames.append(gpa, .{ .html = "(" });
-                        }
+                        try pushTypeList(gpa, &frames, app.args, item.indent, !ctx.single_line_signatures and multiline_layouts.contains(item.value));
                         try frames.append(gpa, .{ .doc_type = .{
                             .value = app.constructor,
                             .needs_parens = false,
@@ -2446,7 +2424,7 @@ fn writeTypeLink(
     if (target_module.len == 0) {
         // Fallback: unqualified anchor (shouldn't happen)
         try w.writeAll("#");
-        try writeHtmlEscaped(w, type_name);
+        try reporting.writeEscapedHtml(w, type_name);
         return;
     }
 
@@ -2479,7 +2457,7 @@ fn writeTypeLink(
         if (ctx.current_module) |_| {
             try w.writeAll("../");
         }
-        try writeHtmlEscaped(w, target_module);
+        try reporting.writeEscapedHtml(w, target_module);
         try w.writeAll("/#");
     }
 
@@ -2502,31 +2480,11 @@ fn writeTypeLink(
     // prefix on its ids, so re-add it. Doing the stripping first means a
     // reference that already carried the module name isn't prefixed twice.
     if (!ctx.isBuiltinDerived(target_module)) {
-        try writeHtmlEscaped(w, target_module);
+        try reporting.writeEscapedHtml(w, target_module);
         try w.writeAll(".");
     }
-    try writeHtmlEscaped(w, rel_head);
-    try writeHtmlEscaped(w, rel_tail);
-}
-
-fn writeHtmlEscaped(w: Writer, text: []const u8) (Allocator.Error || error{WriteFailed})!void {
-    var i: usize = 0;
-    while (i < text.len) : (i += 1) {
-        if (@import("base").bidi.at(text[i..])) |control| {
-            try writeHtmlEscaped(w, control.visible);
-            i += control.utf8.len - 1;
-            continue;
-        }
-        const c = text[i];
-        switch (c) {
-            '<' => try w.writeAll("&lt;"),
-            '>' => try w.writeAll("&gt;"),
-            '&' => try w.writeAll("&amp;"),
-            '"' => try w.writeAll("&quot;"),
-            '\'' => try w.writeAll("&#39;"),
-            else => try w.writeAll(&[_]u8{c}),
-        }
-    }
+    try reporting.writeEscapedHtml(w, rel_head);
+    try reporting.writeEscapedHtml(w, rel_tail);
 }
 
 test "renderDocTypeHtml handles deeply nested types without call stack recursion" {
@@ -3217,12 +3175,12 @@ test "bidi controls render as visible text in documentation" {
     var output = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer output.deinit();
     for (@import("base").bidi.controls) |control| {
-        try writeHtmlEscaped(&output.writer, control.utf8);
+        try reporting.writeEscapedHtml(&output.writer, control.utf8);
     }
     var iter = @import("base").bidi.Iterator{ .bytes = output.written() };
     try std.testing.expect(iter.next() == null);
     try std.testing.expect(std.mem.find(u8, output.written(), "&lt;U+202E RLO&gt;") != null);
     const start = output.written().len;
-    try writeHtmlEscaped(&output.writer, "שלום مرحبا");
+    try reporting.writeEscapedHtml(&output.writer, "שלום مرحبا");
     try std.testing.expectEqualStrings("שלום مرحبا", output.written()[start..]);
 }

@@ -4950,44 +4950,19 @@ pub inline fn debugAssertArraysInSync(self: *const Self) void {
 }
 
 /// Add a new expression to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addDef(self: *Self, expr: CIR.Def, region: Region) std.mem.Allocator.Error!CIR.Def.Idx {
-    const expr_idx = try self.store.addDef(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addDef = storeAdder("addDef");
 
 /// Add a new type header to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addTypeHeader(self: *Self, expr: CIR.TypeHeader, region: Region) std.mem.Allocator.Error!CIR.TypeHeader.Idx {
-    const expr_idx = try self.store.addTypeHeader(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addTypeHeader = storeAdder("addTypeHeader");
 
 /// Add a new statement to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addStatement(self: *Self, expr: CIR.Statement, region: Region) std.mem.Allocator.Error!CIR.Statement.Idx {
-    const expr_idx = try self.store.addStatement(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addStatement = storeAdder("addStatement");
 
 /// Add a new pattern to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addPattern(self: *Self, expr: CIR.Pattern, region: Region) std.mem.Allocator.Error!CIR.Pattern.Idx {
-    const expr_idx = try self.store.addPattern(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addPattern = storeAdder("addPattern");
 
 /// Add a new expression to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addExpr(self: *Self, expr: CIR.Expr, region: Region) std.mem.Allocator.Error!CIR.Expr.Idx {
-    const expr_idx = try self.store.addExpr(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addExpr = storeAdder("addExpr");
 
 /// Reserve one contiguous field-access path plus its enclosing expression.
 pub fn startFieldAccessPath(self: *Self, segment_count: u32) std.mem.Allocator.Error!NodeStore.FieldAccessPathBuilder {
@@ -5020,91 +4995,59 @@ pub fn rollbackFieldAccessPath(self: *Self, builder: NodeStore.FieldAccessPathBu
 }
 
 /// Add a new capture to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addCapture(self: *Self, capture: CIR.Expr.Capture, region: Region) std.mem.Allocator.Error!CIR.Expr.Capture.Idx {
-    const capture_idx = try self.store.addCapture(capture, region);
-    self.debugAssertArraysInSync();
-    return capture_idx;
-}
+pub const addCapture = storeAdder("addCapture");
 
 /// Add a new record field to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addRecordField(self: *Self, expr: CIR.RecordField, region: Region) std.mem.Allocator.Error!CIR.RecordField.Idx {
-    const expr_idx = try self.store.addRecordField(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addRecordField = storeAdder("addRecordField");
 
 /// Add a new unset record field (`name: _`) to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addUnsetField(self: *Self, unset_field: CIR.UnsetField, region: Region) std.mem.Allocator.Error!CIR.UnsetField.Idx {
-    const unset_idx = try self.store.addUnsetField(unset_field, region);
-    self.debugAssertArraysInSync();
-    return unset_idx;
-}
+pub const addUnsetField = storeAdder("addUnsetField");
 
 /// Add a new record destructuring to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addRecordDestruct(self: *Self, expr: CIR.Pattern.RecordDestruct, region: Region) std.mem.Allocator.Error!CIR.Pattern.RecordDestruct.Idx {
-    const expr_idx = try self.store.addRecordDestruct(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addRecordDestruct = storeAdder("addRecordDestruct");
 
 /// Adds a new if branch to the store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addIfBranch(self: *Self, expr: CIR.Expr.IfBranch, region: Region) std.mem.Allocator.Error!CIR.Expr.IfBranch.Idx {
-    const expr_idx = try self.store.addIfBranch(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addIfBranch = storeAdder("addIfBranch");
 
 /// Add a new match branch to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addMatchBranch(self: *Self, expr: CIR.Expr.Match.Branch, region: Region) std.mem.Allocator.Error!CIR.Expr.Match.Branch.Idx {
-    const expr_idx = try self.store.addMatchBranch(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addMatchBranch = storeAdder("addMatchBranch");
 
 /// Add a new where clause to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addWhereClause(self: *Self, expr: CIR.WhereClause, region: Region) std.mem.Allocator.Error!CIR.WhereClause.Idx {
-    const expr_idx = try self.store.addWhereClause(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addWhereClause = storeAdder("addWhereClause");
 
 /// Add a new type annotation to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addTypeAnno(self: *Self, expr: CIR.TypeAnno, region: Region) std.mem.Allocator.Error!CIR.TypeAnno.Idx {
-    const expr_idx = try self.store.addTypeAnno(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addTypeAnno = storeAdder("addTypeAnno");
 
 /// Add a new annotation to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addAnnotation(self: *Self, expr: CIR.Annotation, region: Region) std.mem.Allocator.Error!CIR.Annotation.Idx {
-    const expr_idx = try self.store.addAnnotation(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addAnnotation = storeAdder("addAnnotation");
 
 /// Add a new record field to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addAnnoRecordField(self: *Self, expr: CIR.TypeAnno.RecordField, region: Region) std.mem.Allocator.Error!CIR.TypeAnno.RecordField.Idx {
-    const expr_idx = try self.store.addAnnoRecordField(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addAnnoRecordField = storeAdder("addAnnoRecordField");
 
 /// Add a new exposed item to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addExposedItem(self: *Self, expr: CIR.ExposedItem, region: Region) std.mem.Allocator.Error!CIR.ExposedItem.Idx {
-    const expr_idx = try self.store.addExposedItem(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
+pub const addExposedItem = storeAdder("addExposedItem");
+
+/// The value type `NodeStore.<name>` stores.
+fn StoreValue(comptime name: []const u8) type {
+    return @typeInfo(@TypeOf(@field(NodeStore, name))).@"fn".param_types[1].?;
+}
+
+/// The index type `NodeStore.<name>` returns.
+fn StoreIdx(comptime name: []const u8) type {
+    const store_fn = @typeInfo(@TypeOf(@field(NodeStore, name))).@"fn";
+    return @typeInfo(store_fn.return_type.?).error_union.payload;
+}
+
+/// `NodeStore.<name>(value, region)` forwarded through this env, asserting the
+/// node and region arrays are in sync once the store has grown.
+fn storeAdder(comptime name: []const u8) fn (*Self, StoreValue(name), Region) std.mem.Allocator.Error!StoreIdx(name) {
+    return struct {
+        fn add(self: *Self, value: StoreValue(name), region: Region) std.mem.Allocator.Error!StoreIdx(name) {
+            const idx = try @field(NodeStore, name)(&self.store, value, region);
+            self.debugAssertArraysInSync();
+            return idx;
+        }
+    }.add;
 }
 
 /// Add a diagnostic.
@@ -5116,20 +5059,10 @@ pub fn addDiagnostic(self: *Self, reason: CIR.Diagnostic) std.mem.Allocator.Erro
 }
 
 /// Add a new malformed node to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addMalformed(self: *Self, diagnostic_idx: CIR.Diagnostic.Idx, region: Region) std.mem.Allocator.Error!CIR.Node.Idx {
-    const malformed_idx = try self.store.addMalformed(diagnostic_idx, region);
-    self.debugAssertArraysInSync();
-    return malformed_idx;
-}
+pub const addMalformed = storeAdder("addMalformed");
 
 /// Add a new match branch pattern to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addMatchBranchPattern(self: *Self, expr: CIR.Expr.Match.BranchPattern, region: Region) std.mem.Allocator.Error!CIR.Expr.Match.BranchPattern.Idx {
-    const expr_idx = try self.store.addMatchBranchPattern(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addMatchBranchPattern = storeAdder("addMatchBranchPattern");
 
 /// Retrieves the text of an identifier by its index
 pub fn getIdentText(self: *const Self, idx: Ident.Idx) []const u8 {

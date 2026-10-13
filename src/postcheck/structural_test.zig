@@ -9,7 +9,6 @@ const MonoType = @import("monotype/type.zig");
 const Lifted = @import("monotype_lifted/ast.zig");
 const LambdaSolved = @import("lambda_solved/ast.zig");
 const LambdaSolvedType = @import("lambda_solved/type.zig");
-const LambdaMono = @import("lambda_mono/ast.zig");
 const LambdaMonoType = @import("lambda_mono/type.zig");
 const LIR = @import("lir_core").LIR;
 const names = check.CheckedNames;
@@ -73,8 +72,6 @@ test "post-check row entries carry checked label ids until LIR indices" {
     try std.testing.expect(structFieldType(Mono.RecordDestruct, "name") == names.RecordFieldNameId);
     try std.testing.expect(structFieldType(MonoType.Field, "name") == names.RecordFieldNameId);
     try std.testing.expect(structFieldType(MonoType.Tag, "name") == names.TagNameId);
-    try std.testing.expect(structFieldType(LambdaMono.FieldExpr, "name") == names.RecordFieldNameId);
-    try std.testing.expect(structFieldType(LambdaMono.RecordDestruct, "name") == names.RecordFieldNameId);
     try std.testing.expect(structFieldType(LambdaMonoType.Field, "name") == names.RecordFieldNameId);
     try std.testing.expect(structFieldType(LambdaMonoType.Tag, "name") == names.TagNameId);
 
@@ -117,7 +114,7 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
     try expectContains(lower_lookup_at_type, "required.const_use,\n                ty,\n                (try self.evidenceForUseSite(record.expr)).vector,");
     try expectContains(lower_lookup_at_type, ".platform_required_proc => |proc| try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), record.expr, proc.root_evidence, record.recursive_reference)");
     try expectContains(lower_source, "fn lowerCallableEvalBindingValueAtNode(");
-    try expectContains(lower_source, "try self.restoreConstFnAtNode(view, fn_id, request_fn_node)");
+    try expectContains(lower_source, "try self.restoreConstFnAt(view, fn_id, .{ .node = request_fn_node }, null)");
     try expectContains(lower_source, "try body_ctx.graphFunctionNode(&.{}, request_fn_node)");
     try expectContains(lower_source, "body_ctx.lowerComptimeRootExprAtCell(");
 }
@@ -189,19 +186,11 @@ test "SpecConstr owns strict binding chains and retains opaque discarded work" {
     try expectNotContains(source, "unsafeLeafCount");
 }
 
-test "Lambda Mono has concrete callable values and no function type" {
-    try std.testing.expect(@hasField(LambdaMono.ExprData, "direct_call"));
-    try std.testing.expect(@hasField(LambdaMono.ExprData, "indirect_erased_call"));
-    try std.testing.expect(@hasField(LambdaMono.ExprData, "packed_erased_fn"));
-    try std.testing.expect(@hasField(LambdaMono.ExprData, "callable"));
-    try std.testing.expect(@hasField(LambdaMono.ExprData, "capture_access"));
+test "Lambda Mono types have concrete callable values and no function type" {
     try std.testing.expect(@hasField(LambdaMonoType.Content, "callable"));
     try std.testing.expect(@hasField(LambdaMonoType.Content, "erased_fn"));
     try std.testing.expect(@hasField(LambdaMonoType.Content, "erased_capture_ptr"));
 
-    try std.testing.expect(!@hasField(LambdaMono.ExprData, "call_value"));
-    try std.testing.expect(!@hasField(LambdaMono.ExprData, "call_proc"));
-    try std.testing.expect(!@hasField(LambdaMono.ExprData, "lambda"));
     try std.testing.expect(!@hasField(LambdaMonoType.Content, "func"));
     try std.testing.expect(!@hasField(LambdaMonoType.Content, "lambda_set"));
 }
@@ -231,7 +220,6 @@ test "post-check expression forms do not reintroduce checked-only syntax" {
     inline for (checked_only) |name| {
         try std.testing.expect(!@hasField(Mono.ExprData, name));
         try std.testing.expect(!@hasField(Lifted.ExprData, name));
-        try std.testing.expect(!@hasField(LambdaMono.ExprData, name));
     }
 }
 
@@ -243,17 +231,12 @@ test "a checked row coercion has one post-check form at every stage" {
     try std.testing.expect(@hasField(check.CheckedArtifact.CheckedExprData, "row_coerce"));
     try std.testing.expect(@hasField(Mono.ExprData, "row_widen"));
     try std.testing.expect(@hasField(Lifted.ExprData, "row_widen"));
-    try std.testing.expect(@hasField(LambdaMono.ExprData, "row_widen"));
     try std.testing.expect(!@hasField(Mono.RowWiden, "target"));
     try std.testing.expect(@typeInfo(Mono.RowWiden).@"struct".field_names.len == 1);
 }
 
-test "stage expression forms only shrink checked syntax or add runtime encoding forms" {
+test "stage expression forms only shrink checked syntax" {
     try std.testing.expect(unionFieldCount(Lifted.ExprData) <= unionFieldCount(Mono.ExprData));
-    try std.testing.expect(unionFieldCount(LambdaMono.ExprData) >= unionFieldCount(Lifted.ExprData));
-
-    try std.testing.expect(@hasField(LambdaMono.ExprData, "direct_call"));
-    try std.testing.expect(@hasField(LambdaMono.ExprData, "callable"));
 }
 
 test "post-check stage products do not store expression cache state" {
@@ -261,7 +244,6 @@ test "post-check stage products do not store expression cache state" {
         Mono.Program,
         Lifted.Program,
         LambdaSolved.Program,
-        LambdaMono.Program,
     };
 
     inline for (ir_types) |T| {
@@ -340,13 +322,6 @@ test "Monotype lifting mutates only callable expression nodes in place" {
 
     const lift_lambda = sourceSliceBetween(lifted_source, "fn beginLiftedLambda", "fn finishLiftedLambda");
     try expectContains(lift_lambda, "self.output.setExprData(expr_id, .{ .fn_ref = .{");
-
-    const lambda_mono_source = @embedFile("lambda_mono/lower.zig");
-    const lower_fn = sourceSliceBetween(lambda_mono_source, "fn lowerFnSpec", "fn ensureOwnFnSpec");
-    try expectContains(lower_fn, "self.captures.clearRetainingCapacity();");
-    try expectContains(lower_fn, "@memset(self.expr_map, null);");
-    try expectContains(lower_fn, "@memset(self.pat_map, null);");
-    try expectContains(lower_fn, "@memset(self.stmt_map, null);");
 }
 
 test "Lambda Solved consumes lifted program through a read-only view" {
@@ -1557,25 +1532,10 @@ test "Monotype inspect-only lowering is gated by explicit demand" {
     try expectContains(lower_source, "if (demand != .inspect_only) return null;");
 }
 
-test "Lambda Mono consumes Lambda Solved through a read-only view" {
+test "Lambda Solved exposes a read-only program view" {
     const solved_ast_source = @embedFile("lambda_solved/ast.zig");
     try expectContains(solved_ast_source, "pub const ProgramView = struct");
     try expectContains(solved_ast_source, "pub fn view(self: *const Program) ProgramView");
-
-    const lower_source = @embedFile("lambda_mono/lower.zig");
-    try expectContains(lower_source, "solved: Solved.ProgramView");
-    try expectContains(lower_source, "const solved_view = movedSolvedView(&owned, &program);");
-    try std.testing.expect(std.mem.find(u8, lower_source, "self.solved.lifted.fns.items") == null);
-    try std.testing.expect(std.mem.find(u8, lower_source, "self.solved.fn_tys.items") == null);
-}
-
-test "direct LIR verification consumes producer-owned specialization identities" {
-    const mono_lower = @embedFile("lambda_mono/lower.zig");
-    const direct_lower = @embedFile("solved_lir_lower.zig");
-    try expectContains(mono_lower, "pub const SpecializationIdentity = struct");
-    try expectContains(mono_lower, ".debug_specialization_identities = options.debug_specialization_identities");
-    try expectContains(direct_lower, "by_identity.get(specializationIdentity(entry.spec))");
-    try expectContains(direct_lower, "different types for an exact function specialization");
 }
 
 fn countDefinitions(source: []const u8, decl: []const u8) usize {
@@ -1742,7 +1702,6 @@ test "post-check IR stores append spans through one implementation" {
     const stores = [_][]const u8{
         @embedFile("monotype/ast.zig"),
         @embedFile("monotype_lifted/ast.zig"),
-        @embedFile("lambda_mono/ast.zig"),
     };
     for (stores) |source| {
         // The hand-written form these replaced. Its absence is the invariant.

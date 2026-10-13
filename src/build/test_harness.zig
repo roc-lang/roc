@@ -3,7 +3,6 @@
 //! Provides a comptime-generic process pool, timing statistics, pipe I/O
 //! helpers, and standardized CLI argument parsing. Used by:
 //! - src/eval/test/parallel_runner.zig (eval expression tests)
-//! - src/eval/test/lambda_mono_differential_runner.zig (body-lowering differential)
 //! - src/eval/test/host_effects_runner.zig (runtime host-effects tests)
 //! - src/cli/test/parallel_cli_runner.zig (platform integration tests)
 //! - src/lsp/test/parallel_integration_runner.zig (LSP integration tests)

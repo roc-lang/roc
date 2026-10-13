@@ -991,6 +991,17 @@ test {
     _ = std.testing.refAllDecls(@This());
 }
 
+/// The S-expression node name for a variant: `prefix`, a dash, and the
+/// variant's tag name with underscores replaced by dashes.
+fn sexprName(comptime prefix: []const u8, comptime tag: anytype) []const u8 {
+    comptime {
+        var name: [@tagName(tag).len]u8 = @tagName(tag)[0..@tagName(tag).len].*;
+        std.mem.replaceScalar(u8, &name, '_', '-');
+        const final = name;
+        return prefix ++ "-" ++ &final;
+    }
+}
+
 /// Helper function to convert the AST to a human friendly representation in S-expression format
 pub fn toSExprStr(ast: *@This(), gpa: std.mem.Allocator, env: *const CommonEnv, writer: anytype) (Allocator.Error || error{WriteFailed})!void {
     const file = ast.store.getFile();
@@ -1249,16 +1260,8 @@ pub const Statement = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .crash => |a| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "s-crash", a.region);
-                const attrs = tree.beginNode();
-
-                try ast.store.getExpr(a.expr).pushToSExprTree(gpa, env, ast, tree);
-
-                try tree.endNode(begin, attrs);
-            },
-            .dbg => |a| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "s-dbg", a.region);
+            inline .crash, .dbg, .@"return" => |a, tag| {
+                const begin = try ast.beginSexprNodeAt(env, tree, comptime sexprName("s", tag), a.region);
                 const attrs = tree.beginNode();
 
                 try ast.store.getExpr(a.expr).pushToSExprTree(gpa, env, ast, tree);
@@ -1309,14 +1312,6 @@ pub const Statement = union(enum) {
                 const begin = try ast.beginSexprNodeAt(env, tree, "s-break", a.region);
                 try tree.endNodeWithoutChildren(begin);
             },
-            .@"return" => |a| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "s-return", a.region);
-                const attrs = tree.beginNode();
-
-                try ast.store.getExpr(a.expr).pushToSExprTree(gpa, env, ast, tree);
-
-                try tree.endNode(begin, attrs);
-            },
             .type_anno => |a| {
                 const begin = try ast.beginSexprNodeAt(env, tree, "s-type-anno", a.region);
                 try tree.pushStringPair("name", ast.resolve(a.name));
@@ -1346,14 +1341,7 @@ pub const Statement = union(enum) {
     /// Extract the region from any Statement variant
     pub fn to_tokenized_region(self: @This()) TokenizedRegion {
         return switch (self) {
-            .decl => |s| s.region,
-            .@"var" => |s| s.region,
-            inline .expr, .import, .type_decl, .crash, .dbg, .expect => |s| s.region,
-            .@"for" => |s| s.region,
-            .@"while" => |s| s.region,
-            .@"return" => |s| s.region,
-            .@"break" => |s| s.region,
-            inline .type_anno, .malformed, .file_import => |s| s.region,
+            inline .decl, .@"var", .expr, .import, .type_decl, .crash, .dbg, .expect, .@"for", .@"while", .@"return", .@"break", .type_anno, .malformed, .file_import => |v| v.region,
         };
     }
 };
@@ -1493,42 +1481,15 @@ pub const Pattern = union(enum) {
     /// Extract the region from any Pattern variant
     pub fn to_tokenized_region(self: @This()) TokenizedRegion {
         return switch (self) {
-            .ident => |p| p.region,
-            .var_ident => |p| p.region,
-            .tag => |p| p.region,
-            .int => |p| p.region,
-            .frac => |p| p.region,
-            .typed_int => |p| p.region,
-            .typed_frac => |p| p.region,
-            .string => |p| p.region,
-            .single_quote => |p| p.region,
-            .record => |p| p.region,
-            .list => |p| p.region,
-            .list_rest => |p| p.region,
-            .tuple => |p| p.region,
-            .underscore => |p| p.region,
-            .alternatives => |p| p.region,
-            .as => |p| p.region,
-            .malformed => |p| p.region,
+            inline .ident, .var_ident, .tag, .int, .frac, .typed_int, .typed_frac, .string, .single_quote, .record, .list, .list_rest, .tuple, .underscore, .alternatives, .as, .malformed => |v| v.region,
         };
     }
 
     /// Push this Pattern to the SExprTree stack
     pub fn pushToSExprTree(self: @This(), gpa: std.mem.Allocator, env: *const CommonEnv, ast: *const AST, tree: *SExprTree) std.mem.Allocator.Error!void {
         switch (self) {
-            .ident => |ident| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "p-ident", ident.region);
-
-                // Add raw attribute
-                const raw_begin = try tree.beginNamedNode("raw");
-                try tree.pushString(ast.resolve(ident.ident_tok));
-                try tree.endNodeWithoutChildren(raw_begin);
-                const attrs = tree.beginNode();
-
-                try tree.endNode(begin, attrs);
-            },
-            .var_ident => |ident| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "p-var-ident", ident.region);
+            inline .ident, .var_ident => |ident, tag| {
+                const begin = try ast.beginSexprNodeAt(env, tree, comptime sexprName("p", tag), ident.region);
 
                 // Add raw attribute
                 const raw_begin = try tree.beginNamedNode("raw");
@@ -1550,24 +1511,13 @@ pub const Pattern = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .int => |num| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "p-int", num.region);
+            inline .int, .frac => |num, tag| {
+                const begin = try ast.beginSexprNodeAt(env, tree, comptime sexprName("p", tag), num.region);
                 try tree.pushStringPair("raw", ast.resolve(num.number_tok));
                 try tree.endNodeWithoutChildren(begin);
             },
-            .frac => |num| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "p-frac", num.region);
-                try tree.pushStringPair("raw", ast.resolve(num.number_tok));
-                try tree.endNodeWithoutChildren(begin);
-            },
-            .typed_int => |num| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "p-typed-int", num.region);
-                try tree.pushStringPair("raw", ast.resolve(num.number_tok));
-                try ast.pushLiteralTypeSuffix(env, tree, num.type_suffix);
-                try tree.endNodeWithoutChildren(begin);
-            },
-            .typed_frac => |num| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "p-typed-frac", num.region);
+            inline .typed_int, .typed_frac => |num, tag| {
+                const begin = try ast.beginSexprNodeAt(env, tree, comptime sexprName("p", tag), num.region);
                 try tree.pushStringPair("raw", ast.resolve(num.number_tok));
                 try ast.pushLiteralTypeSuffix(env, tree, num.type_suffix);
                 try tree.endNodeWithoutChildren(begin);
@@ -1611,8 +1561,8 @@ pub const Pattern = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .list => |list| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "p-list", list.region);
+            inline .list, .tuple => |list, tag| {
+                const begin = try ast.beginSexprNodeAt(env, tree, comptime sexprName("p", tag), list.region);
                 const attrs = tree.beginNode();
 
                 for (ast.store.patternSlice(list.patterns)) |pat| {
@@ -1628,16 +1578,6 @@ pub const Pattern = union(enum) {
                     try tree.pushStringPair("name", ast.resolve(name_tok));
                 }
                 const attrs = tree.beginNode();
-
-                try tree.endNode(begin, attrs);
-            },
-            .tuple => |tuple| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "p-tuple", tuple.region);
-                const attrs = tree.beginNode();
-
-                for (ast.store.patternSlice(tuple.patterns)) |pat| {
-                    try ast.store.getPattern(pat).pushToSExprTree(gpa, env, ast, tree);
-                }
 
                 try tree.endNode(begin, attrs);
             },
@@ -2146,7 +2086,7 @@ pub const Header = union(enum) {
     /// Extract the region from any Header variant
     pub fn to_tokenized_region(self: @This()) TokenizedRegion {
         return switch (self) {
-            inline .app, .module, .package, .platform, .hosted, .type_module, .default_app, .malformed => |a| a.region,
+            inline .app, .module, .package, .platform, .hosted, .type_module, .default_app, .malformed => |v| v.region,
         };
     }
 };
@@ -2255,7 +2195,7 @@ pub const ExposedItem = union(enum) {
     /// Extract the region from any ExposedItem variant
     pub fn to_tokenized_region(self: @This()) TokenizedRegion {
         return switch (self) {
-            inline .lower_ident, .upper_ident, .upper_ident_star, .malformed => |i| i.region,
+            inline .lower_ident, .upper_ident, .upper_ident_star, .malformed => |v| v.region,
         };
     }
 };
@@ -2398,7 +2338,7 @@ pub const TypeAnno = union(enum) {
     tag_union: struct {
         tags: TypeAnno.Span,
         /// Extension for open tag unions
-        ext: TagUnionExt,
+        ext: Ext,
         region: TokenizedRegion,
     },
     tuple: struct {
@@ -2407,7 +2347,7 @@ pub const TypeAnno = union(enum) {
     },
     record: struct {
         fields: AnnoRecordField.Span,
-        ext: RecordExt,
+        ext: Ext,
         region: TokenizedRegion,
     },
     @"fn": struct {
@@ -2428,33 +2368,18 @@ pub const TypeAnno = union(enum) {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    /// Extension type for open tag unions
-    pub const TagUnionExt = union(enum) {
-        /// Closed tag union: `[A, B, C]`
+    /// Extension of a tag union or record type annotation
+    pub const Ext = union(enum) {
+        /// Closed: `[A, B, C]` or `{ name: Str }`
         closed,
-        /// Anonymous open tag union: `[A, B, ..]` - stores the DoubleDot token index
+        /// Anonymous open: `[A, B, ..]` or `{ name: Str, .. }` - stores the DoubleDot token index
         open: Token.Idx,
-        /// Named open tag union: `[A, B, ..ext]`
+        /// Named open: `[A, B, ..ext]` or `{ name: Str, ..ext }`
         named: struct { anno: TypeAnno.Idx, region: TokenizedRegion },
     };
 
-    pub const TagUnionRhs = packed struct {
-        /// 0 = closed, 1 = anonymous open, 2 = named open
-        ext_kind: u2,
-        _padding: u30 = 0,
-    };
-
-    /// Extension type for open records
-    pub const RecordExt = union(enum) {
-        /// Closed record: `{ name: Str }`
-        closed,
-        /// Anonymous open record: `{ name: Str, .. }` - stores the DoubleDot token index
-        open: Token.Idx,
-        /// Named open record: `{ name: Str, ..ext }`
-        named: struct { anno: TypeAnno.Idx, region: TokenizedRegion },
-    };
-
-    pub const RecordRhs = packed struct {
+    /// Node `rhs` word of a tag union or record type annotation.
+    pub const ExtRhs = packed struct {
         /// 0 = closed, 1 = anonymous open, 2 = named open
         ext_kind: u2,
         _padding: u30 = 0,
@@ -2465,10 +2390,7 @@ pub const TypeAnno = union(enum) {
     /// Extract the region from any TypeAnno variant
     pub fn to_tokenized_region(self: @This()) TokenizedRegion {
         switch (self) {
-            inline .apply, .ty_var, .underscore_type_var, .underscore, .ty, .tag_union, .tuple, .record => |a| return a.region,
-            .@"fn" => |f| return f.region,
-            .parens => |p| return p.region,
-            .malformed => |m| return m.region,
+            inline .apply, .ty_var, .underscore_type_var, .underscore, .ty, .tag_union, .tuple, .record, .@"fn", .parens, .malformed => |a| return a.region,
         }
     }
 
@@ -2912,42 +2834,7 @@ pub const Expr = union(enum) {
     /// Extract the region from any Expr variant
     pub fn to_tokenized_region(self: @This()) TokenizedRegion {
         return switch (self) {
-            .ident => |e| e.region,
-            .int => |e| e.region,
-            .frac => |e| e.region,
-            .typed_int => |e| e.region,
-            .typed_frac => |e| e.region,
-            .string => |e| e.region,
-            .multiline_string => |e| e.region,
-            .typed_string => |e| e.region,
-            .typed_multiline_string => |e| e.region,
-            .tag => |e| e.region,
-            .list => |e| e.region,
-            .record => |e| e.region,
-            .tuple => |e| e.region,
-            .field_access => |e| e.region,
-            .method_call => |e| e.region,
-            .tuple_access => |e| e.region,
-            .arrow_call => |e| e.region,
-            .lambda => |e| e.region,
-            .record_updater => |e| e.region,
-            .bin_op => |e| e.region,
-            .unary_op => |e| e.region,
-            .suffix_single_question => |e| e.region,
-            .apply => |e| e.region,
-            .if_then_else => |e| e.region,
-            .if_without_else => |e| e.region,
-            .match => |e| e.region,
-            .dbg => |e| e.region,
-            .crash => |e| e.region,
-            .block => |e| e.region,
-            .record_builder => |e| e.region,
-            .nominal_record => |e| e.region,
-            .nominal_apply => |e| e.region,
-            .ellipsis => |e| e.region,
-            .@"break" => |e| e.region,
-            .@"return" => |e| e.region,
-            inline .for_expr, .malformed, .string_part, .single_quote => |e| e.region,
+            inline .ident, .int, .frac, .typed_int, .typed_frac, .string, .multiline_string, .typed_string, .typed_multiline_string, .tag, .list, .record, .tuple, .field_access, .method_call, .tuple_access, .arrow_call, .lambda, .record_updater, .bin_op, .unary_op, .suffix_single_question, .apply, .if_then_else, .if_without_else, .match, .dbg, .crash, .block, .record_builder, .nominal_record, .nominal_apply, .ellipsis, .@"break", .@"return", .for_expr, .malformed, .string_part, .single_quote => |v| v.region,
         };
     }
 
@@ -2969,14 +2856,8 @@ pub const Expr = union(enum) {
                 try tree.pushStringPair("raw", ast.resolve(a.token));
                 try tree.endNodeWithoutChildren(begin);
             },
-            .typed_int => |a| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "e-typed-int", a.region);
-                try tree.pushStringPair("raw", ast.resolve(a.token));
-                try ast.pushLiteralTypeSuffix(env, tree, a.type_suffix);
-                try tree.endNodeWithoutChildren(begin);
-            },
-            .typed_frac => |a| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "e-typed-frac", a.region);
+            inline .typed_int, .typed_frac => |a, tag| {
+                const begin = try ast.beginSexprNodeAt(env, tree, comptime sexprName("e", tag), a.region);
                 try tree.pushStringPair("raw", ast.resolve(a.token));
                 try ast.pushLiteralTypeSuffix(env, tree, a.type_suffix);
                 try tree.endNodeWithoutChildren(begin);
@@ -2996,8 +2877,8 @@ pub const Expr = union(enum) {
                 try tree.endNodeWithoutChildren(raw);
                 try tree.endNodeWithoutChildren(begin);
             },
-            .string => |str| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "e-string", str.region);
+            inline .string, .multiline_string => |str, tag| {
+                const begin = try ast.beginSexprNodeAt(env, tree, comptime sexprName("e", tag), str.region);
                 const attrs = tree.beginNode();
 
                 for (ast.store.exprSlice(str.parts)) |part_id| {
@@ -3007,19 +2888,8 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .multiline_string => |str| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "e-multiline-string", str.region);
-                const attrs = tree.beginNode();
-
-                for (ast.store.exprSlice(str.parts)) |part_id| {
-                    const part_expr = ast.store.getExpr(part_id);
-                    try part_expr.pushToSExprTree(gpa, env, ast, tree);
-                }
-
-                try tree.endNode(begin, attrs);
-            },
-            .typed_string => |str| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "e-typed-string", str.region);
+            inline .typed_string, .typed_multiline_string => |str, tag| {
+                const begin = try ast.beginSexprNodeAt(env, tree, comptime sexprName("e", tag), str.region);
                 try ast.pushLiteralTypeSuffix(env, tree, str.type_suffix);
                 const attrs = tree.beginNode();
 
@@ -3030,30 +2900,8 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .typed_multiline_string => |str| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "e-typed-multiline-string", str.region);
-                try ast.pushLiteralTypeSuffix(env, tree, str.type_suffix);
-                const attrs = tree.beginNode();
-
-                for (ast.store.exprSlice(str.parts)) |part_id| {
-                    const part_expr = ast.store.getExpr(part_id);
-                    try part_expr.pushToSExprTree(gpa, env, ast, tree);
-                }
-
-                try tree.endNode(begin, attrs);
-            },
-            .list => |a| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "e-list", a.region);
-                const attrs = tree.beginNode();
-
-                for (ast.store.exprSlice(a.items)) |b| {
-                    try ast.store.getExpr(b).pushToSExprTree(gpa, env, ast, tree);
-                }
-
-                try tree.endNode(begin, attrs);
-            },
-            .tuple => |a| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "e-tuple", a.region);
+            inline .list, .tuple => |a, tag| {
+                const begin = try ast.beginSexprNodeAt(env, tree, comptime sexprName("e", tag), a.region);
                 const attrs = tree.beginNode();
 
                 for (ast.store.exprSlice(a.items)) |b| {

@@ -24,6 +24,14 @@ const test_fixtures = @import("test_fixtures.zig");
 /// synthetic checked payloads from one definition.
 const fixtureTableIndex = test_fixtures.tableIndex;
 const builtinNominal = test_fixtures.builtinNominal;
+const moduleKey = test_fixtures.moduleKey;
+const typeKey = test_fixtures.typeKey;
+const typeSchemeKey = test_fixtures.typeSchemeKey;
+const testIntNumeral = test_fixtures.testIntNumeral;
+const testSmallDecNumeral = test_fixtures.testSmallDecNumeral;
+const minimalCheckedModule = test_fixtures.minimalCheckedModule;
+const procedureTemplateRef = test_fixtures.procedureTemplateRef;
+const procedureValueRef = test_fixtures.procedureValueRef;
 const solved_lir_lower = @import("../solved_lir_lower.zig");
 
 const Allocator = std.mem.Allocator;
@@ -84,19 +92,16 @@ pub fn run(
         defer source_files.deinit(allocator);
         var seen_source_files = std.StringHashMapUnmanaged(void){};
         defer seen_source_files.deinit(allocator);
-        try appendSourceFile(&source_files, &seen_source_files, allocator, rootProcedureModule(modules));
-        for (modules.imports) |imported| try appendSourceFile(&source_files, &seen_source_files, allocator, procedureModuleFromImport(imported));
-        for (modules.root.relation_modules) |relation| try appendSourceFile(&source_files, &seen_source_files, allocator, procedureModuleFromImport(relation));
+        try appendSourceFile(&source_files, &seen_source_files, allocator, Plan.moduleViewFromCheckedModule(modules.root.module));
+        for (modules.imports) |imported| try appendSourceFile(&source_files, &seen_source_files, allocator, Plan.moduleViewFromImported(imported));
+        for (modules.root.relation_modules) |relation| try appendSourceFile(&source_files, &seen_source_files, allocator, Plan.moduleViewFromImported(relation));
         try result.store.setSourceFiles(source_files.items);
     }
 
     var layout_plan = try Layouts.build(allocator, plan, &result.layouts, .{});
     defer layout_plan.deinit();
 
-    var resolved_workers = try ResolvedWorkers.init(allocator, modules, plan);
-    defer resolved_workers.deinit();
-
-    var procedure_builder = ProcedureBuilder.init(allocator, modules, plan, &layout_plan, &resolved_workers, &result, options);
+    var procedure_builder = ProcedureBuilder.init(allocator, modules, plan, &layout_plan, &result, options);
     defer procedure_builder.deinit();
     try procedure_builder.initHostedCatalog();
     try procedure_builder.emitRoots(roots);
@@ -116,50 +121,25 @@ pub fn run(
     };
 }
 
-const ProcedureModuleView = struct {
-    key: checked.CheckedModuleArtifactKey,
-    canonical_names: *const names.CanonicalNameStore,
-    checked_types: checked.CheckedTypeStoreView,
-    checked_bodies: checked.CheckedBodyStoreView,
-    resolved_value_refs: *const checked.ResolvedValueRefTable,
-    compile_time_roots: *const checked.CompileTimeRootTable,
-    entry_wrappers: *const checked.EntryWrapperTable,
-    intrinsic_wrappers: *const checked.IntrinsicWrapperTable,
-    hosted_procs: *const checked.HostedProcTable,
-    method_registry: *const static_dispatch.MethodRegistry,
-    static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
-    checked_procedure_templates: *const checked.CheckedProcedureTemplateTable,
-    nested_proc_sites: *const checked.NestedProcSiteTable,
-    top_level_procedure_bindings: *const checked.TopLevelProcedureBindingTable,
-    callable_eval_templates: checked.CallableEvalTemplateTableView,
-    exported_procedure_bindings: checked.ExportedProcedureBindingView,
-    const_templates: *const checked.ConstTemplateTable,
-    interface_capabilities: *const checked.ModuleInterfaceCapabilities,
-    const_store: *const check.ConstStore.ConstStore,
-    module_env: *const can.ModuleEnv,
-};
-
 fn appendSourceFile(
     files: *std.ArrayList(base.SourceFileEntry),
     seen: *std.StringHashMapUnmanaged(void),
     allocator: Allocator,
-    module: ProcedureModuleView,
+    module: Plan.ModuleView,
 ) Allocator.Error!void {
-    const qualified_name = module.module_env.qualifiedModuleName();
+    const qualified_name = module.module_env.?.qualifiedModuleName();
     const entry = try seen.getOrPut(allocator, qualified_name);
     if (entry.found_existing) return;
     errdefer _ = seen.remove(qualified_name);
     try files.append(allocator, .{
-        .name = module.module_env.module_name,
+        .name = module.module_env.?.module_name,
         .qualified_name = qualified_name,
         .module_identity = module.key.module_identity_hash,
     });
 }
 
 const ResolvedWorker = struct {
-    worker: Plan.WorkerPlanId,
-    module_key: checked.CheckedModuleArtifactKey,
-    module: ProcedureModuleView,
+    module: Plan.ModuleView,
     template_ref: ?names.ProcedureTemplateRef = null,
     template: ?checked.CheckedProcedureTemplate = null,
     body: ResolvedWorkerBody,
@@ -175,15 +155,12 @@ const StoredCallableCaptureInitializer = struct {
 };
 
 const ResolvedWorkerBody = union(enum) {
-    checked_expr: struct {
-        body_id: ?checked.CheckedBodyId,
-        root_expr: checked.CheckedExprId,
-    },
+    checked_expr: checked.CheckedExprId,
     intrinsic: checked.IntrinsicId,
     hosted: checked.HostedProc,
     /// The declaration behind this worker has a type annotation and no
     /// implementation, so reaching the worker crashes.
-    unimplemented: checked.UnimplementedDeclaration,
+    unimplemented,
     /// A callable binding whose compile-time value is this crash or checked
     /// error constant, so reaching the worker crashes with its message.
     const_crash: checked.ConstNodeId,
@@ -193,7 +170,7 @@ const ResolvedWorkerBody = union(enum) {
 
 fn resolvedWorkerIsListMapCanReuseWrapper(resolved: ResolvedWorker) bool {
     const body = switch (resolved.body) {
-        .checked_expr => |checked_body| checked_body.root_expr,
+        .checked_expr => |root_expr| root_expr,
         .intrinsic,
         .hosted,
         .unimplemented,
@@ -206,7 +183,7 @@ fn resolvedWorkerIsListMapCanReuseWrapper(resolved: ResolvedWorker) bool {
 }
 
 fn checkedExprIsListMapCanReuseWrapper(
-    module: ProcedureModuleView,
+    module: Plan.ModuleView,
     root: checked.CheckedExprId,
 ) bool {
     var expr_id = root;
@@ -269,549 +246,37 @@ fn checkedExprIsListMapCanReuseWrapper(
     };
 }
 
-const ResolvedWorkers = struct {
-    allocator: Allocator,
-    items: []ResolvedWorker,
-
-    fn init(
-        allocator: Allocator,
-        modules: Common.CheckedModules,
-        plan: *const Plan.ProgramPlan,
-    ) Allocator.Error!ResolvedWorkers {
-        const items = try allocator.alloc(ResolvedWorker, plan.workers.items.len);
-        errdefer allocator.free(items);
-
-        for (plan.workers.items, items) |worker, *resolved| {
-            resolved.* = resolveWorkerProcedure(modules, worker);
-        }
-
-        return .{
-            .allocator = allocator,
-            .items = items,
-        };
-    }
-
-    fn deinit(self: *ResolvedWorkers) void {
-        self.allocator.free(self.items);
-        self.* = undefined;
-    }
-};
-
-fn resolveWorkerProcedure(modules: Common.CheckedModules, worker: Plan.WorkerPlan) ResolvedWorker {
-    var resolved = switch (worker.source) {
-        .procedure_template => |template| resolveProcedureTemplate(modules, worker.id, template),
-        .procedure_binding => |binding| resolveProcedureBinding(
-            modules,
-            worker.id,
-            procedureModuleByKey(modules, binding.artifact),
-            binding.binding,
-        ),
-        .procedure_use => |use| resolveProcedureUse(modules, worker.id, use),
-        .nested_expr => |expr_ref| resolveNestedExprWorker(modules, worker.id, expr_ref),
-        .generated_codec => |source| resolveGeneratedCodecWorker(modules, worker.id, source),
-        .generated_field_iterator => |source| resolveGeneratedFieldIteratorWorker(modules, worker.id, source),
+/// Worker `index` with the body planning resolved for it.
+fn resolveWorker(modules: Common.CheckedModules, plan: *const Plan.ProgramPlan, index: usize) ResolvedWorker {
+    const worker = plan.workers.items[index];
+    const body = plan.worker_bodies.items[index] orelse return switch (worker.source) {
+        .generated_codec => |source| .{ .module = Plan.moduleViewForKey(modules, source.shape.module), .body = .{ .generated_codec = source } },
+        .generated_field_iterator => |source| .{ .module = Plan.moduleViewForKey(modules, source.field_names_type.module), .body = .{ .generated_field_iterator = source } },
+        .procedure_template, .procedure_binding, .procedure_use, .nested_expr => boxyLowerInvariant("boxy worker had no planned body"),
     };
-    resolved.stored_fn = worker.stored_fn;
-    return resolved;
-}
-
-fn resolveGeneratedFieldIteratorWorker(
-    modules: Common.CheckedModules,
-    worker: Plan.WorkerPlanId,
-    source: Plan.GeneratedFieldIteratorSource,
-) ResolvedWorker {
-    const module = procedureModuleById(modules, source.field_names_type.module);
     return .{
-        .worker = worker,
-        .module_key = module.key,
-        .module = module,
-        .body = .{ .generated_field_iterator = source },
-    };
-}
-
-fn resolveGeneratedCodecWorker(
-    modules: Common.CheckedModules,
-    worker: Plan.WorkerPlanId,
-    source: Plan.GeneratedCodecSource,
-) ResolvedWorker {
-    const module = procedureModuleById(modules, source.shape.module);
-    return .{
-        .worker = worker,
-        .module_key = module.key,
-        .module = module,
-        .body = .{ .generated_codec = source },
-    };
-}
-
-fn resolveProcedureUse(
-    modules: Common.CheckedModules,
-    worker: Plan.WorkerPlanId,
-    use: checked.ProcedureUseTemplate,
-) ResolvedWorker {
-    return switch (use.binding) {
-        .top_level => |top_level| resolveProcedureBinding(
-            modules,
-            worker,
-            procedureModuleByKey(modules, top_level.artifact),
-            top_level.binding,
-        ),
-        .platform_required => |required| resolveProcedureBinding(
-            modules,
-            worker,
-            procedureModuleByKey(modules, required.app_value.artifact),
-            required.procedure_binding,
-        ),
-        .imported => |imported| resolveImportedProcedureBinding(
-            modules,
-            worker,
-            procedureModuleByKey(modules, imported.artifact),
-            imported,
-        ),
-        .hosted => |hosted| resolveHostedProcedure(modules, worker, hosted),
-    };
-}
-
-fn resolveProcedureBinding(
-    modules: Common.CheckedModules,
-    worker: Plan.WorkerPlanId,
-    module: ProcedureModuleView,
-    binding_ref: checked.TopLevelProcedureBindingRef,
-) ResolvedWorker {
-    const binding = module.top_level_procedure_bindings.get(binding_ref);
-    return switch (binding.body) {
-        .direct_template => |direct| switch (direct.template) {
-            .checked => |template| resolveProcedureTemplate(modules, worker, template),
-            .lifted,
-            .synthetic,
-            => boxyLowerInvariant("non-checked procedure template reached boxy worker resolution"),
+        .module = body.view,
+        .template_ref = body.template,
+        .template = if (body.template) |ref| body.view.checked_procedure_templates.get(ref.template) else null,
+        .body = switch (body.kind) {
+            .checked_expr => |expr| .{ .checked_expr = expr },
+            .intrinsic_wrapper => |wrapper| .{ .intrinsic = wrapper.intrinsic },
+            .hosted_proc => |proc| .{ .hosted = proc },
+            .unimplemented => .unimplemented,
+            .const_crash => |node| .{ .const_crash = node },
         },
-        .checked_error => |expr| .{
-            .worker = worker,
-            .module_key = module.key,
-            .module = module,
-            .body = .{ .checked_expr = .{ .body_id = null, .root_expr = expr } },
-        },
-        .callable_eval_template => |template| resolveCallableEvalTemplate(modules, worker, module, template),
-    };
-}
-
-fn resolveImportedProcedureBinding(
-    modules: Common.CheckedModules,
-    worker: Plan.WorkerPlanId,
-    module: ProcedureModuleView,
-    binding_ref: checked.ImportedProcedureBindingRef,
-) ResolvedWorker {
-    const binding = importedProcedureBinding(module, binding_ref);
-    return switch (binding.body) {
-        .direct_template => |direct| switch (direct.template) {
-            .checked => |template| resolveProcedureTemplate(modules, worker, template),
-            .lifted,
-            .synthetic,
-            => boxyLowerInvariant("non-checked imported procedure template reached boxy worker resolution"),
-        },
-        .checked_error => |expr| .{
-            .worker = worker,
-            .module_key = module.key,
-            .module = module,
-            .body = .{ .checked_expr = .{ .body_id = null, .root_expr = expr } },
-        },
-        .callable_eval_template => |template| resolveCallableEvalTemplate(modules, worker, module, template),
-    };
-}
-
-fn importedProcedureBinding(
-    module: ProcedureModuleView,
-    binding_ref: checked.ImportedProcedureBindingRef,
-) checked.ImportedProcedureBindingView {
-    for (module.exported_procedure_bindings.bindings) |binding| {
-        if (checked_moduleKeyEqual(binding.binding.artifact, binding_ref.artifact) and
-            binding.binding.def == binding_ref.def and
-            binding.binding.pattern == binding_ref.pattern)
-        {
-            return binding;
-        }
-    }
-    boxyLowerInvariant("imported procedure binding was not exported by its checked module");
-}
-
-fn topLevelProcedureBindingForExpr(
-    module: ProcedureModuleView,
-    expr: checked.CheckedExprId,
-) ?checked.ArtifactTopLevelProcedureBindingRef {
-    for (module.top_level_procedure_bindings.bindings.items, 0..) |binding, index| {
-        const template_ref = switch (binding.body) {
-            .direct_template => |direct| switch (direct.template) {
-                .checked => |template| template,
-                .lifted,
-                .synthetic,
-                => continue,
-            },
-            .checked_error, .callable_eval_template => continue,
-        };
-        const template = module.checked_procedure_templates.get(template_ref.template);
-        const body_id = switch (template.body) {
-            .checked_body => |body| body,
-            .intrinsic_wrapper,
-            .entry_wrapper,
-            .unimplemented,
-            => continue,
-        };
-        if (module.checked_bodies.body(body_id).root_expr == expr) {
-            return .{
-                .artifact = module.key,
-                .binding = @fromBackingInt(@intCast(@as(u32, @intCast(index)))),
-            };
-        }
-    }
-    return null;
-}
-
-fn nestedCallableSiteExprForExpr(
-    module: ProcedureModuleView,
-    expr: checked.CheckedExprId,
-) ?checked.CheckedExprId {
-    return Plan.nestedCallableSiteExprFor(module, expr);
-}
-
-fn resolveProcedureTemplate(
-    modules: Common.CheckedModules,
-    worker: Plan.WorkerPlanId,
-    template_ref: names.ProcedureTemplateRef,
-) ResolvedWorker {
-    const module = procedureModuleByCheckedModuleId(modules, template_ref.artifact);
-    const template = module.checked_procedure_templates.get(template_ref.template);
-    const body: ResolvedWorkerBody = if (template.target == .hosted)
-        .{ .hosted = hostedProcForTemplate(module, template_ref) }
-    else switch (template.body) {
-        .checked_body => |body_id| .{ .checked_expr = .{
-            .body_id = body_id,
-            .root_expr = module.checked_bodies.body(body_id).root_expr,
-        } },
-        .intrinsic_wrapper => |wrapper_id| .{ .intrinsic = module.intrinsic_wrappers.get(wrapper_id).intrinsic },
-        .entry_wrapper => |wrapper_id| .{ .checked_expr = .{
-            .body_id = null,
-            .root_expr = module.entry_wrappers.get(wrapper_id).body_expr,
-        } },
-        .unimplemented => |declaration| .{ .unimplemented = declaration },
-    };
-
-    return .{
-        .worker = worker,
-        .module_key = module.key,
-        .module = module,
-        .template_ref = template_ref,
-        .template = template,
-        .body = body,
-    };
-}
-
-fn resolveHostedProcedure(
-    modules: Common.CheckedModules,
-    worker: Plan.WorkerPlanId,
-    hosted_ref: checked.HostedProcRef,
-) ResolvedWorker {
-    const module = procedureModuleByKey(modules, checked.hostedProcedureTemplateModuleId(hosted_ref));
-    const template = module.checked_procedure_templates.get(hosted_ref.template.template);
-    if (template.target != .hosted) {
-        boxyLowerInvariant("hosted procedure ref pointed at a non-hosted checked template");
-    }
-    return .{
-        .worker = worker,
-        .module_key = module.key,
-        .module = module,
-        .template_ref = hosted_ref.template,
-        .template = template,
-        .body = .{ .hosted = hostedProcForTemplate(module, hosted_ref.template) },
-    };
-}
-
-fn resolveCallableEvalTemplate(
-    modules: Common.CheckedModules,
-    worker: Plan.WorkerPlanId,
-    module: ProcedureModuleView,
-    template_id: checked.CallableEvalTemplateId,
-) ResolvedWorker {
-    const raw = @backingInt(template_id);
-    if (raw >= module.callable_eval_templates.templates.len) {
-        boxyLowerInvariant("callable eval binding referenced a missing checked template");
-    }
-    const callable_template = module.callable_eval_templates.templates[raw];
-    const root = module.compile_time_roots.root(callable_template.root);
-    return switch (root.payload) {
-        .fn_value => |fn_id| resolveConstFnValue(modules, worker, module, fn_id),
-        .pending, .unevaluated => boxyLowerInvariant("unevaluated callable eval root reached runtime boxy worker resolution"),
-        .const_node => |node| switch (module.const_store.get(node)) {
-            .fn_value => |fn_id| resolveConstFnValue(modules, worker, module, fn_id),
-            .crash, .checked_error => .{
-                .worker = worker,
-                .module_key = module.key,
-                .module = module,
-                .body = .{ .const_crash = node },
-            },
-            .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .nominal => boxyLowerInvariant("callable eval binding constant was not a callable value"),
-        },
-        .discarded,
-        .expect,
-        .runtime,
-        => boxyLowerInvariant("callable eval binding root did not output a callable value"),
-    };
-}
-
-fn resolveConstFnValue(
-    modules: Common.CheckedModules,
-    worker: Plan.WorkerPlanId,
-    store_module: ProcedureModuleView,
-    fn_id: checked.ConstFnId,
-) ResolvedWorker {
-    const raw = @backingInt(fn_id);
-    if (raw >= store_module.const_store.fns.items.len) {
-        boxyLowerInvariant("callable eval function value referenced a missing ConstStore function");
-    }
-    const fn_value = store_module.const_store.getFn(fn_id);
-    return switch (fn_value.fn_def) {
-        .local_template,
-        .imported_template,
-        .checked_generated,
-        => |template| resolveProcedureTemplate(modules, worker, template),
-        .nested => |nested| resolveNestedConstFn(modules, worker, nested),
-        .local_hosted,
-        .imported_hosted,
-        => |template| resolveProcedureTemplate(modules, worker, template),
-        .parser_runtime,
-        .encoder_for_runtime,
-        => boxyLowerInvariant("generated parser/encoder stored function reached runtime boxy worker resolution before generated runtime support"),
-    };
-}
-
-fn resolveNestedConstFn(
-    modules: Common.CheckedModules,
-    worker: Plan.WorkerPlanId,
-    nested: anytype,
-) ResolvedWorker {
-    // A default-root-qualified stored function's site lives in the declaring
-    // module (resolved by content identity) and belongs to no checked
-    // procedure template, so its worker resolves without a template identity
-    //—exactly like `resolveNestedExprWorker`'s default-root branch
-    // (design.md "Defaulted Fields").
-    if (nested.default_root) |identity| {
-        const module = procedureModuleByIdentity(modules, &identity.bytes);
-        const expr_id = checkedLambdaExprForNestedFn(module, nested);
-        return .{
-            .worker = worker,
-            .module_key = module.key,
-            .module = module,
-            .template_ref = null,
-            .template = null,
-            .body = .{ .checked_expr = .{
-                .body_id = null,
-                .root_expr = expr_id,
-            } },
-        };
-    }
-    const module = procedureModuleByKey(modules, .{ .bytes = names.procTemplateModuleDigest(nested.owner).bytes });
-    const expr_id = checkedLambdaExprForNestedFn(module, nested);
-    const template = module.checked_procedure_templates.get(nested.owner.template);
-    return .{
-        .worker = worker,
-        .module_key = module.key,
-        .module = module,
-        .template_ref = nested.owner,
-        .template = template,
-        .body = .{ .checked_expr = .{
-            .body_id = null,
-            .root_expr = expr_id,
-        } },
-    };
-}
-
-fn procedureModuleByIdentity(modules: Common.CheckedModules, identity: *const [32]u8) ProcedureModuleView {
-    const root = rootProcedureModule(modules);
-    if (procedureModuleIdentityMatches(root, identity)) return root;
-    for (modules.imports) |imported| {
-        const view = procedureModuleFromImport(imported);
-        if (procedureModuleIdentityMatches(view, identity)) return view;
-    }
-    for (modules.root.relation_modules) |relation| {
-        const view = procedureModuleFromImport(relation);
-        if (procedureModuleIdentityMatches(view, identity)) return view;
-    }
-    boxyLowerInvariant("stored default-root function's declaring module was absent from boxy lowering");
-}
-
-fn resolveNestedExprWorker(
-    modules: Common.CheckedModules,
-    worker: Plan.WorkerPlanId,
-    expr_ref: Plan.CheckedExprIdentity,
-) ResolvedWorker {
-    const module = procedureModuleById(modules, expr_ref.module);
-    const site = nestedProcSiteForExpr(module, expr_ref.expr) orelse {
-        boxyLowerInvariant("nested callable worker source had no nested procedure site");
-    };
-    const expr = module.checked_bodies.expr(expr_ref.expr);
-    const root_expr = if (expr.data == .lambda)
-        expr_ref.expr
-    else if (expr.data == .closure)
-        expr.data.closure.lambda
-    else
-        boxyLowerInvariant("nested callable worker source did not point at a lambda or closure");
-    // A default-root site (a lambda inside a defaulted-field expression,
-    // design.md "Defaulted Fields") belongs to no checked procedure template;
-    // its worker resolves with no template identity, exactly like the
-    // template-optional consumers expect.
-    const template_ref: ?names.ProcedureTemplateRef = switch (site.owner) {
-        .template => |template| template,
-        .default_root => null,
-    };
-    return .{
-        .worker = worker,
-        .module_key = module.key,
-        .module = module,
-        .template_ref = template_ref,
-        .template = if (template_ref) |ref| module.checked_procedure_templates.get(ref.template) else null,
-        .body = .{ .checked_expr = .{
-            .body_id = null,
-            .root_expr = root_expr,
-        } },
+        .stored_fn = worker.stored_fn,
     };
 }
 
 /// The runtime captures of the nested procedure a lambda or closure
 /// expression constructs.
-fn nestedCallableExprRuntimeCaptures(module: ProcedureModuleView, expr_id: checked.CheckedExprId) []const checked.CheckedCapture {
+fn nestedCallableExprRuntimeCaptures(module: Plan.ModuleView, expr_id: checked.CheckedExprId) []const checked.CheckedCapture {
     switch (module.checked_bodies.expr(expr_id).data) {
         .lambda, .closure => {},
         .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => boxyLowerInvariant("nested callable capture lookup did not reference a lambda or closure"),
     }
     return Plan.nestedCallableRuntimeCaptures(module, expr_id);
-}
-
-fn nestedProcSiteForExpr(module: ProcedureModuleView, expr_id: checked.CheckedExprId) ?checked.NestedProcSite {
-    for (module.nested_proc_sites.sites) |site| {
-        if (site.checked_expr == expr_id) return site;
-    }
-    return null;
-}
-
-fn checkedLambdaExprForNestedFn(
-    module: ProcedureModuleView,
-    nested: anytype,
-) checked.CheckedExprId {
-    for (module.nested_proc_sites.sites) |site| {
-        if (site.site != nested.site) continue;
-        switch (site.owner) {
-            .template => |site_owner| {
-                if (nested.default_root != null) continue;
-                if (!names.procedureTemplateRefEql(site_owner, nested.owner)) continue;
-            },
-            // A default-root-qualified stored function matches the declaring
-            // module's default-root site (design.md "Defaulted Fields").
-            .default_root => if (nested.default_root == null) continue,
-        }
-        const expr_id = site.checked_expr orelse
-            boxyLowerInvariant("stored nested function had no checked expression site");
-        const expr = module.checked_bodies.expr(expr_id);
-        if (expr.data == .lambda) return expr_id;
-        if (expr.data == .closure) return expr.data.closure.lambda;
-        boxyLowerInvariant("stored nested function site did not point at a lambda or closure");
-    }
-    boxyLowerInvariant("stored nested function referenced a missing checked nested site");
-}
-
-fn checkedBinderType(module: ProcedureModuleView, binder: checked.PatternBinderId) checked.CheckedTypeId {
-    const raw = @backingInt(binder);
-    if (raw >= module.checked_bodies.patternBinderCount()) {
-        boxyLowerInvariant("stored function capture binder was outside the checked body store");
-    }
-    const pattern = module.checked_bodies.patternBinder(@fromBackingInt(@intCast(raw))).pattern;
-    if (@backingInt(pattern) >= module.checked_bodies.patternCount()) {
-        boxyLowerInvariant("stored function capture pattern was outside the checked body store");
-    }
-    return module.checked_bodies.pattern(pattern).ty;
-}
-
-fn hostedProcForTemplate(module: ProcedureModuleView, template_ref: names.ProcedureTemplateRef) checked.HostedProc {
-    for (module.hosted_procs.procs) |hosted| {
-        if (names.procedureTemplateRefEql(hosted.template, template_ref)) {
-            return hosted;
-        }
-    }
-    boxyLowerInvariant("hosted procedure template was missing from the checked hosted proc table");
-}
-
-fn rootProcedureModule(modules: Common.CheckedModules) ProcedureModuleView {
-    const checked_module = modules.root.module;
-    return .{
-        .key = checked_module.key,
-        .canonical_names = &checked_module.canonical_names,
-        .checked_types = checked_module.checked_types.view(),
-        .checked_bodies = checked_module.checked_bodies.view(),
-        .resolved_value_refs = &checked_module.resolved_value_refs,
-        .compile_time_roots = &checked_module.compile_time_roots,
-        .entry_wrappers = &checked_module.entry_wrappers,
-        .intrinsic_wrappers = &checked_module.intrinsic_wrappers,
-        .hosted_procs = &checked_module.hosted_procs,
-        .method_registry = &checked_module.method_registry,
-        .static_dispatch_plans = &checked_module.static_dispatch_plans,
-        .checked_procedure_templates = &checked_module.checked_procedure_templates,
-        .nested_proc_sites = &checked_module.nested_proc_sites,
-        .top_level_procedure_bindings = &checked_module.top_level_procedure_bindings,
-        .callable_eval_templates = checked_module.callable_eval_templates.view(),
-        .exported_procedure_bindings = checked_module.exported_procedure_bindings.view(),
-        .const_templates = &checked_module.const_templates,
-        .interface_capabilities = &checked_module.interface_capabilities,
-        .const_store = &checked_module.const_store,
-        .module_env = checked_module.moduleEnvConst(),
-    };
-}
-
-fn procedureModuleFromImport(import: checked.ImportedModuleView) ProcedureModuleView {
-    return .{
-        .key = import.key,
-        .canonical_names = import.canonical_names,
-        .checked_types = import.checked_types,
-        .checked_bodies = import.checked_bodies,
-        .resolved_value_refs = import.resolved_value_refs,
-        .compile_time_roots = import.compile_time_roots,
-        .entry_wrappers = import.entry_wrappers,
-        .intrinsic_wrappers = import.intrinsic_wrappers,
-        .hosted_procs = import.hosted_procs,
-        .method_registry = import.method_registry,
-        .static_dispatch_plans = import.static_dispatch_plans,
-        .checked_procedure_templates = import.checked_procedure_templates,
-        .nested_proc_sites = import.nested_proc_sites,
-        .top_level_procedure_bindings = import.top_level_procedure_bindings,
-        .callable_eval_templates = import.callable_eval_templates,
-        .exported_procedure_bindings = import.exported_procedure_bindings,
-        .const_templates = import.const_templates,
-        .interface_capabilities = import.interface_capabilities,
-        .const_store = import.const_store,
-        .module_env = import.module_env,
-    };
-}
-
-fn procedureModuleByCheckedModuleId(modules: Common.CheckedModules, checked_module: names.ArtifactRef) ProcedureModuleView {
-    return procedureModuleByKey(modules, .{ .bytes = checked_module.bytes });
-}
-
-/// The label-comparison view of a lowering module view, for the shared plan
-/// queries in `Plan`.
-fn viewNames(view: ProcedureModuleView) Plan.ModuleNames {
-    return .{ .key = view.key, .canonical_names = view.canonical_names };
-}
-
-fn procedureModuleById(modules: Common.CheckedModules, module_id: checked.ModuleId) ProcedureModuleView {
-    return procedureModuleByKey(modules, .{ .bytes = module_id.bytes });
-}
-
-fn procedureModuleByKey(modules: Common.CheckedModules, key: checked.CheckedModuleArtifactKey) ProcedureModuleView {
-    if (checked_moduleKeyEqual(modules.root.module.key, key)) return rootProcedureModule(modules);
-    for (modules.imports) |*import| {
-        if (checked_moduleKeyEqual(import.key, key)) return procedureModuleFromImport(import.*);
-    }
-    for (modules.root.relation_modules) |*relation| {
-        if (checked_moduleKeyEqual(relation.key, key)) return procedureModuleFromImport(relation.*);
-    }
-    boxyLowerInvariant("boxy worker referenced a checked checked_module that was not available to lowering");
 }
 
 /// Positions of a record expression's labels. Labels from the expression's
@@ -860,12 +325,25 @@ fn checked_moduleKeyEqual(a: checked.CheckedModuleArtifactKey, b: checked.Checke
     return std.mem.eql(u8, a.bytes[0..], b.bytes[0..]);
 }
 
-fn procedureModuleIdentityMatches(module: ProcedureModuleView, identity: *const [32]u8) bool {
-    const module_identity = module.module_env.contentIdentityHash() orelse return false;
+/// The module among `modules` whose content identity is `identity`.
+fn moduleViewForIdentity(modules: Common.CheckedModules, identity: *const [32]u8) ?Plan.ModuleView {
+    const root = Plan.moduleViewFromCheckedModule(modules.root.module);
+    if (moduleIdentityMatches(root, identity)) return root;
+    for ([_][]const checked.ImportedModuleView{ modules.imports, modules.root.relation_modules }) |views| {
+        for (views) |imported| {
+            const view = Plan.moduleViewFromImported(imported);
+            if (moduleIdentityMatches(view, identity)) return view;
+        }
+    }
+    return null;
+}
+
+fn moduleIdentityMatches(module: Plan.ModuleView, identity: *const [32]u8) bool {
+    const module_identity = module.module_env.?.contentIdentityHash() orelse return false;
     return base.ModuleIdentity.eql(module_identity, identity);
 }
 
-fn methodOwnerForProcedureType(module: ProcedureModuleView, ty: checked.CheckedTypeId) ?static_dispatch.MethodOwner {
+fn methodOwnerForProcedureType(module: Plan.ModuleView, ty: checked.CheckedTypeId) ?static_dispatch.MethodOwner {
     var current = ty;
     var remaining = module.checked_types.payloadCount();
     while (true) {
@@ -1354,7 +832,6 @@ const ProcedureBuilder = struct {
     modules: Common.CheckedModules,
     plan: *const Plan.ProgramPlan,
     layout_plan: *const Layouts.LayoutPlan,
-    resolved_workers: *const ResolvedWorkers,
     result: *LirProgram.Result,
     options: Options,
     worker_procs: []?LIR.LirProcSpecId,
@@ -1433,16 +910,16 @@ const ProcedureBuilder = struct {
         literal: u32,
     };
 
-    fn sourceLoc(self: *ProcedureBuilder, module: ProcedureModuleView, region: base.Region) Allocator.Error!base.SourceLoc {
+    fn sourceLoc(self: *ProcedureBuilder, module: Plan.ModuleView, region: base.Region) Allocator.Error!base.SourceLoc {
         if (self.source_file_ids.count() == 0) {
             for (0..self.result.store.sourceFileCount()) |file| {
                 const file_id: u32 = @intCast(file);
                 try self.source_file_ids.put(self.allocator, self.result.store.sourceFileQualifiedName(file_id), file_id);
             }
         }
-        const qualified_name = module.module_env.qualifiedModuleName();
+        const qualified_name = module.module_env.?.qualifiedModuleName();
         if (self.source_file_ids.get(qualified_name)) |file_id| {
-            const info = module.module_env.calcRegionInfo(region);
+            const info = module.module_env.?.calcRegionInfo(region);
             return .{
                 .file = file_id,
                 .line = info.start_line_idx + 1,
@@ -1468,8 +945,8 @@ const ProcedureBuilder = struct {
     /// code whose plan source records only types, so they carry no region.
     fn workerOrigin(self: *ProcedureBuilder, resolved: ResolvedWorker) Allocator.Error!LIR.StmtOrigin {
         return switch (resolved.body) {
-            .checked_expr => |body| blk: {
-                const region = resolved.module.checked_bodies.expr(body.root_expr).source_region;
+            .checked_expr => |root_expr| blk: {
+                const region = resolved.module.checked_bodies.expr(root_expr).source_region;
                 break :blk .{
                     .loc = try self.sourceLoc(resolved.module, region),
                     .region = region,
@@ -1485,15 +962,14 @@ const ProcedureBuilder = struct {
         };
     }
 
-    fn expectSite(self: *ProcedureBuilder, module: ProcedureModuleView, region: base.Region) Allocator.Error!?LIR.ExpectSiteId {
+    fn expectSite(self: *ProcedureBuilder, module: Plan.ModuleView, region: base.Region) Allocator.Error!?LIR.ExpectSiteId {
         if (!self.options.observe_expects) return null;
         return try self.result.addExpectSite(try self.sourceLoc(module, region), region);
     }
 
     /// The module data the shared label-comparing plan queries need.
     pub fn moduleNames(self: *ProcedureBuilder, module_id: checked.ModuleId) Plan.ModuleNames {
-        const view = procedureModuleById(self.modules, module_id);
-        return .{ .key = view.key, .canonical_names = view.canonical_names };
+        return Plan.moduleNamesOf(Plan.moduleViewForKey(self.modules, module_id));
     }
 
     /// Shared read-only queries over the representation plan.
@@ -1511,7 +987,6 @@ const ProcedureBuilder = struct {
         modules: Common.CheckedModules,
         plan: *const Plan.ProgramPlan,
         layout_plan: *const Layouts.LayoutPlan,
-        resolved_workers: *const ResolvedWorkers,
         result: *LirProgram.Result,
         options: Options,
     ) ProcedureBuilder {
@@ -1520,7 +995,6 @@ const ProcedureBuilder = struct {
             .modules = modules,
             .plan = plan,
             .layout_plan = layout_plan,
-            .resolved_workers = resolved_workers,
             .result = result,
             .options = options,
             .worker_procs = &.{},
@@ -2979,8 +2453,8 @@ const ProcedureBuilder = struct {
             for (self.descriptor_method_slot_cache.items) |entry| {
                 if (entry.worker == inspect.worker) return .{ .done = .{ .slot_id = entry.slot } };
             }
-            const method_view = procedureModuleById(self.modules, inspect.method_module);
-            if (!std.mem.eql(u8, method_view.canonical_names.methodNameText(inspect.method), switch (frame.kind) {
+            const method_view = Plan.moduleViewForKey(self.modules, inspect.method_module);
+            if (!std.mem.eql(u8, method_view.canonical_names.?.methodNameText(inspect.method), switch (frame.kind) {
                 .inspect => "to_inspect",
                 .equality => "is_eq",
                 .hash => "to_hash",
@@ -4012,18 +3486,15 @@ const ProcedureBuilder = struct {
             .proc = undefined,
         }, self.plan.dictionary_method_slots.items.len);
         for (self.plan.dictionarySlice(dictionaries)) |requirement| {
-            const view = procedureModuleById(self.modules, requirement.source_type.module);
-            const name = view.canonical_names.methodNameText(requirement.fn_name);
+            const view = Plan.moduleViewForKey(self.modules, requirement.source_type.module);
+            const name = view.canonical_names.?.methodNameText(requirement.fn_name);
             const second_layout = if (std.mem.eql(u8, name, "is_eq"))
                 dynamic_layout
             else if (std.mem.eql(u8, name, "to_hash"))
                 try self.descriptorDictHasherLayout(requirement)
             else
                 boxyLowerInvariant("descriptor dictionary was required to supply a method other than is_eq or to_hash");
-            const proc = if (second_layout == dynamic_layout)
-                try self.descriptorEqualityProc(module_id)
-            else
-                try self.descriptorHashProc(module_id, second_layout);
+            const proc = try self.descriptorMethodProc(module_id, if (second_layout == dynamic_layout) null else second_layout);
             const arg_layouts_start: u32 = @intCast(self.result.boxy_method_arg_layouts.items.len);
             try self.result.boxy_method_arg_layouts.appendSlice(self.allocator, &.{ dynamic_layout, second_layout });
             const hidden_sources_start: u32 = @intCast(self.result.boxy_method_hidden_desc_sources.items.len);
@@ -4058,40 +3529,43 @@ const ProcedureBuilder = struct {
         return self.layout_plan.rep_layouts[@backingInt(children[function.args_start + 1].rep)].worker.layoutIdx();
     }
 
-    /// `to_hash(value, hasher)` over a dynamic value described by one hidden
-    /// descriptor: the descriptor-guided hashing of `assign_boxy_hash`.
-    fn descriptorHashProc(self: *ProcedureBuilder, module_id: checked.ModuleId, hasher_layout: layout.Idx) Allocator.Error!LIR.LirProcSpecId {
-        if (self.descriptor_hash_proc) |proc_id| return proc_id;
+    /// `to_hash(value, hasher)` when `hasher_layout` is set, otherwise
+    /// `is_eq(lhs, rhs)`, over dynamic values described by one hidden
+    /// descriptor: the descriptor-guided hashing of `assign_boxy_hash` or
+    /// equality of `assign_boxy_eq`.
+    fn descriptorMethodProc(self: *ProcedureBuilder, module_id: checked.ModuleId, hasher_layout: ?layout.Idx) Allocator.Error!LIR.LirProcSpecId {
+        const cache = if (hasher_layout != null) &self.descriptor_hash_proc else &self.descriptor_equality_proc;
+        if (cache.*) |proc_id| return proc_id;
         if (self.layout_plan.worker_layouts.len == 0) {
-            boxyLowerInvariant("descriptor hash procedure was emitted without a worker layout context");
+            boxyLowerInvariant("descriptor method procedure was emitted without a worker layout context");
         }
         const saved_tail_builder = self.result.store.tail_call_builder;
         self.result.store.tail_call_builder = null;
         defer self.result.store.tail_call_builder = saved_tail_builder;
         var proc = ProcBodyBuilder.initSyntheticAdapter(
             self,
-            procedureModuleById(self.modules, module_id),
+            Plan.moduleViewForKey(self.modules, module_id),
             self.layout_plan.worker_layouts[0],
             constructlessOrigin(.derived),
         );
         defer proc.deinit();
 
         const dynamic_layout = try self.result.layouts.insertErasedBox();
-        const value = try proc.addArgLocal(dynamic_layout);
-        const hasher = try proc.addArgLocal(hasher_layout);
+        const first = try proc.addArgLocal(dynamic_layout);
+        const second = try proc.addArgLocal(hasher_layout orelse dynamic_layout);
         const desc = try proc.addFrameLocal(.opaque_ptr);
         try proc.markReadOnlyDescriptorInput(desc);
         try proc.arg_locals.append(self.allocator, desc);
-        self.result.store.setLocalBoxyDesc(value, .{ .local = desc });
-        const result = try proc.addFrameLocal(hasher_layout);
+        self.result.store.setLocalBoxyDesc(first, .{ .local = desc });
+        if (hasher_layout == null) self.result.store.setLocalBoxyDesc(second, .{ .local = desc });
+        const ret_layout = hasher_layout orelse .bool;
+        const result = try proc.addFrameLocal(ret_layout);
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = result } }, proc.derivedOrigin());
-        const body = try self.result.store.addCFStmt(.{ .assign_boxy_hash = .{
-            .target = result,
-            .value = value,
-            .hasher = hasher,
-            .desc = .{ .local = desc },
-            .next = ret_stmt,
-        } }, proc.derivedOrigin());
+        const stmt: LIR.CFStmt = if (hasher_layout != null)
+            .{ .assign_boxy_hash = .{ .target = result, .value = first, .hasher = second, .desc = .{ .local = desc }, .next = ret_stmt } }
+        else
+            .{ .assign_boxy_eq = .{ .target = result, .lhs = first, .rhs = second, .desc = .{ .local = desc }, .next = ret_stmt } };
+        const body = try self.result.store.addCFStmt(stmt, proc.derivedOrigin());
         const args_span = try self.result.store.addLocalSpan(proc.arg_locals.items);
         const frame_span = try self.result.store.addLocalSpan(proc.frame_locals.items);
         const proc_symbol = self.symbols.fresh();
@@ -4101,67 +3575,13 @@ const ProcedureBuilder = struct {
             .args = args_span,
             .frame_locals = frame_span,
             .body = body,
-            .ret_layout = hasher_layout,
+            .ret_layout = ret_layout,
             .boxy_runtime_entry = true,
-            .stack_probe = self.stackProbeForProc(args_span, frame_span, hasher_layout),
+            .stack_probe = self.stackProbeForProc(args_span, frame_span, ret_layout),
         }, proc.origin.loc);
         const proc_spec = self.result.store.getProcSpecPtr(proc_id);
         proc_spec.shapes = proc_spec.shapes.merged(self.result.store.shapes);
-        self.descriptor_hash_proc = proc_id;
-        return proc_id;
-    }
-
-    /// `is_eq(lhs, rhs)` over two dynamic values described by one hidden
-    /// descriptor: the descriptor-guided equality of `assign_boxy_eq`.
-    fn descriptorEqualityProc(self: *ProcedureBuilder, module_id: checked.ModuleId) Allocator.Error!LIR.LirProcSpecId {
-        if (self.descriptor_equality_proc) |proc_id| return proc_id;
-        if (self.layout_plan.worker_layouts.len == 0) {
-            boxyLowerInvariant("descriptor equality procedure was emitted without a worker layout context");
-        }
-        const saved_tail_builder = self.result.store.tail_call_builder;
-        self.result.store.tail_call_builder = null;
-        defer self.result.store.tail_call_builder = saved_tail_builder;
-        var proc = ProcBodyBuilder.initSyntheticAdapter(
-            self,
-            procedureModuleById(self.modules, module_id),
-            self.layout_plan.worker_layouts[0],
-            constructlessOrigin(.derived),
-        );
-        defer proc.deinit();
-
-        const dynamic_layout = try self.result.layouts.insertErasedBox();
-        const lhs = try proc.addArgLocal(dynamic_layout);
-        const rhs = try proc.addArgLocal(dynamic_layout);
-        const desc = try proc.addFrameLocal(.opaque_ptr);
-        try proc.markReadOnlyDescriptorInput(desc);
-        try proc.arg_locals.append(self.allocator, desc);
-        self.result.store.setLocalBoxyDesc(lhs, .{ .local = desc });
-        self.result.store.setLocalBoxyDesc(rhs, .{ .local = desc });
-        const result = try proc.addFrameLocal(.bool);
-        const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = result } }, proc.derivedOrigin());
-        const body = try self.result.store.addCFStmt(.{ .assign_boxy_eq = .{
-            .target = result,
-            .lhs = lhs,
-            .rhs = rhs,
-            .desc = .{ .local = desc },
-            .next = ret_stmt,
-        } }, proc.derivedOrigin());
-        const args_span = try self.result.store.addLocalSpan(proc.arg_locals.items);
-        const frame_span = try self.result.store.addLocalSpan(proc.frame_locals.items);
-        const proc_symbol = self.symbols.fresh();
-        const proc_id = try self.result.store.addProcSpec(.{
-            .name = lirSymbol(proc_symbol),
-            .identity = LIR.ProcIdentity.programLocal("boxy", @backingInt(proc_symbol)),
-            .args = args_span,
-            .frame_locals = frame_span,
-            .body = body,
-            .ret_layout = .bool,
-            .boxy_runtime_entry = true,
-            .stack_probe = self.stackProbeForProc(args_span, frame_span, .bool),
-        }, proc.origin.loc);
-        const proc_spec = self.result.store.getProcSpecPtr(proc_id);
-        proc_spec.shapes = proc_spec.shapes.merged(self.result.store.shapes);
-        self.descriptor_equality_proc = proc_id;
+        cache.* = proc_id;
         return proc_id;
     }
 
@@ -4366,7 +3786,7 @@ const ProcedureBuilder = struct {
             boxyLowerInvariant("static boxy dictionary method adapter saw mismatched method arity");
         }
 
-        const resolved = self.resolved_workers.items[@backingInt(worker_id)];
+        const resolved = resolveWorker(self.modules, self.plan, @backingInt(worker_id));
         const saved_tail_builder = self.result.store.tail_call_builder;
         self.result.store.tail_call_builder = null;
         defer self.result.store.tail_call_builder = saved_tail_builder;
@@ -5605,13 +5025,13 @@ const ProcedureBuilder = struct {
         rep_id: Plan.TypeRepId,
         requirement: Plan.DictionaryRequirement,
     ) bool {
-        const requirement_module = procedureModuleById(self.modules, requirement.source_type.module);
-        const method_text = requirement_module.canonical_names.methodNameText(requirement.fn_name);
+        const requirement_module = Plan.moduleViewForKey(self.modules, requirement.source_type.module);
+        const method_text = requirement_module.canonical_names.?.methodNameText(requirement.fn_name);
         if (!std.mem.eql(u8, method_text, structural_method)) return false;
         const source_rep = self.plan.representations.items[@backingInt(rep_id)];
-        const source_module = procedureModuleById(self.modules, source_rep.source_type.module);
+        const source_module = Plan.moduleViewForKey(self.modules, source_rep.source_type.module);
         const owner = methodOwnerForProcedureType(source_module, source_rep.source_type.ty) orelse return true;
-        return self.lookupMethodTarget(source_module, owner, requirement_module, requirement.fn_name) == null;
+        return Plan.lookupMethodTarget(self.methodSearchModules(), source_module, owner, requirement_module, requirement.fn_name) == null;
     }
 
     /// Bind each formal of `env` to its actual in `context`, so static
@@ -5821,7 +5241,7 @@ const ProcedureBuilder = struct {
         job.header = .{
             .proc = ProcBodyBuilder.initSyntheticAdapter(
                 self,
-                procedureModuleById(self.modules, rep.source_type.module),
+                Plan.moduleViewForKey(self.modules, rep.source_type.module),
                 self.layout_plan.worker_layouts[0],
                 constructlessOrigin(.derived),
             ),
@@ -6017,11 +5437,12 @@ const ProcedureBuilder = struct {
         while (arg_index > 0) {
             arg_index -= 1;
             if (call_args[arg_index] == target_arg_locals[arg_index]) continue;
-            call_with_args = try adapter_proc.assignPlannedCallBoundaryCopyingSource(
+            call_with_args = try adapter_proc.assignPlannedCallBoundaryWithSourceMode(
                 call_args[arg_index],
                 target_arg_locals[arg_index],
                 source_args[arg_index].rep,
                 target_args[arg_index].rep,
+                .copy,
                 call_with_args,
             );
         }
@@ -6213,7 +5634,7 @@ const ProcedureBuilder = struct {
         defer self.result.store.tail_call_builder = saved_tail_builder;
         var proc = ProcBodyBuilder.initSyntheticAdapter(
             self,
-            procedureModuleById(self.modules, fn_type.module),
+            Plan.moduleViewForKey(self.modules, fn_type.module),
             self.layout_plan.worker_layouts[0],
             constructlessOrigin(.scaffold),
         );
@@ -6244,46 +5665,22 @@ const ProcedureBuilder = struct {
         requirement: Plan.DictionaryRequirement,
     ) ?Plan.WorkerPlanId {
         const source_rep = self.plan.representations.items[@backingInt(rep_id)];
-        const source_module = procedureModuleById(self.modules, source_rep.source_type.module);
-        const requirement_module = procedureModuleById(self.modules, requirement.source_type.module);
+        const source_module = Plan.moduleViewForKey(self.modules, source_rep.source_type.module);
+        const requirement_module = Plan.moduleViewForKey(self.modules, requirement.source_type.module);
         const owner = methodOwnerForProcedureType(source_module, source_rep.source_type.ty) orelse return null;
-        const target_lookup = self.lookupMethodTarget(
+        const target_lookup = Plan.lookupMethodTarget(
+            self.methodSearchModules(),
             source_module,
             owner,
             requirement_module,
             requirement.fn_name,
         ) orelse return null;
-        const source = self.workerSourceForMethodTarget(target_lookup, source_rep.source_type);
+        const source = Plan.workerSourceForMethodTarget(target_lookup, source_rep.source_type, null);
         const worker_type = Plan.CheckedTypeIdentity{
-            .module = target_lookup.module.key,
+            .module = target_lookup.view.key,
             .ty = target_lookup.target.callable_ty,
         };
         return self.plan.workerForSourceType(source, worker_type);
-    }
-
-    fn workerSourceForMethodTarget(
-        _: *ProcedureBuilder,
-        lookup: MethodTargetLookup,
-        shape: Plan.CheckedTypeIdentity,
-    ) Plan.WorkerSource {
-        return switch (lookup.target.kind) {
-            .procedure => |procedure| .{ .procedure_template = procedure.template },
-            .local_proc => |local| if (topLevelProcedureBindingForExpr(lookup.module, local.expr)) |binding|
-                .{ .procedure_binding = binding }
-            else
-                .{ .nested_expr = .{ .module = lookup.module.key, .expr = nestedCallableSiteExprForExpr(lookup.module, local.expr) orelse local.expr } },
-            .structural => |kind| switch (kind) {
-                .parser => .{ .generated_codec = .{
-                    .kind = .parser_constructor,
-                    .shape = shape,
-                } },
-                .encoder => .{ .generated_codec = .{
-                    .kind = .encoder_constructor,
-                    .shape = shape,
-                } },
-                .equality, .hash, .map, .map_effectful => boxyLowerInvariant("non-codec structural target reached Boxy method worker selection"),
-            },
-        };
     }
 
     /// The planned worker for the checked `to_inspect` override of this
@@ -6294,9 +5691,9 @@ const ProcedureBuilder = struct {
         rep_id: Plan.TypeRepId,
     ) ?Plan.WorkerPlanId {
         const source_rep = self.plan.representations.items[@backingInt(rep_id)];
-        const source_module = procedureModuleById(self.modules, source_rep.source_type.module);
+        const source_module = Plan.moduleViewForKey(self.modules, source_rep.source_type.module);
         const owner = methodOwnerForProcedureType(source_module, source_rep.source_type.ty) orelse return null;
-        const target_lookup = self.lookupInspectOverride(source_module, owner) orelse return null;
+        const target_lookup = Plan.lookupInspectOverride(self.methodSearchModules(), source_module, owner) orelse return null;
         const source = switch (target_lookup.target.kind) {
             .procedure => |procedure| Plan.WorkerSource{ .procedure_template = procedure.template },
             .local_proc,
@@ -6304,94 +5701,13 @@ const ProcedureBuilder = struct {
             => boxyLowerInvariant("boxy nominal method target reached lowering without a procedure worker"),
         };
         return self.plan.workerForSourceType(source, .{
-            .module = target_lookup.module.key,
+            .module = target_lookup.view.key,
             .ty = target_lookup.target.callable_ty,
         });
     }
 
-    const MethodTargetLookup = struct {
-        module: ProcedureModuleView,
-        target: static_dispatch.MethodTarget,
-    };
-
-    fn lookupMethodTarget(
-        self: *ProcedureBuilder,
-        owner_module: ProcedureModuleView,
-        owner: static_dispatch.MethodOwner,
-        method_module: ProcedureModuleView,
-        method: names.MethodNameId,
-    ) ?MethodTargetLookup {
-        const method_text = method_module.canonical_names.methodNameText(method);
-        if (self.lookupMethodTargetInModule(owner_module, owner_module, owner, method_text)) |target| return target;
-        for (self.modules.imports) |imported| {
-            const module = procedureModuleFromImport(imported);
-            if (checked_moduleKeyEqual(module.key, owner_module.key)) continue;
-            if (self.lookupMethodTargetInModule(module, owner_module, owner, method_text)) |target| return target;
-        }
-        for (self.modules.root.relation_modules) |relation| {
-            const module = procedureModuleFromImport(relation);
-            if (checked_moduleKeyEqual(module.key, owner_module.key)) continue;
-            if (self.lookupMethodTargetInModule(module, owner_module, owner, method_text)) |target| return target;
-        }
-        return null;
-    }
-
-    /// Selects the module that declares `owner.to_inspect` exactly as
-    /// `lookupMethodTarget` does; that declaration's checked eligibility is
-    /// the answer.
-    fn lookupInspectOverride(
-        self: *ProcedureBuilder,
-        owner_module: ProcedureModuleView,
-        owner: static_dispatch.MethodOwner,
-    ) ?MethodTargetLookup {
-        if (inspectOverrideInModule(owner_module, owner_module, owner)) |decision| return decision.target;
-        for (self.modules.imports) |imported| {
-            const module = procedureModuleFromImport(imported);
-            if (checked_moduleKeyEqual(module.key, owner_module.key)) continue;
-            if (inspectOverrideInModule(module, owner_module, owner)) |decision| return decision.target;
-        }
-        for (self.modules.root.relation_modules) |relation| {
-            const module = procedureModuleFromImport(relation);
-            if (checked_moduleKeyEqual(module.key, owner_module.key)) continue;
-            if (inspectOverrideInModule(module, owner_module, owner)) |decision| return decision.target;
-        }
-        return null;
-    }
-
-    const InspectOverrideDecision = struct {
-        target: ?MethodTargetLookup,
-    };
-
-    fn inspectOverrideInModule(
-        candidate: ProcedureModuleView,
-        owner_module: ProcedureModuleView,
-        owner: static_dispatch.MethodOwner,
-    ) ?InspectOverrideDecision {
-        const candidate_owner = Plan.methodOwnerInNames(owner_module.canonical_names, candidate.canonical_names, owner) orelse return null;
-        const candidate_method = candidate.canonical_names.lookupMethodName("to_inspect") orelse return null;
-        const key: static_dispatch.MethodKey = .{ .owner = candidate_owner, .method = candidate_method };
-        // A declared `to_inspect` decides inspection in this module; the
-        // registry records an override only for an eligible, unrejected
-        // declaration.
-        _ = candidate.method_registry.lookup(key) orelse return null;
-        const override = candidate.method_registry.lookupInspectOverride(key) orelse return .{ .target = null };
-        // Inspection calls the method at its checked `T -> Str` instance.
-        var target = override.target;
-        target.callable_ty = override.callable_ty;
-        return .{ .target = .{ .module = candidate, .target = target } };
-    }
-
-    fn lookupMethodTargetInModule(
-        _: *ProcedureBuilder,
-        candidate: ProcedureModuleView,
-        owner_module: ProcedureModuleView,
-        owner: static_dispatch.MethodOwner,
-        method_text: []const u8,
-    ) ?MethodTargetLookup {
-        const candidate_owner = Plan.methodOwnerInNames(owner_module.canonical_names, candidate.canonical_names, owner) orelse return null;
-        const candidate_method = candidate.canonical_names.lookupMethodName(method_text) orelse return null;
-        const found = candidate.method_registry.lookup(.{ .owner = candidate_owner, .method = candidate_method }) orelse return null;
-        return .{ .module = candidate, .target = found.requireTarget("boxy procedure lowering") };
+    fn methodSearchModules(self: *const ProcedureBuilder) Plan.MethodSearchModules {
+        return .{ .imports = self.modules.imports, .relation_modules = self.modules.root.relation_modules };
     }
 
     /// Compose the explicit substitutions along the storage wrapper chain.
@@ -7013,8 +6329,8 @@ const ProcedureBuilder = struct {
     }
 
     fn tagVariantNameText(self: *const ProcedureBuilder, variant: Plan.TagVariant) []const u8 {
-        const module = procedureModuleById(self.modules, variant.name_module);
-        return module.canonical_names.tagLabelText(variant.name);
+        const module = Plan.moduleViewForKey(self.modules, variant.name_module);
+        return module.canonical_names.?.tagLabelText(variant.name);
     }
 
     fn repInspectsOpaque(self: *const ProcedureBuilder, rep_id: Plan.TypeRepId) bool {
@@ -7059,9 +6375,9 @@ const ProcedureBuilder = struct {
                     boxyLowerInvariant("declared nominal field index exceeded its backing record fields");
                 }
                 const child = backing_fields.items[field.index];
-                const view = procedureModuleById(self.modules, child.source_type.module);
+                const view = Plan.moduleViewForKey(self.modules, child.source_type.module);
                 field_name_ids.items[field.index] = try self.result.store.insertBoxyName(
-                    view.canonical_names.recordFieldLabelText(child.role.record_field),
+                    view.canonical_names.?.recordFieldLabelText(child.role.record_field),
                 );
             }
             const start: u32 = @intCast(self.result.boxy_field_names.items.len);
@@ -7070,10 +6386,10 @@ const ProcedureBuilder = struct {
         }
         for (self.plan.childSlice(rep.children)) |child| {
             if (child.role == .record_field) {
-                const view = procedureModuleById(self.modules, child.source_type.module);
+                const view = Plan.moduleViewForKey(self.modules, child.source_type.module);
                 try field_name_ids.append(
                     self.allocator,
-                    try self.result.store.insertBoxyName(view.canonical_names.recordFieldLabelText(child.role.record_field)),
+                    try self.result.store.insertBoxyName(view.canonical_names.?.recordFieldLabelText(child.role.record_field)),
                 );
             } else if (child.role != .record_ext) {
                 return .{};
@@ -7087,19 +6403,19 @@ const ProcedureBuilder = struct {
     }
 
     fn initHostedCatalog(self: *ProcedureBuilder) Allocator.Error!void {
-        if (self.resolved_workers.items.len == 0) return;
+        if (self.plan.workers.items.len == 0) return;
 
         var entries = std.ArrayList(HostedCatalogEntry).empty;
         defer entries.deinit(self.allocator);
 
-        try self.appendHostedCatalogFromModule(&entries, rootProcedureModule(self.modules));
+        try self.appendHostedCatalogFromModule(&entries, Plan.moduleViewFromCheckedModule(self.modules.root.module));
         for (self.modules.imports, 0..) |imported, index| {
             if (self.importModuleAlreadyScanned(imported.key, index)) continue;
-            try self.appendHostedCatalogFromModule(&entries, procedureModuleFromImport(imported));
+            try self.appendHostedCatalogFromModule(&entries, Plan.moduleViewFromImported(imported));
         }
         for (self.modules.root.relation_modules, 0..) |relation, index| {
             if (self.relationModuleAlreadyScanned(relation.key, index)) continue;
-            try self.appendHostedCatalogFromModule(&entries, procedureModuleFromImport(relation));
+            try self.appendHostedCatalogFromModule(&entries, Plan.moduleViewFromImported(relation));
         }
 
         if (self.hostedBindingView()) |binding_view| {
@@ -7187,12 +6503,12 @@ const ProcedureBuilder = struct {
     fn appendHostedCatalogFromModule(
         self: *ProcedureBuilder,
         entries: *std.ArrayList(HostedCatalogEntry),
-        module: ProcedureModuleView,
+        module: Plan.ModuleView,
     ) Allocator.Error!void {
         for (module.hosted_procs.procs) |hosted| {
             try entries.append(self.allocator, .{
                 .template = hosted.template,
-                .symbol_text = module.canonical_names.externalSymbolNameText(hosted.external_symbol_name),
+                .symbol_text = module.canonical_names.?.externalSymbolNameText(hosted.external_symbol_name),
                 .dispatch_index = 0,
                 .order = hosted.orderKey(module.hosted_procs),
                 .module_key = module.key.bytes,
@@ -7232,15 +6548,15 @@ const ProcedureBuilder = struct {
     }
 
     fn emitRoots(self: *ProcedureBuilder, roots: Common.RootRequests) Allocator.Error!void {
-        self.worker_procs = try self.allocator.alloc(?LIR.LirProcSpecId, self.resolved_workers.items.len);
+        self.worker_procs = try self.allocator.alloc(?LIR.LirProcSpecId, self.plan.workers.items.len);
         @memset(self.worker_procs, null);
-        self.erased_worker_procs = try self.allocator.alloc(?LIR.LirProcSpecId, self.resolved_workers.items.len);
+        self.erased_worker_procs = try self.allocator.alloc(?LIR.LirProcSpecId, self.plan.workers.items.len);
         @memset(self.erased_worker_procs, null);
-        self.hosted_external_procs = try self.allocator.alloc(?LIR.LirProcSpecId, self.resolved_workers.items.len);
+        self.hosted_external_procs = try self.allocator.alloc(?LIR.LirProcSpecId, self.plan.workers.items.len);
         @memset(self.hosted_external_procs, null);
-        self.worker_jobs = try self.allocator.alloc(?u32, self.resolved_workers.items.len);
+        self.worker_jobs = try self.allocator.alloc(?u32, self.plan.workers.items.len);
         @memset(self.worker_jobs, null);
-        self.worker_return_locals = try self.allocator.alloc(?LIR.LocalId, self.resolved_workers.items.len);
+        self.worker_return_locals = try self.allocator.alloc(?LIR.LocalId, self.plan.workers.items.len);
         @memset(self.worker_return_locals, null);
 
         if (self.plan.literal_evidence) |*evidence| {
@@ -7313,7 +6629,7 @@ const ProcedureBuilder = struct {
                         try stack.append(self.allocator, assign.next);
                         const desc_id = switch (assign.desc) {
                             .static => |id| id,
-                            .local, .runtime, .dict_method_arg, .dict_method_hidden => continue,
+                            .local, .runtime, .dict_method_hidden => continue,
                         };
                         const captures = capture_sets.items[@backingInt(desc_id)].items;
                         if (std.mem.findScalar(LIR.LocalId, captures, assign.target) != null) {
@@ -7335,7 +6651,6 @@ const ProcedureBuilder = struct {
                     .assign_boxy_dict_ref,
                     .assign_boxy_box,
                     .assign_boxy_record_update,
-                    .assign_boxy_reuse_box,
                     .assign_boxy_unbox,
                     .assign_boxy_adapt,
                     .assign_boxy_inspect,
@@ -7396,8 +6711,6 @@ const ProcedureBuilder = struct {
                     .expect_err,
                     .runtime_error,
                     .comptime_exhaustiveness_failed,
-                    .loop_continue,
-                    .loop_break,
                     => {},
                 }
             }
@@ -7448,9 +6761,6 @@ const ProcedureBuilder = struct {
                     try self.collectDescriptorGraphRef(payload.desc, parent, captures, parents);
                 }
             }
-
-            try self.collectDescriptorPayloadStepRefs(desc.copy_plan, parent, captures, parents);
-            try self.collectDescriptorPayloadStepRefs(desc.drop_plan, parent, captures, parents);
         }
 
         var queue = std.ArrayList(LIR.BoxyTypeDescId).empty;
@@ -7511,26 +6821,6 @@ const ProcedureBuilder = struct {
         }
     }
 
-    fn collectDescriptorPayloadStepRefs(
-        self: *ProcedureBuilder,
-        span: LIR.BoxySpan,
-        parent: LIR.BoxyTypeDescId,
-        captures: []std.ArrayList(LIR.LocalId),
-        parents: []std.ArrayList(LIR.BoxyTypeDescId),
-    ) Allocator.Error!void {
-        const start: usize = span.start;
-        const end = start + span.len;
-        if (end > self.result.boxy_payload_steps.items.len) {
-            boxyLowerInvariant("boxy descriptor payload step span exceeded its table");
-        }
-        for (self.result.boxy_payload_steps.items[start..end]) |step| {
-            switch (step) {
-                .concrete => {},
-                .dynamic => |dynamic| try self.collectDescriptorGraphRef(dynamic.desc, parent, captures, parents),
-            }
-        }
-    }
-
     fn collectDescriptorGraphRef(
         self: *ProcedureBuilder,
         desc_ref: LIR.BoxyDescRef,
@@ -7554,7 +6844,7 @@ const ProcedureBuilder = struct {
                     try reverse.append(self.allocator, parent);
                 }
             },
-            .runtime, .dict_method_arg, .dict_method_hidden => {},
+            .runtime, .dict_method_hidden => {},
         }
     }
 
@@ -7775,7 +7065,7 @@ const ProcedureBuilder = struct {
         if (index >= procs.len) boxyLowerInvariant("boxy procedure referenced a missing worker proc");
         if (procs[index]) |existing| return existing;
 
-        const resolved = self.resolved_workers.items[index];
+        const resolved = resolveWorker(self.modules, self.plan, index);
         const worker_layout = self.layout_plan.workerLayoutFor(worker_id);
         const ret_layout = if (worker_layout.ret) |ret| ret.layoutIdx() else worker_layout.value.layoutIdx();
         const proc_symbol = self.symbols.fresh();
@@ -7817,7 +7107,7 @@ const ProcedureBuilder = struct {
         if (job.header != null) return;
         const worker_id = job.worker;
         const index = @backingInt(worker_id);
-        const resolved = self.resolved_workers.items[index];
+        const resolved = resolveWorker(self.modules, self.plan, index);
         const saved_tail_builder = self.result.store.tail_call_builder;
         self.result.store.tail_call_builder = null;
         defer self.result.store.tail_call_builder = saved_tail_builder;
@@ -7867,7 +7157,7 @@ const ProcedureBuilder = struct {
     }
 
     fn buildWorkerBody(self: *ProcedureBuilder, job: *WorkerJob) Allocator.Error!void {
-        const resolved = self.resolved_workers.items[@backingInt(job.worker)];
+        const resolved = resolveWorker(self.modules, self.plan, @backingInt(job.worker));
         const header = &(job.header orelse boxyLowerInvariant("boxy worker body was built before its header"));
         const proc = &header.proc;
         const proc_id = job.proc_id;
@@ -7935,7 +7225,7 @@ const ProcedureBuilder = struct {
     }
 
     fn buildErasedWorkerBody(self: *ProcedureBuilder, job: *WorkerJob) Allocator.Error!void {
-        const resolved = self.resolved_workers.items[@backingInt(job.worker)];
+        const resolved = resolveWorker(self.modules, self.plan, @backingInt(job.worker));
         const header = &(job.header orelse boxyLowerInvariant("boxy erased worker body was built before its header"));
         const proc = &header.proc;
         const proc_id = job.proc_id;
@@ -7983,7 +7273,7 @@ const ProcedureBuilder = struct {
         const evidence = &self.plan.literal_evidence.?;
         const initializer = evidence.initializers.items[index];
         const site = self.plan.literal_sites.items[initializer.site];
-        const module = procedureModuleById(self.modules, site.source.module);
+        const module = Plan.moduleViewForKey(self.modules, site.source.module);
         const dict: LIR.BoxyDictId = @fromBackingInt(@intCast(self.result.boxy_dicts.items.len));
         const method: u32 = @intCast(self.result.boxy_method_slots.items.len);
         try self.result.boxy_method_slots.append(self.allocator, .{
@@ -8002,7 +7292,7 @@ const ProcedureBuilder = struct {
         const evidence = &self.plan.literal_evidence.?;
         const initializer = evidence.initializers.items[index];
         const site = self.plan.literal_sites.items[initializer.site];
-        const module = procedureModuleById(self.modules, site.source.module);
+        const module = Plan.moduleViewForKey(self.modules, site.source.module);
         const expr = module.checked_bodies.expr(site.source.expr);
         const origin = LIR.StmtOrigin{ .loc = try self.sourceLoc(module, expr.source_region), .region = expr.source_region, .inline_scope = .none, .kind = .scaffold };
         const ret_layout = self.layout_plan.rep_layouts[@backingInt(initializer.rep)].worker.layoutIdx();
@@ -8215,7 +7505,7 @@ const ProcedureBuilder = struct {
             boxyLowerInvariant("hosted worker had no host ABI signature");
         const host_function = (Plan.RepQuery{ .plan = self.plan, .allocator = self.allocator }).functionChildren(host_fn_rep) orelse
             boxyLowerInvariant("hosted ABI signature is not a function");
-        const worker_function = checkedFunctionPayload(resolved.module, template.checked_fn_root);
+        const worker_function = Plan.checkedFunctionPayload(resolved.module, template.checked_fn_root);
         if (host_function.arg_count != worker_function.args.len) {
             boxyLowerInvariant("hosted host signature arity disagreed with worker signature");
         }
@@ -8257,9 +7547,9 @@ const ProcedureBuilder = struct {
     ) Allocator.Error!void {
         if (!self.options.proc_debug_names) return;
         const template = resolved.template orelse return;
-        const proc_base = resolved.module.canonical_names.procBase(template.proc_base);
+        const proc_base = resolved.module.canonical_names.?.procBase(template.proc_base);
         const export_name = proc_base.export_name orelse return;
-        try self.result.store.setProcDebugName(proc_id, resolved.module.canonical_names.exportNameText(export_name));
+        try self.result.store.setProcDebugName(proc_id, resolved.module.canonical_names.?.exportNameText(export_name));
     }
 
     const WorkerBodySource = union(enum) {
@@ -8283,15 +7573,15 @@ const ProcedureBuilder = struct {
     ) Allocator.Error!WorkerBodySource {
         try proc.bindStoredFnCaptures(resolved.stored_fn);
         return switch (resolved.body) {
-            .checked_expr => |body| blk: {
-                const root_expr = resolved.module.checked_bodies.expr(body.root_expr);
-                if (root_expr.data != .lambda) break :blk .{ .checked_expr = body.root_expr };
+            .checked_expr => |root_expr_id| blk: {
+                const root_expr = resolved.module.checked_bodies.expr(root_expr_id);
+                if (root_expr.data != .lambda) break :blk .{ .checked_expr = root_expr_id };
                 const lambda = root_expr.data.lambda;
                 const worker_args = self.layout_plan.workerLayoutSlice(proc.worker_layout.args);
                 if (lambda.args.len != worker_args.len) {
                     boxyLowerInvariant("boxy worker lambda arity disagreed with worker root layout");
                 }
-                proc.current_lambda = body.root_expr;
+                proc.current_lambda = root_expr_id;
                 try proc.bindLambdaArgs(lambda.args);
                 break :blk .{ .checked_expr = lambda.body };
             },
@@ -8390,7 +7680,7 @@ const ProcedureBuilder = struct {
     ) Allocator.Error!WorkerBodySource {
         const template = resolved.template orelse
             boxyLowerInvariant("intrinsic worker had no checked procedure template");
-        const function = checkedFunctionPayload(resolved.module, template.checked_fn_root);
+        const function = Plan.checkedFunctionPayload(resolved.module, template.checked_fn_root);
         return switch (intrinsic) {
             .str_inspect => {
                 if (function.args.len != 1) {
@@ -8457,12 +7747,12 @@ const ProcedureBuilder = struct {
             .unimplemented => try self.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .literal = try self.result.store.insertString(Common.unimplemented_declaration_crash) },
             } }, proc.origin),
-            .const_crash => |node| switch (resolved.module.const_store.get(node)) {
+            .const_crash => |node| switch (resolved.module.const_store.?.get(node)) {
                 .crash => |str| try self.result.store.addCFStmt(.{ .crash = .{
-                    .msg = .{ .literal = try self.result.store.insertString(resolved.module.const_store.strBytes(str)) },
+                    .msg = .{ .literal = try self.result.store.insertString(resolved.module.const_store.?.strBytes(str)) },
                 } }, proc.origin),
                 .checked_error => |str| try self.result.store.addCFStmt(.{ .crash = .{
-                    .msg = .{ .literal = try self.result.store.insertString(resolved.module.const_store.strBytes(str)) },
+                    .msg = .{ .literal = try self.result.store.insertString(resolved.module.const_store.?.strBytes(str)) },
                     .checked_error = true,
                 } }, proc.origin),
                 .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .nominal, .fn_value => boxyLowerInvariant("boxy constant crash worker's constant was not a crash"),
@@ -9668,7 +8958,7 @@ const ProcedureBuilder = struct {
         }
 
         const shape_rep = proc.repForTypeRef(schema_type);
-        const schema_view = procedureModuleById(self.modules, schema_type.module);
+        const schema_view = Plan.moduleViewForKey(self.modules, schema_type.module);
         if (checkedBuiltinNominalForType(schema_view, schema_type.ty)) |builtin| {
             if (builtin == .box) {
                 const payload = proc.repQuery().requiredSingleChild(shape_rep, .box_payload);
@@ -10416,7 +9706,7 @@ const ProcedureBuilder = struct {
             }
         }
         const fields = try self.allocator.alloc(GeneratedEncoderRecordField, field_count);
-        const record_view = procedureModuleById(self.modules, record.source_type.module);
+        const record_view = Plan.moduleViewForKey(self.modules, record.source_type.module);
         const worker = self.plan.workers.items[@backingInt(proc.worker_layout.worker)];
         const name_capture_ids = self.plan.encoderNameCaptureSlice(worker.encoder_name_captures);
         const name_captures = self.generatedEncoderNameCaptureLocals(proc);
@@ -10433,9 +9723,9 @@ const ProcedureBuilder = struct {
                 if (capture.worker != contract_worker) {
                     boxyLowerInvariant("generated encoder captured a field name outside its contract");
                 }
-                const capture_view = procedureModuleById(self.modules, capture.field_module);
+                const capture_view = Plan.moduleViewForKey(self.modules, capture.field_module);
                 if (planTypeRefEql(capture.record_type, shape_type) and
-                    Plan.recordFieldNameMatches(viewNames(record_view), label, viewNames(capture_view), capture.field_name))
+                    Plan.recordFieldNameMatches(Plan.moduleNamesOf(record_view), label, Plan.moduleNamesOf(capture_view), capture.field_name))
                 {
                     if (renamed != null) boxyLowerInvariant("generated encoder record field had duplicate renamed captures");
                     renamed = name_local;
@@ -11513,7 +10803,7 @@ const ProcedureBuilder = struct {
         const key_type = source.shape;
 
         if (generatedEncoderKeyMethodForType(
-            procedureModuleById(self.modules, key_type.module),
+            Plan.moduleViewForKey(self.modules, key_type.module),
             key_type.ty,
         )) |method_text| {
             const call = proc.generatedCodecCallPlan(caller, encoding_type, method_text, key_type);
@@ -12051,7 +11341,7 @@ const ProcedureBuilder = struct {
             const success = request.success;
             try proc.ensureGeneratedParserOutputDescriptorForRep(value, shape_rep);
             try proc.ensureGeneratedParserOutputDescriptorForRep(rest, context.state_rep);
-            const shape_module = procedureModuleById(self.modules, shape_type.module);
+            const shape_module = Plan.moduleViewForKey(self.modules, shape_type.module);
             // An alias parses as its backing, which is the shape the planner
             // walked and every planned call names.
             switch (shape_module.checked_types.payload(shape_type.ty)) {
@@ -12404,7 +11694,7 @@ const ProcedureBuilder = struct {
                     const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
                     const dispatch = try proc.generatedParserTagDispatch(uncounted.step, uncounted.step_rep, &variants, &bodies, impossible);
                     const uncounted_step = try self.lowerGeneratedCodecCallLocalsInto(proc, uncounted.call, uncounted.step, &.{ context.encoding, loop.cursor }, dispatch);
-                    return self.finishParseShapeFrame(frames, try self.finishGeneratedListParse(proc, state, uncounted_step));
+                    return self.finishParseShapeFrame(frames, try self.finishGeneratedCountedParse(proc, state, uncounted_step));
                 },
             },
             .dict => |*state| switch (state.phase) {
@@ -12475,7 +11765,7 @@ const ProcedureBuilder = struct {
                         context.next,
                         ok_body,
                     );
-                    return self.finishParseShapeFrame(frames, try self.finishGeneratedDictParse(proc, state, uncounted_step));
+                    return self.finishParseShapeFrame(frames, try self.finishGeneratedCountedParse(proc, state, uncounted_step));
                 },
             },
             .dict_entry => |*state| switch (state.phase) {
@@ -12780,20 +12070,22 @@ const ProcedureBuilder = struct {
         } } });
     }
 
-    /// Finish the list parser once both loop steps are built.
-    fn finishGeneratedListParse(
+    /// Finish a list or dictionary parser once both loop steps are built.
+    fn finishGeneratedCountedParse(
         self: *ProcedureBuilder,
         proc: *ProcBodyBuilder,
-        state: *const GeneratedListParseState,
+        state: anytype,
         uncounted_step: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        const is_list = std.meta.Child(@TypeOf(state)) == GeneratedListParseState;
         const context = state.context;
         const loop = state.loop;
-        const target_desc = state.target_desc;
         const loop_body = try proc.boolSwitchNoContinuation(loop.counted, state.counted_step, uncounted_step);
 
-        const start_call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_list_start", state.subject_type);
-        const start = try beginGeneratedParserTryCall(proc, start_call);
+        const start = try beginGeneratedParserTryCall(proc, if (is_list)
+            proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_list_start", state.subject_type)
+        else
+            proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_dict_start", state.shape_type));
         const event = start.ok_payload;
         const counted_variant = proc.generatedParserTagVariant(event.child.rep, "Counted");
         const uncounted_variant = proc.generatedParserTagVariant(event.child.rep, "Uncounted");
@@ -12801,14 +12093,14 @@ const ProcedureBuilder = struct {
         const counted_payload = try proc.generatedParserSingleTagPayloadLocal(counted_variant);
         const counted_len = try proc.addFrameLocal(.u64);
         const counted_rest = try proc.addFrameLocalForRep(context.state_rep);
-        var counted_body = try self.lowerGeneratedListStartJump(proc, loop, target_desc.desc, counted_rest, context.state_rep, true, counted_len);
+        var counted_body = try self.generatedCountedParseStartJump(proc, state, counted_rest, context.state_rep, true, counted_len);
         counted_body = try proc.generatedParserReadRecordField(counted_rest, context.state_rep, counted_payload.local, counted_payload.child, "rest", counted_body);
         counted_body = try proc.generatedParserReadRecordField(counted_len, proc.repForTypeRef(try proc.generatedParserRecordFieldType(counted_payload.child.source_type, "len")), counted_payload.local, counted_payload.child, "len", counted_body);
         counted_body = try proc.generatedParserReadTagPayload(event.local, counted_variant, counted_payload, counted_body);
 
         const uncounted_payload = try proc.generatedParserSingleTagPayloadLocal(uncounted_variant);
         const zero = try proc.addFrameLocal(.u64);
-        var uncounted_body = try self.lowerGeneratedListStartJump(proc, loop, target_desc.desc, uncounted_payload.local, uncounted_payload.child.rep, false, zero);
+        var uncounted_body = try self.generatedCountedParseStartJump(proc, state, uncounted_payload.local, uncounted_payload.child.rep, false, zero);
         uncounted_body = try proc.assignIntLiteral(zero, 0, uncounted_body);
         uncounted_body = try proc.generatedParserReadTagPayload(event.local, uncounted_variant, uncounted_payload, uncounted_body);
 
@@ -12825,13 +12117,28 @@ const ProcedureBuilder = struct {
             context.next,
             ok_body,
         );
-        initial = try proc.prependOptionalDescriptorMaterialization(target_desc.materialize, initial);
+        if (is_list) initial = try proc.prependOptionalDescriptorMaterialization(state.target_desc.materialize, initial);
         return try self.result.store.addCFStmt(.{ .join = .{
             .id = loop.join_id,
             .params = try proc.joinParamSpan(&.{ loop.cursor, loop.acc, loop.counted, loop.remaining }),
             .body = loop_body,
             .remainder = initial,
         } }, proc.derivedOrigin());
+    }
+
+    fn generatedCountedParseStartJump(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        state: anytype,
+        rest: LIR.LocalId,
+        rest_rep: Plan.TypeRepId,
+        counted: bool,
+        len: LIR.LocalId,
+    ) Allocator.Error!LIR.CFStmtId {
+        if (std.meta.Child(@TypeOf(state)) == GeneratedListParseState) {
+            return try self.lowerGeneratedListStartJump(proc, state.loop, state.target_desc.desc, rest, rest_rep, counted, len);
+        }
+        return try self.lowerGeneratedDictStartJump(proc, state.context, state.loop, rest, rest_rep, counted, len);
     }
 
     fn beginGeneratedSetParse(
@@ -12851,7 +12158,7 @@ const ProcedureBuilder = struct {
         }
         const list = try proc.addFrameLocalForRep(list_rep);
         const convert = try self.lowerGeneratedCodecCallLocalsInto(proc, call, request.value, &.{list}, request.success);
-        const shape_module = procedureModuleById(self.modules, shape_type.module);
+        const shape_module = Plan.moduleViewForKey(self.modules, shape_type.module);
         const nominal = resolvedNominalPayload(shape_module, shape_type.ty);
         if (nominal.builtin != .set or nominal.args.len != 1) {
             boxyLowerInvariant("generated Set parser shape did not have one public element type");
@@ -12887,7 +12194,7 @@ const ProcedureBuilder = struct {
         if (insert_arg_types.len != 3 or !planTypeRefEql(insert_arg_types[0], shape_type)) {
             boxyLowerInvariant("generated Dict.insert call had unexpected arguments");
         }
-        const shape_module = procedureModuleById(self.modules, shape_type.module);
+        const shape_module = Plan.moduleViewForKey(self.modules, shape_type.module);
         const nominal = resolvedNominalPayload(shape_module, shape_type.ty);
         if (nominal.builtin != .dict or nominal.args.len != 2) {
             boxyLowerInvariant("generated Dict parser shape did not have public key and value types");
@@ -12923,57 +12230,6 @@ const ProcedureBuilder = struct {
             .phase = .counted,
             .counted_done = done,
         } } });
-    }
-
-    /// Finish the dictionary parser once both loop steps are built.
-    fn finishGeneratedDictParse(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        state: *const GeneratedDictParseState,
-        uncounted_step: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const context = state.context;
-        const loop = state.loop;
-        const loop_body = try proc.boolSwitchNoContinuation(loop.counted, state.counted_step, uncounted_step);
-
-        const start = try beginGeneratedParserTryCall(proc, proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_dict_start", state.shape_type));
-        const event = start.ok_payload;
-        const counted_variant = proc.generatedParserTagVariant(event.child.rep, "Counted");
-        const uncounted_variant = proc.generatedParserTagVariant(event.child.rep, "Uncounted");
-
-        const counted_payload = try proc.generatedParserSingleTagPayloadLocal(counted_variant);
-        const counted_len = try proc.addFrameLocal(.u64);
-        const counted_rest = try proc.addFrameLocalForRep(context.state_rep);
-        var counted_body = try self.lowerGeneratedDictStartJump(proc, context, loop, counted_rest, context.state_rep, true, counted_len);
-        counted_body = try proc.generatedParserReadRecordField(counted_rest, context.state_rep, counted_payload.local, counted_payload.child, "rest", counted_body);
-        counted_body = try proc.generatedParserReadRecordField(counted_len, proc.repForTypeRef(try proc.generatedParserRecordFieldType(counted_payload.child.source_type, "len")), counted_payload.local, counted_payload.child, "len", counted_body);
-        counted_body = try proc.generatedParserReadTagPayload(event.local, counted_variant, counted_payload, counted_body);
-
-        const uncounted_payload = try proc.generatedParserSingleTagPayloadLocal(uncounted_variant);
-        const zero = try proc.addFrameLocal(.u64);
-        var uncounted_body = try self.lowerGeneratedDictStartJump(proc, context, loop, uncounted_payload.local, uncounted_payload.child.rep, false, zero);
-        uncounted_body = try proc.assignIntLiteral(zero, 0, uncounted_body);
-        uncounted_body = try proc.generatedParserReadTagPayload(event.local, uncounted_variant, uncounted_payload, uncounted_body);
-
-        const variants = [_]GeneratedParserTagVariant{ counted_variant, uncounted_variant };
-        const bodies = [_]LIR.CFStmtId{ counted_body, uncounted_body };
-        const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
-        const ok_body = try proc.generatedParserTagDispatch(event.local, event.child.rep, &variants, &bodies, impossible);
-        const initial = try self.finishGeneratedParserTryCall(
-            proc,
-            start,
-            &.{ context.encoding, state.state },
-            context.result,
-            context.result_rep,
-            context.next,
-            ok_body,
-        );
-        return try self.result.store.addCFStmt(.{ .join = .{
-            .id = loop.join_id,
-            .params = try proc.joinParamSpan(&.{ loop.cursor, loop.acc, loop.counted, loop.remaining }),
-            .body = loop_body,
-            .remainder = initial,
-        } }, proc.derivedOrigin());
     }
 
     const GeneratedDictEntryEnd = enum { counted, uncounted };
@@ -13423,11 +12679,12 @@ const ProcedureBuilder = struct {
             retained[retained_len] = field.payload;
             retained_len += 1;
         }
-        const error_body = try proc.assignRepresentationBoundaryConsumingSource(
+        const error_body = try proc.assignRepresentationBoundaryWithSourceMode(
             state.shape_context.result,
             context.target,
             state.shape_context.result_rep,
             context.target_rep,
+            .move,
             state.shape_context.next,
         );
         const loop_body = try self.result.store.addCFStmt(.{ .join = .{
@@ -14145,7 +13402,7 @@ const ProcedureBuilder = struct {
             }
         }
         const fields = try self.allocator.alloc(GeneratedParserRecordField, field_count);
-        const record_view = procedureModuleById(self.modules, record.source_type.module);
+        const record_view = Plan.moduleViewForKey(self.modules, record.source_type.module);
 
         var out_index: usize = 0;
         for (children) |child| {
@@ -14158,9 +13415,9 @@ const ProcedureBuilder = struct {
             var kind: Plan.GeneratedParserFieldKind = .required;
             for (self.plan.generated_parser_field_captures.items) |capture| {
                 if (capture.worker != worker) continue;
-                const capture_view = procedureModuleById(self.modules, capture.field_module);
+                const capture_view = Plan.moduleViewForKey(self.modules, capture.field_module);
                 if (planTypeRefEql(capture.record_type, record_type) and
-                    Plan.recordFieldNameMatches(viewNames(record_view), label, viewNames(capture_view), capture.field_name))
+                    Plan.recordFieldNameMatches(Plan.moduleNamesOf(record_view), label, Plan.moduleNamesOf(capture_view), capture.field_name))
                 {
                     if (renamed != null) boxyLowerInvariant("generated parser record field had duplicate renamed captures");
                     renamed = switch (field_names_source) {
@@ -14642,7 +13899,7 @@ const ProcedureBuilder = struct {
             },
             .optional_slot => return try proc.lowerOptionalSlotMissingInto(field.payload, field.rep, present_continuation),
             .defaulted => |defaulted| return try proc.lowerDefaultedRecordFieldIntoFromModule(
-                procedureModuleById(self.modules, defaulted.module),
+                Plan.moduleViewForKey(self.modules, defaulted.module),
                 field.payload,
                 defaulted.default,
                 field.source_type,
@@ -14934,10 +14191,10 @@ const ProcedureBuilder = struct {
                 self.plan.directCallHiddenDictionaryArgSlice(call.hidden_dict_args),
                 continuation,
             );
-            const field_module = procedureModuleById(self.modules, field_capture.field_module);
+            const field_module = Plan.moduleViewForKey(self.modules, field_capture.field_module);
             continuation = try proc.assignStringBytesLiteral(
                 field_name,
-                field_module.canonical_names.recordFieldLabelText(field_capture.field_name),
+                field_module.canonical_names.?.recordFieldLabelText(field_capture.field_name),
                 continuation,
             );
         }
@@ -15038,7 +14295,7 @@ const ProcedureBuilder = struct {
         worker_plan: Plan.WorkerPlan,
     ) Allocator.Error!LIR.LirProcSpecId {
         const root_plan = self.plan.roots.items[@backingInt(root_layout.root)];
-        const resolved = self.resolved_workers.items[@backingInt(root_plan.worker)];
+        const resolved = resolveWorker(self.modules, self.plan, @backingInt(root_plan.worker));
         var host_origin = try self.workerOrigin(resolved);
         host_origin.kind = .scaffold;
         var proc = ProcBodyBuilder.initSyntheticAdapter(self, resolved.module, worker_layout, host_origin);
@@ -15104,7 +14361,7 @@ const ProcedureBuilder = struct {
                 boxyLowerInvariant("boxy host wrapper worker result descriptor was not one of its arguments");
             },
             .static => ret_desc,
-            .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("boxy host wrapper worker result descriptor was not a static or argument descriptor"),
+            .runtime, .dict_method_hidden => boxyLowerInvariant("boxy host wrapper worker result descriptor was not a static or argument descriptor"),
         } else if (self.plan.representations.items[@backingInt(proc.descriptorStorageRep(worker_ret_rep))].descriptor != null)
             // The worker result carries no descriptor of its own; the wrapper
             // knows the root's exact instantiation and describes it statically.
@@ -15263,7 +14520,6 @@ const ProcedureBuilder = struct {
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
@@ -15331,8 +14587,6 @@ const ProcedureBuilder = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .loop_continue,
-                .loop_break,
                 => {},
             }
         }
@@ -15350,7 +14604,7 @@ const ProcedureBuilder = struct {
                     else
                         .{};
                 },
-                .runtime, .dict_method_arg, .dict_method_hidden => .{},
+                .runtime, .dict_method_hidden => .{},
             },
             .divergent => blk: {
                 for (return_edges.items) |edge| {
@@ -15447,7 +14701,6 @@ const ProcedureBuilder = struct {
                     .assign_boxy_dict_ref,
                     .assign_boxy_box,
                     .assign_boxy_record_update,
-                    .assign_boxy_reuse_box,
                     .assign_boxy_unbox,
                     .assign_boxy_inspect,
                     .assign_boxy_eq,
@@ -15476,8 +14729,6 @@ const ProcedureBuilder = struct {
                     .switch_initialized_payload,
                     .str_match,
                     .str_match_set,
-                    .loop_continue,
-                    .loop_break,
                     .join,
                     .jump,
                     .ret,
@@ -15531,7 +14782,6 @@ const ProcedureBuilder = struct {
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
@@ -15562,8 +14812,6 @@ const ProcedureBuilder = struct {
                 .switch_initialized_payload,
                 .str_match,
                 .str_match_set,
-                .loop_continue,
-                .loop_break,
                 .join,
                 .jump,
                 .ret,
@@ -15621,7 +14869,7 @@ const ProcBodyBuilder = struct {
     literal_locals: std.ArrayList(LIR.LocalId) = .empty,
     literal_initializer: ?u32 = null,
     parent: *ProcedureBuilder,
-    module: ProcedureModuleView,
+    module: Plan.ModuleView,
     worker_layout: Layouts.WorkerLayouts,
     synthetic_adapter: bool,
     erased_argument_descriptors: bool,
@@ -16085,8 +15333,7 @@ const ProcBodyBuilder = struct {
 
     /// The module data the shared label-comparing plan queries need.
     pub fn moduleNames(self: *ProcBodyBuilder, module_id: checked.ModuleId) Plan.ModuleNames {
-        const view = procedureModuleById(self.parent.modules, module_id);
-        return .{ .key = view.key, .canonical_names = view.canonical_names };
+        return Plan.moduleNamesOf(Plan.moduleViewForKey(self.parent.modules, module_id));
     }
 
     /// Shared read-only queries over the representation plan.
@@ -16099,7 +15346,7 @@ const ProcBodyBuilder = struct {
         return .{ .query = self.repQuery(), .modules = self };
     }
 
-    fn init(parent: *ProcedureBuilder, module: ProcedureModuleView, worker_layout: Layouts.WorkerLayouts, origin: LIR.StmtOrigin) ProcBodyBuilder {
+    fn init(parent: *ProcedureBuilder, module: Plan.ModuleView, worker_layout: Layouts.WorkerLayouts, origin: LIR.StmtOrigin) ProcBodyBuilder {
         return .{
             .origin = origin,
             .parent = parent,
@@ -16145,7 +15392,7 @@ const ProcBodyBuilder = struct {
         };
     }
 
-    fn initSyntheticAdapter(parent: *ProcedureBuilder, module: ProcedureModuleView, worker_layout: Layouts.WorkerLayouts, origin: LIR.StmtOrigin) ProcBodyBuilder {
+    fn initSyntheticAdapter(parent: *ProcedureBuilder, module: Plan.ModuleView, worker_layout: Layouts.WorkerLayouts, origin: LIR.StmtOrigin) ProcBodyBuilder {
         var builder = ProcBodyBuilder.init(parent, module, worker_layout, origin);
         builder.synthetic_adapter = true;
         builder.erased_argument_descriptors = true;
@@ -16273,18 +15520,18 @@ const ProcBodyBuilder = struct {
             if (pattern.data == .assign)
                 self.bindPatternToLocal(pattern_id, binding_local)
             else
-                try self.reservePatternBindings(pattern_id);
+                try self.walkPatternBinders(pattern_id, .irrefutable);
         }
     }
 
     fn bindStoredFnCaptures(self: *ProcBodyBuilder, stored_fn: ?Plan.StoredFnSource) Allocator.Error!void {
         const source = stored_fn orelse return;
-        const store_module = procedureModuleById(self.parent.modules, source.module);
+        const store_module = Plan.moduleViewForKey(self.parent.modules, source.module);
         const raw = @backingInt(source.fn_id);
-        if (raw >= store_module.const_store.fns.items.len) {
+        if (raw >= store_module.const_store.?.fns.items.len) {
             boxyLowerInvariant("stored function capture plan referenced a missing ConstStore function");
         }
-        const fn_value = store_module.const_store.getFn(source.fn_id);
+        const fn_value = store_module.const_store.?.getFn(source.fn_id);
         try self.ensureBinderLocals();
 
         for (fn_value.captures) |capture| {
@@ -16296,7 +15543,7 @@ const ProcBodyBuilder = struct {
                 .recursive_binding => continue,
             }
             const binder = capture.id.binder();
-            const ty = checkedBinderType(self.module, binder);
+            const ty = Plan.checkedBinderType(self.module, binder);
             const target_rep = self.repForType(ty);
             const stored_rep = self.parent.plan.repForStoredType(.{
                 .module = store_module.key,
@@ -16324,7 +15571,7 @@ const ProcBodyBuilder = struct {
         while (index > 0) {
             index -= 1;
             const capture = self.stored_capture_initializers.items[index];
-            const store_module = procedureModuleById(self.parent.modules, capture.store_module);
+            const store_module = Plan.moduleViewForKey(self.parent.modules, capture.store_module);
             continuation = try self.restoreStoredConstNodeAcrossBoundary(
                 capture.local,
                 store_module,
@@ -16659,7 +15906,7 @@ const ProcBodyBuilder = struct {
                     if (source_capture_index >= source_captures.len) {
                         boxyLowerInvariant("boxy erased capture plan had more value captures than the source closure");
                     }
-                    try self.reservePatternBindings(source_captures[source_capture_index].pattern);
+                    try self.walkPatternBinders(source_captures[source_capture_index].pattern, .irrefutable);
                     source_capture_index += 1;
                 },
                 .hidden_desc => {
@@ -17335,7 +16582,7 @@ const ProcBodyBuilder = struct {
     fn workerSourceCaptures(self: *ProcBodyBuilder) []const checked.CheckedCapture {
         const worker = self.parent.plan.workers.items[@backingInt(self.worker_layout.worker)];
         return switch (worker.source) {
-            .nested_expr => |expr_ref| nestedCallableExprRuntimeCaptures(procedureModuleById(self.parent.modules, expr_ref.module), expr_ref.expr),
+            .nested_expr => |expr_ref| nestedCallableExprRuntimeCaptures(Plan.moduleViewForKey(self.parent.modules, expr_ref.module), expr_ref.expr),
             .procedure_template,
             .procedure_binding,
             .procedure_use,
@@ -17369,9 +16616,9 @@ const ProcBodyBuilder = struct {
             extension: ?RecordExtension,
             next: LIR.CFStmtId,
         },
-        defaulted_field: struct { field_module: ProcedureModuleView, target: LIR.LocalId, default: checked.CheckedFieldDefault, field_type: Plan.CheckedTypeIdentity, next: LIR.CFStmtId },
+        defaulted_field: struct { field_module: Plan.ModuleView, target: LIR.LocalId, default: checked.CheckedFieldDefault, field_type: Plan.CheckedTypeIdentity, next: LIR.CFStmtId },
         module_expr: struct {
-            expr_module: ProcedureModuleView,
+            expr_module: Plan.ModuleView,
             target: LIR.LocalId,
             expr_id: checked.CheckedExprId,
             /// The type the expression is lowered at, when it differs from
@@ -17492,11 +16739,11 @@ const ProcBodyBuilder = struct {
             rest: LIR.LocalId = undefined,
             miss: ?PatternMiss = null,
         },
-        const_node: struct { target: LIR.LocalId, store_module: ProcedureModuleView, type_module: ProcedureModuleView, node: checked.ConstNodeId, checked_ty: checked.CheckedTypeId, next: LIR.CFStmtId },
-        stored_node: struct { target: LIR.LocalId, store_module: ProcedureModuleView, node: checked.ConstNodeId, stored_type: check.ConstStore.ConstTypeId, rep_id: Plan.TypeRepId, next: LIR.CFStmtId },
-        const_storage: struct { storage_local: LIR.LocalId, store_module: ProcedureModuleView, type_module: ProcedureModuleView, node: checked.ConstNodeId, value_ty: checked.CheckedTypeId, storage_rep: Plan.TypeRepId, next: LIR.CFStmtId },
-        stored_storage: struct { storage_local: LIR.LocalId, store_module: ProcedureModuleView, node: checked.ConstNodeId, stored_type: check.ConstStore.ConstTypeId, value_rep: Plan.TypeRepId, next: LIR.CFStmtId },
-        const_optional_slot: struct { target: LIR.LocalId, store_module: ProcedureModuleView, type_module: ProcedureModuleView, node: checked.ConstNodeId, payload_ty: checked.CheckedTypeId, slot_rep: Plan.TypeRepId, next: LIR.CFStmtId },
+        const_node: struct { target: LIR.LocalId, store_module: Plan.ModuleView, type_module: Plan.ModuleView, node: checked.ConstNodeId, checked_ty: checked.CheckedTypeId, next: LIR.CFStmtId },
+        stored_node: struct { target: LIR.LocalId, store_module: Plan.ModuleView, node: checked.ConstNodeId, stored_type: check.ConstStore.ConstTypeId, rep_id: Plan.TypeRepId, next: LIR.CFStmtId },
+        const_storage: struct { storage_local: LIR.LocalId, store_module: Plan.ModuleView, type_module: Plan.ModuleView, node: checked.ConstNodeId, value_ty: checked.CheckedTypeId, storage_rep: Plan.TypeRepId, next: LIR.CFStmtId },
+        stored_storage: struct { storage_local: LIR.LocalId, store_module: Plan.ModuleView, node: checked.ConstNodeId, stored_type: check.ConstStore.ConstTypeId, value_rep: Plan.TypeRepId, next: LIR.CFStmtId },
+        const_optional_slot: struct { target: LIR.LocalId, store_module: Plan.ModuleView, type_module: Plan.ModuleView, node: checked.ConstNodeId, payload_ty: checked.CheckedTypeId, slot_rep: Plan.TypeRepId, next: LIR.CFStmtId },
         planned_call: struct {
             target: LIR.LocalId,
             target_rep: Plan.TypeRepId,
@@ -17516,13 +16763,13 @@ const ProcBodyBuilder = struct {
         },
         /// A stored constant restored at its stored representation and
         /// converted into `target_rep`.
-        stored_across: struct { target: LIR.LocalId, store_module: ProcedureModuleView, node: checked.ConstNodeId, stored_type: check.ConstStore.ConstTypeId, target_rep: Plan.TypeRepId, stored_rep: Plan.TypeRepId, next: LIR.CFStmtId },
+        stored_across: struct { target: LIR.LocalId, store_module: Plan.ModuleView, node: checked.ConstNodeId, stored_type: check.ConstStore.ConstTypeId, target_rep: Plan.TypeRepId, stored_rep: Plan.TypeRepId, next: LIR.CFStmtId },
         chain: ExprChain,
     };
 
     /// The builder state a module-context swap replaced.
     const ModuleExprSaved = struct {
-        module: ProcedureModuleView,
+        module: Plan.ModuleView,
         binder_locals: []?LIR.LocalId,
         binder_reps: []?Plan.TypeRepId,
         lambda_arg_patterns: []const checked.CheckedPatternId,
@@ -17575,7 +16822,7 @@ const ProcBodyBuilder = struct {
         leave_scope,
         str_concat: struct { target: LIR.LocalId, lhs: LIR.LocalId, rhs: LIR.LocalId },
         missing_optional_slot: struct { target: LIR.LocalId, rep: Plan.TypeRepId },
-        record_ext_field: struct { field_local: LIR.LocalId, target_rep: Plan.TypeRepId, ext_local: LIR.LocalId, ext_rep: Plan.TypeRepId, field_view: ProcedureModuleView, label: @TypeOf(@as(checked.CheckedRecordExprField, undefined).label) },
+        record_ext_field: struct { field_local: LIR.LocalId, target_rep: Plan.TypeRepId, ext_local: LIR.LocalId, ext_rep: Plan.TypeRepId, field_view: Plan.ModuleView, label: @TypeOf(@as(checked.CheckedRecordExprField, undefined).label) },
         /// A call operand lowered into its local at the call's expected type.
         call_operand: struct {
             operand: Plan.CallOperand,
@@ -18704,7 +17951,8 @@ const ProcBodyBuilder = struct {
             return exprDone(try self.prependOptionalDescriptorMaterialization(target_desc_info.materialize, assign_tag));
         }
 
-        const payload = try self.dynamicTagPayloadLocal(payloads, args);
+        if (payloads.len != args.len) boxyLowerInvariant("dynamic tag payload local requested with invalid payload arity");
+        const payload = try self.dynamicTagPayloadLocalForChildren(payloads);
         const descriptor_fields = try self.parent.allocator.alloc(AggregateDescriptorField, args.len);
         defer self.parent.allocator.free(descriptor_fields);
         const field_locals = if (args.len == 1) null else try self.parent.allocator.alloc(LIR.LocalId, args.len);
@@ -18793,7 +18041,7 @@ const ProcBodyBuilder = struct {
         }
         const backing_ty = self.module.static_dispatch_plans.siteInstanceType(backing_id) orelse backing.ty;
         const backing_local = try self.addFrameLocalForType(backing_ty);
-        const assign = try self.assignRepresentationBoundaryConsumingSource(target, backing_local, nominal_rep, self.repForType(backing_ty), described);
+        const assign = try self.assignRepresentationBoundaryWithSourceMode(target, backing_local, nominal_rep, self.repForType(backing_ty), .move, described);
         return .{ .tail = .{ .expr = .{ .target = backing_local, .expr_id = backing_id, .next = assign } } };
     }
 
@@ -19146,21 +18394,21 @@ const ProcBodyBuilder = struct {
         @memset(unset_matched, false);
 
         var layout_index: usize = 0;
-        const rep_field_view = procedureModuleById(self.parent.modules, rep.source_type.module);
+        const rep_field_view = Plan.moduleViewForKey(self.parent.modules, rep.source_type.module);
         // Supplied and unset labels, so each representation field finds its
         // source in constant time. They match as `Plan.recordFieldNameMatches`
         // does: by id within the expression's module, by text across modules.
         var expr_field_positions = RecordLabelPositions.init(checked_moduleKeyEqual(self.module.key, rep_field_view.key));
         defer expr_field_positions.deinit(self.parent.allocator);
         for (expr_fields, 0..) |field, index| {
-            if (try expr_field_positions.put(self.parent.allocator, self.module.canonical_names, field.label, index)) {
+            if (try expr_field_positions.put(self.parent.allocator, self.module.canonical_names.?, field.label, index)) {
                 boxyLowerInvariant("record expression contained the same field label more than once");
             }
         }
         var unset_positions = RecordLabelPositions.init(expr_field_positions.same_module);
         defer unset_positions.deinit(self.parent.allocator);
         for (unset_fields, 0..) |unset_label, index| {
-            if (try unset_positions.put(self.parent.allocator, self.module.canonical_names, unset_label, index)) {
+            if (try unset_positions.put(self.parent.allocator, self.module.canonical_names.?, unset_label, index)) {
                 boxyLowerInvariant("record expression contained the same unset field label more than once");
             }
         }
@@ -19172,7 +18420,7 @@ const ProcBodyBuilder = struct {
                         self.parent.result.store.getLocal(target).layout_idx,
                         layout_index,
                     );
-                    if (expr_field_positions.get(rep_field_view.canonical_names, label)) |source_index| {
+                    if (expr_field_positions.get(rep_field_view.canonical_names.?, label)) |source_index| {
                         const local = try self.addFrameLocal(field_layout);
                         field_locals[layout_index] = local;
                         const expr = self.module.checked_bodies.expr(expr_fields[source_index].value);
@@ -19191,7 +18439,7 @@ const ProcBodyBuilder = struct {
                         source_field_target_reps[source_index] = child.rep;
                         source_field_kinds[source_index] = child.record_field_kind.tag;
                         field_sources[layout_index] = .expr;
-                    } else if (unset_positions.get(rep_field_view.canonical_names, label)) |unset_index| {
+                    } else if (unset_positions.get(rep_field_view.canonical_names.?, label)) |unset_index| {
                         // An UNSET field (`label: _`) constructs the slot's
                         // Missing tag even under an update—never copied from
                         // the extension (design.md "In Progress: Unsetting an
@@ -19341,7 +18589,7 @@ const ProcBodyBuilder = struct {
         target_rep: Plan.TypeRepId,
         ext_local: LIR.LocalId,
         ext_rep: Plan.TypeRepId,
-        field_view: ProcedureModuleView,
+        field_view: Plan.ModuleView,
         label: @TypeOf(@as(checked.CheckedRecordExprField, undefined).label),
         continuation: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
@@ -19374,7 +18622,7 @@ const ProcBodyBuilder = struct {
     /// owning the defaulted record field.
     fn beginDefaultedRecordField(
         self: *ProcBodyBuilder,
-        field_module: ProcedureModuleView,
+        field_module: Plan.ModuleView,
         target: LIR.LocalId,
         default: checked.CheckedFieldDefault,
         field_type: Plan.CheckedTypeIdentity,
@@ -19385,8 +18633,8 @@ const ProcBodyBuilder = struct {
         // into the omitted field's slot—no archived constant, no root.
         const origin = default.origin() orelse
             boxyLowerInvariant("defaulted record field carried no declaring module identity");
-        const origin_hash = field_module.canonical_names.moduleIdentityBytes(origin);
-        const declaring_module = self.moduleForIdentityHash(origin_hash) orelse
+        const origin_hash = field_module.canonical_names.?.moduleIdentityBytes(origin);
+        const declaring_module = moduleViewForIdentity(self.parent.modules, origin_hash) orelse
             boxyLowerInvariant("defaulted record field's declaring module was absent from boxy lowering");
         const default_expr = declaring_module.checked_bodies.defaultExpr(default.expr_node) orelse
             boxyLowerInvariant("defaulted record field's expression was not archived");
@@ -19394,7 +18642,7 @@ const ProcBodyBuilder = struct {
         const expr_rep = self.repForModuleType(declaring_module, default_ty);
         const field_rep = self.repForTypeRef(field_type);
         const value_local = try self.addFrameLocalForRep(expr_rep);
-        const assign = try self.assignRepresentationBoundaryConsumingSource(target, value_local, field_rep, expr_rep, next);
+        const assign = try self.assignRepresentationBoundaryWithSourceMode(target, value_local, field_rep, expr_rep, .move, next);
         return .{ .tail = .{ .module_expr = .{ .expr_module = declaring_module, .target = value_local, .expr_id = default_expr, .next = assign } } };
     }
 
@@ -19543,7 +18791,7 @@ const ProcBodyBuilder = struct {
 
     /// The closure a local declaration binds, when it binds one.
     fn declaredClosureExpr(self: *ProcBodyBuilder, expr_id: checked.CheckedExprId) ?checked.CheckedExprId {
-        const site = nestedCallableSiteExprForExpr(self.module, expr_id) orelse return null;
+        const site = Plan.nestedCallableSiteExprFor(self.module, expr_id) orelse return null;
         if (self.module.checked_bodies.expr(site).data != .closure) return null;
         return site;
     }
@@ -20436,8 +19684,8 @@ const ProcBodyBuilder = struct {
                     .join_id = undefined,
                 };
                 task.state = state;
-                try self.reserveMatchPatternBindings(task.for_.pattern);
-                try self.reserveMatchPatternDescriptors(task.for_.pattern, &.{});
+                try self.walkPatternBinders(task.for_.pattern, .match);
+                try self.walkPatternBinders(task.for_.pattern, .{ .match_descriptors = &.{} });
 
                 const iter_call_plan = self.parent.plan.iteratorCallPlanFor(self.module.key, plan_id, .iter, self.worker_layout.worker);
                 const next_call_plan = self.parent.plan.iteratorCallPlanFor(self.module.key, plan_id, .next, self.worker_layout.worker);
@@ -20559,21 +19807,21 @@ const ProcBodyBuilder = struct {
                 const skip_match = try self.parent.result.store.addCFStmt(.{ .boxy_tag_match = .{
                     .source = step_local,
                     .source_desc = source_desc,
-                    .tag_name = try self.parent.result.store.insertBoxyName(step.module.canonical_names.tagLabelText(step.skip_tag)),
+                    .tag_name = try self.parent.result.store.insertBoxyName(step.module.canonical_names.?.tagLabelText(step.skip_tag)),
                     .on_match = skip_body,
                     .on_miss = impossible,
                 } }, self.glueOrigin());
                 const one_match = try self.parent.result.store.addCFStmt(.{ .boxy_tag_match = .{
                     .source = step_local,
                     .source_desc = source_desc,
-                    .tag_name = try self.parent.result.store.insertBoxyName(step.module.canonical_names.tagLabelText(step.one_tag)),
+                    .tag_name = try self.parent.result.store.insertBoxyName(step.module.canonical_names.?.tagLabelText(step.one_tag)),
                     .on_match = one_body,
                     .on_miss = skip_match,
                 } }, self.glueOrigin());
                 const done_match = try self.parent.result.store.addCFStmt(.{ .boxy_tag_match = .{
                     .source = step_local,
                     .source_desc = source_desc,
-                    .tag_name = try self.parent.result.store.insertBoxyName(step.module.canonical_names.tagLabelText(step.done_tag)),
+                    .tag_name = try self.parent.result.store.insertBoxyName(step.module.canonical_names.?.tagLabelText(step.done_tag)),
                     .on_match = task.done_body,
                     .on_miss = one_match,
                 } }, self.glueOrigin());
@@ -21086,13 +20334,13 @@ const ProcBodyBuilder = struct {
             return try self.loweredExprsChain(args, lowered, hint);
         }
 
-        switch (op) {
+        switch (boxyLowLevelKind(op)) {
             .box_box,
             .box_unbox,
             => return try self.beginBoxBoundaryLowLevel(target, result_ty, op, args, next),
             .box_unbox_borrowed => boxyLowerInvariant("ARC-only Box.unbox variant reached boxy lowering"),
             .list_map_can_reuse => return try self.beginListMapCanReuse(target, args, next),
-            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_prefetch, .list_prefetched, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_sort_with, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_map_prepare_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => {},
+            .other => {},
         }
         try self.markLocalDescriptorForType(target, result_ty);
 
@@ -21177,7 +20425,7 @@ const ProcBodyBuilder = struct {
                 } }, self.origin);
                 // A boxed callable is stored as the callable itself, so the
                 // boundary wraps the callable in an adapter for its ABI result.
-                continuation = try self.assignRepresentationBoundaryConsumingSource(abi_comparator, lowered[1], abi_rep, comparator_rep, continuation);
+                continuation = try self.assignRepresentationBoundaryWithSourceMode(abi_comparator, lowered[1], abi_rep, comparator_rep, .move, continuation);
                 return try self.loweredExprsChain(args, lowered, continuation);
             }
         }
@@ -21336,7 +20584,7 @@ const ProcBodyBuilder = struct {
             .checked_error, .@"unreachable" => return try self.beginCrashingDispatch(dispatch),
             .direct_closed, .direct_parametric, .direct_pending, .evidence_dependent, .structural => {},
         }
-        const callable = checkedFunctionPayload(self.module, dispatch.callable_ty);
+        const callable = Plan.checkedFunctionPayload(self.module, dispatch.callable_ty);
         const try_rep = self.repForType(callable.ret);
         const try_value = try self.addFrameLocalForRepWithFreshDescriptor(try_rep);
         const unwrap = try self.lowerLiteralConversionResultInto(
@@ -21360,7 +20608,7 @@ const ProcBodyBuilder = struct {
         interpolation: checked.CheckedInterpolation,
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
-        const assembler_fn = checkedFunctionPayload(self.module, interpolation.assembler_ty);
+        const assembler_fn = Plan.checkedFunctionPayload(self.module, interpolation.assembler_ty);
         if (assembler_fn.args.len != 1) boxyLowerInvariant("interpolation assembler did not take exactly the values list");
         const assembler_rep = self.repForType(interpolation.assembler_ty);
         const assembler = try self.addFrameLocalForRepWithFreshDescriptor(assembler_rep);
@@ -21871,8 +21119,8 @@ const ProcBodyBuilder = struct {
         for (self.parent.plan.generated_codec_calls.items) |*call| {
             if (call.caller != caller or !planTypeRefEql(call.dispatch_type, dispatch_type)) continue;
             if (!optionalPlanTypeRefEql(call.subject_type, subject_type)) continue;
-            const method_module = procedureModuleById(self.parent.modules, call.method_module);
-            if (std.mem.eql(u8, method_module.canonical_names.methodNameText(call.method), method_text)) return call.*;
+            const method_module = Plan.moduleViewForKey(self.parent.modules, call.method_module);
+            if (std.mem.eql(u8, method_module.canonical_names.?.methodNameText(call.method), method_text)) return call.*;
         }
         return null;
     }
@@ -21902,8 +21150,8 @@ const ProcBodyBuilder = struct {
         var found: ?Plan.GeneratedCodecCallPlan = null;
         for (self.parent.plan.generated_codec_calls.items) |*call| {
             if (call.caller != caller or !planTypeRefEql(call.dispatch_type, dispatch_type)) continue;
-            const method_module = procedureModuleById(self.parent.modules, call.method_module);
-            if (!std.mem.eql(u8, method_module.canonical_names.methodNameText(call.method), method_text)) continue;
+            const method_module = Plan.moduleViewForKey(self.parent.modules, call.method_module);
+            if (!std.mem.eql(u8, method_module.canonical_names.?.methodNameText(call.method), method_text)) continue;
             if (found != null) boxyLowerInvariant("generated codec body referenced an ambiguously planned method call");
             found = call.*;
         }
@@ -22145,7 +21393,7 @@ const ProcBodyBuilder = struct {
         record_type: Plan.CheckedTypeIdentity,
         field_text: []const u8,
     ) Allocator.Error!Plan.CheckedTypeIdentity {
-        const view = procedureModuleById(self.parent.modules, record_type.module);
+        const view = Plan.moduleViewForKey(self.parent.modules, record_type.module);
         const field = checkedRecordFieldByName(view, record_type.ty, field_text);
         return .{ .module = record_type.module, .ty = field.ty };
     }
@@ -22159,12 +21407,12 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("generated record field lookup did not receive a record representation");
         while (true) {
             const rep = self.parent.plan.representations.items[@backingInt(current)];
-            const view = procedureModuleById(self.parent.modules, rep.source_type.module);
+            const view = Plan.moduleViewForKey(self.parent.modules, rep.source_type.module);
             var extension: ?Plan.TypeRepId = null;
             for (self.parent.plan.childSlice(rep.children)) |child| {
                 switch (child.role) {
                     .record_field => |name| {
-                        if (std.mem.eql(u8, view.canonical_names.recordFieldLabelText(name), field_text)) return child;
+                        if (std.mem.eql(u8, view.canonical_names.?.recordFieldLabelText(name), field_text)) return child;
                     },
                     .record_ext => {
                         if (extension != null) boxyLowerInvariant("generated record field lookup found duplicate row extensions");
@@ -22263,7 +21511,7 @@ const ProcBodyBuilder = struct {
         field_text: []const u8,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const view = procedureModuleById(self.parent.modules, source_child.source_type.module);
+        const view = Plan.moduleViewForKey(self.parent.modules, source_child.source_type.module);
         const field = checkedRecordFieldByName(view, source_child.source_type.ty, field_text);
         return try self.lowerRecordFieldFromLocalInto(
             target,
@@ -22503,7 +21751,7 @@ const ProcBodyBuilder = struct {
         const record_rep = self.recordRepForBoundary(target_rep) orelse
             boxyLowerInvariant("generated parser result payload was not a record");
         const rep = self.parent.plan.representations.items[@backingInt(record_rep)];
-        const view = procedureModuleById(self.parent.modules, rep.source_type.module);
+        const view = Plan.moduleViewForKey(self.parent.modules, rep.source_type.module);
         const payload_layout = switch (self.workerRuntimeLayoutForRep(target_rep)) {
             .concrete => self.parent.result.store.getLocal(target).layout_idx,
             .dynamic_box => self.parent.layout_plan.rep_layouts[@backingInt(record_rep)].descriptor_payload_layout orelse
@@ -22532,7 +21780,7 @@ const ProcBodyBuilder = struct {
                 .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("generated parser result record had a non-record child"),
             };
             if (count >= fields.len) boxyLowerInvariant("generated parser result record had too many fields");
-            const text = view.canonical_names.recordFieldLabelText(label);
+            const text = view.canonical_names.?.recordFieldLabelText(label);
             if (std.mem.eql(u8, text, first_name)) {
                 sources[count] = first;
                 source_reps[count] = first_rep;
@@ -22603,7 +21851,7 @@ const ProcBodyBuilder = struct {
         const record_rep = self.recordRepForBoundary(target_rep) orelse
             boxyLowerInvariant("generated one-field value was not a record");
         const rep = self.parent.plan.representations.items[@backingInt(record_rep)];
-        const view = procedureModuleById(self.parent.modules, rep.source_type.module);
+        const view = Plan.moduleViewForKey(self.parent.modules, rep.source_type.module);
         const payload_layout = switch (self.workerRuntimeLayoutForRep(target_rep)) {
             .concrete => self.parent.result.store.getLocal(target).layout_idx,
             .dynamic_box => self.parent.layout_plan.rep_layouts[@backingInt(record_rep)].descriptor_payload_layout orelse
@@ -22627,7 +21875,7 @@ const ProcBodyBuilder = struct {
                 },
                 .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("generated one-field record had a non-record child"),
             };
-            if (!std.mem.eql(u8, view.canonical_names.recordFieldLabelText(label), field_name)) {
+            if (!std.mem.eql(u8, view.canonical_names.?.recordFieldLabelText(label), field_name)) {
                 boxyLowerInvariant("generated one-field record had an unexpected field");
             }
             if (target_child != null) boxyLowerInvariant("generated one-field record had too many fields");
@@ -22730,8 +21978,8 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("checked const lookup expression type disagreed with target layout");
         }
 
-        const store_module = procedureModuleByKey(self.parent.modules, checked.constModuleId(const_use.const_ref));
-        const template = store_module.const_templates.get(const_use.const_ref);
+        const store_module = Plan.moduleViewForKey(self.parent.modules, checked.constModuleId(const_use.const_ref));
+        const template = store_module.const_templates.?.get(const_use.const_ref);
         switch (template.state) {
             .reserved => boxyLowerInvariant("reserved checked const template reached runtime boxy lowering"),
             .eval_template => |eval| return exprDone(try self.lowerConstEvalTemplateUseInto(target, checked_ty, requested_ty, eval, next)),
@@ -22759,7 +22007,7 @@ const ProcBodyBuilder = struct {
     fn restoreStoredConstNodeAcrossBoundary(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
-        store_module: ProcedureModuleView,
+        store_module: Plan.ModuleView,
         node: checked.ConstNodeId,
         stored_type: check.ConstStore.ConstTypeId,
         target_rep: Plan.TypeRepId,
@@ -22774,7 +22022,7 @@ const ProcBodyBuilder = struct {
     fn beginRestoreStoredConstNodeAcrossBoundary(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
-        store_module: ProcedureModuleView,
+        store_module: Plan.ModuleView,
         node: checked.ConstNodeId,
         stored_type: check.ConstStore.ConstTypeId,
         target_rep: Plan.TypeRepId,
@@ -22796,25 +22044,25 @@ const ProcBodyBuilder = struct {
     fn beginRestoreConstNode(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
-        store_module: ProcedureModuleView,
-        type_module: ProcedureModuleView,
+        store_module: Plan.ModuleView,
+        type_module: Plan.ModuleView,
         node: checked.ConstNodeId,
         checked_ty: checked.CheckedTypeId,
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
-        if (@backingInt(node) >= store_module.const_store.values.items.len) {
+        if (@backingInt(node) >= store_module.const_store.?.values.items.len) {
             boxyLowerInvariant("ConstStore node id was outside the store");
         }
-        return switch (store_module.const_store.get(node)) {
+        return switch (store_module.const_store.?.get(node)) {
             .pending => boxyLowerInvariant("pending ConstStore node reached runtime boxy lowering"),
             .zst => exprDone(try self.assignZst(target, next)),
             .scalar => |scalar| exprDone(try self.assignConstScalar(target, scalar, next)),
-            .str => |str| exprDone(try self.assignStringBytesView(target, store_module.const_store.blobData(str.data), str.offset, str.len, next)),
+            .str => |str| exprDone(try self.assignStringBytesView(target, store_module.const_store.?.blobData(str.data), str.offset, str.len, next)),
             .crash => |str| exprDone(try self.parent.result.store.addCFStmt(.{ .crash = .{
-                .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.strBytes(str)) },
+                .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.?.strBytes(str)) },
             } }, self.scaffoldOrigin())),
             .checked_error => |str| exprDone(try self.parent.result.store.addCFStmt(.{ .crash = .{
-                .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.strBytes(str)) },
+                .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.?.strBytes(str)) },
                 .checked_error = true,
             } }, self.scaffoldOrigin())),
             .list => |items| try self.beginRestoreConstList(target, store_module, type_module, items, checked_ty, next),
@@ -22837,30 +22085,30 @@ const ProcBodyBuilder = struct {
     fn beginRestoreStoredConstNode(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
-        store_module: ProcedureModuleView,
+        store_module: Plan.ModuleView,
         node: checked.ConstNodeId,
         stored_type: check.ConstStore.ConstTypeId,
         rep_id: Plan.TypeRepId,
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
-        if (@backingInt(node) >= store_module.const_store.values.items.len) {
+        if (@backingInt(node) >= store_module.const_store.?.values.items.len) {
             boxyLowerInvariant("ConstStore node id was outside the store");
         }
         // A crash or checked-error node is the value of a root whose
         // evaluation stopped. It has no shape to unwrap at any
         // representation, so it restores as that crash before the
         // representation is consulted.
-        switch (store_module.const_store.get(node)) {
+        switch (store_module.const_store.?.get(node)) {
             .crash => |str| return exprDone(try self.parent.result.store.addCFStmt(.{ .crash = .{
-                .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.strBytes(str)) },
+                .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.?.strBytes(str)) },
             } }, self.scaffoldOrigin())),
             .checked_error => |str| return exprDone(try self.parent.result.store.addCFStmt(.{ .crash = .{
-                .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.strBytes(str)) },
+                .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.?.strBytes(str)) },
                 .checked_error = true,
             } }, self.scaffoldOrigin())),
             .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .nominal, .fn_value => {},
         }
-        const stored_type_value = store_module.const_store.type_store.get(stored_type);
+        const stored_type_value = store_module.const_store.?.type_store.get(stored_type);
         const rep = self.parent.plan.representations.items[@backingInt(rep_id)];
         switch (rep.kind) {
             .alias => {
@@ -22882,7 +22130,7 @@ const ProcBodyBuilder = struct {
                     const backing_type = (named.backing orelse
                         boxyLowerInvariant("stored nominal type had no backing")).ty;
                     const backing_rep = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
-                    const backing_node = switch (store_module.const_store.get(node)) {
+                    const backing_node = switch (store_module.const_store.?.get(node)) {
                         .nominal => |nominal| nominal.backing,
                         .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .fn_value => node,
                         .crash, .checked_error => unreachable,
@@ -22903,7 +22151,7 @@ const ProcBodyBuilder = struct {
             // nodes that wrap the stored tag.
             .bool_tag_union => {
                 var bool_node = node;
-                while (true) switch (store_module.const_store.get(bool_node)) {
+                while (true) switch (store_module.const_store.?.get(bool_node)) {
                     .nominal => |nominal| bool_node = nominal.backing,
                     .tag => |tag| return exprDone(try self.restoreConstBoolTagInto(target, tag, next)),
                     .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .fn_value => boxyLowerInvariant("stored Bool constant was not a tag"),
@@ -22913,16 +22161,16 @@ const ProcBodyBuilder = struct {
             .in_progress, .dynamic, .primitive, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => {},
         }
 
-        return switch (store_module.const_store.get(node)) {
+        return switch (store_module.const_store.?.get(node)) {
             .pending => boxyLowerInvariant("pending ConstStore node reached runtime boxy lowering"),
             .zst => exprDone(try self.assignZst(target, next)),
             .scalar => |scalar| exprDone(try self.assignConstScalar(target, scalar, next)),
-            .str => |str| exprDone(try self.assignStringBytesView(target, store_module.const_store.blobData(str.data), str.offset, str.len, next)),
+            .str => |str| exprDone(try self.assignStringBytesView(target, store_module.const_store.?.blobData(str.data), str.offset, str.len, next)),
             .crash => |str| exprDone(try self.parent.result.store.addCFStmt(.{ .crash = .{
-                .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.strBytes(str)) },
+                .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.?.strBytes(str)) },
             } }, self.scaffoldOrigin())),
             .checked_error => |str| exprDone(try self.parent.result.store.addCFStmt(.{ .crash = .{
-                .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.strBytes(str)) },
+                .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.?.strBytes(str)) },
                 .checked_error = true,
             } }, self.scaffoldOrigin())),
             .list => |items| try self.beginRestoreStoredConstList(target, store_module, items, stored_type, rep_id, next),
@@ -22934,24 +22182,24 @@ const ProcBodyBuilder = struct {
         };
     }
 
-    fn storedNodeItem(target: LIR.LocalId, store_module: ProcedureModuleView, node: checked.ConstNodeId, stored_type: check.ConstStore.ConstTypeId, rep_id: Plan.TypeRepId) ExprChainItem {
+    fn storedNodeItem(target: LIR.LocalId, store_module: Plan.ModuleView, node: checked.ConstNodeId, stored_type: check.ConstStore.ConstTypeId, rep_id: Plan.TypeRepId) ExprChainItem {
         return .{ .lower = .{ .stored_node = .{ .target = target, .store_module = store_module, .node = node, .stored_type = stored_type, .rep_id = rep_id, .next = undefined } } };
     }
 
-    fn constNodeItem(target: LIR.LocalId, store_module: ProcedureModuleView, type_module: ProcedureModuleView, node: checked.ConstNodeId, checked_ty: checked.CheckedTypeId) ExprChainItem {
+    fn constNodeItem(target: LIR.LocalId, store_module: Plan.ModuleView, type_module: Plan.ModuleView, node: checked.ConstNodeId, checked_ty: checked.CheckedTypeId) ExprChainItem {
         return .{ .lower = .{ .const_node = .{ .target = target, .store_module = store_module, .type_module = type_module, .node = node, .checked_ty = checked_ty, .next = undefined } } };
     }
 
     fn beginRestoreStoredConstList(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
-        store_module: ProcedureModuleView,
+        store_module: Plan.ModuleView,
         list: checked.ConstList,
         stored_type: check.ConstStore.ConstTypeId,
         rep_id: Plan.TypeRepId,
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
-        const elem_type = switch (store_module.const_store.type_store.get(stored_type)) {
+        const elem_type = switch (store_module.const_store.?.type_store.get(stored_type)) {
             .list => |elem| elem,
             .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => boxyLowerInvariant("stored list node had a non-list stored type"),
         };
@@ -22984,13 +22232,13 @@ const ProcBodyBuilder = struct {
     fn beginRestoreStoredConstBox(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
-        store_module: ProcedureModuleView,
+        store_module: Plan.ModuleView,
         payload: checked.ConstNodeId,
         stored_type: check.ConstStore.ConstTypeId,
         rep_id: Plan.TypeRepId,
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
-        const payload_type = switch (store_module.const_store.type_store.get(stored_type)) {
+        const payload_type = switch (store_module.const_store.?.type_store.get(stored_type)) {
             .box => |elem| elem,
             .primitive, .named, .record, .tuple, .tag_union, .list, .func, .erased, .zst => boxyLowerInvariant("stored box node had a non-box stored type"),
         };
@@ -23003,7 +22251,7 @@ const ProcBodyBuilder = struct {
     fn beginRestoreStoredConstAggregate(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
-        store_module: ProcedureModuleView,
+        store_module: Plan.ModuleView,
         items: []const checked.ConstNodeId,
         stored_type: check.ConstStore.ConstTypeId,
         rep_id: Plan.TypeRepId,
@@ -23026,9 +22274,9 @@ const ProcBodyBuilder = struct {
         const chain_items = try self.parent.allocator.alloc(ExprChainItem, items.len);
         for (chain_items, 0..) |*item, offset| {
             const index = items.len - 1 - offset;
-            const child_type = switch (store_module.const_store.type_store.get(stored_type)) {
-                .tuple => |stored_types| store_module.const_store.type_store.typeSpan(stored_types)[index],
-                .record => |fields| store_module.const_store.type_store.fieldSpan(fields)[index].ty,
+            const child_type = switch (store_module.const_store.?.type_store.get(stored_type)) {
+                .tuple => |stored_types| store_module.const_store.?.type_store.typeSpan(stored_types)[index],
+                .record => |fields| store_module.const_store.?.type_store.fieldSpan(fields)[index].ty,
                 .primitive, .named, .tag_union, .list, .box, .func, .erased, .zst => boxyLowerInvariant("stored aggregate node had a non-aggregate stored type"),
             };
             item.* = storedNodeItem(locals[index], store_module, items[index], child_type, children[index].rep);
@@ -23039,7 +22287,7 @@ const ProcBodyBuilder = struct {
     fn beginRestoreStoredConstTag(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
-        store_module: ProcedureModuleView,
+        store_module: Plan.ModuleView,
         tag: ConstTag,
         stored_type: check.ConstStore.ConstTypeId,
         rep_id: Plan.TypeRepId,
@@ -23050,7 +22298,7 @@ const ProcBodyBuilder = struct {
         if (rep.kind != .tag_union) {
             boxyLowerInvariant("stored tag node had a non-tag-union exact representation");
         }
-        const names_store = store_module.canonical_names;
+        const names_store = store_module.canonical_names.?;
         var variant: ?struct { plan: Plan.TagVariant, index: u32 } = null;
         for (self.parent.plan.tagVariantSlice(rep.tag_variants), 0..) |candidate, index| {
             if (std.mem.eql(u8, tag.tag_name, names_store.tagLabelText(candidate.name))) {
@@ -23064,14 +22312,14 @@ const ProcBodyBuilder = struct {
         if (payload_children.len != tag.payloads.len) {
             boxyLowerInvariant("stored tag payload count disagreed with its exact representation");
         }
-        const stored_tags = switch (store_module.const_store.type_store.get(stored_type)) {
-            .tag_union => |tags| store_module.const_store.type_store.tagSpan(tags),
+        const stored_tags = switch (store_module.const_store.?.type_store.get(stored_type)) {
+            .tag_union => |tags| store_module.const_store.?.type_store.tagSpan(tags),
             .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => boxyLowerInvariant("stored tag node had a non-tag-union stored type"),
         };
         var payload_types: ?[]const check.ConstStore.ConstTypeId = null;
         for (stored_tags) |stored_tag| {
             if (std.mem.eql(u8, tag.tag_name, names_store.tagLabelText(stored_tag.checked_name))) {
-                payload_types = store_module.const_store.type_store.typeSpan(stored_tag.payloads);
+                payload_types = store_module.const_store.?.type_store.typeSpan(stored_tag.payloads);
                 break;
             }
         }
@@ -23124,7 +22372,7 @@ const ProcBodyBuilder = struct {
     fn beginRestoreStoredConstIntoStorageRep(
         self: *ProcBodyBuilder,
         storage_local: LIR.LocalId,
-        store_module: ProcedureModuleView,
+        store_module: Plan.ModuleView,
         node: checked.ConstNodeId,
         stored_type: check.ConstStore.ConstTypeId,
         value_rep: Plan.TypeRepId,
@@ -23143,8 +22391,8 @@ const ProcBodyBuilder = struct {
     fn beginRestoreConstList(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
-        store_module: ProcedureModuleView,
-        type_module: ProcedureModuleView,
+        store_module: Plan.ModuleView,
+        type_module: Plan.ModuleView,
         list: checked.ConstList,
         checked_ty: checked.CheckedTypeId,
         next: LIR.CFStmtId,
@@ -23206,8 +22454,8 @@ const ProcBodyBuilder = struct {
     fn beginRestoreConstBox(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
-        store_module: ProcedureModuleView,
-        type_module: ProcedureModuleView,
+        store_module: Plan.ModuleView,
+        type_module: Plan.ModuleView,
         payload: checked.ConstNodeId,
         checked_ty: checked.CheckedTypeId,
         next: LIR.CFStmtId,
@@ -23227,8 +22475,8 @@ const ProcBodyBuilder = struct {
     fn beginRestoreConstTuple(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
-        store_module: ProcedureModuleView,
-        type_module: ProcedureModuleView,
+        store_module: Plan.ModuleView,
+        type_module: Plan.ModuleView,
         items: []const checked.ConstNodeId,
         checked_ty: checked.CheckedTypeId,
         next: LIR.CFStmtId,
@@ -23259,8 +22507,8 @@ const ProcBodyBuilder = struct {
     fn beginRestoreConstRecord(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
-        store_module: ProcedureModuleView,
-        type_module: ProcedureModuleView,
+        store_module: Plan.ModuleView,
+        type_module: Plan.ModuleView,
         items: []const checked.ConstNodeId,
         checked_ty: checked.CheckedTypeId,
         next: LIR.CFStmtId,
@@ -23398,14 +22646,14 @@ const ProcBodyBuilder = struct {
     fn beginRestoreConstOptionalSlot(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
-        store_module: ProcedureModuleView,
-        type_module: ProcedureModuleView,
+        store_module: Plan.ModuleView,
+        type_module: Plan.ModuleView,
         node: checked.ConstNodeId,
         payload_ty: checked.CheckedTypeId,
         slot_rep: Plan.TypeRepId,
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
-        const stored = store_module.const_store.get(node);
+        const stored = store_module.const_store.?.get(node);
         if (stored != .tag) boxyLowerInvariant("stored optional field did not carry its presence tag");
         const slot = self.parent.plan.representations.items[@backingInt(slot_rep)];
         const present = slot.presence_slot_present_discriminant orelse
@@ -23426,8 +22674,8 @@ const ProcBodyBuilder = struct {
     fn beginRestoreConstTag(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
-        store_module: ProcedureModuleView,
-        type_module: ProcedureModuleView,
+        store_module: Plan.ModuleView,
+        type_module: Plan.ModuleView,
         tag: ConstTag,
         checked_ty: checked.CheckedTypeId,
         next: LIR.CFStmtId,
@@ -23469,7 +22717,7 @@ const ProcBodyBuilder = struct {
         };
     }
 
-    fn constStorageItem(storage_local: LIR.LocalId, store_module: ProcedureModuleView, type_module: ProcedureModuleView, node: checked.ConstNodeId, value_ty: checked.CheckedTypeId, storage_rep: Plan.TypeRepId) ExprChainItem {
+    fn constStorageItem(storage_local: LIR.LocalId, store_module: Plan.ModuleView, type_module: Plan.ModuleView, node: checked.ConstNodeId, value_ty: checked.CheckedTypeId, storage_rep: Plan.TypeRepId) ExprChainItem {
         return .{ .lower = .{ .const_storage = .{
             .storage_local = storage_local,
             .store_module = store_module,
@@ -23489,8 +22737,8 @@ const ProcBodyBuilder = struct {
     fn beginRestoreConstDynamicTag(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
-        store_module: ProcedureModuleView,
-        type_module: ProcedureModuleView,
+        store_module: Plan.ModuleView,
+        type_module: Plan.ModuleView,
         rep_id: Plan.TypeRepId,
         tag: ConstTag,
         checked_ty: checked.CheckedTypeId,
@@ -23562,8 +22810,8 @@ const ProcBodyBuilder = struct {
     fn beginRestoreConstIntoStorageRep(
         self: *ProcBodyBuilder,
         storage_local: LIR.LocalId,
-        store_module: ProcedureModuleView,
-        type_module: ProcedureModuleView,
+        store_module: Plan.ModuleView,
+        type_module: Plan.ModuleView,
         node: checked.ConstNodeId,
         value_ty: checked.CheckedTypeId,
         storage_rep: Plan.TypeRepId,
@@ -23584,8 +22832,8 @@ const ProcBodyBuilder = struct {
     fn beginRestoreConstPlannedTagPayloads(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
-        store_module: ProcedureModuleView,
-        type_module: ProcedureModuleView,
+        store_module: Plan.ModuleView,
+        type_module: Plan.ModuleView,
         variant: TagVariantLookup,
         tag: ConstTag,
         payload_tys: []const checked.CheckedTypeId,
@@ -23667,8 +22915,8 @@ const ProcBodyBuilder = struct {
     fn beginRestoreConstNominal(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
-        store_module: ProcedureModuleView,
-        type_module: ProcedureModuleView,
+        store_module: Plan.ModuleView,
+        type_module: Plan.ModuleView,
         backing: checked.ConstNodeId,
         checked_ty: checked.CheckedTypeId,
         next: LIR.CFStmtId,
@@ -23694,7 +22942,7 @@ const ProcBodyBuilder = struct {
                 .next = next,
             } } },
         };
-        const backing_type_module = procedureModuleById(self.parent.modules, backing_child.source_type.module);
+        const backing_type_module = Plan.moduleViewForKey(self.parent.modules, backing_child.source_type.module);
         const backing_local = try self.addFrameLocalForRep(backing_child.rep);
         const assign = try self.assignRepresentationBoundary(
             target,
@@ -23726,7 +22974,7 @@ const ProcBodyBuilder = struct {
         eval: checked.ConstEvalTemplate,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const entry_view = procedureModuleByCheckedModuleId(self.parent.modules, eval.entry_template.artifact);
+        const entry_view = Plan.moduleViewForKey(self.parent.modules, .{ .bytes = eval.entry_template.artifact.bytes });
         const entry_template = entry_view.checked_procedure_templates.get(eval.entry_template.template);
         const fn_ty_ref = Plan.CheckedTypeIdentity{ .module = entry_view.key, .ty = entry_template.checked_fn_root };
         const worker_id = self.parent.plan.workerForSourceType(.{ .procedure_template = eval.entry_template }, fn_ty_ref) orelse
@@ -23755,7 +23003,7 @@ const ProcBodyBuilder = struct {
     fn beginRestoreStoredConstFnValue(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
-        store_module: ProcedureModuleView,
+        store_module: Plan.ModuleView,
         fn_id: checked.ConstFnId,
         requested_rep: Plan.TypeRepId,
         next: LIR.CFStmtId,
@@ -23786,7 +23034,7 @@ const ProcBodyBuilder = struct {
         );
     }
 
-    fn packedListLiteral(self: *ProcBodyBuilder, module: ProcedureModuleView, data: check.ConstStore.ConstPackedList, elem: layout.Idx) Allocator.Error!LIR.ListLiteral {
+    fn packedListLiteral(self: *ProcBodyBuilder, module: Plan.ModuleView, data: check.ConstStore.ConstPackedList, elem: layout.Idx) Allocator.Error!LIR.ListLiteral {
         const key = PackedLiteralKey{ .module = module.key.bytes, .data = data.bytes.data, .offset = data.bytes.offset, .byte_len = data.bytes.len, .len = data.len, .element = elem };
         if (self.parent.packed_literals.get(key)) |literal| return literal;
         const gpa = self.parent.allocator;
@@ -23797,7 +23045,7 @@ const ProcBodyBuilder = struct {
         }
         const plan = self.parent.packed_plans.getPtr(elem).?;
         if (plan.packed_width != data.byteWidth()) boxyLowerInvariant("packed constant width differed from producer representation");
-        const bytes = module.const_store.blobBytes(data.bytes);
+        const bytes = module.const_store.?.blobBytes(data.bytes);
         var converted: ?[]u8 = null;
         defer if (converted) |owned| gpa.free(owned);
         const target_bytes = if (plan.isIdentity()) bytes else blk: {
@@ -23817,7 +23065,7 @@ const ProcBodyBuilder = struct {
     fn restorePackedListInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
-        module: ProcedureModuleView,
+        module: Plan.ModuleView,
         data: check.ConstStore.ConstPackedList,
         list_rep: Plan.TypeRepId,
         source_rep: Plan.TypeRepId,
@@ -23875,8 +23123,8 @@ const ProcBodyBuilder = struct {
     fn beginRestoreConstFnValue(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
-        store_module: ProcedureModuleView,
-        type_module: ProcedureModuleView,
+        store_module: Plan.ModuleView,
+        type_module: Plan.ModuleView,
         fn_id: checked.ConstFnId,
         checked_ty: checked.CheckedTypeId,
         next: LIR.CFStmtId,
@@ -24525,7 +23773,7 @@ const ProcBodyBuilder = struct {
                         .source_rep = desc_source.rep,
                         .exact = if (hidden_desc_initializer) |initializer| if (initializer.materialize) |materialize| switch (materialize) {
                             .static => |id| if (initializer.captures.len == 0) id else null,
-                            .local, .runtime, .dict_method_arg, .dict_method_hidden => null,
+                            .local, .runtime, .dict_method_hidden => null,
                         } else null else null,
                     } },
                     .hidden_dict => .{ .dictionary = capture.dictionaries },
@@ -24615,7 +23863,7 @@ const ProcBodyBuilder = struct {
             item.* = switch (initializer.source) {
                 .const_node => |const_node| .{ .lower = .{ .stored_across = .{
                     .target = initializer.local,
-                    .store_module = procedureModuleById(self.parent.modules, const_node.store_module),
+                    .store_module = Plan.moduleViewForKey(self.parent.modules, const_node.store_module),
                     .node = const_node.node,
                     .stored_type = const_node.stored_type,
                     .target_rep = initializer.target_rep,
@@ -25152,7 +24400,7 @@ const ProcBodyBuilder = struct {
     ) []const checked.CheckedCapture {
         if (maybe_expr) |expr_id| return self.callableExprCaptures(expr_id);
         return switch (source) {
-            .nested_expr => |expr_ref| nestedCallableExprRuntimeCaptures(procedureModuleById(self.parent.modules, expr_ref.module), expr_ref.expr),
+            .nested_expr => |expr_ref| nestedCallableExprRuntimeCaptures(Plan.moduleViewForKey(self.parent.modules, expr_ref.module), expr_ref.expr),
             .procedure_template,
             .procedure_binding,
             .procedure_use,
@@ -25171,10 +24419,7 @@ const ProcBodyBuilder = struct {
     }
 
     fn directTargetIsLocalProc(self: *const ProcBodyBuilder, target: checked.ResolvedValueId) bool {
-        return switch (self.resolvedValueRecord(target).ref) {
-            .local_proc => true,
-            .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => false,
-        };
+        return self.resolvedValueRecord(target).ref == .local_proc;
     }
 
     fn lowerErasedCallLocalsInto(
@@ -25704,7 +24949,7 @@ const ProcBodyBuilder = struct {
         const required_method = self.parent.plan.dictionaries.items[@backingInt(match.requirement)].fn_name;
 
         const operands = self.parent.plan.callOperandSlice(planned.operands);
-        const callable = checkedFunctionPayload(self.module, dispatch.callable_ty);
+        const callable = Plan.checkedFunctionPayload(self.module, dispatch.callable_ty);
         if (operands.len != callable.args.len) {
             boxyLowerInvariant("planned dictionary operand arity disagreed with its checked callable type");
         }
@@ -25967,11 +25212,11 @@ const ProcBodyBuilder = struct {
         const rep = self.parent.plan.representations.items[@backingInt(identity_rep)];
         if (rep.dictionaries.len == 0) return null;
 
-        const dispatch_name = self.module.canonical_names.methodNameText(method);
+        const dispatch_name = self.module.canonical_names.?.methodNameText(method);
         const requirements = self.parent.plan.dictionarySlice(rep.dictionaries);
         for (requirements, 0..) |requirement, requirement_index| {
-            const requirement_module = procedureModuleById(self.parent.modules, requirement.source_type.module);
-            if (!std.mem.eql(u8, dispatch_name, requirement_module.canonical_names.methodNameText(requirement.fn_name))) continue;
+            const requirement_module = Plan.moduleViewForKey(self.parent.modules, requirement.source_type.module);
+            if (!std.mem.eql(u8, dispatch_name, requirement_module.canonical_names.?.methodNameText(requirement.fn_name))) continue;
             return .{
                 .requirement = @fromBackingInt(@intCast(rep.dictionaries.start + @as(u32, @intCast(requirement_index)))),
                 .slot = requirement.slot,
@@ -25985,7 +25230,7 @@ const ProcBodyBuilder = struct {
         method: names.MethodNameId,
         expected: []const u8,
     ) bool {
-        return std.mem.eql(u8, self.module.canonical_names.methodNameText(method), expected);
+        return std.mem.eql(u8, self.module.canonical_names.?.methodNameText(method), expected);
     }
 
     fn directCallOperandStorageRep(
@@ -26327,32 +25572,7 @@ const ProcBodyBuilder = struct {
         source_rep: Plan.TypeRepId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        return try self.assignPlannedCallBoundaryWithSourceMode(
-            target,
-            source,
-            target_rep,
-            source_rep,
-            .move,
-            next,
-        );
-    }
-
-    fn assignPlannedCallBoundaryCopyingSource(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        source: LIR.LocalId,
-        target_rep: Plan.TypeRepId,
-        source_rep: Plan.TypeRepId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        return try self.assignPlannedCallBoundaryWithSourceMode(
-            target,
-            source,
-            target_rep,
-            source_rep,
-            .copy,
-            next,
-        );
+        return try self.assignPlannedCallBoundaryWithSourceMode(target, source, target_rep, source_rep, .move, next);
     }
 
     fn assignPlannedCallBoundaryWithSourceMode(
@@ -26365,7 +25585,7 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         if (try self.plannedCallBoundaryLowersStructure(target, source, target_rep, source_rep)) {
-            return try self.assignRepresentationBoundaryConsumingSource(target, source, target_rep, source_rep, next);
+            return try self.assignRepresentationBoundaryWithSourceMode(target, source, target_rep, source_rep, .move, next);
         }
         return try self.assignRuntimeAdapterBoundary(target, source, target_rep, source_rep, source_mode, next);
     }
@@ -26570,7 +25790,7 @@ const ProcBodyBuilder = struct {
         const desc = info.desc orelse return null;
         const candidate: DescriptorMaterialization = switch (desc) {
             .static => DescriptorMaterialization{ .desc = desc },
-            .local, .runtime, .dict_method_arg, .dict_method_hidden => info.template orelse if (info.materialize) |materialize| materialized: {
+            .local, .runtime, .dict_method_hidden => info.template orelse if (info.materialize) |materialize| materialized: {
                 // Only a whole-descriptor materialization is this value's
                 // template. Nested, path, and tag-extension reads name the
                 // enclosing descriptor they read from.
@@ -26587,7 +25807,7 @@ const ProcBodyBuilder = struct {
         };
         return switch (candidate.desc) {
             .static => candidate,
-            .local, .runtime, .dict_method_arg, .dict_method_hidden => null,
+            .local, .runtime, .dict_method_hidden => null,
         };
     }
 
@@ -26679,7 +25899,7 @@ const ProcBodyBuilder = struct {
         const target_materialization = try self.descriptorMaterializationForExactRep(target_rep);
         const target_template_id = switch (target_materialization.desc) {
             .static => |desc_id| desc_id,
-            .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("boxy tuple adapter target descriptor template was not static"),
+            .local, .runtime, .dict_method_hidden => boxyLowerInvariant("boxy tuple adapter target descriptor template was not static"),
         };
         const target_template = self.parent.result.boxy_type_descs.items[@backingInt(target_template_id)];
 
@@ -26689,7 +25909,7 @@ const ProcBodyBuilder = struct {
         const source_template: ?LirProgram.BoxyTypeDesc = if (source_materialization) |materialization| blk: {
             const source_template_id = switch (materialization.desc) {
                 .static => |desc_id| desc_id,
-                .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("boxy tuple adapter source descriptor template was not static"),
+                .local, .runtime, .dict_method_hidden => boxyLowerInvariant("boxy tuple adapter source descriptor template was not static"),
             };
             break :blk self.parent.result.boxy_type_descs.items[@backingInt(source_template_id)];
         } else null;
@@ -27038,7 +26258,7 @@ const ProcBodyBuilder = struct {
                 result.desc orelse boxyLowerInvariant("recursive boxy adapter descriptor had no result");
             const template_id = switch (template_ref) {
                 .static => |desc_id| desc_id,
-                .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("recursive boxy adapter descriptor had no static template"),
+                .local, .runtime, .dict_method_hidden => boxyLowerInvariant("recursive boxy adapter descriptor had no static template"),
             };
             if (template_id == recursive_desc) {
                 boxyLowerInvariant("recursive boxy adapter descriptor resolved only to its unfinished reservation");
@@ -27224,7 +26444,7 @@ const ProcBodyBuilder = struct {
         const materialization = try self.descriptorMaterializationForExactRep(target_rep);
         const template_id = switch (materialization.desc) {
             .static => |desc_id| desc_id,
-            .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("boxy adapter descriptor template was not static"),
+            .local, .runtime, .dict_method_hidden => boxyLowerInvariant("boxy adapter descriptor template was not static"),
         };
         const template = self.parent.result.boxy_type_descs.items[@backingInt(template_id)];
 
@@ -27243,7 +26463,7 @@ const ProcBodyBuilder = struct {
         const source_template: LirProgram.BoxyTypeDesc = if (source_template_desc) |template_desc| blk: {
             const source_template_id = switch (template_desc) {
                 .static => |desc_id| desc_id,
-                .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("boxy call adapter source descriptor template was not static"),
+                .local, .runtime, .dict_method_hidden => boxyLowerInvariant("boxy call adapter source descriptor template was not static"),
             };
             break :blk self.parent.result.boxy_type_descs.items[@backingInt(source_template_id)];
         } else return .{ .finished = try self.adapterDescriptorFromMaterialization(
@@ -27547,7 +26767,7 @@ const ProcBodyBuilder = struct {
         const target_materialization = try self.descriptorMaterializationForExactRep(target_rep);
         const target_template_id = switch (target_materialization.desc) {
             .static => |desc_id| desc_id,
-            .local, .runtime, .dict_method_arg, .dict_method_hidden => switch (kind) {
+            .local, .runtime, .dict_method_hidden => switch (kind) {
                 .aggregate => boxyLowerInvariant("boxy declared aggregate adapter target descriptor template was not static"),
                 .record => boxyLowerInvariant("boxy record adapter target descriptor template was not static"),
             },
@@ -27562,7 +26782,7 @@ const ProcBodyBuilder = struct {
         const source_template: ?LirProgram.BoxyTypeDesc = if (source_materialization) |materialization| blk: {
             const source_template_id = switch (materialization.desc) {
                 .static => |desc_id| desc_id,
-                .local, .runtime, .dict_method_arg, .dict_method_hidden => switch (kind) {
+                .local, .runtime, .dict_method_hidden => switch (kind) {
                     .aggregate => boxyLowerInvariant("boxy declared aggregate adapter source descriptor template was not static"),
                     .record => boxyLowerInvariant("boxy record adapter source descriptor template was not static"),
                 },
@@ -27683,7 +26903,7 @@ const ProcBodyBuilder = struct {
                     }
                     const source_field = self.findRecordFieldByLabel(
                         state.source_aggregate_rep,
-                        procedureModuleById(self.parent.modules, target_child.source_type.module),
+                        Plan.moduleViewForKey(self.parent.modules, target_child.source_type.module),
                         target_label,
                     ) orelse {
                         switch (target_child.record_field_kind.tag) {
@@ -27840,7 +27060,7 @@ const ProcBodyBuilder = struct {
             known.desc orelse return known;
         const known_desc_id = switch (known_template_ref) {
             .static => |desc_id| desc_id,
-            .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("planned list adapter target descriptor template was not static"),
+            .local, .runtime, .dict_method_hidden => boxyLowerInvariant("planned list adapter target descriptor template was not static"),
         };
         const known_desc = self.parent.result.boxy_type_descs.items[@backingInt(known_desc_id)];
 
@@ -27866,7 +27086,7 @@ const ProcBodyBuilder = struct {
         const source_elem_desc_info: ResultDescriptorSource = if (source_template_ref) |template_ref| template_elem: {
             const source_desc_id = switch (template_ref) {
                 .static => |desc_id| desc_id,
-                .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("planned list adapter source descriptor template was not static"),
+                .local, .runtime, .dict_method_hidden => boxyLowerInvariant("planned list adapter source descriptor template was not static"),
             };
             const source_type_desc = self.parent.result.boxy_type_descs.items[@backingInt(source_desc_id)];
             if (source_type_desc.nested_descs.len != 1) {
@@ -27996,7 +27216,6 @@ const ProcBodyBuilder = struct {
                 adapter.operation == operation and
                 adapter.source_layout == source_layout and
                 adapter.target_layout == target_layout and
-                adapter.steps.len == 0 and
                 adapter.consumes_source == consumes_source and
                 adapter.produces_owned_result)
             {
@@ -28124,7 +27343,7 @@ const ProcBodyBuilder = struct {
                 .numeral_literal => |literal| {
                     if (literal.guard != null) return null;
                     const magnitude = exact_numeral.intMagnitude(
-                        self.module.module_env.exactNumeral(literal.literal),
+                        self.module.module_env.?.exactNumeral(literal.literal),
                     ) orelse return null;
                     if (magnitude == 0) {
                         return .{ .args = args, .zero_branch_body = branch.value };
@@ -28166,7 +27385,7 @@ const ProcBodyBuilder = struct {
                     .{ .module = self.module.key, .expr = cond },
                     self.worker_layout.worker,
                 ) orelse break :blk null;
-                const resolved = self.parent.resolved_workers.items[@backingInt(direct.worker)];
+                const resolved = resolveWorker(self.parent.modules, self.parent.plan, @backingInt(direct.worker));
                 if (!resolvedWorkerIsListMapCanReuseWrapper(resolved)) break :blk null;
                 break :blk call.args;
             },
@@ -28332,10 +27551,7 @@ const ProcBodyBuilder = struct {
                 task.outer_descriptors = try self.snapshotDescriptorBindings();
                 for (patterns) |branch_pattern| {
                     if (branch_pattern.degenerate) continue;
-                    try self.reserveMatchPatternDescriptors(
-                        branch_pattern.pattern,
-                        branch_pattern.binderRemapsSlice(self.module.checked_bodies),
-                    );
+                    try self.walkPatternBinders(branch_pattern.pattern, .{ .match_descriptors = branch_pattern.binderRemapsSlice(self.module.checked_bodies) });
                 }
                 const branch_done = try self.joinJump(task.done);
                 return .{ .child = .{ .expected = .{ .target = task.target, .expected_ty = task.result_ty, .expr_id = branch.value, .next = branch_done } } };
@@ -28503,39 +27719,6 @@ const ProcBodyBuilder = struct {
         self.parent.result.store.setLocalBoxyDesc(target, .{ .local = local });
     }
 
-    fn dynamicTagPayloadLocal(
-        self: *ProcBodyBuilder,
-        payloads: []const Plan.RepChild,
-        args: []const checked.CheckedExprId,
-    ) Allocator.Error!DynamicTagPayloadLocal {
-        if (payloads.len != args.len or args.len == 0) {
-            boxyLowerInvariant("dynamic tag payload local requested with invalid payload arity");
-        }
-        if (args.len == 1) {
-            const payload_rep = payloads[0].rep;
-            const payload_layout = self.tagPayloadStorageLayoutForRep(payload_rep);
-            return .{
-                .local = try self.addFrameLocal(payload_layout),
-                .layout_idx = payload_layout,
-                .desc_rep = self.parent.tagPayloadStorageDescRepIfNeeded(payload_rep),
-            };
-        }
-
-        const fields = try self.parent.allocator.alloc(layout.StructField, args.len);
-        defer self.parent.allocator.free(fields);
-        for (payloads, fields, 0..) |payload, *field, index| {
-            if (index > std.math.maxInt(u32)) {
-                boxyLowerInvariant("dynamic tag payload index exceeded layout struct field range");
-            }
-            field.* = .{
-                .index = @intCast(index),
-                .layout = self.tagPayloadStorageLayoutForRep(payload.rep),
-            };
-        }
-        const payload_layout = try self.parent.result.layouts.putStructFields(fields);
-        return .{ .local = try self.addFrameLocal(payload_layout), .layout_idx = payload_layout };
-    }
-
     fn dynamicTagPayloadLocalForChildren(
         self: *ProcBodyBuilder,
         payloads: []const Plan.RepChild,
@@ -28597,7 +27780,7 @@ const ProcBodyBuilder = struct {
         var seen = collections.DenseMap(Plan.TypeRepId, void).init(self.parent.allocator);
         defer seen.deinit();
 
-        return try self.dynamicTagPayloadsForTextInner(rep_id, self.module.canonical_names.tagLabelText(name), &seen) orelse
+        return try self.dynamicTagPayloadsForTextInner(rep_id, self.module.canonical_names.?.tagLabelText(name), &seen) orelse
             boxyLowerInvariant("dynamic tag expression referenced a variant outside its checked row representation");
     }
 
@@ -28619,8 +27802,8 @@ const ProcBodyBuilder = struct {
         name_rep: Plan.TypeRepId,
         name: names.TagNameId,
     ) Allocator.Error!?[]const Plan.RepChild {
-        const source_module = procedureModuleById(self.parent.modules, self.parent.plan.representations.items[@backingInt(name_rep)].source_type.module);
-        const name_text = source_module.canonical_names.tagLabelText(name);
+        const source_module = Plan.moduleViewForKey(self.parent.modules, self.parent.plan.representations.items[@backingInt(name_rep)].source_type.module);
+        const name_text = source_module.canonical_names.?.tagLabelText(name);
 
         var seen = collections.DenseMap(Plan.TypeRepId, void).init(self.parent.allocator);
         defer seen.deinit();
@@ -28922,7 +28105,7 @@ const ProcBodyBuilder = struct {
         target_rep: Plan.TypeRepId,
         receiver_local: LIR.LocalId,
         receiver_rep: Plan.TypeRepId,
-        field_view: ProcedureModuleView,
+        field_view: Plan.ModuleView,
         field_name: @TypeOf(@as(checked.CheckedRecordExprField, undefined).label),
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
@@ -29186,7 +28369,7 @@ const ProcBodyBuilder = struct {
     /// wrapper's actuals can name an outer wrapper's formals.
     /// The representation inside `rep_id`'s alias and non-opaque nominal
     /// wrappers, which share their backing's storage.
-    fn nominalWrapperBackingRep(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
+    fn nominalWrapperBackingRep(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
         var current = rep_id;
         for (0..self.parent.plan.representations.items.len) |_| {
             const rep = self.parent.plan.representations.items[@backingInt(current)];
@@ -29341,7 +28524,7 @@ const ProcBodyBuilder = struct {
             local: LIR.LocalId,
             rep: Plan.TypeRepId,
             target_rep: Plan.TypeRepId,
-            field_view: ProcedureModuleView,
+            field_view: Plan.ModuleView,
             label: @TypeOf(@as(checked.CheckedRecordExprField, undefined).label),
         },
     };
@@ -29349,12 +28532,12 @@ const ProcBodyBuilder = struct {
     fn omittedRecordFieldDefault(
         self: *const ProcBodyBuilder,
         record_expr: checked.CheckedExprId,
-        field_view: ProcedureModuleView,
+        field_view: Plan.ModuleView,
         field_name: @TypeOf(@as(checked.CheckedRecordExprField, undefined).label),
     ) ?checked.CheckedFieldDefault {
         for (self.module.checked_bodies.record_omitted_defaults) |entry| {
             if (entry.expr != record_expr) continue;
-            if (Plan.recordFieldNameMatches(viewNames(self.module), entry.field_name, viewNames(field_view), field_name)) {
+            if (Plan.recordFieldNameMatches(Plan.moduleNamesOf(self.module), entry.field_name, Plan.moduleNamesOf(field_view), field_name)) {
                 return entry.default;
             }
         }
@@ -29399,30 +28582,13 @@ const ProcBodyBuilder = struct {
     /// owning the defaulted record field.
     fn lowerDefaultedRecordFieldIntoFromModule(
         self: *ProcBodyBuilder,
-        field_module: ProcedureModuleView,
+        field_module: Plan.ModuleView,
         target: LIR.LocalId,
         default: checked.CheckedFieldDefault,
         field_type: Plan.CheckedTypeIdentity,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         return try self.runExprStep(try self.beginDefaultedRecordField(field_module, target, default, field_type, next));
-    }
-
-    fn moduleForIdentityHash(
-        self: *const ProcBodyBuilder,
-        origin_hash: *const [32]u8,
-    ) ?ProcedureModuleView {
-        const root = rootProcedureModule(self.parent.modules);
-        if (procedureModuleIdentityMatches(root, origin_hash)) return root;
-        for (self.parent.modules.imports) |imported| {
-            const view = procedureModuleFromImport(imported);
-            if (procedureModuleIdentityMatches(view, origin_hash)) return view;
-        }
-        for (self.parent.modules.root.relation_modules) |relation| {
-            const view = procedureModuleFromImport(relation);
-            if (procedureModuleIdentityMatches(view, origin_hash)) return view;
-        }
-        return null;
     }
 
     fn reserveBlockBindings(self: *ProcBodyBuilder, statements: []const checked.CheckedStatementId) Allocator.Error!void {
@@ -29457,12 +28623,12 @@ const ProcBodyBuilder = struct {
             switch (statement.data) {
                 .decl => |decl| {
                     if (!try self.declOmitsRuntimeBinding(decl.pattern, decl.expr)) {
-                        try self.reservePatternBindings(decl.pattern);
+                        try self.walkPatternBinders(decl.pattern, .irrefutable);
                         if (decl.recursive) try self.reserveRecursiveValueSlots(decl.pattern);
                     }
                     try self.reserveClosureCaptureSnapshots(decl.expr);
                 },
-                inline .var_, .var_uninitialized => |decl| try self.reservePatternBindings(decl.pattern),
+                inline .var_, .var_uninitialized => |decl| try self.walkPatternBinders(decl.pattern, .irrefutable),
                 .reassign => |reassign| try self.reserveReassignPatternBindings(reassign.pattern),
                 .import_,
                 .alias_decl,
@@ -30851,8 +30017,8 @@ const ProcBodyBuilder = struct {
         return switch (literal) {
             .int => |value| try self.assignIntLiteral(target, value.toI128(), next),
             .dec => |value| try self.assignDecLiteral(target, value, next),
-            .frac_f32 => |value| try self.assignF32Literal(target, value, next),
-            .frac_f64 => |value| try self.assignF64Literal(target, value, next),
+            .frac_f32 => |value| try self.assignFloatLiteral(target, f32, value, next),
+            .frac_f64 => |value| try self.assignFloatLiteral(target, f64, value, next),
             .str => |literal_id| try self.assignStringLiteral(target, literal_id, next),
         };
     }
@@ -31004,20 +30170,7 @@ const ProcBodyBuilder = struct {
         remaps: []const checked.CheckedAlternativeBinderRemap,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const target_binder = self.matchBinderRepresentative(binder, remaps);
-        const target = self.localForBinder(target_binder);
-        if (target == source) return next;
-
-        const source_ty = self.binderType(binder);
-        const source_rep = self.repForType(source_ty);
-        const target_rep = self.binderStorageRep(target_binder);
-        if (self.parent.result.store.getLocal(target).layout_idx != self.parent.result.store.getLocal(source).layout_idx or
-            self.descriptorStorageRep(target_rep) != self.descriptorStorageRep(source_rep))
-        {
-            return try self.assignRepresentationBoundary(target, source, target_rep, source_rep, next);
-        }
-        // A source without a runtime descriptor has its representation's.
-        return try self.assignLocalFromRep(target, source, source_rep, next);
+        return try self.bindMatchBinderFromRep(binder, source, self.repForType(self.binderType(binder)), remaps, next);
     }
 
     fn bindMatchBinderFromRep(
@@ -31038,6 +30191,7 @@ const ProcBodyBuilder = struct {
         {
             return try self.assignRepresentationBoundary(target, source, target_rep, source_rep, next);
         }
+        // A source without a runtime descriptor has its representation's.
         return try self.assignLocalFromRep(target, source, source_rep, next);
     }
 
@@ -31278,7 +30432,7 @@ const ProcBodyBuilder = struct {
         defer self.parent.allocator.free(field_accesses);
 
         var layout_index: usize = 0;
-        const rest_view = procedureModuleById(self.parent.modules, rep.source_type.module);
+        const rest_view = Plan.moduleViewForKey(self.parent.modules, rep.source_type.module);
         for (children) |child| {
             switch (child.role) {
                 .record_field => |label| {
@@ -31389,7 +30543,7 @@ const ProcBodyBuilder = struct {
     }
 
     const IteratorStepShape = struct {
-        module: ProcedureModuleView,
+        module: Plan.ModuleView,
         step_ty: Plan.CheckedTypeIdentity,
         done_tag: names.TagNameId,
         one_tag: names.TagNameId,
@@ -31611,7 +30765,7 @@ const ProcBodyBuilder = struct {
     }
 
     fn iteratorStepShapeForTypeRef(self: *ProcBodyBuilder, step_ref: Plan.CheckedTypeIdentity) Allocator.Error!IteratorStepShape {
-        const module = procedureModuleById(self.parent.modules, step_ref.module);
+        const module = Plan.moduleViewForKey(self.parent.modules, step_ref.module);
         const step_payload = resolvedTypePayload(module, step_ref.ty);
         const step_tag_union = switch (step_payload) {
             .tag_union => |tag_union| tag_union,
@@ -31632,7 +30786,7 @@ const ProcBodyBuilder = struct {
         while (true) {
             for (tags) |tag| {
                 const tag_args = tag.argsSlice(module.checked_types);
-                const tag_text = module.canonical_names.tagLabelText(tag.name);
+                const tag_text = module.canonical_names.?.tagLabelText(tag.name);
                 if (std.mem.eql(u8, tag_text, "Done")) {
                     if (tag_args.len != 0) boxyLowerInvariant("iterator Done step carried payloads");
                     if (done_tag != null) boxyLowerInvariant("iterator step type had duplicate Done tags");
@@ -31743,7 +30897,7 @@ const ProcBodyBuilder = struct {
                     .op = .{ .local = source },
                     .next = next,
                 } }, self.glueOrigin());
-                switch (op) {
+                switch (boxyLowLevelKind(op)) {
                     .box_box => {
                         const materialization = try self.descriptorMaterializationForExactRep(target_rep);
                         const result_desc = try self.descriptorForConstructedTargetMaterialization(target, materialization);
@@ -31771,13 +30925,13 @@ const ProcBodyBuilder = struct {
                         return assign;
                     },
                     .box_unbox_borrowed => boxyLowerInvariant("ARC-only Box.unbox variant reached boxy lowering"),
-                    .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_prefetch, .list_prefetched, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_sort_with, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => unreachable,
+                    .list_map_can_reuse, .other => unreachable,
                 }
             }
             return try self.assignLocal(target, source, next);
         }
 
-        switch (op) {
+        switch (boxyLowLevelKind(op)) {
             .box_unbox_borrowed => boxyLowerInvariant("ARC-only Box.unbox variant reached boxy lowering"),
             .box_box => {
                 if (target_content.tag == .box and self.parent.result.layouts.getLayout(target_content.getIdx()).eql(source_content)) {
@@ -31801,7 +30955,7 @@ const ProcBodyBuilder = struct {
                     return try self.assignUnaryLowLevel(target, .box_unbox, source, next);
                 }
             },
-            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_prefetch, .list_prefetched, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_sort_with, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => unreachable,
+            .list_map_can_reuse, .other => unreachable,
         }
 
         boxyLowerInvariant("Box boundary low-level operation required descriptor-backed box adaptation lowering");
@@ -33252,7 +32406,6 @@ const ProcBodyBuilder = struct {
             },
             .local,
             .runtime,
-            .dict_method_arg,
             .dict_method_hidden,
             => null,
         };
@@ -35287,7 +34440,7 @@ const ProcBodyBuilder = struct {
             switch (child.role) {
                 .record_field => |label| {
                     if (field_index != 0) try parts.append(self.parent.allocator, .{ .literal = ", " });
-                    try parts.append(self.parent.allocator, .{ .literal = self.module.canonical_names.recordFieldLabelText(label) });
+                    try parts.append(self.parent.allocator, .{ .literal = self.module.canonical_names.?.recordFieldLabelText(label) });
                     try parts.append(self.parent.allocator, .{ .literal = ": " });
                     try parts.append(self.parent.allocator, .{ .field = .{
                         .source = request.source,
@@ -35661,7 +34814,7 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("boxy to_inspect method worker carried hidden parameters");
         }
 
-        const function = checkedFunctionPayload(procedureModuleById(self.parent.modules, worker.checked_type.module), worker.checked_type.ty);
+        const function = Plan.checkedFunctionPayload(Plan.moduleViewForKey(self.parent.modules, worker.checked_type.module), worker.checked_type.ty);
         if (function.args.len != 1) {
             boxyLowerInvariant("boxy to_inspect method worker had unexpected arity");
         }
@@ -37376,7 +36529,7 @@ const ProcBodyBuilder = struct {
         const payload_desc = self.parent.result.store.getLocal(target).boxy_desc orelse return null;
         return switch (payload_desc) {
             .static => null,
-            .local, .runtime, .dict_method_arg, .dict_method_hidden => payload_desc,
+            .local, .runtime, .dict_method_hidden => payload_desc,
         };
     }
 
@@ -37388,7 +36541,7 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("boxy dynamic literal target had no payload descriptor");
         const payload_layout = switch (payload_desc) {
             .static => |desc_id| self.parent.result.boxy_type_descs.items[@backingInt(desc_id)].payload_layout,
-            .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("boxy dynamic literal target used a runtime descriptor without a concrete literal payload layout"),
+            .local, .runtime, .dict_method_hidden => boxyLowerInvariant("boxy dynamic literal target used a runtime descriptor without a concrete literal payload layout"),
         };
         if (payload_layout == target_layout) {
             boxyLowerInvariant("boxy dynamic literal target descriptor resolved to dynamic storage");
@@ -37415,7 +36568,7 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("boxy dynamic literal target had no payload descriptor");
         const payload_layout = switch (payload_desc) {
             .static => |desc_id| self.parent.result.boxy_type_descs.items[@backingInt(desc_id)].payload_layout,
-            .local, .runtime, .dict_method_arg, .dict_method_hidden => known_payload_layout,
+            .local, .runtime, .dict_method_hidden => known_payload_layout,
         };
         if (payload_layout == target_layout) {
             boxyLowerInvariant("boxy dynamic literal target descriptor resolved to dynamic storage");
@@ -37452,7 +36605,7 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         const default_layout = builtinNumeralLayoutForType(self.module, checked_ty);
         if (self.dynamicLiteralRuntimeDesc(target)) |desc_ref| {
-            const exact = self.module.module_env.exactNumeral(literal);
+            const exact = self.module.module_env.?.exactNumeral(literal);
             const value: LIR.LiteralValue = switch (default_layout) {
                 .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => .{ .boxy_dynamic_num_literal = .{
                     .value = exactIntBitsForLayout(exact, default_layout) orelse return try self.invalidNumeralLiteral(),
@@ -37493,7 +36646,7 @@ const ProcBodyBuilder = struct {
         literal: can.ModuleEnv.NumeralLiteral,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const exact = self.module.module_env.exactNumeral(literal);
+        const exact = self.module.module_env.?.exactNumeral(literal);
         return switch (payload_layout) {
             .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => blk: {
                 const value = exactIntBitsForLayout(exact, payload_layout) orelse
@@ -37504,8 +36657,8 @@ const ProcBodyBuilder = struct {
                     .next = next,
                 } }, self.origin);
             },
-            .f32 => try self.assignF32Literal(target, try exact_numeral.floatBits(f32, self.parent.allocator, exact), next),
-            .f64 => try self.assignF64Literal(target, try exact_numeral.floatBits(f64, self.parent.allocator, exact), next),
+            .f32 => try self.assignFloatLiteral(target, f32, try exact_numeral.floatBits(f32, self.parent.allocator, exact), next),
+            .f64 => try self.assignFloatLiteral(target, f64, try exact_numeral.floatBits(f64, self.parent.allocator, exact), next),
             .dec => blk: {
                 const bits = (try exact_numeral.decBits(self.parent.allocator, exact)) orelse
                     break :blk try self.invalidNumeralLiteral();
@@ -37537,7 +36690,7 @@ const ProcBodyBuilder = struct {
         return .{ .static = desc_id };
     }
 
-    fn builtinNumeralLayoutForType(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) layout.Idx {
+    fn builtinNumeralLayoutForType(module: Plan.ModuleView, checked_ty: checked.CheckedTypeId) layout.Idx {
         const builtin = checkedBuiltinNominalForType(module, checked_ty) orelse
             boxyLowerInvariant("builtin numeral had no checked builtin nominal type");
         return switch (builtin) {
@@ -37624,7 +36777,7 @@ const ProcBodyBuilder = struct {
         const record_rep = self.recordRepForBoundary(target_rep) orelse
             boxyLowerInvariant("Numeral Literal payload was not a record representation");
         const rep = self.parent.plan.representations.items[@backingInt(record_rep)];
-        const view = procedureModuleById(self.parent.modules, rep.source_type.module);
+        const view = Plan.moduleViewForKey(self.parent.modules, rep.source_type.module);
         const payload_layout = switch (self.workerRuntimeLayoutForRep(target_rep)) {
             .concrete => self.parent.result.store.getLocal(target).layout_idx,
             .dynamic_box => self.parent.layout_plan.rep_layouts[@backingInt(record_rep)].descriptor_payload_layout orelse
@@ -37653,7 +36806,7 @@ const ProcBodyBuilder = struct {
                 .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("Numeral record representation had a non-record child"),
             };
             if (count >= fields.len) boxyLowerInvariant("Numeral record had too many fields");
-            const field_text = view.canonical_names.recordFieldLabelText(label);
+            const field_text = view.canonical_names.?.recordFieldLabelText(label);
             field_kinds[count] = if (std.mem.eql(u8, field_text, "is_negative"))
                 .is_negative
             else if (std.mem.eql(u8, field_text, "digits_before_pt"))
@@ -37702,8 +36855,8 @@ const ProcBodyBuilder = struct {
             .next = continuation,
         } }, self.derivedOrigin());
 
-        const before = self.module.module_env.numeralDigitsBefore(literal);
-        const after = self.module.module_env.numeralDigitsAfter(literal);
+        const before = self.module.module_env.?.numeralDigitsBefore(literal);
+        const after = self.module.module_env.?.numeralDigitsAfter(literal);
         var index = fields.len;
         while (index > 0) {
             index -= 1;
@@ -37765,7 +36918,7 @@ const ProcBodyBuilder = struct {
             .checked_expr, .generated_interpolation_segments, .generated_quote => boxyLowerInvariant("from_numeral plan operand was not a generated numeral"),
         };
         if (self.dynamicLiteralRuntimeDesc(target)) |desc_ref| {
-            const exact = self.module.module_env.exactNumeral(literal);
+            const exact = self.module.module_env.?.exactNumeral(literal);
             const value: LIR.LiteralValue = if (exact.is_fractional) .{ .boxy_dynamic_frac_literal = .{
                 .dec_bits = (try exact_numeral.decBits(self.parent.allocator, exact)) orelse
                     return try self.invalidNumeralLiteral(),
@@ -37854,44 +37007,25 @@ const ProcBodyBuilder = struct {
         } }, self.origin);
     }
 
-    fn assignF32Literal(self: *ProcBodyBuilder, target: LIR.LocalId, value: f32, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
-        if (self.dynamicLiteralTargetForLayout(target, .f32)) |info| {
-            if (info.payload_layout != .f32) {
-                boxyLowerInvariant("boxy dynamic f32 literal descriptor did not resolve to f32 payload layout");
+    fn assignFloatLiteral(self: *ProcBodyBuilder, target: LIR.LocalId, comptime T: type, value: T, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+        const float_layout: layout.Idx = if (T == f32) .f32 else .f64;
+        const literal_value = @unionInit(LIR.LiteralValue, @typeName(T) ++ "_literal", value);
+        if (self.dynamicLiteralTargetForLayout(target, float_layout)) |info| {
+            if (info.payload_layout != float_layout) {
+                boxyLowerInvariant("boxy dynamic float literal descriptor did not resolve to its float payload layout");
             }
-            const payload = try self.addFrameLocal(.f32);
+            const payload = try self.addFrameLocal(float_layout);
             const box = try self.assignBoxedLiteralPayload(target, payload, info, next);
             const literal = try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
                 .target = payload,
-                .value = .{ .f32_literal = value },
+                .value = literal_value,
                 .next = box,
             } }, self.origin);
             return try self.prependLiteralTargetDescriptorMaterialization(target, literal);
         }
         return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
             .target = target,
-            .value = .{ .f32_literal = value },
-            .next = next,
-        } }, self.origin);
-    }
-
-    fn assignF64Literal(self: *ProcBodyBuilder, target: LIR.LocalId, value: f64, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
-        if (self.dynamicLiteralTargetForLayout(target, .f64)) |info| {
-            if (info.payload_layout != .f64) {
-                boxyLowerInvariant("boxy dynamic f64 literal descriptor did not resolve to f64 payload layout");
-            }
-            const payload = try self.addFrameLocal(.f64);
-            const box = try self.assignBoxedLiteralPayload(target, payload, info, next);
-            const literal = try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
-                .target = payload,
-                .value = .{ .f64_literal = value },
-                .next = box,
-            } }, self.origin);
-            return try self.prependLiteralTargetDescriptorMaterialization(target, literal);
-        }
-        return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
-            .target = target,
-            .value = .{ .f64_literal = value },
+            .value = literal_value,
             .next = next,
         } }, self.origin);
     }
@@ -37905,8 +37039,8 @@ const ProcBodyBuilder = struct {
         return switch (scalar) {
             .i8, .i16, .i32, .i64, .i128, .u8, .u16, .u32, .u64 => |value| try self.assignIntLiteral(target, value, next),
             .u128 => |value| try self.assignIntLiteral(target, @bitCast(value), next),
-            .f32_bits => |bits| try self.assignF32Literal(target, @bitCast(bits), next),
-            .f64_bits => |bits| try self.assignF64Literal(target, @bitCast(bits), next),
+            .f32_bits => |bits| try self.assignFloatLiteral(target, f32, @bitCast(bits), next),
+            .f64_bits => |bits| try self.assignFloatLiteral(target, f64, @bitCast(bits), next),
             .dec_bits => |bits| try self.assignDecLiteral(target, .{ .num = bits }, next),
         };
     }
@@ -39032,7 +38166,7 @@ const ProcBodyBuilder = struct {
                         const materialization = try self.descriptorMaterializationForKnownRep(nested.nested_rep);
                         try initializers.append(allocator, materialization.initializer(nested_local));
                     },
-                    .local, .runtime, .dict_method_arg, .dict_method_hidden => try initializers.append(allocator, .{
+                    .local, .runtime, .dict_method_hidden => try initializers.append(allocator, .{
                         .local = nested_local,
                         .materialize = nested.parent_desc,
                         .nested_index = nested.nested_index,
@@ -39369,32 +38503,7 @@ const ProcBodyBuilder = struct {
         source_rep: Plan.TypeRepId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        return try self.assignRepresentationBoundaryWithSourceMode(
-            target,
-            source,
-            target_rep,
-            source_rep,
-            .borrow,
-            next,
-        );
-    }
-
-    fn assignRepresentationBoundaryConsumingSource(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        source: LIR.LocalId,
-        target_rep: Plan.TypeRepId,
-        source_rep: Plan.TypeRepId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        return try self.assignRepresentationBoundaryWithSourceMode(
-            target,
-            source,
-            target_rep,
-            source_rep,
-            .move,
-            next,
-        );
+        return try self.assignRepresentationBoundaryWithSourceMode(target, source, target_rep, source_rep, .borrow, next);
     }
 
     /// One representation boundary: convert `source` at `source_rep` into
@@ -40241,7 +39350,7 @@ const ProcBodyBuilder = struct {
         for (self.parent.plan.childSlice(target_record.children)) |target_child| {
             switch (target_child.role) {
                 .record_field => |target_label| {
-                    const source_field = self.findRecordFieldByLabel(state.source_record_rep, procedureModuleById(self.parent.modules, target_child.source_type.module), target_label) orelse
+                    const source_field = self.findRecordFieldByLabel(state.source_record_rep, Plan.moduleViewForKey(self.parent.modules, target_child.source_type.module), target_label) orelse
                         boxyLowerInvariant(kind ++ " record boundary source was missing target field");
                     state.target_fields[field_index] = if (self.representationBoundaryIsDirect(target_child.rep, source_field.rep))
                         try self.addFrameLocalForRep(target_child.rep)
@@ -41276,28 +40385,21 @@ const ProcBodyBuilder = struct {
     /// null when the representation does not resolve to a closed checked tag
     /// union.
     fn checkedTagUnionCountForBoundary(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) ?usize {
-        var current = rep_id;
-        while (true) {
-            const rep = self.parent.plan.representations.items[@backingInt(current)];
-            switch (rep.kind) {
-                .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
-                .nominal => |kind| switch (kind) {
-                    .transparent, .builtin_other => current = self.repQuery().requiredSingleChild(current, .nominal_backing).rep,
-                    .opaque_nominal => return null,
-                },
-                .tag_union => {
-                    const view = procedureModuleById(self.parent.modules, rep.source_type.module);
-                    var ty = rep.source_type.ty;
-                    while (true) {
-                        switch (view.checked_types.payload(ty)) {
-                            .alias => |alias| ty = alias.backing,
-                            .tag_union => |tag_union| return tag_union.tags.len,
-                            .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union => return null,
-                        }
+        const current = self.nominalWrapperBackingRep(rep_id);
+        const rep = self.parent.plan.representations.items[@backingInt(current)];
+        switch (rep.kind) {
+            .tag_union => {
+                const view = Plan.moduleViewForKey(self.parent.modules, rep.source_type.module);
+                var ty = rep.source_type.ty;
+                while (true) {
+                    switch (view.checked_types.payload(ty)) {
+                        .alias => |alias| ty = alias.backing,
+                        .tag_union => |tag_union| return tag_union.tags.len,
+                        .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union => return null,
                     }
-                },
-                .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => return null,
-            }
+                }
+            },
+            .alias, .nominal, .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => return null,
         }
     }
 
@@ -41551,7 +40653,7 @@ const ProcBodyBuilder = struct {
     ) bool {
         const tag_rep_id = self.tagDomainRep(rep_id) orelse return false;
         const rep = self.parent.plan.representations.items[@backingInt(tag_rep_id)];
-        const expected_name = self.module.canonical_names.tagLabelText(tag_name);
+        const expected_name = self.module.canonical_names.?.tagLabelText(tag_name);
         for (self.parent.plan.tagVariantSlice(rep.tag_variants)) |variant| {
             if (std.mem.eql(u8, expected_name, self.tagVariantNameText(variant))) return true;
         }
@@ -41559,18 +40661,11 @@ const ProcBodyBuilder = struct {
     }
 
     fn tagDomainRep(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) ?Plan.TypeRepId {
-        var current = rep_id;
-        while (true) {
-            const rep = self.parent.plan.representations.items[@backingInt(current)];
-            switch (rep.kind) {
-                .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
-                .nominal => |kind| switch (kind) {
-                    .transparent, .builtin_other => current = self.repQuery().requiredSingleChild(current, .nominal_backing).rep,
-                    .opaque_nominal => return null,
-                },
-                .tag_union, .dynamic => return current,
-                .in_progress, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => return null,
-            }
+        const current = self.nominalWrapperBackingRep(rep_id);
+        const rep = self.parent.plan.representations.items[@backingInt(current)];
+        switch (rep.kind) {
+            .tag_union, .dynamic => return current,
+            .alias, .nominal, .in_progress, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => return null,
         }
     }
 
@@ -42027,7 +41122,6 @@ const ProcBodyBuilder = struct {
                 .static => self.parent.result.store.setLocalBoxyDesc(local, desc),
                 .local,
                 .runtime,
-                .dict_method_arg,
                 .dict_method_hidden,
                 => self.parent.result.store.setLocalBoxyDesc(local, .{ .local = try self.addFrameLocal(.opaque_ptr) }),
             }
@@ -42309,16 +41403,22 @@ const ProcBodyBuilder = struct {
     }
 
     fn descriptorBindingIsBoundForRep(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) bool {
+        return self.descriptorBindingFlagForRep(rep_id, "descriptor_bound", "bound");
+    }
+
+    /// Whether `rep_id`'s descriptor binding is marked in the per-descriptor
+    /// flags `marks` and the per-binding flag `flag`.
+    fn descriptorBindingFlagForRep(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId, comptime marks: []const u8, comptime flag: []const u8) bool {
         const identity_rep = self.descriptorStorageRep(rep_id);
         const rep = self.parent.plan.representations.items[@backingInt(identity_rep)];
         const desc = rep.descriptor orelse return true;
         const desc_index = @backingInt(desc);
-        if (desc_index < self.descriptor_bound.len and self.descriptor_bound[desc_index]) {
+        if (desc_index < @field(self, marks).len and @field(self, marks)[desc_index]) {
             if (desc_index >= self.descriptor_local_reps.len) return false;
             if (self.descriptor_local_reps[desc_index] == identity_rep) return true;
         }
         for (self.descriptor_rep_bindings.items) |binding| {
-            if (binding.desc == desc and binding.rep == identity_rep) return binding.bound;
+            if (binding.desc == desc and binding.rep == identity_rep) return @field(binding, flag);
         }
         return false;
     }
@@ -42335,18 +41435,7 @@ const ProcBodyBuilder = struct {
     /// write mark from a later-executing statement stays visible while
     /// earlier-executing statements are lowered.
     fn descriptorBindingIsEvidenceBoundForRep(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) bool {
-        const identity_rep = self.descriptorStorageRep(rep_id);
-        const rep = self.parent.plan.representations.items[@backingInt(identity_rep)];
-        const desc = rep.descriptor orelse return true;
-        const desc_index = @backingInt(desc);
-        if (desc_index < self.descriptor_evidence_bound.len and self.descriptor_evidence_bound[desc_index]) {
-            if (desc_index >= self.descriptor_local_reps.len) return false;
-            if (self.descriptor_local_reps[desc_index] == identity_rep) return true;
-        }
-        for (self.descriptor_rep_bindings.items) |binding| {
-            if (binding.desc == desc and binding.rep == identity_rep) return binding.evidence_bound;
-        }
-        return false;
+        return self.descriptorBindingFlagForRep(rep_id, "descriptor_evidence_bound", "evidence_bound");
     }
 
     fn dictionaryLocalForRequirementOrNull(
@@ -42813,23 +41902,30 @@ const ProcBodyBuilder = struct {
         return source_rep orelse planned_rep;
     }
 
-    fn reservePatternBindings(self: *ProcBodyBuilder, root: checked.CheckedPatternId) Allocator.Error!void {
+    /// What `walkPatternBinders` does at each binder.
+    const PatternBinderWalk = union(enum) {
+        /// Reserve an irrefutable pattern's binder locals and descriptors.
+        irrefutable,
+        /// Reserve a match pattern's binder locals.
+        match,
+        /// Bind the descriptors of a match pattern's representative binders.
+        match_descriptors: []const checked.CheckedAlternativeBinderRemap,
+    };
+
+    /// Visit, in pre-order, every binder `root` binds.
+    fn walkPatternBinders(self: *ProcBodyBuilder, root: checked.CheckedPatternId, walk: PatternBinderWalk) Allocator.Error!void {
         const allocator = self.parent.allocator;
         var pending: std.ArrayList(checked.CheckedPatternId) = .empty;
         defer pending.deinit(allocator);
         try pending.append(allocator, root);
+        if (walk != .match_descriptors) try self.ensureBinderLocals();
         while (pending.pop()) |pattern_id| {
-            try self.ensureBinderLocals();
             const pattern = self.module.checked_bodies.pattern(pattern_id);
             const children_start = pending.items.len;
             switch (pattern.data) {
-                .assign => |binder| {
-                    try self.reserveBinderLocal(binder, pattern.ty);
-                    _ = try self.reserveDescriptorLocalForType(pattern.ty);
-                },
+                .assign => |binder| try self.visitPatternBinder(walk, binder, pattern.ty),
                 .as => |as| {
-                    try self.reserveBinderLocal(as.binder, pattern.ty);
-                    _ = try self.reserveDescriptorLocalForType(pattern.ty);
+                    try self.visitPatternBinder(walk, as.binder, pattern.ty);
                     try pending.append(allocator, as.pattern);
                 },
                 .tuple => |items| try pending.appendSlice(allocator, items),
@@ -42862,9 +41958,30 @@ const ProcBodyBuilder = struct {
                 => {},
                 .runtime_error,
                 .pending,
-                => boxyLowerInvariant("refutable or pending checked pattern reached boxy irrefutable binder reservation"),
+                => switch (walk) {
+                    .irrefutable => boxyLowerInvariant("refutable or pending checked pattern reached boxy irrefutable binder reservation"),
+                    .match => boxyLowerInvariant("runtime-error or pending checked pattern reached boxy match binder reservation"),
+                    .match_descriptors => boxyLowerInvariant("runtime-error or pending checked pattern reached boxy match descriptor reservation"),
+                },
             }
             std.mem.reverse(checked.CheckedPatternId, pending.items[children_start..]);
+        }
+    }
+
+    fn visitPatternBinder(self: *ProcBodyBuilder, walk: PatternBinderWalk, binder: checked.PatternBinderId, ty: checked.CheckedTypeId) Allocator.Error!void {
+        switch (walk) {
+            .irrefutable => {
+                try self.reserveBinderLocal(binder, ty);
+                _ = try self.reserveDescriptorLocalForType(ty);
+            },
+            .match => try self.reserveMatchBinderLocal(binder, ty),
+            .match_descriptors => |remaps| {
+                const representative = self.matchBinderRepresentative(binder, remaps);
+                _ = try self.bindRuntimeDescriptorLocalForValueType(
+                    self.localForBinder(representative),
+                    self.binderType(representative),
+                );
+            },
         }
     }
 
@@ -42899,59 +42016,6 @@ const ProcBodyBuilder = struct {
         }
     }
 
-    fn reserveMatchPatternBindings(self: *ProcBodyBuilder, root: checked.CheckedPatternId) Allocator.Error!void {
-        const allocator = self.parent.allocator;
-        var pending: std.ArrayList(checked.CheckedPatternId) = .empty;
-        defer pending.deinit(allocator);
-        try pending.append(allocator, root);
-        while (pending.pop()) |pattern_id| {
-            try self.ensureBinderLocals();
-            const pattern = self.module.checked_bodies.pattern(pattern_id);
-            const children_start = pending.items.len;
-            switch (pattern.data) {
-                .assign => |binder| {
-                    try self.reserveMatchBinderLocal(binder, pattern.ty);
-                },
-                .as => |as| {
-                    try self.reserveMatchBinderLocal(as.binder, pattern.ty);
-                    try pending.append(allocator, as.pattern);
-                },
-                .applied_tag => |tag| try pending.appendSlice(allocator, tag.args),
-                .tuple => |items| try pending.appendSlice(allocator, items),
-                .record_destructure => |destructs| {
-                    for (destructs) |destruct| {
-                        switch (destruct.kind) {
-                            .required,
-                            .sub_pattern,
-                            .rest,
-                            => |child| try pending.append(allocator, child),
-                        }
-                    }
-                },
-                .nominal => |nominal| try pending.append(allocator, nominal.backing_pattern),
-                .list => |list| {
-                    try pending.appendSlice(allocator, list.patterns);
-                    if (list.rest) |rest| {
-                        if (rest.pattern) |rest_pattern| try pending.append(allocator, rest_pattern);
-                    }
-                },
-                .str_interpolation => |str| {
-                    for (str.steps) |step| {
-                        if (step.capture) |capture| try pending.append(allocator, capture);
-                    }
-                },
-                .underscore,
-                .numeral_literal,
-                .str_literal,
-                => {},
-                .runtime_error,
-                .pending,
-                => boxyLowerInvariant("runtime-error or pending checked pattern reached boxy match binder reservation"),
-            }
-            std.mem.reverse(checked.CheckedPatternId, pending.items[children_start..]);
-        }
-    }
-
     /// Reserve, in pre-order, the binders `root` binds from a source of
     /// representation `root_source_rep`.
     fn reserveMatchPatternBindingsFromRep(
@@ -42973,7 +42037,7 @@ const ProcBodyBuilder = struct {
             if (pattern_rep == source_rep or
                 self.workerRuntimeLayoutForRep(pattern_rep).layoutIdx() == self.workerRuntimeLayoutForRep(source_rep).layoutIdx())
             {
-                try self.reserveMatchPatternBindings(pattern_id);
+                try self.walkPatternBinders(pattern_id, .match);
                 continue;
             }
 
@@ -43005,73 +42069,9 @@ const ProcBodyBuilder = struct {
                 .numeral_literal,
                 .str_literal,
                 => {},
-                .pending, .nominal, .record_destructure, .list, .tuple, .str_interpolation, .runtime_error => try self.reserveMatchPatternBindings(pattern_id),
+                .pending, .nominal, .record_destructure, .list, .tuple, .str_interpolation, .runtime_error => try self.walkPatternBinders(pattern_id, .match),
             }
             std.mem.reverse(Pending, pending.items[children_start..]);
-        }
-    }
-
-    fn reserveMatchPatternDescriptors(
-        self: *ProcBodyBuilder,
-        root: checked.CheckedPatternId,
-        remaps: []const checked.CheckedAlternativeBinderRemap,
-    ) Allocator.Error!void {
-        const allocator = self.parent.allocator;
-        var pending: std.ArrayList(checked.CheckedPatternId) = .empty;
-        defer pending.deinit(allocator);
-        try pending.append(allocator, root);
-        while (pending.pop()) |pattern_id| {
-            const pattern = self.module.checked_bodies.pattern(pattern_id);
-            const children_start = pending.items.len;
-            switch (pattern.data) {
-                .assign => |binder| {
-                    const representative = self.matchBinderRepresentative(binder, remaps);
-                    _ = try self.bindRuntimeDescriptorLocalForValueType(
-                        self.localForBinder(representative),
-                        self.binderType(representative),
-                    );
-                },
-                .as => |as| {
-                    const representative = self.matchBinderRepresentative(as.binder, remaps);
-                    _ = try self.bindRuntimeDescriptorLocalForValueType(
-                        self.localForBinder(representative),
-                        self.binderType(representative),
-                    );
-                    try pending.append(allocator, as.pattern);
-                },
-                .applied_tag => |tag| try pending.appendSlice(allocator, tag.args),
-                .tuple => |items| try pending.appendSlice(allocator, items),
-                .record_destructure => |destructs| {
-                    for (destructs) |destruct| {
-                        switch (destruct.kind) {
-                            .required,
-                            .sub_pattern,
-                            .rest,
-                            => |child| try pending.append(allocator, child),
-                        }
-                    }
-                },
-                .nominal => |nominal| try pending.append(allocator, nominal.backing_pattern),
-                .list => |list| {
-                    try pending.appendSlice(allocator, list.patterns);
-                    if (list.rest) |rest| {
-                        if (rest.pattern) |rest_pattern| try pending.append(allocator, rest_pattern);
-                    }
-                },
-                .str_interpolation => |str| {
-                    for (str.steps) |step| {
-                        if (step.capture) |capture| try pending.append(allocator, capture);
-                    }
-                },
-                .underscore,
-                .numeral_literal,
-                .str_literal,
-                => {},
-                .runtime_error,
-                .pending,
-                => boxyLowerInvariant("runtime-error or pending checked pattern reached boxy match descriptor reservation"),
-            }
-            std.mem.reverse(checked.CheckedPatternId, pending.items[children_start..]);
         }
     }
 
@@ -43337,15 +42337,7 @@ const ProcBodyBuilder = struct {
     }
 
     fn resolvedValueRecord(self: *const ProcBodyBuilder, ref_id: checked.ResolvedValueRefId) checked.ResolvedValueRefRecord {
-        return resolvedValueRecordInModule(self.module, ref_id);
-    }
-
-    fn resolvedValueRecordInModule(module: ProcedureModuleView, ref_id: checked.ResolvedValueRefId) checked.ResolvedValueRefRecord {
-        const raw = @backingInt(ref_id);
-        if (raw >= module.resolved_value_refs.records.len) {
-            boxyLowerInvariant("checked lookup referenced a missing resolved value");
-        }
-        return module.resolved_value_refs.records[raw];
+        return Plan.resolvedValueRecord(self.module, ref_id);
     }
 
     fn workerReturnLayout(self: *const ProcBodyBuilder) @import("layout").Idx {
@@ -43369,7 +42361,7 @@ const ProcBodyBuilder = struct {
         return self.repForModuleType(self.module, ty);
     }
 
-    fn repForModuleType(self: *const ProcBodyBuilder, module: ProcedureModuleView, ty: checked.CheckedTypeId) Plan.TypeRepId {
+    fn repForModuleType(self: *const ProcBodyBuilder, module: Plan.ModuleView, ty: checked.CheckedTypeId) Plan.TypeRepId {
         return self.parent.plan.repForSourceType(.{ .module = module.key, .ty = ty }) orelse {
             boxyLowerInvariant("checked body referenced a type missing from the boxy representation plan");
         };
@@ -43427,27 +42419,7 @@ const ProcBodyBuilder = struct {
     }
 
     fn descriptorStorageRep(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
-        var current = rep_id;
-        while (true) {
-            const rep = self.parent.plan.representations.items[@backingInt(current)];
-            switch (rep.kind) {
-                .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
-                .nominal => |kind| switch (kind) {
-                    .transparent => {
-                        if (rep.declared_fields.len != 0 or
-                            rep.nominal_backing_arg_substitutions.len != 0) return current;
-                        current = self.repQuery().requiredSingleChild(current, .nominal_backing).rep;
-                    },
-                    .opaque_nominal, .builtin_other => return current,
-                },
-                .box => {
-                    const child = self.repQuery().requiredSingleChild(current, .box_payload).rep;
-                    if (self.workerRuntimeLayoutForRep(current).layoutIdx() != self.workerRuntimeLayoutForRep(child).layoutIdx()) return current;
-                    current = child;
-                },
-                .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .list, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return current,
-            }
-        }
+        return self.parent.descriptorStorageRep(rep_id);
     }
 
     fn repContainsDynamicStorage(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) bool {
@@ -43478,64 +42450,43 @@ const ProcBodyBuilder = struct {
     }
 
     fn tagRepForBoundary(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId, include_bool: bool) ?Plan.TypeRepId {
-        var current = rep_id;
-        while (true) {
-            const rep = self.parent.plan.representations.items[@backingInt(current)];
-            switch (rep.kind) {
-                .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
-                .nominal => |kind| switch (kind) {
-                    .transparent, .builtin_other => current = self.repQuery().requiredSingleChild(current, .nominal_backing).rep,
-                    .opaque_nominal => return null,
-                },
-                .tag_union, .dynamic => {
-                    if (rep.tag_variants.len == 0) return null;
-                    return current;
-                },
-                .bool_tag_union => return if (include_bool) current else null,
-                .in_progress, .primitive, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => return null,
-            }
+        const current = self.nominalWrapperBackingRep(rep_id);
+        const rep = self.parent.plan.representations.items[@backingInt(current)];
+        switch (rep.kind) {
+            .tag_union, .dynamic => {
+                if (rep.tag_variants.len == 0) return null;
+                return current;
+            },
+            .bool_tag_union => return if (include_bool) current else null,
+            .alias, .nominal, .in_progress, .primitive, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => return null,
         }
     }
 
     fn listRepForBoundary(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) ?Plan.TypeRepId {
-        var current = rep_id;
-        while (true) {
-            const rep = self.parent.plan.representations.items[@backingInt(current)];
-            switch (rep.kind) {
-                .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
-                .nominal => |kind| switch (kind) {
-                    .transparent, .builtin_other => current = self.repQuery().requiredSingleChild(current, .nominal_backing).rep,
-                    .opaque_nominal => return null,
-                },
-                .list => return current,
-                .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return null,
-            }
+        const current = self.nominalWrapperBackingRep(rep_id);
+        const rep = self.parent.plan.representations.items[@backingInt(current)];
+        switch (rep.kind) {
+            .list => return current,
+            .alias, .nominal, .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return null,
         }
     }
 
     fn tupleRepForBoundary(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) ?Plan.TypeRepId {
-        var current = rep_id;
-        while (true) {
-            const rep = self.parent.plan.representations.items[@backingInt(current)];
-            switch (rep.kind) {
-                .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
-                .nominal => |kind| switch (kind) {
-                    .transparent, .builtin_other => current = self.repQuery().requiredSingleChild(current, .nominal_backing).rep,
-                    .opaque_nominal => return null,
-                },
-                .tuple => return current,
-                .dynamic => {
-                    var has_element = false;
-                    for (self.parent.plan.childSlice(rep.children)) |child| {
-                        switch (child.role) {
-                            .tuple_elem => has_element = true,
-                            .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => return null,
-                        }
+        const current = self.nominalWrapperBackingRep(rep_id);
+        const rep = self.parent.plan.representations.items[@backingInt(current)];
+        switch (rep.kind) {
+            .tuple => return current,
+            .dynamic => {
+                var has_element = false;
+                for (self.parent.plan.childSlice(rep.children)) |child| {
+                    switch (child.role) {
+                        .tuple_elem => has_element = true,
+                        .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => return null,
                     }
-                    return if (has_element) current else null;
-                },
-                .in_progress, .primitive, .bool_tag_union, .erased_callable, .record, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return null,
-            }
+                }
+                return if (has_element) current else null;
+            },
+            .alias, .nominal, .in_progress, .primitive, .bool_tag_union, .erased_callable, .record, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return null,
         }
     }
 
@@ -43840,22 +42791,12 @@ const ProcBodyBuilder = struct {
     };
 
     fn recordRepForBoundary(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) ?Plan.TypeRepId {
-        var current = rep_id;
-        while (true) {
-            const rep = self.parent.plan.representations.items[@backingInt(current)];
-            switch (rep.kind) {
-                .record,
-                => return current,
-                .dynamic => return if (self.repHasRecordFieldChildrenForBoundary(rep)) current else null,
-                .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
-                .nominal => |kind| switch (kind) {
-                    .transparent,
-                    .builtin_other,
-                    => current = self.repQuery().requiredSingleChild(current, .nominal_backing).rep,
-                    .opaque_nominal => return null,
-                },
-                .in_progress, .primitive, .bool_tag_union, .erased_callable, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return null,
-            }
+        const current = self.nominalWrapperBackingRep(rep_id);
+        const rep = self.parent.plan.representations.items[@backingInt(current)];
+        switch (rep.kind) {
+            .record => return current,
+            .dynamic => return if (self.repHasRecordFieldChildrenForBoundary(rep)) current else null,
+            .alias, .nominal, .in_progress, .primitive, .bool_tag_union, .erased_callable, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return null,
         }
     }
 
@@ -43874,7 +42815,7 @@ const ProcBodyBuilder = struct {
     fn findRecordFieldByLabel(
         self: *const ProcBodyBuilder,
         record_rep_id: Plan.TypeRepId,
-        target_view: ProcedureModuleView,
+        target_view: Plan.ModuleView,
         target_label: @TypeOf(@as(checked.CheckedRecordExprField, undefined).label),
     ) ?MatchedRecordField {
         const rep = self.parent.plan.representations.items[@backingInt(record_rep_id)];
@@ -43882,7 +42823,7 @@ const ProcBodyBuilder = struct {
         for (self.parent.plan.childSlice(rep.children)) |child| {
             switch (child.role) {
                 .record_field => |source_label| {
-                    if (Plan.recordFieldNameMatches(viewNames(procedureModuleById(self.parent.modules, child.source_type.module)), source_label, viewNames(target_view), target_label)) {
+                    if (Plan.recordFieldNameMatches(Plan.moduleNamesOf(Plan.moduleViewForKey(self.parent.modules, child.source_type.module)), source_label, Plan.moduleNamesOf(target_view), target_label)) {
                         return .{
                             .index = index,
                             .rep = child.rep,
@@ -43918,7 +42859,7 @@ const ProcBodyBuilder = struct {
     fn recordFieldAccessInfo(
         self: *const ProcBodyBuilder,
         receiver_rep_id: Plan.TypeRepId,
-        access_view: ProcedureModuleView,
+        access_view: Plan.ModuleView,
         field_name: @TypeOf(@as(checked.CheckedRecordExprField, undefined).label),
     ) RecordFieldAccessInfo {
         // Aliases and transparent nominals read their backing's fields.
@@ -43948,11 +42889,11 @@ const ProcBodyBuilder = struct {
         };
 
         var index: u32 = 0;
-        const source_view = procedureModuleById(self.parent.modules, rep.source_type.module);
+        const source_view = Plan.moduleViewForKey(self.parent.modules, rep.source_type.module);
         for (self.parent.plan.childSlice(rep.children)) |child| {
             switch (child.role) {
                 .record_field => |label| {
-                    if (Plan.recordFieldNameMatches(viewNames(source_view), label, viewNames(access_view), field_name)) {
+                    if (Plan.recordFieldNameMatches(Plan.moduleNamesOf(source_view), label, Plan.moduleNamesOf(access_view), field_name)) {
                         return .{
                             .record_rep = record_rep_id,
                             .field_idx = index,
@@ -44053,7 +42994,7 @@ const ProcBodyBuilder = struct {
         type_ref: Plan.CheckedTypeIdentity,
         name: names.TagNameId,
     ) TagVariantLookup {
-        const requested_module = procedureModuleById(self.parent.modules, type_ref.module);
+        const requested_module = Plan.moduleViewForKey(self.parent.modules, type_ref.module);
         var current = self.repForTypeRef(type_ref);
         while (true) {
             const rep = self.parent.plan.representations.items[@backingInt(current)];
@@ -44082,7 +43023,7 @@ const ProcBodyBuilder = struct {
     fn tagVariantForModule(
         self: *const ProcBodyBuilder,
         rep: Plan.TypeRepresentation,
-        requested_module: ProcedureModuleView,
+        requested_module: Plan.ModuleView,
         name: names.TagNameId,
     ) TagVariantLookup {
         const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
@@ -44104,26 +43045,25 @@ const ProcBodyBuilder = struct {
     fn tagVariantNameMatches(
         self: *const ProcBodyBuilder,
         variant: Plan.TagVariant,
-        requested_module: ProcedureModuleView,
+        requested_module: Plan.ModuleView,
         requested_name: names.TagNameId,
     ) bool {
         return std.mem.eql(
             u8,
             self.tagVariantNameText(variant),
-            requested_module.canonical_names.tagLabelText(requested_name),
+            requested_module.canonical_names.?.tagLabelText(requested_name),
         );
     }
 
     fn tagVariantNameText(self: *const ProcBodyBuilder, variant: Plan.TagVariant) []const u8 {
-        const module = procedureModuleById(self.parent.modules, variant.name_module);
-        return module.canonical_names.tagLabelText(variant.name);
+        return self.parent.tagVariantNameText(variant);
     }
 
     fn lirTagName(
         self: *ProcBodyBuilder,
         tag_name: names.TagNameId,
     ) Allocator.Error!LIR.BoxyNameId {
-        return try self.parent.result.store.insertBoxyName(self.module.canonical_names.tagLabelText(tag_name));
+        return try self.parent.result.store.insertBoxyName(self.module.canonical_names.?.tagLabelText(tag_name));
     }
 
     fn lirTagNameForRep(
@@ -44132,8 +43072,8 @@ const ProcBodyBuilder = struct {
         tag_name: names.TagNameId,
     ) Allocator.Error!LIR.BoxyNameId {
         const rep = self.parent.plan.representations.items[@backingInt(rep_id)];
-        const module = procedureModuleById(self.parent.modules, rep.source_type.module);
-        return try self.parent.result.store.insertBoxyName(module.canonical_names.tagLabelText(tag_name));
+        const module = Plan.moduleViewForKey(self.parent.modules, rep.source_type.module);
+        return try self.parent.result.store.insertBoxyName(module.canonical_names.?.tagLabelText(tag_name));
     }
 
     fn lirTagNameForVariant(
@@ -44147,12 +43087,12 @@ const ProcBodyBuilder = struct {
         self: *ProcBodyBuilder,
         variant: TagVariantLookup,
     ) Allocator.Error!LIR.BoxyNameId {
-        const module = procedureModuleById(self.parent.modules, variant.name_module);
-        return try self.parent.result.store.insertBoxyName(module.canonical_names.tagLabelText(variant.name));
+        const module = Plan.moduleViewForKey(self.parent.modules, variant.name_module);
+        return try self.parent.result.store.insertBoxyName(module.canonical_names.?.tagLabelText(variant.name));
     }
 
     fn boolVariantIndex(self: *const ProcBodyBuilder, name: names.TagNameId) u32 {
-        return Common.boolTagDiscriminant(self.module.canonical_names.tagLabelText(name)) orelse
+        return Common.boolTagDiscriminant(self.module.canonical_names.?.tagLabelText(name)) orelse
             boxyLowerInvariant("builtin Bool tag expression referenced a non-Bool tag");
     }
 
@@ -44193,7 +43133,7 @@ const ProcBodyBuilder = struct {
     }
 };
 
-fn constListElemType(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypeId {
+fn constListElemType(module: Plan.ModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypeId {
     const nominal = resolvedNominalPayload(module, checked_ty);
     if (nominal.builtin != .list or nominal.args.len != 1) {
         boxyLowerInvariant("ConstStore list restored with a non-list checked type");
@@ -44201,7 +43141,7 @@ fn constListElemType(module: ProcedureModuleView, checked_ty: checked.CheckedTyp
     return nominal.args[0];
 }
 
-fn constBoxPayloadType(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypeId {
+fn constBoxPayloadType(module: Plan.ModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypeId {
     const nominal = resolvedNominalPayload(module, checked_ty);
     if (nominal.builtin != .box or nominal.args.len != 1) {
         boxyLowerInvariant("ConstStore box restored with a non-Box checked type");
@@ -44209,21 +43149,14 @@ fn constBoxPayloadType(module: ProcedureModuleView, checked_ty: checked.CheckedT
     return nominal.args[0];
 }
 
-fn checkedFunctionPayload(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedFunctionType {
-    return switch (resolvedTypePayload(module, checked_ty)) {
-        .function => |function| function,
-        .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("checked intrinsic wrapper did not have a function type"),
-    };
-}
-
-fn constTupleItemTypes(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) []const checked.CheckedTypeId {
+fn constTupleItemTypes(module: Plan.ModuleView, checked_ty: checked.CheckedTypeId) []const checked.CheckedTypeId {
     return switch (resolvedTypePayload(module, checked_ty)) {
         .tuple => |items| items,
         .pending, .err, .flex, .rigid, .alias, .record, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("ConstStore tuple restored with a non-tuple checked type"),
     };
 }
 
-fn constRecordFields(allocator: Allocator, module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) Allocator.Error![]checked.CheckedRecordField {
+fn constRecordFields(allocator: Allocator, module: Plan.ModuleView, checked_ty: checked.CheckedTypeId) Allocator.Error![]checked.CheckedRecordField {
     var fields = std.ArrayList(checked.CheckedRecordField).empty;
     errdefer fields.deinit(allocator);
 
@@ -44262,11 +43195,11 @@ fn constRecordFields(allocator: Allocator, module: ProcedureModuleView, checked_
             return context.names.recordFieldLabelTextLessThan(lhs.name, rhs.name);
         }
     };
-    std.mem.sort(checked.CheckedRecordField, fields.items, SortContext{ .names = module.canonical_names }, SortContext.lessThan);
+    std.mem.sort(checked.CheckedRecordField, fields.items, SortContext{ .names = module.canonical_names.? }, SortContext.lessThan);
     return try fields.toOwnedSlice(allocator);
 }
 
-fn constRowExtensionIsClosed(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId, expected: checked.RowDefault) void {
+fn constRowExtensionIsClosed(module: Plan.ModuleView, checked_ty: checked.CheckedTypeId, expected: checked.RowDefault) void {
     var current = checked_ty;
     const closed = while (true) {
         switch (resolvedTypePayload(module, current)) {
@@ -44293,13 +43226,13 @@ fn constRecordFieldIndex(fields: []const checked.CheckedRecordField, label: name
     return null;
 }
 
-fn checkedRecordFieldByName(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId, field_name: []const u8) checked.CheckedRecordField {
+fn checkedRecordFieldByName(module: Plan.ModuleView, checked_ty: checked.CheckedTypeId, field_name: []const u8) checked.CheckedRecordField {
     var current = checked_ty;
     while (true) {
         switch (resolvedTypePayload(module, current)) {
             .record => |record| {
                 for (record.fields) |field| {
-                    if (std.mem.eql(u8, module.canonical_names.recordFieldLabelText(field.name), field_name)) return field;
+                    if (std.mem.eql(u8, module.canonical_names.?.recordFieldLabelText(field.name), field_name)) return field;
                 }
                 current = record.ext;
             },
@@ -44316,7 +43249,7 @@ const ConstTagPayloadTypes = struct {
 };
 
 fn constTagPayloadTypes(
-    module: ProcedureModuleView,
+    module: Plan.ModuleView,
     checked_ty: checked.CheckedTypeId,
     tag_name: []const u8,
 ) ConstTagPayloadTypes {
@@ -44337,7 +43270,7 @@ fn constTagPayloadTypes(
             .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union => boxyLowerInvariant("ConstStore tag name was missing from checked tag-union type"),
         };
         for (tag_union.tags) |tag| {
-            if (std.mem.eql(u8, module.canonical_names.tagLabelText(tag.name), tag_name)) {
+            if (std.mem.eql(u8, module.canonical_names.?.tagLabelText(tag.name), tag_name)) {
                 return .{
                     .name = tag.name,
                     .payload_tys = tag.argsSlice(module.checked_types),
@@ -44352,7 +43285,7 @@ fn constTagPayloadTypes(
 /// representation, where openness is fine: the named tag is searched through
 /// the row's extension chain instead of demanding a closed row.
 fn constTagPayloadTypesAllowOpen(
-    module: ProcedureModuleView,
+    module: Plan.ModuleView,
     checked_ty: checked.CheckedTypeId,
     tag_name: []const u8,
 ) ConstTagPayloadTypes {
@@ -44363,7 +43296,7 @@ fn constTagPayloadTypesAllowOpen(
             .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union => boxyLowerInvariant("ConstStore tag name was missing from checked tag-union row"),
         };
         for (tag_union.tags) |tag| {
-            if (std.mem.eql(u8, module.canonical_names.tagLabelText(tag.name), tag_name)) {
+            if (std.mem.eql(u8, module.canonical_names.?.tagLabelText(tag.name), tag_name)) {
                 return .{
                     .name = tag.name,
                     .payload_tys = tag.argsSlice(module.checked_types),
@@ -44374,7 +43307,7 @@ fn constTagPayloadTypesAllowOpen(
     }
 }
 
-fn resolvedNominalPayload(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedNominalType {
+fn resolvedNominalPayload(module: Plan.ModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedNominalType {
     return switch (resolvedTypePayload(module, checked_ty)) {
         .nominal => |nominal| nominal,
         .pending, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("ConstStore nominal child lookup reached a non-nominal checked type"),
@@ -44385,21 +43318,21 @@ fn resolvedNominalPayload(module: ProcedureModuleView, checked_ty: checked.Check
 /// names its backing template. Any other checked type is already the
 /// structure that the nominal instantiates at this position, as when an
 /// unannotated worker's structural row is instantiated by a call's `Try`.
-fn checkedTypeAtNominalBacking(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypeId {
+fn checkedTypeAtNominalBacking(module: Plan.ModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypeId {
     return switch (resolvedTypePayload(module, checked_ty)) {
         .nominal => resolvedNominalBacking(module, checked_ty),
         .pending, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => checked_ty,
     };
 }
 
-fn resolvedNominalBacking(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypeId {
+fn resolvedNominalBacking(module: Plan.ModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypeId {
     const nominal = resolvedNominalPayload(module, checked_ty);
     return module.checked_types.nominalBackingTemplateForPayload(nominal) orelse
         boxyLowerInvariant("boxy lowering requested the backing of an opaque nominal type");
 }
 
 fn checkedBuiltinNominalForType(
-    module: ProcedureModuleView,
+    module: Plan.ModuleView,
     checked_ty: checked.CheckedTypeId,
 ) ?checked.CheckedBuiltinNominal {
     return switch (resolvedTypePayload(module, checked_ty)) {
@@ -44409,13 +43342,13 @@ fn checkedBuiltinNominalForType(
 }
 
 fn generatedEncoderKeyMethodForType(
-    module: ProcedureModuleView,
+    module: Plan.ModuleView,
     checked_ty: checked.CheckedTypeId,
 ) ?[]const u8 {
     return Plan.generatedCodecScalarMethod(checkedBuiltinNominalForType(module, checked_ty) orelse return null, "encode_key_");
 }
 
-fn resolvedTypePayload(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypePayload {
+fn resolvedTypePayload(module: Plan.ModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypePayload {
     var current = checked_ty;
     while (true) {
         const payload = module.checked_types.payload(current);
@@ -44906,7 +43839,7 @@ const ConstPlanBuilder = struct {
                     const variant = tag_variants[tag.initialized];
                     const payload_children = self.plan.childSlice(variant.payloads);
                     if (tag.payloads == null) {
-                        const variant_names = procedureModuleById(self.modules, variant.name_module).canonical_names;
+                        const variant_names = Plan.moduleViewForKey(self.modules, variant.name_module).canonical_names.?;
                         tag.name = try self.allocator.dupe(u8, variant_names.tagLabelText(variant.name));
                         errdefer self.allocator.free(tag.name);
                         tag.payloads = try self.allocator.alloc(LirProgram.ConstPlanId, payload_children.len);
@@ -45024,8 +43957,8 @@ const ConstPlanBuilder = struct {
 
             const worker = self.plan.workers.items[@backingInt(static_fn.worker)];
             const worker_captures = self.plan.erasedCaptureSlice(worker.erased_captures);
-            const store_module = procedureModuleById(self.modules, static_fn.store_module);
-            const fn_value = store_module.const_store.getFn(static_fn.fn_id);
+            const store_module = Plan.moduleViewForKey(self.modules, static_fn.store_module);
+            const fn_value = store_module.const_store.?.getFn(static_fn.fn_id);
 
             var value_capture_count: usize = 0;
             for (worker_captures) |capture| {
@@ -45080,7 +44013,7 @@ const ConstPlanBuilder = struct {
     }
 
     fn boolTagUnionConstPlan(self: *ConstPlanBuilder, rep: Plan.TypeRepresentation) Allocator.Error!LirProgram.ConstPlan {
-        const module = procedureModuleById(self.modules, rep.source_type.module);
+        const module = Plan.moduleViewForKey(self.modules, rep.source_type.module);
         const nominal = resolvedNominalPayload(module, rep.source_type.ty);
         const backing = module.checked_types.nominalBackingTemplateForPayload(nominal) orelse
             boxyLowerInvariant("boxy const planning requested the backing of an opaque nominal type");
@@ -45098,7 +44031,7 @@ const ConstPlanBuilder = struct {
             if (tag.argsSlice(module.checked_types).len != 0) {
                 boxyLowerInvariant("Bool checked tag carried a payload");
             }
-            const name_text = module.canonical_names.tagLabelText(tag.name);
+            const name_text = module.canonical_names.?.tagLabelText(tag.name);
             const discriminant = Common.boolTagDiscriminant(name_text) orelse
                 boxyLowerInvariant("Bool checked tag union contained a non-boolean tag");
             variant.* = .{
@@ -45333,6 +44266,27 @@ fn lirSymbol(symbol: Common.Symbol) LIR.Symbol {
     return LIR.Symbol.fromRaw(@intCast(@backingInt(symbol)));
 }
 
+/// The Boxy lowering of a checked low-level operation: the operations
+/// lowering handles with dedicated statements, and `other` for every
+/// operation lowered as an ordinary `assign_low_level`.
+const BoxyLowLevelKind = enum {
+    box_box,
+    box_unbox,
+    box_unbox_borrowed,
+    list_map_can_reuse,
+    other,
+};
+
+fn boxyLowLevelKind(op: can.CIR.Expr.LowLevel) BoxyLowLevelKind {
+    return switch (op) {
+        .box_box => .box_box,
+        .box_unbox => .box_unbox,
+        .box_unbox_borrowed => .box_unbox_borrowed,
+        .list_map_can_reuse => .list_map_can_reuse,
+        .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_prefetch, .list_prefetched, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_take_first, .list_take_last, .list_reverse, .list_sort_with, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_map_prepare_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_floor, .num_ceiling, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => .other,
+    };
+}
+
 fn boxyLowerInvariant(comptime message: []const u8) noreturn {
     if (comptime zig_builtin.mode == .debug and zig_builtin.target.os.tag == .freestanding) {
         base.invariant("{s}", .{"boxy lower invariant violated: " ++ message});
@@ -45396,7 +44350,7 @@ test "descriptor materialization captures close over recursive template graphs" 
         .ret_layout = .opaque_ptr,
     }, .none);
 
-    var builder = ProcedureBuilder.init(gpa, undefined, undefined, undefined, undefined, &result, .{});
+    var builder = ProcedureBuilder.init(gpa, undefined, undefined, undefined, &result, .{});
     try builder.finalizeDescriptorMaterializationCaptures();
 
     const assign = result.store.getCFStmt(materialize).assign_boxy_desc_ref;
@@ -45455,236 +44409,10 @@ test "boxy lowerer returns an empty LIR program for an empty plan" {
     try std.testing.expectEqual(@as(usize, 0), out.lir_result.root_procs.items.len);
 }
 
-fn expectResolvedWorkerCheckedExpr(
-    worker: ResolvedWorker,
-    expected_body: ?checked.CheckedBodyId,
-    expected_root: checked.CheckedExprId,
-) error{ TestExpectedEqual, TestUnexpectedResult }!void {
-    const body = switch (worker.body) {
-        .checked_expr => |checked_body| checked_body,
-        .intrinsic, .hosted, .unimplemented, .const_crash, .generated_codec, .generated_field_iterator => return error.TestUnexpectedResult,
-    };
-    try std.testing.expectEqual(expected_body, body.body_id);
-    try std.testing.expectEqual(expected_root, body.root_expr);
-}
-
-test "boxy lowerer resolves procedure-template workers to checked bodies" {
-    const gpa = std.testing.allocator;
-
-    var checked_module = minimalCheckedArtifact(gpa);
-    defer checked_module.canonical_names.deinit();
-    defer checked_module.checked_types.deinit(gpa);
-    defer checked_module.checked_bodies.deinit(gpa);
-
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
-    try checked_module.checked_bodies.bodies.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-        .root_expr = @fromBackingInt(@intCast(3)),
-        .owner_template = template_ref,
-    });
-    var templates = [_]checked.CheckedProcedureTemplate{
-        checkedTemplate(template_ref, @fromBackingInt(@intCast(9)), @fromBackingInt(@intCast(fixtureTableIndex(0)))),
-    };
-    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len, .pointer_stability = .{} } };
-
-    var plan = Plan.ProgramPlan.init(gpa);
-    defer plan.deinit();
-    try plan.workers.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-        .root_request = dummyRootRequest(),
-        .source = .{ .procedure_template = template_ref },
-        .checked_type = .{ .ty = @fromBackingInt(@intCast(9)) },
-        .rep = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-    });
-
-    var resolved = try ResolvedWorkers.init(gpa, .{ .root = .{ .module = &checked_module, .roots = undefined } }, &plan);
-    defer resolved.deinit();
-
-    try std.testing.expectEqual(@as(usize, 1), resolved.items.len);
-    try std.testing.expectEqual(@as(Plan.WorkerPlanId, @fromBackingInt(@intCast(fixtureTableIndex(0)))), resolved.items[0].worker);
-    try std.testing.expect(names.procedureTemplateRefEql(
-        template_ref,
-        resolved.items[0].template_ref orelse return error.TestUnexpectedResult,
-    ));
-    try expectResolvedWorkerCheckedExpr(resolved.items[0], @fromBackingInt(@intCast(fixtureTableIndex(0))), @fromBackingInt(@intCast(3)));
-}
-
-test "boxy lowerer resolves top-level direct bindings to checked bodies" {
-    const gpa = std.testing.allocator;
-
-    var checked_module = minimalCheckedArtifact(gpa);
-    defer checked_module.canonical_names.deinit();
-    defer checked_module.checked_types.deinit(gpa);
-    defer checked_module.checked_bodies.deinit(gpa);
-
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
-    try checked_module.checked_bodies.bodies.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-        .root_expr = @fromBackingInt(@intCast(5)),
-        .owner_template = template_ref,
-    });
-    var templates = [_]checked.CheckedProcedureTemplate{
-        checkedTemplate(template_ref, @fromBackingInt(@intCast(7)), @fromBackingInt(@intCast(fixtureTableIndex(0)))),
-    };
-    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len, .pointer_stability = .{} } };
-
-    var bindings = [_]checked.TopLevelProcedureBinding{
-        .{
-            .source_scheme = typeSchemeKey(1),
-            .body = .{ .direct_template = .{
-                .proc_value = procedureValueRef(template_ref),
-                .template = .{ .checked = template_ref },
-            } },
-        },
-    };
-    checked_module.top_level_procedure_bindings = .{ .bindings = .{ .items = &bindings, .capacity = bindings.len, .pointer_stability = .{} } };
-
-    var plan = Plan.ProgramPlan.init(gpa);
-    defer plan.deinit();
-    try plan.workers.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-        .root_request = dummyRootRequest(),
-        .source = .{ .procedure_binding = .{ .artifact = checked_module.key, .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
-        .checked_type = .{ .ty = @fromBackingInt(@intCast(7)) },
-        .rep = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-    });
-
-    var resolved = try ResolvedWorkers.init(gpa, .{ .root = .{ .module = &checked_module, .roots = undefined } }, &plan);
-    defer resolved.deinit();
-
-    try std.testing.expectEqual(@as(usize, 1), resolved.items.len);
-    try std.testing.expect(names.procedureTemplateRefEql(
-        template_ref,
-        resolved.items[0].template_ref orelse return error.TestUnexpectedResult,
-    ));
-    try expectResolvedWorkerCheckedExpr(resolved.items[0], @fromBackingInt(@intCast(fixtureTableIndex(0))), @fromBackingInt(@intCast(5)));
-}
-
-test "boxy lowerer resolves callable eval bindings to finalized const function expressions" {
-    const gpa = std.testing.allocator;
-
-    var checked_module = minimalCheckedArtifact(gpa);
-    defer checked_module.canonical_names.deinit();
-    defer checked_module.checked_types.deinit(gpa);
-    defer checked_module.checked_bodies.deinit(gpa);
-    checked_module.const_store = check.ConstStore.ConstStore.init(gpa);
-    defer checked_module.const_store.deinit();
-
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
-    var callable_templates = [_]checked.CallableEvalTemplate{
-        .{
-            .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-            .module_idx = 0,
-            .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-            .root = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-            .source_scheme = typeSchemeKey(1),
-            .checked_fn_root = @fromBackingInt(@intCast(1)),
-        },
-    };
-    checked_module.callable_eval_templates = .{ .templates = .{ .items = &callable_templates, .capacity = callable_templates.len, .pointer_stability = .{} } };
-
-    const evidence_frames = [_]check.ConstStore.ConstFnEvidenceFrame{
-        check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 0),
-    };
-    const fn_id = try checked_module.const_store.appendFn(.{
-        .fn_def = .{ .nested = .{
-            .owner = template_ref,
-            .site = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-            .context_fn_key = typeKey(1),
-        } },
-        .source_fn_ty = @fromBackingInt(@intCast(1)),
-        .source_fn_key = typeKey(1),
-        .evidence_frames = &evidence_frames,
-        .evidence_frame_head = 0,
-    });
-    var compile_time_roots = [_]checked.CompileTimeRoot{
-        .{
-            .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-            .module_idx = 0,
-            .kind = .callable_binding,
-            .source = .{ .def = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-            .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-            .expr = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-            .checked_type = @fromBackingInt(@intCast(1)),
-            .request_eligibility = .eligible,
-            .payload = .{ .fn_value = fn_id },
-        },
-    };
-    checked_module.compile_time_roots = .{ .roots = &compile_time_roots };
-
-    try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-        .ty = @fromBackingInt(@intCast(1)),
-        .source_region = base.Region.zero(),
-        .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
-    });
-    var nested_sites = [_]checked.NestedProcSite{
-        .{
-            .site = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-            .owner = .{ .template = template_ref },
-            .lexical_scope = .root,
-            .evidence_source = .inherited,
-            .evidence = .{},
-            .path_start = 0,
-            .path_len = 0,
-            .kind = .local_function,
-            .checked_expr = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-            .checked_pattern = null,
-        },
-    };
-    checked_module.nested_proc_sites = .{ .sites = &nested_sites };
-
-    var templates = [_]checked.CheckedProcedureTemplate{
-        .{
-            .proc_base = template_ref.proc_base,
-            .template_id = template_ref.template,
-            .body = .{ .entry_wrapper = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-            .checked_fn_scheme = typeSchemeKey(2),
-            .checked_fn_root = @fromBackingInt(@intCast(2)),
-            .static_dispatch_plans = .{},
-            .direct_dispatch_plans = .{},
-            .dispatch_relations = .{},
-            .resolved_value_refs = .{},
-            .top_level_value_uses = .{},
-            .nested_proc_sites = .{},
-            .target = .comptime_only,
-        },
-    };
-    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len, .pointer_stability = .{} } };
-
-    var bindings = [_]checked.TopLevelProcedureBinding{
-        .{
-            .source_scheme = typeSchemeKey(1),
-            .body = .{ .callable_eval_template = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-        },
-    };
-    checked_module.top_level_procedure_bindings = .{ .bindings = .{ .items = &bindings, .capacity = bindings.len, .pointer_stability = .{} } };
-
-    var plan = Plan.ProgramPlan.init(gpa);
-    defer plan.deinit();
-    try plan.workers.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-        .root_request = dummyRootRequest(),
-        .source = .{ .procedure_binding = .{ .artifact = checked_module.key, .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
-        .checked_type = .{ .ty = @fromBackingInt(@intCast(1)) },
-        .rep = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-    });
-
-    var resolved = try ResolvedWorkers.init(gpa, .{ .root = .{ .module = &checked_module, .roots = undefined } }, &plan);
-    defer resolved.deinit();
-
-    try std.testing.expectEqual(@as(usize, 1), resolved.items.len);
-    try std.testing.expect(names.procedureTemplateRefEql(
-        template_ref,
-        resolved.items[0].template_ref orelse return error.TestUnexpectedResult,
-    ));
-    try expectResolvedWorkerCheckedExpr(resolved.items[0], null, @fromBackingInt(@intCast(fixtureTableIndex(0))));
-}
-
 test "boxy lowerer emits private worker proc for zero-arg numeric lambda root" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -45794,7 +44522,7 @@ const ConstLookupStoredKind = enum {
 fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind, stored: ConstLookupStoredKind) (Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -45882,7 +44610,7 @@ fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind, stored: ConstLookupS
             .expr = @fromBackingInt(@intCast(1)),
             .ref = .{ .top_level_const = .{
                 .const_ref = const_ref,
-                .requested_source_ty_template = canonicalTypeKey(1),
+                .requested_source_ty_template = typeKey(1),
                 .requested_source_ty_payload = @fromBackingInt(@intCast(fixtureTableIndex(0))),
             } },
             .checked_ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
@@ -45946,7 +44674,7 @@ fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind, stored: ConstLookupS
 test "boxy lowerer emits small decimal expressions as Dec literals" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -46024,7 +44752,7 @@ test "boxy lowerer emits small decimal expressions as Dec literals" {
 test "boxy lowerer emits direct calls to planned private workers" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -46140,7 +44868,7 @@ test "boxy lowerer emits direct calls to planned private workers" {
             .expr = @fromBackingInt(@intCast(2)),
             .ref = .{ .top_level_proc = .{
                 .binding = .{ .top_level = .{ .artifact = checked_module.key, .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
-                .source_fn_ty_template = canonicalTypeKey(1),
+                .source_fn_ty_template = typeKey(1),
                 .source_fn_ty_payload = @fromBackingInt(@intCast(1)),
                 .runtime_result_provenance = null,
             } },
@@ -46227,12 +44955,12 @@ test "boxy lowerer emits direct calls to planned private workers" {
 test "boxy lowerer emits direct calls to planned imported workers" {
     const gpa = std.testing.allocator;
 
-    var root_checked_module = minimalCheckedArtifact(gpa);
+    var root_checked_module = minimalCheckedModule(gpa);
     defer root_checked_module.canonical_names.deinit();
     defer root_checked_module.checked_types.deinit(gpa);
     defer root_checked_module.checked_bodies.deinit(gpa);
 
-    var import_checked_module = minimalCheckedArtifact(gpa);
+    var import_checked_module = minimalCheckedModule(gpa);
     import_checked_module.key = moduleKey(2);
     defer import_checked_module.canonical_names.deinit();
     defer import_checked_module.checked_types.deinit(gpa);
@@ -46314,7 +45042,7 @@ test "boxy lowerer emits direct calls to planned imported workers" {
     import_checked_module.top_level_procedure_bindings = .{ .bindings = .{ .items = &import_bindings, .capacity = import_bindings.len, .pointer_stability = .{} } };
     const import_helper_use = checked.ProcedureUseTemplate{
         .binding = .{ .top_level = .{ .artifact = import_checked_module.key, .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
-        .source_fn_ty_template = canonicalTypeKey(3),
+        .source_fn_ty_template = typeKey(3),
         .source_fn_ty_payload = @fromBackingInt(@intCast(1)),
         .runtime_result_provenance = null,
     };
@@ -46406,7 +45134,7 @@ test "boxy lowerer emits direct calls to planned imported workers" {
 
     const imported_use = checked.ProcedureUseTemplate{
         .binding = .{ .imported = imported_binding },
-        .source_fn_ty_template = canonicalTypeKey(2),
+        .source_fn_ty_template = typeKey(2),
         .source_fn_ty_payload = @fromBackingInt(@intCast(1)),
         .runtime_result_provenance = null,
     };
@@ -46496,7 +45224,7 @@ test "boxy lowerer emits direct calls to planned imported workers" {
             try std.testing.expectEqual(LIR.BoxyTransferMode.move, adapt.source_mode);
             break :blk .{ adapt.target, adapt.next };
         },
-        .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => return error.TestUnexpectedResult,
+        .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => return error.TestUnexpectedResult,
     };
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = returned[0] } }, out.lir_result.store.getCFStmt(returned[1]));
 
@@ -46522,7 +45250,7 @@ test "boxy lowerer emits direct calls to planned imported workers" {
 test "boxy lowerer emits recursive direct calls to the current private worker" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -46590,7 +45318,7 @@ test "boxy lowerer emits recursive direct calls to the current private worker" {
             .expr = @fromBackingInt(@intCast(2)),
             .ref = .{ .top_level_proc = .{
                 .binding = .{ .top_level = .{ .artifact = checked_module.key, .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
-                .source_fn_ty_template = canonicalTypeKey(1),
+                .source_fn_ty_template = typeKey(1),
                 .source_fn_ty_payload = @fromBackingInt(@intCast(1)),
                 .runtime_result_provenance = null,
             } },
@@ -46661,7 +45389,7 @@ test "boxy lowerer emits recursive direct calls to the current private worker" {
 test "boxy lowerer emits checked crash as terminal LIR crash" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -46740,7 +45468,7 @@ test "boxy lowerer emits checked crash as terminal LIR crash" {
 test "boxy lowerer emits checked ellipsis as identity not-implemented crash" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -46816,7 +45544,7 @@ test "boxy lowerer emits checked ellipsis as identity not-implemented crash" {
 test "boxy lowerer emits checked return expressions as terminal ret" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -46904,7 +45632,7 @@ test "boxy lowerer emits checked return expressions as terminal ret" {
 test "boxy lowerer emits checked return statements as terminal ret" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -47007,7 +45735,7 @@ test "boxy lowerer emits checked return statements as terminal ret" {
 test "boxy lowerer emits checked runtime error expressions as the runtime error crash" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -47080,7 +45808,7 @@ test "boxy lowerer emits checked runtime error expressions as the runtime error 
 test "boxy lowerer emits checked runtime error statements as the runtime error crash" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -47169,7 +45897,7 @@ test "boxy lowerer emits checked runtime error statements as the runtime error c
 test "boxy lowerer emits checked while statements as join-backed loops" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -47303,7 +46031,7 @@ test "boxy lowerer emits checked while statements as join-backed loops" {
 test "boxy lowerer emits checked break as the active loop exit" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -47433,7 +46161,7 @@ test "boxy lowerer emits checked break as the active loop exit" {
 test "boxy lowerer emits checked if expressions with a shared continuation join" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -47568,7 +46296,7 @@ test "boxy lowerer emits checked if expressions with a shared continuation join"
 test "boxy lowerer emits checked tag matches as ordered discriminant tests" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -47731,7 +46459,7 @@ test "boxy lowerer emits checked tag matches as ordered discriminant tests" {
 test "boxy lowerer binds checked tag payload match patterns before branch bodies" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -47919,7 +46647,7 @@ test "boxy lowerer binds checked tag payload match patterns before branch bodies
 test "boxy lowerer emits checked list match patterns as length checks and element reads" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -48119,7 +46847,7 @@ test "boxy lowerer emits checked list match patterns as length checks and elemen
 test "boxy lowerer emits checked string interpolation match patterns" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -48276,7 +47004,7 @@ test "boxy lowerer emits checked string interpolation match patterns" {
 test "boxy lowerer maps checked alternative binders onto representative match locals" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -48467,7 +47195,7 @@ test "boxy lowerer maps checked alternative binders onto representative match lo
 test "boxy lowerer emits checked numeric literal match patterns as equality tests" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -48607,7 +47335,7 @@ test "boxy lowerer emits checked numeric literal match patterns as equality test
 test "boxy lowerer emits checked small decimal match patterns as Dec equality tests" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -48763,7 +47491,7 @@ test "boxy lowerer emits checked small decimal match patterns as Dec equality te
 test "boxy lowerer emits checked string literal match patterns as string equality tests" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -48898,7 +47626,7 @@ test "boxy lowerer emits checked string literal match patterns as string equalit
 test "boxy lowerer emits checked unary not as bool low-level call" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -48991,7 +47719,7 @@ test "boxy lowerer emits checked unary not as bool low-level call" {
 test "boxy lowerer emits short-circuit checked boolean and" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -49104,7 +47832,7 @@ test "boxy lowerer emits short-circuit checked boolean and" {
 test "boxy lowerer emits primitive structural equality as low-level equality" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -49212,7 +47940,7 @@ test "boxy lowerer emits primitive structural equality as low-level equality" {
 test "boxy lowerer emits tuple structural equality with field short-circuiting" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -49377,7 +48105,7 @@ test "boxy lowerer emits tuple structural equality with field short-circuiting" 
 test "boxy lowerer emits primitive structural hash as hasher low-level" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -49479,7 +48207,7 @@ test "boxy lowerer emits primitive structural hash as hasher low-level" {
 test "boxy lowerer emits tuple structural hash by threading hasher through fields" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -49611,7 +48339,7 @@ test "boxy lowerer emits tuple structural hash by threading hasher through field
 test "boxy lowerer emits checked string segment literals" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -49690,7 +48418,7 @@ test "boxy lowerer emits checked string segment literals" {
 test "boxy lowerer emits checked bytes literals as byte-backed LIR literals" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -49773,7 +48501,7 @@ test "boxy lowerer emits checked bytes literals as byte-backed LIR literals" {
 test "boxy lowerer emits checked string interpolation segments as concat chain" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -49905,7 +48633,7 @@ test "boxy lowerer emits checked string interpolation segments as concat chain" 
 test "boxy lowerer emits checked dbg expressions before unit result" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -49997,7 +48725,7 @@ test "boxy lowerer emits checked dbg expressions before unit result" {
 test "boxy lowerer emits checked expect expressions before unit result" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -50088,7 +48816,7 @@ test "boxy lowerer emits checked expect expressions before unit result" {
 test "boxy lowerer emits expect_err messages from inspected payloads" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -50216,7 +48944,7 @@ test "boxy lowerer emits expect_err messages from inspected payloads" {
 test "boxy lowerer emits checked dbg statements in block order" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -50324,7 +49052,7 @@ test "boxy lowerer emits checked dbg statements in block order" {
 test "boxy lowerer emits block declaration bindings with checked type layouts" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -50445,7 +49173,7 @@ test "boxy lowerer emits block declaration bindings with checked type layouts" {
 test "boxy lowerer emits uninitialized mutable block bindings" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -50553,7 +49281,7 @@ test "boxy lowerer emits uninitialized mutable block bindings" {
 test "boxy lowerer emits mutable reassignment as set_local replace" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -50701,7 +49429,7 @@ test "boxy lowerer emits mutable reassignment as set_local replace" {
 test "boxy lowerer destructures tuple declaration patterns" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -50888,7 +49616,7 @@ test "boxy lowerer destructures tuple declaration patterns" {
 test "boxy lowerer materializes record rest declaration patterns" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -51090,7 +49818,7 @@ test "boxy lowerer materializes record rest declaration patterns" {
 test "boxy lowerer binds irrefutable list rest declaration patterns" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -51249,7 +49977,7 @@ test "boxy lowerer binds irrefutable list rest declaration patterns" {
 test "boxy lowerer emits tuple construction in element order" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -51361,7 +50089,7 @@ test "boxy lowerer emits tuple construction in element order" {
 test "boxy lowerer emits tuple access as field_read" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -51473,7 +50201,7 @@ test "boxy lowerer emits tuple access as field_read" {
 test "boxy lowerer emits record construction in layout order after source-order evaluation" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -51593,7 +50321,7 @@ test "boxy lowerer emits record construction in layout order after source-order 
 test "boxy lowerer evaluates empty record extensions before explicit fields" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -51724,7 +50452,7 @@ test "boxy lowerer evaluates empty record extensions before explicit fields" {
 test "boxy lowerer emits record field access using layout field index" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -51853,7 +50581,7 @@ test "boxy lowerer emits record field access using layout field index" {
 test "boxy lowerer emits nominal construction for representation-equivalent backing" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -52002,7 +50730,7 @@ fn expectDeclaredNominalRecordBoundary(
 test "boxy lowerer emits nominal boundary before backing record pattern binding" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -52243,7 +50971,7 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
 test "boxy lowerer inspects declared-field nominals through backing field_read" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -52430,7 +51158,7 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
                 try std.testing.expect(debug.message != construct_nominal.target);
                 break;
             },
-            .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => return error.TestUnexpectedResult,
+            .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => return error.TestUnexpectedResult,
         }
     } else return error.TestUnexpectedResult;
 }
@@ -52438,7 +51166,7 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
 test "boxy lowerer hashes declared-field nominals through backing field_read" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -52637,7 +51365,7 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
                 try std.testing.expect(ret.value != seed.target);
                 break;
             },
-            .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .crash => return error.TestUnexpectedResult,
+            .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .crash => return error.TestUnexpectedResult,
         }
     } else return error.TestUnexpectedResult;
 }
@@ -52645,7 +51373,7 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
 test "boxy lowerer emits builtin Bool tags by checked Bool names" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -52727,7 +51455,7 @@ test "boxy lowerer emits builtin Bool tags by checked Bool names" {
 test "boxy lowerer emits payload tag construction using planned variant payload layout" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -52846,7 +51574,7 @@ test "boxy lowerer emits payload tag construction using planned variant payload 
 test "boxy lowerer emits list construction with committed element layout" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -52951,7 +51679,7 @@ test "boxy lowerer emits list construction with committed element layout" {
 test "boxy lowerer stores dynamic list elements with boxy storage layout" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -53079,7 +51807,7 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
         cursor = switch (out.lir_result.store.getCFStmt(cursor)) {
             .set_local => |set| set.next,
             .assign_boxy_desc_ref => |assign| assign.next,
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => break,
         };
     }
     const first = out.lir_result.store.getCFStmt(cursor).assign_ref;
@@ -53092,7 +51820,7 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
         cursor = switch (out.lir_result.store.getCFStmt(cursor)) {
             .set_local => |set| set.next,
             .assign_boxy_desc_ref => |assign| assign.next,
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => break,
         };
     }
     const second = out.lir_result.store.getCFStmt(cursor).assign_ref;
@@ -53104,7 +51832,7 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
     while (true) {
         cursor = switch (out.lir_result.store.getCFStmt(cursor)) {
             .assign_boxy_desc_ref => |assign| assign.next,
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => break,
         };
     }
     const list = out.lir_result.store.getCFStmt(cursor).assign_list;
@@ -53120,7 +51848,7 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
 test "boxy lowerer inspects concrete lists with an index and string accumulator loop" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -53262,7 +51990,7 @@ test "boxy lowerer inspects concrete lists with an index and string accumulator 
 test "boxy lowerer emits empty list construction" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -53339,7 +52067,7 @@ test "boxy lowerer emits empty list construction" {
 test "boxy lowerer emits checked low-level calls after source-order argument lowering" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -53449,7 +52177,7 @@ test "boxy lowerer emits checked low-level calls after source-order argument low
 test "boxy lowerer boxes concrete values with ordinary box low-level" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -53545,7 +52273,7 @@ test "boxy lowerer boxes concrete values with ordinary box low-level" {
 test "boxy lowerer reuses dynamic boxes for Box(a)" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -53648,7 +52376,7 @@ test "boxy lowerer reuses dynamic boxes for Box(a)" {
     while (true) {
         cursor = switch (out.lir_result.store.getCFStmt(cursor)) {
             .assign_boxy_desc_ref => |assign| assign.next,
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => break,
         };
     }
     const from_arg = out.lir_result.store.getCFStmt(cursor).assign_ref;
@@ -53670,7 +52398,7 @@ test "boxy lowerer reuses dynamic boxes for Box(a)" {
                 if (uses_source_desc) descriptor_materialization_target = assign.target;
                 break :blk assign.next;
             },
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => break,
         };
     }
     const reused = out.lir_result.store.getCFStmt(cursor).assign_ref;
@@ -53689,7 +52417,7 @@ test "boxy lowerer reuses dynamic boxes for Box(a)" {
 test "boxy lowerer unboxes concrete values with ordinary box low-level" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -53803,7 +52531,7 @@ test "boxy lowerer unboxes concrete values with ordinary box low-level" {
 test "boxy lowerer inspects concrete Box payloads" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -53994,7 +52722,7 @@ test "boxy lowerer disables in-place list map across distinct dynamic descriptor
 test "boxy lowerer emits checked integer division low-level calls" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -54093,7 +52821,7 @@ test "boxy lowerer emits checked integer division low-level calls" {
 test "boxy lowerer publishes host wrapper proc for exported roots" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -54212,7 +52940,7 @@ test "boxy lowerer publishes host wrapper proc for exported roots" {
 test "boxy lowerer emits requested layout metadata for layout-only plans" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
 
@@ -54248,7 +52976,7 @@ test "boxy lowerer emits requested layout metadata for layout-only plans" {
 test "boxy lowerer emits requested layout metadata for static data requests" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
 
@@ -54322,7 +53050,7 @@ test "boxy lowerer emits requested layout metadata for static data requests" {
 test "boxy lowerer emits const plans for zero-payload tag variants" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedArtifact(gpa);
+    var checked_module = minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
 
@@ -54377,139 +53105,6 @@ test "boxy lowerer emits const plans for zero-payload tag variants" {
     }
 }
 
-/// A shared empty ModuleEnv for test checked_modules, so lowering paths that read
-/// through the checked_module's module environment (e.g. the hosted-entry section
-/// scan) see valid empty data instead of undefined memory. Allocated once
-/// from the page allocator so the testing allocator's leak detection stays
-/// clean.
-fn testEmptyModuleEnv() *can.ModuleEnv {
-    const S = struct {
-        var env: ?*can.ModuleEnv = null;
-    };
-    if (S.env) |existing| return existing;
-    const page_allocator = std.heap.page_allocator;
-    const env = page_allocator.create(can.ModuleEnv) catch unreachable;
-    env.* = can.ModuleEnv.init(page_allocator, "") catch unreachable;
-    env.initCIRFields("Test") catch unreachable;
-    S.env = env;
-    return env;
-}
-
-fn minimalCheckedArtifact(allocator: Allocator) checked.CheckedModuleArtifact {
-    return .{
-        .key = moduleKey(1),
-        .canonical_names = names.CanonicalNameStore.init(allocator),
-        .module_identity = testModuleIdentity(),
-        .checking_context_identity = .{},
-        .module_env = .{ .checked_source = testEmptyModuleEnv() },
-        .exports = .{},
-        .provides_requires = .{},
-        .method_registry = .{},
-        .static_dispatch_plans = .{},
-        .resolved_value_refs = .{},
-        .checked_procedure_templates = .{},
-        .top_level_procedure_bindings = .{},
-        .root_requests = .{},
-        .hosted_procs = .{},
-        .platform_required_declarations = .{},
-        .platform_required_bindings = .{},
-        .interface_capabilities = .{},
-        .compile_time_roots = .{},
-        .top_level_values = .{},
-        .hoisted_constants = .{},
-        .const_templates = .{},
-        .const_store = check.ConstStore.ConstStore.init(allocator),
-    };
-}
-
-fn testModuleIdentity() checked.ModuleIdentity {
-    return .{
-        .module_idx = 0,
-        .module_name = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-        .display_module_name = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-        .kind = .module,
-    };
-}
-
-fn moduleKey(byte: u8) checked.ModuleId {
-    var key = checked.ModuleId{};
-    key.bytes[0] = byte;
-    return key;
-}
-
-fn typeKey(byte: u8) names.TypeDigest {
-    var key = names.TypeDigest{};
-    key.bytes[0] = byte;
-    return key;
-}
-
-fn canonicalTypeKey(byte: u8) names.CanonicalTypeKey {
-    var key = names.CanonicalTypeKey{};
-    key.bytes[0] = byte;
-    return key;
-}
-
-fn typeSchemeKey(byte: u8) names.CanonicalTypeSchemeKey {
-    var key = names.CanonicalTypeSchemeKey{};
-    key.bytes[0] = byte;
-    return key;
-}
-
-fn testIntNumeral(value: u128) Allocator.Error!can.ModuleEnv.NumeralLiteral {
-    return recordTestNumeral(value, 0, 0, false, false);
-}
-
-fn testSmallDecNumeral(value: can.CIR.SmallDecValue) Allocator.Error!can.ModuleEnv.NumeralLiteral {
-    var divisor: u128 = 1;
-    for (0..value.denominator_power_of_ten) |_| divisor *= 10;
-
-    const magnitude: u128 = @intCast(if (value.numerator < 0) -@as(i32, value.numerator) else value.numerator);
-    return recordTestNumeral(
-        magnitude / divisor,
-        magnitude % divisor,
-        value.denominator_power_of_ten,
-        value.numerator < 0,
-        true,
-    );
-}
-
-fn recordTestNumeral(
-    before: u128,
-    after: u128,
-    scale: u8,
-    is_negative: bool,
-    is_fractional: bool,
-) Allocator.Error!can.ModuleEnv.NumeralLiteral {
-    var before_buffer: [16]u8 = undefined;
-    var after_buffer: [16]u8 = undefined;
-    const before_digits = base256Digits(before, &before_buffer);
-    const after_digits = if (scale == 0) &.{} else base256Digits(after, &after_buffer);
-    const env = testEmptyModuleEnv();
-    const node = @as(can.CIR.Node.Idx, @fromBackingInt(@intCast(fixtureTableIndex(0))));
-    try env.recordNumeralLiteral(
-        node,
-        before_digits,
-        after_digits,
-        scale,
-        is_negative,
-        is_fractional,
-        is_fractional,
-        true,
-    );
-    return env.numeralLiteralForNode(node) orelse unreachable;
-}
-
-fn base256Digits(value: u128, buffer: *[16]u8) []const u8 {
-    var remaining = value;
-    var len: usize = 0;
-    while (true) {
-        buffer.*[buffer.len - 1 - len] = @truncate(remaining);
-        len += 1;
-        remaining >>= 8;
-        if (remaining == 0) return buffer.*[buffer.len - len ..];
-    }
-}
-
 const ListMapCanReuseTransformRet = enum {
     u64,
     u8,
@@ -54521,7 +53116,7 @@ fn lowerListMapCanReuseFixture(
     transform_ret: ListMapCanReuseTransformRet,
     options: Options,
 ) Allocator.Error!Output {
-    var checked_module = minimalCheckedArtifact(allocator);
+    var checked_module = minimalCheckedModule(allocator);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(allocator);
     defer checked_module.checked_bodies.deinit(allocator);
@@ -54687,17 +53282,17 @@ fn skipLeadingDescriptorInitializers(store: *const LirStore, start: LIR.CFStmtId
     while (true) {
         cursor = switch (store.getCFStmt(cursor)) {
             .assign_boxy_desc_ref => |assign| assign.next,
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => return cursor,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => return cursor,
         };
     }
 }
 
-fn procedureTemplateRef(key: checked.CheckedModuleArtifactKey, raw_template_id: u32) names.ProcedureTemplateRef {
-    return .{
-        .artifact = .{ .bytes = key.bytes },
-        .proc_base = @fromBackingInt(@intCast(raw_template_id)),
-        .template = @fromBackingInt(@intCast(raw_template_id)),
-    };
+fn checkedTemplate(
+    template_ref: names.ProcedureTemplateRef,
+    checked_fn_root: checked.CheckedTypeId,
+    body: checked.CheckedBodyId,
+) checked.CheckedProcedureTemplate {
+    return test_fixtures.checkedTemplate(template_ref, checked_fn_root, body, .roc);
 }
 
 fn namedProcedureTemplateRef(
@@ -54718,45 +53313,5 @@ fn namedProcedureTemplateRef(
         .artifact = .{ .bytes = checked_module.key.bytes },
         .proc_base = proc_base,
         .template = @fromBackingInt(@intCast(raw_template_id)),
-    };
-}
-
-fn procedureValueRef(template: names.ProcedureTemplateRef) names.ProcedureValueRef {
-    return .{
-        .artifact = template.artifact,
-        .proc_base = template.proc_base,
-    };
-}
-
-fn checkedTemplate(
-    template_ref: names.ProcedureTemplateRef,
-    checked_fn_root: checked.CheckedTypeId,
-    body: checked.CheckedBodyId,
-) checked.CheckedProcedureTemplate {
-    return .{
-        .proc_base = template_ref.proc_base,
-        .template_id = template_ref.template,
-        .body = .{ .checked_body = body },
-        .checked_fn_scheme = typeSchemeKey(9),
-        .checked_fn_root = checked_fn_root,
-        .static_dispatch_plans = .{},
-        .direct_dispatch_plans = .{},
-        .dispatch_relations = .{},
-        .resolved_value_refs = .{},
-        .top_level_value_uses = .{},
-        .nested_proc_sites = .{},
-        .target = .roc,
-    };
-}
-
-fn dummyRootRequest() checked.RootRequest {
-    return .{
-        .order = 0,
-        .module_idx = 0,
-        .kind = .runtime_entrypoint,
-        .source = .{ .def = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-        .checked_type = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-        .abi = .roc,
-        .exposure = .private,
     };
 }

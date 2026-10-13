@@ -26,12 +26,10 @@ pub const LambdaSolved = struct {
     pub const Type = @import("lambda_solved/type.zig");
     pub const Solve = @import("lambda_solved/solve.zig");
 };
-/// Lambda-solved IR after function values have concrete runtime encodings.
+/// Lambda Mono types: the function-free runtime type store the direct
+/// solved-to-LIR lowering commits layouts against.
 pub const LambdaMono = struct {
-    pub const Ast = @import("lambda_mono/ast.zig");
     pub const Type = @import("lambda_mono/type.zig");
-    pub const Lower = @import("lambda_mono/lower.zig");
-    pub const Eval = @import("lambda_mono/eval.zig");
 };
 /// Decision-tree match compiler used by the direct solved-to-LIR lowering.
 /// `.boxy` does not use it yet and folds match branches into a sequential
@@ -62,10 +60,7 @@ test "postcheck declarations are referenced" {
     std.testing.refAllDecls(@import("lambda_solved/ast.zig"));
     std.testing.refAllDecls(@import("lambda_solved/type.zig"));
     std.testing.refAllDecls(@import("lambda_solved/solve.zig"));
-    std.testing.refAllDecls(@import("lambda_mono/ast.zig"));
     std.testing.refAllDecls(@import("lambda_mono/type.zig"));
-    std.testing.refAllDecls(@import("lambda_mono/lower.zig"));
-    std.testing.refAllDecls(@import("lambda_mono/eval.zig"));
     std.testing.refAllDecls(@import("match_tree.zig"));
     std.testing.refAllDecls(@import("solved_inline.zig"));
     std.testing.refAllDecls(@import("solved_lir_lower.zig"));

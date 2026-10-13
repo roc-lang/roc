@@ -313,13 +313,6 @@ jobs:
       - name: build and execute tests, build repro executables
         run: zig build ${{ matrix.zig_test_timeout_flag }} run-test-zig -Dfuzz -Dsystem-afl=false ${{ matrix.target_flag }}
 
-      # The full 1,700+ case sweep is deliberately a daily full-suite gate,
-      # not a PR MiniCI phase. Debug-only: release builds never materialize
-      # the Lambda Mono tree.
-      - name: Lambda Mono body-lowering differential harness
-        if: inputs.full-run && matrix.os == 'ubuntu-24.04'
-        run: zig build run-test-lambda-mono-differential ${{ matrix.target_flag }}
-
       # 2) in release mode
       - name: Build and execute tests, build repro executables. All in release mode.
         run: zig build ${{ matrix.release_jobs_flag }} ${{ matrix.zig_test_timeout_flag }} run-test-zig -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}

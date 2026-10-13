@@ -1,7 +1,6 @@
 //! Tests for cross-module type checking functionality.
 
 const std = @import("std");
-const Check = @import("../Check.zig");
 const TestEnv = @import("./TestEnv.zig");
 
 const testing = std.testing;
@@ -475,7 +474,7 @@ test "displayNameIsBetter - shorter names are preferred" {
     // display names for the same type (e.g., `import Foo as F` and `import Foo as Foo`).
     // The shortest name wins for error message display. For equal lengths, the
     // lexicographically smaller name wins (deterministic regardless of import order).
-    const displayNameIsBetter = Check.displayNameIsBetter;
+    const displayNameIsBetter = @import("can").Can.displayNameIsBetter;
 
     // Shorter is better
     try testing.expect(displayNameIsBetter("T", "Type"));

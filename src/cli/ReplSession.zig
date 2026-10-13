@@ -374,7 +374,7 @@ pub fn stepLanguageWithConfig(self: *ReplSession, input: []const u8, report_conf
                 } };
             }
             if (input_info.definition_kind == .annotation) {
-                try self.addOrReplaceDefinitionWithImportKind(line, name, .annotation, false);
+                try self.definitions.addOrReplace(self.allocator, line, name, .annotation, false);
                 return .{ .definition = .{ .name = name, .kind = .annotation, .file_import = false } };
             }
 
@@ -389,7 +389,7 @@ pub fn stepLanguageWithConfig(self: *ReplSession, input: []const u8, report_conf
             if (bound_names) |names| {
                 try self.definitions.addOrReplaceNames(self.allocator, line, names, input_info.definition_kind, input_info.file_import);
             } else {
-                try self.addOrReplaceDefinitionWithImportKind(line, name, input_info.definition_kind, input_info.file_import);
+                try self.definitions.addOrReplace(self.allocator, line, name, input_info.definition_kind, input_info.file_import);
             }
             const validation = try self.validateDefinitions(report_config);
             if (!validation.valid) {
@@ -479,42 +479,6 @@ pub fn freeStatementSlices(self: *ReplSession, slices: []const []const u8) void 
 pub fn freeStatementSlicesWithAllocator(allocator: Allocator, slices: []const []const u8) void {
     for (slices) |slice| allocator.free(slice);
     allocator.free(slices);
-}
-
-/// Add or replace one stored definition while preserving definition order.
-pub fn addOrReplaceDefinition(self: *ReplSession, source: []const u8, name: []const u8, kind: DefinitionKind) Allocator.Error!void {
-    try self.addOrReplaceDefinitionWithImportKind(source, name, kind, false);
-}
-
-fn addOrReplaceDefinitionWithImportKind(
-    self: *ReplSession,
-    source: []const u8,
-    name: []const u8,
-    kind: DefinitionKind,
-    file_import: bool,
-) Allocator.Error!void {
-    try self.definitions.addOrReplace(self.allocator, source, name, kind, file_import);
-}
-
-/// Build a block expression containing all current definitions followed by `expr`.
-pub fn buildFullSource(self: *const ReplSession, expr: []const u8) Allocator.Error![]u8 {
-    var out = std.ArrayList(u8).empty;
-    errdefer out.deinit(self.allocator);
-
-    try out.appendSlice(self.allocator, "{\n");
-    for (self.definitions.items.items) |definition| {
-        var lines = std.mem.splitScalar(u8, definition.source, '\n');
-        while (lines.next()) |line| {
-            try out.appendSlice(self.allocator, "    ");
-            try out.appendSlice(self.allocator, line);
-            try out.append(self.allocator, '\n');
-        }
-    }
-    try out.appendSlice(self.allocator, "    ");
-    try out.appendSlice(self.allocator, expr);
-    try out.appendSlice(self.allocator, "\n}");
-
-    return out.toOwnedSlice(self.allocator);
 }
 
 /// Build module-level source for the current stored definitions.
@@ -3199,46 +3163,19 @@ test "Repl - for loop snapshots nested product" {
     try expectStateful(.wasm, steps);
 }
 
-test "Repl - build full source with block syntax" {
-    var repl = try testRepl(.interpreter);
-    defer repl.deinit();
-
-    try repl.addOrReplaceDefinition("x = 5", "x", .value);
-    try repl.addOrReplaceDefinition("y = x + 1", "y", .value);
-
-    const full_source = try repl.buildFullSource("y");
-    defer testing.allocator.free(full_source);
-
-    const expected =
-        \\{
-        \\    x = 5
-        \\    y = x + 1
-        \\    y
-        \\}
-    ;
-    try testing.expectEqualStrings(expected, full_source);
-}
-
 test "Repl - definition replacement" {
     var repl = try testRepl(.interpreter);
     defer repl.deinit();
 
-    try repl.addOrReplaceDefinition("x = 1", "x", .value);
-    try repl.addOrReplaceDefinition("x = 2", "x", .value);
-    try repl.addOrReplaceDefinition("x = 3", "x", .value);
+    try repl.definitions.addOrReplace(testing.allocator, "x = 1", "x", .value, false);
+    try repl.definitions.addOrReplace(testing.allocator, "x = 2", "x", .value, false);
+    try repl.definitions.addOrReplace(testing.allocator, "x = 3", "x", .value, false);
 
     try testing.expect(repl.definitions.count() == 1);
 
-    const full_source = try repl.buildFullSource("x");
-    defer testing.allocator.free(full_source);
-
-    const expected =
-        \\{
-        \\    x = 3
-        \\    x
-        \\}
-    ;
-    try testing.expectEqualStrings(expected, full_source);
+    const source = try repl.definitionsSource();
+    defer testing.allocator.free(source);
+    try testing.expectEqualStrings("x = 3\n", source);
 }
 
 test "Repl - destructure definitions replace atomically by any bound name" {

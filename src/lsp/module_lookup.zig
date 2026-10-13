@@ -362,11 +362,6 @@ pub const DefinitionIterator = struct {
 
         return null;
     }
-
-    pub fn reset(self: *DefinitionIterator) void {
-        self.defs_index = 0;
-        self.statements_index = 0;
-    }
 };
 
 /// Create an iterator over all definitions in a module.

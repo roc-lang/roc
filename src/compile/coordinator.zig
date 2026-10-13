@@ -925,8 +925,6 @@ pub const PackageState = struct {
     root_dir: []const u8,
     /// Exact package root file read during dependency discovery.
     root_file: ?[]const u8,
-    /// Source state consumed for `root_file` during dependency discovery.
-    root_file_state: ?watch_inputs.State,
     /// Source URL data when this package came from a URL bundle.
     url: ?package_source.UrlSource,
     /// All modules in this package
@@ -956,7 +954,6 @@ pub const PackageState = struct {
             .name = name,
             .root_dir = root_dir,
             .root_file = null,
-            .root_file_state = null,
             .url = url,
             .modules = std.ArrayList(ModuleState).empty,
             .module_names = std.StringHashMap(ModuleId).init(thread_safe_allocator),
@@ -1028,11 +1025,10 @@ pub const PackageState = struct {
         }
     }
 
-    pub fn setRootInput(self: *PackageState, gpa: Allocator, root_file: []const u8, state: ?watch_inputs.State) Allocator.Error!void {
+    pub fn setRootFile(self: *PackageState, gpa: Allocator, root_file: []const u8) Allocator.Error!void {
         const owned_root_file = try gpa.dupe(u8, root_file);
         if (self.root_file) |old_root_file| gpa.free(old_root_file);
         self.root_file = owned_root_file;
-        self.root_file_state = state;
     }
 
     /// Ensure a module exists, creating it if necessary
@@ -1788,7 +1784,7 @@ pub const Coordinator = struct {
                 const platform_main_path = try std.fs.path.join(arena, &.{ app_dir, platform_spec });
                 const platform_dir = std.fs.path.dirname(platform_main_path) orelse return error.InvalidPlatformPath;
 
-                try self.registerPlatformPackageWithUrl(app_pkg, platform_dir, platform_main_path, header_info.platform_qualifier, null);
+                try self.registerPlatformPackage(app_pkg, platform_dir, platform_main_path, header_info.platform_qualifier, .{ .local_path = platform_main_path });
             },
             .compiler_owned => |platform| {
                 const materialized = compiler_platforms.materialize(self.gpa, self.roc_ctx, null, platform) catch |err| switch (err) {
@@ -1797,7 +1793,7 @@ pub const Coordinator = struct {
                 };
                 defer self.gpa.free(materialized.root_file);
                 defer self.gpa.free(materialized.root_dir);
-                try self.registerCompilerOwnedPlatformPackage(app_pkg, materialized.root_dir, materialized.root_file, header_info.platform_qualifier, platform);
+                try self.registerPlatformPackage(app_pkg, materialized.root_dir, materialized.root_file, header_info.platform_qualifier, .{ .compiler_owned_platform = platform });
             },
         }
 
@@ -1815,59 +1811,18 @@ pub const Coordinator = struct {
 
     /// Register the platform package, wire the app's shorthand for it, ensure
     /// the platform's main module, and enqueue its parse task.
-    pub fn registerPlatformPackageWithUrl(
+    fn registerPlatformPackage(
         self: *Coordinator,
         app_pkg: *PackageState,
         platform_dir: []const u8,
         platform_main_path: []const u8,
         qualifier: ?[]const u8,
-        url: ?package_source.UrlSourceView,
+        provenance: package_identity.PackageProvenance,
     ) AppDiscoveryError!void {
-        const platform_identity = try package_identity.packageIdentityFor(
-            self.gpa,
-            self.roc_ctx,
-            if (url) |url_view|
-                .{ .url = url_view.url }
-            else
-                .{ .local_path = platform_main_path },
-        );
+        const platform_identity = try package_identity.packageIdentityFor(self.gpa, self.roc_ctx, provenance);
         defer self.gpa.free(platform_identity);
 
-        const pf_pkg = try self.ensurePackageWithUrl(platform_identity, platform_dir, url);
-        self.markPlatformPackage(pf_pkg.name);
-        try self.registerPublicModulesFromRoot(pf_pkg, platform_main_path);
-
-        if (qualifier) |qual| {
-            try app_pkg.shorthands.put(
-                try self.gpa.dupe(u8, qual),
-                try self.gpa.dupe(u8, pf_pkg.name),
-            );
-        }
-
-        const pf_module_id = try pf_pkg.ensureModule(self.gpa, "main", platform_main_path);
-        pf_pkg.root_module_id = pf_module_id;
-        pf_pkg.modules.items[pf_module_id].depth = 1;
-        pf_pkg.remaining_modules += 1;
-        self.total_remaining += 1;
-        try self.enqueueParseTask(pf_pkg.name, pf_module_id);
-    }
-
-    pub fn registerCompilerOwnedPlatformPackage(
-        self: *Coordinator,
-        app_pkg: *PackageState,
-        platform_dir: []const u8,
-        platform_main_path: []const u8,
-        qualifier: ?[]const u8,
-        platform: compiler_platforms.CompilerOwnedPlatform,
-    ) AppDiscoveryError!void {
-        const platform_identity = try package_identity.packageIdentityFor(
-            self.gpa,
-            self.roc_ctx,
-            .{ .compiler_owned_platform = platform },
-        );
-        defer self.gpa.free(platform_identity);
-
-        const pf_pkg = try self.ensurePackageWithUrl(platform_identity, platform_dir, null);
+        const pf_pkg = try self.ensurePackage(platform_identity, platform_dir);
         self.markPlatformPackage(pf_pkg.name);
         try self.registerPublicModulesFromRoot(pf_pkg, platform_main_path);
 
@@ -1900,22 +1855,7 @@ pub const Coordinator = struct {
         app_pkg: ?*PackageState,
         shorthand_on_app: ?[]const u8,
     ) package_identity.PackageIdentityError!*PackageState {
-        return self.registerInlinePackageWithUrl(package_identity_value, package_root_dir, app_pkg, shorthand_on_app, null);
-    }
-
-    pub fn registerInlinePackageWithUrl(
-        self: *Coordinator,
-        package_identity_value: []const u8,
-        package_root_dir: []const u8,
-        app_pkg: ?*PackageState,
-        shorthand_on_app: ?[]const u8,
-        url: ?package_source.UrlSourceView,
-    ) package_identity.PackageIdentityError!*PackageState {
-        // For URL packages the resolved URL is the identity; `ensurePackageWithUrl`
-        // dupes whichever identity it stores, so no temporary copy is needed.
-        const identity = if (url) |url_view| url_view.url else package_identity_value;
-
-        const pkg = try self.ensurePackageWithUrl(identity, package_root_dir, url);
+        const pkg = try self.ensurePackage(package_identity_value, package_root_dir);
         if (app_pkg) |a| {
             if (shorthand_on_app) |sh| {
                 try a.shorthands.put(
@@ -1971,112 +1911,6 @@ pub const Coordinator = struct {
             }
             unreachable;
         };
-    }
-
-    pub fn freeWatchInputStates(self: *Coordinator, inputs: []const watch_inputs.Input) void {
-        watch_inputs.deinit(self.gpa, inputs);
-    }
-
-    fn appendWatchInputState(
-        self: *Coordinator,
-        inputs: *std.ArrayList(watch_inputs.Input),
-        seen: *std.StringHashMapUnmanaged(void),
-        path: []const u8,
-        state: watch_inputs.State,
-    ) Allocator.Error!void {
-        const absolute = try std.fs.path.resolve(self.gpa, &.{path});
-        errdefer self.gpa.free(absolute);
-
-        if (seen.contains(absolute)) {
-            self.gpa.free(absolute);
-            return;
-        }
-
-        try inputs.append(self.gpa, .{
-            .path = absolute,
-            .state = state,
-        });
-        errdefer _ = inputs.pop();
-        try seen.put(self.gpa, absolute, {});
-    }
-
-    fn fileDependencyWatchState(dep: ModuleEnv.FileDependency) watch_inputs.State {
-        return switch (dep.state) {
-            .present => .{ .hash = dep.content_hash },
-            .missing => .missing,
-            .unreadable => .unreadable,
-            .pending => unreachable,
-        };
-    }
-
-    fn appendFileDependencyWatchInputStates(
-        self: *Coordinator,
-        inputs: *std.ArrayList(watch_inputs.Input),
-        seen: *std.StringHashMapUnmanaged(void),
-        source_dir: []const u8,
-        env: *const ModuleEnv,
-    ) Allocator.Error!void {
-        for (env.file_dependencies.items.items) |dep| {
-            // A module that never reached import resolution has not read its
-            // file imports, so this run observed no state for one.
-            if (dep.state == .pending) continue;
-            const relative_path = env.fileDependencyRelativePath(dep);
-            const full_path = try std.fs.path.resolve(self.gpa, &.{ source_dir, relative_path });
-            defer self.gpa.free(full_path);
-            try self.appendWatchInputState(inputs, seen, full_path, fileDependencyWatchState(dep));
-        }
-    }
-
-    /// Collect exact filesystem inputs read by this coordinator run, paired
-    /// with the state consumed by compilation. Returned paths are owned by the
-    /// coordinator allocator and must be released with `freeWatchInputStates`.
-    pub fn collectWatchInputStates(self: *Coordinator) Allocator.Error![]const watch_inputs.Input {
-        if (!self.track_watch_inputs) {
-            if (builtin.mode == .debug) {
-                base.invariant("collectWatchInputStates called without watch input tracking enabled", .{});
-            }
-            unreachable;
-        }
-
-        var inputs = std.ArrayList(watch_inputs.Input).empty;
-        errdefer {
-            for (inputs.items) |input| self.gpa.free(input.path);
-            inputs.deinit(self.gpa);
-        }
-
-        var seen = std.StringHashMapUnmanaged(void){};
-        defer seen.deinit(self.gpa);
-
-        var pkg_it = self.packages.iterator();
-        while (pkg_it.next()) |entry| {
-            const pkg = entry.value_ptr.*;
-            if (pkg.url != null) continue;
-
-            if (pkg.root_file) |root_file| {
-                const state = pkg.root_file_state orelse {
-                    if (builtin.mode == .debug) {
-                        base.invariant("coordinator package {s} has root_file without root_file_state", .{pkg.name});
-                    }
-                    unreachable;
-                };
-                try self.appendWatchInputState(&inputs, &seen, root_file, state);
-            }
-
-            for (pkg.modules.items) |*mod| {
-                const state = mod.source_file_state orelse {
-                    if (builtin.mode == .debug) {
-                        base.invariant("coordinator module {s} has source path without source_file_state", .{mod.name});
-                    }
-                    unreachable;
-                };
-                try self.appendWatchInputState(&inputs, &seen, mod.path, state);
-
-                const env = mod.moduleEnv() orelse continue;
-                try self.appendFileDependencyWatchInputStates(&inputs, &seen, mod.canonicalSourceDir(), env);
-            }
-        }
-
-        return inputs.toOwnedSlice(self.gpa);
     }
 
     /// Collect published checked artifacts available to post-check lowering.
@@ -4055,13 +3889,22 @@ pub const Coordinator = struct {
         };
     }
 
-    /// Write a BUG diagnostic to stderr via the injected Io. No-op in release builds.
-    fn bugReport(self: *Coordinator, comptime fmt: []const u8, args: anytype) void {
-        if (comptime builtin.mode == .debug) {
-            var buf: [2048]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, fmt, args) catch fmt;
-            self.roc_ctx.writeStderr(msg) catch {};
-        }
+    /// The package a worker result names, which the coordinator registered
+    /// before scheduling any of its modules.
+    fn registeredPackage(self: *Coordinator, package_name: []const u8, module_name: []const u8, comptime when: []const u8) *PackageState {
+        return self.packages.get(package_name) orelse {
+            if (builtin.mode == .debug) base.invariant("package '{s}' not found " ++ when ++ " (module={s})", .{ package_name, module_name });
+            unreachable;
+        };
+    }
+
+    /// The module `module_id` names in `pkg`, which the coordinator
+    /// registered before handing out the id.
+    fn registeredModule(pkg: *PackageState, package_name: []const u8, module_id: ModuleId, module_name: []const u8, comptime when: []const u8) *ModuleState {
+        return pkg.getModule(module_id) orelse {
+            if (builtin.mode == .debug) base.invariant("module id={} not found in package '{s}' " ++ when ++ " (module={s})", .{ module_id, package_name, module_name });
+            unreachable;
+        };
     }
 
     /// Handle a result from a worker
@@ -4088,18 +3931,8 @@ pub const Coordinator = struct {
         if (comptime trace_build) {
             std.debug.print("[COORD] PARSED: pkg={s} module={s} result_reports={}\n", .{ result.package_name, result.module_name, result.reports.items.len });
         }
-        const pkg = self.packages.get(result.package_name) orelse {
-            self.bugReport("BUG: package '{s}' not found for parsed result (module={s}, id={})\n", .{
-                result.package_name, result.module_name, result.module_id,
-            });
-            unreachable;
-        };
-        const mod = pkg.getModule(result.module_id) orelse {
-            self.bugReport("BUG: module id={} not found in package '{s}' for parsed result (module={s})\n", .{
-                result.module_id, result.package_name, result.module_name,
-            });
-            unreachable;
-        };
+        const pkg = self.registeredPackage(result.package_name, result.module_name, "for parsed result");
+        const mod = registeredModule(pkg, result.package_name, result.module_id, result.module_name, "for parsed result");
 
         if (comptime trace_build) {
             std.debug.print("[COORD] PARSED: mod.reports BEFORE: len={} cap={}\n", .{ mod.reports.items.len, mod.reports.capacity });
@@ -4144,12 +3977,7 @@ pub const Coordinator = struct {
         // Canonicalization is a pure function of this module's own source, so
         // it is queued now rather than after the imports complete. The module
         // waits on its imports only once it is canonicalized.
-        const mod_after_imports = pkg.getModule(result.module_id) orelse {
-            self.bugReport("BUG: module id={} not found in package '{s}' after parse imports (module={s})\n", .{
-                result.module_id, result.package_name, result.module_name,
-            });
-            unreachable;
-        };
+        const mod_after_imports = registeredModule(pkg, result.package_name, result.module_id, result.module_name, "after parse imports");
         try self.enqueueCanonicalizeTask(
             pkg,
             result.module_id,
@@ -4185,12 +4013,7 @@ pub const Coordinator = struct {
         local_imports: []const DiscoveredLocalImport,
         external_imports: []const DiscoveredExternalImport,
     ) Allocator.Error!ImportRegistration {
-        const mod = pkg.getModule(module_id) orelse {
-            self.bugReport("BUG: module id={} not found in package '{s}' registering imports (module={s})\n", .{
-                module_id, package_name, module_name,
-            });
-            unreachable;
-        };
+        const mod = registeredModule(pkg, package_name, module_id, module_name, "registering imports");
 
         // A registered dependency (notably the platform root) may have failed
         // while this parse task was in flight. Retain the parsed source state for
@@ -4215,12 +4038,7 @@ pub const Coordinator = struct {
         for (local_imports) |imp| {
             // Registering a sibling module can move this package's module
             // storage, so every iteration refetches the importing module.
-            const importer = pkg.getModule(module_id) orelse {
-                self.bugReport("BUG: module id={} not found in package '{s}' registering local import (module={s})\n", .{
-                    module_id, package_name, module_name,
-                });
-                unreachable;
-            };
+            const importer = registeredModule(pkg, package_name, module_id, module_name, "registering local import");
             const resolved = switch (imp.target) {
                 // The parse worker already reported why this import names no
                 // module. Record it as a rejected edge so canonicalization
@@ -4237,12 +4055,7 @@ pub const Coordinator = struct {
                 continue;
             }
             const child_id = try pkg.ensureModule(self.gpa, resolved.module_name, resolved.path);
-            const current_mod = pkg.getModule(module_id) orelse {
-                self.bugReport("BUG: module id={} not found in package '{s}' after ensureModule (module={s})\n", .{
-                    module_id, package_name, module_name,
-                });
-                unreachable;
-            };
+            const current_mod = registeredModule(pkg, package_name, module_id, module_name, "after ensureModule");
 
             const closes_cycle = child_id == module_id or pkg.moduleReaches(child_id, module_id);
 
@@ -4279,12 +4092,7 @@ pub const Coordinator = struct {
             // Scheduling can register modules in the target package, which may
             // be this package, so the module pointer is refetched afterwards.
             const rejection = try self.scheduleExternalImport(package_name, ext_imp.import_name);
-            const current_mod = pkg.getModule(module_id) orelse {
-                self.bugReport("BUG: module id={} not found in package '{s}' after scheduling external import (module={s})\n", .{
-                    module_id, package_name, module_name,
-                });
-                unreachable;
-            };
+            const current_mod = registeredModule(pkg, package_name, module_id, module_name, "after scheduling external import");
             if (rejection) |invalid| {
                 const logical_name = base.module_path.parseQualifiedImport(ext_imp.import_name).?.module;
                 try self.appendInvalidImportReport(current_mod, ext_imp.import_name, logical_name, invalid);
@@ -4305,12 +4113,7 @@ pub const Coordinator = struct {
             );
         }
 
-        const mod_after_imports = pkg.getModule(module_id) orelse {
-            self.bugReport("BUG: module id={} not found in package '{s}' after registering imports (module={s})\n", .{
-                module_id, package_name, module_name,
-            });
-            unreachable;
-        };
+        const mod_after_imports = registeredModule(pkg, package_name, module_id, module_name, "after registering imports");
 
         return if (mod_after_imports.completion == .pending) .proceed else .halted;
     }
@@ -4462,18 +4265,8 @@ pub const Coordinator = struct {
                 result.reports.items.len,
             });
         }
-        const pkg = self.packages.get(result.package_name) orelse {
-            self.bugReport("BUG: package '{s}' not found for canonicalized result (module={s}, id={})\n", .{
-                result.package_name, result.module_name, result.module_id,
-            });
-            unreachable;
-        };
-        const mod = pkg.getModule(result.module_id) orelse {
-            self.bugReport("BUG: module id={} not found in package '{s}' for canonicalized result (module={s})\n", .{
-                result.module_id, result.package_name, result.module_name,
-            });
-            unreachable;
-        };
+        const pkg = self.registeredPackage(result.package_name, result.module_name, "for canonicalized result");
+        const mod = registeredModule(pkg, result.package_name, result.module_id, result.module_name, "for canonicalized result");
 
         if (comptime trace_build) {
             std.debug.print("[COORD] CANONICALIZED: mod.reports BEFORE: len={} cap={}\n", .{ mod.reports.items.len, mod.reports.capacity });
@@ -4582,18 +4375,8 @@ pub const Coordinator = struct {
         if (comptime trace_build) {
             std.debug.print("[COORD] CANONICALIZED (cached): pkg={s} module={s}\n", .{ result.package_name, result.module_name });
         }
-        const pkg = self.packages.get(result.package_name) orelse {
-            self.bugReport("BUG: package '{s}' not found for cached canonicalized result (module={s}, id={})\n", .{
-                result.package_name, result.module_name, result.module_id,
-            });
-            unreachable;
-        };
-        const mod = pkg.getModule(result.module_id) orelse {
-            self.bugReport("BUG: module id={} not found in package '{s}' for cached canonicalized result (module={s})\n", .{
-                result.module_id, result.package_name, result.module_name,
-            });
-            unreachable;
-        };
+        const pkg = self.registeredPackage(result.package_name, result.module_name, "for cached canonicalized result");
+        const mod = registeredModule(pkg, result.package_name, result.module_id, result.module_name, "for cached canonicalized result");
 
         self.canonicalized_cache_hits += 1;
         mod.has_source_version_pin = result.has_source_version_pin;
@@ -4617,12 +4400,7 @@ pub const Coordinator = struct {
             result.discovered_external_imports.items,
         ) == .halted) return;
 
-        const mod_after_imports = pkg.getModule(result.module_id) orelse {
-            self.bugReport("BUG: module id={} not found in package '{s}' after cached imports (module={s})\n", .{
-                result.module_id, result.package_name, result.module_name,
-            });
-            unreachable;
-        };
+        const mod_after_imports = registeredModule(pkg, result.package_name, result.module_id, result.module_name, "after cached imports");
 
         try self.applyCanonicalizedModule(
             mod_after_imports,
@@ -4847,18 +4625,8 @@ pub const Coordinator = struct {
         if (comptime trace_build) {
             std.debug.print("[COORD] TYPE_CHECKED: pkg={s} module={s} result_reports={}\n", .{ result.package_name, result.module_name, result.reports.items.len });
         }
-        const pkg = self.packages.get(result.package_name) orelse {
-            self.bugReport("BUG: package '{s}' not found for type_checked result (module={s}, id={})\n", .{
-                result.package_name, result.module_name, result.module_id,
-            });
-            unreachable;
-        };
-        const mod = pkg.getModule(result.module_id) orelse {
-            self.bugReport("BUG: module id={} not found in package '{s}' for type_checked result (module={s})\n", .{
-                result.module_id, result.package_name, result.module_name,
-            });
-            unreachable;
-        };
+        const pkg = self.registeredPackage(result.package_name, result.module_name, "for type_checked result");
+        const mod = registeredModule(pkg, result.package_name, result.module_id, result.module_name, "for type_checked result");
 
         // Failure propagation can make an already-queued task irrelevant. The
         // result owns any newly produced checked artifact; WorkerResult.deinit
@@ -9344,39 +9112,6 @@ test "Coordinator package creation" {
     try std.testing.expectEqualStrings(app_identity, retrieved.?.name);
 }
 
-test "Coordinator collectWatchInputStates includes package root state" {
-    const allocator = std.testing.allocator;
-
-    var coord = try Coordinator.init(
-        allocator,
-        .single_threaded,
-        1,
-        roc_target.RocTarget.detectNative(),
-        undefined,
-        "test",
-        null,
-        CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
-    );
-    defer coord.deinit();
-    coord.setWatchInputTracking(true);
-
-    const root_hash = @as([32]u8, @splat(11));
-    const pkg = try coord.ensurePackage("pkg", "/test/pkg");
-    try pkg.setRootInput(allocator, "/test/pkg/main.roc", .{ .hash = root_hash });
-
-    const inputs = try coord.collectWatchInputStates();
-    defer coord.freeWatchInputStates(inputs);
-
-    try std.testing.expectEqual(@as(usize, 1), inputs.len);
-    const expected_root = try std.fs.path.resolve(allocator, &.{"/test/pkg/main.roc"});
-    defer allocator.free(expected_root);
-    try std.testing.expectEqualStrings(expected_root, inputs[0].path);
-    switch (inputs[0].state) {
-        .hash => |hash| try std.testing.expectEqualSlices(u8, &root_hash, &hash),
-        .missing, .unreadable => try std.testing.expect(false),
-    }
-}
-
 test "Coordinator readModuleSource hashes raw CRLF source bytes" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -9414,45 +9149,6 @@ test "Coordinator readModuleSource hashes raw CRLF source bytes" {
     switch (read.file_state orelse return error.ExpectedWatchInputState) {
         .hash => |hash| try testing.expectEqualSlices(u8, &expected_hash, &hash),
         .missing, .unreadable => try testing.expect(false),
-    }
-}
-
-test "Coordinator collectWatchInputStates includes module source file state" {
-    const allocator = std.testing.allocator;
-
-    var coord = try Coordinator.init(
-        allocator,
-        .single_threaded,
-        1,
-        roc_target.RocTarget.detectNative(),
-        undefined,
-        "test",
-        null,
-        CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
-    );
-    defer coord.deinit();
-    coord.setWatchInputTracking(true);
-
-    const root_hash = @as([32]u8, @splat(11));
-    const module_hash = @as([32]u8, @splat(22));
-    const pkg = try coord.ensurePackage("pkg", "/test/pkg");
-    try pkg.setRootInput(allocator, "/test/pkg/main.roc", .{ .hash = root_hash });
-    const module_id = try pkg.ensureModule(allocator, "Foo", "/test/pkg/Foo.roc");
-    pkg.modules.items[module_id].source_file_state = .{ .hash = module_hash };
-
-    const inputs = try coord.collectWatchInputStates();
-    defer coord.freeWatchInputStates(inputs);
-
-    try std.testing.expectEqual(@as(usize, 2), inputs.len);
-    const expected_root = try std.fs.path.resolve(allocator, &.{"/test/pkg/main.roc"});
-    defer allocator.free(expected_root);
-    const expected_module = try std.fs.path.resolve(allocator, &.{"/test/pkg/Foo.roc"});
-    defer allocator.free(expected_module);
-    try std.testing.expectEqualStrings(expected_root, inputs[0].path);
-    try std.testing.expectEqualStrings(expected_module, inputs[1].path);
-    switch (inputs[1].state) {
-        .hash => |hash| try std.testing.expectEqualSlices(u8, &module_hash, &hash),
-        .missing, .unreadable => try std.testing.expect(false),
     }
 }
 

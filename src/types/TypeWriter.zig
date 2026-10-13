@@ -178,7 +178,6 @@ const TagUnionExt = union(enum) {
     rigid: types_mod.Rigid,
     empty_tag_union,
     err,
-    alias: Var,
     invalid,
 };
 
@@ -429,16 +428,9 @@ pub fn write(self: *TypeWriter, var_: Var, format: Format) error{ OutOfMemory, W
     collections_mod.managedWriterFinish(&aw, &self.buf);
 }
 
-/// Writes a type variable to the provided buffer, formatting it as a human-readable string.
-/// This APPENDS to the provided buffer
-/// Internal TypeWriter state will be reset before processing
-pub fn writeInto(self: *TypeWriter, into: *std.array_list.Managed(u8), var_: Var, format: Format) error{ OutOfMemory, WriteFailed }!void {
-    return self.writeIntoAtPolarity(into, var_, format, .pos);
-}
-
-/// `writeInto`, starting the polarity walk at `polarity` instead of `.pos`.
-/// Used when the caller knows the polarity of the position `var_` occupies
-/// (eg error snapshots of types nested inside a larger type).
+/// Writes a type variable to the provided buffer, formatting it as a human-readable string,
+/// starting the polarity walk at `polarity` (the polarity of the position `var_` occupies).
+/// This APPENDS to the provided buffer. Internal TypeWriter state is reset before processing.
 pub fn writeIntoAtPolarity(self: *TypeWriter, into: *std.array_list.Managed(u8), var_: Var, format: Format, polarity: types_mod.Polarity) error{ OutOfMemory, WriteFailed }!void {
     self.reset();
     self.polarity = polarity;
@@ -843,7 +835,7 @@ fn startRecord(
 ) error{ OutOfMemory, WriteFailed }!bool {
     const fields_base: u32 = @intCast(self.scratch_record_fields.items.len);
 
-    const ext = try self.gatherRecordFields(record.fields, record.ext, row_var);
+    const ext = try self.gatherRow(.record, record.fields, record.ext, row_var);
     const gathered_fields = self.scratch_record_fields.items[fields_base..];
     const num_fields = gathered_fields.len;
 
@@ -901,7 +893,7 @@ fn startTagUnion(
 
     const tags_base: u32 = @intCast(self.scratch_tags.items.len);
 
-    const ext = try self.gatherTags(tag_union.tags, tag_union.ext, row_var);
+    const ext = try self.gatherRow(.tag_union, tag_union.tags, tag_union.ext, row_var);
     const gathered_tags = self.scratch_tags.items[tags_base..];
     const num_tags = gathered_tags.len;
 
@@ -1178,11 +1170,6 @@ fn stepTagUnion(self: *TypeWriter, writer: *ByteWrite, frame: *TagUnionFrame, ro
                         }
                     },
                     .empty_tag_union, .err, .invalid => {},
-                    .alias => |alias_var| {
-                        if (frame.tags_count > 0) try writer.writeAll(", ");
-                        try writer.writeAll("..");
-                        if (!try self.requestVar(writer, alias_var, .TagUnionExtension, root_var)) return false;
-                    },
                 }
             },
             .done => {
@@ -1208,50 +1195,67 @@ fn stepTag(self: *TypeWriter, writer: *ByteWrite, frame: *TagFrame, root_var: Va
     }
 }
 
-/// Recursively unwrap all record fields
-fn gatherRecordFields(
+const RowKind = enum { record, tag_union };
+
+fn RowEntries(comptime kind: RowKind) type {
+    return switch (kind) {
+        .record => RecordField.SafeMultiList.Range,
+        .tag_union => Tag.SafeMultiList.Range,
+    };
+}
+
+fn RowTail(comptime kind: RowKind) type {
+    return switch (kind) {
+        .record => RecordExt,
+        .tag_union => TagUnionExt,
+    };
+}
+
+fn appendRowEntries(self: *TypeWriter, comptime kind: RowKind, entries: RowEntries(kind)) std.mem.Allocator.Error!void {
+    const scratch = switch (kind) {
+        .record => &self.scratch_record_fields,
+        .tag_union => &self.scratch_tags,
+    };
+    const slice = switch (kind) {
+        .record => self.types.getRecordFieldsSlice(entries),
+        .tag_union => self.types.getTagsSlice(entries),
+    };
+    try scratch.ensureUnusedCapacity(slice.len);
+    for (0..slice.len) |index| scratch.appendAssumeCapacity(slice.get(index));
+}
+
+/// Collect a row's entries and every entry its extension chain contributes,
+/// following aliases, into the kind's scratch list.
+fn gatherRow(
     self: *TypeWriter,
-    fields: RecordField.SafeMultiList.Range,
+    comptime kind: RowKind,
+    entries: RowEntries(kind),
     initial_ext: Var,
     row_var: Var,
-) std.mem.Allocator.Error!RecordExt {
-    const slice = self.types.getRecordFieldsSlice(fields);
-    try self.scratch_record_fields.ensureUnusedCapacity(fields.len());
-    for (slice.items(.name), slice.items(.presence)) |name, presence| {
-        self.scratch_record_fields.appendAssumeCapacity(.{ .name = name, .presence = presence });
-    }
+) std.mem.Allocator.Error!RowTail(kind) {
+    try self.appendRowEntries(kind, entries);
 
     var ext = initial_ext;
     self.ext_seen.clearRetainingCapacity();
-    // The row whose fields were just collected counts as reached, so a chain
+    // The row whose entries were just collected counts as reached, so a chain
     // that loops back through the starting row stops there instead of
-    // collecting that row's own fields a second time.
+    // collecting that row's own entries a second time.
     try self.ext_seen.put(row_var, {});
     while (true) {
         const resolved = self.types.resolveVar(ext);
         // An extension chain that returns to a row it already collected has
-        // contributed every field it can, and would otherwise contribute them
+        // contributed every entry it can, and would otherwise contribute them
         // forever. Terminating on the revisit is what bounds this collection
         // for a cyclic row; a row that terminates on its own never revisits.
         if ((try self.ext_seen.getOrPut(resolved.var_)).found_existing) return .invalid;
         switch (resolved.desc.content) {
-            .flex => |flex| {
-                return .{ .flex = .{ .var_ = resolved.var_, .payload = flex } };
-            },
-            .rigid => |rigid| {
-                return .{ .rigid = rigid };
-            },
-            .alias => |alias| {
-                ext = self.types.getAliasBackingVar(alias);
-            },
-            .structure => |flat_type| {
-                switch (flat_type) {
+            .flex => |flex| return .{ .flex = .{ .var_ = resolved.var_, .payload = flex } },
+            .rigid => |rigid| return .{ .rigid = rigid },
+            .alias => |alias| ext = self.types.getAliasBackingVar(alias),
+            .structure => |flat_type| switch (kind) {
+                .record => switch (flat_type) {
                     .record => |ext_record| {
-                        const ext_slice = self.types.getRecordFieldsSlice(ext_record.fields);
-                        try self.scratch_record_fields.ensureUnusedCapacity(ext_record.fields.len());
-                        for (ext_slice.items(.name), ext_slice.items(.presence)) |name, presence| {
-                            self.scratch_record_fields.appendAssumeCapacity(.{ .name = name, .presence = presence });
-                        }
+                        try self.appendRowEntries(.record, ext_record.fields);
                         ext = ext_record.ext;
                     },
                     .empty_record => return .empty_record,
@@ -1263,59 +1267,11 @@ fn gatherRecordFields(
                     .tag_union,
                     .empty_tag_union,
                     => return .invalid,
-                }
-            },
-            .field_presence => return .invalid,
-            .err => return .invalid,
-        }
-    }
-}
-
-/// Recursively unwrap all tag union tags, following ext var chains
-fn gatherTags(
-    self: *TypeWriter,
-    tags: Tag.SafeMultiList.Range,
-    initial_ext: Var,
-    row_var: Var,
-) std.mem.Allocator.Error!TagUnionExt {
-    const slice = self.types.getTagsSlice(tags);
-    try self.scratch_tags.ensureUnusedCapacity(tags.len());
-    for (slice.items(.name), slice.items(.args)) |name, args| {
-        self.scratch_tags.appendAssumeCapacity(.{ .name = name, .args = args });
-    }
-
-    var ext = initial_ext;
-    self.ext_seen.clearRetainingCapacity();
-    // The row whose tags were just collected counts as reached, so a chain
-    // that loops back through the starting row stops there instead of
-    // collecting that row's own tags a second time.
-    try self.ext_seen.put(row_var, {});
-    while (true) {
-        const resolved = self.types.resolveVar(ext);
-        // An extension chain that returns to a row it already collected has
-        // contributed every tag it can, and would otherwise contribute them
-        // forever. Terminating on the revisit is what bounds this collection
-        // for a cyclic row; a row that terminates on its own never revisits.
-        if ((try self.ext_seen.getOrPut(resolved.var_)).found_existing) return .invalid;
-        switch (resolved.desc.content) {
-            .flex => |flex| {
-                return .{ .flex = .{ .var_ = resolved.var_, .payload = flex } };
-            },
-            .rigid => |rigid| {
-                return .{ .rigid = rigid };
-            },
-            .alias => |alias| {
-                ext = self.types.getAliasBackingVar(alias);
-            },
-            .structure => |flat_type| {
-                switch (flat_type) {
-                    .tag_union => |ext_tu| {
-                        const ext_slice = self.types.getTagsSlice(ext_tu.tags);
-                        try self.scratch_tags.ensureUnusedCapacity(ext_tu.tags.len());
-                        for (ext_slice.items(.name), ext_slice.items(.args)) |name, args| {
-                            self.scratch_tags.appendAssumeCapacity(.{ .name = name, .args = args });
-                        }
-                        ext = ext_tu.ext;
+                },
+                .tag_union => switch (flat_type) {
+                    .tag_union => |ext_tag_union| {
+                        try self.appendRowEntries(.tag_union, ext_tag_union.tags);
+                        ext = ext_tag_union.ext;
                     },
                     .empty_tag_union => return .empty_tag_union,
                     .record,
@@ -1326,10 +1282,13 @@ fn gatherTags(
                     .fn_unbound,
                     .empty_record,
                     => return .invalid,
-                }
+                },
             },
             .field_presence => return .invalid,
-            .err => return .err,
+            .err => return switch (kind) {
+                .record => .invalid,
+                .tag_union => .err,
+            },
         }
     }
 }
@@ -2088,7 +2047,7 @@ test "TypeWriter renders a tuple spine deeper than any native-stack budget" {
 
     var into = std.array_list.Managed(u8).init(testing.allocator);
     defer into.deinit();
-    try env.writer.writeInto(&into, current, .wrap);
+    try env.writer.writeIntoAtPolarity(&into, current, .wrap, .pos);
 
     // `depth` open parens, `{}`, then `depth` close parens.
     try testing.expectEqual(@as(usize, depth * 2 + 2), into.items.len);

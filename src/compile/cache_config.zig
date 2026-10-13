@@ -313,7 +313,11 @@ pub const Constants = struct {
     /// 146: Annotations record an erroneous generated type, and procedure
     ///      templates record whether their signature reaches every scheme
     ///      variable.
-    pub const CACHE_VERSION = 146;
+    /// 147: Canonical node payloads are encoded from their payload field types.
+    /// 148: Low-level op numbering covers only ops that lowering produces.
+    /// 149: A stored checked runtime error keeps its evaluated operands in a
+    ///      field of their own.
+    pub const CACHE_VERSION = 149;
 };
 
 /// Configuration for the Roc cache system.

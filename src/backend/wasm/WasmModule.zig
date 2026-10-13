@@ -6053,7 +6053,7 @@ test "BuiltinSymbols—all symbols found after merge" {
 
     // Spot check a few builtins (populate returns function index = enum index + 1,
     // since index 0 is the import and symbols are added in `BuiltinKind` order).
-    try std.testing.expectEqual(@as(u32, 1), syms.get(.dec_mul)); // first defined fn after import
+    try std.testing.expectEqual(@as(u32, @backingInt(BuiltinKind.dec_mul)) + 1, syms.get(.dec_mul));
     try std.testing.expectEqual(@as(u32, @backingInt(BuiltinKind.str_trim)) + 1, syms.get(.str_trim));
 }
 

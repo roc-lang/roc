@@ -4350,55 +4350,84 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    /// Explain which positions of a structural type don't support equality.
+    /// Nothing is added when every position does. Otherwise `intro` names
+    /// the type and its positions, each failing position is explained by
+    /// `positions.explain`, and the hint says the type has `is_eq` only when
+    /// all of its `hint_positions` do.
+    fn explainEqualityFailure(
+        self: *Self,
+        report: *Report,
+        positions: anytype,
+        intro: []const u8,
+        hint_subject: []const u8,
+        hint_positions: []const u8,
+    ) Allocator.Error!void {
+        var has_problem = false;
+        for (0..positions.len) |index| {
+            if (!positions.supportsEquality(self, index)) {
+                has_problem = true;
+                break;
+            }
+        }
+        if (!has_problem) return;
+
+        try report.document.addReflowingText(intro);
+        try report.document.addAnnotated(Ident.IS_EQ_METHOD_NAME, .emphasized);
+        try report.document.addReflowingText(":");
+        try report.document.addLineBreaks(2);
+
+        for (0..positions.len) |index| {
+            if (positions.supportsEquality(self, index)) continue;
+            try positions.explain(self, report, index);
+        }
+        try report.document.addAnnotated("Hint:", .emphasized);
+        try report.document.addReflowingText(hint_subject);
+        try report.document.addAnnotated(Ident.IS_EQ_METHOD_NAME, .emphasized);
+        try report.document.addReflowingText(hint_positions);
+        try report.document.addAnnotated(Ident.IS_EQ_METHOD_NAME, .emphasized);
+        try report.document.addReflowingText(" methods.");
+        try report.document.addLineBreak();
+    }
+
     /// Explain which record fields don't support equality
     fn explainRecordEqualityFailure(
         self: *Self,
         report: *Report,
         record: snapshot.SnapshotRecord,
     ) Allocator.Error!void {
+        const Fields = struct {
+            names: []const Ident.Idx,
+            contents: []const snapshot.SnapshotContentIdx,
+            len: usize,
+
+            fn supportsEquality(fields: @This(), builder: *Self, index: usize) bool {
+                return builder.snapshotSupportsEquality(fields.contents[index]);
+            }
+
+            fn explain(fields: @This(), builder: *Self, rep: *Report, index: usize) Allocator.Error!void {
+                const field_name = builder.can_ir.getIdentText(fields.names[index]);
+
+                const field_type_str = try rep.addOwnedString(builder.getFormattedString(fields.contents[index]));
+
+                try rep.document.addText("    ");
+                try rep.document.addAnnotated(field_name, .emphasized);
+                try rep.document.addText(": ");
+                try rep.document.addAnnotated(field_type_str, .type_variable);
+                try rep.document.addLineBreak();
+
+                // Explain WHY this field doesn't support equality
+                _ = try builder.explainWhyNoEquality(rep, fields.contents[index], "        ");
+            }
+        };
         const fields = self.snapshots.?.sliceRecordFields(record.fields);
-        var has_problem_fields = false;
-
-        // First pass: check if any fields don't support equality
-        for (fields.items(.content)) |field_content_idx| {
-            if (!self.snapshotSupportsEquality(field_content_idx)) {
-                has_problem_fields = true;
-                break;
-            }
-        }
-
-        if (has_problem_fields) {
-            try report.document.addReflowingText("This record does not support equality because these fields have types that don't support ");
-            try report.document.addAnnotated(Ident.IS_EQ_METHOD_NAME, .emphasized);
-            try report.document.addReflowingText(":");
-            try report.document.addLineBreaks(2);
-
-            const field_names = fields.items(.name);
-            const field_contents = fields.items(.content);
-            for (field_names, field_contents) |name, field_content_idx| {
-                if (!self.snapshotSupportsEquality(field_content_idx)) {
-                    const field_name = self.can_ir.getIdentText(name);
-
-                    const field_type_str = try report.addOwnedString(self.getFormattedString(field_content_idx));
-
-                    try report.document.addText("    ");
-                    try report.document.addAnnotated(field_name, .emphasized);
-                    try report.document.addText(": ");
-                    try report.document.addAnnotated(field_type_str, .type_variable);
-                    try report.document.addLineBreak();
-
-                    // Explain WHY this field doesn't support equality
-                    _ = try self.explainWhyNoEquality(report, field_content_idx, "        ");
-                }
-            }
-            try report.document.addAnnotated("Hint:", .emphasized);
-            try report.document.addReflowingText(" Anonymous records only have an ");
-            try report.document.addAnnotated(Ident.IS_EQ_METHOD_NAME, .emphasized);
-            try report.document.addReflowingText(" method if all of their fields have ");
-            try report.document.addAnnotated(Ident.IS_EQ_METHOD_NAME, .emphasized);
-            try report.document.addReflowingText(" methods.");
-            try report.document.addLineBreak();
-        }
+        try self.explainEqualityFailure(
+            report,
+            Fields{ .names = fields.items(.name), .contents = fields.items(.content), .len = fields.len },
+            "This record does not support equality because these fields have types that don't support ",
+            " Anonymous records only have an ",
+            " method if all of their fields have ",
+        );
     }
 
     /// Explain which tuple elements don't support equality
@@ -4407,45 +4436,35 @@ pub const ReportBuilder = struct {
         report: *Report,
         tuple: snapshot.SnapshotTuple,
     ) Allocator.Error!void {
+        const Elems = struct {
+            contents: []const snapshot.SnapshotContentIdx,
+            len: usize,
+
+            fn supportsEquality(elems: @This(), builder: *Self, index: usize) bool {
+                return builder.snapshotSupportsEquality(elems.contents[index]);
+            }
+
+            fn explain(elems: @This(), builder: *Self, rep: *Report, index: usize) Allocator.Error!void {
+                const elem_type_str = try rep.addOwnedString(builder.getFormattedString(elems.contents[index]));
+
+                try rep.document.addText("    element ");
+                try builder.addAnnotatedFmt(rep, "{d}", .{index}, .emphasized);
+                try rep.document.addText(": ");
+                try rep.document.addAnnotated(elem_type_str, .type_variable);
+                try rep.document.addLineBreak();
+
+                // Explain WHY this element doesn't support equality
+                _ = try builder.explainWhyNoEquality(rep, elems.contents[index], "        ");
+            }
+        };
         const elems = self.snapshots.?.sliceVars(tuple.elems);
-        var has_problem_elems = false;
-
-        // First pass: check if any elements don't support equality
-        for (elems) |elem_content_idx| {
-            if (!self.snapshotSupportsEquality(elem_content_idx)) {
-                has_problem_elems = true;
-                break;
-            }
-        }
-
-        if (has_problem_elems) {
-            try report.document.addReflowingText("This tuple does not support equality because these elements have types that don't support ");
-            try report.document.addAnnotated(Ident.IS_EQ_METHOD_NAME, .emphasized);
-            try report.document.addReflowingText(":");
-            try report.document.addLineBreaks(2);
-
-            for (elems, 0..) |elem_content_idx, i| {
-                if (!self.snapshotSupportsEquality(elem_content_idx)) {
-                    const elem_type_str = try report.addOwnedString(self.getFormattedString(elem_content_idx));
-
-                    try report.document.addText("    element ");
-                    try self.addAnnotatedFmt(report, "{d}", .{i}, .emphasized);
-                    try report.document.addText(": ");
-                    try report.document.addAnnotated(elem_type_str, .type_variable);
-                    try report.document.addLineBreak();
-
-                    // Explain WHY this element doesn't support equality
-                    _ = try self.explainWhyNoEquality(report, elem_content_idx, "        ");
-                }
-            }
-            try report.document.addAnnotated("Hint:", .emphasized);
-            try report.document.addReflowingText(" Tuples only have an ");
-            try report.document.addAnnotated(Ident.IS_EQ_METHOD_NAME, .emphasized);
-            try report.document.addReflowingText(" method if all of their elements have ");
-            try report.document.addAnnotated(Ident.IS_EQ_METHOD_NAME, .emphasized);
-            try report.document.addReflowingText(" methods.");
-            try report.document.addLineBreak();
-        }
+        try self.explainEqualityFailure(
+            report,
+            Elems{ .contents = elems, .len = elems.len },
+            "This tuple does not support equality because these elements have types that don't support ",
+            " Tuples only have an ",
+            " method if all of their elements have ",
+        );
     }
 
     /// Explain which tag union payloads don't support equality
@@ -4454,74 +4473,55 @@ pub const ReportBuilder = struct {
         report: *Report,
         tag_union: snapshot.SnapshotTagUnion,
     ) Allocator.Error!void {
-        const tags = self.snapshots.?.sliceTags(tag_union.tags);
-        var has_problem_tags = false;
+        const Tags = struct {
+            names: []const Ident.Idx,
+            args: []const @FieldType(snapshot.SnapshotTag, "args"),
+            len: usize,
 
-        // First pass: check if any tag payloads don't support equality
-        for (tags.items(.args)) |tag_args| {
-            const args = self.snapshots.?.sliceVars(tag_args);
-            for (args) |arg_content_idx| {
-                if (!self.snapshotSupportsEquality(arg_content_idx)) {
-                    has_problem_tags = true;
-                    break;
+            fn supportsEquality(tags: @This(), builder: *Self, index: usize) bool {
+                for (builder.snapshots.?.sliceVars(tags.args[index])) |arg_content_idx| {
+                    if (!builder.snapshotSupportsEquality(arg_content_idx)) return false;
                 }
+                return true;
             }
-            if (has_problem_tags) break;
-        }
 
-        if (has_problem_tags) {
-            try report.document.addReflowingText("This tag union does not support equality because these tags have payload types that don't support ");
-            try report.document.addAnnotated(Ident.IS_EQ_METHOD_NAME, .emphasized);
-            try report.document.addReflowingText(":");
-            try report.document.addLineBreaks(2);
+            fn explain(tags: @This(), builder: *Self, rep: *Report, index: usize) Allocator.Error!void {
+                const args = builder.snapshots.?.sliceVars(tags.args[index]);
+                const tag_name = builder.can_ir.getIdentText(tags.names[index]);
+                try rep.document.addText("    ");
+                try rep.document.addAnnotated(tag_name, .emphasized);
 
-            const tag_names = tags.items(.name);
-            const tag_args_list = tags.items(.args);
-            for (tag_names, tag_args_list) |name, tag_args| {
-                const args = self.snapshots.?.sliceVars(tag_args);
-                var tag_has_problem = false;
-                for (args) |arg_content_idx| {
-                    if (!self.snapshotSupportsEquality(arg_content_idx)) {
-                        tag_has_problem = true;
-                        break;
-                    }
-                }
-                if (tag_has_problem) {
-                    const tag_name = self.can_ir.getIdentText(name);
-                    try report.document.addText("    ");
-                    try report.document.addAnnotated(tag_name, .emphasized);
-
-                    // Show the problematic payload types
-                    if (args.len > 0) {
-                        try report.document.addText(" (");
-                        var first = true;
-                        for (args) |arg_content_idx| {
-                            if (!first) try report.document.addText(", ");
-                            first = false;
-
-                            const arg_type_str = try report.addOwnedString(self.getFormattedString(arg_content_idx));
-                            try report.document.addAnnotated(arg_type_str, .type_variable);
-                        }
-                        try report.document.addText(")");
-                    }
-                    try report.document.addLineBreak();
-
-                    // Explain WHY each problematic payload doesn't support equality
+                // Show the problematic payload types
+                if (args.len > 0) {
+                    try rep.document.addText(" (");
+                    var first = true;
                     for (args) |arg_content_idx| {
-                        if (!self.snapshotSupportsEquality(arg_content_idx)) {
-                            _ = try self.explainWhyNoEquality(report, arg_content_idx, "        ");
-                        }
+                        if (!first) try rep.document.addText(", ");
+                        first = false;
+
+                        const arg_type_str = try rep.addOwnedString(builder.getFormattedString(arg_content_idx));
+                        try rep.document.addAnnotated(arg_type_str, .type_variable);
+                    }
+                    try rep.document.addText(")");
+                }
+                try rep.document.addLineBreak();
+
+                // Explain WHY each problematic payload doesn't support equality
+                for (args) |arg_content_idx| {
+                    if (!builder.snapshotSupportsEquality(arg_content_idx)) {
+                        _ = try builder.explainWhyNoEquality(rep, arg_content_idx, "        ");
                     }
                 }
             }
-            try report.document.addAnnotated("Hint:", .emphasized);
-            try report.document.addReflowingText(" Tag unions only have an ");
-            try report.document.addAnnotated(Ident.IS_EQ_METHOD_NAME, .emphasized);
-            try report.document.addReflowingText(" method if all of their payload types have ");
-            try report.document.addAnnotated(Ident.IS_EQ_METHOD_NAME, .emphasized);
-            try report.document.addReflowingText(" methods.");
-            try report.document.addLineBreak();
-        }
+        };
+        const tags = self.snapshots.?.sliceTags(tag_union.tags);
+        try self.explainEqualityFailure(
+            report,
+            Tags{ .names = tags.items(.name), .args = tags.items(.args), .len = tags.len },
+            "This tag union does not support equality because these tags have payload types that don't support ",
+            " Tag unions only have an ",
+            " method if all of their payload types have ",
+        );
     }
 
     /// Check if a snapshotted type supports equality
