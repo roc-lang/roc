@@ -9633,9 +9633,8 @@ const Builder = struct {
         if (nominal.args.len != mono_args.len) {
             Common.invariant("checked nominal type argument arity differed from monotype named argument arity");
         }
-        for (nominal.args, mono_args) |checked_arg, mono_arg| {
-            try ctx.constrainTypeToMono(checked_arg, mono_arg);
-        }
+        // The declaration's formals are bound to the already lowered
+        // arguments, so the backing is instantiated from those alone.
         const source = ctx.nominalInstantiationSource(&nominal) orelse {
             Common.invariant("nominal backing type lowering could not resolve a declaration-backed nominal");
         };
@@ -9645,7 +9644,9 @@ const Builder = struct {
         }
         const backing_node = try ctx.instNominalDeclarationBackingNode(source, arg_nodes);
         try graph.freezeRelations();
-        const backing = try graph.sealNode(backing_node);
+        // The arguments are already finished types of this store, so the
+        // backing refers to them rather than to sealed copies.
+        const backing = try graph.sealNodeOverFinished(backing_node, mono_args);
         return try self.structuralBackingForNominal(view, nominal, mono_args, backing);
     }
 
