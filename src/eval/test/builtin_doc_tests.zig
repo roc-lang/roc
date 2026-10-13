@@ -3,7 +3,8 @@
 //! For each block:
 //!   * It must pass `roc check` (driven by `parseAndCheckProgramForProblems`).
 //!   * If the block contains only top-level `expect` statements, the block's
-//!     `test_expect` roots run in the LIR interpreter.
+//!     `test_expect` roots run with the dev backend. Hosts without the dev
+//!     backend skip these blocks.
 //!   * Otherwise, the block is evaluated through `compileInspectedProgram`.
 //!
 //! When a block fails, the source is written to a debug file under
@@ -14,6 +15,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
+const backend = @import("backend");
 const testing = std.testing;
 
 /// Forking is needed so a single crashing block (e.g. annotation-only function
@@ -573,7 +575,7 @@ fn runCheck(
     return null;
 }
 
-/// Run the `test_expect` roots of an expect-only block in the LIR interpreter.
+/// Run the `test_expect` roots of an expect-only block with the dev backend.
 /// This matches the path used by `roc test` for top-level expects.
 fn runExpects(allocator: Allocator, source: []const u8) BuiltinDocTestError!?[]u8 {
     const outcome = (if (prePublishedBuiltin()) |ppb|
@@ -592,6 +594,7 @@ fn runExpects(allocator: Allocator, source: []const u8) BuiltinDocTestError!?[]u
 }
 
 test "runExpects passes a true expect" {
+    if (comptime !backend.host_lir_codegen_available) return error.SkipZigTest;
     const allocator = base.defaultGpa();
     const message = try runExpects(allocator, "expect 1.I64 == 1\n");
     defer if (message) |m| allocator.free(m);
@@ -599,6 +602,7 @@ test "runExpects passes a true expect" {
 }
 
 test "runExpects fails a false expect" {
+    if (comptime !backend.host_lir_codegen_available) return error.SkipZigTest;
     const allocator = base.defaultGpa();
     const message = try runExpects(allocator, "expect 1.I64 == 2\n");
     defer if (message) |m| allocator.free(m);
@@ -606,6 +610,7 @@ test "runExpects fails a false expect" {
 }
 
 test "runExpects counts each failed expect" {
+    if (comptime !backend.host_lir_codegen_available) return error.SkipZigTest;
     const allocator = base.defaultGpa();
     const message = try runExpects(allocator, "expect 1.I64 == 1\nexpect 1.I64 == 2\n");
     defer if (message) |m| allocator.free(m);
@@ -613,6 +618,7 @@ test "runExpects counts each failed expect" {
 }
 
 test "runExpects fails a false expect that calls a Builtin function" {
+    if (comptime !backend.host_lir_codegen_available) return error.SkipZigTest;
     const allocator = base.defaultGpa();
     const message = try runExpects(allocator, "expect List.first([3.I64]) == Ok(4)\n");
     defer if (message) |m| allocator.free(m);
@@ -696,7 +702,10 @@ fn processBlock(allocator: Allocator, block: *const Block) BuiltinDocTestError!P
     if (try checkAccordingToKind(allocator, block)) |msg| return .{ .failed = msg };
 
     switch (block.kind) {
-        .expects_only => return forkResultToProcess(allocator, runInChild(allocator, workerExpects, block.source)),
+        .expects_only => {
+            if (comptime !backend.host_lir_codegen_available) return .success;
+            return forkResultToProcess(allocator, runInChild(allocator, workerExpects, block.source));
+        },
         .module_with_def => {
             const name = block.last_def_name orelse {
                 return .{ .failed = try dupeErr(allocator, "module-style block has no top-level definition to use as main", .{}) };

@@ -1334,7 +1334,8 @@ pub const TopLevelExpectOutcome = union(enum) {
 };
 
 /// Lower the top-level `expect` statements of a module as test roots and run
-/// each root in the LIR interpreter.
+/// each root with the dev backend. Returns `error.DevBackendUnavailable` when
+/// the host has no dev backend.
 pub fn runTopLevelExpects(
     allocator: Allocator,
     io: std.Io,
@@ -1379,75 +1380,67 @@ fn runTopLevelExpectsImpl(
     var lowered = try lowerParsedProgramToLirWithOptions(allocator, io, &resources, .native, .{ .root_requests = selected.items });
     defer lowered.deinit(allocator);
 
-    var runtime_env = RuntimeHostEnv.init(allocator);
-    defer runtime_env.deinit();
-
-    var static_data = try @import("interpreter_static_data.zig").InterpreterStaticData.init(allocator, lowered.view.static_data, lowered.view.static_data_value_count);
-    defer static_data.deinit();
-    var static_strings = try Interpreter.buildStaticStrings(allocator, &lowered.view.store);
-    defer static_strings.deinit();
-
-    var interp = try Interpreter.initWithBoxyTables(
-        allocator,
-        &lowered.view.store,
-        &lowered.view.layouts,
-        boxy_runtime.BoxyTables.fromImageView(&lowered.view),
-        static_strings.view(),
-        runtime_env.get_ops(),
-    );
-    defer interp.deinit();
-    static_data.install(&interp);
-    static_data.ownByInterpreter(&interp);
-
     // Every root proc is a `test_expect` root: lowering received only the
     // selected requests.
-    const total = lowered.view.root_procs.len;
-    var failed: usize = 0;
-    for (lowered.view.root_procs) |root_proc| {
+    const root_procs = lowered.view.root_procs;
+    const roots = try allocator.alloc(BoolRoot, root_procs.len);
+    var roots_len: usize = 0;
+    defer {
+        for (roots[0..roots_len]) |root| {
+            allocator.free(root.symbol_name);
+            allocator.free(root.arg_layouts);
+        }
+        allocator.free(roots);
+    }
+    for (root_procs, 0..) |root_proc, i| {
         const proc = lowered.view.store.getProcSpec(root_proc);
         const arg_locals = lowered.view.store.getLocalSpan(proc.args);
         const arg_layouts = try allocator.alloc(LayoutIdx, arg_locals.len);
-        defer allocator.free(arg_layouts);
-        for (0..arg_locals.len) |i| {
-            arg_layouts[i] = lowered.view.store.getLocal(GuardedList.at(arg_locals, i)).layout_idx;
+        errdefer allocator.free(arg_layouts);
+        for (0..arg_locals.len) |arg_index| {
+            arg_layouts[arg_index] = lowered.view.store.getLocal(GuardedList.at(arg_locals, arg_index)).layout_idx;
         }
-
-        const expect_failures_before = countExpectFailedEvents(&runtime_env);
-        const passed = if (interp.eval(.{
-            .proc_id = root_proc,
+        const symbol_name = try std.fmt.allocPrintSentinel(allocator, "roc_test_expect_{d}", .{i}, 0);
+        roots[i] = .{
+            .symbol_name = symbol_name,
+            .proc = root_proc,
             .arg_layouts = arg_layouts,
             .ret_layout = proc.ret_layout,
-        })) |result| switch (result) {
-            .value => |value| blk: {
-                const ok = value.read(u8) != 0;
-                interp.dropValue(value, proc.ret_layout);
-                break :blk ok;
-            },
-        } else |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.ComptimeExhaustiveness,
-            error.Crash,
-            error.DivisionByZero,
-            error.ExpectErr,
-            error.InvalidHostedFunctionSignature,
-            error.RuntimeError,
-            error.UnsupportedHostedFunction,
-            => false,
         };
-        if (!passed or countExpectFailedEvents(&runtime_env) != expect_failures_before) failed += 1;
+        roots_len += 1;
     }
 
-    if (failed == 0) return .{ .passed = total };
-    return .{ .failed = .{ .failed = failed, .total = total } };
+    var batch = try devEvalBoolRootModule(allocator, .{
+        .store = &lowered.view.store,
+        .layouts = &lowered.view.layouts,
+        .tables = boxy_runtime.BoxyTables.fromImageView(&lowered.view),
+        .roots = roots,
+        .static_data = .{
+            .exports = lowered.view.static_data,
+            .value_count = lowered.view.static_data_value_count,
+        },
+    }, null, 1);
+    defer batch.deinit(allocator);
+
+    var failed: usize = 0;
+    for (batch.results) |result| {
+        const returned_true = switch (result.outcome) {
+            .passed => |passed| passed,
+            .crashed, .expect_err, .checked_error => false,
+        };
+        if (!returned_true or boolRootEventsHaveExpectFailure(result.events)) failed += 1;
+    }
+
+    if (failed == 0) return .{ .passed = batch.results.len };
+    return .{ .failed = .{ .failed = failed, .total = batch.results.len } };
 }
 
-fn countExpectFailedEvents(runtime_env: *const RuntimeHostEnv) usize {
-    var count: usize = 0;
-    for (runtime_env.events.items) |event| switch (event) {
-        .expect_failed => count += 1,
-        .dbg, .crashed, .effect => {},
+fn boolRootEventsHaveExpectFailure(events: []const BoolRootEvent) bool {
+    for (events) |event| switch (event) {
+        .expect_failed => return true,
+        .dbg, .crashed => {},
     };
-    return count;
+    return false;
 }
 
 /// Publish a program for an interactive compile-time evaluation while retaining
