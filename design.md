@@ -6354,6 +6354,16 @@ through the context's leaf scope, which a bound role names its boundary cell
 in, so a leaf read later reaches that cell exactly as the eager
 instantiation's memo would have. A contract relating a nested shape to its
 boundary therefore reads only the levels that differ, not the whole shape.
+Generated-call roles are selected by their subject's class, and a closed
+subject joins the boundary component it denotes only when a class holding
+both is read, so instantiating a contract reads its boundary shape down to
+its nested codec boundaries: every subject is then one class with its
+occurrence, however the derived body later reaches that occurrence. The
+read stops at an occurrence a nested boundary call names, since that
+boundary's components are the subjects of the contract it activates. A
+graph instantiates a contract at boundary classes it has already
+instantiated it at once: nested bodies of one derived codec share that
+instantiation unless it consulted enclosing evidence.
 Queued specialization contexts retain both the constructor and the explicit
 public value shape. Both participate in specialization identity. A constructor
 may use the structural generated-body representation, so restoring the contract
