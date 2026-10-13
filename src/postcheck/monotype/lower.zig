@@ -404,14 +404,14 @@ const ComptimeDemandState = struct {
     root_handled: std.ArrayList(bool) = .empty,
     /// Root values restored or evaluated in place, by expression, and
     /// whether the expression evaluates its root in place.
-    value_reads: std.AutoHashMapUnmanaged(Ast.ExprId, Range) = .empty,
+    value_reads: collections.DenseMapUnmanaged(Ast.ExprId, Range) = .empty,
     value_read_roots: std.ArrayList(u32) = .empty,
     value_read_evaluated: std.ArrayList(bool) = .empty,
     ingested_value_reads: usize = 0,
     /// The roots each procedure an object-cache entry serves read, by the
     /// procedure's function: its body is skipped, so its reads come from the
     /// entry (`Common.SpecCacheHit.comptime_root_reads`).
-    cached_fn_reads: std.AutoHashMapUnmanaged(Ast.FnId, Range) = .empty,
+    cached_fn_reads: collections.DenseMapUnmanaged(Ast.FnId, Range) = .empty,
     cached_fn_read_roots: std.ArrayList(u32) = .empty,
     ingested_cached_fns: usize = 0,
     expr_marks: std.ArrayList(u32) = .empty,
@@ -4845,7 +4845,7 @@ const Builder = struct {
     declared_roots: std.ArrayList(DeclaredRoot) = .empty,
     /// Reserved compile-time root bodies the program has not demanded yet,
     /// by the root's reserved function. Coordinator-only.
-    parked_root_jobs: std.AutoHashMapUnmanaged(Ast.FnId, PendingSpecJob) = .empty,
+    parked_root_jobs: collections.DenseMapUnmanaged(Ast.FnId, PendingSpecJob) = .empty,
     /// Set while a lazily declared root's entry template is reserved: its
     /// queued body is parked in `parked_root_job` instead of the queue.
     parking_root_job: bool = false,
