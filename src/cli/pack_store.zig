@@ -89,6 +89,21 @@ pub const Store = struct {
         try self.writePath(path, bytes);
     }
 
+    /// File a pack of discovery summaries (no code) under a module identity
+    /// for one code-generation key. It is named apart from code packs, so a
+    /// compilation that only asks whether discovery is settled reads no code.
+    pub fn writeDiscovery(self: *const Store, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
+        const dir = try self.identityDir(origin, identity);
+        defer self.allocator.free(dir);
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.Blake3.hash(bytes, &digest, .{});
+        const name = try std.fmt.allocPrint(self.allocator, "discovery-{s}-{s}.rpk", .{ &std.fmt.bytesToHex(key, .lower), &std.fmt.bytesToHex(digest, .lower) });
+        defer self.allocator.free(name);
+        const path = try std.fs.path.join(self.allocator, &.{ dir, name });
+        defer self.allocator.free(path);
+        try self.writePath(path, bytes);
+    }
+
     fn writePath(self: *const Store, path: []const u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
         const dir = std.fs.path.dirname(path).?;
         self.roc_ctx.makePath(dir) catch |err| {
@@ -120,8 +135,7 @@ pub const Store = struct {
         self.roc_ctx.writeStderr(message) catch {};
     }
 
-    /// Every pack filed under a module identity, in name order.
-    /// The packs filed under a module identity for one code-generation key:
+    /// The code packs filed under a module identity for one code-generation key:
     /// its complete pack and its partial offers. Packs an earlier revision of
     /// the module wrote stay on disk but offer nothing this revision can use,
     /// since every offer they hold is keyed by that revision's specializations.
@@ -129,6 +143,14 @@ pub const Store = struct {
         const dir = try self.identityDir(origin, identity);
         defer self.allocator.free(dir);
         try packs.loadDirIntoFor(io, dir, .cache_offers, key);
+    }
+
+    /// Index the discovery summaries filed under a module identity for one
+    /// code-generation key, without reading its code packs.
+    pub fn loadDiscoveryIdentity(self: *const Store, io: std.Io, packs: *LoadedPacks, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8) LoadedPacks.LoadError!void {
+        const dir = try self.identityDir(origin, identity);
+        defer self.allocator.free(dir);
+        try packs.loadDiscoveryDir(io, dir, key);
     }
 };
 
@@ -1179,6 +1201,25 @@ pub const LoadedPacks = struct {
     /// Neither lookup may expose a partial index or retry a failed collection.
     state: enum { pending, ready, unavailable } = .pending,
     failure: ?LoadError = null,
+    /// Serializes the one-time loads: lookups can come from parallel
+    /// specialization workers, and the first of them loads for all.
+    load_mutex: std.atomic.Mutex = .unlocked,
+    /// Whether the discovery summaries of the modules in view are indexed.
+    /// They load apart from code packs, which load at the first code lookup.
+    discovery_loaded: bool = false,
+    /// The prepared program's module set, owned here so that the first code
+    /// lookup of that program can load and admit packs against it. Its views
+    /// borrow checked artifacts the build keeps for the whole command.
+    deferred: ?Deferred = null,
+    /// Packs a program published while code packs were still unloaded,
+    /// indexed with them when they load.
+    staged: std.ArrayListUnmanaged([]u8) = .empty,
+
+    const Deferred = struct {
+        arena: std.heap.ArenaAllocator,
+        modules: lir.CheckedPipeline.CheckedModuleSet,
+        root: *const check.CheckedArtifact.CheckedModuleArtifact,
+    };
 
     pub const LoadError = Allocator.Error || PackFile.ReadError || error{PackDirectoryUnreadable};
     pub const Input = enum {
@@ -1216,7 +1257,7 @@ pub const LoadedPacks = struct {
     pub fn loadDirInto(self: *LoadedPacks, io: std.Io, dir_path: []const u8, input: Input) LoadError!void {
         std.debug.assert(self.state == .pending);
         self.loadDirIntoUnrecorded(io, dir_path, input, null) catch |err| {
-            self.state = .unavailable;
+            @atomicStore(@TypeOf(self.state), &self.state, .unavailable, .release);
             self.failure = err;
             return err;
         };
@@ -1226,7 +1267,7 @@ pub const LoadedPacks = struct {
     pub fn loadDirIntoFor(self: *LoadedPacks, io: std.Io, dir_path: []const u8, input: Input, key: [32]u8) LoadError!void {
         std.debug.assert(self.state == .pending);
         self.loadDirIntoUnrecorded(io, dir_path, input, key) catch |err| {
-            self.state = .unavailable;
+            @atomicStore(@TypeOf(self.state), &self.state, .unavailable, .release);
             self.failure = err;
             return err;
         };
@@ -1303,12 +1344,108 @@ pub const LoadedPacks = struct {
     pub fn retain(self: *LoadedPacks, bytes: []const u8) LoadError!void {
         std.debug.assert(!self.revoked);
         if (self.state == .unavailable) return self.failure.?;
+        // A store's code packs load at the first code lookup, and these join
+        // them then; nothing before that could look them up.
+        if (self.state == .pending and self.pending != null) {
+            try self.staged.append(self.allocator, try self.allocator.dupe(u8, bytes));
+            return;
+        }
         self.appendPack(bytes) catch |err| return self.recordFailure(err);
         try self.indexPacks();
     }
 
+    /// Index a published pack of discovery summaries.
+    pub fn retainDiscovery(self: *LoadedPacks, bytes: []const u8) LoadError!void {
+        std.debug.assert(!self.revoked);
+        try self.indexDiscoveryBytes(bytes);
+    }
+
+    /// Read every discovery pack in `dir_path` filed for `key` and index its
+    /// summaries. Unreadable files are cache misses.
+    pub fn loadDiscoveryDir(self: *LoadedPacks, io: std.Io, dir_path: []const u8, key: [32]u8) LoadError!void {
+        const key_hex = std.fmt.bytesToHex(key, .lower);
+        var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true }) catch |err| switch (err) {
+            error.FileNotFound => return,
+            else => return error.PackDirectoryUnreadable,
+        };
+        defer dir.close(io);
+        var entries = dir.iterate();
+        while (true) {
+            const entry = (entries.next(io) catch return error.PackDirectoryUnreadable) orelse break;
+            if (entry.kind != .file) continue;
+            if (!discoveryNameForKey(entry.name, &key_hex)) continue;
+            const bytes = dir.readFileAlloc(io, entry.name, self.allocator, .limited(1024 * 1024 * 1024)) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.PackDirectoryUnreadable,
+            };
+            defer self.allocator.free(bytes);
+            self.indexDiscoveryBytes(bytes) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.UnsupportedPackVersion, error.MalformedPack => continue,
+                error.PackDirectoryUnreadable => unreachable,
+            };
+        }
+    }
+
+    fn indexDiscoveryBytes(self: *LoadedPacks, bytes: []const u8) LoadError!void {
+        var pack = try PackFile.read(self.allocator, bytes);
+        defer pack.deinit();
+        for (pack.discovery) |entry| {
+            try self.discovery.put(self.allocator, .{ .key = entry.key, .platform_requirement_relation = entry.platform_requirement_relation }, {});
+        }
+    }
+
+    /// Whether a pack file name is a discovery pack
+    /// (`discovery-<key>-<content>.rpk`) of `key`.
+    fn discoveryNameForKey(name: []const u8, key_hex: []const u8) bool {
+        if (!std.mem.endsWith(u8, name, ".rpk")) return false;
+        const stem = name[0 .. name.len - ".rpk".len];
+        const prefix = "discovery-";
+        if (!std.mem.startsWith(u8, stem, prefix)) return false;
+        const rest = stem[prefix.len..];
+        return rest.len > key_hex.len and std.mem.startsWith(u8, rest, key_hex) and rest[key_hex.len] == '-';
+    }
+
+    /// Own a copy of a prepared program's module set, so that its first code
+    /// lookup can load packs and admit them against it.
+    pub fn deferLoad(self: *LoadedPacks, modules: lir.CheckedPipeline.CheckedModuleSet, root: *const check.CheckedArtifact.CheckedModuleArtifact) Allocator.Error!void {
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        errdefer arena.deinit();
+        var copied = modules;
+        copied.imports = try arena.allocator().dupe(check.CheckedArtifact.ImportedModuleView, modules.imports);
+        copied.root.relation_modules = try arena.allocator().dupe(check.CheckedArtifact.ImportedModuleView, modules.root.relation_modules);
+        if (self.deferred) |*previous| previous.arena.deinit();
+        self.deferred = .{ .arena = arena, .modules = copied, .root = root };
+    }
+
+    /// Index the discovery summaries of the root module and every module it
+    /// lowers against, once.
+    pub fn ensureDiscoveryLoadedFor(self: *LoadedPacks, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) void {
+        if (self.discovery_loaded) return;
+        const pending = self.pending orelse return;
+        defer @atomicStore(bool, &self.discovery_loaded, true, .release);
+        self.loadPendingDiscovery(pending, root_artifact) catch |err| switch (err) {
+            error.OutOfMemory => self.unavailable(error.OutOfMemory),
+            // Discovery summaries only spare work; an unreadable directory
+            // leaves every discovery request to be lowered.
+            error.PackDirectoryUnreadable, error.MalformedPack, error.UnsupportedPackVersion => {},
+        };
+    }
+
+    fn loadPendingDiscovery(self: *LoadedPacks, pending: Pending, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) LoadError!void {
+        if (pending.build_env.packPlacementForArtifactKey(root_artifact.key)) |placement| {
+            try pending.store.loadDiscoveryIdentity(pending.io, self, placement.origin, placement.identity, root_artifact.codeGenerationKey().bytes);
+        }
+        const artifacts = try pending.build_env.collectVisibleArtifacts(self.allocator, root_artifact);
+        defer self.allocator.free(artifacts);
+        for (artifacts) |artifact| {
+            const placement = pending.build_env.packPlacementForArtifactKey(artifact.key) orelse continue;
+            try pending.store.loadDiscoveryIdentity(pending.io, self, placement.origin, placement.identity, artifact.codeGenerationKey().bytes);
+        }
+    }
+
     fn recordFailure(self: *LoadedPacks, err: LoadError) LoadError {
-        self.state = .unavailable;
+        @atomicStore(@TypeOf(self.state), &self.state, .unavailable, .release);
         self.failure = err;
         return err;
     }
@@ -1396,7 +1533,7 @@ pub const LoadedPacks = struct {
         }
         self.indexed_count = self.packs.items.len;
         try self.certifyLiteralOffers();
-        self.state = .ready;
+        @atomicStore(@TypeOf(self.state), &self.state, .ready, .release);
     }
 
     /// Semantic producer edges are additional to machine references. Propagate
@@ -1516,6 +1653,10 @@ pub const LoadedPacks = struct {
         target.checked_module_state = .checking_finalization;
         target.completed_scalar_values = null;
         target.layout_request_const_plans = false;
+        // A projection can run inside a specialization worker's lookup, which
+        // cannot wait on its own executor.
+        target.post_check_executor = null;
+        target.timing = null;
         const mono = try lir.CheckedPipeline.prepareCheckedModulesMonotype(self.allocator, modules, .{
             .cached_root_declarations = uses,
             .cached_literal_declarations = recipes,
@@ -1973,7 +2114,18 @@ pub const LoadedPacks = struct {
     /// checking has produced the module set; before that a lookup finds
     /// nothing.
     pub fn ensureLoaded(self: *LoadedPacks) void {
+        if (@atomicLoad(@TypeOf(self.state), &self.state, .acquire) != .pending) return;
+        while (!self.load_mutex.tryLock()) std.atomic.spinLoopHint();
+        defer self.load_mutex.unlock();
         if (self.state != .pending) return;
+        if (self.deferred) |deferred| {
+            // Admission projects materializers against the prepared program.
+            const saved = self.projection_modules;
+            if (saved == null) self.projection_modules = deferred.modules;
+            defer self.projection_modules = saved;
+            self.ensureLoadedFor(deferred.root);
+            return;
+        }
         const pending = self.pending orelse return;
         // The first lookups come from the compile-time evaluator's program,
         // which lowers inside checking, after the root module's artifact
@@ -1989,17 +2141,26 @@ pub const LoadedPacks = struct {
         if (self.state != .pending) return;
         const pending = self.pending orelse return;
         self.checked_root = root_artifact;
+        self.ensureDiscoveryLoadedFor(root_artifact);
         self.loadPending(pending, root_artifact) catch |err| {
             self.unavailable(err);
             return;
         };
+        for (self.staged.items) |bytes| {
+            self.appendPack(bytes) catch |err| {
+                self.unavailable(err);
+                return;
+            };
+        }
+        for (self.staged.items) |bytes| self.allocator.free(bytes);
+        self.staged.clearRetainingCapacity();
         self.indexPacks() catch |err| {
             self.unavailable(err);
         };
     }
 
     fn unavailable(self: *LoadedPacks, err: LoadError) void {
-        self.state = .unavailable;
+        @atomicStore(@TypeOf(self.state), &self.state, .unavailable, .release);
         self.failure = err;
         std.log.warn("object cache unavailable for this build: {}", .{err});
     }
@@ -2027,6 +2188,9 @@ pub const LoadedPacks = struct {
         self.discovery.deinit(self.allocator);
         self.materializer_reads.deinit(self.allocator);
         self.semantic_valid.deinit();
+        if (self.deferred) |*deferred| deferred.arena.deinit();
+        for (self.staged.items) |bytes| self.allocator.free(bytes);
+        self.staged.deinit(self.allocator);
         for (self.packs.items) |pack| {
             pack.deinit();
             self.allocator.destroy(pack);
@@ -2065,8 +2229,13 @@ pub const LoadedPacks = struct {
     fn findDiscovery(context: *anyopaque, key: [32]u8, current_relation: ?[32]u8) bool {
         const self: *LoadedPacks = @ptrCast(@alignCast(context));
         if (self.revoked) return false;
-        self.ensureLoaded();
-        if (self.state != .ready) return false;
+        if (!@atomicLoad(bool, &self.discovery_loaded, .acquire)) {
+            while (!self.load_mutex.tryLock()) std.atomic.spinLoopHint();
+            defer self.load_mutex.unlock();
+            const root = if (self.deferred) |deferred| deferred.root else self.checked_root orelse return false;
+            self.ensureDiscoveryLoadedFor(root);
+        }
+        if (self.state == .unavailable) return false;
         return self.discovery.contains(.{ .key = key, .platform_requirement_relation = current_relation }) or
             self.discovery.contains(.{ .key = key, .platform_requirement_relation = null });
     }

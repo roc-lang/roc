@@ -275,6 +275,8 @@ const CompileTimeObjectCache = struct {
         placement: BuildEnv.PackPlacement,
         key: [32]u8,
         bytes: []u8,
+        /// A pack of discovery summaries, filed apart from code packs.
+        discovery: bool = false,
     };
 
     fn defaultPolicy() lir.CheckedPipeline.TargetConfig {
@@ -351,20 +353,24 @@ const CompileTimeObjectCache = struct {
         return alternative.view();
     }
 
+    /// Discovery summaries load now; code packs load at the program's first
+    /// code lookup, admitted against the module set prepared here. A program
+    /// whose every request is settled reads no code.
     fn prepare(self: *CompileTimeObjectCache, modules: lir.CheckedPipeline.CheckedModuleSet) Allocator.Error!void {
         std.debug.assert(self.packs.projection_modules == null);
-        self.packs.projection_modules = modules;
-        defer self.packs.projection_modules = null;
         self.packs.checked_root = self.declared_root;
         self.packs.projection_target = self.policy;
         if (self.prepared) return;
         if (self.declared_root) |root| {
-            self.packs.ensureLoadedFor(root);
+            if (self.packs.state == .pending) try self.packs.deferLoad(modules, root);
+            self.packs.ensureDiscoveryLoadedFor(root);
         } else {
+            self.packs.projection_modules = modules;
+            defer self.packs.projection_modules = null;
             self.packs.ensureLoaded();
+            if (self.packs.state == .pending) return;
+            self.prepared = true;
         }
-        if (self.packs.state == .pending) return;
-        self.prepared = true;
     }
 
     fn declaredArtifact(self: *const CompileTimeObjectCache, identity: [32]u8) ?*const check.CheckedArtifact.CheckedModuleArtifact {
@@ -542,8 +548,25 @@ const CompileTimeObjectCache = struct {
                 error.InvalidCodeTarget, error.InvalidSourceEventCertificate, error.InvalidLiteralRecipe, error.InvalidRootMaterializationDependency => unreachable,
             };
             errdefer self.allocator.free(bytes);
-            try self.stagePublication(placement, producer.codeGenerationKey().bytes, bytes);
+            try self.stageDiscoveryPublication(placement, producer.codeGenerationKey().bytes, bytes);
         }
+    }
+
+    /// On success, owns the publication bytes.
+    fn stageDiscoveryPublication(self: *CompileTimeObjectCache, placement: BuildEnv.PackPlacement, key: [32]u8, bytes: []u8) Allocator.Error!void {
+        std.debug.assert(!self.packs.revoked);
+        if (self.packs.state != .unavailable) {
+            self.packs.retainDiscovery(bytes) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.MalformedPack, error.UnsupportedPackVersion, error.PackDirectoryUnreadable => unreachable,
+            };
+        }
+        try self.publications.append(self.allocator, .{
+            .placement = placement,
+            .key = key,
+            .bytes = bytes,
+            .discovery = true,
+        });
     }
 
     /// On success, owns the publication bytes independently of decoded objects.
@@ -571,7 +594,11 @@ const CompileTimeObjectCache = struct {
         if (accepted) std.debug.assert(!self.packs.revoked) else self.packs.revoked = true;
         for (self.publications.items) |publication| {
             if (accepted) {
-                self.store.writePartial(publication.placement.origin, publication.placement.identity, publication.key, publication.bytes) catch |err| {
+                const written = if (publication.discovery)
+                    self.store.writeDiscovery(publication.placement.origin, publication.placement.identity, publication.key, publication.bytes)
+                else
+                    self.store.writePartial(publication.placement.origin, publication.placement.identity, publication.key, publication.bytes);
+                written catch |err| {
                     std.log.warn("object cache could not store normal native offers: {}", .{err});
                 };
             }

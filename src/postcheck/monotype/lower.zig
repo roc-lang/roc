@@ -7021,9 +7021,15 @@ const Builder = struct {
                 std.debug.print("CENSUS_KEY\t{s}\t{x}\tev={x}\tcodec={x}\treq={x}\tcallable={s}\n", .{ name, key.bytes[0..8], spec_identity.evidence_digest.bytes[0..6], spec_identity.codec_contract_digest.bytes[0..6], spec_identity.request_fn_ty_digest.bytes[0..6], @tagName(spec_identity.callable) });
             }
             const relation = if (self.program.platform_requirement_filling) |filling| filling.relation else null;
-            const root_hit = if (self.root_use_cache) |cache| cache.lookup(key.bytes, relation) else null;
+            // A queued discovery request whose outcome an earlier check
+            // settled is parked below with no body, so neither the cache's
+            // code nor its demand facts are consulted for it, and answering
+            // it reads no code.
+            const settled_discovery = demand == .discovery and body_scheduling == .queued and
+                if (self.spec_cache) |cache| cache.discoverySettled(key.bytes, relation) else false;
+            const root_hit = if (settled_discovery) null else if (self.root_use_cache) |cache| cache.lookup(key.bytes, relation) else null;
             if (root_hit) |hit| fn_template.cached_demand = hit.demand;
-            if (self.spec_cache) |cache| {
+            if (!settled_discovery) if (self.spec_cache) |cache| {
                 const same_lookup = if (self.root_use_cache) |root_cache| root_cache.sameProvider(cache) else false;
                 const body_hit = if (same_lookup) root_hit else cache.lookup(key.bytes, relation);
                 if (body_hit) |hit| {
@@ -7032,7 +7038,7 @@ const Builder = struct {
                     self.count("spec_cache_hits");
                     if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup monotype key={x} hit\n", .{key.bytes[0..8]});
                 } else if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup monotype key={x} miss\n", .{key.bytes[0..8]});
-            }
+            };
         }
         if (stored_source_topology) |stored_evidence| {
             fn_template.const_evidence = try self.program.addConstFnEvidence(stored_evidence.nodes);
