@@ -44,8 +44,11 @@ pub const Digests = struct {
     /// Layouts whose structural digest is being computed, to turn an
     /// unexpected cycle into a diagnostic rather than unbounded recursion.
     visiting: collections.DenseMap(Idx, void),
+    /// Work stack of `get`, kept between queries.
+    pending: std.ArrayList(Pending) = .empty,
 
     const RecursiveKey = [32]u8;
+    const Pending = struct { idx: Idx, expanded: bool = false };
 
     pub fn init(allocator: Allocator, store: *const Store) Allocator.Error!Digests {
         var recursive_keys = collections.DenseMap(Idx, RecursiveKey).init(allocator);
@@ -73,6 +76,7 @@ pub const Digests = struct {
         self.memo.deinit();
         self.recursive_keys.deinit();
         self.visiting.deinit();
+        self.pending.deinit(self.allocator);
     }
 
     /// Content digest of one committed layout. A layout's digest hashes
@@ -80,9 +84,8 @@ pub const Digests = struct {
     /// explicit stack, so layout nesting never becomes native call depth.
     pub fn get(self: *Digests, idx: Idx) Allocator.Error!Digest {
         if (self.memo.get(idx)) |digest| return digest;
-        const Pending = struct { idx: Idx, expanded: bool = false };
-        var pending: std.ArrayList(Pending) = .empty;
-        defer pending.deinit(self.allocator);
+        const pending = &self.pending;
+        pending.clearRetainingCapacity();
         errdefer for (pending.items) |item| {
             if (item.expanded) _ = self.visiting.remove(item.idx);
         };
@@ -105,7 +108,7 @@ pub const Digests = struct {
                     base.invariant("layout digest: cyclic layout {d} has no recursive-graph key", .{@backingInt(current)});
                 }
                 top.expanded = true;
-                try self.pushChildren(&pending, current);
+                try self.pushChildren(pending, current);
                 continue;
             } else {
                 _ = self.visiting.remove(current);
@@ -217,6 +220,16 @@ pub const DigestCache = struct {
     pub fn invalidate(self: *DigestCache) void {
         if (self.digests) |*digests| digests.deinit();
         self.digests = null;
+    }
+
+    /// Forget the memoized digests that depend on `idx`, whose layout changed
+    /// in place. A memoized digest reaches every layout it depends on through
+    /// `Digests.get`, which memoizes each of those layouts before the digest
+    /// that depends on them, so a memo without `idx` holds no digest that
+    /// depends on it and nothing needs forgetting.
+    pub fn invalidateLayout(self: *DigestCache, idx: Idx) void {
+        const digests = if (self.digests) |*memoized| memoized else return;
+        if (digests.memo.contains(idx)) self.invalidate();
     }
 
     pub fn get(self: *DigestCache, store: *const Store, idx: Idx) Allocator.Error!Digest {

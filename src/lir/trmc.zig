@@ -149,7 +149,7 @@ fn transformProc(
     var tail_site: ?CFStmtId = if (proc.tail_calls) |sites| sites.head else null;
     while (tail_site) |id| {
         tail_count += 1;
-        tail_site = store.getCFStmt(id).assign_call.tail_call.?.next;
+        tail_site = store.getCFStmtImmediate(id).assign_call.tail_call.?.next;
     }
     if (construct_count == 0 and tail_count == 0) return null;
     if (builtin.mode == .debug) detection.assertRewrittenStmtsUnshared();
@@ -230,7 +230,7 @@ test "trmc per-proc and serial TCE preserve metadata and no-op procs" {
         try prepareLayouts(&store, &layouts);
         const layout_count = layouts.layoutCount();
         if (per_proc) {
-            var scratch = std.heap.ArenaAllocator.init(allocator);
+            var scratch = collections.SingleThreadArena.init(allocator);
             defer scratch.deinit();
             const report = (try runProc(&store, &layouts, proc_id, scratch.allocator())).?;
             try std.testing.expectEqual(@as(usize, 0), report.construct_count);
@@ -244,9 +244,9 @@ test "trmc per-proc and serial TCE preserve metadata and no-op procs" {
         const proc = store.getProcSpec(proc_id);
         try std.testing.expectEqual(LIR.TailTransform.tce, proc.tail_transform);
         try std.testing.expect(proc.tail_calls == null);
-        const join = store.getCFStmt(proc.body.?).join;
+        const join = store.getCFStmtImmediate(proc.body.?).join;
         try std.testing.expectEqual(call, join.body);
-        try std.testing.expectEqual(join.id, store.getCFStmt(call).jump.target);
+        try std.testing.expectEqual(join.id, store.getCFStmtImmediate(call).jump.target);
     }
 }
 
@@ -791,13 +791,13 @@ const Detection = struct {
         const local_layout = self.layouts.getLayout(self.store.getLocal(local).layout_idx);
         if (local_layout.tag != .box) return false;
         const inner = self.layouts.getLayout(local_layout.getIdx());
-        const ret_layout = self.layouts.getLayout(self.store.getProcSpec(self.proc_id).ret_layout);
+        const ret_layout = self.layouts.getLayout(self.store.getProcSpecImmediate(self.proc_id).ret_layout);
         return inner.eql(ret_layout);
     }
 
     fn isRetLayoutLocal(self: *const Detection, local: LocalId) bool {
         const local_layout = self.layouts.getLayout(self.store.getLocal(local).layout_idx);
-        const ret_layout = self.layouts.getLayout(self.store.getProcSpec(self.proc_id).ret_layout);
+        const ret_layout = self.layouts.getLayout(self.store.getProcSpecImmediate(self.proc_id).ret_layout);
         return local_layout.eql(ret_layout);
     }
 
@@ -978,7 +978,7 @@ const Transform = struct {
             .ready_moves = &detection.scratch.ready_moves,
             .old_args = &.{},
             .move_targets = .init(gpa),
-            .join_id = if (store.getProcSpec(proc_id).tail_calls) |sites|
+            .join_id = if (store.getProcSpecImmediate(proc_id).tail_calls) |sites|
                 sites.loop
             else
                 @fromBackingInt(@intCast(detection.max_join_id + 1)),
@@ -1058,7 +1058,7 @@ const Transform = struct {
 
     /// `ret v` becomes: write v through the hole, load the head, return it.
     fn rewriteRetEpilogue(self: *Transform, ret_stmt: CFStmtId, ret_layout: layout_mod.Idx) ResourceError!void {
-        const value = self.store.getCFStmt(ret_stmt).ret.value;
+        const value = self.store.getCFStmtImmediate(ret_stmt).ret.value;
         const origin = trmcOrigin(self.store.stmtOrigin(ret_stmt));
 
         const final = try self.addLocal(ret_layout);
@@ -1084,7 +1084,7 @@ const Transform = struct {
         const empty_args = try self.store.addLocalSpan(&.{});
         const box_origin = trmcOrigin(self.store.stmtOrigin(candidate.box_stmt));
         const cell = blk: {
-            var alloc = self.store.getCFStmt(candidate.box_stmt).assign_low_level;
+            var alloc = self.store.getCFStmtImmediate(candidate.box_stmt).assign_low_level;
             alloc.op = .box_alloc_zeroed;
             alloc.rc_effect = LowLevelOp.box_alloc_zeroed.rcEffect();
             alloc.args = empty_args;
@@ -1131,9 +1131,9 @@ const Transform = struct {
     }
 
     fn rewriteTailSites(self: *Transform) ResourceError!void {
-        var site: ?CFStmtId = if (self.store.getProcSpec(self.proc_id).tail_calls) |sites| sites.head else null;
+        var site: ?CFStmtId = if (self.store.getProcSpecImmediate(self.proc_id).tail_calls) |sites| sites.head else null;
         while (site) |id| {
-            const call = self.store.getCFStmt(id).assign_call;
+            const call = self.store.getCFStmtImmediate(id).assign_call;
             site = call.tail_call.?.next;
             // Every incoming reference reaches the same replacement. The
             // shared return continuation remains available to other paths.
@@ -1255,7 +1255,7 @@ const Transform = struct {
     /// Wrap the (rewritten) body in the loop join and re-point the proc at
     /// fresh argument locals; the original args become the join params.
     fn installWrapper(self: *Transform, comptime is_trmc: bool, initial: LocalId) ResourceError!void {
-        const old_body = self.store.getProcSpec(self.proc_id).body.?;
+        const old_body = self.store.getProcSpecImmediate(self.proc_id).body.?;
         const origin = trmcOrigin(self.store.stmtOrigin(old_body));
 
         const fresh = try self.gpa.alloc(LocalId, self.old_args.len);
@@ -1355,7 +1355,7 @@ const Transform = struct {
     /// frame_locals must stay complete, unique, and sorted: the interpreter
     /// binary-searches it for every local in the proc.
     fn rebuildFrameLocals(self: *Transform) ResourceError!LIR.LocalSpan {
-        const old_span = self.store.getProcSpec(self.proc_id).frame_locals;
+        const old_span = self.store.getProcSpecImmediate(self.proc_id).frame_locals;
         const old = self.store.getLocalSpan(old_span);
         if (builtin.mode == .debug) {
             var previous: ?LocalId = null;
@@ -1394,7 +1394,7 @@ const Transform = struct {
             .join_body => |join_stmt| self.store.getCFStmtPtr(join_stmt).join.body = replacement,
             .join_remainder => |join_stmt| self.store.getCFStmtPtr(join_stmt).join.remainder = replacement,
             .switch_branch => |info| {
-                const span = self.store.getCFStmt(info.stmt).switch_stmt.branches;
+                const span = self.store.getCFStmtImmediate(info.stmt).switch_stmt.branches;
                 GuardedList.atPtr(self.store.getCFSwitchBranchesMut(span), info.index).body = replacement;
             },
             .switch_default => |switch_id| self.store.getCFStmtPtr(switch_id).switch_stmt.default_branch = replacement,

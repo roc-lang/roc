@@ -639,8 +639,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
         erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
 
-        /// Map from LIR local id to value location (register or stack slot)
-        local_locations: std.AutoHashMap(u32, ValueLocation),
+        /// Value location (register or stack slot) of every bound local,
+        /// direct-indexed by the local's key.
+        local_locations: collections.DenseMap(u32, ValueLocation),
         stack_alloca_slots: collections.DenseMap(LocalId, i32),
         /// Indexes `ensureStableLocationsForStmtLocals` plans through: borrowed
         /// from the worker running this generator when it lends them (see
@@ -658,14 +659,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Current proc argument span, used only for debug invariant reporting.
         current_proc_args: ?LocalSpan = null,
 
-        /// Map from JoinPointId to code offset (for recursive closure jumps)
-        join_points: std.AutoHashMap(u32, usize),
-
         /// Map from CFStmtId to generated code offset.
         /// Dev codegen must treat LIR control flow as a graph, not a tree:
         /// shared continuations are emitted once and later paths jump to the
         /// already-generated block instead of regenerating it.
-        stmt_locations: std.AutoHashMap(u32, usize),
+        stmt_locations: collections.DenseMap(u32, usize),
 
         /// Source line entries in emission order (code offset paired with
         /// the statement's source location), consumed by DWARF line-table
@@ -674,7 +672,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Registry of compiled procedures (proc-spec id -> CompiledProc)
         /// Used to find call targets during second pass
-        proc_registry: std.AutoHashMap(u32, CompiledProc),
+        proc_registry: collections.DenseMap(u32, CompiledProc),
 
         /// Code offset of the dictionary-dispatch thunk generated for each
         /// procedure that a boxy dictionary worker slot can dispatch to
@@ -727,7 +725,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         join_point_jumps: std.AutoHashMap(u32, std.ArrayList(JumpRecord)),
 
         /// Map from JoinPointId to parameters (for rebinding to correct stack slots)
-        join_point_params: std.AutoHashMap(u32, LocalSpan),
+        join_point_params: collections.DenseMap(u32, LocalSpan),
 
         /// Tracks positions of BL/CALL instructions to compiled nested proc_specs.
         /// When deferred-prologue compilation shifts a proc body (extract, prepend prologue,
@@ -786,7 +784,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Arithmetic assignments whose result was emitted with their matching
         /// overflow predicate and must not be emitted a second time.
-        precomputed_overflow_results: std.AutoHashMap(u32, void),
+        precomputed_overflow_results: collections.DenseMap(u32, void),
 
         /// Stack slot where the hidden return pointer is saved (for return-by-pointer
         /// convention used when the return type exceeds the register limit).
@@ -1250,16 +1248,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .erased_arg_desc_params = erased_arg_desc_params,
                 .boxy_worker_procs = boxy_worker_procs,
                 .boxy_runtime_used = boxy_worker_procs.len != 0,
-                .local_locations = std.AutoHashMap(u32, ValueLocation).init(allocator),
+                .local_locations = collections.DenseMap(u32, ValueLocation).init(allocator),
                 .stack_alloca_slots = collections.DenseMap(LocalId, i32).init(allocator),
                 .local_location_undo = .empty,
                 .vector_local_by_reg = .initFill(null),
                 .vector_local_mask = 0,
-                .join_points = std.AutoHashMap(u32, usize).init(allocator),
-                .stmt_locations = std.AutoHashMap(u32, usize).init(allocator),
-                .precomputed_overflow_results = std.AutoHashMap(u32, void).init(allocator),
+                .stmt_locations = collections.DenseMap(u32, usize).init(allocator),
+                .precomputed_overflow_results = collections.DenseMap(u32, void).init(allocator),
                 .line_entries = .empty,
-                .proc_registry = std.AutoHashMap(u32, CompiledProc).init(allocator),
+                .proc_registry = collections.DenseMap(u32, CompiledProc).init(allocator),
                 .boxy_dict_thunks = std.AutoHashMap(u32, usize).init(allocator),
                 .compiled_rc_helpers = std.AutoHashMap(u64, usize).init(allocator),
                 .unwind_functions = .empty,
@@ -1275,7 +1272,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .spliced_helper_offsets = std.StringHashMap(usize).init(allocator),
                 .spliced_proc_starts = std.AutoHashMap(lir.ProcIdentity, usize).init(allocator),
                 .join_point_jumps = std.AutoHashMap(u32, std.ArrayList(JumpRecord)).init(allocator),
-                .join_point_params = std.AutoHashMap(u32, LocalSpan).init(allocator),
+                .join_point_params = collections.DenseMap(u32, LocalSpan).init(allocator),
                 .internal_call_patches = std.ArrayList(InternalCallPatch).empty,
                 .internal_addr_patches = std.ArrayList(InternalAddrPatch).empty,
                 .early_return_patches = std.ArrayList(usize).empty,
@@ -1332,7 +1329,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.allocator.destroy(self.stack_plan_indexes.?);
             }
             self.local_location_undo.deinit(self.allocator);
-            self.join_points.deinit();
             self.stmt_locations.deinit();
             self.precomputed_overflow_results.deinit();
             self.line_entries.deinit(self.allocator);
@@ -1385,7 +1381,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.reset();
             self.clearSymbolCaches();
             self.clearLocalLocationsRetainingCapacity();
-            self.join_points.clearRetainingCapacity();
             self.stmt_locations.clearRetainingCapacity();
             self.precomputed_overflow_results.clearRetainingCapacity();
             self.pending_overflow_result_target = null;
@@ -1437,21 +1432,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.builtin_symbols.clearRetainingCapacity();
             self.boxy_symbols.clearRetainingCapacity();
             self.hosted_symbols.clearRetainingCapacity();
-        }
-
-        fn cloneJoinPointJumpsMap(
-            self: *Self,
-            source: *const std.AutoHashMap(u32, std.ArrayList(JumpRecord)),
-        ) Allocator.Error!std.AutoHashMap(u32, std.ArrayList(JumpRecord)) {
-            var cloned = std.AutoHashMap(u32, std.ArrayList(JumpRecord)).init(self.allocator);
-            errdefer self.deinitJoinPointJumpsMap(&cloned);
-
-            var it = source.iterator();
-            while (it.next()) |entry| {
-                try cloned.put(entry.key_ptr.*, try entry.value_ptr.clone(self.allocator));
-            }
-
-            return cloned;
         }
 
         fn deinitJoinPointJumpsMap(
@@ -1538,7 +1518,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn clearFunctionControlFlowState(self: *Self) void {
-            self.join_points.clearRetainingCapacity();
             self.stmt_locations.clearRetainingCapacity();
             var it = self.join_point_jumps.valueIterator();
             while (it.next()) |list| {
@@ -15012,7 +14991,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .x86_64_windows
             else
                 .x86_64_sysv;
-            var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+            var arena_state = base.SingleThreadArena.init(self.allocator);
             defer arena_state.deinit();
             const lowered = layout.abi.lower(arena_state.allocator(), self.layout_store, abi_target, arg_layouts, ret_layout, false) catch return error.OutOfMemory;
             const physical = layout.abi.assignPhysicalArgs(arena_state.allocator(), self.layout_store, abi_target, lowered, arg_layouts) catch return error.OutOfMemory;
@@ -15268,7 +15247,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             out_desc: ?LocalId,
         ) Allocator.Error!ValueLocation {
             std.debug.assert(args.len == arg_layouts.len);
-            const has_runtime_ret_desc = self.store.getProcSpec(proc.id).runtime_ret_desc != null;
+            const has_runtime_ret_desc = self.store.getProcSpecImmediate(proc.id).runtime_ret_desc != null;
             if (builtin.mode == .debug and out_desc != null and !has_runtime_ret_desc) {
                 base.invariant(
                     "Dev/codegen invariant violated: proc {d} call requested an unsupported runtime descriptor output",
@@ -18374,7 +18353,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_current_stmt_id = self.current_stmt_id;
             const saved_vector_local_by_reg = self.vector_local_by_reg;
             const saved_vector_local_mask = self.vector_local_mask;
-            var saved_local_locations = self.local_locations.clone() catch return error.OutOfMemory;
+            // The caller's control-flow and location tables move aside for
+            // the procedure's scope rather than being copied: the procedure
+            // starts from empty tables either way, and the swap below hands
+            // the caller's originals back.
+            var saved_local_locations = self.local_locations;
+            self.local_locations = collections.DenseMap(u32, ValueLocation).init(self.allocator);
             defer saved_local_locations.deinit();
             const saved_local_location_undo = try self.allocator.dupe(LocalLocationUndo, self.local_location_undo.items);
             defer {
@@ -18383,13 +18367,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.local_location_undo.appendSliceAssumeCapacity(saved_local_location_undo);
                 self.allocator.free(saved_local_location_undo);
             }
-            var saved_join_points = self.join_points.clone() catch return error.OutOfMemory;
-            defer saved_join_points.deinit();
-            var saved_stmt_locations = self.stmt_locations.clone() catch return error.OutOfMemory;
+            var saved_stmt_locations = self.stmt_locations;
+            self.stmt_locations = collections.DenseMap(u32, usize).init(self.allocator);
             defer saved_stmt_locations.deinit();
-            var saved_join_point_jumps = try self.cloneJoinPointJumpsMap(&self.join_point_jumps);
+            var saved_join_point_jumps = self.join_point_jumps;
+            self.join_point_jumps = std.AutoHashMap(u32, std.ArrayList(JumpRecord)).init(self.allocator);
             defer self.deinitJoinPointJumpsMap(&saved_join_point_jumps);
-            var saved_join_point_params = self.join_point_params.clone() catch return error.OutOfMemory;
+            var saved_join_point_params = self.join_point_params;
+            self.join_point_params = collections.DenseMap(u32, LocalSpan).init(self.allocator);
             defer saved_join_point_params.deinit();
 
             // Clear state for procedure's scope
@@ -18487,7 +18472,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // propagate errors): the mutated maps end up in the saved_*
                 // locals, which their own defers deinit.
                 std.mem.swap(@TypeOf(self.local_locations), &self.local_locations, &saved_local_locations);
-                std.mem.swap(@TypeOf(self.join_points), &self.join_points, &saved_join_points);
                 std.mem.swap(@TypeOf(self.stmt_locations), &self.stmt_locations, &saved_stmt_locations);
                 std.mem.swap(@TypeOf(self.join_point_jumps), &self.join_point_jumps, &saved_join_point_jumps);
                 std.mem.swap(@TypeOf(self.join_point_params), &self.join_point_params, &saved_join_point_params);
@@ -18723,7 +18707,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             std.mem.swap(@TypeOf(self.local_locations), &self.local_locations, &saved_local_locations);
             self.vector_local_by_reg = saved_vector_local_by_reg;
             self.vector_local_mask = saved_vector_local_mask;
-            std.mem.swap(@TypeOf(self.join_points), &self.join_points, &saved_join_points);
             std.mem.swap(@TypeOf(self.stmt_locations), &self.stmt_locations, &saved_stmt_locations);
             std.mem.swap(@TypeOf(self.join_point_jumps), &self.join_point_jumps, &saved_join_point_jumps);
             std.mem.swap(@TypeOf(self.join_point_params), &self.join_point_params, &saved_join_point_params);
@@ -20939,7 +20922,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.current_stmt_id = c.owner;
                     const skip_join_body_patch = try self.codegen.emitJump();
                     const join_location = self.codegen.currentOffset();
-                    try self.join_points.put(c.jp_key, join_location);
                     try work.append(wa, .{ .join_patch = .{
                         .owner = c.owner,
                         .jp_key = c.jp_key,
@@ -22652,7 +22634,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             ret_layout: layout.Idx,
             runtime_desc_slot_out: ?*?i32,
         ) Allocator.Error!ValueLocation {
-            const has_runtime_ret_desc = self.store.getProcSpec(compiled.id).runtime_ret_desc != null;
+            const has_runtime_ret_desc = self.store.getProcSpecImmediate(compiled.id).runtime_ret_desc != null;
             var runtime_desc_result_slot: ?i32 = null;
             const call_arg_infos: []const ArgInfo = if (has_runtime_ret_desc) blk: {
                 const combined = try self.allocator.alloc(ArgInfo, arg_infos.len + 1);
@@ -22761,7 +22743,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .x86_64_windows
             else
                 .x86_64_sysv;
-            var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+            var arena_state = base.SingleThreadArena.init(self.allocator);
             defer arena_state.deinit();
             const lowered = layout.abi.lower(arena_state.allocator(), self.layout_store, abi_target, arg_layouts, ret_layout, false) catch return error.OutOfMemory;
             const physical = layout.abi.assignPhysicalArgs(arena_state.allocator(), self.layout_store, abi_target, lowered, arg_layouts) catch return error.OutOfMemory;
@@ -24397,7 +24379,7 @@ test "Boxy thunk artifact splice preserves worker namespace in both orders and a
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
     const worker = try addLiteralProc(&store, .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } }, .u64);
-    const identity = store.getProcSpec(worker).identity;
+    const identity = store.getProcSpecImmediate(worker).identity;
     var producer = try HostLirCodeGen.initWithBoxyMetadata(
         allocator,
         &store,
@@ -26182,14 +26164,14 @@ test "independent fragment symbolic calls resolve after all procedures are place
             var lane = try CG.init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
             defer lane.deinit();
             try lane.emitProcFragment(id);
-            const identity = store.getProcSpec(id).identity;
+            const identity = store.getProcSpecImmediate(id).identity;
             const start = try image.appendAssembledRegion(lane.getGeneratedCode(), .{ .spliced_proc = identity }, 0, null);
             try image.registerAssembledProc(identity, start);
             for (lane.codeRefs()) |ref| {
                 try image.queueAssembledSymbolicRef(SymbolicReference{
                     .site = @intCast(start + ref.site),
                     .form = .call,
-                    .target = .{ .proc = store.getProcSpec(ref.target.proc).identity },
+                    .target = .{ .proc = store.getProcSpecImmediate(ref.target.proc).identity },
                 });
             }
         }

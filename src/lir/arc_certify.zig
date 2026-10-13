@@ -411,14 +411,14 @@ fn certifyRcAtomicity(
     defer visible.deinit(allocator);
 
     for (0..store.cfStmtCount()) |stmt_index| {
-        const stmt = store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
-        const checked: struct { value: LIR.LocalId, atomicity: LIR.RcAtomicity } = if (stmt == .incref)
+        const stmt = store.getCFStmtImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
+        const checked: struct { value: LIR.LocalId, atomicity: LIR.RcAtomicity } = if (stmt.* == .incref)
             .{ .value = stmt.incref.value, .atomicity = stmt.incref.atomicity }
-        else if (stmt == .decref)
+        else if (stmt.* == .decref)
             .{ .value = stmt.decref.value, .atomicity = stmt.decref.atomicity }
-        else if (stmt == .decref_if_initialized)
+        else if (stmt.* == .decref_if_initialized)
             .{ .value = stmt.decref_if_initialized.value, .atomicity = stmt.decref_if_initialized.atomicity }
-        else if (stmt == .free)
+        else if (stmt.* == .free)
             .{ .value = stmt.free.value, .atomicity = stmt.free.atomicity }
         else
             continue;
@@ -645,10 +645,10 @@ fn writeFailureContext(
 
     for (0..store.cfStmtCount()) |index| {
         if (!reachable.contains(@fromBackingInt(@intCast(@as(u32, @intCast(index)))))) continue;
-        const stmt = store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
-        var mentions = if (local) |l| body_clone.stmtMentionsLocal(store, stmt, l) else false;
+        const stmt = store.getCFStmtImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
+        var mentions = if (local) |l| body_clone.stmtMentionsLocal(store, stmt.*, l) else false;
         for (extra_locals) |extra| {
-            mentions = mentions or body_clone.stmtMentionsLocal(store, stmt, extra);
+            mentions = mentions or body_clone.stmtMentionsLocal(store, stmt.*, extra);
         }
         const structural = false;
         const nearby = if (stmt_id) |focus_stmt| if (index > @backingInt(focus_stmt))
@@ -656,8 +656,8 @@ fn writeFailureContext(
         else
             @backingInt(focus_stmt) - index <= 50 else false;
         if (!mentions and !structural and !nearby) continue;
-        context.append("  stmt {d}: {s}", .{ index, @tagName(stmt) });
-        switch (stmt) {
+        context.append("  stmt {d}: {s}", .{ index, @tagName(stmt.*) });
+        switch (stmt.*) {
             .join => |j| {
                 context.append(" id={d} body={d} remainder={d} params=[", .{
                     @backingInt(j.id), @backingInt(j.body), @backingInt(j.remainder),
@@ -974,8 +974,8 @@ const MaybeUninitializedConditions = struct {
 
         for (0..store.cfStmtCount()) |stmt_index| {
             const stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(stmt_index))));
-            const stmt = store.getCFStmt(stmt_id);
-            if (stmt != .join) continue;
+            const stmt = store.getCFStmtImmediate(stmt_id);
+            if (stmt.* != .join) continue;
 
             const params = store.getLocalSpan(stmt.join.maybe_uninitialized_params);
             const conditions = store.getLocalSpan(stmt.join.maybe_uninitialized_conditions);
@@ -1295,7 +1295,7 @@ const State = struct {
 };
 
 test "forked state preserves independent tag-union variant witnesses" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = base.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
 
     var store = LirStore.init(testing.allocator);
@@ -1315,7 +1315,7 @@ test "forked state preserves independent tag-union variant witnesses" {
 }
 
 test "forked state shares unchanged maybe-uninitialized facts" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = base.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
 
     var source = try State.init(arena.allocator(), &.{}, 4);
@@ -1334,7 +1334,7 @@ test "forked state shares unchanged maybe-uninitialized facts" {
 }
 
 test "certifier debt index follows sign changes and isolates branches" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = base.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
     var state = try State.init(arena.allocator(), &.{}, 0);
     try state.addBalance(7, -2);
@@ -1880,9 +1880,9 @@ const Certifier = struct {
     rc_local: []const bool,
     maybe_uninitialized: *const MaybeUninitializedConditions,
     values: std.ArrayList(ValueInfo) = .empty,
-    lender_arena: std.heap.ArenaAllocator,
+    lender_arena: base.SingleThreadArena,
     /// Persistent path-state nodes share this procedure-scoped lifetime.
-    state_arena: std.heap.ArenaAllocator,
+    state_arena: base.SingleThreadArena,
     records: collections.DenseMap(LIR.JoinPointId, JoinRecord),
     memo: std.AutoHashMap(MemoEntry, void),
     /// Statements with more than one structural predecessor. Only these
@@ -1923,7 +1923,7 @@ const Certifier = struct {
     /// dense proc-local positions, so the cache is cleared at each proc boundary.
     reads_before_rebind_cache: collections.DenseMap(LIR.CFStmtId, arc_liveness.Row),
     /// Backs the current proc's read-before-rebind rows.
-    liveness_arena: std.heap.ArenaAllocator,
+    liveness_arena: base.SingleThreadArena,
     /// Exact erased-allocation producer relation for the current proc, plus
     /// calls checked after every reachable definition has been collected.
     erased_owners: erased_owner.Owners,
@@ -1986,7 +1986,7 @@ const Certifier = struct {
     work_stats: ?*CertifierWorkStats,
     /// Immutable layout claim sets survive per-procedure state-arena resets.
     claim_layouts: std.AutoHashMapUnmanaged(layout_mod.Idx, ClaimSet) = .empty,
-    claim_arena: std.heap.ArenaAllocator,
+    claim_arena: base.SingleThreadArena,
     /// Proc and statement being certified; written by `certifyProc` and
     /// `runSegment` before any read.
     current_proc: LIR.LirProcSpecId = undefined,
@@ -2014,9 +2014,9 @@ const Certifier = struct {
             .sigs = sigs,
             .rc_local = rc_local,
             .maybe_uninitialized = maybe_uninitialized,
-            .lender_arena = std.heap.ArenaAllocator.init(allocator),
-            .state_arena = std.heap.ArenaAllocator.init(allocator),
-            .claim_arena = std.heap.ArenaAllocator.init(allocator),
+            .lender_arena = base.SingleThreadArena.init(allocator),
+            .state_arena = base.SingleThreadArena.init(allocator),
+            .claim_arena = base.SingleThreadArena.init(allocator),
             .records = collections.DenseMap(LIR.JoinPointId, JoinRecord).init(allocator),
             .memo = std.AutoHashMap(MemoEntry, void).init(allocator),
             .repr_scratch = collections.DenseMap(ValueId, u32).init(allocator),
@@ -2033,7 +2033,7 @@ const Certifier = struct {
             .domain_values_scratch = collections.DenseMap(ValueId, void).init(allocator),
             .value_reach_seen = collections.DenseMap(ValueId, void).init(allocator),
             .reads_before_rebind_cache = collections.DenseMap(LIR.CFStmtId, arc_liveness.Row).init(allocator),
-            .liveness_arena = std.heap.ArenaAllocator.init(allocator),
+            .liveness_arena = base.SingleThreadArena.init(allocator),
             .erased_owners = erased_owner.Owners.init(allocator),
             .seen_outcomes = std.AutoHashMap(u32, void).init(allocator),
             .diag = diag,
@@ -2779,7 +2779,7 @@ const Certifier = struct {
         };
         try self.seen_outcomes.put(discriminant, {});
         if (mask == 0) return;
-        const params = self.store.getLocalSpan(self.store.getProcSpec(self.current_proc).args);
+        const params = self.store.getLocalSpan(self.store.getProcSpecImmediate(self.current_proc).args);
         for (0..GuardedList.borrowLen(params)) |position| {
             const bit = arc_sig.paramBit(position) orelse break;
             if ((mask & bit) == 0) continue;
@@ -3965,7 +3965,7 @@ const Certifier = struct {
         while (stack.pop()) |current| {
             if ((try self.memo_walked.getOrPut(current)).found_existing) continue;
 
-            switch (self.store.getCFStmt(current)) {
+            switch (self.store.getCFStmtImmediate(current).*) {
                 .jump => |jump| {
                     if (self.join_bodies.get(jump.target)) |target_body| {
                         try MemoWalk.add(predecessor_counts, &stack, self.allocator, target_body);
@@ -4133,7 +4133,7 @@ const Certifier = struct {
         }
         errdefer self.clearReadsBeforeRebindCache();
 
-        var graph_arena = std.heap.ArenaAllocator.init(self.allocator);
+        var graph_arena = base.SingleThreadArena.init(self.allocator);
         defer graph_arena.deinit();
         const graph_allocator = graph_arena.allocator();
 
@@ -6531,7 +6531,7 @@ test "certifier state indexes explicit proc locals" {
     const first: LIR.LocalId = @fromBackingInt(@intCast(1));
     const second: LIR.LocalId = @fromBackingInt(@intCast(3));
     const local_dense = [_]u32{ no_dense, 0, no_dense, 1 };
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = base.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
 
     var state = try State.init(arena.allocator(), &local_dense, 2);
@@ -7103,7 +7103,7 @@ test "erased owner resolution re-derives a reuse source that became an alias" {
     try testing.expectError(error.Certification, f.certify());
 
     try erased_owner.resolveProcReuseSources(f.allocator, &f.store, &f.layouts, proc_id);
-    try testing.expectEqual(owner, f.store.getCFStmt(call).assign_call_erased.reuse_source.?);
+    try testing.expectEqual(owner, f.store.getCFStmtImmediate(call).assign_call_erased.reuse_source.?);
     try f.certify();
 }
 

@@ -28,7 +28,7 @@ fn expectCallBuiltRecordListSetHasNoRetain(
     defer stack.deinit(allocator);
     for (0..store.procSpecCount()) |proc_index| {
         const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
-        if (store.getProcSpec(proc_id).body != null) try stack.append(allocator, .{ .proc = proc_id });
+        if (store.getProcSpecImmediate(proc_id).body != null) try stack.append(allocator, .{ .proc = proc_id });
     }
 
     var saw_root = false;
@@ -40,7 +40,7 @@ fn expectCallBuiltRecordListSetHasNoRetain(
             if (seen_procs[index]) continue;
             seen_procs[index] = true;
             saw_root = true;
-            if (store.getProcSpec(proc_id).body) |body| {
+            if (store.getProcSpecImmediate(proc_id).body) |body| {
                 try stack.append(allocator, .{ .stmt = body });
             }
         },
@@ -48,7 +48,7 @@ fn expectCallBuiltRecordListSetHasNoRetain(
             const index = @backingInt(stmt_id);
             if (seen_stmts[index]) continue;
             seen_stmts[index] = true;
-            switch (store.getCFStmt(stmt_id)) {
+            switch (store.getCFStmtImmediate(stmt_id).*) {
                 .assign_low_level => |assign| {
                     if (assign.op == .list_set) {
                         saw_list_set = true;

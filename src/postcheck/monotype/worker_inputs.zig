@@ -1,6 +1,7 @@
 //! Snapshot storage for specialization inputs. The coordinator is the sole
 //! writer; workers borrow captured prefixes until their task completes.
 const std = @import("std");
+const collections = @import("collections");
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
 const checked = @import("check");
@@ -74,7 +75,7 @@ pub const Snapshot = struct {
     /// caches and all output tables belong to the lane's private workspace.
     pub fn workerProgram(self: *const Snapshot, allocator: Allocator) Ast.Program {
         var program = Ast.Program.init(allocator);
-        inline for (.{ "types", "constructing", "spans", "fields", "tags", "declared_fields" }) |field| {
+        inline for (.{ "types", "named_nodes", "erased_digests", "constructing", "spans", "fields", "tags", "declared_fields" }) |field| {
             @field(program.types, field) = @field(self.types, field);
         }
         program.types.freeze();
@@ -93,7 +94,9 @@ pub const Snapshot = struct {
 /// The complete captured read set. Final syntax and mutable reservation rows
 /// never enter a worker snapshot. Snapshots borrow this owner's allocations.
 pub const ProgramInputs = struct {
-    types: Prefix(Type.Content) = .{},
+    types: Prefix(Type.StoredNode) = .{},
+    named_nodes: Prefix(Type.NamedContent) = .{},
+    erased_digests: Prefix(names.TypeDigest) = .{},
     constructing: Prefix(bool) = .{},
     spans: Prefix(Type.TypeId) = .{},
     fields: Prefix(Type.Field) = .{},
@@ -121,7 +124,7 @@ pub const ProgramInputs = struct {
             .current_loc = source.current_loc,
             .current_region = source.current_region,
         };
-        inline for (.{ "types", "constructing", "spans", "fields", "tags", "declared_fields" }) |field| {
+        inline for (.{ "types", "named_nodes", "erased_digests", "constructing", "spans", "fields", "tags", "declared_fields" }) |field| {
             const values = try @field(self, field).capture(allocator, @field(source.types, field).unsafeRawItemsForView());
             @field(view.types, field) = @TypeOf(@field(view.types, field)).fromOwnedSlice(values);
         }
@@ -167,12 +170,12 @@ fn AppendIndexHashed(comptime K: type, comptime V: type, comptime hashKey: fn (K
             branch: struct { bit: u6, children: [2]Link },
             leaf: struct { hash: u64, entries: std.atomic.Value(?*const Entry) },
         };
-        arena: std.heap.ArenaAllocator,
+        arena: collections.SingleThreadArena,
         root: Link = .init(null),
         count: usize = 0,
 
         pub fn init(allocator: Allocator) Self {
-            return .{ .arena = std.heap.ArenaAllocator.init(allocator) };
+            return .{ .arena = collections.SingleThreadArena.init(allocator) };
         }
 
         pub fn deinit(self: *Self) void {

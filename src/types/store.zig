@@ -238,7 +238,10 @@ pub const Store = struct {
     /// another member; a write aimed at that member hands the class back to
     /// this anchor before detaching the member. Runtime-only: frozen classes
     /// are thawed before a store is serialized or cloned.
-    frozen_anchors: std.AutoHashMapUnmanaged(u32, Var) = .empty,
+    frozen_anchors: collections.DenseMap(DescStore.Idx, Var),
+    /// The members of the frozen class `detachOccurrence` is splitting.
+    /// Runtime-only scratch, reused across detaches.
+    detach_members_scratch: std.ArrayListUnmanaged(Var) = .empty,
 
     /// Classes callers' memos depend on. Runtime-only: never serialized,
     /// cloned, or relocated.
@@ -307,6 +310,7 @@ pub const Store = struct {
     pub fn initCapacity(gpa: Allocator, root_capacity: usize, child_capacity: usize) std.mem.Allocator.Error!Self {
         return .{
             .gpa = gpa,
+            .frozen_anchors = .init(gpa),
 
             // slots & descriptors
             .descs = try DescStore.init(gpa, root_capacity),
@@ -338,7 +342,8 @@ pub const Store = struct {
 
     /// Deinit the unification table
     pub fn deinit(self: *Self) void {
-        self.frozen_anchors.deinit(self.gpa);
+        self.frozen_anchors.deinit();
+        self.detach_members_scratch.deinit(self.gpa);
         // slots & descriptors
         self.descs.deinit(self.gpa);
         self.slots.deinit(self.gpa);
@@ -373,6 +378,7 @@ pub const Store = struct {
     pub fn clone(self: *const Self, gpa: Allocator) Allocator.Error!Self {
         return .{
             .gpa = gpa,
+            .frozen_anchors = .init(gpa),
             .slots = .{ .backing = try self.slots.backing.clone(gpa) },
             .descs = .{ .backing = try self.descs.backing.clone(gpa), .err_written = self.descs.err_written },
             .root_metas = try self.root_metas.clone(gpa),
@@ -834,15 +840,15 @@ pub const Store = struct {
         std.debug.assert(storage.meta.checked_var == var_);
         var desc = storage.desc;
         desc.flags.frozen = true;
-        try self.frozen_anchors.put(self.gpa, @backingInt(storage.desc_idx), var_);
+        try self.frozen_anchors.put(storage.desc_idx, var_);
         try self.setDescUnguarded(storage.desc_idx, desc);
     }
 
     /// End every class's freeze; afterwards the store holds no frozen class.
     pub fn thawFrozenClasses(self: *Self) Allocator.Error!void {
-        var anchors = self.frozen_anchors.iterator();
+        var anchors = self.frozen_anchors.constIterator();
         while (anchors.next()) |entry| {
-            const idx: DescStore.Idx = @fromBackingInt(entry.key_ptr.*);
+            const idx = entry.key_ptr.*;
             var desc = self.descs.get(idx);
             desc.flags.frozen = false;
             try self.setDescUnguarded(idx, desc);
@@ -863,7 +869,7 @@ pub const Store = struct {
     fn isolateFromFrozenClassSlow(self: *Self, target_var: Var) Allocator.Error!bool {
         var class = self.resolveStorageRoot(target_var);
         if (!class.desc.flags.frozen) return true;
-        const anchor = self.frozen_anchors.get(@backingInt(class.desc_idx)) orelse
+        const anchor = self.frozen_anchors.get(class.desc_idx) orelse
             base.invariant("a frozen type class has no anchor", .{});
         if (target_var == anchor) return false;
         if (class.meta.checked_var == target_var) {
@@ -2048,14 +2054,13 @@ pub const Store = struct {
         const checked_var = class.meta.checked_var;
         std.debug.assert(occurrence != checked_var);
 
-        var class_members: std.ArrayListUnmanaged(Var) = .empty;
-        defer class_members.deinit(self.gpa);
-        try class_members.ensureTotalCapacity(self.gpa, @intCast(self.len()));
+        const class_members = &self.detach_members_scratch;
+        class_members.clearRetainingCapacity();
         var raw_var: u32 = 0;
         while (raw_var < self.len()) : (raw_var += 1) {
             const candidate: Var = @fromBackingInt(@intCast(raw_var));
             if (self.resolveStorageRoot(candidate).storage_var == class.storage_var) {
-                class_members.appendAssumeCapacity(candidate);
+                try class_members.append(self.gpa, candidate);
             }
         }
 
@@ -2176,6 +2181,7 @@ pub const Store = struct {
         pub fn deserializeInto(self: *const Serialized, base_addr: usize, gpa: Allocator) Store {
             return Store{
                 .gpa = gpa,
+                .frozen_anchors = .init(gpa),
                 .slots = self.slots.deserializeInto(base_addr),
                 .descs = self.descs.deserializeInto(base_addr),
                 .root_metas = self.root_metas.deserializeInto(base_addr),
@@ -2195,6 +2201,7 @@ pub const Store = struct {
         pub fn deserializeWithCopy(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!Store {
             var store = Store{
                 .gpa = gpa,
+                .frozen_anchors = .init(gpa),
                 .slots = try self.slots.deserializeWithCopy(base_addr, gpa),
                 .descs = try self.descs.deserializeWithCopy(base_addr, gpa),
                 .root_metas = try self.root_metas.deserializeWithCopy(base_addr, gpa),

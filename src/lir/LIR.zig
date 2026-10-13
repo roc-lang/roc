@@ -811,25 +811,27 @@ pub const ListLiteral = struct {
 };
 
 /// Literal RHS values supported by `assign_literal`.
+/// The 128-bit payloads are 8-byte aligned so that a literal, and the
+/// statement union holding one, aligns to 8 rather than 16.
 pub const LiteralValue = union(enum) {
     i64_literal: struct {
         value: i64,
         layout_idx: layout.Idx,
     },
     i128_literal: struct {
-        value: i128,
+        value: i128 align(8),
         layout_idx: layout.Idx,
     },
     f64_literal: f64,
     f32_literal: f32,
-    dec_literal: i128,
+    dec_literal: i128 align(8),
     str_literal: StrLiteral,
     /// A numeric literal whose runtime representation is only known through a
     /// descriptor (a literal pattern matched against an erased scrutinee).
     /// The runtime encodes `value` per the descriptor's payload layout and
     /// boxes it into the dynamic-storage target.
     boxy_dynamic_num_literal: struct {
-        value: i128,
+        value: i128 align(8),
         desc: BoxyDescRef,
         /// Encoding used when the descriptor is erased (carries no concrete
         /// payload layout): the literal kind's default numeric layout, which
@@ -842,7 +844,7 @@ pub const LiteralValue = union(enum) {
     /// descriptor's payload layout (`Dec`, `F64`, or `F32`) and boxes it into
     /// the dynamic-storage target.
     boxy_dynamic_frac_literal: struct {
-        dec_bits: i128,
+        dec_bits: i128 align(8),
         desc: BoxyDescRef,
         /// Encoding used when the descriptor is erased and carries no concrete
         /// payload layout.

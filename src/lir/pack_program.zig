@@ -323,14 +323,14 @@ pub fn literalConvertingProcs(allocator: Allocator, store: *const LirStore) Allo
         for (visited.items) |stmt_id| seen[@backingInt(stmt_id)] = false;
         visited.clearRetainingCapacity();
         work.clearRetainingCapacity();
-        const body = store.getProcSpec(@fromBackingInt(@intCast(index))).body orelse continue;
+        const body = store.getProcSpecImmediate(@fromBackingInt(@intCast(index))).body orelse continue;
         try work.append(allocator, body);
         while (work.pop()) |stmt_id| {
             if (seen[@backingInt(stmt_id)]) continue;
             seen[@backingInt(stmt_id)] = true;
             try visited.append(allocator, stmt_id);
-            const stmt = store.getCFStmt(stmt_id);
-            if (stmt == .crash and stmt.crash.literal_rejection != null) {
+            const stmt = store.getCFStmtImmediate(stmt_id);
+            if (stmt.* == .crash and stmt.crash.literal_rejection != null) {
                 result.* = true;
                 break;
             }

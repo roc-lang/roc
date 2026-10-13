@@ -15,6 +15,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
 const collections = @import("collections");
+const DenseMap = collections.DenseMap;
 const types = @import("types");
 
 const MkSafeList = collections.SafeList;
@@ -396,9 +397,11 @@ pub const Scratch = struct {
     stack: MkSafeList(Frame),
     seen: MkSafeList(SeenEntry),
     /// Each var on `seen` by its position. A var is pushed only when it is
-    /// not already on the stack, so the positions are unique.
-    seen_positions: std.AutoHashMapUnmanaged(Var, usize) = .empty,
-    visited: std.AutoHashMapUnmanaged(DescStoreIdx, void),
+    /// not already on the stack, so the positions are unique. Both maps are
+    /// direct-indexed by their dense ids, so clearing them between checks
+    /// costs what the last check touched.
+    seen_positions: DenseMap(Var, u32),
+    visited: DenseMap(DescStoreIdx, void),
 
     /// The var to report when a cycle is detected: the deepest var on the seen
     /// stack (the parent of the cycle-closing edge). Null until a cycle is found.
@@ -411,13 +414,14 @@ pub const Scratch = struct {
         // - seen: 32 - typical type depth is much shallower
         // - visited: 64 - covers most type traversals without reallocation
         // Future optimization: profile real codebases to tune these values.
-        var visited: std.AutoHashMapUnmanaged(DescStoreIdx, void) = .empty;
-        errdefer visited.deinit(gpa);
-        try visited.ensureTotalCapacity(gpa, 64);
+        var visited = DenseMap(DescStoreIdx, void).init(gpa);
+        errdefer visited.deinit();
+        try visited.ensureTotalCapacity(64);
         return .{
             .gpa = gpa,
             .stack = try MkSafeList(Frame).initCapacity(gpa, 32),
             .seen = try MkSafeList(SeenEntry).initCapacity(gpa, 32),
+            .seen_positions = DenseMap(Var, u32).init(gpa),
             .visited = visited,
         };
     }
@@ -425,8 +429,8 @@ pub const Scratch = struct {
     pub fn deinit(self: *Self) void {
         self.stack.deinit(self.gpa);
         self.seen.deinit(self.gpa);
-        self.seen_positions.deinit(self.gpa);
-        self.visited.deinit(self.gpa);
+        self.seen_positions.deinit();
+        self.visited.deinit();
     }
 
     pub fn reset(self: *Self) void {
@@ -440,7 +444,8 @@ pub const Scratch = struct {
     /// Returns the index of `var_` on the seen stack if it's currently being
     /// traversed (i.e. a cycle), else null. The index marks the cycle head.
     fn hasSeenVar(self: *const Self, var_: Var) ?usize {
-        return self.seen_positions.get(var_);
+        const position = self.seen_positions.get(var_) orelse return null;
+        return @intCast(position);
     }
 
     fn hasVisited(self: *const Self, desc_idx: DescStoreIdx) bool {
@@ -448,10 +453,10 @@ pub const Scratch = struct {
     }
 
     fn pushSeen(self: *Self, var_: Var, edge: Edge) std.mem.Allocator.Error!void {
-        try self.seen_positions.ensureUnusedCapacity(self.gpa, 1);
-        const position: usize = @intCast(self.seen.len());
+        const position: u32 = @intCast(self.seen.len());
+        std.debug.assert(!self.seen_positions.contains(var_));
+        try self.seen_positions.put(var_, position);
         _ = try self.seen.append(self.gpa, .{ .var_ = var_, .edge = edge });
-        self.seen_positions.putAssumeCapacityNoClobber(var_, position);
     }
 
     fn popSeen(self: *Self) void {
@@ -461,7 +466,7 @@ pub const Scratch = struct {
     }
 
     fn appendVisited(self: *Self, desc_idx: DescStoreIdx) std.mem.Allocator.Error!void {
-        try self.visited.put(self.gpa, desc_idx, {});
+        try self.visited.put(desc_idx, {});
     }
 };
 

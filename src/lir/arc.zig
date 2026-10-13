@@ -602,9 +602,9 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     var variant_index: usize = 0;
     // The wave width is a storage bound independent of worker count. Identity
     // reservation and commit order are identical for inline and pooled runs.
+    const owners = try store.allocator.alloc(EmissionOwner, options.emission_wave_size);
+    defer store.allocator.free(owners);
     while (base_index < base_proc_count or variant_index < variants.queue.items.len) {
-        const owners = try store.allocator.alloc(EmissionOwner, options.emission_wave_size);
-        defer store.allocator.free(owners);
         var count: usize = 0;
         defer for (owners[0..count]) |*owner| owner.deinit();
         while (count < owners.len) {
@@ -698,14 +698,14 @@ fn recordObjectCacheFacts(
     for (0..proc_count) |proc_index| {
         const caller: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
         for (solution.tailCallsOf(caller)) |tail_call| {
-            const callee = store.getCFStmt(tail_call.stmt).assign_call.proc;
+            const callee = store.getCFStmtImmediate(tail_call.stmt).assign_call.proc;
             if (callee != caller) tail_targets.set(@backingInt(callee));
         }
     }
     try recordTailGroups(store, solution);
     for (0..proc_count) |proc_index| {
         const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
-        if (store.getProcSpec(proc).body == null) continue;
+        if (store.getProcSpecImmediate(proc).body == null) continue;
         const sig = solution.sigOf(proc);
         const rows = solution.sigTable().retConditionsOf(sig);
         const words = try store.allocator.alloc(u32, rows.len);
@@ -743,7 +743,7 @@ fn recordTailGroups(store: *LirStore, solution: *const arc_solve.Solution) Resou
     for (0..proc_count) |proc_index| {
         const caller: LIR.LirProcSpecId = @fromBackingInt(@as(u32, @intCast(proc_index)));
         for (solution.tailCallsOf(caller)) |tail_call| {
-            const callee = store.getCFStmt(tail_call.stmt).assign_call.proc;
+            const callee = store.getCFStmtImmediate(tail_call.stmt).assign_call.proc;
             grouped.set(proc_index);
             grouped.set(@backingInt(callee));
             groups.unite(@intCast(proc_index), @backingInt(callee));
@@ -828,7 +828,7 @@ const SourceCache = struct {
     /// Ownership-neutral roots and frames never follow emitted proc metadata.
     body: ?LIR.CFStmtId,
     frame: LIR.LocalSpan,
-    arena: ?std.heap.ArenaAllocator = null,
+    arena: ?collections.SingleThreadArena = null,
     local_index: collections.DenseMap(LIR.LocalId, u32) = undefined,
     domain: ProcArcDomain = undefined,
     liveness: SourceLiveness = undefined,
@@ -842,7 +842,7 @@ const SourceCache = struct {
 
     fn execute(self: *SourceCache, allocator: Allocator) ResourceError!void {
         const body = self.body orelse return;
-        self.arena = std.heap.ArenaAllocator.init(allocator);
+        self.arena = collections.SingleThreadArena.init(allocator);
         const arena = self.arena.?.allocator();
         self.local_index = collections.DenseMap(LIR.LocalId, u32).init(arena);
         self.domain = try ProcArcDomain.init(arena, self.template.store, self.template.solution, self.template.local_contains_refcounted, &self.local_index, self.frame);
@@ -867,7 +867,7 @@ const EmissionOwner = struct {
     inserter: Inserter,
     source: *SourceCache,
     job: QueuedVariant,
-    arena: ?std.heap.ArenaAllocator = null,
+    arena: ?collections.SingleThreadArena = null,
     shard: ?LirStore = null,
     domain: ProcArcDomain = undefined,
     death_scratch: std.ArrayList(ReleaseDecision) = .empty,
@@ -875,7 +875,7 @@ const EmissionOwner = struct {
     retain_arg_scratch: std.ArrayList(LIR.LocalId) = .empty,
     dismantle_temps: std.ArrayList(LIR.LocalId) = .empty,
     arc_plans: ArcPlans = .{},
-    restitution_switches: std.AutoHashMapUnmanaged(LIR.CFStmtId, RestitutionSwitch) = .empty,
+    restitution_switches: collections.DenseMapUnmanaged(LIR.CFStmtId, RestitutionSwitch) = .empty,
     owned_binding_override: OwnedSet = undefined,
     root: LIR.CFStmtId = undefined,
     frame: LIR.LocalSpan = undefined,
@@ -898,14 +898,14 @@ const EmissionOwner = struct {
     }
 
     fn plan(self: *EmissionOwner, allocator: Allocator) ResourceError!void {
-        self.arena = std.heap.ArenaAllocator.init(allocator);
+        self.arena = collections.SingleThreadArena.init(allocator);
         const inserter = &self.inserter;
         const store = inserter.store;
         const solution = inserter.solution;
         const dismantles = inserter.dismantles;
         const emit_sig = self.job.sig;
         const source_proc = self.job.source;
-        const emit_args = store.getProcSpec(source_proc).args;
+        const emit_args = store.getProcSpecImmediate(source_proc).args;
         // The source's original body is retained explicitly, since the base
         // procedure's metadata may already name its emitted body in later waves.
         inserter.current_proc_body = self.source.body.?;
@@ -1149,8 +1149,8 @@ fn computeEmissionContainsRefcounted(
     defer stack.deinit(allocator);
     for (0..store.cfStmtCount()) |stmt_index| {
         const stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(stmt_index))));
-        const stmt = store.getCFStmt(stmt_id);
-        if (stmt == .assign_low_level and stmt.assign_low_level.op == .erased_capture_load) {
+        const stmt = store.getCFStmtImmediate(stmt_id);
+        if (stmt.* == .assign_low_level and stmt.assign_low_level.op == .erased_capture_load) {
             const target = stmt.assign_low_level.target;
             const target_layout = store.getLocal(target).layout_idx;
             if (try arc_dismantle.layoutMayContainBoxyDynamic(allocator, layouts, target_layout, &visited, &stack)) {
@@ -1772,7 +1772,7 @@ const Inserter = struct {
     arc_plans: *ArcPlans = undefined,
     /// Exact call-result refinements registered while solving this emission.
     /// Keys are ownership-neutral switch statement ids.
-    restitution_switches: *std.AutoHashMapUnmanaged(LIR.CFStmtId, RestitutionSwitch) = undefined,
+    restitution_switches: *collections.DenseMapUnmanaged(LIR.CFStmtId, RestitutionSwitch) = undefined,
     materialized_plans: []?LIR.CFStmtId = &.{},
     materialized_joins: []?LIR.CFStmtId = &.{},
     /// Reused planning buffers. Their contents are ephemeral; every slice
@@ -1878,7 +1878,7 @@ const Inserter = struct {
                 try self.completeMaterializedPath(path.plan_index, tail, path.result);
             },
             .jump => |jump| {
-                const source = self.store.getCFStmt(jump.stmt).jump;
+                const source = self.store.getCFStmtImmediate(jump.stmt).jump;
                 var tail = try self.addCFStmtAtSource(jump.stmt, .{ .jump = .{ .target = source.target } });
                 tail = try self.materializeTerminalReleases(jump.releases.items, .{ .stmt = jump.stmt, .reason = .jump_balance }, tail);
                 try self.completeMaterializedPath(path.plan_index, tail, path.result);
@@ -1908,7 +1908,7 @@ const Inserter = struct {
                 try self.pushMaterializePath(tasks, join.remainder_plan, &state.remainder);
             },
             .switch_stmt => |switch_plan| {
-                const source = self.store.getCFStmt(switch_plan.stmt).switch_stmt;
+                const source = self.store.getCFStmtImmediate(switch_plan.stmt).switch_stmt;
                 const branch_count = switch_plan.branch_plans.len;
                 const child_count = branch_count + 1 + @intFromBool(switch_plan.continuation_reachable);
                 const state = try self.emission_allocator.create(MaterializeControlTask);
@@ -1980,7 +1980,7 @@ const Inserter = struct {
 
     fn finishMaterializeJoin(self: *Inserter, state: *MaterializeJoinTask) ResourceError!void {
         const terminal = self.arcPlan(state.plan_index).terminal.join;
-        const source = self.store.getCFStmt(terminal.stmt).join;
+        const source = self.store.getCFStmtImmediate(terminal.stmt).join;
         var tail: LIR.CFStmtId = undefined;
         if (terminal.body_reachable) {
             tail = try self.addCFStmtAtSource(terminal.stmt, .{ .join = .{
@@ -2011,7 +2011,7 @@ const Inserter = struct {
         var tail: LIR.CFStmtId = undefined;
         switch (plan.terminal) {
             .switch_stmt => |switch_plan| {
-                const source = self.store.getCFStmt(switch_plan.stmt).switch_stmt;
+                const source = self.store.getCFStmtImmediate(switch_plan.stmt).switch_stmt;
                 const source_branches = self.store.getCFSwitchBranches(source.branches);
                 if (source_branches.len != switch_plan.branch_plans.len) arcInvariant("ARC materializer switch branch count changed");
                 const branches = try self.emission_allocator.alloc(LIR.CFSwitchBranch, source_branches.len);
@@ -2032,7 +2032,7 @@ const Inserter = struct {
                 } });
             },
             .initialized_payload_switch => |switch_plan| {
-                const source = self.store.getCFStmt(switch_plan.stmt).switch_initialized_payload;
+                const source = self.store.getCFStmtImmediate(switch_plan.stmt).switch_initialized_payload;
                 tail = try self.addCFStmtAtSource(switch_plan.stmt, .{ .switch_initialized_payload = .{
                     .cond = source.cond,
                     .cond_mask = source.cond_mask,
@@ -2043,7 +2043,7 @@ const Inserter = struct {
                 } });
             },
             .str_match => |str_plan| {
-                const source = self.store.getCFStmt(str_plan.stmt).str_match;
+                const source = self.store.getCFStmtImmediate(str_plan.stmt).str_match;
                 const on_match = try self.retainLocalIfRcCount(source.source, str_plan.capture_retain_count, .{ .stmt = str_plan.stmt, .reason = .str_match_capture }, state.child_results[0]);
                 tail = try self.addCFStmtAtSource(str_plan.stmt, .{ .str_match = .{
                     .source = source.source,
@@ -2055,7 +2055,7 @@ const Inserter = struct {
                 } });
             },
             .boxy_tag_match => |tag_plan| {
-                const source = self.store.getCFStmt(tag_plan.stmt).boxy_tag_match;
+                const source = self.store.getCFStmtImmediate(tag_plan.stmt).boxy_tag_match;
                 tail = try self.addCFStmtAtSource(tag_plan.stmt, .{ .boxy_tag_match = .{
                     .source = source.source,
                     .source_desc = source.source_desc,
@@ -2065,7 +2065,7 @@ const Inserter = struct {
                 } });
             },
             .str_match_set => |str_plan| {
-                const source = self.store.getCFStmt(str_plan.stmt).str_match_set;
+                const source = self.store.getCFStmtImmediate(str_plan.stmt).str_match_set;
                 const source_arms = self.store.getStrMatchArms(source.arms);
                 if (source_arms.len != str_plan.match_plans.len) arcInvariant("ARC materializer string arm count changed");
                 const arms = try self.emission_allocator.alloc(LIR.StrMatchArm, source_arms.len);
@@ -3358,7 +3358,7 @@ const Inserter = struct {
         if (self.current_sig.outcomes.isEmpty()) return;
         const mask = self.solution.restitutionParamsAt(stmt);
         if (mask == 0) return;
-        const params = self.store.getLocalSpan(self.store.getProcSpec(self.current_proc).args);
+        const params = self.store.getLocalSpan(self.store.getProcSpecImmediate(self.current_proc).args);
         for (0..GuardedList.borrowLen(params)) |position| {
             const bit = arc_sig.paramBit(position) orelse break;
             if ((mask & bit) == 0) continue;
@@ -3390,7 +3390,7 @@ const Inserter = struct {
     ) ResourceError!void {
         const mask = self.solution.restitutionParamsAt(stmt);
         if (mask == 0) return;
-        const params = self.store.getLocalSpan(self.store.getProcSpec(self.current_source_proc).args);
+        const params = self.store.getLocalSpan(self.store.getProcSpecImmediate(self.current_source_proc).args);
         for (0..GuardedList.borrowLen(params)) |position| {
             const bit = arc_sig.paramBit(position) orelse break;
             if ((mask & bit) == 0) continue;
@@ -3716,7 +3716,7 @@ const Inserter = struct {
         if (self.arcPlan(children[0]).start != match_start or self.arcPlan(children[1]).start != miss_start) {
             arcInvariant("ARC string-match child plan changed its structured start");
         }
-        const capture_retain_count = self.strMatchCaptureRetainCount(self.store.getCFStmt(stmt).str_match.steps);
+        const capture_retain_count = self.strMatchCaptureRetainCount(self.store.getCFStmtImmediate(stmt).str_match.steps);
         self.arcPlan(plan_index).terminal = .{ .str_match = .{
             .stmt = stmt,
             .match_plan = children[0],
@@ -4844,7 +4844,7 @@ const Inserter = struct {
         next: LIR.CFStmtId,
         releases: *std.ArrayList(ReleaseDecision),
     ) ResourceError!void {
-        const params = self.store.getLocalSpan(self.store.getProcSpec(self.current_source_proc).args);
+        const params = self.store.getLocalSpan(self.store.getProcSpecImmediate(self.current_source_proc).args);
         for (self.boxy_desc_users.usersOf(desc_local)) |local| {
             if (!owned.contains(local)) continue;
             if (localSpanContains(params, local)) continue;
@@ -5407,7 +5407,7 @@ const Inserter = struct {
         resource: RestoredResource,
     ) ResourceError!void {
         const bit = arc_sig.paramBit(position) orelse return;
-        const switch_stmt = self.store.getCFStmt(refinement.stmt).switch_stmt;
+        const switch_stmt = self.store.getCFStmtImmediate(refinement.stmt).switch_stmt;
         const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
         const entry = try self.restitution_switches.getOrPut(self.solve_allocator, refinement.stmt);
         if (!entry.found_existing) {
@@ -5579,7 +5579,7 @@ const Inserter = struct {
     /// at them.
     fn appendStmtWalkSuccessors(self: *Inserter, stmt: LIR.CFStmtId, out: *std.ArrayList(LIR.CFStmtId)) Allocator.Error!void {
         const gpa = self.emission_allocator;
-        switch (self.store.getCFStmt(stmt)) {
+        switch (self.store.getCFStmtImmediate(stmt).*) {
             inline .assign_ref,
             .assign_literal,
             .init_uninitialized,
@@ -5669,14 +5669,23 @@ const Inserter = struct {
         /// statement that rebinds it, or zero when none does. No statement
         /// rebinding the root is reachable from a component at or above it.
         rebind_component_end: []u32,
-        /// Roots whose place-use region is solved, and the nodes and loops
-        /// in each region, keyed by `root << 32 | index`.
-        solved_roots: std.AutoHashMapUnmanaged(u32, void) = .empty,
-        live_nodes: std.AutoHashMapUnmanaged(u64, void) = .empty,
-        live_loops: std.AutoHashMapUnmanaged(u64, void) = .empty,
+        /// The place-use region of each solved root.
+        solved_regions: collections.DenseMapUnmanaged(LIR.LocalId, PlaceUseRegion) = .empty,
+        /// Units waiting while a region is solved, kept between solves.
+        region_work: std.ArrayList(PlaceUseRegion.Unit) = .empty,
         node_stamp: []u32,
         loop_stamp: []u32,
         stamp: u32 = 0,
+    };
+
+    /// The statement nodes and loops from which a root's place is used
+    /// before the root is rebound; a node inside a loop that is transparent
+    /// for the root is represented by that loop.
+    const PlaceUseRegion = struct {
+        nodes: std.bit_set.DynamicBitSetUnmanaged,
+        loops: std.bit_set.DynamicBitSetUnmanaged,
+
+        const Unit = struct { loop: bool, index: u32 };
     };
 
     const no_rebind: LIR.LocalId = @fromBackingInt(@intCast(std.math.maxInt(u32)));
@@ -5854,14 +5863,18 @@ const Inserter = struct {
     /// Solve where `root`'s place is used later: one backward search from the
     /// statements using the place, stopped by statements that rebind `root`,
     /// in which every loop that never rebinds `root` is a single unit.
-    fn solvePlaceUseRegion(self: *Inserter, facts: *PlaceUseFacts, root: LIR.LocalId) ResourceError!void {
+    fn solvePlaceUseRegion(self: *Inserter, facts: *PlaceUseFacts, root: LIR.LocalId) ResourceError!*const PlaceUseRegion {
         const allocator = self.emission_allocator;
         const graph = self.source_liveness.graphFor(self.current_sig);
-        const root_key = @as(u64, @backingInt(root)) << 32;
         const transparency = PlaceRootTransparency{ .facts = facts, .root_bit = @backingInt(root) };
         facts.stamp +%= 1;
-        const Unit = struct { loop: bool, index: u32 };
-        var work = std.ArrayList(Unit).empty;
+        const Unit = PlaceUseRegion.Unit;
+        var region: PlaceUseRegion = .{
+            .nodes = try .initEmpty(allocator, graph.nodes.items.len),
+            .loops = try .initEmpty(allocator, facts.forest.loops.len),
+        };
+        const work = &facts.region_work;
+        work.clearRetainingCapacity();
         const Reach = struct {
             fn reach(facts_: *PlaceUseFacts, transparency_: PlaceRootTransparency, work_: *std.ArrayList(Unit), allocator_: Allocator, node: u32) Allocator.Error!void {
                 if (transparency_.outermost(node)) |loop| {
@@ -5884,30 +5897,32 @@ const Inserter = struct {
         }
         if (low < facts.place_leaders.len and facts.place_leaders[low] == place) {
             for (facts.place_users[facts.place_user_starts[low]..facts.place_user_starts[low + 1]]) |user| {
-                try Reach(facts, transparency, &work, allocator, user);
+                try Reach(facts, transparency, work, allocator, user);
             }
         }
         while (work.pop()) |unit| {
             if (unit.loop) {
-                try facts.live_loops.put(allocator, root_key | unit.index, {});
+                region.loops.set(unit.index);
                 const header = facts.forest.loops[unit.index].header;
                 for (graph.liveness.predecessorsOf(header)) |pred| {
                     if (facts.forest.containsNode(unit.index, pred) or facts.rebinds[pred] == root) continue;
-                    try Reach(facts, transparency, &work, allocator, pred);
+                    try Reach(facts, transparency, work, allocator, pred);
                 }
                 for (facts.side_entries[facts.side_entry_starts[unit.index]..facts.side_entry_starts[unit.index + 1]]) |pred| {
                     if (facts.rebinds[pred] == root) continue;
-                    try Reach(facts, transparency, &work, allocator, pred);
+                    try Reach(facts, transparency, work, allocator, pred);
                 }
             } else {
-                try facts.live_nodes.put(allocator, root_key | unit.index, {});
+                region.nodes.set(unit.index);
                 for (graph.liveness.predecessorsOf(unit.index)) |pred| {
                     if (facts.rebinds[pred] == root) continue;
-                    try Reach(facts, transparency, &work, allocator, pred);
+                    try Reach(facts, transparency, work, allocator, pred);
                 }
             }
         }
-        try facts.solved_roots.put(allocator, @backingInt(root), {});
+        const entry = try facts.solved_regions.getOrPut(allocator, root);
+        entry.value_ptr.* = region;
+        return entry.value_ptr;
     }
 
     /// Exact use query for one complete ownership place, keyed by the unit
@@ -5942,12 +5957,11 @@ const Inserter = struct {
             return facts.places_used_from[start_component].isSet(place) or
                 facts.reaches_every_place_use.isSet(start_node);
         }
-        if (!facts.solved_roots.contains(@backingInt(root))) try self.solvePlaceUseRegion(facts, root);
-        const root_key = @as(u64, @backingInt(root)) << 32;
+        const region = facts.solved_regions.getPtr(root) orelse try self.solvePlaceUseRegion(facts, root);
         const transparency = PlaceRootTransparency{ .facts = facts, .root_bit = @backingInt(root) };
         if (transparency.outermost(start_node)) |loop| {
-            if (facts.live_loops.contains(root_key | loop)) return true;
-        } else if (facts.live_nodes.contains(root_key | start_node)) {
+            if (region.loops.isSet(loop)) return true;
+        } else if (region.nodes.isSet(start_node)) {
             return true;
         }
         if (!facts.reaches_every_place_use.isSet(start_node)) return false;
@@ -5983,7 +5997,7 @@ const Inserter = struct {
     fn walkOwnershipPlaceUsedInPath(self: *Inserter, start: LIR.CFStmtId, root: LIR.LocalId) ResourceError!bool {
         const allocator = self.emission_allocator;
         const place = self.ownershipPlaceLeader(root);
-        var seen = std.AutoHashMapUnmanaged(LIR.CFStmtId, void).empty;
+        var seen = collections.DenseMapUnmanaged(LIR.CFStmtId, void).empty;
         defer seen.deinit(allocator);
         var stack = std.ArrayList(LIR.CFStmtId).empty;
         defer stack.deinit(allocator);
@@ -6015,7 +6029,7 @@ const Inserter = struct {
     ) ResourceError!?OutcomeRestitution {
         const bit = arc_sig.paramBit(position) orelse return null;
         const refinement = try self.findOutcomeRefinement(target, next, sig) orelse return null;
-        const switch_stmt = self.store.getCFStmt(refinement.stmt).switch_stmt;
+        const switch_stmt = self.store.getCFStmtImmediate(refinement.stmt).switch_stmt;
         const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
         const outcomes = self.solution.sigTable().outcomesOf(sig);
         var has_restored_outcome = false;
@@ -7684,7 +7698,7 @@ test "RC elision lowers adjacent multi retain count" {
         f.store.stmtOrigin(release),
         release,
     );
-    const stmt = f.store.getCFStmt(retain).incref;
+    const stmt = f.store.getCFStmtImmediate(retain).incref;
     try testing.expectEqual(@as(u32, 2), stmt.count);
     try testing.expectEqual(ret, stmt.next);
 }
@@ -8264,12 +8278,12 @@ const ArcTest = struct {
         defer visited.deinit();
         var stack = std.ArrayList(LIR.CFStmtId).empty;
         defer stack.deinit(self.allocator);
-        const body = self.store.getProcSpec(proc_id).body orelse return 0;
+        const body = self.store.getProcSpecImmediate(proc_id).body orelse return 0;
         try stack.append(self.allocator, body);
         while (stack.pop()) |current| {
             if (visited.contains(current)) continue;
             try visited.put(current, {});
-            switch (self.store.getCFStmt(current)) {
+            switch (self.store.getCFStmtImmediate(current).*) {
                 .assign_low_level => |assign| if (assign.target == target) {
                     mask |= assign.unique_args;
                 },
@@ -8802,11 +8816,11 @@ test "ARC preserves erased callable repack reuse" {
 
     try f.run();
 
-    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var cursor = f.store.getProcSpecImmediate(caller).body orelse return error.MissingCallerBody;
     var found = false;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
-        switch (f.store.getCFStmt(cursor)) {
+        switch (f.store.getCFStmtImmediate(cursor).*) {
             .assign_packed_erased_fn => |assign| {
                 if (assign.target == new_callable) {
                     try testing.expect(cursor != new_pack);
@@ -8898,7 +8912,7 @@ test "ARC preserves erased call ABI metadata" {
 
     try f.run();
 
-    var cursor = f.store.getProcSpec(caller).body.?;
+    var cursor = f.store.getProcSpecImmediate(caller).body.?;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
         const stmt = f.store.getCFStmt(cursor);
@@ -8960,10 +8974,10 @@ test "ARC runtime-checks erased callable repack from an ordinary parameter" {
 
     try f.run();
 
-    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var cursor = f.store.getProcSpecImmediate(caller).body orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
-        switch (f.store.getCFStmt(cursor)) {
+        switch (f.store.getCFStmtImmediate(cursor).*) {
             .assign_packed_erased_fn => |assign| {
                 try testing.expectEqual(old_callable, assign.reuse.?);
                 try testing.expect(!assign.reuse_unique);
@@ -9045,10 +9059,10 @@ test "ARC transfers erased call ownership from an explicit outer source" {
     try testing.expectEqual(@as(usize, 0), f.countRc(extracted_callable, .incref));
     try testing.expectEqual(@as(usize, 0), f.countRc(extracted_callable, .decref));
 
-    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var cursor = f.store.getProcSpecImmediate(caller).body orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
-        switch (f.store.getCFStmt(cursor)) {
+        switch (f.store.getCFStmtImmediate(cursor).*) {
             .assign_call_erased => |assign| {
                 try testing.expect(assign.reuse_closure);
                 try testing.expectEqual(owned_callable, assign.reuse_source.?);
@@ -9133,10 +9147,10 @@ test "ARC retains an erased call reuse source that is read after the call" {
     var saw_retain = false;
     var saw_call = false;
     var saw_later_use = false;
-    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var cursor = f.store.getProcSpecImmediate(caller).body orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
-        switch (f.store.getCFStmt(cursor)) {
+        switch (f.store.getCFStmtImmediate(cursor).*) {
             .assign_ref => |assign| cursor = assign.next,
             .incref => |rc| {
                 if (rc.value == owned_callable) {
@@ -9244,10 +9258,10 @@ test "ARC retains an erased callable whose repack input is used later" {
     try f.run();
 
     try testing.expectEqual(@as(usize, 1), f.countRc(old_callable, .incref));
-    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var cursor = f.store.getProcSpecImmediate(caller).body orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
-        switch (f.store.getCFStmt(cursor)) {
+        switch (f.store.getCFStmtImmediate(cursor).*) {
             .assign_packed_erased_fn => |assign| {
                 try testing.expectEqual(old_callable, assign.reuse.?);
                 try testing.expect(!assign.reuse_unique);
@@ -9395,7 +9409,7 @@ test "ARC proc domain excludes scalar and other-proc locals" {
     defer solution.deinit();
     var global_local_index = collections.DenseMap(LIR.LocalId, u32).init(testing.allocator);
     defer global_local_index.deinit();
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = collections.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
 
     {
@@ -9405,7 +9419,7 @@ test "ARC proc domain excludes scalar and other-proc locals" {
             &solution,
             &local_contains_refcounted,
             &global_local_index,
-            f.store.getProcSpec(resource_proc).frame_locals,
+            f.store.getProcSpecImmediate(resource_proc).frame_locals,
         );
         defer domain.clearGlobalIndices();
         try testing.expectEqual(@as(usize, 2), domain.frame_locals.len);
@@ -9426,7 +9440,7 @@ test "ARC proc domain excludes scalar and other-proc locals" {
         &solution,
         &local_contains_refcounted,
         &global_local_index,
-        f.store.getProcSpec(other_proc).frame_locals,
+        f.store.getProcSpecImmediate(other_proc).frame_locals,
     );
     defer other_domain.clearGlobalIndices();
     try testing.expectEqual(@as(usize, 1), other_domain.frame_locals.len);
@@ -9480,7 +9494,7 @@ test "ARC proc domain filters module-wide borrow groups to its frame" {
 
     var global_local_index = collections.DenseMap(LIR.LocalId, u32).init(testing.allocator);
     defer global_local_index.deinit();
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = collections.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
     var domain = try ProcArcDomain.init(
         arena.allocator(),
@@ -9488,7 +9502,7 @@ test "ARC proc domain filters module-wide borrow groups to its frame" {
         &solution,
         &local_contains_refcounted,
         &global_local_index,
-        f.store.getProcSpec(local_proc).frame_locals,
+        f.store.getProcSpecImmediate(local_proc).frame_locals,
     );
     defer domain.clearGlobalIndices();
 
@@ -9525,7 +9539,7 @@ test "ARC lender-death query sees a live solver-only borrow anchor" {
     const concrete_rc = [_]bool{ false, true, false };
     var global_local_index = collections.DenseMap(LIR.LocalId, u32).init(testing.allocator);
     defer global_local_index.deinit();
-    var domain_arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var domain_arena = collections.SingleThreadArena.init(testing.allocator);
     defer domain_arena.deinit();
     var domain = try ProcArcDomain.init(
         domain_arena.allocator(),
@@ -9533,12 +9547,12 @@ test "ARC lender-death query sees a live solver-only borrow anchor" {
         &solution,
         &concrete_rc,
         &global_local_index,
-        f.store.getProcSpec(proc).frame_locals,
+        f.store.getProcSpecImmediate(proc).frame_locals,
     );
     defer domain.clearGlobalIndices();
     try testing.expectEqual(@as(usize, 2), domain.resource_locals.len);
 
-    var liveness_arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var liveness_arena = collections.SingleThreadArena.init(testing.allocator);
     defer liveness_arena.deinit();
     var source_liveness = SourceLiveness.init(liveness_arena.allocator(), testing.allocator);
 
@@ -9568,7 +9582,7 @@ test "ARC prepared source liveness survives transient domains and frozen reuse" 
     const rc = [_]bool{true};
     var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, &.{}, &.{proc}, true);
     defer solution.deinit();
-    var durable = std.heap.ArenaAllocator.init(testing.allocator);
+    var durable = collections.SingleThreadArena.init(testing.allocator);
     defer durable.deinit();
     var source = SourceLiveness.init(durable.allocator(), testing.allocator);
     var inserter = Inserter{
@@ -9581,10 +9595,10 @@ test "ARC prepared source liveness survives transient domains and frozen reuse" 
         .source_liveness = &source,
     };
     {
-        var temporary = std.heap.ArenaAllocator.init(testing.allocator);
+        var temporary = collections.SingleThreadArena.init(testing.allocator);
         defer temporary.deinit();
         var indices = collections.DenseMap(LIR.LocalId, u32).init(temporary.allocator());
-        var domain = try ProcArcDomain.init(temporary.allocator(), &f.store, &solution, &rc, &indices, f.store.getProcSpec(proc).frame_locals);
+        var domain = try ProcArcDomain.init(temporary.allocator(), &f.store, &solution, &rc, &indices, f.store.getProcSpecImmediate(proc).frame_locals);
         defer domain.clearGlobalIndices();
         inserter.current_domain = &domain;
         try inserter.prepareSourceLiveness();
@@ -9625,14 +9639,14 @@ test "ARC proc domain sparse high global IDs retain only a tiny frame" {
     rc[@backingInt(local)] = true;
     var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, &.{}, &.{proc}, true);
     defer solution.deinit();
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = collections.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
     // A module-sized u32 array cannot fit; one sparse page and tiny frame can.
     var storage: [4096]u8 = undefined;
     var bounded = std.heap.FixedBufferAllocator.init(&storage);
     var indices = collections.DenseMap(LIR.LocalId, u32).init(bounded.allocator());
     defer indices.deinit();
-    var domain = try ProcArcDomain.init(arena.allocator(), &f.store, &solution, rc, &indices, f.store.getProcSpec(proc).frame_locals);
+    var domain = try ProcArcDomain.init(arena.allocator(), &f.store, &solution, rc, &indices, f.store.getProcSpecImmediate(proc).frame_locals);
     try testing.expectEqual(@as(usize, 1), indices.count());
     try testing.expectEqual(@as(usize, 0), domain.frameIndexOf(local));
     try testing.expect(domain.frameContainsLocal(local));
@@ -9668,9 +9682,9 @@ test "ARC grouped raw liveness agrees with exhaustive resource queries" {
     for (locals, 0..) |local, i| try testing.expectEqual(locals[i % 3], solution.leaderOf(local));
     var indices = collections.DenseMap(LIR.LocalId, u32).init(testing.allocator);
     defer indices.deinit();
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = collections.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
-    var domain = try ProcArcDomain.init(arena.allocator(), &f.store, &solution, &rc, &indices, f.store.getProcSpec(proc).frame_locals);
+    var domain = try ProcArcDomain.init(arena.allocator(), &f.store, &solution, &rc, &indices, f.store.getProcSpecImmediate(proc).frame_locals);
     defer domain.clearGlobalIndices();
     const grouped = try GroupLivenessIndex.init(arena.allocator(), &domain, &solution, false);
     var reads = Row.initEmpty(arena.allocator(), domain.livenessBitLen());
@@ -9704,7 +9718,7 @@ test "ARC grouped raw liveness agrees with exhaustive resource queries" {
 }
 
 test "ARC raw-liveness ranges exclude boundary bits without scanning wide empty groups" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = collections.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
     var reads = Row.initEmpty(arena.allocator(), 1_000_001);
     for ([_]usize{ 0, 63, 64, 511, 512, 999999, 1000000 }) |bit| try reads.set(bit);
@@ -9911,8 +9925,8 @@ test "RC shared neutral proc body is rewritten separately for each proc" {
 
     try f.run();
 
-    const first_body = f.store.getProcSpec(first).body orelse return error.MissingProcBody;
-    const second_body = f.store.getProcSpec(second).body orelse return error.MissingProcBody;
+    const first_body = f.store.getProcSpecImmediate(first).body orelse return error.MissingProcBody;
+    const second_body = f.store.getProcSpecImmediate(second).body orelse return error.MissingProcBody;
     try testing.expect(first_body != shared_body);
     try testing.expect(second_body != shared_body);
     try testing.expect(first_body != second_body);
@@ -9940,8 +9954,8 @@ test "RC shared neutral join body keeps compact indices per proc" {
 
     try f.run();
 
-    const first_body = f.store.getProcSpec(first).body orelse return error.MissingProcBody;
-    const second_body = f.store.getProcSpec(second).body orelse return error.MissingProcBody;
+    const first_body = f.store.getProcSpecImmediate(first).body orelse return error.MissingProcBody;
+    const second_body = f.store.getProcSpecImmediate(second).body orelse return error.MissingProcBody;
     try testing.expect(first_body != shared_body);
     try testing.expect(second_body != shared_body);
     try testing.expect(first_body != second_body);
@@ -14013,8 +14027,8 @@ test "RC sublist of a dying unique argument passed to a non-inlined callee consu
         try insert(&f.store, &f.layouts, .{ .roots = &.{caller}, .specialize = specialize });
 
         // Follow the caller's call to the callee emission it actually runs.
-        var cursor = f.store.getProcSpec(caller).body.?;
-        const target_proc = while (true) switch (f.store.getCFStmt(cursor)) {
+        var cursor = f.store.getProcSpecImmediate(caller).body.?;
+        const target_proc = while (true) switch (f.store.getCFStmtImmediate(cursor).*) {
             .assign_call => |assign| break assign.proc,
             .assign_list => |assign| cursor = assign.next,
             inline .incref, .decref => |rc| cursor = rc.next,
@@ -14060,8 +14074,8 @@ test "RC sublist of a dying unique argument passed to a non-inlined callee consu
             .crash,
             => return error.TestUnexpectedResult,
         };
-        cursor = f.store.getProcSpec(target_proc).body.?;
-        const emitted_op = while (true) switch (f.store.getCFStmt(cursor)) {
+        cursor = f.store.getProcSpecImmediate(target_proc).body.?;
+        const emitted_op = while (true) switch (f.store.getCFStmtImmediate(cursor).*) {
             .assign_low_level => |assign| {
                 if (assign.target == slice) break assign.op;
                 cursor = assign.next;
@@ -14195,7 +14209,7 @@ test "RC borrow: read-only sublist keeps its parameter borrowed" {
     } }, .test_fixture);
     const proc = try f.addProc(&.{param}, try f.assignI64(range, 0, sublist), .i64);
     try insert(&f.store, &f.layouts, .{ .specialize = false });
-    try testing.expectEqual(@as(u64, 1), f.store.getProcSpec(proc).rc_borrowed_params);
+    try testing.expectEqual(@as(u64, 1), f.store.getProcSpecImmediate(proc).rc_borrowed_params);
     try testing.expectEqual(LIR.LowLevel.list_sublist_borrowed, f.reachableLowLevelAssign(slice).op);
     try f.expectRc(param, 0, 0, 0);
     try f.expectRc(slice, 0, 0, 0);
@@ -14228,7 +14242,7 @@ test "RC borrow: returned sublist transfers a dying caller buffer" {
     } }, .test_fixture);
     const caller = try f.addProc(&.{}, try f.assignList(list, &.{}, call), f.list_i64);
     try insert(&f.store, &f.layouts, .{ .roots = &.{caller}, .specialize = false });
-    try testing.expectEqual(@as(u64, 0), f.store.getProcSpec(callee).rc_borrowed_params);
+    try testing.expectEqual(@as(u64, 0), f.store.getProcSpecImmediate(callee).rc_borrowed_params);
     try testing.expectEqual(LIR.LowLevel.list_sublist, f.reachableLowLevelAssign(slice).op);
     try f.expectRc(param, 0, 0, 0);
     try f.expectRc(slice, 0, 0, 0);
@@ -14453,7 +14467,7 @@ test "RC outcome restitution preserves List Str on failure and seeds the success
     try testing.expectEqual(@as(u64, 0), try f.uniqueArgsInProc(callee, changed));
     try testing.expectEqual(@as(u64, 1), try f.uniqueArgsInProc(outcome_variant, changed));
 
-    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var cursor = f.store.getProcSpecImmediate(caller).body orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
         const stmt = f.store.getCFStmt(cursor);
@@ -14669,10 +14683,10 @@ test "RC outcome restitution spends retained arguments through aliases only on s
             // Preparation is source-owned, but boundary reads are selected by
             // the emitted convention. Exercise both preparation orders, then
             // query a frozen cache without permitting further allocation.
-            var arena = std.heap.ArenaAllocator.init(testing.allocator);
+            var arena = collections.SingleThreadArena.init(testing.allocator);
             defer arena.deinit();
             var indices = collections.DenseMap(LIR.LocalId, u32).init(arena.allocator());
-            var domain = try ProcArcDomain.init(arena.allocator(), &f.store, &solution, rc, &indices, f.store.getProcSpec(callee).frame_locals);
+            var domain = try ProcArcDomain.init(arena.allocator(), &f.store, &solution, rc, &indices, f.store.getProcSpecImmediate(callee).frame_locals);
             defer domain.clearGlobalIndices();
             var source = SourceLiveness.init(arena.allocator(), testing.allocator);
             const base_sig = solution.sigOf(callee);
@@ -14713,7 +14727,7 @@ test "RC outcome restitution spends retained arguments through aliases only on s
         const base_proc_count = f.store.procSpecCount();
         try insert(&f.store, &f.layouts, .{ .roots = &.{caller}, .specialize = specialize });
         try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
-        const caller_body = f.store.getCFStmt(f.store.getProcSpec(caller).body.?);
+        const caller_body = f.store.getCFStmt(f.store.getProcSpecImmediate(caller).body.?);
         try testing.expect(caller_body == .assign_call);
         try testing.expectEqual(base_proc_count, @backingInt(caller_body.assign_call.proc));
 
@@ -14837,7 +14851,7 @@ test "RC outcome restitution releases every returned argument before a nested jo
     try testing.expectEqual(@as(usize, 1), f.countRc(rejected_first, .incref));
     try testing.expectEqual(@as(usize, 1), f.countRc(rejected_second, .incref));
 
-    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var cursor = f.store.getProcSpecImmediate(caller).body orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
         const stmt = f.store.getCFStmt(cursor);
@@ -14883,7 +14897,7 @@ test "RC outcome restitution releases every returned argument before a nested jo
     }
     try testing.expect(remaining > 0);
 
-    cursor = f.store.getProcSpec(rejected_caller).body orelse return error.MissingCallerBody;
+    cursor = f.store.getProcSpecImmediate(rejected_caller).body orelse return error.MissingCallerBody;
     remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
         const stmt = f.store.getCFStmt(cursor);
@@ -15786,7 +15800,7 @@ test "RC field take restores the exact aggregate field on checked failure withou
     try testing.expectEqual(@as(usize, 0), f.countRc(failure_projection, .incref));
     try testing.expectEqual(@as(usize, 0), f.countRc(pair, .decref));
 
-    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var cursor = f.store.getProcSpecImmediate(caller).body orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
         const stmt = f.store.getCFStmt(cursor);
@@ -15961,12 +15975,12 @@ test "RC specialization: caller body survives variant proc append" {
 
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     const variant: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_proc_count))));
-    try testing.expectEqual(callee_flag, f.store.getProcSpec(variant).runtime_ret_desc.?);
+    try testing.expectEqual(callee_flag, f.store.getProcSpecImmediate(variant).runtime_ret_desc.?);
 
-    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var cursor = f.store.getProcSpecImmediate(caller).body orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
-        switch (f.store.getCFStmt(cursor)) {
+        switch (f.store.getCFStmtImmediate(cursor).*) {
             .assign_call => |assign| {
                 if (assign.target == result) {
                     try testing.expectEqual(variant, assign.proc);
@@ -16063,8 +16077,8 @@ test "RC specialization: a variant's frame excludes the source's base dismantle 
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     const variant: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_proc_count))));
 
-    const base_frame = f.store.getLocalSpan(f.store.getProcSpec(callee).frame_locals);
-    const variant_frame = f.store.getLocalSpan(f.store.getProcSpec(variant).frame_locals);
+    const base_frame = f.store.getLocalSpan(f.store.getProcSpecImmediate(callee).frame_locals);
+    const variant_frame = f.store.getLocalSpan(f.store.getProcSpecImmediate(variant).frame_locals);
     var base_generated: usize = 0;
     var variant_generated: usize = 0;
     var shared_generated: usize = 0;
@@ -16317,7 +16331,7 @@ test "RC interprocedural: tail self-call keeps a read-only parameter borrowed" {
     // requirement is not an ownership requirement, so position 0 stays
     // borrowed and the parameter's read-only uses emit nothing.
     const solved: arc_sig.RcSig = .{
-        .borrowed_params = @intCast(f.store.getProcSpec(recurse).rc_borrowed_params),
+        .borrowed_params = @intCast(f.store.getProcSpecImmediate(recurse).rc_borrowed_params),
     };
     try testing.expectEqual(arc_sig.Mode.borrowed, solved.paramMode(0));
     try f.expectRc(text, 0, 0, 0);
@@ -16387,12 +16401,12 @@ test "RC interprocedural: tail self-call transfers an SCC-local argument" {
     // edge targets itself with no cleanup after the call.
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     const owned_variant: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_proc_count))));
-    const base_switch = f.walkToSwitch(f.store.getProcSpec(recurse).body.?);
+    const base_switch = f.walkToSwitch(f.store.getProcSpecImmediate(recurse).body.?);
     const base_borrow_call = f.walkToDirectCall(base_switch.default_branch);
     try testing.expectEqual(identity, base_borrow_call.proc);
     const base_call = f.walkToDirectCall(base_borrow_call.next);
     try testing.expectEqual(owned_variant, base_call.proc);
-    const variant_switch = f.walkToSwitch(f.store.getProcSpec(owned_variant).body.?);
+    const variant_switch = f.walkToSwitch(f.store.getProcSpecImmediate(owned_variant).body.?);
     const variant_borrow_call = f.walkToDirectCall(variant_switch.default_branch);
     try testing.expectEqual(identity, variant_borrow_call.proc);
     const variant_call = f.walkToDirectCall(variant_borrow_call.next);
@@ -16468,8 +16482,8 @@ test "RC interprocedural: mutual tail calls preserve an SCC-entry borrow" {
     try f.run();
 
     try testing.expectEqual(base_proc_count, f.store.procSpecCount());
-    const left_sig: arc_sig.RcSig = .{ .borrowed_params = @intCast(f.store.getProcSpec(left).rc_borrowed_params) };
-    const right_sig: arc_sig.RcSig = .{ .borrowed_params = @intCast(f.store.getProcSpec(right).rc_borrowed_params) };
+    const left_sig: arc_sig.RcSig = .{ .borrowed_params = @intCast(f.store.getProcSpecImmediate(left).rc_borrowed_params) };
+    const right_sig: arc_sig.RcSig = .{ .borrowed_params = @intCast(f.store.getProcSpecImmediate(right).rc_borrowed_params) };
     try testing.expectEqual(arc_sig.Mode.borrowed, left_sig.paramMode(0));
     try testing.expectEqual(arc_sig.Mode.borrowed, right_sig.paramMode(0));
     try f.expectRc(left_text, 0, 0, 0);
@@ -16523,12 +16537,12 @@ test "RC interprocedural: tail call matches the caller return ownership" {
     const base_proc_count = f.store.procSpecCount();
     try f.run();
 
-    try testing.expect(!f.store.getProcSpec(caller).rc_ret_borrowed);
-    try testing.expect(f.store.getProcSpec(lender).rc_ret_borrowed);
+    try testing.expect(!f.store.getProcSpecImmediate(caller).rc_ret_borrowed);
+    try testing.expect(f.store.getProcSpecImmediate(lender).rc_ret_borrowed);
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     const owned_return_variant: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_proc_count))));
-    try testing.expect(!f.store.getProcSpec(owned_return_variant).rc_ret_borrowed);
-    const caller_switch = f.walkToSwitch(f.store.getProcSpec(caller).body.?);
+    try testing.expect(!f.store.getProcSpecImmediate(owned_return_variant).rc_ret_borrowed);
+    const caller_switch = f.walkToSwitch(f.store.getProcSpecImmediate(caller).body.?);
     const rewritten_tail_call = f.walkToDirectCall(caller_switch.default_branch);
     try testing.expectEqual(owned_return_variant, rewritten_tail_call.proc);
     const after_tail_call = f.store.getCFStmt(rewritten_tail_call.next);
@@ -16572,7 +16586,7 @@ test "RC interprocedural: borrowed call result anchors a recursive tail argument
 
     try f.run();
 
-    const recurse_sig: arc_sig.RcSig = .{ .borrowed_params = @intCast(f.store.getProcSpec(recurse).rc_borrowed_params) };
+    const recurse_sig: arc_sig.RcSig = .{ .borrowed_params = @intCast(f.store.getProcSpecImmediate(recurse).rc_borrowed_params) };
     try testing.expectEqual(arc_sig.Mode.borrowed, recurse_sig.paramMode(0));
     try f.expectRc(text, 0, 0, 0);
     try f.expectRc(borrowed_result, 0, 0, 0);
@@ -17026,7 +17040,7 @@ test "RC alias of a parameter consumed in the body solves the parameter owned" {
 }
 
 test "ARC ownership iteration skips absent resources and preserves release order" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = collections.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
     const width = 65536;

@@ -479,7 +479,7 @@ pub fn Engine(comptime Adapter: type) type {
         block_existing: std.ArrayListUnmanaged(u32) = .empty,
         next_local_class: std.ArrayListUnmanaged(u32) = .empty,
         local_groups: std.StringHashMapUnmanaged(u32) = .empty,
-        local_group_arena: std.heap.ArenaAllocator,
+        local_group_arena: base.SingleThreadArena,
         dfs_index: collections.DenseMap(u32, u32),
         dfs_frames: std.ArrayListUnmanaged(DfsFrame) = .empty,
         buf: std.ArrayListUnmanaged(u8) = .empty,
@@ -577,7 +577,7 @@ pub fn Engine(comptime Adapter: type) type {
                 .node_info = collections.DenseMap(u32, NodeInfo).init(gpa),
                 .local_of = collections.DenseMap(u32, u32).init(gpa),
                 .state_of_class = collections.DenseMap(u32, u32).init(gpa),
-                .local_group_arena = std.heap.ArenaAllocator.init(gpa),
+                .local_group_arena = base.SingleThreadArena.init(gpa),
                 .dfs_index = collections.DenseMap(u32, u32).init(gpa),
             };
         }

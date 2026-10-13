@@ -193,7 +193,7 @@ fn movedMonoView(source: *const Mono.Program, moved: *const Ast.Program) Mono.Pr
         .branches = moved_view.branches,
         .if_branches = moved_view.if_branches,
         .string_literals = moved_view.string_literals,
-        .proc_debug_names = moved.proc_debug_names.view(),
+        .proc_debug_names = &moved.proc_debug_names,
         .roots = source_view.roots,
         .literal_roots = source_view.literal_roots,
         .layout_requests = source_view.layout_requests,
@@ -1889,7 +1889,7 @@ const CaptureUpdate = struct {
 /// affected edges, and each operand-expression node is activated at most once.
 const CaptureDependencyGraph = struct {
     backing_allocator: Allocator,
-    arena: *std.heap.ArenaAllocator,
+    arena: *base.SingleThreadArena,
     allocator: Allocator,
     program: *Ast.Program,
     lifter: ?*Lifter,
@@ -1904,9 +1904,9 @@ const CaptureDependencyGraph = struct {
     next_update: usize,
 
     fn init(allocator: Allocator, program: *Ast.Program, lifter: ?*Lifter) Allocator.Error!CaptureDependencyGraph {
-        const arena = try allocator.create(std.heap.ArenaAllocator);
+        const arena = try allocator.create(base.SingleThreadArena);
         errdefer allocator.destroy(arena);
-        arena.* = std.heap.ArenaAllocator.init(allocator);
+        arena.* = base.SingleThreadArena.init(allocator);
         errdefer arena.deinit();
         const scratch = arena.allocator();
         const states = try scratch.alloc(CaptureFnState, program.fnCount());

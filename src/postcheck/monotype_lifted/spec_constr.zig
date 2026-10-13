@@ -1312,8 +1312,13 @@ const InlineScopeRebasePair = struct {
 };
 
 const Pass = struct {
+    /// Containers of finished cloners, kept for the next clone (see
+    /// `ClonerScratch`). A fixed number are kept so returning a cloner never
+    /// allocates; beyond that a finished cloner's containers are freed.
+    spare_cloner_scratch: [max_spare_cloner_scratch]ClonerScratch = undefined,
+    spare_cloner_scratch_len: usize = 0,
     allocator: Allocator,
-    arena: std.heap.ArenaAllocator,
+    arena: collections.SingleThreadArena,
     program: *Ast.Program,
     plans: []FnPlan,
     symbols: Common.SymbolGen,
@@ -1353,11 +1358,11 @@ const Pass = struct {
     /// What each frozen source loop body contains, keyed by the body. One
     /// walk of an outer loop records every loop nested in it, so nested
     /// loops never rescan their bodies.
-    loop_body_contents: std.AutoHashMapUnmanaged(Ast.ExprId, LoopBodyContents) = .empty,
+    loop_body_contents: collections.DenseMapUnmanaged(Ast.ExprId, LoopBodyContents) = .empty,
 
     const PatternRequest = struct { fn_id: Ast.FnId, pattern: CallPattern };
     const RequestSink = struct {
-        arena: std.heap.ArenaAllocator,
+        arena: collections.SingleThreadArena,
         items: std.ArrayList(PatternRequest) = .empty,
     };
 
@@ -1389,13 +1394,13 @@ const Pass = struct {
             output.* = .{
                 .allocator = allocator,
                 .program = try self.source.program.cloneForSpecConstrBody(allocator, self.fn_id),
-                .requests = .{ .arena = std.heap.ArenaAllocator.init(allocator) },
+                .requests = .{ .arena = collections.SingleThreadArena.init(allocator) },
             };
             errdefer output.program.deinit();
             errdefer output.requests.arena.deinit();
             var pass: Pass = .{
                 .allocator = scratch,
-                .arena = std.heap.ArenaAllocator.init(scratch),
+                .arena = collections.SingleThreadArena.init(scratch),
                 .program = &output.program,
                 .plans = self.source.plans,
                 .symbols = self.source.symbols,
@@ -1412,6 +1417,7 @@ const Pass = struct {
             defer pass.static_data_structure.deinit();
             defer pass.callable_workers.deinit();
             defer pass.loop_body_contents.deinit(scratch);
+            defer pass.releaseSpareClonerScratch();
             if (self.phase == .discovery) pass.pattern_requests = &output.requests;
             switch (self.phase) {
                 .discovery => {
@@ -1537,7 +1543,7 @@ const Pass = struct {
                 if (failure) |err| return err;
             } else {
                 for (work[0..count]) |*item| {
-                    var scratch = std.heap.ArenaAllocator.init(self.allocator);
+                    var scratch = collections.SingleThreadArena.init(self.allocator);
                     defer scratch.deinit();
                     try item.execute(self.allocator, scratch.allocator());
                 }
@@ -1609,7 +1615,7 @@ const Pass = struct {
         next_join_point: u32,
     };
     fn init(allocator: Allocator, program: *Ast.Program) Allocator.Error!Pass {
-        var arena = std.heap.ArenaAllocator.init(allocator);
+        var arena = collections.SingleThreadArena.init(allocator);
         errdefer arena.deinit();
 
         const plans = try allocator.alloc(FnPlan, program.fnCount());
@@ -1904,7 +1910,37 @@ const Pass = struct {
         return contents;
     }
 
+    const max_spare_cloner_scratch = 8;
+
+    /// Empty cloner containers, reusing a finished cloner's when one is spare.
+    fn takeClonerScratch(self: *Pass) ClonerScratch {
+        if (self.spare_cloner_scratch_len > 0) {
+            self.spare_cloner_scratch_len -= 1;
+            return self.spare_cloner_scratch[self.spare_cloner_scratch_len];
+        }
+        return ClonerScratch.fresh(self.allocator);
+    }
+
+    /// Keep a finished cloner's containers for the next clone.
+    fn returnClonerScratch(self: *Pass, scratch: *ClonerScratch) void {
+        if (self.spare_cloner_scratch_len == max_spare_cloner_scratch) {
+            scratch.deinit(self.allocator);
+            return;
+        }
+        scratch.clear();
+        self.spare_cloner_scratch[self.spare_cloner_scratch_len] = scratch.*;
+        self.spare_cloner_scratch_len += 1;
+    }
+
+    /// Free every spare cloner's containers through the pass's current
+    /// allocator.
+    fn releaseSpareClonerScratch(self: *Pass) void {
+        for (self.spare_cloner_scratch[0..self.spare_cloner_scratch_len]) |*spare| spare.deinit(self.allocator);
+        self.spare_cloner_scratch_len = 0;
+    }
+
     fn deinit(self: *Pass) void {
+        self.releaseSpareClonerScratch();
         self.loop_body_contents.deinit(self.allocator);
         self.static_data_structure.deinit();
         self.callable_sources.deinit();
@@ -5156,6 +5192,15 @@ const Subst = struct {
         self.exact.deinit();
     }
 
+    /// Forget every substitution while keeping the tables' capacity.
+    fn clearRetainingCapacity(self: *Subst) void {
+        self.changes.clearRetainingCapacity();
+        self.loop_carried_binders.clearRetainingCapacity();
+        self.binder_aliases.clearRetainingCapacity();
+        self.binder_subst.clearRetainingCapacity();
+        self.exact.clearRetainingCapacity();
+    }
+
     /// Identity a local's binder-scoped substitution is keyed by: the pattern
     /// binder together with the digest of the local's monomorphic type. Two
     /// locals that share a binder but were monomorphized at different types are
@@ -5396,6 +5441,126 @@ const Subst = struct {
     }
 };
 
+/// Empty frame stacks kept for reuse by `Cloner.runClone`.
+const CloneFramePool = struct {
+    stacks: [max_stacks]std.ArrayList(Cloner.CloneFrame) = undefined,
+    len: usize = 0,
+
+    const max_stacks = 8;
+
+    fn take(self: *CloneFramePool) std.ArrayList(Cloner.CloneFrame) {
+        if (self.len == 0) return .empty;
+        self.len -= 1;
+        return self.stacks[self.len];
+    }
+
+    /// Keep `frames` empty for the next run, or free it when the pool is full.
+    fn give(self: *CloneFramePool, allocator: Allocator, frames: *std.ArrayList(Cloner.CloneFrame)) void {
+        if (self.len == max_stacks) {
+            frames.deinit(allocator);
+            return;
+        }
+        frames.clearRetainingCapacity();
+        self.stacks[self.len] = frames.*;
+        self.len += 1;
+    }
+
+    fn deinit(self: *CloneFramePool, allocator: Allocator) void {
+        for (self.stacks[0..self.len]) |*frames| frames.deinit(allocator);
+        self.len = 0;
+    }
+};
+
+/// The containers of one `Cloner`, kept with their capacity on the pass after
+/// the cloner finishes so the next clone the pass runs starts from the
+/// capacity the last one reached rather than from empty tables.
+const ClonerScratch = struct {
+    arena: collections.SingleThreadArena,
+    subst: Subst,
+    inline_stack: std.ArrayList(InlineFrame),
+    loop_stack: std.ArrayList(LoopPattern),
+    loop_exit_stack: std.ArrayList(?LoopExitSelection),
+    exit_tuple_items: collections.DenseMap(Ast.LocalId, []?Ast.ExprId),
+    join_stack: std.ArrayList(ActiveJoinClone),
+    let_case_builds: std.ArrayList(*LetCaseBuild),
+    clone_templates: std.ArrayList(ExprIdRange),
+    arm_values: collections.DenseMap(Ast.ExprId, []const Value),
+    block_tail_values: collections.DenseMap(Ast.ExprId, Value),
+    recorded_value_keys: std.ArrayList(RecordedValueKey),
+    active_recursive_value_locals: collections.DenseMap(Ast.LocalId, void),
+    rebased_inline_scopes: std.AutoHashMap(InlineScopeRebasePair, Ast.InlineScopeId),
+    inline_scope_origins: collections.DenseMap(Ast.InlineScopeId, Ast.InlineScopeId),
+    rebased_inline_scope_changes: std.ArrayList(InlineScopeRebasePair),
+    /// Frame stacks of finished `Cloner.runClone` calls, kept empty with their
+    /// capacity for the next run. A fixed number are kept so returning one
+    /// never allocates.
+    spare_clone_frames: CloneFramePool,
+
+    fn fresh(allocator: Allocator) ClonerScratch {
+        return .{
+            .arena = collections.SingleThreadArena.init(allocator),
+            .subst = Subst.init(allocator),
+            .inline_stack = .empty,
+            .loop_stack = .empty,
+            .loop_exit_stack = .empty,
+            .exit_tuple_items = .init(allocator),
+            .join_stack = .empty,
+            .let_case_builds = .empty,
+            .clone_templates = .empty,
+            .arm_values = collections.DenseMap(Ast.ExprId, []const Value).init(allocator),
+            .block_tail_values = collections.DenseMap(Ast.ExprId, Value).init(allocator),
+            .recorded_value_keys = .empty,
+            .active_recursive_value_locals = collections.DenseMap(Ast.LocalId, void).init(allocator),
+            .rebased_inline_scopes = std.AutoHashMap(InlineScopeRebasePair, Ast.InlineScopeId).init(allocator),
+            .inline_scope_origins = collections.DenseMap(Ast.InlineScopeId, Ast.InlineScopeId).init(allocator),
+            .rebased_inline_scope_changes = .empty,
+            .spare_clone_frames = .{},
+        };
+    }
+
+    /// Empty every container, keeping its capacity. The arena is released
+    /// outright: retaining its capacity may need a replacement chunk, and a
+    /// failed allocation would have nowhere to go from here.
+    fn clear(self: *ClonerScratch) void {
+        _ = self.arena.reset(.free_all);
+        self.subst.clearRetainingCapacity();
+        self.inline_stack.clearRetainingCapacity();
+        self.loop_stack.clearRetainingCapacity();
+        self.loop_exit_stack.clearRetainingCapacity();
+        self.exit_tuple_items.clearRetainingCapacity();
+        self.join_stack.clearRetainingCapacity();
+        self.let_case_builds.clearRetainingCapacity();
+        self.clone_templates.clearRetainingCapacity();
+        self.arm_values.clearRetainingCapacity();
+        self.block_tail_values.clearRetainingCapacity();
+        self.recorded_value_keys.clearRetainingCapacity();
+        self.active_recursive_value_locals.clearRetainingCapacity();
+        self.rebased_inline_scopes.clearRetainingCapacity();
+        self.inline_scope_origins.clearRetainingCapacity();
+        self.rebased_inline_scope_changes.clearRetainingCapacity();
+    }
+
+    fn deinit(self: *ClonerScratch, allocator: Allocator) void {
+        self.inline_stack.deinit(allocator);
+        self.loop_stack.deinit(allocator);
+        self.loop_exit_stack.deinit(allocator);
+        self.exit_tuple_items.deinit();
+        self.join_stack.deinit(allocator);
+        self.let_case_builds.deinit(allocator);
+        self.clone_templates.deinit(allocator);
+        self.arm_values.deinit();
+        self.block_tail_values.deinit();
+        self.recorded_value_keys.deinit(allocator);
+        self.active_recursive_value_locals.deinit();
+        self.rebased_inline_scopes.deinit();
+        self.inline_scope_origins.deinit();
+        self.rebased_inline_scope_changes.deinit(allocator);
+        self.spare_clone_frames.deinit(allocator);
+        self.subst.deinit();
+        self.arena.deinit();
+    }
+};
+
 const Cloner = struct {
     pass: *Pass,
     purpose: ClonePurpose,
@@ -5405,7 +5570,7 @@ const Cloner = struct {
     /// Symbolic values, shapes, and strict-binding chains owned by this clone.
     /// Accepted call patterns are copied into the pass-wide arena before this
     /// short-lived scratch arena is released.
-    arena: std.heap.ArenaAllocator,
+    arena: collections.SingleThreadArena,
     source_fn: Ast.FnId,
     pattern: CallPattern,
     subst: Subst,
@@ -5467,6 +5632,7 @@ const Cloner = struct {
     /// Insertions into the two inline-scope maps, in order, for rejected loop
     /// attempt rollback. Accepted entries remain useful for the rest of the clone.
     rebased_inline_scope_changes: std.ArrayList(InlineScopeRebasePair),
+    spare_clone_frames: CloneFramePool,
     /// Depth of the wrapper-strip recursion in the static value matchers
     /// (`bindPatToValue`/`bindPatToMatchValue`/`bindPatToFlowValue`), counting
     /// each `runtime_anchor.structure`/`nominal.backing`/
@@ -5526,30 +5692,32 @@ const Cloner = struct {
     };
 
     fn init(pass: *Pass, source_fn: Ast.FnId, pattern: CallPattern) Cloner {
+        const scratch = pass.takeClonerScratch();
         return .{
             .pass = pass,
             .purpose = .specialization,
             .source_reuse = .none,
-            .arena = std.heap.ArenaAllocator.init(pass.allocator),
+            .arena = scratch.arena,
             .source_fn = source_fn,
             .pattern = pattern,
-            .subst = Subst.init(pass.allocator),
-            .inline_stack = .empty,
-            .loop_stack = .empty,
-            .loop_exit_stack = .empty,
-            .exit_tuple_items = .init(pass.allocator),
-            .join_stack = .empty,
+            .subst = scratch.subst,
+            .inline_stack = scratch.inline_stack,
+            .loop_stack = scratch.loop_stack,
+            .loop_exit_stack = scratch.loop_exit_stack,
+            .exit_tuple_items = scratch.exit_tuple_items,
+            .join_stack = scratch.join_stack,
             .let_case_shape_growth = .init(let_case_shape_arm_budget),
-            .let_case_builds = .empty,
+            .let_case_builds = scratch.let_case_builds,
             .output_start = pass.program.exprCount(),
-            .clone_templates = .empty,
-            .arm_values = collections.DenseMap(Ast.ExprId, []const Value).init(pass.allocator),
-            .block_tail_values = collections.DenseMap(Ast.ExprId, Value).init(pass.allocator),
-            .recorded_value_keys = .empty,
-            .active_recursive_value_locals = collections.DenseMap(Ast.LocalId, void).init(pass.allocator),
-            .rebased_inline_scopes = std.AutoHashMap(InlineScopeRebasePair, Ast.InlineScopeId).init(pass.allocator),
-            .inline_scope_origins = collections.DenseMap(Ast.InlineScopeId, Ast.InlineScopeId).init(pass.allocator),
-            .rebased_inline_scope_changes = .empty,
+            .clone_templates = scratch.clone_templates,
+            .arm_values = scratch.arm_values,
+            .block_tail_values = scratch.block_tail_values,
+            .recorded_value_keys = scratch.recorded_value_keys,
+            .active_recursive_value_locals = scratch.active_recursive_value_locals,
+            .rebased_inline_scopes = scratch.rebased_inline_scopes,
+            .inline_scope_origins = scratch.inline_scope_origins,
+            .rebased_inline_scope_changes = scratch.rebased_inline_scope_changes,
+            .spare_clone_frames = scratch.spare_clone_frames,
             .wrapper_strip_depth = 0,
             .materialize_strip_depth = 0,
             .inline_calls = .all,
@@ -5589,22 +5757,26 @@ const Cloner = struct {
     }
 
     fn deinit(self: *Cloner) void {
-        self.inline_stack.deinit(self.pass.allocator);
-        self.loop_stack.deinit(self.pass.allocator);
-        self.loop_exit_stack.deinit(self.pass.allocator);
-        self.exit_tuple_items.deinit();
-        self.join_stack.deinit(self.pass.allocator);
-        self.let_case_builds.deinit(self.pass.allocator);
-        self.clone_templates.deinit(self.pass.allocator);
-        self.arm_values.deinit();
-        self.block_tail_values.deinit();
-        self.recorded_value_keys.deinit(self.pass.allocator);
-        self.active_recursive_value_locals.deinit();
-        self.rebased_inline_scopes.deinit();
-        self.inline_scope_origins.deinit();
-        self.rebased_inline_scope_changes.deinit(self.pass.allocator);
-        self.subst.deinit();
-        self.arena.deinit();
+        var scratch: ClonerScratch = .{
+            .arena = self.arena,
+            .subst = self.subst,
+            .inline_stack = self.inline_stack,
+            .loop_stack = self.loop_stack,
+            .loop_exit_stack = self.loop_exit_stack,
+            .exit_tuple_items = self.exit_tuple_items,
+            .join_stack = self.join_stack,
+            .let_case_builds = self.let_case_builds,
+            .clone_templates = self.clone_templates,
+            .arm_values = self.arm_values,
+            .block_tail_values = self.block_tail_values,
+            .recorded_value_keys = self.recorded_value_keys,
+            .active_recursive_value_locals = self.active_recursive_value_locals,
+            .rebased_inline_scopes = self.rebased_inline_scopes,
+            .inline_scope_origins = self.inline_scope_origins,
+            .rebased_inline_scope_changes = self.rebased_inline_scope_changes,
+            .spare_clone_frames = self.spare_clone_frames,
+        };
+        self.pass.returnClonerScratch(&scratch);
     }
 
     /// Debug validator for the clone-source invariant described on
@@ -5721,8 +5893,8 @@ const Cloner = struct {
 
     /// Run a cloning computation to completion on an explicit frame stack.
     fn runClone(self: *Cloner, root: CloneTask) Common.LowerError!CloneResult {
-        var frames: std.ArrayList(CloneFrame) = .empty;
-        defer frames.deinit(self.pass.allocator);
+        var frames = self.spare_clone_frames.take();
+        defer self.spare_clone_frames.give(self.pass.allocator, &frames);
         errdefer for (frames.items) |*frame| self.releaseCloneFrame(frame);
         try frames.append(self.pass.allocator, .{ .task = root });
         var input: ?CloneResult = null;
@@ -15032,7 +15204,7 @@ fn walkLoopBodyContents(pass: *Pass, root_body: Ast.ExprId, root_uses: []Initial
     defer children.deinit(allocator);
     var open: std.ArrayList(OpenLoop) = .empty;
     defer open.deinit(allocator);
-    var registered: std.AutoHashMapUnmanaged(Ast.LocalId, std.ArrayList(LocalRegistration)) = .empty;
+    var registered: collections.DenseMapUnmanaged(Ast.LocalId, std.ArrayList(LocalRegistration)) = .empty;
     defer {
         var lists = registered.valueIterator();
         while (lists.next()) |list| list.deinit(allocator);
@@ -15133,7 +15305,7 @@ fn markOpenLoopsReturn(open: []OpenLoop) void {
 /// registration is marked once, then dropped.
 fn markLocalReferenced(
     open: []OpenLoop,
-    registered: *std.AutoHashMapUnmanaged(Ast.LocalId, std.ArrayList(LocalRegistration)),
+    registered: *collections.DenseMapUnmanaged(Ast.LocalId, std.ArrayList(LocalRegistration)),
     local: Ast.LocalId,
 ) void {
     const list = registered.getPtr(local) orelse return;
@@ -16748,7 +16920,7 @@ const ReverseSpecConstrExecutor = struct {
         const self: *@This() = @ptrCast(@alignCast(context));
         self.len -= 1;
         const task = self.queued[self.len];
-        var scratch = std.heap.ArenaAllocator.init(std.testing.allocator);
+        var scratch = collections.SingleThreadArena.init(std.testing.allocator);
         defer scratch.deinit();
         var lane = TaskExecutor.LaneState.init(std.testing.allocator);
         defer lane.deinit();
@@ -16985,7 +17157,10 @@ test "SpecConstr retained locals allocate by exact leaves not unrelated prefix" 
     var buffer: [4096]u8 = undefined;
     var bounded = std.heap.FixedBufferAllocator.init(&buffer);
     pass.allocator = bounded.allocator();
+    // The cloner's containers return to the pass when the cloner finishes,
+    // so they are released through the bounded allocator before it goes away.
     defer pass.allocator = allocator;
+    defer pass.releaseSpareClonerScratch();
     var cloner = Cloner.initForRewrite(&pass);
     defer cloner.deinit();
     const before_empty = bounded.end_index;
@@ -17984,7 +18159,7 @@ test "value substitutability is exact at any depth" {
     var cloner = Cloner.initForRewrite(&pass);
     defer cloner.deinit();
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = collections.SingleThreadArena.init(allocator);
     defer arena.deinit();
 
     const u8_ty = try program.types.add(.{ .primitive = .u8 });
@@ -18034,7 +18209,7 @@ test "making a substitutable value reusable keeps it whole at any size" {
     var cloner = Cloner.initForRewrite(&pass);
     defer cloner.deinit();
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = collections.SingleThreadArena.init(allocator);
     defer arena.deinit();
 
     const u8_ty = try program.types.add(.{ .primitive = .u8 });
@@ -18070,7 +18245,7 @@ test "value substitution bounds the expansion of shared sub-values" {
     var cloner = Cloner.initForRewrite(&pass);
     defer cloner.deinit();
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = collections.SingleThreadArena.init(allocator);
     defer arena.deinit();
 
     const u8_ty = try program.types.add(.{ .primitive = .u8 });

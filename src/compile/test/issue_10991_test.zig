@@ -30,14 +30,14 @@ const ProcScan = struct {
         var result = ProcScan{};
         var stack = std.ArrayList(lir.LIR.CFStmtId).empty;
         defer stack.deinit(allocator);
-        const body = store.getProcSpec(proc_id).body orelse return result;
+        const body = store.getProcSpecImmediate(proc_id).body orelse return result;
         try stack.append(allocator, body);
 
         while (stack.pop()) |stmt_id| {
             const index = @backingInt(stmt_id);
             if (seen_stmts[index]) continue;
             seen_stmts[index] = true;
-            switch (store.getCFStmt(stmt_id)) {
+            switch (store.getCFStmtImmediate(stmt_id).*) {
                 .assign_low_level => |assign| {
                     if (assign.op == .list_get_unsafe) result.reads_list_elements = true;
                     try stack.append(allocator, assign.next);

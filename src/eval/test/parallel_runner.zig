@@ -2524,7 +2524,7 @@ fn writeStatsJson(
     results: []const TestResult,
     spans: []const ?harness.PoolSpan,
 ) RunnerError!void {
-    var stats_arena = std.heap.ArenaAllocator.init(gpa);
+    var stats_arena = base.SingleThreadArena.init(gpa);
     defer stats_arena.deinit();
     const stats_allocator = stats_arena.allocator();
 

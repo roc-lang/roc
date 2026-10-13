@@ -49,22 +49,22 @@ pub const Value = struct {
         @memcpy(self.ptr[0..bytes.len], bytes);
     }
 
-    /// Copy `size` bytes from `src` into this value.
+    /// Copy `size` bytes from `src` into this value. The ranges may overlap.
     pub fn copyFrom(self: Value, src: Value, size: usize) void {
-        if (size > 0) {
-            const dest = self.ptr[0..size];
-            const source = src.ptr[0..size];
-            if (@intFromPtr(dest.ptr) <= @intFromPtr(source.ptr)) {
-                var i: usize = 0;
-                while (i < size) : (i += 1) {
-                    dest[i] = source[i];
-                }
-            } else {
-                var i: usize = size;
-                while (i > 0) {
-                    i -= 1;
-                    dest[i] = source[i];
-                }
+        if (size == 0) return;
+        const dest = self.ptr[0..size];
+        const source = src.ptr[0..size];
+        const dest_start = @intFromPtr(dest.ptr);
+        const source_start = @intFromPtr(source.ptr);
+        if (dest_start + size <= source_start or source_start + size <= dest_start) {
+            @memcpy(dest, source);
+        } else if (dest_start <= source_start) {
+            std.mem.copyForwards(u8, dest, source);
+        } else {
+            var i: usize = size;
+            while (i > 0) {
+                i -= 1;
+                dest[i] = source[i];
             }
         }
     }

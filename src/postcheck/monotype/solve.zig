@@ -242,6 +242,14 @@ pub const ClosedTypeBuild = struct {
     node: NodeId,
 };
 
+/// One label's pairing state for the row relation in flight; see
+/// `InstGraph.row_label_slots`.
+const RowLabelSlot = struct {
+    right_generation: u32,
+    right_index: u32,
+    left_generation: u32,
+};
+
 /// Content of an instantiation-graph node. Rows carry explicit extension
 /// links; `redirect` is the union-find edge.
 pub const InstNode = union(enum) {
@@ -273,7 +281,8 @@ pub const InstNode = union(enum) {
     /// Stored out of line: a named payload is an order of magnitude larger
     /// than every other variant, and most nodes are not named.
     named: *const InstNamed,
-    erased: names.TypeDigest,
+    /// Stored out of line for the same reason as `named`.
+    erased: *const names.TypeDigest,
     zst,
 };
 
@@ -356,6 +365,9 @@ pub const InterfaceConstraints = struct {
         spare_capture_items: std.ArrayList(std.ArrayList(Capture.CaptureItem)) = .empty,
         neutral_scan: Capture.NeutralScan.Eval.Scratch = .{},
         shareability_scan: Capture.Shareability.Eval.Scratch = .{},
+        /// A capture's hole positions by class, when it has enough holes to
+        /// index; emptied after each capture with its pages kept.
+        hole_positions: collections.DenseMapUnmanaged(NodeId, u32) = .empty,
 
         pub fn init(allocator: Allocator) CaptureScratch {
             return .{
@@ -383,6 +395,7 @@ pub const InterfaceConstraints = struct {
             self.settled_sealed_types.deinit();
             self.retained_sealed.deinit();
             self.retained_sealed_types.deinit();
+            self.hole_positions.deinit(allocator);
             self.nodes.deinit(allocator);
             self.open_nodes.deinit(allocator);
             self.kinds.deinit(allocator);
@@ -417,12 +430,12 @@ pub const InterfaceConstraints = struct {
         for (holes, hole_roots) |hole, *root| root.* = graph.find(hole);
         // Every captured class asks whether it is a hole, so a request with
         // many holes indexes them; the first position of a class answers.
-        var hole_positions: std.AutoHashMapUnmanaged(NodeId, u32) = .empty;
-        defer hole_positions.deinit(allocator);
+        const hole_positions = &graph.capture_scratch.hole_positions;
+        defer hole_positions.clearRetainingCapacity();
         if (hole_roots.len > Capture.hole_scan_limit) {
-            try hole_positions.ensureTotalCapacity(allocator, @intCast(hole_roots.len));
+            try hole_positions.ensureTotalCapacity(graph.allocator, @intCast(hole_roots.len));
             for (hole_roots, 0..) |root, index| {
-                const entry = hole_positions.getOrPutAssumeCapacity(root);
+                const entry = try hole_positions.getOrPut(graph.allocator, root);
                 if (!entry.found_existing) entry.value_ptr.* = @intCast(index);
             }
         }
@@ -442,7 +455,7 @@ pub const InterfaceConstraints = struct {
             .allocator = allocator,
             .scratch = scratch,
             .holes = hole_roots,
-            .hole_positions = &hole_positions,
+            .hole_positions = hole_positions,
             .hole_classes = hole_classes,
             .node_ids = scratch.node_ids,
             .kind_ids = scratch.kind_ids,
@@ -587,6 +600,25 @@ pub const InterfaceConstraints = struct {
         return self.identityInto(graph, graph.arena());
     }
 
+    /// Whether these constraints' identity equals `other`, compared in the
+    /// graph's identity scratch without copying it out.
+    pub fn identityEql(self: InterfaceConstraints, graph: *InstGraph, other: Identity) Allocator.Error!bool {
+        var writer = IdentityWriter{
+            .graph = graph,
+            .bytes = graph.identity_bytes_scratch,
+            .leaves = graph.identity_leaves_scratch,
+        };
+        defer {
+            writer.bytes.clearRetainingCapacity();
+            writer.leaves.clearRetainingCapacity();
+            graph.identity_bytes_scratch = writer.bytes;
+            graph.identity_leaves_scratch = writer.leaves;
+        }
+        try writer.write(InterfaceConstraints, self);
+        const mine: Identity = .{ .bytes = writer.bytes.items, .leaves = writer.leaves.items };
+        return mine.eql(other, graph.types, graph.name_store);
+    }
+
     pub fn identityInto(self: InterfaceConstraints, graph: *InstGraph, allocator: Allocator) Allocator.Error!Identity {
         var writer = IdentityWriter{
             .graph = graph,
@@ -609,7 +641,7 @@ pub const InterfaceConstraints = struct {
     /// were joined. Two expansions of one request constrain its interface
     /// identically exactly when these bytes agree.
     pub fn equivalenceIdentityInto(self: InterfaceConstraints, graph: *InstGraph, allocator: Allocator) Allocator.Error![]const u8 {
-        var arena = std.heap.ArenaAllocator.init(graph.allocator);
+        var arena = base.SingleThreadArena.init(graph.allocator);
         defer arena.deinit();
         var renumberer = EquivalenceRenumberer{ .source = self, .types = graph.types, .name_store = graph.name_store, .allocator = arena.allocator() };
         const constraints = try renumberer.run();
@@ -635,10 +667,10 @@ pub const InterfaceConstraints = struct {
         types: *Type.Store,
         name_store: *const names.NameStore,
         allocator: Allocator,
-        settled: std.AutoHashMapUnmanaged(NodeId, Type.TypeId) = .empty,
-        node_ids: std.AutoHashMapUnmanaged(NodeId, NodeId) = .empty,
+        settled: collections.DenseMapUnmanaged(NodeId, Type.TypeId) = .empty,
+        node_ids: collections.DenseMapUnmanaged(NodeId, NodeId) = .empty,
         node_order: std.ArrayList(NodeId) = .empty,
-        kind_ids: std.AutoHashMapUnmanaged(FieldKindId, FieldKindId) = .empty,
+        kind_ids: collections.DenseMapUnmanaged(FieldKindId, FieldKindId) = .empty,
         kind_order: std.ArrayList(FieldKindId) = .empty,
         group_ids: std.AutoHashMapUnmanaged(u32, u32) = .empty,
         group_sizes: std.AutoHashMapUnmanaged(u32, u32) = .empty,
@@ -754,7 +786,7 @@ pub const InterfaceConstraints = struct {
         /// writing its cache.
         fn containsIterator(self: *EquivalenceRenumberer, root: Type.TypeId) Allocator.Error!bool {
             var pending: std.ArrayList(Type.TypeId) = .empty;
-            var visited: std.AutoHashMapUnmanaged(Type.TypeId, void) = .empty;
+            var visited: collections.DenseMapUnmanaged(Type.TypeId, void) = .empty;
             try pending.append(self.allocator, root);
             while (pending.pop()) |ty| {
                 if ((try visited.getOrPut(self.allocator, ty)).found_existing) continue;
@@ -978,7 +1010,7 @@ pub const InterfaceConstraints = struct {
         holes: []const NodeId = &.{},
         /// `holes` indexed by class when there are more than
         /// `hole_scan_limit` of them.
-        hole_positions: ?*const std.AutoHashMapUnmanaged(NodeId, u32) = null,
+        hole_positions: ?*const collections.DenseMapUnmanaged(NodeId, u32) = null,
         hole_classes: []?NodeId = &.{},
 
         const hole_scan_limit = 16;
@@ -1088,9 +1120,10 @@ pub const InterfaceConstraints = struct {
         /// captures its content when it is a new open node.
         fn beginNode(self: *Capture, raw: NodeId) Allocator.Error!?OpenStart {
             const root = self.graph.find(raw);
-            if (self.node_ids.contains(root)) return null;
             const id: NodeId = @fromBackingInt(@intCast(self.nodes.items.len));
-            try self.node_ids.put(root, id);
+            const entry = try self.node_ids.getOrPut(root);
+            if (entry.found_existing) return null;
+            entry.value_ptr.* = id;
             try self.nodes.append(self.graph.allocator, undefined);
             if (self.holeIndex(root)) |hole| {
                 if ((try self.graph.content(root)) != .unresolved and try self.holeIsRepresentationNeutral(raw)) {
@@ -2025,7 +2058,7 @@ pub const InstGraph = struct {
     types: *Type.Store,
     name_store: *const names.NameStore,
     diagnostics: ?*GraphDiagnostics,
-    arena_impl: std.heap.ArenaAllocator,
+    arena_impl: base.SingleThreadArena,
     nodes: std.ArrayList(InstNode),
     field_kinds: std.ArrayList(FieldKindNode),
     versions: std.ArrayList(u32),
@@ -2132,13 +2165,13 @@ pub const InstGraph = struct {
     /// Transitive unification scratch, one entry per call in flight; a union
     /// can unify again while an outer call is still draining.
     unify_scratch_pool: std.ArrayList(UnifyScratch) = .empty,
-    /// Record-row pairing by label id. An entry is current only when its
-    /// generation equals `row_label_generation`, so a row relation claims
-    /// fresh slots without clearing them. Row pairing completes before any
-    /// queued relation runs, so one set serves every relation.
-    row_label_right_generation: std.ArrayList(u32) = .empty,
-    row_label_right_index: std.ArrayList(u32) = .empty,
-    row_label_left_generation: std.ArrayList(u32) = .empty,
+    /// Row pairing by label id. A slot is current only when its generation
+    /// equals `row_label_generation`, so a row relation claims fresh slots
+    /// without clearing them. Row pairing completes before any queued
+    /// relation runs, so one column serves every relation. The column grows
+    /// by explicit reallocation, never by resizing in place, so the number of
+    /// allocations a relation makes does not depend on the heap's layout.
+    row_label_slots: []RowLabelSlot = &.{},
     row_label_generation: u32 = 0,
     /// Buffers borrowed by every `InterfaceConstraints.identityInto`.
     identity_bytes_scratch: std.ArrayList(u8) = .empty,
@@ -2154,7 +2187,7 @@ pub const InstGraph = struct {
     uninhabited_scan_scratch: GraphUninhabitedScan.Eval.Scratch = .{},
     /// Emptied arenas that keep their buffers, for work that needs a
     /// short-lived arena many times over.
-    spare_arenas: std.ArrayList(std.heap.ArenaAllocator) = .empty,
+    spare_arenas: std.ArrayList(base.SingleThreadArena) = .empty,
     /// Roots whose every reachable node was found resolved, stamped with the
     /// `resolved_epoch` current at that walk. Resolvedness survives every
     /// union (a concrete class always wins over a variable), every content
@@ -2178,7 +2211,7 @@ pub const InstGraph = struct {
     /// Proven-uninhabited answers for finished types, one map per
     /// `UninhabitedPolicy`. Store types are immutable, so entries outlive
     /// every reset.
-    proven_uninhabited_types: [3]std.AutoHashMapUnmanaged(Type.TypeId, bool) = .{ .empty, .empty, .empty },
+    proven_uninhabited_types: [3]collections.DenseMapUnmanaged(Type.TypeId, bool) = .{ .empty, .empty, .empty },
     type_uninhabited_scratch: TypeUninhabitedScan.Eval.Scratch = .{},
     /// At least how many times a node received a generated-private backing.
     /// While zero, no class can reach one and the containment query answers
@@ -2206,7 +2239,7 @@ pub const InstGraph = struct {
             .types = types,
             .name_store = name_store,
             .diagnostics = null,
-            .arena_impl = std.heap.ArenaAllocator.init(allocator),
+            .arena_impl = base.SingleThreadArena.init(allocator),
             .nodes = .empty,
             .field_kinds = .empty,
             .versions = .empty,
@@ -2389,9 +2422,7 @@ pub const InstGraph = struct {
         self.never_uninhabited.deinit();
         for (self.unify_scratch_pool.items) |*scratch| scratch.deinit(self.allocator);
         self.unify_scratch_pool.deinit(self.allocator);
-        self.row_label_right_generation.deinit(self.allocator);
-        self.row_label_right_index.deinit(self.allocator);
-        self.row_label_left_generation.deinit(self.allocator);
+        self.allocator.free(self.row_label_slots);
         self.capture_scratch.deinit(allocator);
         self.identity_bytes_scratch.deinit(allocator);
         self.identity_leaves_scratch.deinit(allocator);
@@ -3502,14 +3533,14 @@ pub const InstGraph = struct {
     }
 
     /// An empty arena, reusing a released arena's buffers when one is spare.
-    pub fn acquireArena(self: *InstGraph) std.heap.ArenaAllocator {
-        return self.spare_arenas.pop() orelse std.heap.ArenaAllocator.init(self.allocator);
+    pub fn acquireArena(self: *InstGraph) base.SingleThreadArena {
+        return self.spare_arenas.pop() orelse base.SingleThreadArena.init(self.allocator);
     }
 
     /// Empty an arena from `acquireArena` and keep its buffers for the next
     /// one. An arena that grew large is freed instead, as is one the spare
     /// list has no room for.
-    pub fn releaseArena(self: *InstGraph, used: std.heap.ArenaAllocator) void {
+    pub fn releaseArena(self: *InstGraph, used: base.SingleThreadArena) void {
         var released = used;
         if (released.queryCapacity() > spare_arena_capacity or !released.reset(.retain_capacity)) {
             released.deinit();
@@ -4211,34 +4242,38 @@ pub const InstGraph = struct {
         allow_field_kind_defaults: bool,
     ) Allocator.Error!bool {
         if (self.rootStampedResolved(root)) return true;
+        // The worklist is usually short, so it starts on this frame.
+        var pending_buffer: [1024]u8 align(@alignOf(usize)) = undefined;
+        var pending_state = std.heap.BufferFirstAllocator.init(&pending_buffer, self.allocator);
+        const pending_allocator = pending_state.allocator();
         var pending = std.ArrayList(NodeId).empty;
-        defer pending.deinit(self.allocator);
+        defer pending.deinit(pending_allocator);
         var seen = self.node_set_pool.acquire();
         defer self.node_set_pool.release(&seen);
-        try pending.append(self.allocator, root);
+        try pending.append(pending_allocator, root);
         while (pending.pop()) |raw_node| {
             const node = self.find(raw_node);
-            const entry = try seen.getOrPut(node);
-            if (entry.found_existing) continue;
             // A stamped class is resolved throughout, so nothing below it can
             // change the answer.
             if (self.rootStampedResolved(node)) continue;
+            const entry = try seen.getOrPut(node);
+            if (entry.found_existing) continue;
             switch (self.nodes.items[@backingInt(node)]) {
                 .redirect => unreachable,
                 // A finished Monotype is resolved throughout.
                 .leaf => {},
                 .unresolved => return false,
                 .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
-                .list, .box => |child| try pending.append(self.allocator, child),
-                .tuple => |items| try pending.appendSlice(self.allocator, items),
+                .list, .box => |child| try pending.append(pending_allocator, child),
+                .tuple => |items| try pending.appendSlice(pending_allocator, items),
                 .func => |function| {
-                    try pending.appendSlice(self.allocator, function.args);
-                    try pending.append(self.allocator, function.ret);
+                    try pending.appendSlice(pending_allocator, function.args);
+                    try pending.append(pending_allocator, function.ret);
                 },
                 .tag_union => |row| {
                     if (!try self.rowExtensionChainResolved(node, .tag_union)) return false;
-                    for (row.tags) |tag| try pending.appendSlice(self.allocator, tag.payloads);
-                    try pending.append(self.allocator, row.ext);
+                    for (row.tags) |tag| try pending.appendSlice(pending_allocator, tag.payloads);
+                    try pending.append(pending_allocator, row.ext);
                 },
                 .record => |row| {
                     if (!try self.rowExtensionChainResolved(node, .record)) return false;
@@ -4246,23 +4281,23 @@ pub const InstGraph = struct {
                         if (field.kind == .undetermined and self.resolvedFieldKind(field.kind) == null) {
                             if (!allow_field_kind_defaults) return false;
                             try pending.append(
-                                self.allocator,
+                                pending_allocator,
                                 field.value_ty orelse
                                     Common.invariant("undetermined field kind carried no source value cell"),
                             );
                             continue;
                         }
-                        try pending.append(self.allocator, field.ty);
-                        if (field.value_ty) |value_ty| try pending.append(self.allocator, value_ty);
+                        try pending.append(pending_allocator, field.ty);
+                        if (field.value_ty) |value_ty| try pending.append(pending_allocator, value_ty);
                     }
-                    try pending.append(self.allocator, row.ext);
+                    try pending.append(pending_allocator, row.ext);
                 },
                 .named => |named| {
-                    try pending.appendSlice(self.allocator, named.args);
-                    if (named.backing) |backing| try pending.append(self.allocator, backing.node);
+                    try pending.appendSlice(pending_allocator, named.args);
+                    if (named.backing) |backing| try pending.append(pending_allocator, backing.node);
                     for (named.declared_order) |declared| switch (declared) {
                         .named => {},
-                        .padding => |padding| try pending.append(self.allocator, padding),
+                        .padding => |padding| try pending.append(pending_allocator, padding),
                     };
                 },
             }
@@ -4363,15 +4398,17 @@ pub const InstGraph = struct {
         defer self.node_set_pool.release(&seen);
         var current = self.find(raw_root);
         while (true) {
-            const entry = try seen.getOrPut(current);
-            if (entry.found_existing) return false;
+            // A row is recorded as it is left, so reaching one again is a
+            // cyclic chain.
             switch (try self.rootContent(current)) {
                 .tag_union => |row| {
                     if (kind != .tag_union) return false;
+                    if ((try seen.getOrPut(current)).found_existing) return false;
                     current = self.find(row.ext);
                 },
                 .record => |row| {
                     if (kind != .record) return false;
+                    if ((try seen.getOrPut(current)).found_existing) return false;
                     current = self.find(row.ext);
                 },
                 .empty_tag_union => return kind == .tag_union,
@@ -4781,8 +4818,7 @@ pub const InstGraph = struct {
             .right = private_node,
             .row_width = raw_pair.row_width,
         };
-        if (related.contains(pair)) return;
-        try related.put(pair, {});
+        if ((try related.getOrPut(pair)).found_existing) return;
 
         const public_content = try self.rootContent(public_node);
         const private_content = try self.rootContent(private_node);
@@ -6012,12 +6048,12 @@ pub const InstGraph = struct {
                 if (public_row.fields.len != request_row.fields.len) {
                     Common.invariant("request container join received records with different field counts");
                 }
-                var request_names: std.AutoHashMapUnmanaged(names.RecordFieldNameId, void) = .empty;
-                defer request_names.deinit(self.allocator);
-                try request_names.ensureTotalCapacity(self.allocator, @intCast(request_row.fields.len));
-                for (request_row.fields) |request_field| request_names.putAssumeCapacity(request_field.name, {});
+                const generation = try self.claimRowLabelGeneration(public_row.fields, request_row.fields);
+                for (request_row.fields) |request_field| {
+                    self.row_label_slots[@backingInt(request_field.name)].right_generation = generation;
+                }
                 for (public_row.fields) |public_field| {
-                    if (!request_names.contains(public_field.name)) {
+                    if (self.row_label_slots[@backingInt(public_field.name)].right_generation != generation) {
                         Common.invariant("request container join received records with different fields");
                     }
                 }
@@ -6113,8 +6149,7 @@ pub const InstGraph = struct {
         const right = self.find(raw_right);
         if (left == right) return;
         const pair = NodePair{ .left = left, .right = right, .row_width = row_width };
-        if (related.contains(pair)) return;
-        try related.put(pair, {});
+        if ((try related.getOrPut(pair)).found_existing) return;
 
         var left_content = self.nodes.items[@backingInt(left)];
         var right_content = self.nodes.items[@backingInt(right)];
@@ -6874,6 +6909,16 @@ pub const InstGraph = struct {
         const root_content = try self.rootContent(root);
         if (root_content != .record) Common.invariant("instantiation flattened a non-record row");
         const row = root_content.record;
+        var ext = self.find(row.ext);
+        const ext_content = try self.rootContent(ext);
+        if (ext_content == .unresolved or ext_content == .empty_record) {
+            if (row.ext != ext) {
+                const flattened: InstNode = .{ .record = .{ .fields = row.fields, .ext = ext } };
+                _ = try self.replaceContentWithoutSnapshotInvalidation(root, flattened);
+            }
+            return .{ .fields = row.fields, .ext = ext };
+        }
+
         // The row lists below live only for this call and are usually short,
         // so they start in a buffer on this frame.
         var stack_first_buffer: [2048]u8 align(@alignOf(usize)) = undefined;
@@ -6886,16 +6931,6 @@ pub const InstGraph = struct {
         var seen = self.node_set_pool.acquire();
         defer self.node_set_pool.release(&seen);
         try seen.put(root, {});
-
-        var ext = self.find(row.ext);
-        const ext_content = try self.rootContent(ext);
-        if (ext_content == .unresolved or ext_content == .empty_record) {
-            if (row.ext != ext) {
-                const flattened: InstNode = .{ .record = .{ .fields = row.fields, .ext = ext } };
-                _ = try self.replaceContentWithoutSnapshotInvalidation(root, flattened);
-            }
-            return .{ .fields = row.fields, .ext = ext };
-        }
 
         while (true) {
             if (seen.contains(ext)) {
@@ -6951,20 +6986,26 @@ pub const InstGraph = struct {
 
     /// Start a record-row pairing whose label slots cover both rows.
     fn claimRowLabelGeneration(self: *InstGraph, left: []const InstField, right: []const InstField) Allocator.Error!u32 {
-        var needed: usize = self.row_label_right_generation.items.len;
+        var needed: usize = self.row_label_slots.len;
         for (left) |field| needed = @max(needed, @as(usize, @backingInt(field.name)) + 1);
         for (right) |field| needed = @max(needed, @as(usize, @backingInt(field.name)) + 1);
-        if (needed > self.row_label_right_generation.items.len) {
-            const old_len = self.row_label_right_generation.items.len;
-            try self.row_label_right_generation.resize(self.allocator, needed);
-            try self.row_label_right_index.resize(self.allocator, needed);
-            try self.row_label_left_generation.resize(self.allocator, needed);
-            @memset(self.row_label_right_generation.items[old_len..], 0);
-            @memset(self.row_label_left_generation.items[old_len..], 0);
+        return self.claimLabelGeneration(needed);
+    }
+
+    /// Claim a fresh label generation over `needed` label slots. Reading the
+    /// slots of a generation must finish before any relation that can pair
+    /// rows runs, since that relation claims the next generation.
+    fn claimLabelGeneration(self: *InstGraph, needed: usize) Allocator.Error!u32 {
+        if (needed > self.row_label_slots.len) {
+            const old = self.row_label_slots;
+            const grown = try self.allocator.alloc(RowLabelSlot, @max(needed, old.len * 2));
+            @memcpy(grown[0..old.len], old);
+            @memset(grown[old.len..], .{ .right_generation = 0, .right_index = 0, .left_generation = 0 });
+            self.allocator.free(old);
+            self.row_label_slots = grown;
         }
         if (self.row_label_generation == std.math.maxInt(u32)) {
-            @memset(self.row_label_right_generation.items, 0);
-            @memset(self.row_label_left_generation.items, 0);
+            @memset(self.row_label_slots, .{ .right_generation = 0, .right_index = 0, .left_generation = 0 });
             self.row_label_generation = 0;
         }
         self.row_label_generation += 1;
@@ -7206,19 +7247,19 @@ pub const InstGraph = struct {
         const generation = try self.claimRowLabelGeneration(flat_left.fields, flat_right.fields);
         for (flat_right.fields, 0..) |right_field, index| {
             const slot = @backingInt(right_field.name);
-            if (self.row_label_right_generation.items[slot] == generation) continue;
-            self.row_label_right_generation.items[slot] = generation;
-            self.row_label_right_index.items[slot] = @intCast(index);
+            if (self.row_label_slots[slot].right_generation == generation) continue;
+            self.row_label_slots[slot].right_generation = generation;
+            self.row_label_slots[slot].right_index = @intCast(index);
         }
         for (flat_left.fields) |left_field| {
-            self.row_label_left_generation.items[@backingInt(left_field.name)] = generation;
+            self.row_label_slots[@backingInt(left_field.name)].left_generation = generation;
         }
 
         for (flat_left.fields) |left_field| {
             var shared = false;
             const left_slot = @backingInt(left_field.name);
-            if (self.row_label_right_generation.items[left_slot] == generation) {
-                const right_field = flat_right.fields[self.row_label_right_index.items[left_slot]];
+            if (self.row_label_slots[left_slot].right_generation == generation) {
+                const right_field = flat_right.fields[self.row_label_slots[left_slot].right_index];
                 const merged_kind = self.unifyFieldKinds(
                     left_field.kind,
                     left_field.default,
@@ -7250,7 +7291,7 @@ pub const InstGraph = struct {
             }
         }
         for (flat_right.fields) |right_field| {
-            if (self.row_label_left_generation.items[@backingInt(right_field.name)] == generation) continue;
+            if (self.row_label_slots[@backingInt(right_field.name)].left_generation == generation) continue;
             try merged.append(row_allocator, right_field);
             try only_right.append(row_allocator, right_field);
         }
@@ -7503,7 +7544,11 @@ pub const InstGraph = struct {
                     .declared_order = declared_order,
                 });
             },
-            .erased => |digest| .{ .erased = digest },
+            .erased => |digest| blk: {
+                const stored = try self.arena().create(names.TypeDigest);
+                stored.* = digest;
+                break :blk .{ .erased = stored };
+            },
             .zst => .zst,
         };
     }
@@ -7841,7 +7886,7 @@ const TypeUninhabitedScan = struct {
     policy: UninhabitedPolicy,
     /// Each type being expanded, with the number of cycle hits seen before
     /// it was entered.
-    visiting: std.AutoHashMapUnmanaged(Type.TypeId, usize) = .empty,
+    visiting: collections.DenseMapUnmanaged(Type.TypeId, usize) = .empty,
     /// Re-entries of a type still being expanded. A type whose expansion saw
     /// none answers independently of the types enclosing it, so its answer
     /// is cached for every later scan.
@@ -7849,7 +7894,7 @@ const TypeUninhabitedScan = struct {
 
     const Eval = AnyAll.Evaluation(Type.TypeId, TypeUninhabitedScan);
 
-    fn answers(self: *TypeUninhabitedScan) *std.AutoHashMapUnmanaged(Type.TypeId, bool) {
+    fn answers(self: *TypeUninhabitedScan) *collections.DenseMapUnmanaged(Type.TypeId, bool) {
         return &self.graph.proven_uninhabited_types[@backingInt(self.policy)];
     }
 
@@ -8548,7 +8593,7 @@ pub const GraphTypeFinals = struct {
                     .declared_order = try self.finishDeclaredFields(named.declared_order, reader),
                 } };
             },
-            .erased => |digest| .{ .erased = digest },
+            .erased => |digest| .{ .erased = digest.* },
             .zst => .zst,
         };
     }
@@ -12996,7 +13041,11 @@ test "issue 11362: iterator-free finalization performs no graph walks" {
 
 test "issue 11362: iterator index tracks argument unions collisions and provenance replacement" {
     try testGeneratedIteratorIndex(std.testing.allocator);
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, testGeneratedIteratorIndex, .{});
+    // The graph's per-node columns grow by in-place remaps whose success
+    // depends on the heap's layout, so the failure check runs over an
+    // allocator that refuses in-place growth.
+    var deterministic = base.DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), testGeneratedIteratorIndex, .{});
 }
 
 fn testGeneratedIteratorIndex(gpa: Allocator) (Allocator.Error || error{ TestUnexpectedResult, TestExpectedEqual })!void {
@@ -13837,7 +13886,7 @@ test "finished witness capture work is independent of permanent class history" {
                 var diagnostics: GraphDiagnostics = .{};
                 graph.setDiagnostics(&diagnostics);
                 for (0..capture_count) |_| {
-                    var scratch = std.heap.ArenaAllocator.init(allocator);
+                    var scratch = base.SingleThreadArena.init(allocator);
                     defer scratch.deinit();
                     const captured = try InterfaceConstraints.capture(graph, scratch.allocator(), &.{root});
                     try std.testing.expectEqual(@as(usize, 1), captured.open_nodes.len);

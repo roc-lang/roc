@@ -21,10 +21,10 @@ const harness = @import("lower_to_lir_harness.zig");
 // store. A rejected value must still fail when optimizations erase its consumer.
 fn hasTerminalCheckedError(store: *const lir.LirStore) bool {
     for (0..store.procSpecCount()) |i| {
-        var current = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(i))))).body orelse continue;
+        var current = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(i))))).body orelse continue;
         var remaining = store.cfStmtCount() + 1;
         while (remaining > 0) : (remaining -= 1) {
-            switch (store.getCFStmt(current)) {
+            switch (store.getCFStmtImmediate(current).*) {
                 .runtime_error => return true,
                 .crash => |crash| {
                     if (crash.msg == .literal and std.mem.eql(u8, store.getString(crash.msg.literal), "runtime error")) return true;

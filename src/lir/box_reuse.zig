@@ -32,6 +32,7 @@
 //! validate the payload/box layouts before rewriting.
 
 const std = @import("std");
+const collections = @import("collections");
 const Allocator = std.mem.Allocator;
 const core = @import("lir_core");
 const layout_mod = @import("layout");
@@ -187,7 +188,7 @@ const Transform = struct {
 
         const box_layout = self.store.getLocal(boxed).layout_idx;
         if (self.store.getLocal(result_box).layout_idx != box_layout) return false;
-        if (self.store.getProcSpec(self.proc_id).ret_layout != box_layout) return false;
+        if (self.store.getProcSpecImmediate(self.proc_id).ret_layout != box_layout) return false;
 
         const box_layout_value = self.layouts.getLayout(box_layout);
         if (box_layout_value.tag != .box) return false;
@@ -282,7 +283,7 @@ const Transform = struct {
 
         const box_layout = self.store.getLocal(boxed).layout_idx;
         if (self.store.getLocal(result_box).layout_idx != box_layout) return false;
-        if (self.store.getProcSpec(self.proc_id).ret_layout != box_layout) return false;
+        if (self.store.getProcSpecImmediate(self.proc_id).ret_layout != box_layout) return false;
 
         const box_layout_value = self.layouts.getLayout(box_layout);
         if (box_layout_value.tag != .box) return false;
@@ -377,7 +378,7 @@ const Transform = struct {
 
         const box_layout = self.store.getLocal(boxed).layout_idx;
         if (self.store.getLocal(result_box).layout_idx != box_layout) return false;
-        if (self.store.getProcSpec(self.proc_id).ret_layout != box_layout) return false;
+        if (self.store.getProcSpecImmediate(self.proc_id).ret_layout != box_layout) return false;
 
         const box_layout_value = self.layouts.getLayout(box_layout);
         if (box_layout_value.tag != .box) return false;
@@ -473,7 +474,7 @@ const Transform = struct {
 
         const erased_layout = self.store.getLocal(old_stmt.target).layout_idx;
         if (self.store.getLocal(new_stmt.target).layout_idx != erased_layout) return false;
-        if (self.store.getProcSpec(self.proc_id).ret_layout != erased_layout) return false;
+        if (self.store.getProcSpecImmediate(self.proc_id).ret_layout != erased_layout) return false;
         if (self.layouts.getLayout(erased_layout).tag != .erased_callable) return false;
 
         if (!self.samePackedErasedPayloadShape(old_stmt.capture_layout, new_stmt.capture_layout)) return false;
@@ -564,7 +565,7 @@ const Transform = struct {
 
         var work = std.ArrayList(CFStmtId).empty;
         defer work.deinit(self.scratch_allocator);
-        var visited = std.AutoHashMapUnmanaged(CFStmtId, void).empty;
+        var visited = collections.DenseMapUnmanaged(CFStmtId, void).empty;
         defer visited.deinit(self.scratch_allocator);
 
         var count: usize = 0;
@@ -785,39 +786,39 @@ fn testDirectBoxReuse(per_proc: bool) (Allocator.Error || error{ TestExpectedEqu
     if (per_proc) {
         try prepareLayouts(&store, &layouts);
         const layout_count = layouts.layoutCount();
-        var scratch = std.heap.ArenaAllocator.init(allocator);
+        var scratch = collections.SingleThreadArena.init(allocator);
         defer scratch.deinit();
         try runProc(&store, &layouts, caller, scratch.allocator());
         try std.testing.expectEqual(layout_count, layouts.layoutCount());
-        try std.testing.expect(store.getProcSpec(callee).body == null);
+        try std.testing.expect(store.getProcSpecImmediate(callee).body == null);
     } else {
         try run(&store, &layouts);
     }
 
-    const prepare = store.getCFStmt(unbox).assign_low_level;
+    const prepare = store.getCFStmtImmediate(unbox).assign_low_level;
     try std.testing.expectEqual(LowLevelOp.box_prepare_update, prepare.op);
     try std.testing.expectEqual(result_box, prepare.target);
     try std.testing.expectEqual(boxed_arg, GuardedList.at(store.getLocalSpan(prepare.args), 0));
 
-    const cast = store.getCFStmt(prepare.next).assign_low_level;
+    const cast = store.getCFStmtImmediate(prepare.next).assign_low_level;
     try std.testing.expectEqual(LowLevelOp.ptr_cast, cast.op);
     const payload_ptr = cast.target;
     try std.testing.expectEqual(result_box, GuardedList.at(store.getLocalSpan(cast.args), 0));
 
-    const load = store.getCFStmt(cast.next).assign_low_level;
+    const load = store.getCFStmtImmediate(cast.next).assign_low_level;
     try std.testing.expectEqual(LowLevelOp.ptr_load, load.op);
     try std.testing.expectEqual(old_payload, load.target);
     try std.testing.expectEqual(payload_ptr, GuardedList.at(store.getLocalSpan(load.args), 0));
     try std.testing.expectEqual(call, load.next);
 
-    const store_payload = store.getCFStmt(rebox).assign_low_level;
+    const store_payload = store.getCFStmtImmediate(rebox).assign_low_level;
     try std.testing.expectEqual(LowLevelOp.ptr_store, store_payload.op);
     const store_args = store.getLocalSpan(store_payload.args);
     try std.testing.expectEqual(payload_ptr, GuardedList.at(store_args, 0));
     try std.testing.expectEqual(new_payload, GuardedList.at(store_args, 1));
     try std.testing.expectEqual(ret, store_payload.next);
 
-    const frame_locals = store.getLocalSpan(store.getProcSpec(caller).frame_locals);
+    const frame_locals = store.getLocalSpan(store.getProcSpecImmediate(caller).frame_locals);
     try std.testing.expect(frame_locals.len >= 6);
 }
 
@@ -856,16 +857,16 @@ test "box reuse rewrites an inlined straight-line payload producer" {
 
     try run(&store, &layouts);
 
-    const prepare = store.getCFStmt(unbox).assign_low_level;
+    const prepare = store.getCFStmtImmediate(unbox).assign_low_level;
     try std.testing.expectEqual(LowLevelOp.box_prepare_update, prepare.op);
-    const cast = store.getCFStmt(prepare.next).assign_low_level;
+    const cast = store.getCFStmtImmediate(prepare.next).assign_low_level;
     try std.testing.expectEqual(LowLevelOp.ptr_cast, cast.op);
     const payload_ptr = cast.target;
-    const load = store.getCFStmt(cast.next).assign_low_level;
+    const load = store.getCFStmtImmediate(cast.next).assign_low_level;
     try std.testing.expectEqual(LowLevelOp.ptr_load, load.op);
     try std.testing.expectEqual(literal, load.next);
 
-    const store_payload = store.getCFStmt(rebox).assign_low_level;
+    const store_payload = store.getCFStmtImmediate(rebox).assign_low_level;
     try std.testing.expectEqual(LowLevelOp.ptr_store, store_payload.op);
     const store_args = store.getLocalSpan(store_payload.args);
     try std.testing.expectEqual(payload_ptr, GuardedList.at(store_args, 0));
@@ -913,8 +914,8 @@ fn testRejectedBoxReuse(per_proc: bool) (Allocator.Error || error{ TestExpectedE
         try run(&store, &layouts);
     }
 
-    try std.testing.expectEqual(LowLevelOp.box_unbox, store.getCFStmt(unbox).assign_low_level.op);
-    try std.testing.expectEqual(LowLevelOp.box_box, store.getCFStmt(rebox).assign_low_level.op);
+    try std.testing.expectEqual(LowLevelOp.box_unbox, store.getCFStmtImmediate(unbox).assign_low_level.op);
+    try std.testing.expectEqual(LowLevelOp.box_box, store.getCFStmtImmediate(rebox).assign_low_level.op);
 }
 
 test "box reuse rewrites joined update wrappers" {
@@ -998,30 +999,30 @@ test "box reuse rewrites joined update wrappers" {
 
     try run(&store, &layouts);
 
-    const prepare = store.getCFStmt(unbox).assign_low_level;
+    const prepare = store.getCFStmtImmediate(unbox).assign_low_level;
     try std.testing.expectEqual(LowLevelOp.box_prepare_update, prepare.op);
     try std.testing.expectEqual(result_box, prepare.target);
     try std.testing.expectEqual(boxed_arg, GuardedList.at(store.getLocalSpan(prepare.args), 0));
 
-    const cast = store.getCFStmt(prepare.next).assign_low_level;
+    const cast = store.getCFStmtImmediate(prepare.next).assign_low_level;
     try std.testing.expectEqual(LowLevelOp.ptr_cast, cast.op);
     const payload_ptr = cast.target;
     try std.testing.expectEqual(result_box, GuardedList.at(store.getLocalSpan(cast.args), 0));
 
-    const load = store.getCFStmt(cast.next).assign_low_level;
+    const load = store.getCFStmtImmediate(cast.next).assign_low_level;
     try std.testing.expectEqual(LowLevelOp.ptr_load, load.op);
     try std.testing.expectEqual(old_payload, load.target);
     try std.testing.expectEqual(payload_ptr, GuardedList.at(store.getLocalSpan(load.args), 0));
     try std.testing.expectEqual(old_payload_ref, load.next);
 
-    const store_payload = store.getCFStmt(rebox).assign_low_level;
+    const store_payload = store.getCFStmtImmediate(rebox).assign_low_level;
     try std.testing.expectEqual(LowLevelOp.ptr_store, store_payload.op);
     const store_args = store.getLocalSpan(store_payload.args);
     try std.testing.expectEqual(payload_ptr, GuardedList.at(store_args, 0));
     try std.testing.expectEqual(body_payload_alias, GuardedList.at(store_args, 1));
     try std.testing.expectEqual(ret, store_payload.next);
 
-    const frame_locals = store.getLocalSpan(store.getProcSpec(caller).frame_locals);
+    const frame_locals = store.getLocalSpan(store.getProcSpecImmediate(caller).frame_locals);
     try std.testing.expect(frame_locals.len >= 13);
 }
 
@@ -1100,37 +1101,37 @@ test "box reuse rewrites platform-style join remainder update wrappers" {
 
     try run(&store, &layouts);
 
-    const prepare = store.getCFStmt(unbox).assign_low_level;
+    const prepare = store.getCFStmtImmediate(unbox).assign_low_level;
     try std.testing.expectEqual(LowLevelOp.box_prepare_update, prepare.op);
     try std.testing.expectEqual(result_box, prepare.target);
     try std.testing.expectEqual(boxed_alias_b, GuardedList.at(store.getLocalSpan(prepare.args), 0));
 
-    const cast = store.getCFStmt(prepare.next).assign_low_level;
+    const cast = store.getCFStmtImmediate(prepare.next).assign_low_level;
     try std.testing.expectEqual(LowLevelOp.ptr_cast, cast.op);
     const payload_ptr = cast.target;
     try std.testing.expectEqual(result_box, GuardedList.at(store.getLocalSpan(cast.args), 0));
 
-    const load = store.getCFStmt(cast.next).assign_low_level;
+    const load = store.getCFStmtImmediate(cast.next).assign_low_level;
     try std.testing.expectEqual(LowLevelOp.ptr_load, load.op);
     try std.testing.expectEqual(old_payload, load.target);
     try std.testing.expectEqual(payload_ptr, GuardedList.at(store.getLocalSpan(load.args), 0));
     try std.testing.expectEqual(call, load.next);
 
-    const rewritten_join = store.getCFStmt(join).join;
+    const rewritten_join = store.getCFStmtImmediate(join).join;
     const rewritten_params = store.getLocalSpan(rewritten_join.params);
     try std.testing.expectEqual(@as(usize, 3), rewritten_params.len);
     try std.testing.expectEqual(join_payload, GuardedList.at(rewritten_params, 0));
     try std.testing.expectEqual(result_box, GuardedList.at(rewritten_params, 1));
     try std.testing.expectEqual(payload_ptr, GuardedList.at(rewritten_params, 2));
 
-    const store_payload = store.getCFStmt(rebox).assign_low_level;
+    const store_payload = store.getCFStmtImmediate(rebox).assign_low_level;
     try std.testing.expectEqual(LowLevelOp.ptr_store, store_payload.op);
     const store_args = store.getLocalSpan(store_payload.args);
     try std.testing.expectEqual(payload_ptr, GuardedList.at(store_args, 0));
     try std.testing.expectEqual(body_payload_alias, GuardedList.at(store_args, 1));
     try std.testing.expectEqual(ret, store_payload.next);
 
-    const frame_locals = store.getLocalSpan(store.getProcSpec(caller).frame_locals);
+    const frame_locals = store.getLocalSpan(store.getProcSpecImmediate(caller).frame_locals);
     try std.testing.expect(frame_locals.len >= 11);
 }
 
@@ -1191,11 +1192,11 @@ test "erased callable reuse rewrites adjacent same-shape repack" {
 
     try run(&store, &layouts);
 
-    const rewritten = store.getCFStmt(new_pack).assign_packed_erased_fn;
+    const rewritten = store.getCFStmtImmediate(new_pack).assign_packed_erased_fn;
     try std.testing.expectEqual(old_callable, rewritten.reuse.?);
     try std.testing.expect(!rewritten.reuse_unique);
 
-    const frame_locals = store.getLocalSpan(store.getProcSpec(caller).frame_locals);
+    const frame_locals = store.getLocalSpan(store.getProcSpecImmediate(caller).frame_locals);
     try std.testing.expectEqual(@as(usize, 4), frame_locals.len);
 }
 
@@ -1258,7 +1259,7 @@ test "erased callable reuse forwards through aliases between the packs" {
 
     try run(&store, &layouts);
 
-    const rewritten = store.getCFStmt(new_pack).assign_packed_erased_fn;
+    const rewritten = store.getCFStmtImmediate(new_pack).assign_packed_erased_fn;
     try std.testing.expectEqual(old_callable, rewritten.reuse.?);
     try std.testing.expect(!rewritten.reuse_unique);
 }
@@ -1320,7 +1321,7 @@ test "erased callable reuse declines when an alias of the old pack is read elsew
 
     try run(&store, &layouts);
 
-    const unchanged = store.getCFStmt(new_pack).assign_packed_erased_fn;
+    const unchanged = store.getCFStmtImmediate(new_pack).assign_packed_erased_fn;
     try std.testing.expectEqual(@as(?LocalId, null), unchanged.reuse);
 }
 
@@ -1378,7 +1379,7 @@ test "erased callable reuse forwards through the aliased return path" {
 
     try run(&store, &layouts);
 
-    const rewritten = store.getCFStmt(new_pack).assign_packed_erased_fn;
+    const rewritten = store.getCFStmtImmediate(new_pack).assign_packed_erased_fn;
     try std.testing.expectEqual(old_callable, rewritten.reuse.?);
     try std.testing.expect(!rewritten.reuse_unique);
 }

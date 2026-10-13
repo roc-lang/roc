@@ -309,7 +309,7 @@ const StaticInitializerMachine = struct {
     /// The first static value an initializer reads whose own initializer has
     /// not run yet.
     fn unevaluatedStaticRead(self: *StaticInitializerMachine, proc_id: lir.LIR.LirProcSpecId) MaterializationError!?lir.LIR.StaticDataId {
-        var current = self.store().getProcSpec(proc_id).body orelse staticDataInvariant("static initializer procedure had no body");
+        var current = self.store().getProcSpecImmediate(proc_id).body orelse staticDataInvariant("static initializer procedure had no body");
         while (true) {
             current = switch (self.store().getCFStmt(current)) {
                 .assign_literal => |assign| blk: {
@@ -1632,7 +1632,7 @@ const StaticDataBuilder = struct {
             },
             .procedure => |proc_id| {
                 const cached_name = self.procedure_names.get(proc_id);
-                const name = cached_name orelse try procSymbolName(self.allocator, self.lowered.lir_result.store.getProcSpec(proc_id).identity);
+                const name = cached_name orelse try procSymbolName(self.allocator, self.lowered.lir_result.store.getProcSpecImmediate(proc_id).identity);
                 errdefer if (cached_name == null) self.allocator.free(name);
                 if (cached_name == null) try self.procedure_names.put(proc_id, name);
                 dest.* = .{

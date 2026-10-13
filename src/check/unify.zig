@@ -3532,14 +3532,17 @@ const Unifier = struct {
             .start = @fromBackingInt(@intCast(b_indices_start)),
             .count = @intCast(b_constraints.len),
         });
-        std.mem.sort(u32, a_indices, ConstraintOrder{
-            .unifier = self,
-            .constraints = a_constraints,
-        }, ConstraintOrder.lessThan);
-        std.mem.sort(u32, b_indices, ConstraintOrder{
-            .unifier = self,
-            .constraints = b_constraints,
-        }, ConstraintOrder.lessThan);
+        // Constraint lists are usually already in evidence order, so an
+        // ordered pass costs one comparison per constraint where a sort
+        // would compare each constraint's name text several times.
+        const a_order = ConstraintOrder{ .unifier = self, .constraints = a_constraints };
+        if (!std.sort.isSorted(u32, a_indices, a_order, ConstraintOrder.lessThan)) {
+            std.mem.sort(u32, a_indices, a_order, ConstraintOrder.lessThan);
+        }
+        const b_order = ConstraintOrder{ .unifier = self, .constraints = b_constraints };
+        if (!std.sort.isSorted(u32, b_indices, b_order, ConstraintOrder.lessThan)) {
+            std.mem.sort(u32, b_indices, b_order, ConstraintOrder.lessThan);
+        }
 
         var a_group_start: usize = 0;
         var b_group_start: usize = 0;
@@ -4421,7 +4424,9 @@ pub const Scratch = struct {
         self.fresh_vars.items.clearRetainingCapacity();
         self.occurs_scratch.reset();
         self.visited_vars.items.clearRetainingCapacity();
-        self.visited_index.clearRetainingCapacity();
+        // Clearing a hash map rewrites its whole metadata array, so an empty
+        // index is left alone rather than paying for its retained capacity.
+        if (self.visited_index.count() != 0) self.visited_index.clearRetainingCapacity();
         self.visited_index_pairs = 0;
         self.constraint_visited_vars.items.clearRetainingCapacity();
         self.opened_nominals.clearRetainingCapacity();

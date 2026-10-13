@@ -227,7 +227,7 @@ pub fn run(
             context.completed = true;
         }
     } else {
-        var scratch = std.heap.ArenaAllocator.init(allocator);
+        var scratch = base.SingleThreadArena.init(allocator);
         defer scratch.deinit();
         var analysis = BodyClone.AnalysisScratch.init(allocator);
         defer analysis.deinit();
@@ -256,7 +256,7 @@ pub fn run(
     for (contexts.items) |*context| {
         const shard = &context.shard.?;
         if (context.verify_only) {
-            if (context.changed) base.invariant("LIR pass {s} rewrote procedure {d} whose shapes {any} excluded it from the phase", .{ @tagName(phase), @backingInt(context.proc), store.getProcSpec(context.proc).shapes });
+            if (context.changed) base.invariant("LIR pass {s} rewrote procedure {d} whose shapes {any} excluded it from the phase", .{ @tagName(phase), @backingInt(context.proc), store.getProcSpecImmediate(context.proc).shapes });
             if (parallel) if (metrics) |counts| {
                 counts.tasks_committed +|= 1;
                 counts.committed_by_phase[@backingInt(phase)] +|= 1;
@@ -291,7 +291,7 @@ pub fn run(
 /// Whether the procedure's recorded shapes admit it to the phase: the phase
 /// can only rewrite a shape the body's flags say it contains.
 fn phaseAdmits(store: *const LirStore, phase: Phase, proc: LIR.LirProcSpecId) bool {
-    const shapes = store.getProcSpec(proc).shapes;
+    const shapes = store.getProcSpecImmediate(proc).shapes;
     return switch (phase) {
         .branch_expectation => shapes.switch_stmt,
         .trmc => shapes.self_call,

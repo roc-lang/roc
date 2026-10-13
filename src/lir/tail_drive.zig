@@ -236,8 +236,8 @@ fn returnOf(
     // join never returns, so more jumps than joins is such a cycle.
     var jumps: usize = 0;
     while (true) {
-        const stmt = store.getCFStmt(current);
-        if (stmt == .ret) {
+        const stmt = store.getCFStmtImmediate(current);
+        if (stmt.* == .ret) {
             if (stmt.ret.value != returned) return .no;
             if (!converts) return .unchanged;
             if (counts_other) return .no;
@@ -257,14 +257,14 @@ fn returnOf(
             }
             return .{ .converted = .{ .result_desc = stored_as } };
         }
-        if (stmt == .jump) {
+        if (stmt.* == .jump) {
             const join_index = @backingInt(stmt.jump.target);
             if (jumps == join_bodies.len or join_index >= join_bodies.len) return .no;
             jumps += 1;
             current = join_bodies[join_index] orelse return .no;
             continue;
         }
-        if (stmt == .assign_boxy_adapt) {
+        if (stmt.* == .assign_boxy_adapt) {
             const adapt = stmt.assign_boxy_adapt;
             if (adapt.source != returned or adapt.source_mode != .move) return .no;
             converted_from = returned;
@@ -274,7 +274,7 @@ fn returnOf(
             current = adapt.next;
             continue;
         }
-        if (stmt == .assign_boxy_desc_ref) {
+        if (stmt.* == .assign_boxy_desc_ref) {
             const desc_ref = stmt.assign_boxy_desc_ref;
             const names_whole_descriptor = desc_ref.nested_index == null and
                 desc_ref.box_payload_layout == null and
@@ -290,16 +290,16 @@ fn returnOf(
             continue;
         }
         var counted: LIR.LocalId = undefined;
-        if (stmt == .incref) {
+        if (stmt.* == .incref) {
             counted = stmt.incref.value;
             current = stmt.incref.next;
-        } else if (stmt == .decref) {
+        } else if (stmt.* == .decref) {
             counted = stmt.decref.value;
             current = stmt.decref.next;
-        } else if (stmt == .decref_if_initialized) {
+        } else if (stmt.* == .decref_if_initialized) {
             counted = stmt.decref_if_initialized.value;
             current = stmt.decref_if_initialized.next;
-        } else if (stmt == .free) {
+        } else if (stmt.* == .free) {
             counted = stmt.free.value;
             current = stmt.free.next;
         } else {

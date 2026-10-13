@@ -352,16 +352,14 @@ pub fn calcLineStarts(self: *CommonEnv, gpa: std.mem.Allocator) Allocator.Error!
         std.debug.assert(@backingInt(idx) == expected_idx);
     }
 
-    // find all newlines in the source, save their offset
-    var pos: u32 = 0;
-    for (self.getSourceAll()) |c| {
-        if (c == '\n') {
-            // next line starts after the newline in the current position
-            const expected_idx = self.line_starts.items.items.len;
-            const idx = try self.line_starts.append(gpa, pos + 1);
-            std.debug.assert(@backingInt(idx) == expected_idx);
-        }
-        pos += 1;
+    // Each newline starts the next line after it; the search is vectorized.
+    const source = self.getSourceAll();
+    var search_from: usize = 0;
+    while (std.mem.findScalarPos(u8, source, search_from, '\n')) |newline| {
+        const expected_idx = self.line_starts.items.items.len;
+        const idx = try self.line_starts.append(gpa, @intCast(newline + 1));
+        std.debug.assert(@backingInt(idx) == expected_idx);
+        search_from = newline + 1;
     }
 }
 

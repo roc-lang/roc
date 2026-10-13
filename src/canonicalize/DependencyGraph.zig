@@ -312,7 +312,7 @@ const DemandAnalyzer = struct {
     allocator: std.mem.Allocator,
     summary_defs: []const CIR.Def.Idx,
     graph_def_set: std.AutoHashMapUnmanaged(CIR.Def.Idx, void) = .{},
-    pattern_to_def: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Def.Idx) = .{},
+    pattern_to_def: collections.DenseMap(CIR.Pattern.Idx, CIR.Def.Idx),
     resolved_literal_targets: std.AutoHashMapUnmanaged(Var, std.ArrayListUnmanaged(CIR.Def.Idx)) = .{},
     scheme_use_by_node: std.AutoHashMapUnmanaged(CIR.Node.Idx, u32) = .{},
     summaries: std.AutoHashMapUnmanaged(CIR.Expr.Idx, DemandSummary) = .{},
@@ -336,6 +336,7 @@ const DemandAnalyzer = struct {
             .cir = cir,
             .allocator = allocator,
             .summary_defs = summary_defs,
+            .pattern_to_def = .init(allocator),
         };
         errdefer analyzer.deinit();
 
@@ -381,7 +382,7 @@ const DemandAnalyzer = struct {
             summary.deinit(self.allocator);
         }
         self.summaries.deinit(self.allocator);
-        self.pattern_to_def.deinit(self.allocator);
+        self.pattern_to_def.deinit();
         self.graph_def_set.deinit(self.allocator);
         var resolved_iter = self.resolved_literal_targets.valueIterator();
         while (resolved_iter.next()) |targets| targets.deinit(self.allocator);
@@ -1403,7 +1404,7 @@ fn patternBindsName(pattern: CIR.Pattern) bool {
 /// dependency (and any cycle) it creates.
 fn mapDefBinderPatterns(
     cir: *const ModuleEnv,
-    pattern_to_def: *std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Def.Idx),
+    pattern_to_def: *collections.DenseMap(CIR.Pattern.Idx, CIR.Def.Idx),
     def_idx: CIR.Def.Idx,
     binders: *std.ArrayList(CIR.Pattern.Idx),
     scratch: *std.ArrayList(CIR.Pattern.Idx),
@@ -1412,7 +1413,7 @@ fn mapDefBinderPatterns(
     binders.clearRetainingCapacity();
     try appendPatternBinders(cir, cir.store.getDef(def_idx).pattern, binders, scratch, allocator);
     for (binders.items) |binder| {
-        try pattern_to_def.put(allocator, binder, def_idx);
+        try pattern_to_def.put(binder, def_idx);
     }
 }
 
@@ -1520,7 +1521,7 @@ pub fn computeSCCs(
 /// The walk is an explicit worklist (zero-recursion policy).
 pub fn collectNameReferences(
     cir: *const ModuleEnv,
-    pattern_to_def: *const std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Def.Idx),
+    pattern_to_def: *const collections.DenseMap(CIR.Pattern.Idx, CIR.Def.Idx),
     root_expr: CIR.Expr.Idx,
     out: *std.AutoHashMapUnmanaged(CIR.Def.Idx, void),
     scratch_stack: *std.ArrayList(CIR.Expr.Idx),
@@ -1740,18 +1741,18 @@ pub fn computeCheckOrder(
 ) std.mem.Allocator.Error!CheckOrder {
     const defs_slice = cir.store.sliceDefs(all_defs);
 
-    var pattern_to_def: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Def.Idx) = .{};
-    defer pattern_to_def.deinit(allocator);
+    var pattern_to_def = collections.DenseMap(CIR.Pattern.Idx, CIR.Def.Idx).init(allocator);
+    defer pattern_to_def.deinit();
     // Source position of each def, for the deterministic tie-break.
-    var def_position: std.AutoHashMapUnmanaged(CIR.Def.Idx, u32) = .{};
-    defer def_position.deinit(allocator);
+    var def_position = collections.DenseMap(CIR.Def.Idx, u32).init(allocator);
+    defer def_position.deinit();
     var binders: std.ArrayList(CIR.Pattern.Idx) = .empty;
     defer binders.deinit(allocator);
     var binder_scratch: std.ArrayList(CIR.Pattern.Idx) = .empty;
     defer binder_scratch.deinit(allocator);
     for (defs_slice, 0..) |def_idx, position| {
         try mapDefBinderPatterns(cir, &pattern_to_def, def_idx, &binders, &binder_scratch, allocator);
-        try def_position.put(allocator, def_idx, @intCast(position));
+        try def_position.put(def_idx, @intCast(position));
     }
 
     var graph = DependencyGraph.init(allocator, defs_slice);
@@ -1779,7 +1780,7 @@ pub fn computeCheckOrder(
 
     // Sort members within each group by source position.
     const MemberSort = struct {
-        fn lessThan(ctx: *const std.AutoHashMapUnmanaged(CIR.Def.Idx, u32), a: CIR.Def.Idx, b: CIR.Def.Idx) bool {
+        fn lessThan(ctx: *const collections.DenseMap(CIR.Def.Idx, u32), a: CIR.Def.Idx, b: CIR.Def.Idx) bool {
             return ctx.get(a).? < ctx.get(b).?;
         }
     };
@@ -1790,11 +1791,11 @@ pub fn computeCheckOrder(
     // Deterministic topological order over the condensation: Kahn's algorithm,
     // always emitting the ready group with the earliest first member.
     const group_count = tarjan_order.sccs.len;
-    var def_to_group: std.AutoHashMapUnmanaged(CIR.Def.Idx, u32) = .{};
-    defer def_to_group.deinit(allocator);
+    var def_to_group = collections.DenseMap(CIR.Def.Idx, u32).init(allocator);
+    defer def_to_group.deinit();
     for (tarjan_order.sccs, 0..) |scc, group_index| {
         for (scc.defs) |def_idx| {
-            try def_to_group.put(allocator, def_idx, @intCast(group_index));
+            try def_to_group.put(def_idx, @intCast(group_index));
         }
     }
 
@@ -1918,19 +1919,19 @@ const TarjanState = struct {
     index: u32,
 
     /// Map from node to its DFS index
-    indices: std.AutoHashMapUnmanaged(CIR.Def.Idx, u32),
+    indices: collections.DenseMap(CIR.Def.Idx, u32),
 
     /// Map from node to its lowlink value
-    lowlinks: std.AutoHashMapUnmanaged(CIR.Def.Idx, u32),
+    lowlinks: collections.DenseMap(CIR.Def.Idx, u32),
 
     /// Set of visited nodes
-    visited: std.AutoHashMapUnmanaged(CIR.Def.Idx, void),
+    visited: collections.DenseMap(CIR.Def.Idx, void),
 
     /// Stack for Tarjan's algorithm
     stack: std.ArrayList(CIR.Def.Idx),
 
     /// Set of nodes currently on stack
-    on_stack: std.AutoHashMapUnmanaged(CIR.Def.Idx, void),
+    on_stack: collections.DenseMap(CIR.Def.Idx, void),
 
     /// Resulting SCCs (in reverse topological order during construction)
     sccs: std.ArrayList(SCC),
@@ -1940,34 +1941,34 @@ const TarjanState = struct {
     fn init(allocator: std.mem.Allocator) TarjanState {
         return .{
             .index = 0,
-            .indices = .{},
-            .lowlinks = .{},
-            .visited = .{},
+            .indices = .init(allocator),
+            .lowlinks = .init(allocator),
+            .visited = .init(allocator),
             .stack = .empty,
-            .on_stack = .{},
+            .on_stack = .init(allocator),
             .sccs = .empty,
             .allocator = allocator,
         };
     }
 
     fn deinit(self: *TarjanState) void {
-        self.indices.deinit(self.allocator);
-        self.lowlinks.deinit(self.allocator);
-        self.visited.deinit(self.allocator);
+        self.indices.deinit();
+        self.lowlinks.deinit();
+        self.visited.deinit();
         self.stack.deinit(self.allocator);
-        self.on_stack.deinit(self.allocator);
+        self.on_stack.deinit();
         // Note: sccs ownership transferred to EvaluationOrder, don't free here
         self.sccs.deinit(self.allocator);
     }
 
     fn beginNode(self: *TarjanState, v: CIR.Def.Idx) std.mem.Allocator.Error!void {
-        try self.indices.put(self.allocator, v, self.index);
-        try self.lowlinks.put(self.allocator, v, self.index);
-        try self.visited.put(self.allocator, v, {});
+        try self.indices.put(v, self.index);
+        try self.lowlinks.put(v, self.index);
+        try self.visited.put(v, {});
         self.index += 1;
 
         try self.stack.append(self.allocator, v);
-        try self.on_stack.put(self.allocator, v, {});
+        try self.on_stack.put(v, {});
     }
 
     fn finishNode(
@@ -2047,7 +2048,7 @@ const TarjanState = struct {
                 } else if (self.on_stack.contains(w)) {
                     const v_lowlink = self.lowlinks.get(top.node).?;
                     const w_index = self.indices.get(w).?;
-                    try self.lowlinks.put(self.allocator, top.node, @min(v_lowlink, w_index));
+                    try self.lowlinks.put(top.node, @min(v_lowlink, w_index));
                 }
                 continue;
             }
@@ -2060,7 +2061,7 @@ const TarjanState = struct {
                 const parent = dfs_stack.items[dfs_stack.items.len - 1].node;
                 const parent_lowlink = self.lowlinks.get(parent).?;
                 const finished_lowlink = self.lowlinks.get(finished).?;
-                try self.lowlinks.put(self.allocator, parent, @min(parent_lowlink, finished_lowlink));
+                try self.lowlinks.put(parent, @min(parent_lowlink, finished_lowlink));
             }
         }
     }

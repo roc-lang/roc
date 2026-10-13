@@ -2058,7 +2058,7 @@ const Lowerer = struct {
             // A procedure served from the object cache has no body to lower;
             // the serial path records that and moves on.
             if (l.fn_entries.items[@backingInt(fn_id)].proc) |proc| {
-                if (l.result.store.getProcSpec(proc).external) return false;
+                if (l.result.store.getProcSpecImmediate(proc).external) return false;
             }
             try self.add(.{ .proc = fn_id });
             try self.add(.{ .expr = body });
@@ -2488,7 +2488,7 @@ const Lowerer = struct {
         // box while the root is a tag union). The request already carries that
         // exact layout in the initializer proc; lower directly into it instead
         // of reconstructing the root layout from the logical type.
-        const ret_layout = self.result.store.getProcSpec(initializer.proc).ret_layout;
+        const ret_layout = self.result.store.getProcSpecImmediate(initializer.proc).ret_layout;
         const ret_local = try self.addLocalForLayout(ret_layout);
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } }, where.scaffold());
         const erased_owner_use_start = self.erased_call_owner_uses.items.len;
@@ -2517,7 +2517,7 @@ const Lowerer = struct {
         const saved_shapes = self.result.store.shapes;
         self.result.store.shapes = .{};
         defer self.result.store.shapes = saved_shapes;
-        if (self.result.store.getProcSpec(proc_id).external) {
+        if (self.result.store.getProcSpecImmediate(proc_id).external) {
             // The object cache provides this procedure's code; its body is
             // never lowered, and nothing it would reach is reached through it.
             if (!self.worker_callback) self.fn_written.items[@backingInt(fn_id)] = true;
@@ -2540,7 +2540,7 @@ const Lowerer = struct {
         const proc_args = try GuardedList.dupe(
             self.allocator,
             LIR.LocalId,
-            self.result.store.getLocalSpan(self.result.store.getProcSpec(proc_id).args),
+            self.result.store.getLocalSpan(self.result.store.getProcSpecImmediate(proc_id).args),
         );
         defer self.allocator.free(proc_args);
         const solved_fn_ty = spec.solved_fn_ty;
@@ -2630,7 +2630,7 @@ const Lowerer = struct {
                     self.current_erased_reuse = saved_erased_reuse;
                 }
 
-                try self.noteLocalSpan(self.result.store.getProcSpec(proc_id).args);
+                try self.noteLocalSpan(self.result.store.getProcSpecImmediate(proc_id).args);
 
                 var capture_snapshot: ?LIR.LocalId = null;
                 if (spec.capture_ty) |capture_ty| switch (spec.abi) {
@@ -2726,8 +2726,8 @@ const Lowerer = struct {
             self.current_fn = saved_current_fn;
             self.current_proc = saved_current_proc;
         }
-        try self.noteLocalSpan(self.result.store.getProcSpec(proc_id).args);
-        const ret_layout = self.result.store.getProcSpec(proc_id).ret_layout;
+        try self.noteLocalSpan(self.result.store.getProcSpecImmediate(proc_id).args);
+        const ret_layout = self.result.store.getProcSpecImmediate(proc_id).ret_layout;
         const ret_local = try self.addLocalForLayout(ret_layout);
         // A forwarder exists only for a cached hosted-body procedure, whose
         // lifted function carries no source location; the forwarder is
@@ -3241,7 +3241,7 @@ const Lowerer = struct {
     /// from a frozen image does (see `ComptimeScalarValues`); null leaves the
     /// value to its slot.
     fn lowerConstructionExprInto(self: *Lowerer, where: LowerSite, target: LIR.LocalId, expr_id: Lifted.ExprId, ty: Type.TypeId, next: LIR.CFStmtId) Common.LowerError!?LIR.CFStmtId {
-        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        var arena = base.SingleThreadArena.init(self.allocator);
         defer arena.deinit();
         const layout_idx = self.result.store.getLocal(target).layout_idx;
         const construction = try self.constructionOfExpr(arena.allocator(), expr_id, ty, layout_idx) orelse return null;
@@ -5440,7 +5440,7 @@ const Lowerer = struct {
         // same monomorphic type, so recomputing from `ret_ty` here would lose
         // the explicit ABI choice.
         const proc_id = self.current_proc orelse Common.invariant("return lowering ran without a current procedure");
-        const ret_layout = self.result.store.getProcSpec(proc_id).ret_layout;
+        const ret_layout = self.result.store.getProcSpecImmediate(proc_id).ret_layout;
         const ret_local = try self.addLocalForLayout(ret_layout);
         try self.local_types.put(ret_local, ret_ty);
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } }, where.glue());
@@ -5594,7 +5594,7 @@ const Lowerer = struct {
             return try self.lowerRootSlotReadInto(where, value_local, value, ty, store_value);
         }
         const proc_id = self.current_proc orelse Common.invariant("compile-time value lowering ran without a current procedure");
-        const is_static_initializer = self.result.store.getProcSpec(proc_id).is_static_initializer;
+        const is_static_initializer = self.result.store.getProcSpecImmediate(proc_id).is_static_initializer;
         const runtime_values = if (is_static_initializer) null else self.completed_scalar_values;
         if (runtime_values) |values| {
             if (values.constructionFor(root.module, root.root, layout_idx)) |construction| {
@@ -5988,7 +5988,7 @@ const Lowerer = struct {
         scrutinee_local: LIR.LocalId = undefined,
         done: LIR.JoinPointId = undefined,
         /// Owns the decision tree and its emitter.
-        arena: ?*std.heap.ArenaAllocator = null,
+        arena: ?*base.SingleThreadArena = null,
         emitter: *match_tree.Compiler(MatchTreeCtx).Emitter = undefined,
     };
 
@@ -6823,7 +6823,7 @@ const Lowerer = struct {
     ) Common.LowerError!LowerStep {
         const layout_idx = self.result.store.getLocal(target).layout_idx;
         const proc_id = self.current_proc orelse Common.invariant("static data candidate lowering ran without a current procedure");
-        if (self.result.store.getProcSpec(proc_id).is_static_initializer) {
+        if (self.result.store.getProcSpecImmediate(proc_id).is_static_initializer) {
             // Closed target initializers serialize the stored value, not a
             // runtime construction.
             return .{ .tail = exprTask(where, target, candidate.runtime_expr, ty, next) };
@@ -6832,7 +6832,7 @@ const Lowerer = struct {
         if (candidate.storage.needsTargetStorage(self.result.layouts.targetUsize()) and self.layoutNeedsStaticData(layout_idx)) {
             const id = try self.lirStaticDataFor(candidate, ty, layout_idx);
             // A list of copies keeps its slot and also names its fresh form.
-            var arena = std.heap.ArenaAllocator.init(self.allocator);
+            var arena = base.SingleThreadArena.init(self.allocator);
             defer arena.deinit();
             const fresh_alternative = if (try self.uniformListOfExpr(arena.allocator(), candidate.runtime_expr, ty, layout_idx)) |uniform|
                 try self.uniformListConstructor(where, id, uniform, layout_idx)
@@ -8288,8 +8288,8 @@ const Lowerer = struct {
         // (src/postcheck/match_tree.zig): one multiway test per tested
         // occurrence, one discriminant/length/field read per position, and
         // branch bodies lowered exactly once.
-        const arena_state = try self.allocator.create(std.heap.ArenaAllocator);
-        arena_state.* = std.heap.ArenaAllocator.init(self.allocator);
+        const arena_state = try self.allocator.create(base.SingleThreadArena);
+        arena_state.* = base.SingleThreadArena.init(self.allocator);
         errdefer {
             arena_state.deinit();
             self.allocator.destroy(arena_state);
@@ -15354,7 +15354,7 @@ test "typed boundaries from empty rows are terminal even with matching layouts" 
         const target = try lowerer.result.store.addLocal(.{ .layout_idx = target_layout });
         const next = try lowerer.result.store.addCFStmt(.{ .ret = .{ .value = target } }, test_site.scaffold());
         const boundary = try lowerer.assignTypedBoundary(test_site, target, target_ty, source, empty, next);
-        try std.testing.expect(lowerer.result.store.getCFStmt(boundary) == .runtime_error);
+        try std.testing.expect(lowerer.result.store.getCFStmtImmediate(boundary).* == .runtime_error);
     }
 }
 

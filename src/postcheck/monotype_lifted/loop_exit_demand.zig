@@ -36,7 +36,7 @@ pub const Plan = struct {
 pub const Inventory = struct {
     allocator: std.mem.Allocator,
     program: *const Ast.Program,
-    arena: std.heap.ArenaAllocator,
+    arena: collections.SingleThreadArena,
     plans: collections.DenseMap(Ast.PatId, *Plan),
     uses: collections.DenseMap(Ast.LocalId, Use),
     /// Deterministic work counter for scaling tests.
@@ -48,7 +48,7 @@ pub const Inventory = struct {
         return .{
             .allocator = allocator,
             .program = program,
-            .arena = std.heap.ArenaAllocator.init(allocator),
+            .arena = collections.SingleThreadArena.init(allocator),
             .plans = .init(allocator),
             .uses = .init(allocator),
         };
@@ -66,7 +66,8 @@ pub const Inventory = struct {
     }
 
     pub fn hasSelection(self: *const Inventory) bool {
-        for (self.plans.values.items) |plan| if (plan.selected()) return true;
+        var plans = self.plans.constIterator();
+        while (plans.next()) |entry| if (entry.value_ptr.*.selected()) return true;
         return false;
     }
 
