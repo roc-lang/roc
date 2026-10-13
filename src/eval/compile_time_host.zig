@@ -441,42 +441,60 @@ fn jump(self: *CompileTimeHost, termination: Termination) noreturn {
     base.invariant("{s}", .{"compile-time host failure escaped without an active crash boundary"});
 }
 
+/// Every allocation is preceded by a header holding its length, so a
+/// reallocation copies exactly the live bytes without a lookup. The header
+/// is as wide as the strictest supported alignment, which keeps the
+/// returned pointer aligned.
+const allocation_header_len = 16;
+
+fn allocateTracked(self: *CompileTimeHost, length: usize, alignment: usize) [*]u8 {
+    const alloc_len = @max(length, 1);
+    const block = allocateBytes(self.arena.allocator(), allocation_header_len + alloc_len, @max(alignment, @alignOf(usize))) orelse {
+        self.jump(.host_oom);
+    };
+    const ptr = block + allocation_header_len;
+    std.mem.writeInt(usize, (ptr - @sizeOf(usize))[0..@sizeOf(usize)], alloc_len, .little);
+    // Safety-checked builds keep the live set to verify the compiler's own
+    // deallocation and reallocation calls.
+    if (std.debug.runtime_safety) {
+        self.allocations.put(self.host_arena.allocator(), @intFromPtr(ptr), .{ .size = alloc_len, .alignment = alignment }) catch {
+            self.jump(.host_oom);
+        };
+    }
+    return ptr;
+}
+
+fn allocationLength(ptr: *anyopaque) usize {
+    const bytes: [*]u8 = @ptrCast(ptr);
+    return std.mem.readInt(usize, (bytes - @sizeOf(usize))[0..@sizeOf(usize)], .little);
+}
+
 fn rocAlloc(roc_ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
-    const alloc_len = @max(length, 1);
-    const arena_allocator = self.arena.allocator();
-    const ptr = allocateBytes(arena_allocator, alloc_len, alignment) orelse {
-        self.jump(.host_oom);
-    };
-    self.allocations.put(self.host_arena.allocator(), @intFromPtr(ptr), .{ .size = alloc_len, .alignment = alignment }) catch {
-        self.jump(.host_oom);
-    };
-    return @ptrCast(ptr);
+    return @ptrCast(self.allocateTracked(length, alignment));
 }
 
 fn rocDealloc(roc_ops: *RocOps, ptr: *anyopaque, _: usize) callconv(.c) void {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
-    _ = self.allocations.fetchRemove(@intFromPtr(ptr)) orelse {
-        base.invariant("{s}", .{"compile-time RocOps deallocated unknown pointer"});
-    };
+    if (std.debug.runtime_safety) {
+        _ = self.allocations.fetchRemove(@intFromPtr(ptr)) orelse {
+            base.invariant("{s}", .{"compile-time RocOps deallocated unknown pointer"});
+        };
+    }
 }
 
 fn rocRealloc(roc_ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
-    const old_info = self.allocations.get(@intFromPtr(ptr)) orelse {
-        base.invariant("{s}", .{"compile-time RocOps reallocated unknown pointer"});
-    };
+    if (std.debug.runtime_safety) {
+        _ = self.allocations.fetchRemove(@intFromPtr(ptr)) orelse {
+            base.invariant("{s}", .{"compile-time RocOps reallocated unknown pointer"});
+        };
+    }
+    const old_len = allocationLength(ptr);
+    const new_ptr = self.allocateTracked(new_length, alignment);
     const alloc_len = @max(new_length, 1);
-    const arena_allocator = self.arena.allocator();
-    const new_ptr = allocateBytes(arena_allocator, alloc_len, alignment) orelse {
-        self.jump(.host_oom);
-    };
     const old_bytes: [*]u8 = @ptrCast(@alignCast(ptr));
-    @memcpy(new_ptr[0..@min(old_info.size, alloc_len)], old_bytes[0..@min(old_info.size, alloc_len)]);
-    self.allocations.put(self.host_arena.allocator(), @intFromPtr(new_ptr), .{ .size = alloc_len, .alignment = alignment }) catch {
-        self.jump(.host_oom);
-    };
-    _ = self.allocations.remove(@intFromPtr(ptr));
+    @memcpy(new_ptr[0..@min(old_len, alloc_len)], old_bytes[0..@min(old_len, alloc_len)]);
     return @ptrCast(new_ptr);
 }
 

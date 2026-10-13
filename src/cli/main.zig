@@ -482,6 +482,7 @@ const CompileTimeObjectCache = struct {
             const producer = if (owner.eql(requester)) artifact else self.declaredArtifact(owner.bytes) orelse continue;
             const placement = build_env.packPlacementForArtifactKey(producer.key) orelse continue;
             const bytes = try packFileBytesFiltered(self.allocator, &set, lowered, .{
+                .carried_reads = &self.packs.materializer_reads,
                 .generated_roots = generated,
                 .checked_owner = owner,
                 .requester = requester,
@@ -534,7 +535,7 @@ const CompileTimeObjectCache = struct {
             const owner = check.CheckedArtifact.ModuleId{ .bytes = owner_bytes };
             const producer = if (owner.eql(requester)) artifact else self.declaredArtifact(owner.bytes) orelse continue;
             const placement = build_env.packPlacementForArtifactKey(producer.key) orelse continue;
-            const bytes = backend.dev.PackFile.writeOffers(self.allocator, &empty, &.{}, entries.items) catch |err| switch (err) {
+            const bytes = backend.dev.PackFile.writeOffers(self.allocator, &empty, &.{}, entries.items, &.{}) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 // Lowering produces valid recipes, and an empty set has no
                 // artifact to reject.
@@ -9283,6 +9284,8 @@ test "CTFE publication keeps builtin instantiations with the declared requester"
 }
 
 const PackOfferFilter = struct {
+    /// Literal reads of the code this program carries from loaded packs.
+    carried_reads: ?*const std.AutoHashMapUnmanaged([32]u8, lir.Program.CachedLiteralRead) = null,
     generated_roots: ?[]const bool = null,
     checked_owner: ?check.CheckedArtifact.ModuleId = null,
     requester: ?check.CheckedArtifact.ModuleId = null,
@@ -9684,7 +9687,21 @@ fn packFileBytesFiltered(
     var serving = try backend.dev.ArtifactClosure.selectMarked(allocator, set, selected);
     defer serving.deinit();
     for (selected_specs.items) |*spec| spec.artifact = serving.old_to_new[spec.artifact].?;
-    return backend.dev.PackFile.write(allocator, &serving.set, selected_specs.items) catch |err| switch (err) {
+    // Each literal materializer the serving code calls carries its read:
+    // this program's own, or the one the carried code's pack recorded.
+    var materializer_reads = std.ArrayList(backend.dev.PackFile.MaterializerRead).empty;
+    defer materializer_reads.deinit(allocator);
+    var recorded = std.AutoHashMap([32]u8, void).init(allocator);
+    defer recorded.deinit();
+    for (serving.set.artifacts) |artifact| for (artifact.materializations) |dependency| {
+        const wrapper = dependency.materialization.wrapper_identity;
+        if (dependency.materialization.producer != .literal) continue;
+        if ((try recorded.getOrPut(wrapper)).found_existing) continue;
+        const read = lowered.lir_result.literal_materializer_reads.get(wrapper) orelse
+            (if (filter.carried_reads) |carried| carried.get(wrapper) else null) orelse continue;
+        try materializer_reads.append(allocator, .{ .wrapper_identity = wrapper, .read = read });
+    };
+    return backend.dev.PackFile.writeOffers(allocator, &serving.set, selected_specs.items, &.{}, materializer_reads.items) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.InvalidCodeTarget, error.InvalidSourceEventCertificate, error.InvalidLiteralRecipe, error.InvalidRootMaterializationDependency => {
             std.debug.assert(false); // A validated native producer emitted an invalid context site.

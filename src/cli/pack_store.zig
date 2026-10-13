@@ -985,7 +985,7 @@ test "pack checked materializer demand is shared across recursive callers and re
     defer set.deinit();
     var closure = try backend.dev.ArtifactClosure.init(allocator, &set);
     defer closure.deinit();
-    const summaries = try packs.servingDemandSummaries(&closure, &.{});
+    const summaries = try packs.servingDemandSummaries(&closure, &.{}, &.{});
     defer allocator.free(summaries);
     try std.testing.expect(summaries[0].checked_roots.ptr == summaries[1].checked_roots.ptr);
     try std.testing.expectEqual(@as(usize, 1), summaries[0].checked_roots.len);
@@ -1149,6 +1149,10 @@ pub const LoadedPacks = struct {
     /// Specializations with a settled discovery outcome, by the key and
     /// relation they serve.
     discovery: std.AutoHashMapUnmanaged(OfferKey, void) = .empty,
+    /// The literal read behind each literal materializer the loaded packs'
+    /// code calls, by wrapper identity, so a pack that carries that code on
+    /// carries its read too. Each read lives in its pack's arena.
+    materializer_reads: std.AutoHashMapUnmanaged([32]u8, lir.Program.CachedLiteralRead) = .empty,
     semantic_valid: std.AutoHashMap(OfferKey, bool),
     artifacts: std.AutoHashMap(lir.ProcIdentity, SelectedProcedure),
     /// Specializations served so far.
@@ -1320,6 +1324,10 @@ pub const LoadedPacks = struct {
             for (pack.discovery) |entry| {
                 try self.discovery.put(self.allocator, .{ .key = entry.key, .platform_requirement_relation = entry.platform_requirement_relation }, {});
             }
+            for (pack.materializer_reads) |entry| {
+                const read = try self.materializer_reads.getOrPut(self.allocator, entry.wrapper_identity);
+                if (!read.found_existing) read.value_ptr.* = entry.read;
+            }
             for (pack.set.artifacts) |artifact| {
                 backend.dev.ProcArtifact.validateSourceEventCertificates(self.allocator, artifact, @import("builtin").cpu.arch.endian()) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
@@ -1329,7 +1337,7 @@ pub const LoadedPacks = struct {
             }
             var closure = try backend.dev.ArtifactClosure.init(self.allocator, &pack.set);
             defer closure.deinit();
-            const summaries = try self.servingDemandSummaries(&closure, pack.specs);
+            const summaries = try self.servingDemandSummaries(&closure, pack.specs, pack.materializer_reads);
             defer self.allocator.free(summaries);
             try self.projectPendingMaterializers(pack, summaries);
             const closed = try closure.admit(self, normalNode);
@@ -1521,7 +1529,6 @@ pub const LoadedPacks = struct {
         defer projected.deinit();
         for (projected.lir_result.store.getProcSpecs()) |proc| {
             const declaration = proc.root_materialization orelse continue;
-            if (declaration.producer != .checked) continue;
             try self.pinMaterializer(declaration);
         }
         for (projected.lir_result.requested_layouts.items) |request| {
@@ -1632,7 +1639,12 @@ pub const LoadedPacks = struct {
             std.mem.eql(u8, &recipe.producer_key, &producer.conversion_identity);
     }
 
-    fn servingDemandSummaries(self: *LoadedPacks, closure: *backend.dev.ArtifactClosure, specs: []const PackFile.SpecEntry) Allocator.Error![]const ServingDemand {
+    fn servingDemandSummaries(
+        self: *LoadedPacks,
+        closure: *backend.dev.ArtifactClosure,
+        specs: []const PackFile.SpecEntry,
+        materializer_reads: []const PackFile.MaterializerRead,
+    ) Allocator.Error![]const ServingDemand {
         var components = try closure.components();
         defer components.deinit();
         const sets = try self.allocator.alloc(std.AutoHashMap(Common.CheckedRootUse, void), components.callees.len);
@@ -1662,9 +1674,21 @@ pub const LoadedPacks = struct {
         for (closure.set.artifacts, components.nodes) |artifact, component| {
             for (artifact.materializations) |dependency| {
                 const declaration = dependency.materialization;
-                if (declaration.producer != .checked) continue;
-                const use = Common.CheckedRootUse{ .module = declaration.module, .root = declaration.producer.checked };
-                try sets[component].put(use, {});
+                switch (declaration.producer) {
+                    .checked => |root| try sets[component].put(.{ .module = declaration.module, .root = root }, {}),
+                    // Code that reads a literal carries that literal's read in
+                    // its own pack, so serving it declares the literal even
+                    // where no offer's demand reached the read (the body of a
+                    // lambda its keyed caller applies).
+                    .literal => for (materializer_reads) |entry| {
+                        if (!std.mem.eql(u8, &entry.wrapper_identity, &declaration.wrapper_identity)) continue;
+                        if (!literalRecipeMatchesMaterializer(declaration, entry.read.recipe)) {
+                            complete[component] = false;
+                            continue;
+                        }
+                        try addLiteralRead(&literals[component], &recipes[component], &complete[component], entry.read);
+                    },
+                }
             }
         }
         var component: usize = sets.len;
@@ -2001,6 +2025,7 @@ pub const LoadedPacks = struct {
         self.artifacts.deinit();
         self.specs.deinit();
         self.discovery.deinit(self.allocator);
+        self.materializer_reads.deinit(self.allocator);
         self.semantic_valid.deinit();
         for (self.packs.items) |pack| {
             pack.deinit();
@@ -2261,12 +2286,12 @@ test "pack literal materializers require a recipe in their own serving closure" 
         .rc_ret_unique_fields = 0,
         .rc_ret_conditions = &.{},
     };
-    const unrelated = try packs.servingDemandSummaries(&closure, (&spec)[0..1]);
+    const unrelated = try packs.servingDemandSummaries(&closure, (&spec)[0..1], &.{});
     defer allocator.free(unrelated);
     try std.testing.expect(!LoadedPacks.literalMaterializersDeclared(artifacts[1], unrelated[1].literal_reads));
     spec.artifact = 1;
     spec.demand.?.literal_reads = &.{ read, read, other_cause };
-    const matched = try packs.servingDemandSummaries(&closure, (&spec)[0..1]);
+    const matched = try packs.servingDemandSummaries(&closure, (&spec)[0..1], &.{});
     defer allocator.free(matched);
     try std.testing.expect(LoadedPacks.literalMaterializersDeclared(artifacts[1], matched[1].literal_reads));
     try std.testing.expectEqual(@as(usize, 2), matched[0].literal_reads.len);
@@ -2274,11 +2299,30 @@ test "pack literal materializers require a recipe in their own serving closure" 
     var conflicting = read;
     conflicting.recipe.current_fn_key.bytes[0] ^= 1;
     spec.demand.?.literal_reads = &.{ read, conflicting };
-    const rejected = try packs.servingDemandSummaries(&closure, (&spec)[0..1]);
+    const rejected = try packs.servingDemandSummaries(&closure, (&spec)[0..1], &.{});
     defer allocator.free(rejected);
     try std.testing.expect(!rejected[0].complete);
     try std.testing.expect(!rejected[1].complete);
     try std.testing.expect(rejected[2].complete);
+    // A read the pack records for the materializer itself declares it in the
+    // reading code's own closure, with no offer's demand naming the read.
+    spec.artifact = 2;
+    spec.demand.?.literal_reads = &.{};
+    const recorded = [_]PackFile.MaterializerRead{.{ .wrapper_identity = declaration.wrapper_identity, .read = read }};
+    const carried = try packs.servingDemandSummaries(&closure, (&spec)[0..1], &recorded);
+    defer allocator.free(carried);
+    try std.testing.expect(LoadedPacks.literalMaterializersDeclared(artifacts[1], carried[1].literal_reads));
+    try std.testing.expect(carried[0].complete and carried[1].complete);
+    try std.testing.expectEqual(@as(usize, 1), carried[0].literal_reads.len);
+    try std.testing.expectEqual(@as(usize, 0), carried[2].literal_reads.len);
+    // A recorded read for another producer declares nothing.
+    var other_producer = read;
+    other_producer.recipe.producer_key[0] ^= 1;
+    const mismatched = [_]PackFile.MaterializerRead{.{ .wrapper_identity = declaration.wrapper_identity, .read = other_producer }};
+    const refused = try packs.servingDemandSummaries(&closure, (&spec)[0..1], &mismatched);
+    defer allocator.free(refused);
+    try std.testing.expect(!refused[1].complete);
+    try std.testing.expect(!LoadedPacks.literalMaterializersDeclared(artifacts[1], refused[1].literal_reads));
 }
 
 fn nameLessThan(_: void, lhs: []u8, rhs: []u8) bool {

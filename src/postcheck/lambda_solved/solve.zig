@@ -498,11 +498,22 @@ const Solver = struct {
 
         try self.program.layout_requests.ensureTotalCapacity(self.allocator, self.lifted.layout_requests.len);
         for (self.lifted.layout_requests) |request| {
+            // A literal root's storage holds the value its own conversion
+            // returns when the root is evaluated in this program, so it has
+            // that procedure's result type and keeps its lambda sets. Every
+            // other storage request is read across programs and holds erased
+            // callables.
+            const literal_root: ?Lifted.FnId = if (request.comptime_root) |root| switch (root.root) {
+                .literal => |id| self.lifted.literal_roots[@backingInt(id)].fn_id,
+                .checked => null,
+            } else null;
             const ty = if (request.fn_id) |fn_id|
+                self.fnRetType(fn_id)
+            else if (literal_root) |fn_id|
                 self.fnRetType(fn_id)
             else
                 try self.monoLeaf(request.ty);
-            try self.markErasedCallablesReachedByType(ty);
+            if (literal_root == null) try self.markErasedCallablesReachedByType(ty);
             try self.program.layout_requests.append(self.allocator, .{
                 .checked_type = request.checked_type,
                 .ty = ty,

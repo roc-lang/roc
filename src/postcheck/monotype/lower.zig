@@ -741,6 +741,13 @@ pub fn run(
         builder.requirePendingSpecJobsDrained();
     }
 
+    // A callable literal result has no type-only projection: its storage is
+    // the replayed conversion's own result, so the producer is declared and
+    // its body lowered like any other specialization.
+    for (builder.callable_literal_declarations.items) |recipe| {
+        try builder.declareCachedLiteralStorage(recipe);
+    }
+
     // Wave 3: static-data restoration in listed order, then a second
     // specialization queue drain for the template bodies it discovered.
     {
@@ -4265,6 +4272,9 @@ const Builder = struct {
     /// request unparks one; the rest complete as never-run stubs once every
     /// body has lowered.
     parked_spec_jobs: std.AutoArrayHashMapUnmanaged(Ast.FnId, PendingSpecJob) = .empty,
+    /// Projected literal producers whose result is callable, declared in full
+    /// after the type-only projections.
+    callable_literal_declarations: std.ArrayListUnmanaged(Common.CachedLiteralRecipe) = .empty,
     /// Specializations whose bodies are lowered for discovery.
     discovery_specs: std.AutoHashMapUnmanaged(Ast.FnId, void) = .empty,
     /// The specializations each committed discovery body requested for
@@ -4764,6 +4774,7 @@ const Builder = struct {
         self.spec_store.deinit();
         self.pending_spec_jobs.deinit(self.allocator);
         self.parked_spec_jobs.deinit(self.allocator);
+        self.callable_literal_declarations.deinit(self.allocator);
         self.discovery_specs.deinit(self.allocator);
         {
             var callees = self.discovery_callees.valueIterator();
@@ -5534,7 +5545,8 @@ const Builder = struct {
 
     /// Reifies the exact keyed producer's noncallable result as a layout request.
     /// The recipe is earlier-stage type authority, not a request to recheck its
-    /// source. No callable evidence, capture values, or body is prepared.
+    /// source. No callable evidence, capture values, or body is prepared. A
+    /// callable result is set aside for a full declaration once types settle.
     fn projectLiteralMaterialization(self: *Builder, recipe: Common.CachedLiteralRecipe) Allocator.Error!void {
         const destination = ProgramTypeDestination.begin(self);
         defer destination.end();
@@ -5563,7 +5575,10 @@ const Builder = struct {
         result_view.const_store = &result_store.store;
         const ty = try context.lowerConstCaptureType(&result_view, recipe.result.root);
         // ConstType.func does not carry lambda-set/capture ABI authority.
-        if (self.program.types.get(ty) == .func or try self.monoFnTypeMentionsFunction(ty)) return;
+        if (self.program.types.get(ty) == .func or try self.monoFnTypeMentionsFunction(ty)) {
+            try self.callable_literal_declarations.append(self.allocator, recipe);
+            return;
+        }
         try self.program.addLayoutRequest(.{
             .checked_type = view.bodies.expr(@fromBackingInt(@intCast(recipe.checked_expr))).ty,
             .ty = ty,
@@ -5582,23 +5597,26 @@ const Builder = struct {
         for (facts.eager_reads) |read| {
             try self.declareCachedRootReads(&.{.{ .module = read.module, .root = read.root }}, false);
         }
-        for (facts.literal_reads) |read| {
-            const id = try self.declareCachedLiteral(read.recipe);
-            const root = self.program.literal_roots.get(@backingInt(id));
-            const view = self.moduleForId(root.module);
-            const def = self.program.defs.get(@backingInt(root.def));
-            // A callable value is no storage layout: its lambda set comes from
-            // the producer body this declaration lowered, as it does when the
-            // literal is discovered in source, and a storage request would
-            // erase it (`projectLiteralMaterialization`).
-            if (self.program.types.get(def.ret) == .func or try self.monoFnTypeMentionsFunction(def.ret)) continue;
-            try self.program.addLayoutRequest(.{
-                .checked_type = view.bodies.expr(@fromBackingInt(@intCast(root.site.checked_expr))).ty,
-                .ty = def.ret,
-                .def = root.def,
-                .comptime_root = .{ .module = root.module, .root = .{ .literal = id }, .const_locator = null },
-            });
-        }
+        for (facts.literal_reads) |read| try self.declareCachedLiteralStorage(read.recipe);
+    }
+
+    /// Declare an earlier producer's literal root together with the storage
+    /// its readers read: the slot the replayed conversion fills when the
+    /// literal root is evaluated, at the conversion's own result type. The
+    /// request names no initializer; Lambda Solved types it by the literal
+    /// root's procedure, so a callable result keeps the lambda set that
+    /// conversion body gives it, and its materializer is the one its
+    /// producer's readers were compiled against.
+    fn declareCachedLiteralStorage(self: *Builder, recipe: Common.CachedLiteralRecipe) Allocator.Error!void {
+        const id = try self.declareCachedLiteral(recipe);
+        const root = self.program.literal_roots.get(@backingInt(id));
+        const view = self.moduleForId(root.module);
+        const def = self.program.defs.get(@backingInt(root.def));
+        try self.program.addLayoutRequest(.{
+            .checked_type = view.bodies.expr(@fromBackingInt(@intCast(root.site.checked_expr))).ty,
+            .ty = def.ret,
+            .comptime_root = .{ .module = root.module, .root = .{ .literal = id }, .const_locator = null },
+        });
     }
 
     /// Prepare only an explicitly declared earlier producer. Its checked

@@ -975,6 +975,10 @@ pub const Result = struct {
     /// Discovery summaries of the specializations this program lowered only
     /// for discovery.
     discovery_summaries: std.ArrayList(DiscoverySummary) = .empty,
+    /// The literal read behind each literal materializer this program's code
+    /// calls, by the materializer's wrapper identity: the recipe a consumer
+    /// replays to declare that literal wherever the reading code is served.
+    literal_materializer_reads: std.AutoArrayHashMapUnmanaged([32]u8, CachedLiteralRead) = .empty,
     root_metadata: std.ArrayList(root.RootMetadata),
     requested_layouts: std.ArrayList(RequestedLayout),
     const_types: const_store.ConstTypeStore,
@@ -1114,6 +1118,8 @@ pub const Result = struct {
         for (self.spec_procs.items) |spec| if (spec.demand) |demand| demand.deinit(allocator);
         self.spec_procs.deinit(allocator);
         self.discovery_summaries.deinit(allocator);
+        for (self.literal_materializer_reads.values()) |read| read.recipe.deinit(allocator);
+        self.literal_materializer_reads.deinit(allocator);
         self.layouts.deinit();
         self.store.deinit();
     }

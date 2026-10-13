@@ -19,7 +19,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RPCK";
 /// Format version; bump whenever the encoding or artifact contents change.
-pub const format_version: u32 = 22;
+pub const format_version: u32 = 23;
 
 /// One specialization the pack can serve: its reservation-time key, the
 /// artifact holding its procedure, and the ownership signature and
@@ -49,11 +49,20 @@ pub const DiscoveryEntry = struct {
     platform_requirement_relation: ?[32]u8 = null,
 };
 
+/// The literal read behind a literal materializer the pack's code calls,
+/// under that materializer's wrapper identity. Serving the code that calls it
+/// declares the literal from this recipe, wherever in the code the read is.
+pub const MaterializerRead = struct {
+    wrapper_identity: [32]u8,
+    read: lir.Program.CachedLiteralRead,
+};
+
 /// A pack read back from its bytes.
 pub const Pack = struct {
     set: ProcArtifact.Set,
     specs: []const SpecEntry,
     discovery: []const DiscoveryEntry = &.{},
+    materializer_reads: []const MaterializerRead = &.{},
 
     pub fn deinit(self: *Pack) void {
         self.set.deinit();
@@ -138,11 +147,18 @@ pub fn recipeDigest(allocator: Allocator, recipe: lir.Program.CachedLiteralRecip
 /// context immediates are stored as zero: their descriptors, not the producer's
 /// dense IDs, decide the persistent bytes.
 pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const SpecEntry) WriteError![]u8 {
-    return writeOffers(allocator, set, specs, &.{});
+    return writeOffers(allocator, set, specs, &.{}, &.{});
 }
 
-/// `write`, with the discovery summaries the pack also offers.
-pub fn writeOffers(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const SpecEntry, discovery: []const DiscoveryEntry) WriteError![]u8 {
+/// `write`, with the discovery summaries the pack also offers and the literal
+/// reads behind the literal materializers its code calls.
+pub fn writeOffers(
+    allocator: Allocator,
+    set: *const ProcArtifact.Set,
+    specs: []const SpecEntry,
+    discovery: []const DiscoveryEntry,
+    materializer_reads: []const MaterializerRead,
+) WriteError![]u8 {
     for (specs) |spec| {
         if (spec.artifact >= set.artifacts.len or set.artifacts[spec.artifact].root_materialization != null)
             return error.InvalidRootMaterializationDependency;
@@ -150,6 +166,7 @@ pub fn writeOffers(allocator: Allocator, set: *const ProcArtifact.Set, specs: []
     for (specs) |spec| if (spec.demand) |demand| {
         for (demand.literal_reads) |literal| if (!try literal.recipe.valid(allocator)) return error.InvalidLiteralRecipe;
     };
+    for (materializer_reads) |entry| if (!try entry.read.recipe.valid(allocator)) return error.InvalidLiteralRecipe;
     for (set.artifacts) |artifact| {
         try ProcArtifact.validateRootMaterializations(allocator, artifact);
         if (artifact.root_materialization == null) {
@@ -346,6 +363,12 @@ pub fn writeOffers(allocator: Allocator, set: *const ProcArtifact.Set, specs: []
         try writer.raw(&entry.key);
         try writer.byte(@intFromBool(entry.platform_requirement_relation != null));
         if (entry.platform_requirement_relation) |relation| try writer.raw(&relation);
+    }
+
+    try writer.word(@intCast(materializer_reads.len));
+    for (materializer_reads) |entry| {
+        try writer.raw(&entry.wrapper_identity);
+        try writer.context(entry.read);
     }
 
     var namespace = std.crypto.hash.Blake3.init(.{});
@@ -623,12 +646,21 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
             },
         };
     }
+    const materializer_reads = try arena_allocator.alloc(MaterializerRead, try reader.word());
+    for (materializer_reads) |*entry| {
+        entry.* = .{
+            .wrapper_identity = (try reader.raw(32))[0..32].*,
+            .read = try reader.context(lir.Program.CachedLiteralRead, arena_allocator),
+        };
+        if (!try entry.read.recipe.valid(allocator)) return error.MalformedPack;
+    }
     if (reader.offset != bytes.len) return error.MalformedPack;
 
     return .{
         .set = .{ .arena = arena, .artifacts = artifacts, .physical_namespace = physical_namespace },
         .specs = specs,
         .discovery = discovery,
+        .materializer_reads = materializer_reads,
     };
 }
 
@@ -1085,8 +1117,19 @@ test "pack literal producer declaration roundtrip and malformed recipe rejection
     var restored = try result.materialize(allocator);
     defer restored.deinit();
     try std.testing.expectEqualDeep(result_types[0], restored.store.type_store.get(result.root));
+    // The read behind a literal materializer the code calls travels in the
+    // pack's own table, under the materializer's wrapper identity.
+    const materializer_reads = [_]MaterializerRead{.{ .wrapper_identity = @as([32]u8, @splat(63)), .read = literals[0] }};
+    const with_reads = try writeOffers(allocator, &set, &specs, &.{}, &materializer_reads);
+    defer allocator.free(with_reads);
+    var decoded_reads = try read(allocator, with_reads);
+    defer decoded_reads.deinit();
+    try std.testing.expectEqualDeep(@as([]const MaterializerRead, &materializer_reads), decoded_reads.materializer_reads);
+    try std.testing.expectEqual(@as(usize, 0), decoded.materializer_reads.len);
     literals[0].recipe.result.root = @fromBackingInt(@intCast(100));
     try std.testing.expectError(error.InvalidLiteralRecipe, write(allocator, &set, &specs));
+    const invalid_reads = [_]MaterializerRead{.{ .wrapper_identity = @as([32]u8, @splat(63)), .read = literals[0] }};
+    try std.testing.expectError(error.InvalidLiteralRecipe, writeOffers(allocator, &set, &.{}, &.{}, &invalid_reads));
 }
 
 test "pack bytes round-trip every artifact field and spec entry" {

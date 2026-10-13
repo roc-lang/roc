@@ -887,6 +887,10 @@ const Lowerer = struct {
     /// The fresh-form procedure of each static list of copies, by slot.
     uniform_constructors: collections.DenseMap(LIR.StaticDataId, LIR.LirProcSpecId),
     comptime_value_map: std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId),
+    /// Each literal materializer this program's code calls, by wrapper
+    /// identity, with the read that first called it. Its recipe is recorded
+    /// once lowering has settled every procedure (`recordLiteralMaterializerReads`).
+    literal_materializers: std.AutoArrayHashMapUnmanaged([32]u8, LiteralMaterializerUse) = .empty,
     /// Whether a root-slot read at one type takes its root's slot value
     /// as stored, per (root type, read type) pair.
     comptime_read_shares_root: std.AutoHashMapUnmanaged(ComptimeReadTypes, bool) = .empty,
@@ -1309,6 +1313,7 @@ const Lowerer = struct {
         self.static_initializer_map.deinit();
         self.uniform_constructors.deinit();
         self.comptime_value_map.deinit();
+        self.literal_materializers.deinit(self.allocator);
         self.comptime_read_shares_root.deinit(self.allocator);
         self.comptime_root_slots.deinit();
         self.retired_read_requests.deinit(self.allocator);
@@ -1520,6 +1525,25 @@ const Lowerer = struct {
         if (self.lowersLayoutRequests()) try self.lowerLayoutRequests();
         if (self.lowersRuntimeSchemaRequests()) try self.lowerRuntimeSchemaRequests();
         if (self.lowersLiteralRoots()) try self.summarizeDiscoveryFns();
+        try self.recordLiteralMaterializerReads();
+    }
+
+    const LiteralMaterializerUse = struct {
+        root: Common.LiteralRootId,
+        cause: LirProgram.CtfeDemandCause,
+    };
+
+    /// Record the literal read behind every literal materializer this
+    /// program's code calls, so whatever serves that code declares the
+    /// literal even where no keyed demand reached the read. A literal root
+    /// with no earlier producer recipe has no read a consumer can replay.
+    fn recordLiteralMaterializerReads(self: *Lowerer) Common.LowerError!void {
+        try self.result.literal_materializer_reads.ensureTotalCapacity(self.allocator, self.literal_materializers.count());
+        for (self.literal_materializers.keys(), self.literal_materializers.values()) |wrapper, use| {
+            if (self.solved.lifted.literalRootsView()[@backingInt(use.root)].recipe == null) continue;
+            const recipe = try self.cachedLiteralRecipe(use.root);
+            self.result.literal_materializer_reads.putAssumeCapacity(wrapper, .{ .recipe = recipe, .cause = use.cause });
+        }
     }
 
     /// Each specialization lowered only for discovery whose demand closure is
@@ -4651,6 +4675,45 @@ const Lowerer = struct {
         };
     }
 
+    /// The recipe a later consumer replays to declare literal root `id`:
+    /// its earlier producer declaration and native producer object.
+    fn cachedLiteralRecipe(self: *Lowerer, id: Common.LiteralRootId) Common.LowerError!LirProgram.CachedLiteralRecipe {
+        const root = self.solved.lifted.literalRootsView()[@backingInt(id)];
+        const declaration = root.recipe orelse Common.invariant("literal demand has no earlier producer declaration recipe");
+        const producer_fn = try self.ensureOwnFnSpec(root.fn_id, .finite);
+        const producer_entry = self.fn_entries.items[@backingInt(producer_fn)];
+        const object_identity = try self.procIdentity(producer_entry.spec, producer_entry);
+        const export_ = @import("literal_recipe.zig");
+        const callable = try export_.representation(self.allocator, self.solved.lifted.types.view(), &self.solved.lifted.names, declaration.callable_ty);
+        errdefer callable.deinit(self.allocator);
+        const result = try export_.representation(self.allocator, self.solved.lifted.types.view(), &self.solved.lifted.names, self.solved.lifted.getFn(root.fn_id).ret);
+        errdefer result.deinit(self.allocator);
+        const evidence = try self.allocator.dupe(const_store.ConstFnEvidence, self.solved.lifted.const_fn_evidence.unsafeRawItemsForView()[declaration.const_evidence.start..][0..declaration.const_evidence.len]);
+        errdefer self.allocator.free(evidence);
+        const frames = try self.allocator.dupe(const_store.ConstFnEvidenceFrame, self.solved.lifted.const_fn_evidence_frames.unsafeRawItemsForView()[declaration.const_evidence_frames.start..][0..declaration.const_evidence_frames.len]);
+        errdefer self.allocator.free(frames);
+        const local_contexts = try self.cachedLiteralLocalContexts(declaration);
+        return .{
+            .module = root.module.bytes,
+            .checked_expr = root.site.checked_expr,
+            .kind = root.site.kind,
+            .producer_key = declaration.producer_key.bytes,
+            .object_identity = object_identity.bytes,
+            .owner_template = declaration.owner_template,
+            .owner_context_fn_key = declaration.owner_context_fn_key,
+            .current_fn_key = declaration.current_fn_key,
+            .method_scope = declaration.method_scope.bytes,
+            .in_default_expr = declaration.in_default_expr,
+            .checked_callable_ty = declaration.checked_callable_ty,
+            .callable = callable,
+            .result = result,
+            .evidence = evidence,
+            .evidence_frames = frames,
+            .evidence_frame_head = declaration.const_evidence_frame_head,
+            .local_contexts = local_contexts,
+        };
+    }
+
     fn cachedDemand(self: *Lowerer, source: Lifted.FnId) Common.LowerError!LirProgram.CachedCtfeDemand {
         var summary = try self.demandSummary(source);
         defer summary.deinit(self.allocator);
@@ -4673,47 +4736,9 @@ const Lowerer = struct {
             const root_id = switch (read.root.root) {
                 .checked => |id| @backingInt(id),
                 .literal => |id| {
-                    const root = self.solved.lifted.literalRootsView()[@backingInt(id)];
-                    const declaration = root.recipe orelse Common.invariant("literal demand has no earlier producer declaration recipe");
-                    const producer_fn = try self.ensureOwnFnSpec(root.fn_id, .finite);
-                    const producer_entry = self.fn_entries.items[@backingInt(producer_fn)];
-                    const object_identity = try self.procIdentity(producer_entry.spec, producer_entry);
-                    const export_ = @import("literal_recipe.zig");
-                    const callable = try export_.representation(self.allocator, self.solved.lifted.types.view(), &self.solved.lifted.names, declaration.callable_ty);
-                    errdefer callable.deinit(self.allocator);
-                    const result = try export_.representation(self.allocator, self.solved.lifted.types.view(), &self.solved.lifted.names, self.solved.lifted.getFn(root.fn_id).ret);
-                    errdefer result.deinit(self.allocator);
-                    const evidence = try self.allocator.dupe(const_store.ConstFnEvidence, self.solved.lifted.const_fn_evidence.unsafeRawItemsForView()[declaration.const_evidence.start..][0..declaration.const_evidence.len]);
-                    errdefer self.allocator.free(evidence);
-                    const frames = try self.allocator.dupe(const_store.ConstFnEvidenceFrame, self.solved.lifted.const_fn_evidence_frames.unsafeRawItemsForView()[declaration.const_evidence_frames.start..][0..declaration.const_evidence_frames.len]);
-                    errdefer self.allocator.free(frames);
-                    const local_contexts = try self.cachedLiteralLocalContexts(declaration);
-                    errdefer {
-                        for (local_contexts) |context| context.deinit(self.allocator);
-                        self.allocator.free(local_contexts);
-                    }
-                    try literal_reads.append(self.allocator, .{
-                        .recipe = .{
-                            .module = root.module.bytes,
-                            .checked_expr = root.site.checked_expr,
-                            .kind = root.site.kind,
-                            .producer_key = declaration.producer_key.bytes,
-                            .object_identity = object_identity.bytes,
-                            .owner_template = declaration.owner_template,
-                            .owner_context_fn_key = declaration.owner_context_fn_key,
-                            .current_fn_key = declaration.current_fn_key,
-                            .method_scope = declaration.method_scope.bytes,
-                            .in_default_expr = declaration.in_default_expr,
-                            .checked_callable_ty = declaration.checked_callable_ty,
-                            .callable = callable,
-                            .result = result,
-                            .evidence = evidence,
-                            .evidence_frames = frames,
-                            .evidence_frame_head = declaration.const_evidence_frame_head,
-                            .local_contexts = local_contexts,
-                        },
-                        .cause = cause,
-                    });
+                    const recipe = try self.cachedLiteralRecipe(id);
+                    errdefer recipe.deinit(self.allocator);
+                    try literal_reads.append(self.allocator, .{ .recipe = recipe, .cause = cause });
                     continue;
                 },
             };
@@ -6369,6 +6394,18 @@ const Lowerer = struct {
         };
         const layout_digest = try self.result.layouts.contentDigest(layout_idx);
         const identity = LirProgram.rootMaterializationIdentity(root.module.bytes, producer, representation.bytes, layout_digest);
+        switch (root.root) {
+            .checked => {},
+            .literal => |literal| {
+                const entry = try self.literal_materializers.getOrPut(self.allocator, identity.bytes);
+                if (!entry.found_existing) entry.value_ptr.* = .{ .root = literal, .cause = .{
+                    .module = if (where.loc.hasLocation()) self.solved.lifted.sourceFiles()[where.loc.file].checked_module_key else null,
+                    .region = where.region,
+                    .line = where.loc.line,
+                    .column = where.loc.column,
+                } };
+            },
+        }
         const materialization: LirProgram.RootMaterialization = .{
             .module = root.module.bytes,
             .producer = producer,
