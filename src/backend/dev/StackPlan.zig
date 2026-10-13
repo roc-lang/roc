@@ -693,11 +693,16 @@ fn assignSlots(self: *Self) Allocator.Error!void {
         }
         classes.deinit();
     }
-    // Each slot's reservations; their nodes live only while slots are assigned.
+    // Each slot's reservations. Every live range of every ordered value gets
+    // exactly one node, so the nodes are one allocation that lives only
+    // while slots are assigned.
     var reservations: std.ArrayList(Reservations) = .empty;
     defer reservations.deinit(self.allocator);
-    var nodes = collections.SingleThreadArena.init(self.allocator);
-    defer nodes.deinit();
+    var node_count: usize = 0;
+    for (order.items) |index| node_count += self.values.items[index].ranges.items().len;
+    const nodes = try self.allocator.alloc(Reservations.Node, node_count);
+    defer self.allocator.free(nodes);
+    var next_node: usize = 0;
     for (order.items) |index| {
         const value = &self.values.items[index];
         const ranges = value.ranges.items();
@@ -736,7 +741,8 @@ fn assignSlots(self: *Self) Allocator.Error!void {
         };
         const tree = &reservations.items[slot_index];
         for (ranges) |range| {
-            const reservation = try nodes.allocator().create(Reservations.Node);
+            const reservation = &nodes[next_node];
+            next_node += 1;
             var slot_entry = tree.getEntryFor(range);
             std.debug.assert(slot_entry.node == null);
             slot_entry.set(reservation);
