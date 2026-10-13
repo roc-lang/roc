@@ -2239,12 +2239,12 @@ pub fn addTargetEntry(store: *NodeStore, entry: AST.TargetEntry) std.mem.Allocat
 }
 
 /// Adds a TargetFile node and returns its index.
-pub fn addTargetFile(store: *NodeStore, file: AST.TargetFile) std.mem.Allocator.Error!AST.TargetFile.Idx {
+pub fn addTargetFile(store: *NodeStore, file: AST.TargetFile, region: AST.TokenizedRegion) std.mem.Allocator.Error!AST.TargetFile.Idx {
     var node = Node{
         .tag = .malformed,
         .main_token = 0,
         .data = .{ .lhs = 0, .rhs = 0 },
-        .region = AST.TokenizedRegion.empty(),
+        .region = region,
     };
 
     switch (file) {
@@ -2285,12 +2285,12 @@ pub fn addTargetConfigEntry(store: *NodeStore, entry: AST.TargetConfigEntry) std
 }
 
 /// Adds a TargetConfigValue node and returns its index.
-pub fn addTargetConfigValue(store: *NodeStore, value: AST.TargetConfigValue) std.mem.Allocator.Error!AST.TargetConfigValue.Idx {
+pub fn addTargetConfigValue(store: *NodeStore, value: AST.TargetConfigValue, region: AST.TokenizedRegion) std.mem.Allocator.Error!AST.TargetConfigValue.Idx {
     var node = Node{
         .tag = .target_config_value,
         .main_token = 0,
         .data = .{ .lhs = 0, .rhs = 0 },
-        .region = AST.TokenizedRegion.empty(),
+        .region = region,
     };
 
     switch (value) {

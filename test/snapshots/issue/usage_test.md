@@ -13,8 +13,8 @@ value : UsedType
 value = 42
 ~~~
 # EXPECTED
-UNDERSCORE IN TYPE ALIAS - usage_test.md:1:1:1:1
-UNDERSCORE IN TYPE ALIAS - usage_test.md:1:1:1:1
+UNDERSCORE IN TYPE ALIAS - usage_test.md:1:15:1:16
+UNDERSCORE IN TYPE ALIAS - usage_test.md:3:13:3:14
 TYPE MISMATCH - usage_test.md:6:9:6:11
 # PROBLEMS
 ~~~clojure
@@ -22,21 +22,21 @@ TYPE MISMATCH - usage_test.md:6:9:6:11
 	(report
 		(severity runtime_error)
 		(title "Underscore In Type Alias")
-		(region (start 1 1) (end 1 1))
+		(region (start 1 15) (end 1 16))
 		(headline
 			(reflow "Underscores are not allowed in type alias declarations."))
 		(document
-			(source-region (file "usage_test.md") (start 1 1) (end 1 1) (annotation error) (line-text "UnusedType := _"))
+			(source-region (file "usage_test.md") (start 1 15) (end 1 16) (annotation error) (line-text "UnusedType := _"))
 			(line-break)
 			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
 	(report
 		(severity runtime_error)
 		(title "Underscore In Type Alias")
-		(region (start 1 1) (end 1 1))
+		(region (start 3 13) (end 3 14))
 		(headline
 			(reflow "Underscores are not allowed in type alias declarations."))
 		(document
-			(source-region (file "usage_test.md") (start 1 1) (end 1 1) (annotation error) (line-text "UnusedType := _"))
+			(source-region (file "usage_test.md") (start 3 13) (end 3 14) (annotation error) (line-text "UsedType := _"))
 			(line-break)
 			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
 	(report

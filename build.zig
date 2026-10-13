@@ -4866,6 +4866,7 @@ pub fn build(b: *std.Build) void {
     const names: []const []const u8 = &.{
         "tokenize",
         "parse",
+        "format",
         "canonicalize",
         "typecheck",
         "build",
