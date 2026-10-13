@@ -4629,6 +4629,10 @@ fn checkCommandExpectation(
     return null;
 }
 
+/// The exit code a test that expects a panic accepts: 128 + SIGABRT where
+/// abort raises the signal, and the code `abort` exits with on Windows.
+const abort_exit_code: u8 = if (builtin.os.tag == .windows) 3 else 134;
+
 fn checkExitExpectation(
     allocator: Allocator,
     result: std.process.RunResult,
@@ -4657,7 +4661,7 @@ fn checkExitExpectation(
         },
         .panic => {
             const did_panic = result.term == .signal or
-                (result.term == .exited and result.term.exited == 134);
+                (result.term == .exited and result.term.exited == abort_exit_code);
             return if (did_panic) null else "expected the process to panic";
         },
         .any => null,
