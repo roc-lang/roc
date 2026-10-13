@@ -45,14 +45,6 @@ fn writeEchoPlatform(dir: std.Io.Dir, io: std.Io) (std.Io.Dir.CreateDirPathError
     for (echo_platform) |file| try dir.writeFile(io, .{ .sub_path = file.path, .data = file.source });
 }
 
-fn materializedRootCount(program: *const lir.CheckedPipeline.LoweredProgram) usize {
-    var count: usize = 0;
-    for (program.lir_result.const_roots.items) |root| {
-        if (root.value_slot != null) count += 1;
-    }
-    return count;
-}
-
 /// How many of one module's evaluated roots the program materializes a
 /// completed value for.
 fn materializedAmong(
@@ -155,7 +147,7 @@ fn rootWithOrder(requests: []const CheckedArtifact.RootRequest, order: u32) erro
     return error.TestUnexpectedResult;
 }
 
-test "compile-time consumer materializes only the evaluated values the program reads" {
+test "a build evaluates and materializes only the compile-time values its program reads" {
     if (is_freestanding) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
@@ -232,21 +224,27 @@ test "compile-time consumer materializes only the evaluated values the program r
     try std.testing.expect(!coord.hasUserErrors());
     const session = &coord.program_session.?;
 
-    // Both roots ran: an unreachable value still reports its `dbg`.
+    // A build evaluates only the roots its program demands (design.md
+    // "Demand-Driven Compile-Time Evaluation"), so the unread value never
+    // runs and reports no `dbg`.
     const observed = capture.bytes[0..capture.len];
     try std.testing.expect(std.mem.find(u8, observed, "evaluated used table") != null);
-    try std.testing.expect(std.mem.find(u8, observed, "evaluated unused table") != null);
+    try std.testing.expect(std.mem.find(u8, observed, "evaluated unused table") == null);
 
     const host = &session.host.?;
     const helper = moduleArtifactNamed(&coord, "Helper") orelse return error.TestUnexpectedResult;
     const helper_roots = helper.root_requests.compile_time_requests;
     try std.testing.expectEqual(@as(usize, 2), helper_roots.len);
-    // Only the value the program reads is materialized and frozen. The other
-    // root's value is checked module data, not target data. Transcoding
-    // rejects a read whose value the host did not materialize, so the runtime
-    // continuation below also fails if the wrong root were the retained one.
+    // The value the program reads is materialized and frozen; the other root
+    // stays explicitly unevaluated. Transcoding rejects a read whose value
+    // the host did not materialize, so the runtime continuation below also
+    // fails if the wrong root were the evaluated one.
     try std.testing.expectEqual(@as(usize, 1), materializedAmong(host, helper.key, helper_roots));
-    try std.testing.expect(materializedRootCount(host) < host.lir_result.const_roots.items.len);
+    var unevaluated: usize = 0;
+    for (helper_roots) |request| {
+        if (helper.compile_time_roots.root(request.compile_time_root.?).payload == .unevaluated) unevaluated += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), unevaluated);
 
     var runtime = try session.takeRuntime(allocator, session.runtime_roots, target);
     defer runtime.deinit();
