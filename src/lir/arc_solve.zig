@@ -1616,7 +1616,7 @@ fn computeOutcomeRestitution(
                 // Every other statement continues along its flow edges with
                 // the state it leaves.
                 var successors: OutcomeSuccessors = .{ .stack = &stack, .allocator = allocator, .state = next_state };
-                body_clone.forEachSuccessor(store, stmt, .{ .switch_edges = .arms_only, .join_body = false }, &successors, OutcomeSuccessors.push);
+                body_clone.forEachSuccessor(store, stmt.*, .{ .switch_edges = .arms_only, .join_body = false }, &successors, OutcomeSuccessors.push);
                 if (successors.failure) |err| return err;
             }
             if (!valid) break;
