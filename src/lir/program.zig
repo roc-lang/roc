@@ -708,10 +708,11 @@ pub const CachedCtfeDemand = struct {
     eager_reads: []const CachedCtfeRead = &.{},
     literal_reads: []const CachedLiteralRead = &.{},
 
+    /// Recipe validity is established where demand facts enter the
+    /// compiler: lowering builds valid recipes, and pack decoding rejects a
+    /// pack carrying an invalid one.
     pub fn permitsRetirement(self: CachedCtfeDemand) bool {
-        if (self.version != current_version or !self.complete) return false;
-        for (self.literal_reads) |read| if (!read.recipe.valid()) return false;
-        return true;
+        return self.version == current_version and self.complete;
     }
 
     pub fn deinit(self: CachedCtfeDemand, allocator: Allocator) void {
@@ -947,6 +948,17 @@ pub const SpecProc = struct {
     demand: ?CachedCtfeDemand = null,
 };
 
+/// A specialization lowered only for discovery whose body, and every body it
+/// reaches, registered no literal root, under the specialization key it was
+/// reserved for. A later compilation that reaches the same key parks it
+/// instead of lowering it again.
+pub const DiscoverySummary = struct {
+    key: [32]u8,
+    /// Checked template owner, as `SpecProc.owner`.
+    owner: ?checked.ModuleId = null,
+    platform_requirement_relation: ?[32]u8 = null,
+};
+
 /// Everything one lowering produced: the procedure store, its layouts, the
 /// root and specialization tables, and the static data the program carries.
 pub const Result = struct {
@@ -958,6 +970,9 @@ pub const Result = struct {
     /// the specialization's own procedure is listed, never SpecConstr clones
     /// or capture-bearing variants of it.
     spec_procs: std.ArrayList(SpecProc),
+    /// Discovery summaries of the specializations this program lowered only
+    /// for discovery.
+    discovery_summaries: std.ArrayList(DiscoverySummary) = .empty,
     root_metadata: std.ArrayList(root.RootMetadata),
     requested_layouts: std.ArrayList(RequestedLayout),
     const_types: const_store.ConstTypeStore,
@@ -1096,6 +1111,7 @@ pub const Result = struct {
         self.root_procs.deinit(allocator);
         for (self.spec_procs.items) |spec| if (spec.demand) |demand| demand.deinit(allocator);
         self.spec_procs.deinit(allocator);
+        self.discovery_summaries.deinit(allocator);
         self.layouts.deinit();
         self.store.deinit();
     }

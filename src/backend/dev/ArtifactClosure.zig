@@ -40,19 +40,7 @@ pub fn init(allocator: Allocator, set: *const ProcArtifact.Set) Allocator.Error!
         .seen = std.AutoHashMap(u32, void).init(allocator),
     };
     errdefer self.deinit();
-    var physical = std.crypto.hash.Blake3.init(.{});
-    physical.update("roc.native.physical.provision.v1");
-    for (set.artifacts) |artifact| {
-        std.hash.autoHashStrat(&physical, .{
-            artifact.kind,          artifact.code,              artifact.entry,       artifact.frame,
-            artifact.refs,          artifact.symbolic_refs,     artifact.relocations, artifact.data,
-            artifact.source_events, artifact.callable_contract,
-        }, .Deep);
-        if (artifact.context_contract) |contract| {
-            std.hash.autoHash(&physical, .{ contract.target, contract.cpu_level, contract.hot_reload, contract.default_platform_runtime });
-        }
-    }
-    physical.final(&self.physical_namespace);
+    self.physical_namespace = set.physical_namespace orelse derivedPhysicalNamespace(set);
     for (set.artifacts, 0..) |artifact, index| {
         switch (artifact.kind) {
             .proc => |identity| try self.indexDefinition(&self.procs, identity, @intCast(index)),
@@ -96,6 +84,25 @@ pub fn init(allocator: Allocator, set: *const ProcArtifact.Set) Allocator.Error!
         };
     }
     return self;
+}
+
+/// The physical identity of a set no producer recorded one for.
+fn derivedPhysicalNamespace(set: *const ProcArtifact.Set) [32]u8 {
+    var physical = std.crypto.hash.Blake3.init(.{});
+    physical.update("roc.native.physical.provision.v1");
+    for (set.artifacts) |artifact| {
+        std.hash.autoHashStrat(&physical, .{
+            artifact.kind,          artifact.code,              artifact.entry,       artifact.frame,
+            artifact.refs,          artifact.symbolic_refs,     artifact.relocations, artifact.data,
+            artifact.source_events, artifact.callable_contract,
+        }, .Deep);
+        if (artifact.context_contract) |contract| {
+            std.hash.autoHash(&physical, .{ contract.target, contract.cpu_level, contract.hot_reload, contract.default_platform_runtime });
+        }
+    }
+    var namespace: [32]u8 = undefined;
+    physical.final(&namespace);
+    return namespace;
 }
 
 fn resolveSymbolic(self: *const Self, target: @FieldType(ProcArtifact.SymbolicReference, "target")) ?u32 {

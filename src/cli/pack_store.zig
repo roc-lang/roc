@@ -1117,8 +1117,20 @@ pub const LoadedPacks = struct {
     const SelectedProcedure = struct {
         artifact: backend.dev.LocatedArtifact,
         physical: backend.dev.LirCodeGenMod.PhysicalProvision,
-        metadata: [32]u8,
+        /// The ARC and demand contract the first offer attached.
+        hit: Common.SpecCacheHit,
     };
+
+    /// Content identity of an offer's attached contract. Two offers of one
+    /// physical definition are compared by it only when both name the same
+    /// physical provision.
+    fn offerMetadata(hit: Common.SpecCacheHit) [32]u8 {
+        var hash = std.crypto.hash.Blake3.init(.{});
+        std.hash.autoHashStrat(&hash, hit, .Deep);
+        var metadata: [32]u8 = undefined;
+        hash.final(&metadata);
+        return metadata;
+    }
     const OfferKey = struct {
         key: [32]u8,
         platform_requirement_relation: ?[32]u8,
@@ -1130,6 +1142,9 @@ pub const LoadedPacks = struct {
     /// A rejected checking session can never serve or extend its objects again.
     revoked: bool = false,
     specs: std.AutoHashMap(OfferKey, Common.SpecCacheHit),
+    /// Specializations whose published discovery registered no literal root,
+    /// by the key and relation they serve.
+    discovery: std.AutoHashMapUnmanaged(OfferKey, void) = .empty,
     semantic_valid: std.AutoHashMap(OfferKey, bool),
     artifacts: std.AutoHashMap(lir.ProcIdentity, SelectedProcedure),
     /// Specializations served so far.
@@ -1275,6 +1290,9 @@ pub const LoadedPacks = struct {
 
     fn indexPacksUnrecorded(self: *LoadedPacks) LoadError!void {
         for (self.packs.items[self.indexed_count..]) |pack| {
+            for (pack.discovery) |entry| {
+                try self.discovery.put(self.allocator, .{ .key = entry.key, .platform_requirement_relation = entry.platform_requirement_relation }, {});
+            }
             for (pack.set.artifacts) |artifact| {
                 backend.dev.ProcArtifact.validateSourceEventCertificates(self.allocator, artifact, @import("builtin").cpu.arch.endian()) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
@@ -1321,21 +1339,17 @@ pub const LoadedPacks = struct {
                     .graph = closure.physical_namespace,
                     .definition = spec.artifact,
                 };
-                var hash = std.crypto.hash.Blake3.init(.{});
-                std.hash.autoHashStrat(&hash, hit, .Deep);
-                var metadata: [32]u8 = undefined;
-                hash.final(&metadata);
                 const artifact_entry = try self.artifacts.getOrPut(identity);
                 if (artifact_entry.found_existing) {
                     // Logical identity cannot redirect a hit to a physical
                     // sibling, nor attach that sibling's ARC/demand contract.
                     if (!std.meta.eql(artifact_entry.value_ptr.physical, physical) or
-                        !std.mem.eql(u8, &artifact_entry.value_ptr.metadata, &metadata)) continue;
+                        !std.mem.eql(u8, &offerMetadata(artifact_entry.value_ptr.hit), &offerMetadata(hit))) continue;
                 } else {
                     artifact_entry.value_ptr.* = .{
                         .artifact = .{ .set = &pack.set, .index = spec.artifact },
                         .physical = physical,
-                        .metadata = metadata,
+                        .hit = hit,
                     };
                 }
                 const gop = try self.specs.getOrPut(.{
@@ -1518,7 +1532,6 @@ pub const LoadedPacks = struct {
                 if (declaration.producer == .literal) {
                     for (summary.literal_reads) |read| {
                         if (!literalRecipeMatchesMaterializer(declaration, read.recipe)) continue;
-                        if (!read.recipe.valid()) continue;
                         const key = LiteralProducer{ .key = read.recipe.producer_key, .identity = read.recipe.object_identity };
                         if ((try literal_keys.getOrPut(key)).found_existing) continue;
                         try recipes.append(self.allocator, read.recipe);
@@ -1683,10 +1696,7 @@ pub const LoadedPacks = struct {
         read: lir.Program.CachedLiteralRead,
     ) Allocator.Error!void {
         const producer = LiteralProducer{ .key = read.recipe.producer_key, .identity = read.recipe.object_identity };
-        var recipe_hash = std.crypto.hash.Blake3.init(.{});
-        std.hash.autoHashStrat(&recipe_hash, read.recipe, .Deep);
-        var digest: [32]u8 = undefined;
-        recipe_hash.final(&digest);
+        var digest = try PackFile.recipeDigest(reads.allocator, read.recipe);
         const recipe = try recipes.getOrPut(producer);
         if (recipe.found_existing) {
             if (!std.mem.eql(u8, &recipe.value_ptr.*, &digest)) complete.* = false;
@@ -1963,6 +1973,7 @@ pub const LoadedPacks = struct {
         self.authority_arena.deinit();
         self.artifacts.deinit();
         self.specs.deinit();
+        self.discovery.deinit(self.allocator);
         self.semantic_valid.deinit();
         for (self.packs.items) |pack| {
             pack.deinit();
@@ -1973,7 +1984,7 @@ pub const LoadedPacks = struct {
 
     /// The lookup Monotype consults at reservation.
     pub fn specCacheLookup(self: *LoadedPacks) Common.SpecCacheLookup {
-        return .{ .context = @ptrCast(self), .find = findSpec };
+        return .{ .context = @ptrCast(self), .find = findSpec, .find_discovery = findDiscovery };
     }
 
     /// The artifact source the object compiler splices from.
@@ -1997,6 +2008,15 @@ pub const LoadedPacks = struct {
         };
         self.hits += 1;
         return hit;
+    }
+
+    fn findDiscovery(context: *anyopaque, key: [32]u8, current_relation: ?[32]u8) bool {
+        const self: *LoadedPacks = @ptrCast(@alignCast(context));
+        if (self.revoked) return false;
+        self.ensureLoaded();
+        if (self.state != .ready) return false;
+        return self.discovery.contains(.{ .key = key, .platform_requirement_relation = current_relation }) or
+            self.discovery.contains(.{ .key = key, .platform_requirement_relation = null });
     }
 
     fn findArtifact(context: *anyopaque, identity: lir.ProcIdentity) ?backend.dev.LocatedArtifact {

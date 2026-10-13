@@ -361,6 +361,10 @@ fn validatePatchSpan(code: []const u8, span: PatchSpan) PatchError!void {
 pub const Set = struct {
     arena: std.heap.ArenaAllocator,
     artifacts: []const Artifact,
+    /// Content identity of this exact physical graph when its producer
+    /// recorded one, as a decoded pack does. Otherwise `ArtifactClosure`
+    /// derives it from the artifacts.
+    physical_namespace: ?[32]u8 = null,
 
     pub fn deinit(self: *Set) void {
         self.arena.deinit();

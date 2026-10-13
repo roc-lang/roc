@@ -319,20 +319,14 @@ pub fn hasherWriteOp(primitive: checked.CheckedPrimitive) LIR.LowLevel {
     };
 }
 
-/// Panic in debug builds for a violated post-check invariant.
+/// Panic in builds with runtime safety for a violated post-check invariant.
 pub fn invariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .debug) {
-        base.invariant("postcheck invariant violated: {s}", .{message});
-    }
-    unreachable;
+    base.invariant("postcheck invariant violated: {s}", .{message});
 }
 
 /// `invariant` with runtime context formatted into the panic message.
 pub fn invariantFmt(comptime fmt: []const u8, args: anytype) noreturn {
-    if (@import("builtin").mode == .debug) {
-        base.invariant("postcheck invariant violated: " ++ fmt, args);
-    }
-    unreachable;
+    base.invariant("postcheck invariant violated: " ++ fmt, args);
 }
 
 /// Stop the build with a compiler-bug message in every build mode.
@@ -438,6 +432,14 @@ pub const SpecCacheHit = struct {
 pub const SpecCacheLookup = struct {
     context: *anyopaque,
     find: *const fn (context: *anyopaque, key: [32]u8, current_relation: ?[32]u8) ?SpecCacheHit,
+    /// Whether the provider holds a discovery summary showing that the
+    /// specialization's discovery registers no literal root.
+    find_discovery: ?*const fn (context: *anyopaque, key: [32]u8, current_relation: ?[32]u8) bool = null,
+
+    pub fn registersNoLiteralRoot(self: SpecCacheLookup, key: [32]u8, current_relation: ?[32]u8) bool {
+        const find = self.find_discovery orelse return false;
+        return find(self.context, key, current_relation);
+    }
 
     /// Session capability identity, not a persistent cache key. Equal providers
     /// expose the same immutable offer and artifact collection to both readers.

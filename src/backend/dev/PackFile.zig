@@ -19,7 +19,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RPCK";
 /// Format version; bump whenever the encoding or artifact contents change.
-pub const format_version: u32 = 20;
+pub const format_version: u32 = 22;
 
 /// One specialization the pack can serve: its reservation-time key, the
 /// artifact holding its procedure, and the ownership signature and
@@ -41,10 +41,19 @@ pub const SpecEntry = struct {
     rc_ret_conditions: []const u32,
 };
 
+/// A specialization whose discovery registered no literal root, under the
+/// specialization key it was reserved for (`lir.Program.DiscoverySummary`).
+/// It names no artifact.
+pub const DiscoveryEntry = struct {
+    key: [32]u8,
+    platform_requirement_relation: ?[32]u8 = null,
+};
+
 /// A pack read back from its bytes.
 pub const Pack = struct {
     set: ProcArtifact.Set,
     specs: []const SpecEntry,
+    discovery: []const DiscoveryEntry = &.{},
 
     pub fn deinit(self: *Pack) void {
         self.set.deinit();
@@ -111,12 +120,29 @@ test "pack preserves physical callable targets and observation facts but rejects
     try std.testing.expectError(error.InvalidCodeTarget, write(allocator, &set, &.{}));
 }
 
+/// Content identity of a literal recipe: the digest of its persisted
+/// encoding, which names exactly the declared fields and no in-memory layout.
+pub fn recipeDigest(allocator: Allocator, recipe: lir.Program.CachedLiteralRecipe) Allocator.Error![32]u8 {
+    var bytes = std.ArrayList(u8).empty;
+    defer bytes.deinit(allocator);
+    var writer = Writer{ .allocator = allocator, .bytes = &bytes };
+    try writer.context(recipe);
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.Blake3.hash(bytes.items, &digest, .{});
+    return digest;
+}
+
 /// Encode an artifact set and its spec table. Every carried constant the
 /// set's program named for itself is written under its content name, and so
 /// is every relocation to it, so the pack links into any program. Explicit
 /// context immediates are stored as zero: their descriptors, not the producer's
 /// dense IDs, decide the persistent bytes.
 pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const SpecEntry) WriteError![]u8 {
+    return writeOffers(allocator, set, specs, &.{});
+}
+
+/// `write`, with the discovery summaries the pack also offers.
+pub fn writeOffers(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const SpecEntry, discovery: []const DiscoveryEntry) WriteError![]u8 {
     for (specs) |spec| {
         if (spec.artifact >= set.artifacts.len or set.artifacts[spec.artifact].root_materialization != null)
             return error.InvalidRootMaterializationDependency;
@@ -155,6 +181,11 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
 
     try writer.raw(magic);
     try writer.word(format_version);
+    // The body's content hash names this exact physical graph for every
+    // reader, so a reader never hashes the decoded artifacts again.
+    const namespace_offset = bytes.items.len;
+    try writer.raw(&(@as([32]u8, @splat(0))));
+    const body_offset = bytes.items.len;
     try writer.word(@intCast(set.artifacts.len));
     try writer.word(@intCast(specs.len));
 
@@ -310,6 +341,17 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
         for (spec.rc_ret_conditions) |condition| try writer.word(condition);
     }
 
+    try writer.word(@intCast(discovery.len));
+    for (discovery) |entry| {
+        try writer.raw(&entry.key);
+        try writer.byte(@intFromBool(entry.platform_requirement_relation != null));
+        if (entry.platform_requirement_relation) |relation| try writer.raw(&relation);
+    }
+
+    var namespace = std.crypto.hash.Blake3.init(.{});
+    namespace.update("roc.native.physical.pack.v1");
+    namespace.update(bytes.items[body_offset..]);
+    namespace.final(bytes.items[namespace_offset..][0..32]);
     return try bytes.toOwnedSlice(allocator);
 }
 
@@ -323,6 +365,7 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
     const header = try reader.raw(magic.len);
     if (!std.mem.eql(u8, header, magic)) return error.MalformedPack;
     if (try reader.word() != format_version) return error.UnsupportedPackVersion;
+    const physical_namespace = (try reader.raw(32))[0..32].*;
     const artifact_count = try reader.word();
     const spec_count = try reader.word();
 
@@ -569,11 +612,23 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
             for (demand.literal_reads) |literal| if (!literal.recipe.valid()) return error.MalformedPack;
         }
     }
+    const discovery = try arena_allocator.alloc(DiscoveryEntry, try reader.word());
+    for (discovery) |*entry| {
+        entry.* = .{
+            .key = (try reader.raw(32))[0..32].*,
+            .platform_requirement_relation = switch (try reader.byte()) {
+                0 => null,
+                1 => (try reader.raw(32))[0..32].*,
+                else => return error.MalformedPack,
+            },
+        };
+    }
     if (reader.offset != bytes.len) return error.MalformedPack;
 
     return .{
-        .set = .{ .arena = arena, .artifacts = artifacts },
+        .set = .{ .arena = arena, .artifacts = artifacts, .physical_namespace = physical_namespace },
         .specs = specs,
+        .discovery = discovery,
     };
 }
 
@@ -590,7 +645,12 @@ const Writer = struct {
             .int => |info| {
                 if (info.bits == 8) try self.byte(value) else if (info.bits == 32) try self.word(value) else @compileError("unsupported context integer");
             },
-            .@"enum" => try self.byte(@intCast(@backingInt(value))),
+            // An enum keeps its full backing width: dense ids are enums too.
+            .@"enum" => |info| switch (@typeInfo(info.tag_type).int.bits) {
+                1...8 => try self.byte(@intCast(@backingInt(value))),
+                9...32 => try self.word(@intCast(@backingInt(value))),
+                else => @compileError("unsupported context enum width"),
+            },
             .optional => {
                 try self.byte(@intFromBool(value != null));
                 if (value) |present| try self.context(present);
@@ -672,7 +732,14 @@ const Reader = struct {
                 if (info.bits == 32) return try self.word();
                 @compileError("unsupported context integer");
             },
-            .@"enum" => return std.enums.fromInt(T, try self.byte()) orelse error.MalformedPack,
+            .@"enum" => |info| {
+                const backing: u32 = switch (@typeInfo(info.tag_type).int.bits) {
+                    1...8 => try self.byte(),
+                    9...32 => try self.word(),
+                    else => @compileError("unsupported context enum width"),
+                };
+                return std.enums.fromInt(T, backing) orelse error.MalformedPack;
+            },
             .optional => |info| return switch (try self.byte()) {
                 0 => null,
                 1 => try self.context(info.child, allocator),
@@ -1019,7 +1086,6 @@ test "pack literal producer declaration roundtrip and malformed recipe rejection
     defer restored.deinit();
     try std.testing.expectEqualDeep(result_types[0], restored.store.type_store.get(result.root));
     literals[0].recipe.result.root = @fromBackingInt(@intCast(100));
-    try std.testing.expect(!specs[0].demand.?.permitsRetirement());
     try std.testing.expectError(error.InvalidLiteralRecipe, write(allocator, &set, &specs));
 }
 

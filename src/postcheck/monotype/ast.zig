@@ -220,6 +220,10 @@ pub const FnTemplate = struct {
     /// before the body exists. Null for functions that are not template
     /// specializations.
     spec_key: ?names.TypeDigest = null,
+    /// The `spec_key` a procedure lowered only for discovery was reserved
+    /// under. Its discovery summary is published under this key; the
+    /// procedure itself offers no object-cache entry.
+    discovery_key: ?names.TypeDigest = null,
     /// Set when the object cache served this specialization: the body is
     /// never lowered, and Direct LIR emits an external procedure that the
     /// object writer fills from the cache entry.

@@ -379,6 +379,7 @@ const CompileTimeObjectCache = struct {
         defer self.packs.projection_modules = null;
         const artifact = modules.root.module;
         const build_env = self.build_env.?;
+        try self.publishDiscoverySummaries(artifact, lowered);
         var sets = std.ArrayList(*const backend.dev.ProcArtifact.Set).empty;
         defer sets.deinit(self.allocator);
         const keyed = try self.allocator.alloc(bool, lowered.lir_result.store.getProcSpecs().len);
@@ -498,6 +499,45 @@ const CompileTimeObjectCache = struct {
                 self.allocator.free(bytes);
                 continue;
             }
+            try self.stagePublication(placement, producer.codeGenerationKey().bytes, bytes);
+        }
+    }
+
+    /// Publish each discovery summary this program produced in a pack of
+    /// its checked owner, beside that owner's native offers.
+    fn publishDiscoverySummaries(self: *CompileTimeObjectCache, artifact: *const check.CheckedArtifact.CheckedModuleArtifact, lowered: *const lir.CheckedPipeline.LoweredProgram) Allocator.Error!void {
+        const summaries = lowered.lir_result.discovery_summaries.items;
+        if (summaries.len == 0) return;
+        const build_env = self.build_env.?;
+        const requester = check.CheckedArtifact.ModuleId{ .bytes = artifact.key.bytes };
+        const builtin_owner = check.CheckedArtifact.ModuleId{ .bytes = build_env.builtin_modules.checked_artifact.key.bytes };
+        var by_owner = std.AutoArrayHashMapUnmanaged([32]u8, std.ArrayList(backend.dev.PackFile.DiscoveryEntry)).empty;
+        defer {
+            for (by_owner.values()) |*entries| entries.deinit(self.allocator);
+            by_owner.deinit(self.allocator);
+        }
+        for (summaries) |summary| {
+            const owner = cachePublicationOwner(summary.owner, requester, builtin_owner) orelse continue;
+            const entry = try by_owner.getOrPut(self.allocator, owner.bytes);
+            if (!entry.found_existing) entry.value_ptr.* = .empty;
+            try entry.value_ptr.append(self.allocator, .{
+                .key = summary.key,
+                .platform_requirement_relation = summary.platform_requirement_relation,
+            });
+        }
+        var empty = backend.dev.ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(self.allocator), .artifacts = &.{} };
+        defer empty.deinit();
+        for (by_owner.keys(), by_owner.values()) |owner_bytes, entries| {
+            const owner = check.CheckedArtifact.ModuleId{ .bytes = owner_bytes };
+            const producer = if (owner.eql(requester)) artifact else self.declaredArtifact(owner.bytes) orelse continue;
+            const placement = build_env.packPlacementForArtifactKey(producer.key) orelse continue;
+            const bytes = backend.dev.PackFile.writeOffers(self.allocator, &empty, &.{}, entries.items) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                // Lowering produces valid recipes, and an empty set has no
+                // artifact to reject.
+                error.InvalidCodeTarget, error.InvalidSourceEventCertificate, error.InvalidLiteralRecipe, error.InvalidRootMaterializationDependency => unreachable,
+            };
+            errdefer self.allocator.free(bytes);
             try self.stagePublication(placement, producer.codeGenerationKey().bytes, bytes);
         }
     }
@@ -17664,7 +17704,7 @@ fn recordDevTestExecution(reporter: *progress.Reporter, timing: *const eval.test
     );
 }
 
-fn demandCounters(demand: lir.CheckedPipeline.DemandMetrics) [12]progress.Counter {
+fn demandCounters(demand: lir.CheckedPipeline.DemandMetrics) [13]progress.Counter {
     return .{
         .{ .name = "Program roots", .count = demand.program_roots },
         .{ .name = "Discovery roots", .count = demand.discovery_roots },
@@ -17678,6 +17718,7 @@ fn demandCounters(demand: lir.CheckedPipeline.DemandMetrics) [12]progress.Counte
         .{ .name = "Unparked requests", .count = demand.monotype.unparked },
         .{ .name = "Upgraded bodies", .count = demand.monotype.upgraded },
         .{ .name = "Never-run stubs", .count = demand.monotype.stubs },
+        .{ .name = "Summarized discovery requests", .count = demand.monotype.summarized },
     };
 }
 
