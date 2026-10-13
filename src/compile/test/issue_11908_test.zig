@@ -1,6 +1,7 @@
 //! Numeric source lists must remain compact through their first evaluation.
 const std = @import("std");
 const check = @import("check");
+const CoreCtx = @import("ctx").CoreCtx;
 const roc_target = @import("roc_target");
 const compile_build = @import("../compile_build.zig");
 
@@ -9,6 +10,17 @@ const TestError = compile_build.InitError || compile_build.BuildRootError ||
     error{ TestExpectedEqual, TestUnexpectedResult };
 
 const Measurement = struct { statements: usize, locals: usize, unpacked_lists: usize };
+
+/// Collects a build's stderr writes, such as compile-time `dbg` output, in
+/// memory rather than in the test process's stderr.
+const StderrCapture = struct {
+    bytes: std.ArrayList(u8) = .empty,
+
+    fn write(raw: ?*anyopaque, _: std.Io, bytes: []const u8) CoreCtx.StdioError!void {
+        const self: *StderrCapture = @ptrCast(@alignCast(raw.?));
+        self.bytes.appendSlice(std.testing.allocator, bytes) catch return error.IoError;
+    }
+};
 
 fn checkList(source: []const u8, scalar: check.ConstStore.ConstPackedScalar, expected: []const u8) TestError!Measurement {
     return checkListWithDebug(source, scalar, expected, &.{});
@@ -26,6 +38,10 @@ fn checkListWithDebug(source: []const u8, scalar: check.ConstStore.ConstPackedSc
     defer gpa.free(path);
     var build = try compile_build.BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
     defer build.deinit();
+    var stderr_capture: StderrCapture = .{};
+    defer stderr_capture.bytes.deinit(gpa);
+    build.filesystem.ctx = &stderr_capture;
+    build.filesystem.vtable.writeStderr = StderrCapture.write;
     try build.build(path);
     const coord = build.coordinator.?;
     try std.testing.expect(!coord.hasUserErrors());
@@ -42,6 +58,10 @@ fn checkListWithDebug(source: []const u8, scalar: check.ConstStore.ConstPackedSc
     for (messages, artifact.compile_time_debug.entries) |message, entry| {
         try std.testing.expectEqualStrings(message, artifact.compile_time_debug.message(entry));
     }
+    var expected_stderr: std.ArrayList(u8) = .empty;
+    defer expected_stderr.deinit(gpa);
+    for (messages) |message| try expected_stderr.print(gpa, "[dbg] {s}\n", .{message});
+    try std.testing.expectEqualStrings(expected_stderr.items, stderr_capture.bytes.items);
     var constants: usize = 0;
     for (artifact.compile_time_roots.roots) |root| {
         if (root.kind != .constant) continue;

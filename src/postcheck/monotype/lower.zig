@@ -23235,11 +23235,15 @@ const BodyContext = struct {
     /// variables over them, and relates each bound node to the one it
     /// replaces. The relations follow the environment: a new binder is
     /// related on the next request, and one rebound or removed since starts
-    /// them over.
+    /// them over. The relations belong to the binder environment, so a fresh
+    /// environment (`enterFreshBinderEnvironment`) starts without them.
     fn nestedRelationBase(self: *BodyContext) Allocator.Error!*NestedRelationBase {
         const entries = try self.binders.sortedEntries(self.allocator);
         defer self.allocator.free(entries);
         if (self.nested_relation_base) |existing| {
+            if (!moduleBytesEqual(existing.ctx.view.key.bytes, self.view.key.bytes)) {
+                Common.invariant("nested binder relations outlived their binder environment's module");
+            }
             var current: usize = 0;
             var stale = false;
             for (entries) |entry| {
