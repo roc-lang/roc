@@ -1189,7 +1189,8 @@ pub const LoadedPacks = struct {
     allocator: Allocator,
     packs: std.ArrayList(*PackFile.Pack),
     indexed_count: usize = 0,
-    /// A rejected checking session can never serve or extend its objects again.
+    /// A rejected checking session can never offer or extend its objects
+    /// again; the code of specializations it already served stays readable.
     revoked: bool = false,
     specs: std.AutoHashMap(OfferKey, Common.SpecCacheHit),
     /// Specializations with a settled discovery outcome, by the key and
@@ -2264,9 +2265,12 @@ pub const LoadedPacks = struct {
             self.discovery.contains(.{ .key = key, .platform_requirement_relation = null });
     }
 
+    /// The code of a specialization this cache served. A revoked session
+    /// serves no new specialization, but the code of the ones it served
+    /// before the revocation stays available to the program that took them.
     fn findArtifact(context: *anyopaque, identity: lir.ProcIdentity) ?backend.dev.LocatedArtifact {
         const self: *LoadedPacks = @ptrCast(@alignCast(context));
-        if (self.revoked) return null;
+        if (self.revoked and self.state == .pending) return null;
         self.ensureLoaded();
         if (self.state != .ready) return null;
         const selected = self.artifacts.get(identity) orelse return null;
