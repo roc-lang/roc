@@ -1492,6 +1492,7 @@ pub const Instantiator = struct {
                         .expr_region = constraint.interpolation.expr_region,
                         .item_var = fresh_item_var,
                         .interpolated_parts = fresh_parts_range,
+                        .regions = constraint.interpolation.regions,
                     };
                     try machine.pending_constraints.append(self.store.gpa, fresh_constraint);
                     frame.cons_idx += 1;
@@ -1869,6 +1870,7 @@ pub const Instantiator = struct {
             .expr_region = metadata.expr_region,
             .item_var = fresh_item_var,
             .interpolated_parts = fresh_parts_range,
+            .regions = metadata.regions,
         };
     }
 };

@@ -2263,7 +2263,7 @@ main! = |_| { # Yeah I can leave a comment here
 		number = number + n
 	}
 	record =
-		qux :
+	qux :
 	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
 	multiline_tuple = (
 		123,

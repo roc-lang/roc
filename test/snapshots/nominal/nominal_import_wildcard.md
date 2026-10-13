@@ -134,7 +134,6 @@ EndOfFile,
 ~~~roc
 import Color
 
-
 red : Color
 red = Red
 
