@@ -4274,6 +4274,23 @@ pub fn deinit(self: *Self) void {
     var scheme_names = self.scheme_mint_names.valueIterator();
     while (scheme_names.next()) |names| self.gpa.free(names.*);
     if (self.method_binding_envs) |envs| self.gpa.free(envs);
+    const fields = @typeInfo(Self).@"struct";
+    inline for (fields.field_names, fields.field_types) |name, T| {
+        const info = @typeInfo(T);
+        if (info != .@"struct" and info != .@"union") continue;
+        if (!@hasDecl(T, "deinit")) {
+            const exempt = comptime for (deinit_exempt_types) |Exempt| {
+                if (T == Exempt) break true;
+            } else false;
+            if (!exempt) @compileError("Check field '" ++ name ++ "' needs a pub deinit");
+            continue;
+        }
+        if (@typeInfo(@TypeOf(T.deinit)).@"fn".param_types.len == 2) {
+            @field(self, name).deinit(self.gpa);
+        } else {
+            @field(self, name).deinit();
+        }
+    }
 }
 
 /// Returns the hoisted roots selected while checking this module.
