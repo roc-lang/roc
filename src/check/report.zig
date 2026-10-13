@@ -3417,7 +3417,7 @@ pub const ReportBuilder = struct {
 
         if (tie.interpolation_region) |interpolation_region| {
             try D.renderSliceInto(&.{
-                D.bytes("The values interpolated into this string must all have the same type:"),
+                D.bytes("The values interpolated into this string must all have the same type."),
             }, self, &report, &report.headline);
             try self.addSourceHighlightRegion(&report, interpolation_region);
             try report.document.addLineBreak();
@@ -3427,7 +3427,7 @@ pub const ReportBuilder = struct {
             try report.document.addLineBreak();
         } else {
             try D.renderSliceInto(&.{
-                D.bytes("This use gives different types to values that are interpolated into the same string, so they must all have the same type:"),
+                D.bytes("This use gives different types to values that are interpolated into the same string, so they must all have the same type."),
             }, self, &report, &report.headline);
             try self.addSourceHighlightRegion(&report, tie.use_region);
         }
