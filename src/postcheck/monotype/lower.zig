@@ -23305,7 +23305,6 @@ const BodyContext = struct {
         self.allocator.destroy(relation_base);
     }
 
-
     /// The cell a nested body's instantiation gives a quantified variable of
     /// an enclosing scope: the substitution of the innermost lexical evidence
     /// frame whose scheme quantifies it. Null leaves the variable fresh: it
