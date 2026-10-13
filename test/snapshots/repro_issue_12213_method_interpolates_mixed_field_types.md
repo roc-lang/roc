@@ -25,7 +25,7 @@ TYPE MISMATCH - repro_issue_12213_method_interpolates_mixed_field_types.md:2:22:
 		(title "Type Mismatch")
 		(region (start 2 22) (end 2 65))
 		(headline
-			(reflow "The values interpolated into this string must all have the same type:"))
+			(reflow "The values interpolated into this string must all have the same type."))
 		(document
 			(source-region (file "repro_issue_12213_method_interpolates_mixed_field_types.md") (start 2 22) (end 2 65) (annotation error) (line-text "\tdescribe = |person| \"${person.name} is ${person.age} years old\""))
 			(line-break)

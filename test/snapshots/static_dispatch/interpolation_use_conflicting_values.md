@@ -24,7 +24,7 @@ TYPE MISMATCH - interpolation_use_conflicting_values.md:1:21:1:64
 		(title "Type Mismatch")
 		(region (start 1 21) (end 1 64))
 		(headline
-			(reflow "The values interpolated into this string must all have the same type:"))
+			(reflow "The values interpolated into this string must all have the same type."))
 		(document
 			(source-region (file "interpolation_use_conflicting_values.md") (start 1 21) (end 1 64) (annotation error) (line-text "describe = |person| \"${person.name} is ${person.age} years old\""))
 			(line-break)
