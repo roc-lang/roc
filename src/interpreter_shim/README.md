@@ -72,9 +72,9 @@ before it is embedded:
   and a COFF link rejects the second definition outright. The 128-bit helpers
   the shim's code calls are the libcall-free ones in
   `builtins/native_runtime_libcalls.zig`, and its stack probe is
-  `src/shim_stack_probe.zig`; both are compiled into the shim under names
+  `src/machine_code_shim/stack_probe.zig`; both are compiled into the shim under names
   local to its object. A 32-bit target adds the 64-bit helpers of
-  `src/shim_compiler_rt.zig` the same way.
+  `src/machine_code_shim/compiler_rt.zig` the same way.
 
 ## Key Symbols
 

@@ -6028,13 +6028,13 @@ fn wasmObjectArtifact(b: *std.Build, obj: *Step.Compile) std.Build.LazyPath {
 
 /// The 64-bit arithmetic and AAPCS helpers a shim's own code calls on a
 /// 32-bit target, to be compiled into it with local binding (see
-/// src/shim_compiler_rt.zig).
+/// src/machine_code_shim/compiler_rt.zig).
 ///
 /// Reuses the toolchain's arithmetic and AAPCS implementations without
 /// importing its public compiler-rt root, which exports every helper.
 fn shimCompilerRtModule(b: *std.Build, target: ResolvedTarget) *std.Build.Module {
     const private_rt = b.addWriteFiles();
-    const root = private_rt.addCopyFile(b.path("src/shim_compiler_rt.zig"), "compiler_rt.zig");
+    const root = private_rt.addCopyFile(b.path("src/machine_code_shim/compiler_rt.zig"), "compiler_rt.zig");
     for ([_][]const u8{
         "int.zig",             "udivmod.zig",             "arm.zig",
         "udivmodsi4_test.zig", "udivmoddi4_test.zig",     "udivmodti4_test.zig",
@@ -6113,7 +6113,7 @@ fn addInterpreterShimLib(
         interpreter_shim_lib.root_module.addImport("shim_compiler_rt", shimCompilerRtModule(b, target));
     }
     interpreter_shim_lib.root_module.addImport("shim_stack_probe", b.createModule(.{
-        .root_source_file = b.path("src/shim_stack_probe.zig"),
+        .root_source_file = b.path("src/machine_code_shim/stack_probe.zig"),
     }));
     return interpreter_shim_lib;
 }
@@ -6175,9 +6175,6 @@ fn addMachineCodeShimLib(
     machine_code_shim_lib.root_module.addImport("shim_host_abi", shim_host_abi_module);
     machine_code_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
     machine_code_shim_lib.step.dependOn(&write_compiled_builtins.step);
-    machine_code_shim_lib.root_module.addImport("shim_stack_probe", b.createModule(.{
-        .root_source_file = b.path("src/shim_stack_probe.zig"),
-    }));
     if (target.result.os.tag == .linux and
         (target.result.cpu.arch == .x86 or target.result.cpu.arch.isArm()))
     {
@@ -6532,9 +6529,6 @@ fn addMainExe(
             .root_source_file = b.path("src/shim_io.zig"),
         }));
         machine_code_shim_test.root_module.addImport("shim_host_abi", shim_host_abi_module);
-        machine_code_shim_test.root_module.addImport("shim_stack_probe", b.createModule(.{
-            .root_source_file = b.path("src/shim_stack_probe.zig"),
-        }));
         machine_code_shim_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
         machine_code_shim_test.step.dependOn(&write_compiled_builtins.step);
         machine_code_shim_test.root_module.addObjectFile(builtins_obj.getEmittedBin());
