@@ -628,14 +628,14 @@ pub const CachedLiteralRecipe = struct {
     evidence_frame_head: ?u32 = null,
     local_contexts: []const CachedLiteralLocalContext = &.{},
 
-    pub fn valid(self: CachedLiteralRecipe) bool {
-        if (!self.callable.valid() or !self.result.valid()) return false;
+    pub fn valid(self: CachedLiteralRecipe, allocator: Allocator) Allocator.Error!bool {
+        if (!try self.callable.valid(allocator) or !try self.result.valid(allocator)) return false;
         if (self.callable.types[@backingInt(self.callable.root)] != .func) return false;
         if (!validEvidence(self.evidence, self.evidence_frames, self.evidence_frame_head)) return false;
         for (self.local_contexts) |context| {
             if (!validEvidence(context.evidence, context.evidence_frames, context.evidence_frame_head)) return false;
             for (context.bindings) |binding| {
-                if (binding.kind > 1 or !binding.ty.valid()) return false;
+                if (binding.kind > 1 or !try binding.ty.valid(allocator)) return false;
             }
         }
         return true;

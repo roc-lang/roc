@@ -231,7 +231,7 @@ pub const FnTemplate = struct {
     /// Storage demand is producer data even when a non-native consumer retains
     /// this body; native late splicing still needs the same root declarations.
     cached_root_uses: []const Common.CheckedRootUse = &.{},
-    cached_demand: ?@import("lir_core").Program.CachedCtfeDemand = null,
+    cached_demand: ?Common.CachedCtfeDemand = null,
     /// Set for a closed specialization of a Builtin template whose checked
     /// provided low-level operation is on `LowLevel.procedureKeyedByLayout`'s
     /// allow list. Direct LIR identifies the plain procedure of such a
@@ -1128,7 +1128,7 @@ pub const ComptimeSite = struct {
     owner: Common.LoweringModuleId,
     region: base.Region,
     checked_site: ?checked.CheckedExhaustivenessSiteId = null,
-    checked_origin: ?@import("lir_core").LIR.CheckedSiteOrigin = null,
+    checked_origin: ?Common.CheckedSiteOrigin = null,
     branch_regions: []const base.Region = &.{},
 };
 

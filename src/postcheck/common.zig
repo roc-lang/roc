@@ -396,6 +396,14 @@ test "test metadata uses explicit union request positions across equal root orde
     try std.testing.expectEqual(@as(u32, 7), testPlanMetadataForRoot(roots, root, 3).?.module_index);
 }
 
+/// Compile-time demand facts a cached specialization carries (`lir_core`),
+/// named here for the stages that must not import LIR.
+pub const CachedCtfeDemand = lir_core.Program.CachedCtfeDemand;
+pub const CachedLiteralRecipe = lir_core.Program.CachedLiteralRecipe;
+pub const CachedLiteralLocalContext = lir_core.Program.CachedLiteralLocalContext;
+/// The checked site an emitted statement originates from.
+pub const CheckedSiteOrigin = lir_core.LIR.CheckedSiteOrigin;
+
 /// What the object cache knows about a specialization it can serve: the
 /// content identity of its compiled procedure and the ownership signature
 /// and uniqueness facts ARC solved for it, which the program that links the

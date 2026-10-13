@@ -121,10 +121,14 @@ pub const Store = struct {
     }
 
     /// Every pack filed under a module identity, in name order.
-    pub fn loadIdentity(self: *const Store, io: std.Io, packs: *LoadedPacks, origin: compile.BuildEnv.PackOrigin, identity: [32]u8) LoadedPacks.LoadError!void {
+    /// The packs filed under a module identity for one code-generation key:
+    /// its complete pack and its partial offers. Packs an earlier revision of
+    /// the module wrote stay on disk but offer nothing this revision can use,
+    /// since every offer they hold is keyed by that revision's specializations.
+    pub fn loadIdentity(self: *const Store, io: std.Io, packs: *LoadedPacks, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8) LoadedPacks.LoadError!void {
         const dir = try self.identityDir(origin, identity);
         defer self.allocator.free(dir);
-        try packs.loadDirInto(io, dir, .cache_offers);
+        try packs.loadDirIntoFor(io, dir, .cache_offers, key);
     }
 };
 
@@ -1207,14 +1211,25 @@ pub const LoadedPacks = struct {
     /// Read every `.rpk` file in `dir_path`, in name order, without indexing.
     pub fn loadDirInto(self: *LoadedPacks, io: std.Io, dir_path: []const u8, input: Input) LoadError!void {
         std.debug.assert(self.state == .pending);
-        self.loadDirIntoUnrecorded(io, dir_path, input) catch |err| {
+        self.loadDirIntoUnrecorded(io, dir_path, input, null) catch |err| {
             self.state = .unavailable;
             self.failure = err;
             return err;
         };
     }
 
-    fn loadDirIntoUnrecorded(self: *LoadedPacks, io: std.Io, dir_path: []const u8, input: Input) LoadError!void {
+    /// `loadDirInto`, reading only the packs written for `key`.
+    pub fn loadDirIntoFor(self: *LoadedPacks, io: std.Io, dir_path: []const u8, input: Input, key: [32]u8) LoadError!void {
+        std.debug.assert(self.state == .pending);
+        self.loadDirIntoUnrecorded(io, dir_path, input, key) catch |err| {
+            self.state = .unavailable;
+            self.failure = err;
+            return err;
+        };
+    }
+
+    fn loadDirIntoUnrecorded(self: *LoadedPacks, io: std.Io, dir_path: []const u8, input: Input, only_key: ?[32]u8) LoadError!void {
+        const key_hex: ?[64]u8 = if (only_key) |key| std.fmt.bytesToHex(key, .lower) else null;
         const allocator = self.allocator;
         var names = std.ArrayList([]u8).empty;
         defer {
@@ -1232,6 +1247,7 @@ pub const LoadedPacks = struct {
                 const entry = (entries.next(io) catch return error.PackDirectoryUnreadable) orelse break;
                 if (entry.kind != .file) continue;
                 if (!std.mem.endsWith(u8, entry.name, ".rpk")) continue;
+                if (key_hex) |hex| if (!packNameForKey(entry.name, &hex)) continue;
                 try names.ensureUnusedCapacity(allocator, 1);
                 names.appendAssumeCapacity(try allocator.dupe(u8, entry.name));
             }
@@ -1254,6 +1270,17 @@ pub const LoadedPacks = struct {
                 return @as(LoadError!void, err);
             };
         }
+    }
+
+    /// Whether a pack file name is the complete pack (`<key>.rpk`) or a
+    /// partial offer (`partial-<key>-<content>.rpk`) of `key`.
+    fn packNameForKey(name: []const u8, key_hex: []const u8) bool {
+        const stem = name[0 .. name.len - ".rpk".len];
+        if (std.mem.eql(u8, stem, key_hex)) return true;
+        const prefix = "partial-";
+        if (!std.mem.startsWith(u8, stem, prefix)) return false;
+        const rest = stem[prefix.len..];
+        return rest.len > key_hex.len and std.mem.startsWith(u8, rest, key_hex) and rest[key_hex.len] == '-';
     }
 
     fn appendPack(self: *LoadedPacks, bytes: []const u8) LoadError!void {
@@ -1753,6 +1780,7 @@ pub const LoadedPacks = struct {
             const kind: SourceEvents.LiteralKind = switch (expr.data) {
                 .numeral => |numeral| if (numeral.plan != null) .numeral else return,
                 .str_from_quote => |quote| if (quote.plan != null) .quote else return,
+                .interpolation => |interpolation| if (interpolation.plan != null) .interpolation else return,
                 .pending,
                 .str_segment,
                 .str,
@@ -1779,7 +1807,6 @@ pub const LoadedPacks = struct {
                 .unary_not,
                 .field_access,
                 .dispatch_call,
-                .interpolation,
                 .structural_eq,
                 .structural_hash,
                 .method_eq,
@@ -1955,13 +1982,13 @@ pub const LoadedPacks = struct {
 
     fn loadPending(self: *LoadedPacks, pending: Pending, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) LoadError!void {
         if (pending.build_env.packPlacementForArtifactKey(root_artifact.key)) |placement| {
-            try pending.store.loadIdentity(pending.io, self, placement.origin, placement.identity);
+            try pending.store.loadIdentity(pending.io, self, placement.origin, placement.identity, root_artifact.codeGenerationKey().bytes);
         }
         const artifacts = try pending.build_env.collectVisibleArtifacts(self.allocator, root_artifact);
         defer self.allocator.free(artifacts);
         for (artifacts) |artifact| {
             const placement = pending.build_env.packPlacementForArtifactKey(artifact.key) orelse continue;
-            try pending.store.loadIdentity(pending.io, self, placement.origin, placement.identity);
+            try pending.store.loadIdentity(pending.io, self, placement.origin, placement.identity, artifact.codeGenerationKey().bytes);
         }
     }
 
@@ -2055,7 +2082,7 @@ test "pack literal offers require the full transitive exact producer closure" {
     };
     const first = [_]lir.Program.CachedLiteralRead{Fixture.read(@splat(2), @splat(12))};
     const second = [_]lir.Program.CachedLiteralRead{Fixture.read(@splat(3), @splat(13))};
-    try std.testing.expect(first[0].recipe.valid());
+    try std.testing.expect(try first[0].recipe.valid(std.testing.allocator));
     try packs.specs.put(.{ .key = @splat(1), .platform_requirement_relation = null }, Fixture.hit(@splat(11), &first));
     try packs.specs.put(.{ .key = @splat(2), .platform_requirement_relation = null }, Fixture.hit(@splat(12), &second));
     try packs.specs.put(.{ .key = @splat(4), .platform_requirement_relation = null }, Fixture.hit(@splat(14), &.{}));

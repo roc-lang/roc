@@ -85,7 +85,7 @@ pub const Representation = struct {
 
     /// Restore declared types, never reverse a cached physical layout.
     pub fn materialize(self: Representation, allocator: Allocator) (Allocator.Error || error{InvalidLiteralRecipe})!Materialized {
-        if (!self.valid()) return error.InvalidLiteralRecipe;
+        if (!try self.valid(allocator)) return error.InvalidLiteralRecipe;
         var result: Materialized = .{ .names = Names.NameStore.init(allocator), .store = ConstStore.ConstStore.init(allocator) };
         errdefer result.deinit();
         for (self.modules, 0..) |module, index| {
@@ -118,15 +118,17 @@ pub const Representation = struct {
     }
     /// All references are checked before entering ConstStore accessors.
     /// Recursive type edges are legitimate and need no recursive traversal.
-    pub fn valid(self: Representation) bool {
+    pub fn valid(self: Representation, allocator: Allocator) Allocator.Error!bool {
         if (!self.hasType(self.root)) return false;
-        for (self.modules, 0..) |module, index| {
-            for (self.modules[0..index]) |earlier| if (std.mem.eql(u8, &module, &earlier)) return false;
+        {
+            var seen = std.AutoHashMap([32]u8, void).init(allocator);
+            defer seen.deinit();
+            for (self.modules) |module| if ((try seen.getOrPut(module)).found_existing) return false;
         }
         inline for (.{ self.type_names, self.field_names, self.tag_names }) |texts| {
-            for (texts, 0..) |text, index| {
-                for (texts[0..index]) |earlier| if (std.mem.eql(u8, text, earlier)) return false;
-            }
+            var seen = std.StringHashMap(void).init(allocator);
+            defer seen.deinit();
+            for (texts) |text| if ((try seen.getOrPut(text)).found_existing) return false;
         }
         for (self.type_pool) |ty| if (!self.hasType(ty)) return false;
         for (self.field_pool) |field| {
@@ -194,7 +196,7 @@ test "literal producer representation restores exact name and type closure" {
     const record = try store.append(.{ .record = try store.appendFieldSpan(&.{.{ .name = name, .ty = number, .default = null }}) });
     const recipe = try Representation.capture(allocator, &store, &names, record);
     defer recipe.deinit(allocator);
-    try std.testing.expect(recipe.valid());
+    try std.testing.expect(try recipe.valid(std.testing.allocator));
     try std.testing.expectEqual(@as(usize, 2), recipe.types.len);
     try std.testing.expectEqual(@as(usize, 1), recipe.field_names.len);
     var restored = try recipe.materialize(allocator);
@@ -207,6 +209,6 @@ test "literal producer representation restores exact name and type closure" {
 test "literal producer representation rejects malformed references" {
     const types = [_]ConstStore.ConstType{.{ .list = @fromBackingInt(@intCast(1)) }};
     const recipe: Representation = .{ .root = @fromBackingInt(@intCast(types.len - 1)), .types = &types };
-    try std.testing.expect(!recipe.valid());
+    try std.testing.expect(!try recipe.valid(std.testing.allocator));
     try std.testing.expectError(error.InvalidLiteralRecipe, recipe.materialize(std.testing.allocator));
 }

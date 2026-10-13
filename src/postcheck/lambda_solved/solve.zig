@@ -711,6 +711,14 @@ const Solver = struct {
     fn markAbiBoundaryCallables(self: *Solver) Allocator.Error!void {
         for (self.lifted.fns, 0..) |fn_, index| {
             if (fn_.body != .hosted) continue;
+            // Only a host procedure has a host-facing schema. A body-less
+            // object-cache procedure keeps the signature its key names, and a
+            // reserved literal producer declaration is no procedure at all.
+            const source = fn_.source orelse continue;
+            switch (source.fn_def) {
+                .local_hosted, .imported_hosted => {},
+                .local_template, .imported_template, .checked_generated, .nested, .parser_runtime, .encoder_for_runtime => continue,
+            }
             const fn_id: Lifted.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             try self.markErasedCallablesAtFunctionBoundary(self.program.fn_tys.items[@backingInt(fn_id)]);
         }

@@ -80,7 +80,7 @@ test "literal producer exports a concrete callable declaration before lambda sol
     const conversion = try types.add(.{ .func = .{ .args = try types.addSpan(&.{number}), .ret = result_callable } });
     const recipe = try @import("literal_recipe.zig").representation(allocator, types.view(), &names_, conversion);
     defer recipe.deinit(allocator);
-    try std.testing.expect(recipe.valid());
+    try std.testing.expect(try recipe.valid(std.testing.allocator));
     var materialized = try recipe.materialize(allocator);
     defer materialized.deinit();
     const callable = materialized.store.type_store.get(recipe.root).func;

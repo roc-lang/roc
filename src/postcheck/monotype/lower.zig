@@ -5535,7 +5535,7 @@ const Builder = struct {
     /// Reifies the exact keyed producer's noncallable result as a layout request.
     /// The recipe is earlier-stage type authority, not a request to recheck its
     /// source. No callable evidence, capture values, or body is prepared.
-    fn projectLiteralMaterialization(self: *Builder, recipe: @import("lir_core").Program.CachedLiteralRecipe) Allocator.Error!void {
+    fn projectLiteralMaterialization(self: *Builder, recipe: Common.CachedLiteralRecipe) Allocator.Error!void {
         const destination = ProgramTypeDestination.begin(self);
         defer destination.end();
         const view = self.moduleForId(.{ .bytes = recipe.module });
@@ -5576,7 +5576,7 @@ const Builder = struct {
         });
     }
 
-    fn declareCachedDemand(self: *Builder, demand: ?@import("lir_core").Program.CachedCtfeDemand) Allocator.Error!void {
+    fn declareCachedDemand(self: *Builder, demand: ?Common.CachedCtfeDemand) Allocator.Error!void {
         const facts = demand orelse return;
         if (!facts.permitsRetirement()) Common.invariant("cached storage declaration has incomplete demand facts");
         for (facts.eager_reads) |read| {
@@ -5587,6 +5587,11 @@ const Builder = struct {
             const root = self.program.literal_roots.get(@backingInt(id));
             const view = self.moduleForId(root.module);
             const def = self.program.defs.get(@backingInt(root.def));
+            // A callable value is no storage layout: its lambda set comes from
+            // the producer body this declaration lowered, as it does when the
+            // literal is discovered in source, and a storage request would
+            // erase it (`projectLiteralMaterialization`).
+            if (self.program.types.get(def.ret) == .func or try self.monoFnTypeMentionsFunction(def.ret)) continue;
             try self.program.addLayoutRequest(.{
                 .checked_type = view.bodies.expr(@fromBackingInt(@intCast(root.site.checked_expr))).ty,
                 .ty = def.ret,
@@ -5599,7 +5604,7 @@ const Builder = struct {
     /// Prepare only an explicitly declared earlier producer. Its checked
     /// callable and lexical evidence are sufficient even when the result
     /// contains a callable whose capture layout is selected by the conversion.
-    fn declareCachedLiteral(self: *Builder, recipe: @import("lir_core").Program.CachedLiteralRecipe) Allocator.Error!Common.LiteralRootId {
+    fn declareCachedLiteral(self: *Builder, recipe: Common.CachedLiteralRecipe) Allocator.Error!Common.LiteralRootId {
         const identity: names.TypeDigest = .{ .bytes = recipe.producer_key };
         if (self.program.literal_root_by_identity.get(identity)) |id| {
             const existing = self.program.literal_roots.get(@backingInt(id));
@@ -5614,12 +5619,13 @@ const Builder = struct {
             self.program.literal_roots.getPtrImmediate(@backingInt(id)).recipe = declaration;
             return id;
         }
-        if (!recipe.valid()) Common.invariant("cached literal declaration has an invalid recipe");
+        if (!try recipe.valid(self.allocator)) Common.invariant("cached literal declaration has an invalid recipe");
         const view = self.moduleForId(.{ .bytes = recipe.module });
         const expr_id: checked.CheckedExprId = @fromBackingInt(@intCast(recipe.checked_expr));
         const kind: Common.LiteralRejectionKind = switch (view.bodies.expr(expr_id).data) {
             .numeral => .numeral,
             .str_from_quote => .quote,
+            .interpolation => .interpolation,
             .pending,
             .str_segment,
             .str,
@@ -5646,7 +5652,6 @@ const Builder = struct {
             .unary_not,
             .field_access,
             .dispatch_call,
-            .interpolation,
             .structural_eq,
             .structural_hash,
             .method_eq,
@@ -17448,7 +17453,7 @@ const DraftComptimeSite = struct {
     owner: Common.LoweringModuleId,
     region: base.Region,
     checked_site: ?checked.CheckedExhaustivenessSiteId = null,
-    checked_origin: ?@import("lir_core").LIR.CheckedSiteOrigin = null,
+    checked_origin: ?Common.CheckedSiteOrigin = null,
     branch_regions: DraftSpan(base.Region) = .empty(),
 };
 
@@ -49588,7 +49593,7 @@ const BodyContext = struct {
     }
 
     /// Decode the cached lexical types into the factory's declaration format.
-    fn materializeLiteralLocalContexts(self: *BodyContext, source: []const @import("lir_core").Program.CachedLiteralLocalContext) Allocator.Error![]DraftLiteralLocalContext {
+    fn materializeLiteralLocalContexts(self: *BodyContext, source: []const Common.CachedLiteralLocalContext) Allocator.Error![]DraftLiteralLocalContext {
         const allocator = self.builder.evidence_arena.allocator();
         const contexts = try allocator.alloc(DraftLiteralLocalContext, source.len);
         for (source, contexts) |context, *out_context| {
@@ -61393,7 +61398,7 @@ const BodyContext = struct {
         region: base.Region,
         checked_site: ?checked.CheckedExhaustivenessSiteId,
         branch_regions: []const base.Region,
-        checked_origin: @import("lir_core").LIR.CheckedSiteOrigin,
+        checked_origin: Common.CheckedSiteOrigin,
     ) Allocator.Error!DraftComptimeSiteId {
         const id = try self.draft.addComptimeSite(kind, self.builder.loweringModuleId(self.view.key), region, checked_site, branch_regions);
         self.draft.comptime_sites.items[@backingInt(id)].checked_origin = checked_origin;
@@ -69575,7 +69580,7 @@ test "body draft store appends draft-local ids spans and type cells" {
     try std.testing.expectEqual(@as(usize, 1), program.ifBranchCount());
     try std.testing.expectEqualStrings("literal", program.stringLiteralText(sealed_literal));
     try std.testing.expectEqual(Ast.ComptimeSiteKind.if_, program.comptimeSite(sealed_site).kind);
-    try std.testing.expectEqualDeep(@as(?@import("lir_core").LIR.CheckedSiteOrigin, .{ .checked_expr = 73 }), program.comptimeSite(sealed_site).checked_origin);
+    try std.testing.expectEqualDeep(@as(?Common.CheckedSiteOrigin, .{ .checked_expr = 73 }), program.comptimeSite(sealed_site).checked_origin);
     try std.testing.expectEqual(@as(?checked.CheckedExhaustivenessSiteId, null), program.comptimeSite(sealed_site).checked_site);
     try std.testing.expectEqual(@as(usize, 1), program.comptimeSite(sealed_site).branch_regions.len);
     try std.testing.expectEqualStrings("value", program.localName(sealed_local));

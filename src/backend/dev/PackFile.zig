@@ -148,7 +148,7 @@ pub fn writeOffers(allocator: Allocator, set: *const ProcArtifact.Set, specs: []
             return error.InvalidRootMaterializationDependency;
     }
     for (specs) |spec| if (spec.demand) |demand| {
-        for (demand.literal_reads) |literal| if (!literal.recipe.valid()) return error.InvalidLiteralRecipe;
+        for (demand.literal_reads) |literal| if (!try literal.recipe.valid(allocator)) return error.InvalidLiteralRecipe;
     };
     for (set.artifacts) |artifact| {
         try ProcArtifact.validateRootMaterializations(allocator, artifact);
@@ -609,7 +609,7 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
         if (spec.artifact >= artifact_count) return error.MalformedPack;
         if (artifacts[spec.artifact].root_materialization != null) return error.MalformedPack;
         if (spec.demand) |demand| {
-            for (demand.literal_reads) |literal| if (!literal.recipe.valid()) return error.MalformedPack;
+            for (demand.literal_reads) |literal| if (!try literal.recipe.valid(allocator)) return error.MalformedPack;
         }
     }
     const discovery = try arena_allocator.alloc(DiscoveryEntry, try reader.word());
@@ -981,7 +981,7 @@ test "literal producer representation survives namespace translation" {
     const record = try store.append(.{ .record = try store.appendFieldSpan(&.{.{ .name = name, .ty = number, .default = null }}) });
     const recipe = try Representation.capture(allocator, &store, &names, record);
     defer recipe.deinit(allocator);
-    try std.testing.expect(recipe.valid());
+    try std.testing.expect(try recipe.valid(std.testing.allocator));
     try std.testing.expectEqual(@as(usize, 2), recipe.types.len);
     try std.testing.expectEqual(@as(usize, 1), recipe.field_names.len);
     var restored = try recipe.materialize(allocator);
