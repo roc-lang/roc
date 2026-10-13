@@ -11004,6 +11004,16 @@ fn runExprKernel(
             const idx = parse_work.idx;
             current_result_target = parse_work.target;
             const expr = self.parse_ir.store.getExpr(idx);
+            if (parse_work.loop_body and expr != .block) {
+                // A loop body written as a single expression is that one
+                // statement, in a block whose final expression is `{}`.
+                try stacks.push(.finish_loop_body_stmt, frame_allocator, .{
+                    .region = self.parse_ir.tokenizedRegionToRegion(expr.to_tokenized_region()),
+                    .result_start = child_slots.items.len,
+                });
+                try stacks.push(.parse, frame_allocator, .{ .idx = idx, .target = .scratch });
+                continue :expr_kernel_loop .dispatch;
+            }
             switch (expr) {
                 .int => |e| {
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
@@ -11705,7 +11715,7 @@ fn runExprKernel(
                         block_region,
                         self.parse_ir.store.statementSlice(e.statements),
                         child_slots.items.len,
-                        .block_expr,
+                        if (parse_work.loop_body) .loop_body else .block_expr,
                     );
                     try self.recordParserBlockLocalDefs(e.scope);
                     try stacks.push(.block_next, frame_allocator, .{
@@ -12135,7 +12145,7 @@ fn runExprKernel(
             const work = state.block;
             if (state.next >= work.stmt_idxs.len) {
                 switch (work.terminal) {
-                    .block_expr => try stacks.push(.finish_block, frame_allocator, .{
+                    .block_expr, .loop_body => try stacks.push(.finish_block, frame_allocator, .{
                         .block = work,
                         .has_final_expr = false,
                     }),
@@ -12500,6 +12510,25 @@ fn runExprKernel(
 
             continue :expr_kernel_loop .dispatch;
         },
+        .finish_loop_body_stmt => {
+            const state = stacks.take(.finish_loop_body_stmt);
+            const expr = child_slots.items[state.result_start].expr;
+            child_slots.shrinkRetainingCapacity(state.result_start);
+            const stmt_idx = try self.env.addStatement(Statement{ .s_expr = .{
+                .expr = expr.idx,
+            } }, state.region);
+            const stmt_start = self.env.store.scratch.?.statements.top();
+            try self.env.store.addScratchStatement(stmt_idx);
+            const stmts = try self.env.store.statementSpanFrom(stmt_start);
+            const final_expr = try self.env.addExpr(CIR.Expr{ .e_empty_record = .{} }, state.region);
+            const block_idx = try self.env.addExpr(CIR.Expr{ .e_block = .{
+                .stmts = stmts,
+                .final_expr = final_expr,
+            } }, state.region);
+            try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = block_idx, .free_vars = expr.free_vars });
+
+            continue :expr_kernel_loop .dispatch;
+        },
         .finish_block_expr_stmt => {
             const state = stacks.take(.finish_block_expr_stmt);
             const result_start = child_slots.items.len - 1;
@@ -12699,7 +12728,7 @@ fn runExprKernel(
                 .captures_top = state.captures_top,
                 .body_free_vars_start = body_free_vars_start,
             });
-            try stacks.push(.parse, frame_allocator, .{ .idx = state.body_ast, .target = .scratch });
+            try stacks.push(.parse, frame_allocator, .{ .idx = state.body_ast, .target = .scratch, .loop_body = true });
 
             continue :expr_kernel_loop .dispatch;
         },
@@ -12774,7 +12803,7 @@ fn runExprKernel(
                 .saved_defining_bound_vars = state.saved_defining_bound_vars,
                 .saved_stmt_pos = state.saved_stmt_pos,
             });
-            try stacks.push(.parse, frame_allocator, .{ .idx = state.ast_body, .target = .scratch });
+            try stacks.push(.parse, frame_allocator, .{ .idx = state.ast_body, .target = .scratch, .loop_body = true });
 
             continue :expr_kernel_loop .dispatch;
         },
@@ -13900,7 +13929,7 @@ fn runExprKernel(
                 .saved_defining_bound_vars = state.saved_defining_bound_vars,
                 .saved_stmt_pos = state.saved_stmt_pos,
             });
-            try stacks.push(.parse, frame_allocator, .{ .idx = state.ast_body, .target = .scratch });
+            try stacks.push(.parse, frame_allocator, .{ .idx = state.ast_body, .target = .scratch, .loop_body = true });
 
             continue :expr_kernel_loop .dispatch;
         },
@@ -16248,6 +16277,7 @@ const ExprKernelLabel = enum {
     finish_statement_list,
     finish_block_expr_stmt,
     finish_block_final_expr,
+    finish_loop_body_stmt,
     finish_block_dbg_stmt,
     finish_block_crash_stmt,
     finish_block_expect_stmt,
@@ -16303,6 +16333,9 @@ const ExprResultTarget = enum {
 const ExprParseWork = struct {
     idx: AST.Expr.Idx,
     target: ExprResultTarget,
+    /// The expression is a loop body, which only includes statements: every
+    /// line of it, including the last, is canonicalized as a statement.
+    loop_body: bool = false,
 };
 
 const ExprChildSlot = struct {
@@ -16357,6 +16390,11 @@ const ExprFinishBlockExprStmtWork = struct {
 
 const ExprFinishBlockFinalExprWork = struct {
     block: BlockState,
+};
+
+const ExprFinishLoopBodyStmtWork = struct {
+    region: Region,
+    result_start: usize,
 };
 
 const ExprFinishBlockDbgStmtWork = struct {
@@ -16736,6 +16774,7 @@ fn exprKernelPayload(comptime label: ExprKernelLabel) type {
         .finish_statement_list => ExprFinishStatementListWork,
         .finish_block_expr_stmt => ExprFinishBlockExprStmtWork,
         .finish_block_final_expr => ExprFinishBlockFinalExprWork,
+        .finish_loop_body_stmt => ExprFinishLoopBodyStmtWork,
         .finish_block_dbg_stmt => ExprFinishBlockDbgStmtWork,
         .finish_block_crash_stmt => ExprFinishBlockCrashStmtWork,
         .finish_block_expect_stmt => ExprFinishBlockExpectStmtWork,
@@ -16824,6 +16863,7 @@ const ExprKernelWork = struct {
                 .finish_statement_list,
                 .finish_block_expr_stmt,
                 .finish_block_final_expr,
+                .finish_loop_body_stmt,
                 .finish_block_dbg_stmt,
                 .finish_block_crash_stmt,
                 .finish_block_expect_stmt,
@@ -16928,6 +16968,9 @@ const BlockState = *BlockStateData;
 const BlockTerminal = enum {
     /// An `e_block` expression.
     block_expr,
+    /// A loop body's `e_block`: its last line is a statement too, and its
+    /// final expression is `{}`.
+    loop_body,
     /// The module's `all_statements` span.
     statement_list,
 };

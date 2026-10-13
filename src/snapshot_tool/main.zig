@@ -4448,6 +4448,7 @@ fn snapshotReplProblemIsError(problem: check.problem.Problem) bool {
         tag != .unmatchable_pattern and
         tag != .comptime_unused_branch and
         tag != .comptime_condition and
+        tag != .discarded_var_update and
         tag != .literal_defaulted;
 }
 
