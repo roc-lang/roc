@@ -324,6 +324,13 @@ comptime {
 }
 
 fn shimGetOps() callconv(.c) *anyopaque {
+    // The compiler-rt helpers and stack probe this archive's code calls are
+    // its own, bound locally: a platform neither supplies nor replaces them.
+    // Naming them from an exported function keeps them in the object.
+    builtins.native_runtime_libcalls.bindLocally();
+    @import("shim_stack_probe").retain();
+    if (builtin.os.tag == .linux and (builtin.cpu.arch == .x86 or builtin.cpu.arch.isArm()))
+        @import("shim_compiler_rt").retain();
     return shim_host_abi.getOpsOpaque();
 }
 

@@ -2376,3 +2376,58 @@ test "imports reject package-root escape and physical source aliases" {
     try util.checkFailure(root_alias_result);
     try testing.expect(std.mem.find(u8, root_alias_result.stderr, "import source alias") != null);
 }
+
+test "the interpreter backend runs and builds a Windows target in either C ABI" {
+    // `roc` embeds one interpreter shim archive, built for its own C ABI, and
+    // links it into whichever Windows target the platform offers. A platform
+    // is free to offer only the other ABI, as a Rust host built for
+    // `x86_64-pc-windows-msvc` does.
+    if (comptime builtin.os.tag != .windows) return error.SkipZigTest;
+    const targets: []const []const u8 = if (comptime builtin.cpu.arch == .x86_64)
+        &.{ "--target=x64win", "--target=x64mingw" }
+    else if (comptime builtin.cpu.arch == .aarch64)
+        &.{ "--target=arm64win", "--target=arm64mingw" }
+    else
+        return error.SkipZigTest;
+    const allocator = testing.allocator;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(tmp_path);
+
+    for (targets) |target_arg| {
+        const run_result = try util.runRocCommand(std.testing.io, allocator, &.{
+            "--opt=interpreter",
+            target_arg,
+            "test/fx/hello_world.roc",
+        });
+        defer allocator.free(run_result.stdout);
+        defer allocator.free(run_result.stderr);
+        try util.checkSuccess(run_result);
+        try testing.expectEqualStrings("Hello, world!\n", run_result.stdout);
+
+        const output_path = try std.fmt.allocPrint(allocator, "{s}{c}hello-{s}.exe", .{ tmp_path, std.fs.path.sep, target_arg["--target=".len..] });
+        defer allocator.free(output_path);
+        const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_path});
+        defer allocator.free(output_arg);
+        const build_result = try util.runRocCommand(std.testing.io, allocator, &.{
+            "build",
+            "--opt=interpreter",
+            target_arg,
+            output_arg,
+            "test/fx/hello_world.roc",
+        });
+        defer allocator.free(build_result.stdout);
+        defer allocator.free(build_result.stderr);
+        try util.checkSuccess(build_result);
+
+        const exe_result = try util.runChildWithTimeout(std.testing.io, allocator, &.{output_path}, .{
+            .max_output_bytes = 1024 * 1024,
+        });
+        defer allocator.free(exe_result.stdout);
+        defer allocator.free(exe_result.stderr);
+        try util.checkSuccess(.{ .stdout = exe_result.stdout, .stderr = exe_result.stderr, .term = exe_result.term });
+        try testing.expectEqualStrings("Hello, world!\n", exe_result.stdout);
+    }
+}

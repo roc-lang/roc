@@ -1,9 +1,10 @@
-//! Compiler-owned stack probing for the machine-code shim.
+//! Compiler-owned stack probing for the shim archives.
 //!
 //! Safe Zig builds emit calls to `__zig_probe_stack` for large x86 and
-//! x86_64 ELF and Mach-O stack frames. The shim is linked into programs whose
-//! platform host need not carry Zig's compiler-rt, so the shim must define that
-//! helper itself. Local binding resolves the generated calls without exposing
+//! x86_64 ELF and Mach-O stack frames, and every Windows build calls the
+//! platform's stack-growth helper. A shim is linked into programs whose
+//! platform host need not carry Zig's compiler-rt, so it must define those
+//! helpers itself. Local binding resolves the generated calls without exposing
 //! a compiler-private symbol to the platform link.
 
 const builtin = @import("builtin");

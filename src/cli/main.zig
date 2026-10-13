@@ -3575,7 +3575,7 @@ fn spawnExecutableWithArgv0(
     app_args: []const []const u8,
 ) (CliError || Allocator.Error)!std.process.Child {
     if (comptime is_windows) {
-        const exe_path_w = std.unicode.utf8ToUtf16LeAllocZ(ctx.arena, exe_path) catch |err| switch (err) {
+        const exe_path_w = std.unicode.utf8ToUtf16LeAllocZ(ctx.arena, try windowsSpawnPath(ctx.arena, exe_path)) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.InvalidUtf8 => return ctx.fail(.{ .child_process_spawn_failed = .{
                 .command = exe_path,
@@ -3894,7 +3894,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
             try ctx.io.stderr().print("Error: invalid target for roc: {s}\n", .{target_str});
             return error.InvalidTarget;
         };
-        if (!devShimTargetCompatible(requested, native_target)) {
+        if (!embeddedShimTargetCompatible(requested, native_target)) {
             try rejectRunTargetNotExecutable(ctx, requested);
             unreachable;
         }
@@ -4131,6 +4131,52 @@ fn appendWindowsQuotedArg(cmd_builder: *std.array_list.Managed(u8), arg: []const
     try cmd_builder.append('"');
 }
 
+/// The spelling of `exe_path` that `CreateProcessW` starts whatever its length.
+///
+/// `CreateProcessW` reads its application name with the Win32 path parser,
+/// which gives up at `MAX_PATH` (260 characters) with `PATH_NOT_FOUND` unless
+/// the machine has opted into long paths. The executable `roc` runs lives
+/// several directories into the cache, under a compatibility digest and a
+/// random directory, so a cache below a deep project is enough to cross that.
+/// The extended-length spelling (`\\?\C:\...`) skips that parser.
+///
+/// A path that fits is returned as it is: the child reads its own path back
+/// from the OS, and a program that prints it should see the usual spelling.
+fn windowsSpawnPath(arena: std.mem.Allocator, exe_path: []const u8) Allocator.Error![]const u8 {
+    // Every UTF-16 path is at most as long as its UTF-8 spelling.
+    if (exe_path.len < std.os.windows.MAX_PATH) return exe_path;
+    // The extended-length form is passed to the filesystem untouched, so it
+    // has to be absolute, backslash-separated, and free of `.` and `..`.
+    const resolved = try std.fs.path.resolveWindows(arena, &.{exe_path});
+    const drive_absolute = resolved.len >= 3 and std.ascii.isAlphabetic(resolved[0]) and
+        resolved[1] == ':' and resolved[2] == '\\';
+    if (!drive_absolute) return exe_path;
+    return std.mem.concat(arena, u8, &.{ "\\\\?\\", resolved });
+}
+
+test "windowsSpawnPath spells only paths past MAX_PATH in extended-length form" {
+    var arena_impl = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    const short = "C:\\Users\\someone\\AppData\\Local\\roc\\tmp\\app.roc.exe";
+    try std.testing.expectEqualStrings(short, try windowsSpawnPath(arena, short));
+
+    var middle = std.ArrayList(u8).empty;
+    for (0..30) |_| try middle.appendSlice(arena, "directory\\");
+
+    const deep = try std.mem.concat(arena, u8, &.{ "C:\\cache/", middle.items, "nested\\..\\app.roc.exe" });
+    try std.testing.expect(deep.len >= std.os.windows.MAX_PATH);
+    try std.testing.expectEqualStrings(
+        try std.mem.concat(arena, u8, &.{ "\\\\?\\C:\\cache\\", middle.items, "app.roc.exe" }),
+        try windowsSpawnPath(arena, deep),
+    );
+
+    // Already in a device or UNC namespace: left for the caller's spelling.
+    const unc = try std.mem.concat(arena, u8, &.{ "\\\\server\\share\\", middle.items, "app.roc.exe" });
+    try std.testing.expectEqualStrings(unc, try windowsSpawnPath(arena, unc));
+}
+
 /// Run child process using Windows handle inheritance (idiomatic Windows approach)
 fn runWithWindowsHandleInheritance(
     ctx: *CliCtx,
@@ -4148,7 +4194,7 @@ fn runWithWindowsHandleInheritance(
     }
 
     // Convert paths to Windows wide strings
-    const exe_path_w = std.unicode.utf8ToUtf16LeAllocZ(ctx.arena, exe_path) catch |err| switch (err) {
+    const exe_path_w = std.unicode.utf8ToUtf16LeAllocZ(ctx.arena, try windowsSpawnPath(ctx.arena, exe_path)) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.InvalidUtf8 => return ctx.fail(.{ .child_process_spawn_failed = .{
             .command = exe_path,
@@ -6136,7 +6182,14 @@ fn viewLirImageFromHandle(handle: SharedMemoryHandle, target_usize: base.target.
     return lir.LirImage.viewMappedImageWithAllocator(header, base_ptr, handle.size, target_usize, arena);
 }
 
-fn devShimTargetCompatible(selected: RocTarget, native: RocTarget) bool {
+/// Whether the shim archives this compiler embeds link into `selected`.
+///
+/// The archives are built once, for the target the compiler itself runs on.
+/// They call the OS directly and carry their own runtime support, so the C
+/// ABI of the platform they are linked into does not matter: one archive
+/// serves `x64win` and `x64mingw` alike, and `x64musl` and `x64glibc`. Only the
+/// OS and architecture have to be the compiler's own.
+fn embeddedShimTargetCompatible(selected: RocTarget, native: RocTarget) bool {
     return selected.toCpuArch() == native.toCpuArch() and
         selected.toOsTag() == native.toOsTag() and
         selected.ptrBitWidth() == native.ptrBitWidth();
@@ -6148,7 +6201,7 @@ fn useDefaultAppSharedMemoryShim(args: cli_args.RunArgs) bool {
 
     const native_target = roc_target.host_cpu.nativeTarget();
     const default_target = defaultRunShimTarget(native_target);
-    return devShimTargetCompatible(default_target, native_target) and
+    return embeddedShimTargetCompatible(default_target, native_target) and
         default_target.toOsTag() == .linux and
         DefaultPlatformRuntimeObjects.forTarget(default_target) != null;
 }
@@ -6478,7 +6531,7 @@ fn writeDevRunImageToSharedMemory(
         return error.UnsupportedTarget;
     } else {
         const native_target = backend.HostLirCodeGen.roc_target;
-        if (!devShimTargetCompatible(selected_target, native_target)) {
+        if (!embeddedShimTargetCompatible(selected_target, native_target)) {
             try rejectRunTargetNotExecutable(ctx, selected_target);
             unreachable;
         }
@@ -11346,9 +11399,9 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     const link_type = selected.output;
 
     const native_target = roc_target.host_cpu.nativeTarget();
-    if (target != native_target) {
+    if (!embeddedShimTargetCompatible(target, native_target)) {
         const stderr = ctx.io.stderr();
-        try stderr.print("Error: The interpreter backend only supports building for the native target ({s}).\n\n", .{@tagName(native_target)});
+        try stderr.print("Error: The interpreter backend only supports building for this machine's OS and architecture ({s}).\n\n", .{@tagName(native_target)});
         try stderr.print("To cross-compile for {s}, use the dev backend:\n\n", .{@tagName(target)});
         try stderr.print("    roc build --opt=dev --target={s} {s}\n\n", .{ @tagName(target), args.path });
         return error.UnsupportedCrossCompilation;
@@ -11538,6 +11591,14 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
             .target_arch = target_arch,
             .output_path = final_output_path,
             .output_kind = linkerOutputKind(link_type),
+            // The host shim object names every hosted function and
+            // entrypoint the program uses, so host archives resolve by
+            // symbol reference, exactly as they do when `roc` runs the same
+            // program. Loading every member instead fails outright on
+            // Windows for a host archive that carries import-library
+            // members, as a Rust static library does: each one defines the
+            // same import descriptor symbols.
+            .lazy_platform_archives = true,
             .object_files = object_files.items,
             .platform_files_pre = link_inputs.platform_files_pre,
             .platform_files_post = link_inputs.platform_files_post,
