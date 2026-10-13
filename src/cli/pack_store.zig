@@ -1239,6 +1239,18 @@ pub const LoadedPacks = struct {
     /// Packs a program published while code packs were still unloaded,
     /// indexed with them when they load.
     staged: std.ArrayListUnmanaged([]u8) = .empty,
+    /// Store packs read but not yet decoded. A lookup that selects one of a
+    /// pack's offers decodes and admits it, with the packs offering the
+    /// literal producers its offers read.
+    store_packs: std.ArrayListUnmanaged(StorePack) = .empty,
+    /// The store packs offering each key, in load order.
+    candidates: std.AutoHashMapUnmanaged([32]u8, std.ArrayListUnmanaged(u32)) = .empty,
+
+    const StorePack = struct {
+        /// Owned until the pack is admitted.
+        bytes: ?[]u8,
+        index: PackFile.Index,
+    };
 
     const Deferred = struct {
         arena: std.heap.ArenaAllocator,
@@ -1331,6 +1343,13 @@ pub const LoadedPacks = struct {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => return error.PackDirectoryUnreadable,
             };
+            if (input == .cache_offers) {
+                self.addSource(bytes) catch |err| switch (err) {
+                    error.UnsupportedPackVersion => continue,
+                    error.OutOfMemory, error.MalformedPack, error.PackDirectoryUnreadable => return err,
+                };
+                continue;
+            }
             defer allocator.free(bytes);
             self.appendPack(bytes) catch |err| {
                 switch (err) {
@@ -1364,6 +1383,51 @@ pub const LoadedPacks = struct {
         try self.packs.append(self.allocator, owner);
     }
 
+    /// Register a store pack's offers without decoding its artifacts. Takes
+    /// ownership of `bytes`, also on failure.
+    fn addSource(self: *LoadedPacks, bytes: []u8) LoadError!void {
+        var index = PackFile.readIndex(self.allocator, bytes) catch |err| {
+            self.allocator.free(bytes);
+            return err;
+        };
+        errdefer index.deinit();
+        errdefer self.allocator.free(bytes);
+        const id: u32 = @intCast(self.store_packs.items.len);
+        for (index.offers.specs) |spec| {
+            const entry = try self.candidates.getOrPut(self.allocator, spec.key);
+            if (!entry.found_existing) entry.value_ptr.* = .empty;
+            const list = entry.value_ptr;
+            if (list.items.len == 0 or list.items[list.items.len - 1] != id) try list.append(self.allocator, id);
+        }
+        try self.store_packs.append(self.allocator, .{ .bytes = bytes, .index = index });
+    }
+
+    /// Admit every source offering `key`, and transitively the sources
+    /// offering the literal producers their offers read, then index them.
+    fn admitKey(self: *LoadedPacks, key: [32]u8) LoadError!void {
+        if (self.candidates.count() == 0) return;
+        var pending = std.ArrayList([32]u8).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, key);
+        var admitted_any = false;
+        while (pending.pop()) |next| {
+            const list = self.candidates.get(next) orelse continue;
+            for (list.items) |id| {
+                const source = &self.store_packs.items[id];
+                const bytes = source.bytes orelse continue;
+                source.bytes = null;
+                defer self.allocator.free(bytes);
+                try self.appendPack(bytes);
+                admitted_any = true;
+                for (source.index.offers.specs) |spec| if (spec.demand) |demand| {
+                    for (demand.literal_reads) |read| try pending.append(self.allocator, read.recipe.producer_key);
+                };
+                for (source.index.offers.materializer_reads) |entry| try pending.append(self.allocator, entry.read.recipe.producer_key);
+            }
+        }
+        if (admitted_any) try self.indexPacksUnrecorded();
+    }
+
     /// Retain newly produced normal objects in the same serving universe.
     /// Disk publication remains a separate accepted-checking transaction.
     pub fn retain(self: *LoadedPacks, bytes: []const u8) LoadError!void {
@@ -1371,8 +1435,17 @@ pub const LoadedPacks = struct {
         if (self.state == .unavailable) return self.failure.?;
         // A store's code packs load at the first code lookup, and these join
         // them then; nothing before that could look them up.
-        if (self.state == .pending and self.pending != null) {
-            try self.staged.append(self.allocator, try self.allocator.dupe(u8, bytes));
+        if (self.pending != null) {
+            const owned = try self.allocator.dupe(u8, bytes);
+            switch (self.state) {
+                .pending => try self.staged.append(self.allocator, owned),
+                .ready => {
+                    while (!self.load_mutex.tryLock()) std.atomic.spinLoopHint();
+                    defer self.load_mutex.unlock();
+                    self.addSource(owned) catch |err| return self.recordFailure(err);
+                },
+                .unavailable => unreachable,
+            }
             return;
         }
         self.appendPack(bytes) catch |err| return self.recordFailure(err);
@@ -2142,6 +2215,10 @@ pub const LoadedPacks = struct {
         if (@atomicLoad(@TypeOf(self.state), &self.state, .acquire) != .pending) return;
         while (!self.load_mutex.tryLock()) std.atomic.spinLoopHint();
         defer self.load_mutex.unlock();
+        self.ensureLoadedLocked();
+    }
+
+    fn ensureLoadedLocked(self: *LoadedPacks) void {
         if (self.state != .pending) return;
         if (self.deferred) |deferred| {
             // Admission projects materializers against the prepared program.
@@ -2171,14 +2248,16 @@ pub const LoadedPacks = struct {
             self.unavailable(err);
             return;
         };
-        for (self.staged.items) |bytes| {
-            self.appendPack(bytes) catch |err| {
+        for (self.staged.items, 0..) |bytes, index| {
+            self.addSource(bytes) catch |err| {
+                for (self.staged.items[index + 1 ..]) |rest| self.allocator.free(rest);
+                self.staged.clearRetainingCapacity();
                 self.unavailable(err);
                 return;
             };
         }
-        for (self.staged.items) |bytes| self.allocator.free(bytes);
         self.staged.clearRetainingCapacity();
+        // Store packs are admitted at the lookups that select them.
         self.indexPacks() catch |err| {
             self.unavailable(err);
         };
@@ -2216,6 +2295,14 @@ pub const LoadedPacks = struct {
         if (self.deferred) |*deferred| deferred.arena.deinit();
         for (self.staged.items) |bytes| self.allocator.free(bytes);
         self.staged.deinit(self.allocator);
+        for (self.store_packs.items) |*source| {
+            if (source.bytes) |bytes| self.allocator.free(bytes);
+            source.index.deinit();
+        }
+        self.store_packs.deinit(self.allocator);
+        var lists = self.candidates.valueIterator();
+        while (lists.next()) |list| list.deinit(self.allocator);
+        self.candidates.deinit(self.allocator);
         for (self.packs.items) |pack| {
             pack.deinit();
             self.allocator.destroy(pack);
@@ -2236,8 +2323,22 @@ pub const LoadedPacks = struct {
     fn findSpec(context: *anyopaque, key: [32]u8, current_relation: ?[32]u8) ?Common.SpecCacheHit {
         const self: *LoadedPacks = @ptrCast(@alignCast(context));
         if (self.revoked) return null;
-        self.ensureLoaded();
+        // Admission changes the index, and lookups come from parallel
+        // specialization workers.
+        while (!self.load_mutex.tryLock()) std.atomic.spinLoopHint();
+        defer self.load_mutex.unlock();
+        self.ensureLoadedLocked();
         if (self.state != .ready) return null;
+        // Admission projects materializers against the prepared program.
+        const saved_modules = self.projection_modules;
+        if (saved_modules == null) if (self.deferred) |deferred| {
+            self.projection_modules = deferred.modules;
+        };
+        defer self.projection_modules = saved_modules;
+        self.admitKey(key) catch |err| {
+            self.unavailable(err);
+            return null;
+        };
         // Retain each relation's offer separately: an incompatible earlier
         // pack must not hide a compatible later pack for the reservation.
         const related = OfferKey{ .key = key, .platform_requirement_relation = current_relation };
@@ -2271,7 +2372,9 @@ pub const LoadedPacks = struct {
     fn findArtifact(context: *anyopaque, identity: lir.ProcIdentity) ?backend.dev.LocatedArtifact {
         const self: *LoadedPacks = @ptrCast(@alignCast(context));
         if (self.revoked and self.state == .pending) return null;
-        self.ensureLoaded();
+        while (!self.load_mutex.tryLock()) std.atomic.spinLoopHint();
+        defer self.load_mutex.unlock();
+        self.ensureLoadedLocked();
         if (self.state != .ready) return null;
         const selected = self.artifacts.get(identity) orelse return null;
         self.artifacts_served += 1;

@@ -19,7 +19,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RPCK";
 /// Format version; bump whenever the encoding or artifact contents change.
-pub const format_version: u32 = 23;
+pub const format_version: u32 = 24;
 
 /// One specialization the pack can serve: its reservation-time key, the
 /// artifact holding its procedure, and the ownership signature and
@@ -205,6 +205,10 @@ pub fn writeOffers(
     const body_offset = bytes.items.len;
     try writer.word(@intCast(set.artifacts.len));
     try writer.word(@intCast(specs.len));
+    // Where the spec table starts, so an index reads the offers without
+    // decoding the artifacts before them (`readIndex`).
+    const specs_offset_at = bytes.items.len;
+    try writer.wide(0);
 
     for (set.artifacts) |artifact| {
         try writer.context(artifact.context_contract);
@@ -342,6 +346,7 @@ pub fn writeOffers(
         }
     }
 
+    std.mem.writeInt(u64, bytes.items[specs_offset_at..][0..8], bytes.items.len, .little);
     for (specs) |spec| {
         try writer.raw(&spec.key);
         try writer.word(spec.artifact);
@@ -391,6 +396,7 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
     const physical_namespace = (try reader.raw(32))[0..32].*;
     const artifact_count = try reader.word();
     const spec_count = try reader.word();
+    const specs_offset = try reader.wide();
 
     const artifacts = try arena_allocator.alloc(ProcArtifact.Artifact, artifact_count);
     for (artifacts) |*artifact| {
@@ -599,6 +605,63 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
             if (artifacts[reference.target].root_materialization != null) return error.MalformedPack;
         }
     }
+    if (reader.offset != specs_offset) return error.MalformedPack;
+    const offers = try readOffers(allocator, arena_allocator, &reader, artifact_count, spec_count);
+    for (offers.specs) |spec| {
+        if (artifacts[spec.artifact].root_materialization != null) return error.MalformedPack;
+    }
+    const specs = offers.specs;
+    const discovery = offers.discovery;
+    const materializer_reads = offers.materializer_reads;
+    if (reader.offset != bytes.len) return error.MalformedPack;
+
+    return .{
+        .set = .{ .arena = arena, .artifacts = artifacts, .physical_namespace = physical_namespace },
+        .specs = specs,
+        .discovery = discovery,
+        .materializer_reads = materializer_reads,
+    };
+}
+
+/// The offers a pack makes, decoded without its artifacts.
+pub const Offers = struct {
+    specs: []const SpecEntry,
+    discovery: []const DiscoveryEntry,
+    materializer_reads: []const MaterializerRead,
+};
+
+/// A pack's offers, read without decoding its artifacts. Each spec names an
+/// artifact by index; `read` checks the artifact itself.
+pub const Index = struct {
+    arena: std.heap.ArenaAllocator,
+    physical_namespace: [32]u8,
+    offers: Offers,
+
+    pub fn deinit(self: *Index) void {
+        self.arena.deinit();
+    }
+};
+
+/// Read a pack's offers without decoding its artifacts.
+pub fn readIndex(allocator: Allocator, bytes: []const u8) ReadError!Index {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+    var reader = Reader{ .bytes = bytes };
+    const header = try reader.raw(magic.len);
+    if (!std.mem.eql(u8, header, magic)) return error.MalformedPack;
+    if (try reader.word() != format_version) return error.UnsupportedPackVersion;
+    const physical_namespace = (try reader.raw(32))[0..32].*;
+    const artifact_count = try reader.word();
+    const spec_count = try reader.word();
+    const specs_offset = try reader.wide();
+    if (specs_offset < reader.offset or specs_offset > bytes.len) return error.MalformedPack;
+    reader.offset = @intCast(specs_offset);
+    const offers = try readOffers(allocator, arena.allocator(), &reader, artifact_count, spec_count);
+    if (reader.offset != bytes.len) return error.MalformedPack;
+    return .{ .arena = arena, .physical_namespace = physical_namespace, .offers = offers };
+}
+
+fn readOffers(allocator: Allocator, arena_allocator: Allocator, reader: *Reader, artifact_count: u32, spec_count: u32) ReadError!Offers {
     const specs = try arena_allocator.alloc(SpecEntry, spec_count);
     for (specs) |*spec| {
         spec.* = .{
@@ -630,7 +693,6 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
         for (conditions) |*condition| condition.* = try reader.word();
         spec.rc_ret_conditions = conditions;
         if (spec.artifact >= artifact_count) return error.MalformedPack;
-        if (artifacts[spec.artifact].root_materialization != null) return error.MalformedPack;
         if (spec.demand) |demand| {
             for (demand.literal_reads) |literal| if (!try literal.recipe.valid(allocator)) return error.MalformedPack;
         }
@@ -654,14 +716,7 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
         };
         if (!try entry.read.recipe.valid(allocator)) return error.MalformedPack;
     }
-    if (reader.offset != bytes.len) return error.MalformedPack;
-
-    return .{
-        .set = .{ .arena = arena, .artifacts = artifacts, .physical_namespace = physical_namespace },
-        .specs = specs,
-        .discovery = discovery,
-        .materializer_reads = materializer_reads,
-    };
+    return .{ .specs = specs, .discovery = discovery, .materializer_reads = materializer_reads };
 }
 
 const Writer = struct {
