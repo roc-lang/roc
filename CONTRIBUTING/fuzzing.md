@@ -70,7 +70,8 @@ This builds:
 - `zig-out/bin/repro-*` - Reproduction executables for debugging crashes
 
 Available fuzz targets:
-- `fuzz-parse` - Parser and formatter stability testing
+- `fuzz-parse` - Parser and formatter stability and comment preservation testing
+- `fuzz-format` - Formatter comment preservation and stability testing on generated programs with comments between their tokens
 - `fuzz-tokenize` - Tokenizer testing
 - `fuzz-canonicalize` - Canonicalization testing
 - `fuzz-typecheck` - Type checking generated well-typed Roc programs
@@ -94,13 +95,14 @@ Basic single-threaded fuzzing:
 afl-fuzz -i /tmp/corpus -o /tmp/parse-out zig-out/bin/fuzz-parse
 ```
 
-The typecheck fuzzer generates Roc source from arbitrary input bytes, so it can
-start from a tiny byte corpus:
+The typecheck and format fuzzers generate Roc source from arbitrary input
+bytes, so they can start from a tiny byte corpus:
 
 ```bash
 mkdir -p /tmp/typecheck-corpus
 printf '\0' > /tmp/typecheck-corpus/seed
 afl-fuzz -i /tmp/typecheck-corpus -o /tmp/typecheck-out zig-out/bin/fuzz-typecheck
+afl-fuzz -i /tmp/typecheck-corpus -o /tmp/format-out zig-out/bin/fuzz-format
 ```
 
 You may need to set environment variables to skip certain checks:

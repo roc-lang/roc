@@ -82,14 +82,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-a.Showable :  where [a.to_str : a -> Str]
-
-a.Comparable :  where [a.order_relative_to : a -> [Before, Same, After]]
-
-a.Sortable :  where [a.Showable, a.Comparable]
-
-describe : a -> Str where [a.Sortable]
-describe = |value| value.to_str()
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

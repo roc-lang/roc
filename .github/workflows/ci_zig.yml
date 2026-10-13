@@ -61,7 +61,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          for target in tokenize parse canonicalize typecheck build; do
+          for target in tokenize parse format canonicalize typecheck build; do
             export ROC_FUZZ_TARGET="$target"
             export ROC_FUZZ_INPUT="/tmp/roc-${target}-fuzz-input"
 
