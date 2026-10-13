@@ -3195,7 +3195,7 @@ EndOfFile,
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 1355) (dispatcher-var 281)
+						(e-interpolation (constraint-fn-var 1357) (dispatcher-var 281)
 							(first
 								(e-literal (string "H, ")))
 							(parts
@@ -3210,8 +3210,10 @@ EndOfFile,
 					(p-assign (ident "n"))
 					(e-runtime-error (tag "ident_not_in_scope"))
 					(e-block
-						(e-runtime-error (tag "erroneous_value_expr")
-							(e-runtime-error (tag "erroneous_value_expr")))))
+						(s-runtime-error (tag "erroneous_value_expr")
+							(e-runtime-error (tag "erroneous_value_expr")
+								(e-runtime-error (tag "erroneous_value_expr"))))
+						(e-empty_record)))
 				(s-let
 					(p-assign (ident "rd"))
 					(e-runtime-error (tag "erroneous_value_expr")
@@ -3250,11 +3252,11 @@ EndOfFile,
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 1538)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 1540)
 									(receiver
 										(e-runtime-error (tag "erroneous_value_expr")))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 1535)
+										(e-dispatch-call (method "times") (constraint-fn-var 1537)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -3269,18 +3271,18 @@ EndOfFile,
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 1571)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 1573)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 1561)
+															(e-dispatch-call (method "plus") (constraint-fn-var 1563)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 1598)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 1600)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 1588)
+															(e-dispatch-call (method "minus") (constraint-fn-var 1590)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -3295,11 +3297,11 @@ EndOfFile,
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 1637)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 1639)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 1634)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 1636)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -3314,12 +3316,12 @@ EndOfFile,
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 1703)
+													(e-dispatch-call (method "ned") (constraint-fn-var 1705)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "od") (constraint-fn-var 1673)
+																		(e-dispatch-call (method "od") (constraint-fn-var 1675)
 																			(receiver
 																				(e-runtime-error (tag "erroneous_value_expr")))
 																			(args)))

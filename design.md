@@ -931,6 +931,17 @@ checker recovery. The recovery rules:
 - A lambda parameter pattern that the lambda's annotation rejects binds
   nothing, so the lambda is erroneous, exactly as when the pattern fails its
   own check.
+- An annotation whose generated type is erroneous (for example, it names an
+  undeclared type) declares no type, and nothing may be related to it. Checking
+  records this on the annotation itself (`CIR.Annotation.erroneous`) as soon as
+  it generates the annotation's type, before any body or use is related to it,
+  so the record is available in every module that can see the definition. The
+  definition's right-hand side becomes the runtime error, a method included,
+  and a static dispatch that selects a method with such an annotation is
+  rejected exactly as one selecting an annotation-only declaration is: its
+  constraint callable is never related to the erroneous type, which would
+  otherwise reach the instantiation that the dispatch belongs to while every
+  type that instantiation's owner publishes stays error-free.
 - A pattern matched against an erroneous value binds nothing, because the
   value crashes before any pattern sees it. This is one rule wherever a
   pattern meets a value: a binding whose right-hand side is erroneous, every
@@ -3274,7 +3285,12 @@ An expression statement is such a consumer of its expression's value: the
 `{}` demand is owned by the statement, and a call's result class is its
 callee's return slot, which a monomorphic callee shares with every other use.
 A rejected statement value retires the expression and marks the statement
-erroneous; the call and its callee keep their solved types.
+erroneous; the call and its callee keep their solved types. The one exception
+is Discarded Var Update (see Solver-Mutating Rewrites).
+A loop body has no final expression: canonicalization makes every line of a
+`for` or `while` body a statement, including the last, so the body is a block
+whose final expression is `{}`, and each of its expression statements owns its
+`{}` demand like any other. The checker asserts this shape for every loop body.
 A `Bool` demand is the same kind of consumer: an `if` or `while` condition and
 an `expect` body each own the `Bool` relation on a value they only consult, so
 a rejection retires that operand, and a rejected match guard retires its match.
@@ -8768,7 +8784,10 @@ expression's own errors can later be related to the type as it was. A ground
 expected type can change only through an explicit write, so one pristine copy
 serves every later expression expecting a structurally identical type
 (`Check.expectedTypeBackup`); a consumer that needs to unify with a shared
-copy takes its own copy first, so the shared one stays pristine.
+copy takes its own copy first, so the shared one stays pristine. Identity
+compares only the flags a copy carries (`DescriptorFlags.copied`), so a type
+whose classes record a defaulting decision or a rejection is identical to its
+own copy and shares it like any other.
 
 A row the reference itself WRITES as a type argument is decided the same way,
 by composition rather than by inheritance. A declaration's formal stands
@@ -10415,43 +10434,50 @@ eligible and encoded its replay shape, it becomes the source for that shape. A
 replay shape is the selected binding and method plus the receiver and callable
 exactly as stored: descriptor flags and content in depth-first order,
 variables numbered by first appearance, and attached constraints omitted,
-since each is a separate relation settled on its own receiver. Equal shapes
-are equal types up to renaming, so relating a fresh instance to either yields
-the same ground instance, and the instance's requirements have ground
-receivers and final targets, so they select the same targets.
+since each is a separate relation settled on its own receiver. The flags
+exclude `default_decided`, which only the report for a failed requirement
+reads, so a receiver whose type a default chose shares a shape with one the
+program wrote. Equal shapes are equal types up to renaming, so relating a
+fresh instance to either yields the same ground instance, and the instance's
+requirements have ground receivers and final targets, so they select the same
+targets.
 
 A later eligible edge with an equal shape replays the source once every
 requirement the source's instance carried, recursively, has settled without
 rejection. The first replay freezes a copy of the source's instance: fresh
 outermost-rank classes, registered with no solver environment, holding the
-same ground type, and marked frozen in the type store. It does so only while
-the instance is still ground, since a ground type changes later only by being
-poisoned, so a ground instance is still the one the source settled to; an
-instance that is no longer ground, or that holds a row not closed directly, is
-never frozen and its source never replays. The source's scheme-use
-substitution is restated over the copy; its nested-requirement callables stay
-the source's own. The replay walks the frozen instance and the edge's callable
-together. Where the callable already has structure the shapes guarantee it is
-the instance's, so it is kept as is; each callable variable is related to the
-frozen subtree at its position, which is what relating the callable to a fresh
-instance would bind it to, so every replayed edge shares one frozen instance
-rather than copying it. A callable function whose effect is still unbound is
-structure whose effect is not yet the instance's: a frozen instance is ground,
-so its function at that position is pure or effectful, and the callable
-function takes that kind in place, exactly as unifying it with the instance
-would give it, while its arguments and result are paired like any other
-children. A walk that finds the two stored layouts differ at some position
-(equal rows stored in different orders), or that finds a pure instance
-function at a callable function with effect dependencies (which the shape does
-not record, and which relating would have to make pure), replays nothing. The
-edge's scheme-use record is an ordinary dispatch-target record whose
-substitution names the callable node at each instance position, or the frozen
-node where the callable had a variable, and whose nested-requirement callables
-are the source's settled ones, which mention only ground types; evidence
-construction therefore treats it like any other edge's record. Eligibility and
-shape keys are computed only for bindings already proven replayable, so a
-method whose instances never settle ground (one whose result depends on a
-callback's own requirements, for example) pays nothing.
+same ground type with exactly the descriptor flags an instantiated copy
+carries (`DescriptorFlags.copied`), and marked frozen in the type store. The
+copy stands for a fresh instance, so it carries none of the flags that record
+what happened to the source's own classes, such as a defaulting decision or a
+rejection. It does so only while the instance is still ground, since a ground
+type changes later only by being poisoned, so a ground instance is still the
+one the source settled to; an instance that is no longer ground, or that holds
+a row not closed directly, is never frozen and its source never replays. The
+source's scheme-use substitution is restated over the copy; its
+nested-requirement callables stay the source's own. The replay walks the
+frozen instance and the edge's callable together. Where the callable already
+has structure the shapes guarantee it is the instance's, so it is kept as is;
+each callable variable is related to the frozen subtree at its position, which
+is what relating the callable to a fresh instance would bind it to, so every
+replayed edge shares one frozen instance rather than copying it. A callable
+function whose effect is still unbound is structure whose effect is not yet
+the instance's: a frozen instance is ground, so its function at that position
+is pure or effectful, and the callable function takes that kind in place,
+exactly as unifying it with the instance would give it, while its arguments
+and result are paired like any other children. A walk that finds the two
+stored layouts differ at some position (equal rows stored in different
+orders), or that finds a pure instance function at a callable function with
+effect dependencies (which the shape does not record, and which relating would
+have to make pure), replays nothing. The edge's scheme-use record is an
+ordinary dispatch-target record whose substitution names the callable node at
+each instance position, or the frozen node where the callable had a variable,
+and whose nested-requirement callables are the source's settled ones, which
+mention only ground types; evidence construction therefore treats it like any
+other edge's record. Eligibility and shape keys are computed only for bindings
+already proven replayable, so a method whose instances never settle ground
+(one whose result depends on a callback's own requirements, for example) pays
+nothing.
 
 Sharing is safe because the type store keeps a frozen class's meaning fixed
 while uses relate to it. A merge with a frozen class keeps the frozen
@@ -11757,6 +11783,28 @@ destructure is IMPLEMENTED); SETTING an optional field in an update
 the SET side of this section's typing frame, realized by the kind-flexible
 update probe (see the record-update bullet in Field Kinds).
 
+### Discarded Var Update
+
+An expression statement written as a method call on a `var` binding
+(`$acc.append(e)`: an `e_method_call`, or an `e_dispatch_call` whose surface
+origin is a method call, whose receiver is a lookup of a `var_assign` pattern)
+discards an updated copy of that binding when its value is not `{}` but could
+be assigned back to the binding. Such a statement is accepted with a
+`discarded_var_update` warning that suggests the reassignment, and its value
+is discarded at runtime. The statement does not relate its value to `{}` or to
+the binding; its own type is `{}`. Every other expression statement whose value
+is not `{}` is rejected as before.
+
+`Check.discardedVarUpdate` decides it with two read-only `probeCanUseAs`
+probes, both rolled back: the statement's `{}` relation must fail, and relating
+the value to the binding's type (the relation `$acc = $acc.append(e)` would
+run) must succeed. Only the statement's own type and the problem store are
+written. Accepted and rejected sides are pinned in
+`src/check/test/issue_12128_test.zig`: the warning for a discarded `append` in
+and outside a loop; errors for a discarded value of another type on a `var`
+(`$items.len()`), the same call on an immutable binding, and an operator on a
+`var` (`$count + n`).
+
 ### Rewrite Inventory
 
 - `finishAliasDeclarationParameters`—mechanism: completes an in-progress
@@ -11844,6 +11892,12 @@ Other solved-graph mutations:
   instead. `checkIteratorForLoop` also consumes an explicit rejected pattern
   result to retire the loop and reject its iterator plans without poisoning
   the independently checked iterable.
+- `rejectValuelessMethodDispatch` for a method whose annotation is erroneous
+  (`markStaticDispatchFnRejected`)—mechanism: diagnostic recovery after an
+  already-reported error (Every Rejection Is Explicit Recovery, above). The
+  rejection reads the explicit `CIR.Annotation.erroneous` record, which only an
+  annotation that already produced a diagnostic carries, so no error-free
+  program's typechecking or checked-module output changes.
 - `checkMatchExpr`'s branch-pattern target—mechanism: diagnostic recovery after
   an already-reported error. An erroneous scrutinee cannot relate the branch
   patterns to each other, so they unify against a shared fresh variable instead
@@ -12107,7 +12161,9 @@ at their definitions): `staticDispatchConstraintAcceptsCandidate` states the
 method-acceptance rule of static dispatch, with accepted/missing-method/
 signature-mismatch branches each pinned by tests;
 `numeralCandidateStructurallyRefuted` implements no rule of its own and is
-witness-asserted against the probe it pre-filters in safety builds.
+witness-asserted against the probe it pre-filters in safety builds;
+`probeCanUseAs` is the gating probe for Discarded Var Update
+(`discardedVarUpdate`, above).
 
 ## Runtime Lowering Strategy
 
@@ -14791,7 +14847,9 @@ poisoned body, checked at the annotation's type, only when that annotation
 itself declares a function: a bare `_` hole declares no callable type, and a
 function shape filled into it by the erroneous body is not a declaration, so
 such a method's bound expression becomes the runtime error like an unannotated
-one. Such a declaration
+one. An annotation that is itself erroneous (for example, one naming an
+undeclared type) declares no type either, so its method's bound expression
+becomes the runtime error too. Such a declaration
 is still *declared*, so `MethodRegistry` records its `(MethodOwner,
 MethodNameId)` key with no target rather than omitting it, and
 `lookupCheckedMethodTarget` answers `rejected` instead of "no such method".
@@ -15103,7 +15161,16 @@ specialization evidence. Boxy gives each independent callable contract its own
 hidden dictionary, so one target worker can be invoked with different adapters
 and nested dictionaries. The checked owner parameter and contract index identify
 those dictionaries across forwarding and lexical capture. Side vectors are interned and omitted when all selected
-target schemas authorize callable derivation. Omitting an evidence payload does
+target schemas authorize callable derivation. A procedure target authorizes it
+only when its own signature reaches every quantified variable of its scheme
+(`CheckedProcedureTemplate.callable_determines_scheme`). A variable that only a
+requirement's callable mentions, such as the error row of a forwarded method's
+result in `is_ok = |x| checked_send(x).is_ok()`, is fixed only by the selected
+targets' complete evidence chain, which a callable alone cannot supply, so every
+independent callable of such a target carries its own contract. A selected
+contract supplies its own checked instantiation and substitution, which
+Monotype uses for that call exactly as the primary use uses its own; an
+iterator `for` plan's calls consume the same entries. Omitting an evidence payload does
 not omit its callable relation: Monotype relates every independent callable
 recorded in the schema to a fresh instantiation of the selected declaration,
 including variables reachable only through those callables, before sealing a
