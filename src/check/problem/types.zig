@@ -29,8 +29,10 @@ pub const ExtraStringIdx = ByteListRange;
 pub const MissingPatternsRange = struct { start: usize, count: usize };
 
 /// The checker relation that recorded a problem, or whose unification queued
-/// a dispatch obligation whose problems then belong to it (design.md "Every
-/// Rejection Is Explicit Recovery"). A relation is void at the settled state
+/// a dispatch obligation whose problems then belong to it, unless the
+/// obligation is an expression's own dispatch, which that expression's
+/// relation owns wherever it is queued (design.md "Every Rejection Is
+/// Explicit Recovery"). A relation is void at the settled state
 /// when it read an erroneous value, and a void relation's problems are
 /// withdrawn: an erroneous value relates to nothing. `kind` says which
 /// values the relation read.

@@ -994,7 +994,31 @@ checker recovery. The recovery rules:
   branch join reads that branch, and the branches before it only when every
   one of them is erroneous, since an erroneous branch joins nothing. A
   dispatch requirement records the relation whose checking queued it, and the
-  problems its resolution reports belong to that relation. Because checking
+  problems its resolution reports belong to that relation. An expression's own
+  dispatch (an operator, a unary operator, or a method call) is the exception:
+  when its receiver is still open as the expression is checked, the
+  requirement waits on the receiver and is queued by whichever later
+  unification grounds it, yet it still belongs to the expression's relation
+  over its operands and fails at that expression, exactly as if the receiver
+  had been known (`Check.own_dispatch_exprs`, exact by callable identity, so
+  a copy that instantiation or import makes is never one). The obligations its
+  resolution queues inherit no failure expression from the entry that carried
+  it. An obligation derived from such a dispatch, a requirement its selected
+  target's instantiation left behind or a component relation of a structural
+  comparison, belongs to the same relation and fails at the expression,
+  whichever later unification grounds it: `x == x` over a list whose items a
+  later use makes functions reports the missing equality at `x == x`, as when
+  the items were known. A `for` loop's own `iter` and `next` dispatches have
+  no expression to own a relation, so an obligation derived from them (a
+  requirement of the selected `iter` target) keeps the relation that queued
+  it, but it reports at the loop's iterable (`Check.loop_dispatch_iterables`)
+  and retires no expression: the loop's checked iterator evidence carries the
+  rejection, and the iterable is a valid value. So in `for letter in "a"..="z" { echo!(letter) }` the range's rejected
+  `range_inclusive_to` is reported at the range, which it retires, rather than
+  at `echo!(letter)`, whose unification grounded the literal; `letter` is then
+  bound from an erroneous value, and `Range.iter`'s `range_iter` requirement,
+  which `echo!(letter)` made concrete, is withdrawn with that void relation.
+  Because checking
   replaces rejected expressions with runtime errors, each expression's operands
   are captured when its checking begins (`relation_operands`). A relation is
   void when one of its operands is erroneous through a name: a use of a name
@@ -5881,7 +5905,13 @@ requirement of a scheme that another expression instantiated is not its
 owner's own dispatch, even when the owner dispatches on its operands: the
 owner only made it concrete by relating that instantiation's type (`Friendly
 == Blub.parse("Friendly")?` makes `Blub.parse`'s `a.parser_for` concrete at
-`==`, which reports it, while the lookup of `Blub.parse` instantiated it). The
+`==`, which reports it, while the lookup of `Blub.parse` instantiated it).
+A scheme's requirement is its requirement whether its annotation declared it
+in a where clause or the scheme inferred it from an operator or method call
+its body dispatches: `sub = |a, b| a - b` used as `sub(x, "b")` with
+`x : Str` reports the missing `minus` at `sub(x, "b")`, as the annotated
+`sub : a, a -> a where [a.minus : a, a -> a]` does, never at `a - b` in the
+body (`Check.use_instance_by_fn_var` names the copies a value use owns). The
 call carrying the requirement is among the owner's operands, so the owner is
 the crash alone rather than evaluating a call whose callee cannot run. Each
 instantiated relation records the expression that instantiated it
