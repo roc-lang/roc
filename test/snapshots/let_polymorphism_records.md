@@ -102,7 +102,7 @@ TYPE MISMATCH - let_polymorphism_records.md:8:7:8:14
 		(title "Type Mismatch")
 		(region (start 8 7) (end 8 14))
 		(headline
-			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both:"))
+			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both."))
 		(document
 			(source-region (file "let_polymorphism_records.md") (start 8 7) (end 8 14) (annotation error) (line-text "str = \"hello\""))
 			(line-break)

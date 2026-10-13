@@ -38,21 +38,9 @@ pub const Idx = enum(u32) {
     _,
 };
 
-fn assertAppendIndex(expected: usize, idx: collections.SafeList(u8).Idx) void {
-    if (comptime builtin.mode == .debug) {
-        std.debug.assert(@backingInt(idx) == expected);
-    } else if (@backingInt(idx) != expected) {
-        unreachable;
-    }
-}
-
 fn assertAppendRange(expected_start: usize, expected_len: u32, range: collections.SafeList(u8).Range) void {
-    if (comptime builtin.mode == .debug) {
-        std.debug.assert(@backingInt(range.start) == expected_start);
-        std.debug.assert(range.count == expected_len);
-    } else if (@backingInt(range.start) != expected_start or range.count != expected_len) {
-        unreachable;
-    }
+    std.debug.assert(@backingInt(range.start) == expected_start);
+    std.debug.assert(range.count == expected_len);
 }
 
 /// Initialize a `SmallStringInterner` with the specified capacity.
@@ -79,7 +67,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
     {
         const expected_idx = self.bytes.items.items.len;
         const idx = try self.bytes.append(gpa, 0);
-        assertAppendIndex(expected_idx, idx);
+        std.debug.assert(@backingInt(idx) == expected_idx);
     }
 
     // Initialize hash table with all zeros (Idx.unused)
@@ -129,7 +117,7 @@ const Policy = struct {
         {
             const expected_idx = self.bytes.items.items.len;
             const idx = try self.bytes.append(gpa, 0);
-            assertAppendIndex(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         self.entry_count += 1;
         return new_offset;

@@ -80,7 +80,7 @@ TYPE NOT DETERMINED - multiline_string_complex.md:37:3:37:4
 		(title "Type Not Determined")
 		(region (start 37 3) (end 37 4))
 		(headline
-			(reflow "Nothing in this program determines the type of this number:"))
+			(reflow "Nothing in this program determines the type of this number."))
 		(document
 			(source-region (file "multiline_string_complex.md") (start 37 3) (end 37 4) (annotation error) (line-text "\t\t0 - \\\\"))
 			(line-break)

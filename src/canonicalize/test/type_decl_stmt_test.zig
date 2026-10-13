@@ -167,7 +167,7 @@ fn expectBlockSetupDoesNotScanStatements(can_source: []const u8) SourceAuditErro
     const expr_driver_start = std.mem.find(u8, can_source, "fn runExprKernel(") orelse return error.MissingCanonicalizeBlock;
     const block_start_rel = std.mem.find(u8, can_source[expr_driver_start..], ".block => |e| {") orelse return error.MissingCanonicalizeBlock;
     const block_start = expr_driver_start + block_start_rel;
-    const walk_start_rel = std.mem.find(u8, can_source[block_start..], "stacks.pushBlockNext(") orelse return error.MissingCanonicalizeBlockWalk;
+    const walk_start_rel = std.mem.find(u8, can_source[block_start..], "stacks.push(.block_next,") orelse return error.MissingCanonicalizeBlockWalk;
     const block_setup = can_source[block_start .. block_start + walk_start_rel];
 
     try expectSourceDoesNotContain(block_setup, "while (");
@@ -228,13 +228,13 @@ fn expectCanonicalizationKernelsUseExplicitPayloadStacks(can_source: []const u8)
     try expectSourceDoesNotContain(can_source, "arrayListItemType");
     try expectSourceDoesNotContain(can_source, "canonicalizedAssociatedLookupMaybeUsed");
 
-    try expectSourceSliceBetweenDoesNotContain(can_source, "const PatternKernelWork = struct", "const ExprKernelLabel = enum", "fn append(self: *PatternKernelWork");
+    try expectSourceSliceBetweenDoesNotContain(can_source, "const PatternKernelWork = ", "const ExprKernelLabel = enum", "fn append(self: *PatternKernelWork");
     try expectSourceSliceBetweenDoesNotContain(can_source, "const ExprKernelWork = struct", "const ExprRecordFieldWork = struct", "fn append(self: *ExprKernelWork");
-    try expectSourceSliceBetweenDoesNotContain(can_source, "const TypeAnnoKernelWork = struct", "fn runTypeAnnoKernel(", "fn append(self: *TypeAnnoKernelWork");
+    try expectSourceSliceBetweenDoesNotContain(can_source, "const TypeAnnoKernelWork = ", "fn runTypeAnnoKernel(", "fn append(self: *TypeAnnoKernelWork");
 
-    try expectSourceSliceBetweenDoesNotContain(can_source, "const PatternKernelWork = struct", "const ExprKernelLabel = enum", "std.ArrayList(struct");
+    try expectSourceSliceBetweenDoesNotContain(can_source, "const PatternKernelWork = ", "const ExprKernelLabel = enum", "std.ArrayList(struct");
     try expectSourceSliceBetweenDoesNotContain(can_source, "const ExprKernelWork = struct", "const ExprRecordFieldWork = struct", "std.ArrayList(struct");
-    try expectSourceSliceBetweenDoesNotContain(can_source, "const TypeAnnoKernelWork = struct", "fn runTypeAnnoKernel(", "std.ArrayList(struct");
+    try expectSourceSliceBetweenDoesNotContain(can_source, "const TypeAnnoKernelWork = ", "fn runTypeAnnoKernel(", "std.ArrayList(struct");
     try expectSourceSliceBetweenDoesNotContain(can_source, "fn runExprKernel(", "fn addBoolTagExpr", "frames.");
     try expectSourceSliceBetweenDoesNotContain(can_source, "pub fn canonicalizePattern(", "fn isVarPattern", "frames.");
     try expectSourceSliceBetweenDoesNotContain(can_source, "fn runTypeAnnoKernel(", "/// Handle basic type lookup", "frames.");

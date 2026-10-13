@@ -8824,7 +8824,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 14)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 14 5) (end 16 6) (annotation dim) (line-text "    Inner := [D].{\n        inner_val = outer_val\n    }"))))
 	(report
@@ -8834,7 +8834,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "outer_val")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "associated_items_complete_all_patterns.md") (start 28 5) (end 28 14) (annotation error) (line-text "    outer_val = 500"))
 			(line-break)
@@ -8845,7 +8845,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 18)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 18 5) (end 18 14) (annotation dim) (line-text "    outer_val = 300"))))
 	(report
@@ -8855,7 +8855,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "outer_val")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "associated_items_complete_all_patterns.md") (start 33 5) (end 33 14) (annotation error) (line-text "    outer_val = d2_outer_refs_inner.Inner.inner_val"))
 			(line-break)
@@ -8866,7 +8866,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 28)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 28 5) (end 28 14) (annotation dim) (line-text "    outer_val = 500"))))
 	(report
@@ -8887,7 +8887,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 14)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 14 5) (end 16 6) (annotation dim) (line-text "    Inner := [D].{\n        inner_val = outer_val\n    }"))))
 	(report
@@ -8921,7 +8921,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 14)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 14 5) (end 16 6) (annotation dim) (line-text "    Inner := [D].{\n        inner_val = outer_val\n    }"))))
 	(report
@@ -8957,7 +8957,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "val1")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "associated_items_complete_all_patterns.md") (start 76 5) (end 76 9) (annotation error) (line-text "    val1 = 30"))
 			(line-break)
@@ -8968,7 +8968,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 69)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 69 5) (end 69 9) (annotation dim) (line-text "    val1 = 10"))))
 	(report
@@ -8989,7 +8989,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 61)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 61 5) (end 67 6) (annotation dim) (line-text "    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }"))))
 	(report
@@ -9023,7 +9023,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 61)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 61 5) (end 67 6) (annotation dim) (line-text "    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }"))))
 	(report
@@ -9057,7 +9057,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 61)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 61 5) (end 67 6) (annotation dim) (line-text "    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }"))))
 	(report
@@ -9078,7 +9078,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 61)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 61 5) (end 67 6) (annotation dim) (line-text "    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }"))))
 	(report
@@ -9088,7 +9088,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "val1")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "associated_items_complete_all_patterns.md") (start 119 5) (end 119 9) (annotation error) (line-text "    val1 = 5"))
 			(line-break)
@@ -9099,7 +9099,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 76)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 76 5) (end 76 9) (annotation dim) (line-text "    val1 = 30"))))
 	(report
@@ -9133,7 +9133,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 61)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 61 5) (end 67 6) (annotation dim) (line-text "    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }"))))
 	(report
@@ -9143,7 +9143,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "val1")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "associated_items_complete_all_patterns.md") (start 138 5) (end 138 9) (annotation error) (line-text "    val1 = 1"))
 			(line-break)
@@ -9154,7 +9154,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 119)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 119 5) (end 119 9) (annotation dim) (line-text "    val1 = 5"))))
 	(report
@@ -9164,7 +9164,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "val1")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "associated_items_complete_all_patterns.md") (start 143 5) (end 143 9) (annotation error) (line-text "    val1 = 10"))
 			(line-break)
@@ -9175,7 +9175,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 138)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 138 5) (end 138 9) (annotation dim) (line-text "    val1 = 1"))))
 	(report
@@ -9196,7 +9196,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 61)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 61 5) (end 67 6) (annotation dim) (line-text "    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }"))))
 	(report
@@ -9217,7 +9217,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 61)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 61 5) (end 67 6) (annotation dim) (line-text "    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }"))))
 	(report
@@ -9227,7 +9227,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "val1")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "associated_items_complete_all_patterns.md") (start 172 5) (end 172 9) (annotation error) (line-text "    val1 = 7"))
 			(line-break)
@@ -9238,7 +9238,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 143)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 143 5) (end 143 9) (annotation dim) (line-text "    val1 = 10"))))
 	(report
@@ -9248,7 +9248,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "val1")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "associated_items_complete_all_patterns.md") (start 177 5) (end 177 9) (annotation error) (line-text "    val1 = 15"))
 			(line-break)
@@ -9259,7 +9259,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 172)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 172 5) (end 172 9) (annotation dim) (line-text "    val1 = 7"))))
 	(report
@@ -9280,7 +9280,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 61)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 61 5) (end 67 6) (annotation dim) (line-text "    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }"))))
 	(report
@@ -9301,7 +9301,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 61)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 61 5) (end 67 6) (annotation dim) (line-text "    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }"))))
 	(report
@@ -9322,7 +9322,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 61)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 61 5) (end 67 6) (annotation dim) (line-text "    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }"))))
 	(report
@@ -9343,7 +9343,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 61)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 61 5) (end 67 6) (annotation dim) (line-text "    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }"))))
 	(report
@@ -9353,7 +9353,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "val1")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "associated_items_complete_all_patterns.md") (start 233 5) (end 233 9) (annotation error) (line-text "    val1 = 3"))
 			(line-break)
@@ -9364,7 +9364,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 177)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 177 5) (end 177 9) (annotation dim) (line-text "    val1 = 15"))))
 	(report
@@ -9385,7 +9385,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 61)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 61 5) (end 67 6) (annotation dim) (line-text "    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }"))))
 	(report
@@ -9419,7 +9419,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 61)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 61 5) (end 67 6) (annotation dim) (line-text "    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }"))))
 	(report
@@ -9440,7 +9440,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 61)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 61 5) (end 67 6) (annotation dim) (line-text "    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }"))))
 	(report
@@ -9461,7 +9461,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 61)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 61 5) (end 67 6) (annotation dim) (line-text "    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }"))))
 	(report
@@ -9471,7 +9471,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "val1")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "associated_items_complete_all_patterns.md") (start 290 5) (end 290 9) (annotation error) (line-text "    val1 = 1"))
 			(line-break)
@@ -9482,7 +9482,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 233)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 233 5) (end 233 9) (annotation dim) (line-text "    val1 = 3"))))
 	(report
@@ -9492,7 +9492,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "val1")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "associated_items_complete_all_patterns.md") (start 295 5) (end 295 9) (annotation error) (line-text "    val1 = 100"))
 			(line-break)
@@ -9503,7 +9503,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 290)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 290 5) (end 290 9) (annotation dim) (line-text "    val1 = 1"))))
 	(report
@@ -9524,7 +9524,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 61)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 61 5) (end 67 6) (annotation dim) (line-text "    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }"))))
 	(report
@@ -9534,7 +9534,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "val1")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "associated_items_complete_all_patterns.md") (start 316 5) (end 316 9) (annotation error) (line-text "    val1 = 2"))
 			(line-break)
@@ -9545,7 +9545,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 295)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 295 5) (end 295 9) (annotation dim) (line-text "    val1 = 100"))))
 	(report
@@ -9566,7 +9566,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 61)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 61 5) (end 67 6) (annotation dim) (line-text "    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }"))))
 	(report
@@ -9587,7 +9587,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 61)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 61 5) (end 67 6) (annotation dim) (line-text "    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }"))))
 	(report
@@ -9608,7 +9608,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 61)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 61 5) (end 67 6) (annotation dim) (line-text "    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }"))))
 	(report
@@ -9629,7 +9629,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 61)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 61 5) (end 67 6) (annotation dim) (line-text "    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }"))))
 	(report
@@ -9639,7 +9639,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "val1")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "associated_items_complete_all_patterns.md") (start 385 5) (end 385 9) (annotation error) (line-text "    val1 = 5"))
 			(line-break)
@@ -9650,7 +9650,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 316)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 316 5) (end 316 9) (annotation dim) (line-text "    val1 = 2"))))
 	(report
@@ -9684,7 +9684,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 61)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 61 5) (end 67 6) (annotation dim) (line-text "    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }"))))
 	(report
@@ -9694,7 +9694,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "bad")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "associated_items_complete_all_patterns.md") (start 404 5) (end 404 8) (annotation error) (line-text "    bad = deep_secret"))
 			(line-break)
@@ -9705,7 +9705,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 246)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 246 5) (end 246 8) (annotation dim) (line-text "    bad = l4_val"))))
 	(report
@@ -9739,7 +9739,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 61)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 61 5) (end 67 6) (annotation dim) (line-text "    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }"))))
 	(report
@@ -9760,7 +9760,7 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 				(file "associated_items_complete_all_patterns.md")
 				(line 61)
 				(column 5))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 61 5) (end 67 6) (annotation dim) (line-text "    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }"))))
 	(report

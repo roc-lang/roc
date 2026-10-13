@@ -653,9 +653,6 @@ pub const RocModules = struct {
         // tracing shim.
         self.vendor_macho.addImport("tracy", self.tracy);
 
-        // The vendored LLVM IR library's BitcodeReader reaches roc's `base`.
-        self.vendor_llvm_ir.addImport("base", self.base);
-
         return self;
     }
 

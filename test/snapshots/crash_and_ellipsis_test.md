@@ -44,7 +44,7 @@ UNUSED VARIABLE - crash_and_ellipsis_test.md:22:5:22:12
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "result1")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_result1")
@@ -58,7 +58,7 @@ UNUSED VARIABLE - crash_and_ellipsis_test.md:22:5:22:12
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "result2")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_result2")
@@ -72,7 +72,7 @@ UNUSED VARIABLE - crash_and_ellipsis_test.md:22:5:22:12
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "result3")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_result3")

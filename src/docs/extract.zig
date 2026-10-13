@@ -140,27 +140,6 @@ pub fn extractDocComment(gpa: Allocator, source: []const u8, def_start_offset: u
     };
 }
 
-/// Extract documentation for all exported definitions in a module.
-///
-/// For type modules, only the main type entry (the one matching the module name)
-/// and its nested children are included. All other top-level definitions are
-/// considered private to the module and are excluded from documentation.
-/// For example, in a `Color.roc` type module, only `Color := ...` and its
-/// methods are documented; any helper functions defined outside the `Color`
-/// type declaration are not visible.
-///
-/// The Builtin module receives additional special handling: the `Builtin` opaque
-/// entry itself is removed, and its children are re-distributed under the
-/// proper parent types (Str, List, Bool, Num, etc.).
-pub fn extractModuleDocs(
-    gpa: Allocator,
-    module_env: *const ModuleEnv,
-    package_name: []const u8,
-    source_path: ?[]const u8,
-) Allocator.Error!DocModel.ModuleDocs {
-    return extractModuleDocsWithOptions(gpa, module_env, package_name, source_path, .{});
-}
-
 /// Controls which source-level entries are included in one module's docs.
 pub const ExtractOptions = struct {
     /// When set, retain only these top-level entries and their children.
@@ -203,7 +182,20 @@ const PublicReferenceRouting = struct {
     checked_artifact: ?*const CheckedArtifact.CheckedModuleArtifact,
 };
 
-/// Extract documentation, optionally restricted to explicit top-level names.
+/// Extract documentation for all exported definitions in a module.
+///
+/// For type modules, only the main type entry (the one matching the module name)
+/// and its nested children are included. All other top-level definitions are
+/// considered private to the module and are excluded from documentation.
+/// For example, in a `Color.roc` type module, only `Color := ...` and its
+/// methods are documented; any helper functions defined outside the `Color`
+/// type declaration are not visible.
+///
+/// The Builtin module receives additional special handling: the `Builtin` opaque
+/// entry itself is removed, and its children are re-distributed under the
+/// proper parent types (Str, List, Bool, Num, etc.).
+///
+/// `options` can restrict the result to explicit top-level names.
 pub fn extractModuleDocsWithOptions(
     gpa: Allocator,
     module_env: *const ModuleEnv,
@@ -810,7 +802,7 @@ test "Builtin docs exclude private sibling types and preserve public nested type
     defer gpa.free(diagnostics);
     try std.testing.expectEqual(0, diagnostics.len);
 
-    var docs = try extractModuleDocs(gpa, &env, "Builtin", null);
+    var docs = try extractModuleDocsWithOptions(gpa, &env, "Builtin", null, .{});
     defer docs.deinit(gpa);
     try std.testing.expectEqual(2, docs.entries.len);
     try std.testing.expectEqualStrings("Public", docs.entries[0].name);
@@ -2428,47 +2420,7 @@ fn extractDocTypeInner(
                 origin_text,
                 ident_text,
             );
-            var display_moved = false;
-            errdefer if (!display_moved) {
-                gpa.free(display.module_path);
-                gpa.free(display.type_name);
-            };
-
-            var args_iter = types.iterAliasArgs(alias);
-            if (args_iter.count() > 0) {
-                // Type application
-                const constructor = try allocDocType(gpa, .{ .type_ref = .{
-                    .module_path = display.module_path,
-                    .type_name = display.type_name,
-                } });
-                display_moved = true;
-                errdefer {
-                    constructor.deinit(gpa);
-                    gpa.destroy(constructor);
-                }
-
-                var args = std.ArrayList(*const DocType).empty;
-                defer args.deinit(gpa);
-
-                while (args_iter.next()) |arg_var| {
-                    const arg_type = try extractDocTypeInner(ctx, arg_var) orelse
-                        try allocDocType(gpa, .@"error");
-                    try args.append(gpa, arg_type);
-                }
-
-                const args_slice = try args.toOwnedSlice(gpa);
-                return try allocDocType(gpa, .{ .apply = .{
-                    .constructor = constructor,
-                    .args = args_slice,
-                    .layout = .compact,
-                } });
-            } else {
-                // Simple type reference
-                return try allocDocType(gpa, .{ .type_ref = .{
-                    .module_path = display.module_path,
-                    .type_name = display.type_name,
-                } });
-            }
+            return displayedTypeApplication(ctx, display, types.iterAliasArgs(alias));
         },
         .structure => |flat_type| {
             return try extractFlatType(ctx, flat_type);
@@ -2557,11 +2509,59 @@ fn extractFunction(
     } });
 }
 
+/// Builds the doc type that refers to `display`, applied to the iterated
+/// type arguments when there are any. Takes ownership of `display`'s strings.
+fn displayedTypeApplication(
+    ctx: *ExtractContext,
+    display: TypeReferenceDisplay,
+    args_iter_in: anytype,
+) ExtractError!*const DocType {
+    const gpa = ctx.gpa;
+    var display_moved = false;
+    errdefer if (!display_moved) {
+        gpa.free(display.module_path);
+        gpa.free(display.type_name);
+    };
+
+    var args_iter = args_iter_in;
+    if (args_iter.count() == 0) {
+        return try allocDocType(gpa, .{ .type_ref = .{
+            .module_path = display.module_path,
+            .type_name = display.type_name,
+        } });
+    }
+
+    const constructor = try allocDocType(gpa, .{ .type_ref = .{
+        .module_path = display.module_path,
+        .type_name = display.type_name,
+    } });
+    display_moved = true;
+    errdefer {
+        constructor.deinit(gpa);
+        gpa.destroy(constructor);
+    }
+
+    var args = std.ArrayList(*const DocType).empty;
+    defer args.deinit(gpa);
+
+    while (args_iter.next()) |arg_var| {
+        const arg_type = try extractDocTypeInner(ctx, arg_var) orelse
+            try allocDocType(gpa, .@"error");
+        try args.append(gpa, arg_type);
+    }
+
+    const args_slice = try args.toOwnedSlice(gpa);
+    return try allocDocType(gpa, .{ .apply = .{
+        .constructor = constructor,
+        .args = args_slice,
+        .layout = .compact,
+    } });
+}
+
 fn extractNominalType(
     ctx: *ExtractContext,
     nominal: NominalType,
 ) ExtractError!*const DocType {
-    const gpa = ctx.gpa;
     const idents = ctx.idents;
     const origin_text = ctx.env.moduleIdentityDisplayText(nominal.origin_module);
     const ident_text = idents.getText(nominal.ident.ident_idx);
@@ -2572,45 +2572,7 @@ fn extractNominalType(
         origin_text,
         ident_text,
     );
-    var display_moved = false;
-    errdefer if (!display_moved) {
-        gpa.free(display.module_path);
-        gpa.free(display.type_name);
-    };
-
-    var args_iter = ctx.types.iterNominalArgs(nominal);
-    if (args_iter.count() > 0) {
-        const constructor = try allocDocType(gpa, .{ .type_ref = .{
-            .module_path = display.module_path,
-            .type_name = display.type_name,
-        } });
-        display_moved = true;
-        errdefer {
-            constructor.deinit(gpa);
-            gpa.destroy(constructor);
-        }
-
-        var args = std.ArrayList(*const DocType).empty;
-        defer args.deinit(gpa);
-
-        while (args_iter.next()) |arg_var| {
-            const arg_type = try extractDocTypeInner(ctx, arg_var) orelse
-                try allocDocType(gpa, .@"error");
-            try args.append(gpa, arg_type);
-        }
-
-        const args_slice = try args.toOwnedSlice(gpa);
-        return try allocDocType(gpa, .{ .apply = .{
-            .constructor = constructor,
-            .args = args_slice,
-            .layout = .compact,
-        } });
-    } else {
-        return try allocDocType(gpa, .{ .type_ref = .{
-            .module_path = display.module_path,
-            .type_name = display.type_name,
-        } });
-    }
+    return displayedTypeApplication(ctx, display, ctx.types.iterNominalArgs(nominal));
 }
 
 /// The documentation kind of a solved record field. A field whose kind solved

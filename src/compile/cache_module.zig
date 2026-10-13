@@ -190,38 +190,6 @@ pub const CacheModule = struct {
         return module_env_ptr;
     }
 
-    /// Get diagnostic information about the cache
-    pub fn getDiagnostics(self: *const CacheModule) Diagnostics {
-        return Diagnostics{
-            .total_size = @sizeOf(Header) + self.header.data_size,
-            .header_size = @sizeOf(Header),
-            .data_size = self.header.data_size,
-        };
-    }
-
-    /// Validate the cache structure and integrity
-    pub fn validate(self: *const CacheModule) Allocator.Error!void {
-        // Just validate that we have data
-        if (self.data.len != self.header.data_size) {
-            return error.DataSizeMismatch;
-        }
-    }
-
-    /// Convenience function for reading cache files
-    pub fn readFromFile(
-        allocator: Allocator,
-        file_path: []const u8,
-        filesystem: anytype,
-    ) Allocator.Error![]align(SERIALIZATION_ALIGNMENT.toByteUnits()) u8 {
-        const file_data = try filesystem.readFile(file_path, allocator);
-        defer allocator.free(file_data);
-
-        const buffer = try allocator.alignedAlloc(u8, SERIALIZATION_ALIGNMENT, file_data.len);
-        @memcpy(buffer, file_data);
-
-        return buffer;
-    }
-
     /// Tagged union to represent cache data that can be either memory-mapped or heap-allocated
     pub const CacheData = union(enum) {
         mapped: CoreCtx.MappedFile,
@@ -247,33 +215,6 @@ pub const CacheModule = struct {
         }
     };
 
-    /// Load a cache file, memory-mapping it when `roc_ctx` can map files and
-    /// reading it onto the heap otherwise.
-    ///
-    /// The mapping is copy-on-write (`CoreCtx.mapFilePrivate`), so callers may
-    /// write into the returned bytes (for example, relocating serialized
-    /// pointers in place) without those writes ever reaching the cache file on
-    /// disk. If a caller keeps references into the mapped bytes, the mapping
-    /// must outlive them; free it through `CacheData.deinit`, which unmaps a
-    /// `.mapped` value and never routes it through the heap allocator.
-    ///
-    /// An empty file, a mapping error, or a `roc_ctx` that cannot map files (a
-    /// virtual filesystem, a target without `mmap`) uses the heap-read path via
-    /// `filesystem.readFile`, so a mapping failure never fails the load.
-    pub fn readFromFileMapped(
-        allocator: Allocator,
-        roc_ctx: CoreCtx,
-        file_path: []const u8,
-        filesystem: anytype,
-    ) Allocator.Error!CacheData {
-        if (tryMapCacheFile(roc_ctx, file_path)) |mapped| {
-            return mapped;
-        }
-
-        const data = try readFromFile(allocator, file_path, filesystem);
-        return CacheData{ .allocated = data };
-    }
-
     /// Copy-on-write map `file_path` into a `CacheData.mapped` value, or return
     /// `null` when `roc_ctx` cannot map it (a virtual filesystem, a target without
     /// `mmap`, or a missing, empty, or kernel-refused file). A `null` result is
@@ -283,78 +224,3 @@ pub const CacheModule = struct {
         return CacheData{ .mapped = mapped };
     }
 };
-
-/// Diagnostic information about a cache
-pub const Diagnostics = struct {
-    total_size: u32,
-    header_size: u32,
-    data_size: u32,
-};
-
-test "readFromFileMapped memory-maps a cache file copy-on-write" {
-    if (comptime !CoreCtx.can_map_files) return;
-
-    const testing = std.testing;
-    const roc_ctx = CoreCtx.default(testing.allocator, testing.allocator, testing.io);
-
-    var tmp_dir = testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-    const tmp_path = try tmp_dir.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
-    defer testing.allocator.free(tmp_path);
-    const path = try std.fs.path.join(testing.allocator, &.{ tmp_path, "mmap-roundtrip.bin" });
-    defer testing.allocator.free(path);
-
-    // A page of deterministic bytes so the mapped data spans the whole page.
-    var payload: [4096]u8 = undefined;
-    for (&payload, 0..) |*b, i| b.* = @truncate(i);
-    try roc_ctx.writeFile(path, &payload);
-
-    // A filesystem whose read errors, proving the heap-read path is not taken when
-    // the mapping succeeds.
-    const StubFs = struct {
-        fn readFile(_: @This(), _: []const u8, _: Allocator) Allocator.Error![]u8 {
-            return error.OutOfMemory;
-        }
-    };
-
-    const cache_data = try CacheModule.readFromFileMapped(testing.allocator, roc_ctx, path, StubFs{});
-    defer cache_data.deinit(testing.allocator);
-
-    try testing.expect(std.meta.activeTag(cache_data) == .mapped);
-    try testing.expectEqualSlices(u8, &payload, cache_data.data());
-
-    // Copy-on-write: mutating the mapping (as relocation does) must not reach disk.
-    const mutable: [*]u8 = @constCast(cache_data.data().ptr);
-    mutable[0] +%= 1;
-    mutable[payload.len - 1] +%= 1;
-
-    const reread = try roc_ctx.readFile(path, testing.allocator);
-    defer testing.allocator.free(reread);
-    try testing.expectEqualSlices(u8, &payload, reread);
-}
-
-test "readFromFileMapped heap-reads when the path is not a real on-disk file" {
-    const testing = std.testing;
-    const roc_ctx = CoreCtx.default(testing.allocator, testing.allocator, testing.io);
-
-    // Opening this path fails to map, so the load drops to the heap-read path;
-    // on targets that cannot map files, the heap-read path is the only path.
-    const HeapFs = struct {
-        payload: []const u8,
-        fn readFile(self: @This(), _: []const u8, allocator: Allocator) Allocator.Error![]u8 {
-            return allocator.dupe(u8, self.payload);
-        }
-    };
-
-    const payload = "roc cache heap-read payload bytes";
-    const cache_data = try CacheModule.readFromFileMapped(
-        testing.allocator,
-        roc_ctx,
-        "/roc-nonexistent/cache/entry.bin",
-        HeapFs{ .payload = payload },
-    );
-    defer cache_data.deinit(testing.allocator);
-
-    try testing.expect(std.meta.activeTag(cache_data) == .allocated);
-    try testing.expectEqualSlices(u8, payload, cache_data.data());
-}

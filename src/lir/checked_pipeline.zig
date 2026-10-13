@@ -222,10 +222,6 @@ pub const TargetConfig = struct {
     /// is enabled for optimized builds and kept off for dev and compile-time
     /// evaluation.
     prove_ranges: bool = false,
-    /// Debug-only: forwarded to `SolvedLirLower.Options.debug_materialized_out`
-    /// so a differential harness can execute the Debug verifier's materialized
-    /// Lambda Mono program. The slot receives a value only in Debug builds.
-    debug_materialized_out: ?*?postcheck.LambdaMono.Ast.Program = null,
     /// Optional deterministic task counts for solved-LIR body-shard lowering.
     solved_lir_parallel_metrics_out: ?*SolvedLirParallelMetrics = null,
     /// Per-run staged specialization counters; SpecConstr owns resetting them.
@@ -970,7 +966,6 @@ pub const Observers = struct {
     work_metrics: ?*WorkMetrics = null,
     timing: ?*Timing = null,
     post_check_executor: ?base.post_check_task_executor.Executor = null,
-    debug_materialized_out: ?*?postcheck.LambdaMono.Ast.Program = null,
     solved_lir_parallel_metrics_out: ?*SolvedLirParallelMetrics = null,
     lir_pass_parallel_metrics_out: ?*LirPassParallelMetrics = null,
     arc_parallel_metrics_out: ?*ArcParallelMetrics = null,
@@ -1109,10 +1104,6 @@ pub const FrozenMaterializer = struct {
     materialize: *const fn (Allocator, *anyopaque, *LirProgram.Result) Allocator.Error!LirProgram.FrozenStaticData,
 };
 
-/// Materialized Lambda Mono program type, re-exported for harnesses that
-/// receive one through `TargetConfig.debug_materialized_out`.
-pub const LambdaMonoProgram = postcheck.LambdaMono.Ast.Program;
-
 /// Runtime record and tag-union schemas needed by dev tooling.
 pub const RuntimeValueSchemaStore = struct {
     allocator: Allocator,
@@ -1188,18 +1179,6 @@ pub fn retainRuntimeRoots(lowered: *LoweredProgram, root_indices: []const u32) A
     metadata = .empty;
     result.const_roots.clearRetainingCapacity();
     result.literal_roots.clearRetainingCapacity();
-    try completeComptimeValueSlots(lowered);
-}
-
-/// Turn a runtime consumer's completed compile-time value slots into ordinary
-/// frozen program data.
-///
-/// This consumer lowered only its own roots, so nothing here selects roots. It
-/// reaches each compile-time value through a slot the evaluation has since
-/// filled, and its own roots are the program's roots already.
-pub fn adoptCompletedComptimeValues(lowered: *LoweredProgram) Allocator.Error!void {
-    if (lowered.lir_result.const_roots.items.len != 0 or lowered.lir_result.literal_roots.items.len != 0) checkedPipelineInvariant("runtime consumer lowered a compile-time root");
-    if (lowered.frozen_static_data == null) checkedPipelineInvariant("runtime consumer has no completed compile-time values to adopt");
     try completeComptimeValueSlots(lowered);
 }
 
@@ -1815,7 +1794,6 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
         .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
         .layout_request_const_plans = target.layout_request_const_plans,
         .test_plan_metadata = prepared.test_plan_metadata,
-        .debug_materialized_out = target.debug_materialized_out,
         .parallel_metrics = parallel_metrics,
         .completed_scalar_values = target.completed_scalar_values,
     });
@@ -2422,7 +2400,7 @@ test "adopting completed compile-time values drops their initializers and identi
     };
     lowered.frozen_static_data = .{ .allocator = allocator, .exports = exports };
 
-    try adoptCompletedComptimeValues(&lowered);
+    try completeComptimeValueSlots(&lowered);
 
     const slot = lowered.lir_result.static_data_values.items[0];
     try std.testing.expectEqual(@as(?LIR.LirProcSpecId, null), slot.initializer);

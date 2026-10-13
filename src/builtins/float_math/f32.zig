@@ -16,9 +16,10 @@
 // is preserved.
 
 const std = @import("std");
+const ieee = @import("ieee.zig");
 
-const canonical_nan: f32 = @bitCast(@as(u32, 0x7fc0_0000));
-const positive_infinity: f32 = @bitCast(@as(u32, 0x7f80_0000));
+const canonical_nan = ieee.canonicalNan(f32);
+const positive_infinity = ieee.positiveInfinity(f32);
 
 const Fixed = [5]u64;
 
@@ -411,38 +412,6 @@ pub fn log(value: f32) f32 {
     return s * (half_square + approximation) + float_exponent * ln2_lo - half_square + f + float_exponent * ln2_hi;
 }
 
-fn scalePowerOfTwo(value: f32, power: i32) f32 {
-    var bits: u32 = @bitCast(value);
-    const sign = bits & 0x8000_0000;
-    var exponent: i32 = @intCast((bits >> 23) & 0xff);
-    if (exponent == 0xff or bits & 0x7fff_ffff == 0) return value;
-
-    var adjusted_power = power;
-    if (exponent == 0) {
-        const scaled = value * 0x1.0p24;
-        bits = @bitCast(scaled);
-        exponent = @as(i32, @intCast((bits >> 23) & 0xff)) - 24;
-    }
-
-    const new_exponent = exponent + adjusted_power;
-    if (new_exponent >= 0xff) return @bitCast(sign | 0x7f80_0000);
-    if (new_exponent > 0) return @bitCast((bits & 0x807f_ffff) | (@as(u32, @intCast(new_exponent)) << 23));
-    if (new_exponent <= -24) return @bitCast(sign);
-
-    adjusted_power = new_exponent + 24;
-    const normal_bits = (bits & 0x807f_ffff) | (@as(u32, @intCast(adjusted_power)) << 23);
-    const normal: f32 = @bitCast(normal_bits);
-    return normal * 0x1.0p-24;
-}
-
-fn isOddInteger(value: f32) bool {
-    const abs_bits = @as(u32, @bitCast(value)) & 0x7fff_ffff;
-    if (abs_bits >= 0x4b80_0000) return false;
-    if (@trunc(value) != value) return false;
-    const integer: i32 = @intFromFloat(value);
-    return integer & 1 != 0;
-}
-
 const pow_bp = [2]f32{ 1.0, 1.5 };
 const pow_dp_high = [2]f32{ 0.0, 5.84960938e-01 };
 const pow_dp_low = [2]f32{ 0.0, 1.56322085e-06 };
@@ -583,50 +552,11 @@ fn finitePowerMagnitude(base: f32, exponent: f32) f32 {
     const correction = exp_argument - square * (pow_p1 + square * (pow_p2 + square * (pow_p3 + square * (pow_p4 + square * pow_p5))));
     const approximation = (exp_argument * correction) / (correction - 2.0) - (exp_tail + exp_argument * exp_tail);
     exp_argument = 1.0 - (approximation - exp_argument);
-    return scalePowerOfTwo(exp_argument, scale_exponent);
+    return ieee.scalePowerOfTwo(f32, 24, exp_argument, scale_exponent);
 }
 
 /// Returns `base` raised to `exponent`, computed entirely with binary32 operations.
-pub fn pow(base: f32, exponent: f32) f32 {
-    @setFloatMode(.strict);
-
-    if (exponent == 0.0 or base == 1.0) return 1.0;
-    const base_bits: u32 = @bitCast(base);
-    const exponent_bits: u32 = @bitCast(exponent);
-    const base_abs_bits = base_bits & 0x7fff_ffff;
-    const exponent_abs_bits = exponent_bits & 0x7fff_ffff;
-    if (base_abs_bits > 0x7f80_0000 or exponent_abs_bits > 0x7f80_0000) return canonical_nan;
-    if (exponent == 1.0) return base;
-    if (exponent == -1.0) return 1.0 / base;
-    if (exponent == 2.0) return base * base;
-
-    if (base_abs_bits == 0) {
-        if (exponent < 0.0) return if (isOddInteger(exponent)) @bitCast((base_bits & 0x8000_0000) | 0x7f80_0000) else positive_infinity;
-        return if (isOddInteger(exponent)) base else 0.0;
-    }
-
-    if (exponent_abs_bits == 0x7f80_0000) {
-        if (base == -1.0) return 1.0;
-        const tends_to_zero = (@abs(base) < 1.0) == (exponent > 0.0);
-        return if (tends_to_zero) 0.0 else positive_infinity;
-    }
-    if (base_abs_bits == 0x7f80_0000) {
-        if (base_bits >> 31 != 0) {
-            const reciprocal: f32 = @bitCast(base_bits & 0x8000_0000);
-            return pow(reciprocal, -exponent);
-        }
-        return if (exponent < 0.0) 0.0 else positive_infinity;
-    }
-    if (exponent == 0.5) return @sqrt(base);
-    if (exponent == -0.5) return 1.0 / @sqrt(base);
-
-    const exponent_is_integer = @trunc(exponent) == exponent;
-    if (base < 0.0 and !exponent_is_integer) return canonical_nan;
-
-    var result = finitePowerMagnitude(@abs(base), exponent);
-    if (base < 0.0 and isOddInteger(exponent)) result = -result;
-    return result;
-}
+pub const pow = ieee.powFn(f32, finitePowerMagnitude);
 
 test "fixed-point argument reduction covers the binary32 exponent range" {
     const cases = [_]f32{ 1.0, -1.0, 1000.0, -1000.0, @bitCast(@as(u32, 0x7f7f_ffff)) };

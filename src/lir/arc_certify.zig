@@ -150,6 +150,7 @@ const core = @import("lir_core");
 const layout_mod = @import("layout");
 const rc_effect_rules = base.rc_effect_rules;
 const arc_sig = @import("arc_sig.zig");
+const body_clone = @import("body_clone.zig");
 const arc_dismantle = @import("arc_dismantle.zig");
 const arc_solve = @import("arc_solve.zig");
 const ArcSnapshot = @import("arc_state.zig").Snapshot;
@@ -638,61 +639,16 @@ fn writeFailureContext(
         while (walk.pop()) |current| {
             if (reachable.contains(current)) continue;
             reachable.put(current, {}) catch return;
-            switch (store.getCFStmt(current)) {
-                .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break, .jump, .ret, .crash, .expect_err => {},
-                .comptime_branch_taken => |s| walk.append(store.allocator, s.next) catch return,
-                .switch_stmt => |s| {
-                    const branches = store.getCFSwitchBranches(s.branches);
-                    for (0..GuardedList.borrowLen(branches)) |branch_index| {
-                        const branch = GuardedList.at(branches, branch_index);
-                        walk.append(store.allocator, branch.body) catch return;
-                    }
-                    walk.append(store.allocator, s.default_branch) catch return;
-                    if (s.continuation) |continuation| {
-                        walk.append(store.allocator, continuation) catch return;
-                    }
-                },
-                inline .str_match, .boxy_tag_match => |s| {
-                    walk.append(store.allocator, s.on_match) catch return;
-                    walk.append(store.allocator, s.on_miss) catch return;
-                },
-                .str_match_set => |s| {
-                    const arms = store.getStrMatchArms(s.arms);
-                    for (0..GuardedList.borrowLen(arms)) |arm_index| {
-                        const arm = GuardedList.at(arms, arm_index);
-                        walk.append(store.allocator, arm.on_match) catch return;
-                    }
-                    walk.append(store.allocator, s.on_miss) catch return;
-                },
-                .switch_initialized_payload => |s| {
-                    walk.append(store.allocator, s.initialized_branch) catch return;
-                    walk.append(store.allocator, s.uninitialized_branch) catch return;
-                },
-                .join => |j| {
-                    walk.append(store.allocator, j.body) catch return;
-                    walk.append(store.allocator, j.remainder) catch return;
-                },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| {
-                    walk.append(store.allocator, s.next) catch return;
-                },
-            }
+            body_clone.appendSuccessors(store, &walk, current, store.allocator) catch return;
         }
     }
 
     for (0..store.cfStmtCount()) |index| {
         if (!reachable.contains(@fromBackingInt(@intCast(@as(u32, @intCast(index)))))) continue;
         const stmt = store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
-        var mentions = if (local) |l| stmtMentionsLocal(store, stmt, l) else false;
-        if (local) |l| {
-            if (stmt == .join) {
-                const jp = store.getLocalSpan(stmt.join.params);
-                for (0..GuardedList.borrowLen(jp)) |jpi| {
-                    if (GuardedList.at(jp, jpi) == l) mentions = true;
-                }
-            }
-        }
+        var mentions = if (local) |l| body_clone.stmtMentionsLocal(store, stmt, l) else false;
         for (extra_locals) |extra| {
-            mentions = mentions or stmtMentionsLocal(store, stmt, extra);
+            mentions = mentions or body_clone.stmtMentionsLocal(store, stmt, extra);
         }
         const structural = false;
         const nearby = if (stmt_id) |focus_stmt| if (index > @backingInt(focus_stmt))
@@ -902,7 +858,7 @@ fn writeFailureContext(
                 @backingInt(a.hasher),
                 @backingInt(a.next),
             }),
-            inline .assign_literal, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_reuse_box, .assign_boxy_adapt => |a| context.append(" target={d} next={d}", .{ @backingInt(a.target), @backingInt(a.next) }),
+            inline .assign_literal, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_adapt => |a| context.append(" target={d} next={d}", .{ @backingInt(a.target), @backingInt(a.next) }),
             .store_struct,
             .store_tag,
             .debug,
@@ -911,8 +867,6 @@ fn writeFailureContext(
             .runtime_error,
             .comptime_exhaustiveness_failed,
             .comptime_branch_taken,
-            .loop_continue,
-            .loop_break,
             .crash,
             => {},
         }
@@ -925,12 +879,6 @@ fn appendBoxyDescRef(context: *FailureContext, desc: LIR.BoxyDescRef) void {
         .static => |id| context.append("static:{d}", .{@backingInt(id)}),
         .local => |local| context.append("local:{d}", .{@backingInt(local)}),
         .runtime => |id| context.append("runtime:{d}", .{id}),
-        .dict_method_arg => |projection| context.append("dict-arg:{d}:{d}:{d}:{d}", .{
-            @backingInt(projection.dict),
-            @backingInt(projection.method),
-            projection.method_slot,
-            projection.arg_index,
-        }),
         .dict_method_hidden => |projection| context.append("dict-hidden:{d}:{d}:{d}:{d}:{s}", .{
             @backingInt(projection.dict),
             @backingInt(projection.method),
@@ -971,108 +919,6 @@ fn appendRefOp(context: *FailureContext, op: LIR.RefOp) void {
         .list_reinterpret => |ref| context.append("list_reinterpret({d})", .{@backingInt(ref.backing_ref)}),
         .nominal => |ref| context.append("nominal({d})", .{@backingInt(ref.backing_ref)}),
     }
-}
-
-fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.LocalId) bool {
-    return switch (stmt) {
-        .assign_ref => |a| a.target == needle or refOpReadsLocal(a.op, needle),
-        inline .assign_literal, .init_uninitialized => |a| a.target == needle,
-        inline .assign_call, .assign_low_level => |a| a.target == needle or spanHasLocal(store, a.args, needle),
-        .assign_call_erased => |a| a.target == needle or a.closure == needle or (a.reuse_source != null and a.reuse_source.? == needle) or spanHasLocal(store, a.args, needle),
-        .assign_packed_erased_fn => |a| a.target == needle or (a.capture != null and a.capture.? == needle) or (a.reuse != null and a.reuse.? == needle),
-        .assign_boxy_desc_ref => |a| a.target == needle or boxyDescRefReadsLocal(a.desc, needle) or
-            (a.tag_residual_for != null and boxyDescRefReadsLocal(a.tag_residual_for.?, needle)) or
-            spanHasLocal(store, a.captures, needle),
-        .assign_boxy_dict_ref => |a| a.target == needle or boxyDictRefReadsLocal(a.dict, needle) or
-            spanHasLocal(store, a.captures, needle),
-        .assign_boxy_box => |a| a.target == needle or a.payload == needle or
-            (a.source_desc != null and boxyDescRefReadsLocal(a.source_desc.?, needle)) or
-            (a.payload_desc != null and boxyDescRefReadsLocal(a.payload_desc.?, needle)),
-        .assign_boxy_record_update => |a| a.target == needle or a.base == needle or a.fields == needle or
-            boxyDescRefReadsLocal(a.base_desc, needle) or boxyDescRefReadsLocal(a.fields_desc, needle),
-        .assign_boxy_reuse_box => |a| a.target == needle or a.source == needle or boxyDescRefReadsLocal(a.desc, needle),
-        .assign_boxy_unbox => |a| a.target == needle or a.source == needle or boxyDescRefReadsLocal(a.source_desc, needle) or
-            (a.target_desc != null and boxyDescRefReadsLocal(a.target_desc.?, needle)),
-        .assign_boxy_adapt => |a| a.target == needle or a.source == needle or
-            (a.source_desc != null and boxyDescRefReadsLocal(a.source_desc.?, needle)) or
-            (a.target_desc != null and boxyDescRefReadsLocal(a.target_desc.?, needle)),
-        .assign_boxy_inspect => |a| a.target == needle or a.source == needle or boxyDescRefReadsLocal(a.source_desc, needle),
-        .assign_boxy_eq => |a| a.target == needle or a.lhs == needle or a.rhs == needle or boxyDescRefReadsLocal(a.desc, needle),
-        .assign_boxy_hash => |a| a.target == needle or a.value == needle or a.hasher == needle or boxyDescRefReadsLocal(a.desc, needle),
-        .assign_boxy_tag => |a| a.target == needle or boxyDescRefReadsLocal(a.target_desc, needle) or
-            (a.payload != null and a.payload.? == needle) or
-            (a.payload_desc != null and boxyDescRefReadsLocal(a.payload_desc.?, needle)),
-        .assign_boxy_tag_payload => |a| a.target == needle or (a.target_desc != null and a.target_desc.? == needle) or
-            a.source == needle or boxyDescRefReadsLocal(a.source_desc, needle),
-        .assign_call_dict => |a| a.target == needle or boxyDictRefReadsLocal(a.dict, needle) or
-            spanHasLocal(store, a.args, needle) or spanHasLocal(store, a.arg_descs, needle) or
-            spanHasLocal(store, a.hidden_args, needle) or
-            (a.result_desc != null and boxyDescRefReadsLocal(a.result_desc.?, needle)),
-        .assign_list => |a| a.target == needle or spanHasLocal(store, a.elems, needle),
-        .assign_struct => |a| a.target == needle or spanHasLocal(store, a.fields, needle),
-        .assign_tag => |a| a.target == needle or
-            (a.target_desc != null and boxyDescRefReadsLocal(a.target_desc.?, needle)) or
-            (a.payload != null and a.payload.? == needle),
-        .store_struct => |a| a.dest == needle or spanHasLocal(store, a.fields, needle),
-        .store_tag => |a| a.dest == needle or (a.payload != null and a.payload.? == needle),
-        .set_local => |a| a.target == needle or a.value == needle,
-        .debug => |d| d.message == needle,
-        .expect_err => |e| e.message == needle,
-        .expect => |e| e.condition == needle,
-        inline .incref, .decref, .free => |rc| rc.value == needle,
-        .decref_if_initialized => |rc| rc.cond == needle or rc.value == needle,
-        .switch_stmt => |s| s.cond == needle,
-        .switch_initialized_payload => |s| s.cond == needle or s.payload == needle,
-        .str_match => |s| blk: {
-            if (s.source == needle) break :blk true;
-            const steps = store.getStrMatchSteps(s.steps);
-            for (0..GuardedList.borrowLen(steps)) |step_index| {
-                const step = GuardedList.at(steps, step_index);
-                switch (step.capture) {
-                    .discard => {},
-                    .view => |local| if (local == needle) break :blk true,
-                }
-            }
-            break :blk false;
-        },
-        .str_match_set => |s| blk: {
-            if (s.source == needle) break :blk true;
-            const arms = store.getStrMatchArms(s.arms);
-            for (0..GuardedList.borrowLen(arms)) |arm_index| {
-                const arm = GuardedList.at(arms, arm_index);
-                const steps = store.getStrMatchSteps(arm.steps);
-                for (0..GuardedList.borrowLen(steps)) |step_index| {
-                    const step = GuardedList.at(steps, step_index);
-                    switch (step.capture) {
-                        .discard => {},
-                        .view => |local| if (local == needle) break :blk true,
-                    }
-                }
-            }
-            break :blk false;
-        },
-        .boxy_tag_match => |s| s.source == needle or boxyDescRefReadsLocal(s.source_desc, needle),
-        .ret => |r| r.value == needle,
-        .crash => |s| if (s.msg.localId()) |message| message == needle else false,
-        .join, .jump, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .loop_continue, .loop_break => false,
-    };
-}
-
-fn spanHasLocal(store: *const LirStore, span: LIR.LocalSpan, needle: LIR.LocalId) bool {
-    const locals = store.getLocalSpan(span);
-    for (0..GuardedList.borrowLen(locals)) |index| {
-        const local = GuardedList.at(locals, index);
-        if (local == needle) return true;
-    }
-    return false;
-}
-
-fn boxyDescRefReadsLocal(desc: LIR.BoxyDescRef, needle: LIR.LocalId) bool {
-    return if (desc.localOrNull()) |local| local == needle else false;
-}
-
-fn boxyDictRefReadsLocal(dict: LIR.BoxyDictRef, needle: LIR.LocalId) bool {
-    return if (dict.localOrNull()) |local| local == needle else false;
 }
 
 const ValueId = u32;
@@ -3813,6 +3659,8 @@ const Certifier = struct {
         var stack = std.ArrayList(RegionStmt).empty;
         defer stack.deinit(self.allocator);
         try stack.append(self.allocator, .{ .stmt = body, .region = 0 });
+        var successors = std.ArrayList(LIR.CFStmtId).empty;
+        defer successors.deinit(self.allocator);
 
         while (stack.pop()) |entry| {
             const current = entry.stmt;
@@ -3828,25 +3676,13 @@ const Certifier = struct {
             switch (current_stmt) {
                 .assign_ref => |assign| {
                     try self.noteProcLocal(assign.target);
-                    switch (assign.op) {
-                        .local => |source| try self.noteProcLocal(source),
-                        inline .discriminant, .field, .tag_payload, .tag_payload_struct => |op| try self.noteProcLocal(op.source),
-                        inline .list_reinterpret, .nominal => |op| try self.noteProcLocal(op.backing_ref),
-                    }
-                    try stack.append(self.allocator, .{ .stmt = assign.next, .region = region });
+                    try self.noteProcLocal(body_clone.refOpSource(assign.op));
                 },
-                .assign_literal => |assign| {
-                    try self.noteProcLocal(assign.target);
-                    try stack.append(self.allocator, .{ .stmt = assign.next, .region = region });
-                },
-                .init_uninitialized => |init| {
-                    try self.noteProcLocal(init.target);
-                    try stack.append(self.allocator, .{ .stmt = init.next, .region = region });
-                },
+                .assign_literal => |assign| try self.noteProcLocal(assign.target),
+                .init_uninitialized => |init| try self.noteProcLocal(init.target),
                 inline .assign_call, .assign_low_level => |assign| {
                     try self.noteProcLocal(assign.target);
                     try self.noteProcLocalSpan(assign.args);
-                    try stack.append(self.allocator, .{ .stmt = assign.next, .region = region });
                 },
                 .assign_call_erased => |assign| {
                     self.diag.context_proc = self.current_proc;
@@ -3871,7 +3707,6 @@ const Certifier = struct {
                         });
                     }
                     try self.noteProcLocalSpan(assign.args);
-                    try stack.append(self.allocator, .{ .stmt = assign.next, .region = region });
                 },
                 .assign_packed_erased_fn => |assign| {
                     try self.noteProcLocal(assign.target);
@@ -3880,26 +3715,22 @@ const Certifier = struct {
                         if (result_desc.localOrNull()) |local| try self.noteProcLocal(local);
                     }
                     if (assign.reuse) |reuse| try self.noteProcLocal(reuse);
-                    try stack.append(self.allocator, .{ .stmt = assign.next, .region = region });
                 },
                 .assign_boxy_desc_ref => |assign| {
                     try self.noteProcLocal(assign.target);
                     if (assign.desc.localOrNull()) |local| try self.noteProcLocal(local);
                     if (assign.tag_residual_for) |desc| if (desc.localOrNull()) |local| try self.noteProcLocal(local);
                     try self.noteProcLocalSpan(assign.captures);
-                    try stack.append(self.allocator, .{ .stmt = assign.next, .region = region });
                 },
                 .assign_boxy_dict_ref => |assign| {
                     try self.noteProcLocal(assign.target);
                     if (assign.dict.localOrNull()) |local| try self.noteProcLocal(local);
                     try self.noteProcLocalSpan(assign.captures);
-                    try stack.append(self.allocator, .{ .stmt = assign.next, .region = region });
                 },
                 .assign_boxy_box => |assign| {
                     try self.noteProcLocal(assign.target);
                     try self.noteProcLocal(assign.payload);
                     if (assign.payload_desc) |desc| if (desc.localOrNull()) |local| try self.noteProcLocal(local);
-                    try stack.append(self.allocator, .{ .stmt = assign.next, .region = region });
                 },
                 .assign_boxy_record_update => |assign| {
                     try self.noteProcLocal(assign.target);
@@ -3907,47 +3738,35 @@ const Certifier = struct {
                     try self.noteProcLocal(assign.fields);
                     if (assign.base_desc.localOrNull()) |local| try self.noteProcLocal(local);
                     if (assign.fields_desc.localOrNull()) |local| try self.noteProcLocal(local);
-                    try stack.append(self.allocator, .{ .stmt = assign.next, .region = region });
-                },
-                .assign_boxy_reuse_box => |assign| {
-                    try self.noteProcLocal(assign.target);
-                    try self.noteProcLocal(assign.source);
-                    if (assign.desc.localOrNull()) |local| try self.noteProcLocal(local);
-                    try stack.append(self.allocator, .{ .stmt = assign.next, .region = region });
                 },
                 .assign_boxy_unbox => |assign| {
                     try self.noteProcLocal(assign.target);
                     try self.noteProcLocal(assign.source);
                     if (assign.source_desc.localOrNull()) |local| try self.noteProcLocal(local);
                     if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try self.noteProcLocal(local);
-                    try stack.append(self.allocator, .{ .stmt = assign.next, .region = region });
                 },
                 .assign_boxy_adapt => |assign| {
                     try self.noteProcLocal(assign.target);
                     try self.noteProcLocal(assign.source);
                     if (assign.source_desc) |desc| if (desc.localOrNull()) |local| try self.noteProcLocal(local);
                     if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try self.noteProcLocal(local);
-                    try stack.append(self.allocator, .{ .stmt = assign.next, .region = region });
                 },
                 .assign_boxy_inspect => |assign| {
                     try self.noteProcLocal(assign.target);
                     try self.noteProcLocal(assign.source);
                     if (assign.source_desc.localOrNull()) |local| try self.noteProcLocal(local);
-                    try stack.append(self.allocator, .{ .stmt = assign.next, .region = region });
                 },
                 .assign_boxy_eq => |assign| {
                     try self.noteProcLocal(assign.target);
                     try self.noteProcLocal(assign.lhs);
                     try self.noteProcLocal(assign.rhs);
                     if (assign.desc.localOrNull()) |local| try self.noteProcLocal(local);
-                    try stack.append(self.allocator, .{ .stmt = assign.next, .region = region });
                 },
                 .assign_boxy_hash => |assign| {
                     try self.noteProcLocal(assign.target);
                     try self.noteProcLocal(assign.value);
                     try self.noteProcLocal(assign.hasher);
                     if (assign.desc.localOrNull()) |local| try self.noteProcLocal(local);
-                    try stack.append(self.allocator, .{ .stmt = assign.next, .region = region });
                 },
                 .assign_boxy_tag => |assign| {
                     try self.noteProcLocal(assign.target);
@@ -3956,14 +3775,12 @@ const Certifier = struct {
                     if (assign.payload_desc) |desc| {
                         if (desc.localOrNull()) |local| try self.noteProcLocal(local);
                     }
-                    try stack.append(self.allocator, .{ .stmt = assign.next, .region = region });
                 },
                 .assign_boxy_tag_payload => |assign| {
                     try self.noteProcLocal(assign.target);
                     if (assign.target_desc) |target_desc| try self.noteProcLocal(target_desc);
                     try self.noteProcLocal(assign.source);
                     if (assign.source_desc.localOrNull()) |local| try self.noteProcLocal(local);
-                    try stack.append(self.allocator, .{ .stmt = assign.next, .region = region });
                 },
                 .assign_call_dict => |assign| {
                     try self.noteProcLocal(assign.target);
@@ -3974,73 +3791,43 @@ const Certifier = struct {
                     try self.noteProcLocalSpan(assign.args);
                     try self.noteProcLocalSpan(assign.arg_descs);
                     try self.noteProcLocalSpan(assign.hidden_args);
-                    try stack.append(self.allocator, .{ .stmt = assign.next, .region = region });
                 },
                 .assign_list => |assign| {
                     try self.noteProcLocal(assign.target);
                     try self.noteProcLocalSpan(assign.elems);
-                    try stack.append(self.allocator, .{ .stmt = assign.next, .region = region });
                 },
                 .assign_struct => |assign| {
                     try self.noteProcLocal(assign.target);
                     try self.noteProcLocalSpan(assign.fields);
-                    try stack.append(self.allocator, .{ .stmt = assign.next, .region = region });
                 },
                 .assign_tag => |assign| {
                     try self.noteProcLocal(assign.target);
                     if (assign.payload) |payload| try self.noteProcLocal(payload);
-                    try stack.append(self.allocator, .{ .stmt = assign.next, .region = region });
                 },
                 .store_struct => |assign| {
                     try self.noteProcLocal(assign.dest);
                     try self.noteProcLocalSpan(assign.fields);
-                    try stack.append(self.allocator, .{ .stmt = assign.next, .region = region });
                 },
                 .store_tag => |assign| {
                     try self.noteProcLocal(assign.dest);
                     if (assign.payload) |payload| try self.noteProcLocal(payload);
-                    try stack.append(self.allocator, .{ .stmt = assign.next, .region = region });
                 },
                 .set_local => |assign| {
                     try self.noteProcLocal(assign.target);
                     try self.noteProcLocal(assign.value);
-                    try stack.append(self.allocator, .{ .stmt = assign.next, .region = region });
                 },
-                .debug => |debug_stmt| {
-                    try self.noteProcLocal(debug_stmt.message);
-                    try stack.append(self.allocator, .{ .stmt = debug_stmt.next, .region = region });
-                },
+                .debug => |debug_stmt| try self.noteProcLocal(debug_stmt.message),
                 .expect_err => |expect_err_stmt| try self.noteProcLocal(expect_err_stmt.message),
-                .expect => |expect_stmt| {
-                    try self.noteProcLocal(expect_stmt.condition);
-                    try stack.append(self.allocator, .{ .stmt = expect_stmt.next, .region = region });
-                },
-                inline .incref, .decref, .free => |rc| {
-                    try self.noteProcLocal(rc.value);
-                    try stack.append(self.allocator, .{ .stmt = rc.next, .region = region });
-                },
+                .expect => |expect_stmt| try self.noteProcLocal(expect_stmt.condition),
+                inline .incref, .decref, .free => |rc| try self.noteProcLocal(rc.value),
                 .decref_if_initialized => |rc| {
                     try self.noteProcLocal(rc.cond);
                     try self.noteProcLocal(rc.value);
-                    try stack.append(self.allocator, .{ .stmt = rc.next, .region = region });
                 },
-                .switch_stmt => |switch_stmt| {
-                    try self.noteProcLocal(switch_stmt.cond);
-                    const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
-                    for (0..GuardedList.borrowLen(branches)) |branch_index| {
-                        const branch = GuardedList.at(branches, branch_index);
-                        try stack.append(self.allocator, .{ .stmt = branch.body, .region = region });
-                    }
-                    try stack.append(self.allocator, .{ .stmt = switch_stmt.default_branch, .region = region });
-                    if (switch_stmt.continuation) |continuation| {
-                        try stack.append(self.allocator, .{ .stmt = continuation, .region = region });
-                    }
-                },
+                .switch_stmt => |switch_stmt| try self.noteProcLocal(switch_stmt.cond),
                 .switch_initialized_payload => |switch_stmt| {
                     try self.noteProcLocal(switch_stmt.cond);
                     try self.noteProcLocal(switch_stmt.payload);
-                    try stack.append(self.allocator, .{ .stmt = switch_stmt.initialized_branch, .region = region });
-                    try stack.append(self.allocator, .{ .stmt = switch_stmt.uninitialized_branch, .region = region });
                 },
                 .str_match => |str_match| {
                     try self.noteProcLocal(str_match.source);
@@ -4052,14 +3839,10 @@ const Certifier = struct {
                             .view => |local| try self.noteProcLocal(local),
                         }
                     }
-                    try stack.append(self.allocator, .{ .stmt = str_match.on_match, .region = region });
-                    try stack.append(self.allocator, .{ .stmt = str_match.on_miss, .region = region });
                 },
                 .boxy_tag_match => |tag_match| {
                     try self.noteProcLocal(tag_match.source);
                     if (tag_match.source_desc.localOrNull()) |local| try self.noteProcLocal(local);
-                    try stack.append(self.allocator, .{ .stmt = tag_match.on_match, .region = region });
-                    try stack.append(self.allocator, .{ .stmt = tag_match.on_miss, .region = region });
                 },
                 .str_match_set => |str_match_set| {
                     try self.noteProcLocal(str_match_set.source);
@@ -4074,9 +3857,7 @@ const Certifier = struct {
                                 .view => |local| try self.noteProcLocal(local),
                             }
                         }
-                        try stack.append(self.allocator, .{ .stmt = arm.on_match, .region = region });
                     }
-                    try stack.append(self.allocator, .{ .stmt = str_match_set.on_miss, .region = region });
                 },
                 .join => |join_stmt| {
                     if (!first_visit) {
@@ -4108,12 +3889,16 @@ const Certifier = struct {
                     try self.region_of_join.put(join_stmt.id, join_region);
                     try stack.append(self.allocator, .{ .stmt = join_stmt.body, .region = join_region });
                     try stack.append(self.allocator, .{ .stmt = join_stmt.remainder, .region = region });
+                    continue;
                 },
                 .ret => |ret_stmt| try self.noteProcLocal(ret_stmt.value),
                 .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| try self.noteProcLocal(message),
-                .jump, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
-                .comptime_branch_taken => |marker| try stack.append(self.allocator, .{ .stmt = marker.next, .region = region }),
+                .jump, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken => {},
             }
+            // Every other statement's successors stay in its region.
+            successors.clearRetainingCapacity();
+            try body_clone.appendSuccessorsInOrder(self.store, &successors, current, self.allocator, .{ .switch_edges = .arms_first });
+            for (successors.items) |successor| try stack.append(self.allocator, .{ .stmt = successor, .region = region });
         }
 
         try self.indexRegionsAndMentions();
@@ -4133,6 +3918,8 @@ const Certifier = struct {
 
         var stack = std.ArrayList(LIR.CFStmtId).empty;
         defer stack.deinit(self.allocator);
+        var successors = std.ArrayList(LIR.CFStmtId).empty;
+        defer successors.deinit(self.allocator);
 
         const MemoWalk = struct {
             fn add(
@@ -4156,9 +3943,16 @@ const Certifier = struct {
             if ((try self.memo_walked.getOrPut(current)).found_existing) continue;
 
             switch (self.store.getCFStmt(current)) {
-                inline .assign_ref,
-                .assign_literal,
+                .jump => |jump| {
+                    if (self.join_bodies.get(jump.target)) |target_body| {
+                        try MemoWalk.add(predecessor_counts, &stack, self.allocator, target_body);
+                    }
+                },
+                // A join body is a separately scheduled control-flow root;
+                // jumps contribute its remaining predecessors.
                 .init_uninitialized,
+                .assign_ref,
+                .assign_literal,
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
@@ -4166,7 +3960,6 @@ const Certifier = struct {
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
@@ -4174,6 +3967,7 @@ const Certifier = struct {
                 .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
+                .boxy_tag_match,
                 .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
@@ -4184,62 +3978,26 @@ const Certifier = struct {
                 .set_local,
                 .debug,
                 .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
                 .free,
-                .comptime_branch_taken,
-                => |stmt| try MemoWalk.add(predecessor_counts, &stack, self.allocator, stmt.next),
-                .switch_stmt => |switch_stmt| {
-                    const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
-                    for (0..GuardedList.borrowLen(branches)) |branch_index| {
-                        const branch = GuardedList.at(branches, branch_index);
-                        try MemoWalk.add(predecessor_counts, &stack, self.allocator, branch.body);
-                    }
-                    try MemoWalk.add(predecessor_counts, &stack, self.allocator, switch_stmt.default_branch);
-                    if (switch_stmt.continuation) |continuation| {
-                        try MemoWalk.add(predecessor_counts, &stack, self.allocator, continuation);
-                    }
-                },
-                .switch_initialized_payload => |switch_stmt| {
-                    try MemoWalk.add(predecessor_counts, &stack, self.allocator, switch_stmt.initialized_branch);
-                    try MemoWalk.add(predecessor_counts, &stack, self.allocator, switch_stmt.uninitialized_branch);
-                },
-                .str_match => |str_match| {
-                    try MemoWalk.add(predecessor_counts, &stack, self.allocator, str_match.on_match);
-                    try MemoWalk.add(predecessor_counts, &stack, self.allocator, str_match.on_miss);
-                },
-                .boxy_tag_match => |tag_match| {
-                    try MemoWalk.add(predecessor_counts, &stack, self.allocator, tag_match.on_match);
-                    try MemoWalk.add(predecessor_counts, &stack, self.allocator, tag_match.on_miss);
-                },
-                .str_match_set => |str_match_set| {
-                    const arms = self.store.getStrMatchArms(str_match_set.arms);
-                    for (0..GuardedList.borrowLen(arms)) |arm_index| {
-                        const arm = GuardedList.at(arms, arm_index);
-                        try MemoWalk.add(predecessor_counts, &stack, self.allocator, arm.on_match);
-                    }
-                    try MemoWalk.add(predecessor_counts, &stack, self.allocator, str_match_set.on_miss);
-                },
-                .join => |join_stmt| {
-                    // A join body is a separately scheduled control-flow
-                    // root; jumps contribute its remaining predecessors.
-                    try MemoWalk.add(predecessor_counts, &stack, self.allocator, join_stmt.body);
-                    try MemoWalk.add(predecessor_counts, &stack, self.allocator, join_stmt.remainder);
-                },
-                .jump => |jump_stmt| {
-                    if (self.join_bodies.get(jump_stmt.target)) |target_body| {
-                        try MemoWalk.add(predecessor_counts, &stack, self.allocator, target_body);
-                    }
-                },
-                .expect_err,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .join,
                 .ret,
                 .crash,
-                .runtime_error,
-                .comptime_exhaustiveness_failed,
-                .loop_continue,
-                .loop_break,
-                => {},
+                => {
+                    successors.clearRetainingCapacity();
+                    try body_clone.appendSuccessorsInOrder(self.store, &successors, current, self.allocator, .{ .switch_edges = .arms_first });
+                    for (successors.items) |successor| try MemoWalk.add(predecessor_counts, &stack, self.allocator, successor);
+                },
             }
         }
 
@@ -4260,30 +4018,14 @@ const Certifier = struct {
         try reads.append(self.allocator, dense);
     }
 
-    fn noteExposedReadSpan(
-        self: *const Certifier,
+    const ExposedReads = struct {
+        certifier: *const Certifier,
         reads: *std.ArrayList(u32),
-        span: LIR.LocalSpan,
-    ) Allocator.Error!void {
-        const locals = self.store.getLocalSpan(span);
-        for (0..GuardedList.borrowLen(locals)) |index| {
-            const local = GuardedList.at(locals, index);
-            try self.noteExposedReadLocal(reads, local);
-        }
-    }
 
-    fn noteExposedRefOpRead(
-        self: *const Certifier,
-        reads: *std.ArrayList(u32),
-        op: LIR.RefOp,
-    ) Allocator.Error!void {
-        const local = switch (op) {
-            .local => |source| source,
-            inline .discriminant, .field, .tag_payload, .tag_payload_struct => |ref| ref.source,
-            inline .list_reinterpret, .nominal => |ref| ref.backing_ref,
-        };
-        try self.noteExposedReadLocal(reads, local);
-    }
+        fn note(self: *ExposedReads, local: LIR.LocalId) Allocator.Error!void {
+            try self.certifier.noteExposedReadLocal(self.reads, local);
+        }
+    };
 
     const ReadBeforeRebindNode = struct {
         stmt: LIR.CFStmtId,
@@ -4380,273 +4122,125 @@ const Certifier = struct {
 
         var node_reads = std.ArrayList(u32).empty;
         defer node_reads.deinit(self.allocator);
+        var successors = std.ArrayList(LIR.CFStmtId).empty;
+        defer successors.deinit(self.allocator);
         while (work.pop()) |stmt| {
             const node_index = graph.indices.get(stmt) orelse unreachable;
             node_reads.clearRetainingCapacity();
 
-            switch (self.store.getCFStmt(stmt)) {
-                .assign_ref => |assign| {
-                    try self.noteExposedRefOpRead(&node_reads, assign.op);
-                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+            // String-match captures are branch-local definitions. The graph
+            // tracks one def per statement, not per edge, so they are not
+            // marked as unconditional defs; that would hide reads on the miss
+            // path. Over-reporting relevance is safe.
+            const current = self.store.getCFStmt(stmt);
+            var exposed: ExposedReads = .{ .certifier = self, .reads = &node_reads };
+            try body_clone.tryForEachStmtRead(self.store, current, &exposed, ExposedReads.note);
+            if (body_clone.definedTarget(current)) |target| self.setReadBeforeRebindDef(&graph, node_index, target);
+            switch (current) {
+                .assign_call_erased => |s| if (s.out_desc) |out_desc| self.setReadBeforeRebindDef(&graph, node_index, out_desc),
+                .assign_boxy_tag_payload => |s| if (s.target_desc) |target_desc| self.setReadBeforeRebindDef(&graph, node_index, target_desc),
+                .init_uninitialized,
+                .assign_ref,
+                .assign_literal,
+                .assign_call,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .boxy_tag_match,
+                .assign_call_dict,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .join,
+                .jump,
+                .ret,
+                .crash,
+                => {},
+            }
+            switch (current) {
+                .join => |join| {
+                    try ensureReadBeforeRebindNode(&graph, &work, join.body);
+                    try cache_roots.append(graph_allocator, join.body);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, join.remainder);
                 },
-                .assign_literal => |assign| {
-                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .init_uninitialized => |init| {
-                    self.setReadBeforeRebindDef(&graph, node_index, init.target);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, init.next);
-                },
-                inline .assign_call, .assign_low_level => |assign| {
-                    try self.noteExposedReadSpan(&node_reads, assign.args);
-                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_call_erased => |assign| {
-                    try self.noteExposedReadLocal(&node_reads, assign.closure);
-                    if (assign.reuse_source) |reuse_source| try self.noteExposedReadLocal(&node_reads, reuse_source);
-                    try self.noteExposedReadSpan(&node_reads, assign.args);
-                    if (assign.result_desc) |result_desc| {
-                        if (result_desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
-                    }
-                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    if (assign.out_desc) |out_desc| self.setReadBeforeRebindDef(&graph, node_index, out_desc);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_packed_erased_fn => |assign| {
-                    if (assign.capture) |capture| try self.noteExposedReadLocal(&node_reads, capture);
-                    if (assign.result_desc) |result_desc| {
-                        if (result_desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
-                    }
-                    if (assign.reuse) |reuse| try self.noteExposedReadLocal(&node_reads, reuse);
-                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_boxy_desc_ref => |assign| {
-                    if (assign.desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
-                    const captures = self.store.getLocalSpan(assign.captures);
-                    for (0..GuardedList.borrowLen(captures)) |index| {
-                        const local = GuardedList.at(captures, index);
-                        try self.noteExposedReadLocal(&node_reads, local);
-                    }
-                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_boxy_dict_ref => |assign| {
-                    if (assign.dict.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
-                    const captures = self.store.getLocalSpan(assign.captures);
-                    for (0..GuardedList.borrowLen(captures)) |index| {
-                        try self.noteExposedReadLocal(&node_reads, GuardedList.at(captures, index));
-                    }
-                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_boxy_box => |assign| {
-                    try self.noteExposedReadLocal(&node_reads, assign.payload);
-                    if (assign.payload_desc) |desc| if (desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
-                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_boxy_record_update => |assign| {
-                    try self.noteExposedReadLocal(&node_reads, assign.base);
-                    try self.noteExposedReadLocal(&node_reads, assign.fields);
-                    if (assign.base_desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
-                    if (assign.fields_desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
-                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_boxy_reuse_box => |assign| {
-                    try self.noteExposedReadLocal(&node_reads, assign.source);
-                    if (assign.desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
-                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_boxy_unbox => |assign| {
-                    try self.noteExposedReadLocal(&node_reads, assign.source);
-                    if (assign.source_desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
-                    if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
-                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_boxy_adapt => |assign| {
-                    try self.noteExposedReadLocal(&node_reads, assign.source);
-                    if (assign.source_desc) |desc| if (desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
-                    if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
-                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_boxy_inspect => |assign| {
-                    try self.noteExposedReadLocal(&node_reads, assign.source);
-                    if (assign.source_desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
-                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_boxy_eq => |assign| {
-                    try self.noteExposedReadLocal(&node_reads, assign.lhs);
-                    try self.noteExposedReadLocal(&node_reads, assign.rhs);
-                    if (assign.desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
-                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_boxy_hash => |assign| {
-                    try self.noteExposedReadLocal(&node_reads, assign.value);
-                    try self.noteExposedReadLocal(&node_reads, assign.hasher);
-                    if (assign.desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
-                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_boxy_tag => |assign| {
-                    if (assign.target_desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
-                    if (assign.payload) |payload| try self.noteExposedReadLocal(&node_reads, payload);
-                    if (assign.payload_desc) |desc| {
-                        if (desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
-                    }
-                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_boxy_tag_payload => |assign| {
-                    try self.noteExposedReadLocal(&node_reads, assign.source);
-                    if (assign.source_desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
-                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    if (assign.target_desc) |target_desc| self.setReadBeforeRebindDef(&graph, node_index, target_desc);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .boxy_tag_match => |tag_match| {
-                    try self.noteExposedReadLocal(&node_reads, tag_match.source);
-                    if (tag_match.source_desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, tag_match.on_match);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, tag_match.on_miss);
-                },
-                .assign_call_dict => |assign| {
-                    if (assign.dict.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
-                    if (assign.result_desc) |result_desc| {
-                        if (result_desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
-                    }
-                    try self.noteExposedReadSpan(&node_reads, assign.args);
-                    try self.noteExposedReadSpan(&node_reads, assign.arg_descs);
-                    try self.noteExposedReadSpan(&node_reads, assign.hidden_args);
-                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_list => |assign| {
-                    try self.noteExposedReadSpan(&node_reads, assign.elems);
-                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_struct => |assign| {
-                    try self.noteExposedReadSpan(&node_reads, assign.fields);
-                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_tag => |assign| {
-                    if (assign.target_desc) |target_desc| {
-                        if (target_desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
-                    }
-                    if (assign.payload) |payload| try self.noteExposedReadLocal(&node_reads, payload);
-                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .store_struct => |assign| {
-                    try self.noteExposedReadLocal(&node_reads, assign.dest);
-                    try self.noteExposedReadSpan(&node_reads, assign.fields);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .store_tag => |assign| {
-                    try self.noteExposedReadLocal(&node_reads, assign.dest);
-                    if (assign.payload) |payload| try self.noteExposedReadLocal(&node_reads, payload);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .set_local => |assign| {
-                    try self.noteExposedReadLocal(&node_reads, assign.value);
-                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .debug => |debug_stmt| {
-                    try self.noteExposedReadLocal(&node_reads, debug_stmt.message);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, debug_stmt.next);
-                },
-                .expect_err => |expect_err_stmt| try self.noteExposedReadLocal(&node_reads, expect_err_stmt.message),
-                .expect => |expect_stmt| {
-                    try self.noteExposedReadLocal(&node_reads, expect_stmt.condition);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, expect_stmt.next);
-                },
-                inline .incref, .decref, .free => |rc| {
-                    try self.noteExposedReadLocal(&node_reads, rc.value);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, rc.next);
-                },
-                .decref_if_initialized => |rc| {
-                    try self.noteExposedReadLocal(&node_reads, rc.cond);
-                    try self.noteExposedReadLocal(&node_reads, rc.value);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, rc.next);
-                },
-                .switch_stmt => |switch_stmt| {
-                    try self.noteExposedReadLocal(&node_reads, switch_stmt.cond);
-                    if (switch_stmt.continuation) |continuation| {
-                        try appendReadBeforeRebindSuccessor(&graph, &work, node_index, continuation);
-                    }
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, switch_stmt.default_branch);
-                    const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
-                    for (0..GuardedList.borrowLen(branches)) |branch_index| {
-                        const branch = GuardedList.at(branches, branch_index);
-                        try appendReadBeforeRebindSuccessor(&graph, &work, node_index, branch.body);
-                    }
-                },
-                .switch_initialized_payload => |switch_stmt| {
-                    try self.noteExposedReadLocal(&node_reads, switch_stmt.cond);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, switch_stmt.initialized_branch);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, switch_stmt.uninitialized_branch);
-                },
-                .str_match => |str_match| {
-                    try self.noteExposedReadLocal(&node_reads, str_match.source);
-                    const steps = self.store.getStrMatchSteps(str_match.steps);
-                    for (0..GuardedList.borrowLen(steps)) |step_index| {
-                        const step = GuardedList.at(steps, step_index);
-                        switch (step.capture) {
-                            .discard => {},
-                            // Captures are branch-local definitions. The graph
-                            // tracks defs per statement, not per edge, so we
-                            // intentionally do not mark them as unconditional
-                            // defs here; doing so would hide reads on the miss
-                            // path. Over-reporting relevance is safe.
-                            .view => {},
-                        }
-                    }
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, str_match.on_match);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, str_match.on_miss);
-                },
-                .str_match_set => |str_match_set| {
-                    try self.noteExposedReadLocal(&node_reads, str_match_set.source);
-                    const arms = self.store.getStrMatchArms(str_match_set.arms);
-                    for (0..GuardedList.borrowLen(arms)) |arm_index| {
-                        const arm = GuardedList.at(arms, arm_index);
-                        const steps = self.store.getStrMatchSteps(arm.steps);
-                        for (0..GuardedList.borrowLen(steps)) |step_index| {
-                            const step = GuardedList.at(steps, step_index);
-                            switch (step.capture) {
-                                .discard, .view => {},
-                            }
-                        }
-                        try appendReadBeforeRebindSuccessor(&graph, &work, node_index, arm.on_match);
-                    }
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, str_match_set.on_miss);
-                },
-                .join => |join_stmt| {
-                    try ensureReadBeforeRebindNode(&graph, &work, join_stmt.body);
-                    try cache_roots.append(graph_allocator, join_stmt.body);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, join_stmt.remainder);
-                },
-                .jump => |jump_stmt| {
-                    if (self.join_bodies.get(jump_stmt.target)) |target_body| {
+                .jump => |jump| {
+                    if (self.join_bodies.get(jump.target)) |target_body| {
                         try appendReadBeforeRebindSuccessor(&graph, &work, node_index, target_body);
                     }
                 },
-                .ret => |ret_stmt| try self.noteExposedReadLocal(&node_reads, ret_stmt.value),
-                .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| {
-                    try self.noteExposedReadLocal(&node_reads, message);
+                .init_uninitialized,
+                .assign_ref,
+                .assign_literal,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .ret,
+                .crash,
+                => {
+                    successors.clearRetainingCapacity();
+                    try body_clone.appendSuccessors(self.store, &successors, stmt, self.allocator);
+                    for (successors.items) |successor| try appendReadBeforeRebindSuccessor(&graph, &work, node_index, successor);
                 },
-                .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
-                .comptime_branch_taken => |marker| try appendReadBeforeRebindSuccessor(&graph, &work, node_index, marker.next),
             }
             graph.nodes.items[node_index].read_start = @intCast(graph.read_bits.items.len);
             graph.nodes.items[node_index].read_len = @intCast(node_reads.items.len);
@@ -4654,37 +4248,6 @@ const Certifier = struct {
         }
 
         const node_count = graph.nodes.items.len;
-        var pred_counts = try graph_allocator.alloc(usize, node_count);
-        @memset(pred_counts, 0);
-        for (graph.nodes.items) |node| {
-            const successor_start = node.successor_start;
-            const successor_end = successor_start + @as(usize, node.successor_len);
-            for (graph.successors.items[successor_start..successor_end]) |successor| {
-                const successor_index = graph.indices.get(successor) orelse unreachable;
-                pred_counts[successor_index] += 1;
-            }
-        }
-
-        var pred_starts = try graph_allocator.alloc(usize, node_count + 1);
-        pred_starts[0] = 0;
-        for (pred_counts, 0..) |count, index| {
-            pred_starts[index + 1] = pred_starts[index] + count;
-        }
-        var pred_writes = try graph_allocator.dupe(usize, pred_starts[0..node_count]);
-        const predecessors = try graph_allocator.alloc(usize, pred_starts[node_count]);
-        for (graph.nodes.items, 0..) |node, predecessor_index| {
-            const successor_start = node.successor_start;
-            const successor_end = successor_start + @as(usize, node.successor_len);
-            for (graph.successors.items[successor_start..successor_end]) |successor| {
-                const successor_index = graph.indices.get(successor) orelse unreachable;
-                const write_index = pred_writes[successor_index];
-                predecessors[write_index] = predecessor_index;
-                pred_writes[successor_index] += 1;
-            }
-        }
-
-        try self.computeJoinComponents(&graph, pred_starts, predecessors);
-
         const succ_starts = try graph_allocator.alloc(u32, node_count + 1);
         const succs = try graph_allocator.alloc(u32, graph.successors.items.len);
         const read_starts = try graph_allocator.alloc(u32, node_count + 1);
@@ -4709,15 +4272,22 @@ const Certifier = struct {
             }
             def_starts[node_index + 1] = @intCast(defs.items.len);
         }
-        const pred_starts_u32 = try graph_allocator.alloc(u32, node_count + 1);
-        for (pred_starts, pred_starts_u32) |offset, *out| out.* = @intCast(offset);
-        const preds = try graph_allocator.alloc(u32, predecessors.len);
-        for (predecessors, preds) |predecessor, *out| out.* = @intCast(predecessor);
+        const preds = try collections.csr.transpose(graph_allocator, succ_starts, succs);
+
+        // Numbering components in forward order makes every inter-component
+        // predecessor settle before a queued successor join is walked.
+        const components = try collections.scc.compute(graph_allocator, succ_starts, succs, preds.starts, preds.targets);
+        var joins = self.join_bodies.iterator();
+        while (joins.next()) |join| {
+            const node = graph.indices.get(join.value_ptr.*) orelse unreachable;
+            try self.join_components.put(join.key_ptr.*, components.component_of[node]);
+        }
+
         const liveness_graph = arc_liveness.Graph{
             .succ_starts = succ_starts,
             .succs = succs,
-            .pred_starts = pred_starts_u32,
-            .preds = preds,
+            .pred_starts = preds.starts,
+            .preds = preds.targets,
             .read_starts = read_starts,
             .reads = reads.items,
             .def_starts = def_starts,
@@ -4736,67 +4306,6 @@ const Certifier = struct {
             base.invariant("ARC borrow certifier invariant violated: read-before-rebind cache missing stmt {d}", .{@backingInt(start)});
         };
         return cached;
-    }
-
-    /// Kosaraju over the same final-LIR graph used for read-before-rebind
-    /// analysis. Numbering components in forward order makes every inter-
-    /// component predecessor settle before a queued successor join is walked.
-    fn computeJoinComponents(
-        self: *Certifier,
-        graph: *const ReadBeforeRebindGraph,
-        pred_starts: []const usize,
-        predecessors: []const usize,
-    ) Allocator.Error!void {
-        const allocator = graph.allocator;
-        const n = graph.nodes.items.len;
-        const Frame = struct { node: usize, next: usize = 0 };
-        var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, n);
-        var frames = std.ArrayList(Frame).empty;
-        var finished = std.ArrayList(usize).empty;
-        for (0..n) |start| {
-            if (seen.isSet(start)) continue;
-            seen.set(start);
-            try frames.append(allocator, .{ .node = start });
-            while (frames.items.len != 0) {
-                const frame = &frames.items[frames.items.len - 1];
-                const node = graph.nodes.items[frame.node];
-                if (frame.next < node.successor_len) {
-                    const successor = graph.successors.items[node.successor_start + frame.next];
-                    frame.next += 1;
-                    const child = graph.indices.get(successor) orelse unreachable;
-                    if (!seen.isSet(child)) {
-                        seen.set(child);
-                        try frames.append(allocator, .{ .node = child });
-                    }
-                } else {
-                    try finished.append(allocator, frame.node);
-                    _ = frames.pop();
-                }
-            }
-        }
-
-        const components = try allocator.alloc(u32, n);
-        @memset(components, no_dense);
-        var reverse_work = std.ArrayList(usize).empty;
-        var component: u32 = 0;
-        while (finished.pop()) |start| {
-            if (components[start] != no_dense) continue;
-            components[start] = component;
-            try reverse_work.append(allocator, start);
-            while (reverse_work.pop()) |node| {
-                for (predecessors[pred_starts[node]..pred_starts[node + 1]]) |predecessor| {
-                    if (components[predecessor] != no_dense) continue;
-                    components[predecessor] = component;
-                    try reverse_work.append(allocator, predecessor);
-                }
-            }
-            component += 1;
-        }
-        var joins = self.join_bodies.iterator();
-        while (joins.next()) |join| {
-            const node = graph.indices.get(join.value_ptr.*) orelse unreachable;
-            try self.join_components.put(join.key_ptr.*, components[node]);
-        }
     }
 
     /// Ascending dense positions of a join's maybe-uninitialized params.
@@ -5780,11 +5289,13 @@ const Certifier = struct {
             }
 
             const stmt = self.store.getCFStmt(cursor);
+            // Any write to the returned local kills its discriminant witness;
+            // `assign_tag` establishes a replacement after this kill.
             if (self.current_return_local) |return_local| {
                 // Emission rebinding of the returned local kills its witness exactly
                 // as it does in the solver's outcome domain; `assign_tag`
                 // establishes a replacement witness after this generic kill.
-                if (arc_solve.outcomeBindingTarget(stmt)) |target| {
+                if (body_clone.writtenLocal(stmt)) |target| {
                     if (target == return_local) state.result_discriminant = no_dense;
                 }
             }
@@ -5953,12 +5464,6 @@ const Certifier = struct {
                     _ = try self.requireBoxyTransferSource(&state, assign.base, .borrow);
                     const target_value = try self.bindBoxyOwnedTarget(&state, assign.target);
                     try self.consumeBoxyTransferIntoHolder(&state, assign.fields, .move, target_value);
-                    cursor = assign.next;
-                },
-                .assign_boxy_reuse_box => |assign| {
-                    try self.requireBoxyDescRef(&state, assign.desc);
-                    _ = try self.bindBoxyOwnedTarget(&state, assign.target);
-                    _ = try self.requireBoxyTransferSource(&state, assign.source, .move);
                     cursor = assign.next;
                 },
                 .assign_boxy_unbox => |assign| {
@@ -6404,12 +5909,6 @@ const Certifier = struct {
                 .runtime_error, .comptime_exhaustiveness_failed => {
                     try self.checkLeaks(&state);
                     if (segment.walk != 0) try self.propagateTerminal(segment.walk);
-                    return;
-                },
-                .loop_continue, .loop_break => {
-                    // Control returns to an enclosing iteration engine that
-                    // owns the kept values; per-path balance checking resumes
-                    // at the statements that follow the engine.
                     return;
                 },
             }
@@ -6912,14 +6411,6 @@ const Certifier = struct {
         }
     }
 };
-
-fn refOpReadsLocal(op: LIR.RefOp, needle: LIR.LocalId) bool {
-    return switch (op) {
-        .local => |local| local == needle,
-        inline .discriminant, .field, .tag_payload, .tag_payload_struct => |ref| ref.source == needle,
-        inline .list_reinterpret, .nominal => |ref| ref.backing_ref == needle,
-    };
-}
 
 test "certifier declarations are referenced" {
     std.testing.refAllDecls(@This());

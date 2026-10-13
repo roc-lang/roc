@@ -75,7 +75,6 @@ pub fn record(self: *Self, id: LIR.CFStmtId, stmt: LIR.CFStmt) std.mem.Allocator
         .assign_boxy_dict_ref,
         .assign_boxy_box,
         .assign_boxy_record_update,
-        .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
@@ -106,8 +105,6 @@ pub fn record(self: *Self, id: LIR.CFStmtId, stmt: LIR.CFStmt) std.mem.Allocator
         .switch_initialized_payload,
         .str_match,
         .str_match_set,
-        .loop_continue,
-        .loop_break,
         .jump,
         .ret,
         .crash,
@@ -184,11 +181,7 @@ fn successor(self: *const Self, stmt: LIR.CFStmt) ?LIR.CFStmtId {
             .tag_payload_struct,
             => null,
         },
-        .assign_boxy_adapt => |assign| if (assign.source_mode == .move and
-            self.adapters[@backingInt(assign.adapter)].operation == .relabel)
-            assign.next
-        else
-            null,
+        .assign_boxy_adapt => |assign| if (assign.source_mode == .move and self.adapters[@backingInt(assign.adapter)].operation == .relabel) assign.next else null,
         .set_local => |assign| if (assign.mode == .initialize_join_param) assign.next else null,
         .init_uninitialized,
         .assign_literal,
@@ -199,7 +192,6 @@ fn successor(self: *const Self, stmt: LIR.CFStmt) ?LIR.CFStmtId {
         .assign_boxy_dict_ref,
         .assign_boxy_box,
         .assign_boxy_record_update,
-        .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_inspect,
         .assign_boxy_eq,
@@ -228,8 +220,6 @@ fn successor(self: *const Self, stmt: LIR.CFStmt) ?LIR.CFStmtId {
         .switch_initialized_payload,
         .str_match,
         .str_match_set,
-        .loop_continue,
-        .loop_break,
         .ret,
         .crash,
         => null,
@@ -254,6 +244,7 @@ fn returnedLocal(self: *Self, store: anytype, start: LIR.CFStmtId) std.mem.Alloc
     };
     while (self.path.pop()) |id| {
         if (result) |local| {
+            // The path holds only statements `successor` forwards through.
             switch (store.getCFStmt(id)) {
                 .assign_ref => |assign| {
                     result = if (assign.target != local) null else switch (assign.op) {
@@ -279,7 +270,6 @@ fn returnedLocal(self: *Self, store: anytype, start: LIR.CFStmtId) std.mem.Alloc
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_inspect,
                 .assign_boxy_eq,
@@ -308,8 +298,6 @@ fn returnedLocal(self: *Self, store: anytype, start: LIR.CFStmtId) std.mem.Alloc
                 .switch_initialized_payload,
                 .str_match,
                 .str_match_set,
-                .loop_continue,
-                .loop_break,
                 .ret,
                 .crash,
                 => unreachable,

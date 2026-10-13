@@ -4173,7 +4173,7 @@ test "check type - if else - dual-kind literal branches (number first) - stable 
         source,
         .fail_with,
         \\**Type Mismatch**
-        \\This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both:
+        \\This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both.
         \\```roc
         \\x = if True 1 else "s"
         \\```
@@ -4194,7 +4194,7 @@ test "check type - if else - dual-kind literal branches (string first) - stable 
         source,
         .fail_with,
         \\**Type Mismatch**
-        \\This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both:
+        \\This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both.
         \\```roc
         \\x = if True "s" else 1
         \\```

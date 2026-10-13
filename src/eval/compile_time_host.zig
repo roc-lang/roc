@@ -18,12 +18,11 @@ pub const SlotDemand = struct {
     ensure: *const fn (*anyopaque, lir.LIR.StaticDataId) Error!void,
 };
 const sljmp = @import("sljmp");
+const crash_boundary_mod = @import("crash_boundary.zig");
 
 const Allocator = std.mem.Allocator;
 const RocOps = builtins.host_abi.RocOps;
-const signal_handler = base.signal_handler;
 const JmpBuf = sljmp.JmpBuf;
-const setjmp = sljmp.setjmp;
 const longjmp = sljmp.longjmp;
 
 const CompileTimeHost = @This();
@@ -154,64 +153,7 @@ pub fn resetForRun(self: *CompileTimeHost) void {
 }
 
 /// setjmp/longjmp boundary for catching root-local crashes.
-pub const CrashBoundary = struct {
-    env: *CompileTimeHost,
-    prev_jmp_buf: ?*JmpBuf,
-    recovery: signal_handler.StackOverflowRecovery = undefined,
-    prev_recovery: ?*const signal_handler.StackOverflowRecovery = null,
-    recovery_registered: bool = false,
-
-    pub fn init(env: *CompileTimeHost) CrashBoundary {
-        return .{
-            .env = env,
-            .prev_jmp_buf = if (sljmp.supported) env.installJumpBuf(&env.jmp_buf) else null,
-        };
-    }
-
-    pub fn deinit(self: *CrashBoundary) void {
-        if (self.recovery_registered) {
-            _ = signal_handler.setStackOverflowRecovery(self.prev_recovery);
-            self.recovery_registered = false;
-        }
-        if (sljmp.supported) self.env.restoreJumpBuf(self.prev_jmp_buf);
-    }
-
-    pub inline fn set(self: *CrashBoundary) c_int {
-        if (!sljmp.supported) return 0;
-        const sj = setjmp(&self.env.jmp_buf);
-        if (sj == 0) {
-            // Register this boundary as the thread's escape route for a stack
-            // overflow in the compile-time code about to run: the fault
-            // handler longjmps back here and the root reports a crash instead
-            // of the overflow taking the compiler down.
-            self.recovery = .{
-                .context = @ptrCast(self.env),
-                .escape = &escapeStackOverflow,
-            };
-            self.prev_recovery = signal_handler.setStackOverflowRecovery(&self.recovery);
-            self.recovery_registered = true;
-        } else if (sj == signal_handler.stack_overflow_longjmp_value) {
-            signal_handler.restoreStackGuardAfterOverflow();
-            self.env.noteStackOverflow();
-        }
-        return sj;
-    }
-};
-
-fn escapeStackOverflow(context: *anyopaque) noreturn {
-    const env: *CompileTimeHost = @ptrCast(@alignCast(context));
-    if (sljmp.supported) {
-        if (env.active_jmp_buf) |active_jmp_buf| {
-            env.active_jmp_buf = null;
-            longjmp(active_jmp_buf, signal_handler.stack_overflow_longjmp_value);
-        }
-    }
-    std.process.exit(134);
-}
-
-/// The message recorded when compile-time code overflows its stack. Worded to
-/// match the interpreter's own stack-overflow report.
-pub const STACK_OVERFLOW_MESSAGE = "This Roc program overflowed its stack memory. This usually means there is very deep or infinite recursion somewhere in the code.";
+pub const CrashBoundary = crash_boundary_mod.CrashBoundary(CompileTimeHost, true);
 
 /// Record a caught stack overflow exactly the way a Roc `crash` is recorded,
 /// so the finalizer reports it as this root's compile-time crash.
@@ -221,7 +163,7 @@ pub fn noteStackOverflow(self: *CompileTimeHost) void {
         self.failed_region = frame.region;
         self.failed_loc = frame.loc;
     }
-    self.appendEvent(.crashed, STACK_OVERFLOW_MESSAGE);
+    self.appendEvent(.crashed, crash_boundary_mod.STACK_OVERFLOW_MESSAGE);
     self.termination = .crashed;
 }
 
@@ -336,16 +278,6 @@ fn enteredOps() *RocOps {
 
 fn enteredHost() *CompileTimeHost {
     return @ptrCast(@alignCast(enteredOps().env));
-}
-
-fn installJumpBuf(self: *CompileTimeHost, jmp_buf: *JmpBuf) ?*JmpBuf {
-    const prev = self.active_jmp_buf;
-    self.active_jmp_buf = jmp_buf;
-    return prev;
-}
-
-fn restoreJumpBuf(self: *CompileTimeHost, prev: ?*JmpBuf) void {
-    self.active_jmp_buf = prev;
 }
 
 fn clearHostState(self: *CompileTimeHost) void {

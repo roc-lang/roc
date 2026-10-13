@@ -45,7 +45,7 @@ UNUSED VARIABLE - reporting_duplicate_pattern_binder.md:2:6:2:10
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "from")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_from")
@@ -66,6 +66,7 @@ It was first bound here:
 
 (from, from) => True
  ^^^^
+
 Each name in a pattern must be different. To check whether two values are
 equal, give them different names and compare them in a guard:
 
@@ -73,7 +74,7 @@ equal, give them different names and compare them in a guard:
 
 ── ● unused variable ───────────────── reporting_duplicate_pattern_binder.md:2:6
 
-Variable from is defined here and then never used:
+Variable from is defined here and then never used.
 
 (from, from) => True
  ^^^^
@@ -102,7 +103,7 @@ Each name in a pattern must be different. To check whether two values are equal,
     (a, b) if a == b => ...
 
 **Unused Variable**
-Variable `from` is defined here and then never used:
+Variable `from` is defined here and then never used.
 If you don't need this variable, prefix it with an underscore like `_from` to suppress this warning.
 ```roc
     (from, from) => True
@@ -131,7 +132,7 @@ Each name in a pattern must be different. To check whether two values are equal,
 <div class="report warning">
 <h1 class="report-title">unused variable</h1>
 <div class="report-content">
-Variable <span class="symbol-unqualified">from</span> is defined here and then never used:<br>
+Variable <span class="symbol-unqualified">from</span> is defined here and then never used.<br>
 If you don&#39;t need this variable, prefix it with an underscore like <span class="symbol-unqualified">_from</span> to suppress this warning.<br>
 <div class="source-region"><pre class="error">    (from, from) =&gt; True
      ^^^^
@@ -154,7 +155,7 @@ Each name in a pattern must be different. To check whether two values are equal,
 
   (a, b) if a == b => ...unused variable
 
-Variable from is defined here and then never used:
+Variable from is defined here and then never used.
 If you don't need this variable, prefix it with an underscore like _from to suppress this warning.
     (from, from) => True
      ^^^^

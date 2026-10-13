@@ -1137,21 +1137,6 @@ pub const Program = struct {
         return self.lowering_modules.unsafeRawItemsForView();
     }
 
-    pub fn takeStringLiterals(self: *Program) std.ArrayList(Mono.StringLiteral) {
-        std.debug.assert(self.body_prefix == null);
-        return self.string_literals.takeArrayList();
-    }
-
-    pub fn takeSourceFiles(self: *Program) std.ArrayList(base.SourceFileEntry) {
-        std.debug.assert(self.body_prefix == null);
-        return self.source_files.takeArrayList();
-    }
-
-    pub fn takeStaticDataValues(self: *Program) std.ArrayList(StaticDataValue) {
-        std.debug.assert(self.body_prefix == null);
-        return self.static_data_values.takeArrayList();
-    }
-
     pub fn stringLiteralsView(self: *const Program) []const Mono.StringLiteral {
         std.debug.assert(self.body_prefix == null);
         return self.string_literals.unsafeRawItemsForView();

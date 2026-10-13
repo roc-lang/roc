@@ -622,7 +622,7 @@ jobs:
 
           output = Path("zig-out/minici/crash-reports")
           output.mkdir(parents=True, exist_ok=True)
-          programs = ("roc", "eval-test-runner", "lambda-mono-differential-runner")
+          programs = ("roc", "eval-test-runner")
           roots = (Path.home() / "Library/Logs/DiagnosticReports",
                    Path("/Library/Logs/DiagnosticReports"))
           for index, root in enumerate(roots):

@@ -24,7 +24,7 @@ UNUSED VARIABLE - nominal_associated_in_patterns.md:6:18:6:21
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "res")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_res")

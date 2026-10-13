@@ -523,7 +523,7 @@ pub fn appendSpan(
 
 /// Comptime byte-equality of two comptime strings. `std.mem.eql` is banned in
 /// `src/check`, so field-name matching uses this manual loop.
-fn comptimeStrEq(comptime a: []const u8, comptime b: []const u8) bool {
+pub fn comptimeStrEq(comptime a: []const u8, comptime b: []const u8) bool {
     if (a.len != b.len) return false;
     for (a, b) |x, y| {
         if (x != y) return false;
@@ -683,6 +683,110 @@ pub fn SliceStoreSerde(comptime Store: type, comptime Serialized: type) type {
         pub fn deserializeWithAllocator(self: *const Serialized, base_addr: usize, allocator: std.mem.Allocator) Store {
             return fill(self, base_addr, allocator);
         }
+    };
+}
+
+/// `deinit` for a store whose ownership is uniform: every slice field is freed,
+/// every field with a `deinit` is deinitialized, and POD fields need nothing. A
+/// `serialized: bool` frozen flag gates the persisted fields (they alias a loaded
+/// buffer) while declared transients are always released. The store is reset to
+/// its default value. A store aliases it as `pub const deinit = SliceStoreDeinit(@This()).deinit;`.
+pub fn SliceStoreDeinit(comptime Store: type) type {
+    return struct {
+        pub fn deinit(store: *Store, allocator: std.mem.Allocator) void {
+            const flag = comptime frozenFlagField(Store);
+            const frozen = if (comptime flag != null) @field(store, flag.?) else false;
+            inline for (@typeInfo(Store).@"struct".field_names) |name| {
+                const is_flag = comptime flag != null and comptimeStrEq(name, flag.?);
+                const persisted = comptime !is_flag and !isTransientField(Store, name);
+                if (!frozen or !persisted) deinitStoreField(&@field(store, name), allocator);
+            }
+            store.* = .{};
+        }
+    };
+}
+
+fn deinitStoreField(field: anytype, allocator: std.mem.Allocator) void {
+    const FT = @TypeOf(field.*);
+    switch (@typeInfo(FT)) {
+        .pointer => |info| {
+            if (info.size != .slice) @compileError("SliceStoreDeinit: " ++ @typeName(FT) ++ " is not a slice");
+            allocator.free(field.*);
+        },
+        .@"struct" => if (comptime @hasDecl(FT, "deinit")) {
+            if (@typeInfo(@TypeOf(FT.deinit)).@"fn".param_types.len == 1) field.deinit() else field.deinit(allocator);
+        } else if (comptime ownsPointers(FT)) {
+            @compileError("SliceStoreDeinit: " ++ @typeName(FT) ++ " holds pointers but has no pub deinit");
+        },
+        .optional => |info| if (comptime @typeInfo(info.child) == .@"struct" and @hasDecl(info.child, "deinit")) {
+            @compileError("SliceStoreDeinit: optional owned field " ++ @typeName(FT) ++ " needs a hand-written deinit");
+        },
+        .type,
+        .void,
+        .bool,
+        .noreturn,
+        .int,
+        .float,
+        .array,
+        .comptime_float,
+        .comptime_int,
+        .undefined,
+        .null,
+        .error_union,
+        .error_set,
+        .@"enum",
+        .@"union",
+        .@"fn",
+        .@"opaque",
+        .frame,
+        .@"anyframe",
+        .vector,
+        .enum_literal,
+        .spirv,
+        => {},
+    }
+}
+
+/// Whether a value of `T` can hold a pointer, so dropping it without a `deinit`
+/// could leak.
+fn ownsPointers(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .pointer => true,
+        .optional => |info| ownsPointers(info.child),
+        .array => |info| ownsPointers(info.child),
+        .@"struct" => |info| blk: {
+            for (info.field_types) |field_type| {
+                if (ownsPointers(field_type)) break :blk true;
+            }
+            break :blk false;
+        },
+        .@"union" => |info| blk: {
+            for (info.field_types) |field_type| {
+                if (ownsPointers(field_type)) break :blk true;
+            }
+            break :blk false;
+        },
+        .type,
+        .void,
+        .bool,
+        .noreturn,
+        .int,
+        .float,
+        .comptime_float,
+        .comptime_int,
+        .undefined,
+        .null,
+        .error_union,
+        .error_set,
+        .@"enum",
+        .@"fn",
+        .@"opaque",
+        .frame,
+        .@"anyframe",
+        .vector,
+        .enum_literal,
+        .spirv,
+        => false,
     };
 }
 

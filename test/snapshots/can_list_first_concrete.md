@@ -17,7 +17,7 @@ TYPE MISMATCH - can_list_first_concrete.md:1:6:1:13
 		(title "Type Mismatch")
 		(region (start 1 6) (end 1 13))
 		(headline
-			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both:"))
+			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both."))
 		(document
 			(source-region (file "can_list_first_concrete.md") (start 1 6) (end 1 13) (annotation error) (line-text "[42, \"world\", 3.14]"))
 			(line-break)

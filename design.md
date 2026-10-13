@@ -7523,10 +7523,8 @@ must keep analysis state bounded by the finite LIR graph.
 
 `SolvedLirLower` computes the logical Lambda Mono callable, capture, procedure,
 and function-free type decisions while directly consuming Lambda Solved syntax.
-Release builds do not materialize a second Lambda Mono expression, pattern,
-statement, or local tree. Debug builds separately materialize Lambda Mono and
-compare its decisions with the direct lowerer; that verifier is not a production
-lowering route.
+No build materializes a second Lambda Mono expression, pattern, statement, or
+local tree; the direct lowerer is the only consumer of Lambda Solved syntax.
 
 #### Public Iterator Contract
 
@@ -8590,9 +8588,7 @@ The following properties require focused tests:
 - iterator loop scalarization preserves every reachable transition, including
   adapter-state changes across `continue` edges;
 - constant-list zero-allocation claims are tested on a cart path that performs
-  compile-time finalization;
-- direct Solved-to-LIR decisions agree with the debug materialized Lambda Mono
-  verifier.
+  compile-time finalization.
 
 Backends receive only ordinary LIR and explicit ARC statements. They must not
 know whether a value originated as a public iterator, a minted iterator,
@@ -11962,7 +11958,7 @@ Other solved-graph mutations:
   mechanism for a proved concrete builtin conversion; does not mutate the
   context's type or introduce a redirect rule.
 
-- `recordForMerge` / `tagUnionForMerge`—mechanism: row-extension
+- `rowForMerge` (record and tag-union rows)—mechanism: row-extension
   preservation during ordinary unification. Both operand equivalence classes
   acquire the merged content, so an extension reaching either operand must
   preserve that operand's pre-merge row meaning before the classes are joined.
@@ -12076,7 +12072,7 @@ Other solved-graph mutations:
   `check type - polarity` tests in
   `src/check/test/type_checking_integration.zig` and by
   `test/cli/platform_requirement_wider_error_row/`.
-- `closeRecordRowForDerivedParse` / `closeRecordRowForDerivedEncode`—policy:
+- `closeRecordRowForDerivedCodec` (parse and encode)—policy:
   Derived Structural Codec Record-Row Closure (above). After derived codec
   dispatch reaches quiescence, every record the codec's value shape reaches
   as data that was inferred from use sites closes its unconstrained flexible
@@ -12250,8 +12246,7 @@ Other solved-graph mutations:
 Stamped-plan restamps on CIR nodes (discharge time): the restamp rule—
 only the node's own constraint may restamp a node that already carries a
 stamped plan—is documented and enforced at the restamp sites
-(`rewriteEqBinopAsMethodEq`, `rewriteDerivedIsEqMethodCallAsStructuralEq`,
-`rewriteDerivedMethodCallAsStructuralHash`). Plan stamping at creation
+(`rewriteEqBinopAsMethodEq`, `rewriteDerivedMethodCallAsStructural`). Plan stamping at creation
 (`replaceExprWithDispatchCall` and friends at plan-creation sites) is the
 plan's first stamp, not a restamp. Eager method calls stamp their plan before
 discharging its constraint, so a selected structural derivation cannot be
@@ -14323,8 +14318,8 @@ Drafts own their root descriptors until sealing; a draft ID cannot be used in
 the destination program without explicit remapping. Whole-program forks copy
 the table with its ID domain, while Lift transfers it with the expression
 storage. SpecConstr body shards borrow the frozen table without allocating or
-relocating root IDs. Materialized Lambda Mono owns its matching table, and LIR
-lowering resolves the descriptor before producing runtime slots. Local table
+relocating root IDs. LIR lowering resolves the descriptor before producing
+runtime slots. Local table
 ordinals never replace checked module/root identity in slot caches or serialized
 checked module data, and moving metadata out of line does not change their existing
 module/root matching rules.
@@ -16045,8 +16040,8 @@ Exact specialization demand and shared LIR procedure-body scheduling are separat
 state. When distinct specializations have one procedure identity, a reference
 demands its exact specialization and queues the shared owner's body once. It
 does not demand the owner's specialization merely because that owner supplies
-the body. The debug materializer compares referenced specializations; sharing a
-procedure must not introduce additional specialization demands into that check.
+the body. Sharing a procedure must not introduce additional specialization
+demands.
 
 The Lambda Mono type store has no function type. Function values have already
 become ordinary value representations:
@@ -17661,26 +17656,6 @@ const BoxyTransferMode = enum {
     move,
 };
 
-const BoxyAdaptStep = union(enum) {
-    copy_bytes: struct {
-        source_offset: u32,
-        target_offset: u32,
-        layout_idx: layout.Idx,
-    },
-    dynamic_payload: struct {
-        source_offset: u32,
-        target_offset: u32,
-        source_desc: ?BoxyDescSource,
-        target_desc: ?BoxyDescSource,
-        mode: BoxyTransferMode,
-    },
-    nested_adapter: struct {
-        source_offset: u32,
-        target_offset: u32,
-        adapter: BoxyAdapterId,
-        mode: BoxyTransferMode,
-    },
-};
 ```
 
 The exact descriptor, dictionary, and adapter payload structs are owned by LIR,
@@ -17890,8 +17865,6 @@ The boxy statement surface is:
   the same rules for dictionary values
 - `assign_boxy_box`: creates a boxy top-level box from a payload local, payload
   layout, optional payload descriptor, and explicit transfer mode
-- `assign_boxy_reuse_box`: reuses an existing box pointer when the source is
-  already in the compiler-internal boxy type-variable representation
 - `assign_boxy_unbox`: extracts or projects a concrete target layout from a boxy
   value using the statement's descriptor and source transfer mode
 - `assign_boxy_adapt`: applies a named adapter plan to a source local with
@@ -17911,56 +17884,6 @@ dictionary, argument, and hidden-argument locals. Backends must not infer any
 missing behavior from target layout shape; if codegen has not implemented a
 boxy statement's specified behavior, reaching that statement is an invariant failure in
 that backend.
-
-### Debug Lambda Mono Verification
-
-This verification applies only to `.lss`. Debug builds may additionally
-materialize the logical Lambda Mono tree for verification. That tree is never
-an input to production lowering, never a
-substitute result, and never a recovery path. The direct solved-to-LIR builder
-always produces the LIR result first. The debug verifier then checks a
-separately materialized Lambda Mono tree against the direct path.
-
-The verifier must be guarded so that release builds pay nothing for it: no tree
-allocation, no materialized Lambda Mono traversal, no verifier data structures,
-and no old Lambda Mono-to-LIR run. The release branch must be compile-time dead
-after Zig specializes the debug condition.
-
-The debug verifier checks at least these explicit decisions:
-
-- every direct function specialization has the same lifted function id, solved
-  function type, capture ABI, capture span, capture record type, source
-  metadata, argument list, and return type as the materialized Lambda Mono tree
-- every finite callable type has the same variants, variant ids, source
-  symbols, target functions, and capture payload types
-- every erased callable type has the same entries, targets, source function
-  digest, and capture payload types
-- every function reference, direct call, value call, captured local access, and
-  callable pattern uses the same target, payload, and capture binding decisions
-- root, layout, runtime-schema, const-plan, and requested-layout outputs name
-  the same checked ids and Lambda Mono types
-
-The materializer re-derives every decision it is compared on, with exactly one
-copied input: the direct path's choice to fold a statically-impossible
-`List.map` reuse match, which depends on committed layouts the materializer
-does not have. Each fold is recorded as a `FoldedMatch`, and the materializer
-re-derives the site's shape and selected branch at replay and asserts that the
-record names a `List.map` reuse site resolved to its constant-0 branch
-(`FoldedMatch.isResolutionOf`). A new kind of fold extends that predicate and
-its contract together. The materializer also asserts that every source of a
-local's type—signature argument, pattern, expression, loop parameter, payload
-local—lowers to the same Lambda Mono type, so a Lambda Solved local whose type
-sources stop sharing one root fails at that local instead of making the
-reference tree depend on traversal order.
-
-The verifier may also lower the materialized Lambda Mono tree with the legacy
-Lambda Mono-to-LIR builder and compare that LIR to the direct LIR result. This
-comparison is a debug assertion only. A mismatch is a compiler bug. The compiler
-must not continue by using the materialized Lambda Mono LIR.
-
-The full Lambda Mono body-lowering differential sweep over the ordinary eval
-corpus runs once per day on Ubuntu through `nightly_gate.yml`; it is not part of
-PR MiniCI.
 
 ### Direct Builder Internal Contracts
 
@@ -18440,10 +18363,8 @@ leaves its join, and each of its writes is deleted by routing the write's
 incoming edges to its successor; copying a successor over a deleted statement
 would duplicate any join it copied. Deleting a write can leave its value
 unread, so the pass repeats to a fixed point. Reads outside operand positions
-keep a parameter: a join's retained or maybe-uninitialized lists, another
-local's descriptor, and the implicit carry of `loop_continue` or `loop_break`,
-which keeps every current definition live, so a procedure containing either
-is left unchanged. A join parameter that is also a procedure argument is
+keep a parameter: a join's retained or maybe-uninitialized lists and another
+local's descriptor. A join parameter that is also a procedure argument is
 defined by the call as well, and is never removed.
 
 Where lowering carries the variables and the construct's result together in
@@ -18670,136 +18591,6 @@ complementary comparison, which is how `!=` reaches the prover.
 `i128` arithmetic and join the integer family, despite the family name saying
 integer, because that is precisely what they are at the machine level. `Dec`
 multiplication requires rescaling, so it remains its own `dec_mul` operation.
-
-### Division and shifts
-
-Division, remainder, modulo, negation, and absolute value keep their existing
-checked forms. Their overflow shape differs—the most negative value divided
-by negative one, and division by zero—and they are not part of this family.
-Shift operations do not yet assert no-wraparound where it would be provable.
-
-## Integer Arithmetic Operations
-
-Integer addition, subtraction, and multiplication each exist as a family of
-distinct LIR operations rather than a single operation whose meaning depends on
-context. A single `num_plus` would have to serve floating-point addition, a
-wrapping add a program may depend on, an add a range proof showed cannot
-overflow, and compiler-synthesized index arithmetic. Those cases carry opposite
-optimization licences, so collapsing them forces every backend to assume the
-weakest one.
-
-For each of add, sub, and mul the family is:
-
-- `num_int_add_wrap` produces the sum and wraps on overflow. The programmer
-  asked for wrapping and may depend on it.
-- `num_int_add_crash_on_overflow` produces the sum and crashes on overflow.
-  This is what plain `+` becomes.
-- `num_int_add_overflows` produces a `Bool` answering whether the addition
-  would overflow. It performs no addition of its own.
-- `num_int_add_proven_cannot_overflow` produces the sum, carrying a proof that
-  overflow cannot occur. Only this member licenses a backend to assert
-  no-wraparound to its optimizer.
-
-`num_float_add`, `num_float_sub`, and `num_float_mul` are separate operations
-with no variants. IEEE-754 overflow is defined: the result becomes an infinity
-and a sticky flag is set. Floats never wrap and never trap, so there is no
-checked, wrapping, or proven distinction to draw, and the numeric builtins
-correspondingly offer no `_try`, `_wrap`, or `_saturated` forms on `F32` and
-`F64`. Fast-math flags are the float analogue of no-wraparound assertions; they
-change results and are not enabled.
-
-The names state what happens rather than using "checked", which fails to
-distinguish three members that all check. `_overflows` is present tense because
-it asks about a hypothetical addition rather than reporting on one that ran.
-
-### Plain arithmetic always crashes on overflow
-
-Plain `+`, `-`, and `*` on integers crash on overflow at every optimization
-level. This is not a debug-build behavior that relaxes under optimization: the
-lowering that commits source arithmetic to a LIR operation receives the operand
-layout and nothing else, so the policy cannot vary by optimization level. What
-varies is only how many of those checks the range prover discharges.
-
-### Committing source arithmetic
-
-`num_plus`, `num_minus`, and `num_times` survive as source-policy markers
-emitted by canonicalization, where the operand layout is not yet committed. A
-single lowering step maps them to a family member using the layout: a float
-layout selects the float operation, an integer layout selects
-`crash_on_overflow`, and the explicit `_wrap` builtins select `wrap`. These
-markers never reach a LIR pass or a backend.
-
-The overflow predicate needs no such marker. It is integer-only and has exactly
-one form, so there is no policy for the lowering step to decide, and it maps
-directly.
-
-### The predicate is a separate operation, not a paired result
-
-Hardware computes an overflow flag as part of every add; obtaining it costs
-nothing. The natural encoding would be one operation returning both the sum and
-the flag, mirroring the LLVM intrinsics. LIR does not express that: a low-level
-assignment has a single destination local and there is no field read
-statement, so a paired result would require a two-field struct local that risks
-being spilled to memory.
-
-Splitting them costs nothing. Computing the wrapping sum and the overflow
-predicate as independent operations over the same operands produces identical
-machine code, because the backend merges them. So the predicate stands alone as
-a pure question about its operands, and the higher-level forms compose from it:
-
-- `plus_try` is the predicate, then `Err(Overflow)` or `Ok(wrapping sum)`.
-- `plus_saturated` is the predicate, then a limit or the wrapping sum, which
-  compiles to a conditional select rather than a branch.
-- `plus` is `crash_on_overflow`.
-
-Writing these in terms of the predicate keeps them in builtin Roc source, where
-they are readable, without paying to re-derive overflow. Deriving it by hand
-instead costs a comparison, a branch, and a redundant overflow check on the
-addition that follows; for multiplication it costs a hardware division.
-
-### Only the range prover mints the proven form
-
-`num_int_add_proven_cannot_overflow` and its siblings are the one place in the
-family where an incorrect claim produces undefined behavior rather than a wrong
-answer, because they assert no-wraparound to the backend optimizer. They are
-minted exclusively by the range prover, which proves that overflow is
-impossible before rewriting. Source lowering never produces them, and neither
-does any other pass.
-
-This rule binds compiler-synthesized arithmetic too. A LIR pass that constructs
-an add directly emits the wrapping member and leaves the proof to the prover,
-even where the arithmetic is safe by construction. A hand-asserted proof at a
-synthesis site is a claim that decays as the surrounding pass changes, and its
-failure mode is undefined behavior rather than a detectably wrong result. The
-range prover either proves overflow is impossible or does not perform the
-rewrite.
-
-Under a debug build the interpreter evaluates the proven forms in a wider type
-and panics if one actually overflows, so every evaluation test doubles as an
-audit of the prover's claims.
-
-### What the prover does with the family
-
-Proving that overflow is impossible benefits every member. A crashing operation
-loses its crash path. The predicate folds to a constant, which then folds the
-branch that consumed it and collapses the surrounding `Try` or select entirely.
-A wrapping operation becomes the proven form, which is sound because a
-mathematical result that provably fits in the type makes wrapping and
-non-wrapping addition compute identical bits.
-
-One asymmetry is deliberate and worth recording. A surviving crash-on-overflow
-operation pays for itself even when no proof is found: control reaching the
-next statement is itself proof that the sum is exact, and later bounds checks
-consume that exact-sum range. A wrapping operation offers no such assumption,
-because no crash justifies it. Hand-writing `_wrap` in hot code therefore forfeits
-something plain `+` provides, and doing so has measurably cost throughput.
-
-### Dec
-
-`Dec` is fixed-point over an `i128`. Its addition and subtraction are plain
-`i128` arithmetic and join the integer family, despite the family name saying
-integer, because that is precisely what they are at the machine level. `Dec`
-multiplication requires rescaling, so it remains its own operation.
 
 ### Division and shifts
 
@@ -19558,21 +19349,12 @@ per-statement group counters or additional membership sets are maintained.
 Solver-only resource anchors participate exactly like concrete RC resources in
 these queries. Group-extension bits are not substitutes for raw member bits:
 their read-before-rebind kill equations differ.
-Join keep-set seeding inverts the exact group-use predicate instead of scanning
-the procedure's resource inventory per join. Source preparation builds the
-inverse alongside raw liveness numbering only for procedures with joins and
-multi-member groups. Singleton-only frames retain their allocation-free identity
-mapping. The inverse names concrete refcounted resources, excluding solver-only
-anchors, and is shared by all ownership variants. Sparse range enumeration reads
-only singleton raw bits and group-extension bits; grouped raw-member bits and
-borrowed-result bits do not select seed units. Absent and out-of-range subtrees
-are skipped. Each emission supplies its own committed residual masks and places
-the existing retained resources and join parameters, preserving the exact
-descending ownership fixed point. Until a jump reaches a join's body, the
-only reader of its body keep-set is the entry keep-set's membership test, so
-the seed stays represented by that exact membership predicate. A join whose
-body or remainder reaches a loop edge materializes the seed, because
-loop-keyed liveness enumerates the keep-set as boundary data.
+A join's body keep-set seed is the exact group-use predicate over its body
+plus the existing retained resources and join parameters, preserving the exact
+descending ownership fixed point; no seed scans the procedure's resource
+inventory per join. Until a jump reaches a join's body, the only reader of its
+body keep-set is the entry keep-set's membership test, so the seed stays
+represented by that exact membership predicate.
 Consequently neither ownership nor liveness rows are widened by locals from
 other procedures. Unrelated scalar locals are not ARC resources and never
 receive raw liveness bits. This distinction is load-bearing for wide static
@@ -19601,11 +19383,11 @@ The graph uses a reusable dense statement-to-node table, so successors,
 predecessors, and worklist edges are direct node indices rather than statement
 hash lookups. Its strongly-connected-component condensation is solved in
 reverse dependency order: an acyclic singleton is evaluated once, and
-iteration occurs only inside genuinely cyclic components. Keep-free rows live
+iteration occurs only inside genuinely cyclic components. Rows live
 at their compact graph nodes and the active source graph supplies their direct
 dense statement-to-node lookup.
 
-Debug builds check the keep-free solve against a certificate the solver keeps
+Debug builds check the liveness solve against a certificate the solver keeps
 rather than re-solving it. Every row satisfies its equation exactly. Inside a
 cyclic component, every row is its innermost loop's carried row plus the bits
 its own node exposes, and every carried row is its parent loop's plus the bits
@@ -19617,14 +19399,9 @@ then has a finite path to a read and the fixed point is the least one. The
 checks descend only where the shared rows diverge, so certification is linear
 like the solve.
 
-Each join receives a compact loop identity whose direct cache covers the
-forward closure of its explicit body and remainder roots. The join keep-set
-adds a boundary row to each reachable loop-edge node. When that keep-set
-shrinks, ARC computes the exact new boundary row, seeds only loop edges whose
-rows actually changed, and propagates the delta through changed predecessors;
-it neither rebuilds the graph nor discards unaffected rows. Every loop-keyed
-query is therefore a direct `(loop identity, node index)` lookup with no map or
-statement scan.
+Join keep-sets never feed liveness: every liveness query is a direct node
+lookup in the source graph's rows, with no map or statement scan, and a keep
+change schedules no liveness work.
 
 Join ownership is a must-property. Each reachable jump site contributes a
 state that can only shrink; a join summary maintains their running
@@ -19650,10 +19427,7 @@ whose walk reached the join statement, by re-deciding only the units whose
 state entry or deciding liveness bit differs structurally between the two
 snapshots. The result is exact for any reference; the reference only bounds
 the work, which is the difference between related snapshots instead of the
-size of the sets, so a loop nest costs linear keep-set work in its depth. Each loop identity
-records whether its solved rows consumed any keep bits, answered from the
-row's structure rather than by counting its set bits. A keep change that
-supplied no boundary bits schedules no liveness work.
+size of the sets, so a loop nest costs linear keep-set work in its depth.
 
 Join, jump-site, and continuation-switch identities are compact indices
 assigned by the structural lift. Summary tables and plan registrations use
@@ -20171,8 +19945,7 @@ A later write first checks its value operand against
 the previous definition's take state, then starts the new definition with all
 fields available. This includes loop back edges: the join cell has no global
 incoming ownership origin, and each explicit write supplies its own intact unit.
-A prospective take that reaches `loop_continue` or `loop_break` is rejected
-because the implicit boundary keeps the join definition live. Join cells with
+Join cells with
 no explicit initializer or with any other kind of definition remain ineligible.
 
 Ownership-complete aggregate reads extend that schedule across wrappers without
@@ -20259,9 +20032,7 @@ The use
 query is definition-sensitive: a `set_local` that writes the root ends the
 current place definition after its value operand is read. Uses reached through
 the following jump belong to the newly written join value and cannot keep the
-previous definition alive. Conversely, reaching an implicit `loop_continue`
-or `loop_break` without such a rebind keeps the current definition live across
-the loop boundary. A pure
+previous definition alive. A pure
 same-value alias followed only by non-refcounted field reads is
 representation-only: an inline struct's scalar bytes remain available after
 its stored RC units move or are released, so such reads do not keep the
@@ -22990,7 +22761,7 @@ solving, adapted for Roc's checked module boundary and existing LIR.
 | `monotype` | Monotype IR |
 | `monotype_lifted` | Monotype Lifted IR |
 | `lambdasolved` | Lambda Solved IR |
-| `lambdamono` | logical Lambda Mono decisions in direct lowering; materialized only by the debug verifier |
+| `lambdamono` | logical Lambda Mono decisions in direct lowering; never materialized as a tree |
 | `ir` | direct Solved-to-LIR builder |
 | `eval` | LIR interpreter for compile-time evaluation |
 

@@ -80,7 +80,6 @@ const VarSafeList = Var.SafeList;
 const RecordFieldSafeMultiList = RecordField.SafeMultiList;
 const RecordFieldSafeList = RecordField.SafeList;
 const TagSafeList = Tag.SafeList;
-const TagSafeMultiList = Tag.SafeMultiList;
 const TwoTagsSafeList = TwoTags.SafeList;
 
 const Problem = problem_mod.Problem;
@@ -588,10 +587,10 @@ const Unifier = struct {
             .structure => |flat_type| {
                 switch (flat_type) {
                     .record => |record| {
-                        return Content{ .structure = FlatType{ .record = try self.recordForMerge(vars, record) } };
+                        return Content{ .structure = FlatType{ .record = try self.rowForMerge(.record, vars, record) } };
                     },
                     .tag_union => |tag_union| {
-                        return Content{ .structure = FlatType{ .tag_union = try self.tagUnionForMerge(vars, tag_union) } };
+                        return Content{ .structure = FlatType{ .tag_union = try self.rowForMerge(.tag_union, vars, tag_union) } };
                     },
                     .fn_pure => |func| {
                         // A pure function's effect formula is discharged: every
@@ -1895,9 +1894,9 @@ const Unifier = struct {
         };
     }
 
-    fn recordExtReachesDesc(self: *Self, ext: Var, targets: RowMergeTargets) bool {
+    fn rowExtReachesDesc(self: *Self, comptime kind: RowKind, ext: Var, targets: RowMergeTargets) bool {
         var ext_var = ext;
-        var guard = types_mod.debug.IterationGuard.init("recordExtReachesDesc");
+        var guard = types_mod.debug.IterationGuard.init("rowExtReachesDesc");
 
         while (true) {
             guard.tick();
@@ -1910,103 +1909,43 @@ const Unifier = struct {
                     ext_var = self.types_store.getAliasBackingVar(alias);
                 },
                 .structure => |flat_type| {
-                    switch (flat_type) {
-                        .record => |record| {
-                            ext_var = record.ext;
-                        },
-                        .tuple,
-                        .nominal_type,
-                        .fn_pure,
-                        .fn_effectful,
-                        .fn_unbound,
-                        .empty_record,
-                        .tag_union,
-                        .empty_tag_union,
-                        => return false,
-                    }
+                    const ext_row = kind.rowOf(flat_type) orelse return false;
+                    ext_var = ext_row.ext;
                 },
                 .flex, .rigid, .field_presence, .err => return false,
             }
         }
     }
 
-    fn tagExtReachesDesc(self: *Self, ext: Var, targets: RowMergeTargets) bool {
-        var ext_var = ext;
-        var guard = types_mod.debug.IterationGuard.init("tagExtReachesDesc");
-
-        while (true) {
-            guard.tick();
-
-            const resolved = self.types_store.resolveVar(ext_var);
-            if (targets.contains(resolved.desc_idx)) return true;
-
-            switch (resolved.desc.content) {
-                .alias => |alias| {
-                    ext_var = self.types_store.getAliasBackingVar(alias);
-                },
-                .structure => |flat_type| {
-                    switch (flat_type) {
-                        .tag_union => |tag_union| {
-                            ext_var = tag_union.ext;
-                        },
-                        .record,
-                        .tuple,
-                        .nominal_type,
-                        .fn_pure,
-                        .fn_effectful,
-                        .fn_unbound,
-                        .empty_record,
-                        .empty_tag_union,
-                        => return false,
-                    }
-                },
-                .flex, .rigid, .field_presence, .err => return false,
-            }
-        }
-    }
-
-    fn mergeRecordFieldsIntoScratch(self: *Self, range: *RecordFieldSafeList.Range, fields: RecordFieldSafeMultiList.Range) std.mem.Allocator.Error!void {
-        const next_fields = self.types_store.record_fields.sliceRange(fields);
-        try self.scratch.mergeSortedExtensionFields(
+    fn mergeRowEntriesIntoScratch(self: *Self, comptime kind: RowKind, range: *kind.Entry().SafeList.Range, entries: kind.Entry().SafeMultiList.Range) std.mem.Allocator.Error!void {
+        const next = kind.storeEntries(self.types_store).sliceRange(entries);
+        try self.scratch.mergeSortedExtension(
+            kind,
             range,
-            next_fields.items(.name),
-            next_fields.items(.presence),
+            next.items(.name),
+            next.items(kind.payloadField()),
             self.ident_store,
         );
     }
 
-    fn mergeTagsIntoScratch(self: *Self, range: *TagSafeList.Range, tags: TagSafeMultiList.Range) std.mem.Allocator.Error!void {
-        const next_tags = self.types_store.tags.sliceRange(tags);
-        try self.scratch.mergeSortedExtensionTags(
-            range,
-            next_tags.items(.name),
-            next_tags.items(.args),
-            self.ident_store,
-        );
+    fn finishRowForMerge(self: *Self, comptime kind: RowKind, range: kind.Entry().SafeList.Range, ext: Var) std.mem.Allocator.Error!kind.Row() {
+        const entries = try kind.appendToStore(self.types_store, self.scratch.rowList(kind, "gathered_").sliceRange(range));
+        return kind.row(entries, ext);
     }
 
-    fn finishRecordForMerge(self: *Self, range: RecordFieldSafeList.Range, ext: Var) std.mem.Allocator.Error!types_mod.Record {
-        const fields = try self.types_store.appendRecordFields(self.scratch.gathered_fields.sliceRange(range));
-        return .{ .fields = fields, .ext = ext };
-    }
-
-    fn finishTagUnionForMerge(self: *Self, range: TagSafeList.Range, ext: Var) std.mem.Allocator.Error!TagUnion {
-        const tags = try self.types_store.appendTags(self.scratch.gathered_tags.sliceRange(range));
-        return .{ .tags = tags, .ext = ext };
-    }
-
-    fn recordForMerge(self: *Self, vars: *const ResolvedVarDescs, record: types_mod.Record) std.mem.Allocator.Error!types_mod.Record {
+    fn rowForMerge(self: *Self, comptime kind: RowKind, vars: *const ResolvedVarDescs, start: kind.Row()) std.mem.Allocator.Error!kind.Row() {
         const targets = self.rowExtMergeTargets(vars);
-        if (!self.recordExtReachesDesc(record.ext, targets)) return record;
+        if (!self.rowExtReachesDesc(kind, start.ext, targets)) return start;
 
-        var range = try self.scratch.copyGatherFieldsFromMultiList(
-            &self.types_store.record_fields,
-            record.fields,
+        var range = try self.scratch.copyGatherFromMultiList(
+            kind,
+            kind.storeEntries(self.types_store),
+            kind.entriesOf(start),
         );
-        var ext_var = record.ext;
+        var ext_var = start.ext;
         var spliced_a = false;
         var spliced_b = false;
-        var guard = types_mod.debug.IterationGuard.init("recordForMerge");
+        var guard = types_mod.debug.IterationGuard.init("rowForMerge");
 
         while (true) {
             guard.tick();
@@ -2015,30 +1954,16 @@ const Unifier = struct {
             if (targets.contains(resolved.desc_idx)) {
                 const spliced = if (resolved.desc_idx == targets.a) &spliced_a else &spliced_b;
                 if (spliced.*) {
-                    return try self.finishRecordForMerge(range, try self.fresh(vars, resolved.desc.content));
+                    return try self.finishRowForMerge(kind, range, try self.fresh(vars, resolved.desc.content));
                 }
 
                 spliced.* = true;
-                switch (resolved.desc.content) {
-                    .structure => |flat_type| {
-                        switch (flat_type) {
-                            .record => |target_record| {
-                                try self.mergeRecordFieldsIntoScratch(&range, target_record.fields);
-                                ext_var = target_record.ext;
-                            },
-                            .tuple,
-                            .nominal_type,
-                            .fn_pure,
-                            .fn_effectful,
-                            .fn_unbound,
-                            .empty_record,
-                            .tag_union,
-                            .empty_tag_union,
-                            => return try self.finishRecordForMerge(range, try self.fresh(vars, resolved.desc.content)),
-                        }
-                    },
-                    .flex, .rigid, .alias, .field_presence, .err => return try self.finishRecordForMerge(range, try self.fresh(vars, resolved.desc.content)),
-                }
+                const target_row = switch (resolved.desc.content) {
+                    .structure => |flat_type| kind.rowOf(flat_type),
+                    .flex, .rigid, .alias, .field_presence, .err => null,
+                } orelse return try self.finishRowForMerge(kind, range, try self.fresh(vars, resolved.desc.content));
+                try self.mergeRowEntriesIntoScratch(kind, &range, kind.entriesOf(target_row));
+                ext_var = target_row.ext;
                 continue;
             }
 
@@ -2047,96 +1972,11 @@ const Unifier = struct {
                     ext_var = self.types_store.getAliasBackingVar(alias);
                 },
                 .structure => |flat_type| {
-                    switch (flat_type) {
-                        .record => |ext_record| {
-                            try self.mergeRecordFieldsIntoScratch(&range, ext_record.fields);
-                            ext_var = ext_record.ext;
-                        },
-                        .tuple,
-                        .nominal_type,
-                        .fn_pure,
-                        .fn_effectful,
-                        .fn_unbound,
-                        .empty_record,
-                        .tag_union,
-                        .empty_tag_union,
-                        => return try self.finishRecordForMerge(range, ext_var),
-                    }
+                    const ext_row = kind.rowOf(flat_type) orelse return try self.finishRowForMerge(kind, range, ext_var);
+                    try self.mergeRowEntriesIntoScratch(kind, &range, kind.entriesOf(ext_row));
+                    ext_var = ext_row.ext;
                 },
-                .flex, .rigid, .field_presence, .err => return try self.finishRecordForMerge(range, ext_var),
-            }
-        }
-    }
-
-    fn tagUnionForMerge(self: *Self, vars: *const ResolvedVarDescs, tag_union: TagUnion) std.mem.Allocator.Error!TagUnion {
-        const targets = self.rowExtMergeTargets(vars);
-        if (!self.tagExtReachesDesc(tag_union.ext, targets)) return tag_union;
-
-        var range = try self.scratch.copyGatherTagsFromMultiList(
-            &self.types_store.tags,
-            tag_union.tags,
-        );
-        var ext_var = tag_union.ext;
-        var spliced_a = false;
-        var spliced_b = false;
-        var guard = types_mod.debug.IterationGuard.init("tagUnionForMerge");
-
-        while (true) {
-            guard.tick();
-
-            const resolved = self.types_store.resolveVar(ext_var);
-            if (targets.contains(resolved.desc_idx)) {
-                const spliced = if (resolved.desc_idx == targets.a) &spliced_a else &spliced_b;
-                if (spliced.*) {
-                    return try self.finishTagUnionForMerge(range, try self.fresh(vars, resolved.desc.content));
-                }
-
-                spliced.* = true;
-                switch (resolved.desc.content) {
-                    .structure => |flat_type| {
-                        switch (flat_type) {
-                            .tag_union => |target_tag_union| {
-                                try self.mergeTagsIntoScratch(&range, target_tag_union.tags);
-                                ext_var = target_tag_union.ext;
-                            },
-                            .record,
-                            .tuple,
-                            .nominal_type,
-                            .fn_pure,
-                            .fn_effectful,
-                            .fn_unbound,
-                            .empty_record,
-                            .empty_tag_union,
-                            => return try self.finishTagUnionForMerge(range, try self.fresh(vars, resolved.desc.content)),
-                        }
-                    },
-                    .flex, .rigid, .alias, .field_presence, .err => return try self.finishTagUnionForMerge(range, try self.fresh(vars, resolved.desc.content)),
-                }
-                continue;
-            }
-
-            switch (resolved.desc.content) {
-                .alias => |alias| {
-                    ext_var = self.types_store.getAliasBackingVar(alias);
-                },
-                .structure => |flat_type| {
-                    switch (flat_type) {
-                        .tag_union => |ext_tag_union| {
-                            try self.mergeTagsIntoScratch(&range, ext_tag_union.tags);
-                            ext_var = ext_tag_union.ext;
-                        },
-                        .record,
-                        .tuple,
-                        .nominal_type,
-                        .fn_pure,
-                        .fn_effectful,
-                        .fn_unbound,
-                        .empty_record,
-                        .empty_tag_union,
-                        => return try self.finishTagUnionForMerge(range, ext_var),
-                    }
-                },
-                .flex, .rigid, .field_presence, .err => return try self.finishTagUnionForMerge(range, ext_var),
+                .flex, .rigid, .field_presence, .err => return try self.finishRowForMerge(kind, range, ext_var),
             }
         }
     }
@@ -2158,21 +1998,7 @@ const Unifier = struct {
             }});
         }
 
-        if (post.mb_a_extended_fields) |extended_fields| {
-            _ = try self.types_store.appendRecordFields(
-                self.scratch.only_in_a_fields.sliceRange(extended_fields),
-            );
-        }
-        if (post.mb_b_extended_fields) |extended_fields| {
-            _ = try self.types_store.appendRecordFields(
-                self.scratch.only_in_b_fields.sliceRange(extended_fields),
-            );
-        }
-
-        try self.merge(&post.vars, Content{ .structure = FlatType{ .record = .{
-            .fields = self.types_store.record_fields.rangeToEnd(range_start),
-            .ext = post.ext,
-        } } });
+        try self.mergeRowAppendedFrom(.record, &post.vars, range_start, post.mb_a_extended_fields, post.mb_b_extended_fields, post.ext);
     }
 
     fn processSharedTagsAfterChildren(self: *Self, post: SharedTagsAfterChildren) Error!void {
@@ -2185,21 +2011,34 @@ const Unifier = struct {
             }});
         }
 
-        if (post.mb_a_extended_tags) |extended_tags| {
-            _ = try self.types_store.appendTags(
-                self.scratch.only_in_a_tags.sliceRange(extended_tags),
-            );
+        try self.mergeRowAppendedFrom(.tag_union, &post.vars, range_start, post.mb_a_extended_tags, post.mb_b_extended_tags, post.ext);
+    }
+
+    /// Append each side's unshared entries after the shared entries already
+    /// appended from `range_start`, then merge the row built from all of them.
+    fn mergeRowAppendedFrom(
+        self: *Self,
+        comptime kind: RowKind,
+        vars: *const ResolvedVarDescs,
+        range_start: u32,
+        mb_a_extended: ?kind.Entry().SafeList.Range,
+        mb_b_extended: ?kind.Entry().SafeList.Range,
+        ext: Var,
+    ) std.mem.Allocator.Error!void {
+        if (mb_a_extended) |extended| {
+            _ = try kind.appendToStore(self.types_store, self.scratch.rowList(kind, "only_in_a_").sliceRange(extended));
         }
-        if (post.mb_b_extended_tags) |extended_tags| {
-            _ = try self.types_store.appendTags(
-                self.scratch.only_in_b_tags.sliceRange(extended_tags),
-            );
+        if (mb_b_extended) |extended| {
+            _ = try kind.appendToStore(self.types_store, self.scratch.rowList(kind, "only_in_b_").sliceRange(extended));
         }
 
-        try self.merge(&post.vars, Content{ .structure = FlatType{ .tag_union = .{
-            .tags = self.types_store.tags.rangeToEnd(range_start),
-            .ext = post.ext,
-        } } });
+        try self.merge(vars, kind.content(kind.row(kind.storeEntries(self.types_store).rangeToEnd(range_start), ext)));
+    }
+
+    /// A fresh row holding `entries` over `ext`.
+    fn freshRow(self: *Self, comptime kind: RowKind, vars: *const ResolvedVarDescs, entries: []const kind.Entry(), ext: Var) std.mem.Allocator.Error!Var {
+        const range = try kind.appendToStore(self.types_store, entries);
+        return try self.fresh(vars, kind.content(kind.row(range, ext)));
     }
 
     fn unifyTagUnionWithNominal(
@@ -2716,12 +2555,13 @@ const Unifier = struct {
 
         // First, unwrap all fields for record, erroring if we encounter an
         // invalid record ext var
-        const a_gathered_fields = try self.gatherRecordFields(a_fields, a_ext);
-        const b_gathered_fields = try self.gatherRecordFields(b_fields, b_ext);
+        const a_gathered_fields = try self.gatherRow(.record, .{ .fields = a_fields, .ext = a_ext });
+        const b_gathered_fields = try self.gatherRow(.record, .{ .fields = b_fields, .ext = b_ext });
         try self.relateChainDuplicateFields(vars);
 
         // Then partition the fields
-        const partitioned = try self.partitionFields(
+        const partitioned = try self.partitionRow(
+            .record,
             self.scratch,
             a_gathered_fields.range,
             b_gathered_fields.range,
@@ -2731,7 +2571,7 @@ const Unifier = struct {
         const a_has_uniq_fields = partitioned.only_in_a.len() > 0;
         const b_has_uniq_fields = partitioned.only_in_b.len() > 0;
 
-        var fields_ext: FieldsExtension = .exactly_the_same;
+        var fields_ext: RowExtension = .exactly_the_same;
         if (a_has_uniq_fields and b_has_uniq_fields) {
             fields_ext = .both_extend;
         } else if (a_has_uniq_fields) {
@@ -2762,13 +2602,7 @@ const Unifier = struct {
             .a_extends_b => {
                 // Create a new variable of a record with only a's uniq fields
                 // This copies fields from scratch into type_store
-                const only_in_a_fields_range = try self.types_store.appendRecordFields(
-                    self.scratch.only_in_a_fields.sliceRange(partitioned.only_in_a),
-                );
-                const only_in_a_var = try self.fresh(vars, Content{ .structure = FlatType{ .record = .{
-                    .fields = only_in_a_fields_range,
-                    .ext = a_gathered_ext,
-                } } });
+                const only_in_a_var = try self.freshRow(.record, vars, self.scratch.only_in_a_fields.sliceRange(partitioned.only_in_a), a_gathered_ext);
 
                 // Unify shared fields
                 // This copies fields from scratch into type_store
@@ -2786,13 +2620,7 @@ const Unifier = struct {
             .b_extends_a => {
                 // Create a new variable of a record with only b's uniq fields
                 // This copies fields from scratch into type_store
-                const only_in_b_fields_range = try self.types_store.appendRecordFields(
-                    self.scratch.only_in_b_fields.sliceRange(partitioned.only_in_b),
-                );
-                const only_in_b_var = try self.fresh(vars, Content{ .structure = FlatType{ .record = .{
-                    .fields = only_in_b_fields_range,
-                    .ext = b_gathered_ext,
-                } } });
+                const only_in_b_var = try self.freshRow(.record, vars, self.scratch.only_in_b_fields.sliceRange(partitioned.only_in_b), b_gathered_ext);
 
                 // Unify shared fields
                 // This copies fields from scratch into type_store
@@ -2813,23 +2641,11 @@ const Unifier = struct {
 
                 // Create a new variable of a record with only a's uniq fields
                 // This copies fields from scratch into type_store
-                const only_in_a_fields_range = try self.types_store.appendRecordFields(
-                    self.scratch.only_in_a_fields.sliceRange(partitioned.only_in_a),
-                );
-                const only_in_a_var = try self.fresh(vars, Content{ .structure = FlatType{ .record = .{
-                    .fields = only_in_a_fields_range,
-                    .ext = new_ext_var,
-                } } });
+                const only_in_a_var = try self.freshRow(.record, vars, self.scratch.only_in_a_fields.sliceRange(partitioned.only_in_a), new_ext_var);
 
                 // Create a new variable of a record with only b's uniq fields
                 // This copies fields from scratch into type_store
-                const only_in_b_fields_range = try self.types_store.appendRecordFields(
-                    self.scratch.only_in_b_fields.sliceRange(partitioned.only_in_b),
-                );
-                const only_in_b_var = try self.fresh(vars, Content{ .structure = FlatType{ .record = .{
-                    .fields = only_in_b_fields_range,
-                    .ext = new_ext_var,
-                } } });
+                const only_in_b_var = try self.freshRow(.record, vars, self.scratch.only_in_b_fields.sliceRange(partitioned.only_in_b), new_ext_var);
 
                 // Unify shared fields
                 // This copies fields from scratch into type_store
@@ -2850,20 +2666,11 @@ const Unifier = struct {
         }
     }
 
-    const FieldsExtension = enum { exactly_the_same, a_extends_b, b_extends_a, both_extend };
+    const RowExtension = enum { exactly_the_same, a_extends_b, b_extends_a, both_extend };
 
-    const GatheredFields = struct { ext: Var, range: RecordFieldSafeList.Range };
-
-    /// Recursively unwraps the fields of an extensible record, flattening all visible fields
-    /// into `scratch.gathered_fields` and following through:
-    /// * aliases (by chasing `.backing_var`)
-    /// * record extension chains (via nested `.record.ext`)
-    ///
-    /// Returns:
-    /// * a `Range` indicating the location of the gathered fields in `gathered_fields`
-    /// * the final tail extension variable, which is either a flex var or an empty record
-    ///
-    /// Errors if it encounters a malformed or invalid extension (e.g. a non-record type).
+    fn GatheredRow(comptime kind: RowKind) type {
+        return struct { ext: Var, range: kind.Entry().SafeList.Range };
+    }
     /// A field repeated along one row's extension chain is the same field:
     /// its value types and kinds are equal exactly (design.md "Row Union
     /// Normalization"), with no relation-specific kind relaxation.
@@ -2910,145 +2717,146 @@ const Unifier = struct {
         }
     }
 
-    fn gatherRecordFields(self: *Self, record_fields: RecordField.SafeMultiList.Range, record_ext: Var) Error!GatheredFields {
-        // first, copy from the store's MultiList record fields array into scratch's
-        // regular list, capturing the insertion range
-        var range = try self.scratch.copyGatherFieldsFromMultiList(
-            &self.types_store.record_fields,
-            record_fields,
+    /// Recursively unwraps the entries of an extensible row, flattening all visible entries
+    /// into the kind's gathered scratch list and following through:
+    /// * aliases (by chasing `.backing_var`)
+    /// * row extension chains (via nested `.ext`)
+    ///
+    /// Returns:
+    /// * a `Range` indicating the location of the gathered entries in the gathered list
+    /// * the final tail extension variable, which is either a flex var or an empty row
+    ///
+    /// An entry repeated along the chain keeps its first occurrence here;
+    /// `relateChainDuplicateFields` / `relateChainDuplicateTags` relates each repeat to it.
+    fn gatherRow(self: *Self, comptime kind: RowKind, start: kind.Row()) Error!GatheredRow(kind) {
+        // first, copy from the store's MultiList into scratch's regular list,
+        // capturing the insertion range
+        var range = try self.scratch.copyGatherFromMultiList(
+            kind,
+            kind.storeEntries(self.types_store),
+            kind.entriesOf(start),
         );
 
-        // A field repeated along the chain keeps its first occurrence here;
-        // `relateChainDuplicateFields` relates each repeat to it.
-
-        // Recursively gather fields from extensions
-        var ext = record_ext;
-        var guard = types_mod.debug.IterationGuard.init("gatherRecordFields");
+        // then loop gathering extension entries
+        var ext = start.ext;
+        var guard = types_mod.debug.IterationGuard.init("gatherRow");
         while (true) {
             guard.tick();
             switch (self.types_store.resolveVar(ext).desc.content) {
-                .flex, .rigid => return .{ .ext = ext, .range = range },
                 .alias => |alias| {
                     ext = self.types_store.getAliasBackingVar(alias);
                 },
                 .structure => |flat_type| {
-                    switch (flat_type) {
-                        .record => |ext_record| {
-                            const next_fields = self.types_store.record_fields.sliceRange(ext_record.fields);
-
-                            // Merge extension fields while maintaining sorted order
-                            try self.scratch.mergeSortedExtensionFields(
-                                &range,
-                                next_fields.items(.name),
-                                next_fields.items(.presence),
-                                self.ident_store,
-                            );
-
-                            ext = ext_record.ext;
-                        },
-                        .tuple,
-                        .nominal_type,
-                        .fn_pure,
-                        .fn_effectful,
-                        .fn_unbound,
-                        .empty_record,
-                        .tag_union,
-                        .empty_tag_union,
-                        => return .{ .ext = ext, .range = range },
-                    }
+                    const ext_row = kind.rowOf(flat_type) orelse return .{ .ext = ext, .range = range };
+                    // Merge extension entries while maintaining sorted order
+                    try self.mergeRowEntriesIntoScratch(kind, &range, kind.entriesOf(ext_row));
+                    ext = ext_row.ext;
                 },
-                // A presence variable can never be a record extension tail.
-                .field_presence => return .{ .ext = ext, .range = range },
-                .err => return .{ .ext = ext, .range = range },
+                // A presence variable can never be a row extension tail.
+                .flex, .rigid, .field_presence, .err => return .{ .ext = ext, .range = range },
             }
         }
     }
 
-    const PartitionedRecordFields = struct {
-        only_in_a: RecordFieldSafeList.Range,
-        only_in_b: RecordFieldSafeList.Range,
-        in_both: TwoRecordFieldsSafeList.Range,
-    };
+    fn PartitionedRow(comptime kind: RowKind) type {
+        return struct {
+            only_in_a: kind.Entry().SafeList.Range,
+            only_in_b: kind.Entry().SafeList.Range,
+            in_both: MkSafeList(kind.Two()).Range,
+        };
+    }
 
-    /// Given two ranges of record fields stored in `scratch.gathered_fields`, this function:
-    /// * sorts both slices in-place by field name
+    /// Given two ranges of entries stored in the kind's gathered scratch list, this function:
+    /// * sorts both slices in-place by name
     /// * partitions them into three disjoint groups:
-    ///     - fields only in `a`
-    ///     - fields only in `b`
-    ///     - fields present in both (by name)
+    ///     - entries only in `a`
+    ///     - entries only in `b`
+    ///     - entries present in both (by name)
     ///
-    /// These groups are stored into dedicated scratch buffers:
-    /// * `only_in_a_fields`
-    /// * `only_in_b_fields`
-    /// * `in_both_fields`
+    /// These groups are stored into the kind's dedicated scratch buffers
+    /// (`only_in_a_*`, `only_in_b_*`, `in_both_*`), and the result is a set
+    /// of ranges that can be used to slice those buffers.
     ///
-    /// The result is a set of ranges that can be used to slice those buffers.
-    ///
-    /// The caller must not mutate the field ranges between `gatherRecordFields` and `partitionFields`.
-    fn partitionFields(
+    /// The caller must not mutate the ranges between `gatherRow` and `partitionRow`.
+    fn partitionRow(
         self: *const Self,
+        comptime kind: RowKind,
         scratch: *Scratch,
-        a_fields_range: RecordFieldSafeList.Range,
-        b_fields_range: RecordFieldSafeList.Range,
-    ) std.mem.Allocator.Error!PartitionedRecordFields {
-        // Sort the fields (gathering maintains partial order, but unification may create unsorted unions)
-        const a_fields = scratch.gathered_fields.sliceRange(a_fields_range);
-        std.mem.sort(RecordField, a_fields, self.ident_store, comptime RecordField.sortByNameAsc);
-        const b_fields = scratch.gathered_fields.sliceRange(b_fields_range);
-        std.mem.sort(RecordField, b_fields, self.ident_store, comptime RecordField.sortByNameAsc);
+        a_range: kind.Entry().SafeList.Range,
+        b_range: kind.Entry().SafeList.Range,
+    ) std.mem.Allocator.Error!PartitionedRow(kind) {
+        const Entry = kind.Entry();
+        const gathered = scratch.rowList(kind, "gathered_");
+        const only_in_a = scratch.rowList(kind, "only_in_a_");
+        const only_in_b = scratch.rowList(kind, "only_in_b_");
+        const in_both = scratch.rowList(kind, "in_both_");
+
+        // Sort the entries (gathering maintains partial order, but unification may create unsorted rows)
+        const a_entries = gathered.sliceRange(a_range);
+        self.sortRowByName(Entry, a_entries);
+        const b_entries = gathered.sliceRange(b_range);
+        self.sortRowByName(Entry, b_entries);
 
         // Get the start of index of the new range
-        const a_fields_start: u32 = @intCast(scratch.only_in_a_fields.len());
-        const b_fields_start: u32 = @intCast(scratch.only_in_b_fields.len());
-        const both_fields_start: u32 = @intCast(scratch.in_both_fields.len());
+        const a_start: u32 = @intCast(only_in_a.len());
+        const b_start: u32 = @intCast(only_in_b.len());
+        const both_start: u32 = @intCast(in_both.len());
 
-        // Iterate over the fields in order, grouping them
+        // Iterate over the entries in order, grouping them
         var a_i: usize = 0;
         var b_i: usize = 0;
-        while (a_i < a_fields.len and b_i < b_fields.len) {
-            const a_next = a_fields[a_i];
-            const b_next = b_fields[b_i];
-            const ord = RecordField.orderByName(self.ident_store, a_next, b_next);
-            switch (ord) {
+        while (a_i < a_entries.len and b_i < b_entries.len) {
+            const a_next = a_entries[a_i];
+            const b_next = b_entries[b_i];
+            switch (Entry.orderByName(self.ident_store, a_next, b_next)) {
                 .eq => {
-                    _ = try scratch.in_both_fields.append(scratch.gpa, TwoRecordFields{
-                        .a = a_next,
-                        .b = b_next,
-                    });
-                    a_i = a_i + 1;
-                    b_i = b_i + 1;
+                    _ = try in_both.append(scratch.gpa, .{ .a = a_next, .b = b_next });
+                    a_i += 1;
+                    b_i += 1;
                 },
                 .lt => {
-                    _ = try scratch.only_in_a_fields.append(scratch.gpa, a_next);
-                    a_i = a_i + 1;
+                    _ = try only_in_a.append(scratch.gpa, a_next);
+                    a_i += 1;
                 },
                 .gt => {
-                    _ = try scratch.only_in_b_fields.append(scratch.gpa, b_next);
-                    b_i = b_i + 1;
+                    _ = try only_in_b.append(scratch.gpa, b_next);
+                    b_i += 1;
                 },
             }
         }
 
         // If b was shorter, add the extra a elems
-        while (a_i < a_fields.len) {
-            const a_next = a_fields[a_i];
-            _ = try scratch.only_in_a_fields.append(scratch.gpa, a_next);
-            a_i = a_i + 1;
+        while (a_i < a_entries.len) : (a_i += 1) {
+            _ = try only_in_a.append(scratch.gpa, a_entries[a_i]);
         }
 
         // If a was shorter, add the extra b elems
-        while (b_i < b_fields.len) {
-            const b_next = b_fields[b_i];
-            _ = try scratch.only_in_b_fields.append(scratch.gpa, b_next);
-            b_i = b_i + 1;
+        while (b_i < b_entries.len) : (b_i += 1) {
+            _ = try only_in_b.append(scratch.gpa, b_entries[b_i]);
         }
 
         // Return the ranges
         return .{
-            .only_in_a = scratch.only_in_a_fields.rangeToEnd(a_fields_start),
-            .only_in_b = scratch.only_in_b_fields.rangeToEnd(b_fields_start),
-            .in_both = scratch.in_both_fields.rangeToEnd(both_fields_start),
+            .only_in_a = only_in_a.rangeToEnd(a_start),
+            .only_in_b = only_in_b.rangeToEnd(b_start),
+            .in_both = in_both.rangeToEnd(both_start),
         };
+    }
+
+    /// Order entries by name text. A row gathered from one built by an
+    /// earlier merge is already ordered, and a merge of two ordered rows is
+    /// linear, so the ordered case is confirmed in one pass before sorting.
+    fn sortRowByName(self: *const Self, comptime Entry: type, entries: []Entry) void {
+        var ordered = true;
+        var index: usize = 1;
+        while (index < entries.len) : (index += 1) {
+            if (Entry.orderByName(self.ident_store, entries[index - 1], entries[index]) == .gt) {
+                ordered = false;
+                break;
+            }
+        }
+        if (ordered) return;
+        std.mem.sort(Entry, entries, self.ident_store, comptime Entry.sortByNameAsc);
     }
 
     /// An effect-polymorphic function's effect is the disjunction of the
@@ -3355,12 +3163,13 @@ const Unifier = struct {
         defer trace.end();
 
         // Unwrap all fields for tag unions, erroring on invalid ext var
-        const a_gathered_tags = try self.gatherTagUnionTags(a_tag_union);
-        const b_gathered_tags = try self.gatherTagUnionTags(b_tag_union);
+        const a_gathered_tags = try self.gatherRow(.tag_union, a_tag_union);
+        const b_gathered_tags = try self.gatherRow(.tag_union, b_tag_union);
         try self.relateChainDuplicateTags();
 
         // Then partition the tags
-        const partitioned = try self.partitionTags(
+        const partitioned = try self.partitionRow(
+            .tag_union,
             self.scratch,
             a_gathered_tags.range,
             b_gathered_tags.range,
@@ -3370,7 +3179,7 @@ const Unifier = struct {
         const a_has_uniq_tags = partitioned.only_in_a.len() > 0;
         const b_has_uniq_tags = partitioned.only_in_b.len() > 0;
 
-        var tags_ext: TagsExtension = .exactly_the_same;
+        var tags_ext: RowExtension = .exactly_the_same;
         if (a_has_uniq_tags and b_has_uniq_tags) {
             tags_ext = .both_extend;
         } else if (a_has_uniq_tags) {
@@ -3431,13 +3240,7 @@ const Unifier = struct {
             .a_extends_b => {
                 // Create a new variable of a tag_union with only a's uniq tags
                 // This copies tags from scratch into type_store
-                const only_in_a_tags_range = try self.types_store.appendTags(
-                    self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a),
-                );
-                const only_in_a_var = try self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
-                    .tags = only_in_a_tags_range,
-                    .ext = a_gathered_tags.ext,
-                } } });
+                const only_in_a_var = try self.freshRow(.tag_union, vars, self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a), a_gathered_tags.ext);
 
                 // Unify shared tags
                 // This copies tags from scratch into type_store
@@ -3455,13 +3258,7 @@ const Unifier = struct {
             .b_extends_a => {
                 // Create a new variable of a tag_union with only b's uniq tags
                 // This copies tags from scratch into type_store
-                const only_in_b_tags_range = try self.types_store.appendTags(
-                    self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b),
-                );
-                const only_in_b_var = try self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
-                    .tags = only_in_b_tags_range,
-                    .ext = b_gathered_tags.ext,
-                } } });
+                const only_in_b_var = try self.freshRow(.tag_union, vars, self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b), b_gathered_tags.ext);
 
                 // Unify shared tags
                 // This copies tags from scratch into type_store
@@ -3484,23 +3281,11 @@ const Unifier = struct {
 
                 // Create a new variable of a tag_union with only a's uniq tags
                 // Uses new_ext_var (not a_gathered_tags.ext) to prevent cycles
-                const only_in_a_tags_range = try self.types_store.appendTags(
-                    self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a),
-                );
-                const only_in_a_var = try self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
-                    .tags = only_in_a_tags_range,
-                    .ext = new_ext_var,
-                } } });
+                const only_in_a_var = try self.freshRow(.tag_union, vars, self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a), new_ext_var);
 
                 // Create a new variable of a tag_union with only b's uniq tags
                 // Uses new_ext_var (not b_gathered_tags.ext) to prevent cycles
-                const only_in_b_tags_range = try self.types_store.appendTags(
-                    self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b),
-                );
-                const only_in_b_var = try self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
-                    .tags = only_in_b_tags_range,
-                    .ext = new_ext_var,
-                } } });
+                const only_in_b_var = try self.freshRow(.tag_union, vars, self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b), new_ext_var);
 
                 // Unify shared tags
                 // Include all tags in the merged type - both shared and unique
@@ -3520,173 +3305,6 @@ const Unifier = struct {
                 try self.unifyGuarded(a_gathered_tags.ext, only_in_b_var);
             },
         }
-    }
-
-    const TagsExtension = enum { exactly_the_same, a_extends_b, b_extends_a, both_extend };
-
-    const GatheredTags = struct { ext: Var, range: TagSafeList.Range };
-
-    /// Recursively unwraps the tags of an extensible tag_union, flattening all visible tags
-    /// into `scratch.gathered_tags` and following through:
-    /// * aliases (by chasing `.backing_var`)
-    /// * tag_union extension chains (via nested `.tag_union.ext`)
-    ///
-    /// Returns:
-    /// * a `Range` indicating the location of the gathered tags in `gathered_tags`
-    /// * the final tail extension variable, which is either a flex var or an empty tag_union
-    ///
-    /// Errors if it encounters a malformed or invalid extension (e.g. a non-tag_union type).
-    fn gatherTagUnionTags(self: *Self, tag_union: TagUnion) Error!GatheredTags {
-        // first, copy from the store's MultiList record fields array into scratch's
-        // regular list, capturing the insertion range
-        var range = try self.scratch.copyGatherTagsFromMultiList(
-            &self.types_store.tags,
-            tag_union.tags,
-        );
-
-        // then loop gathering extensible tags
-        var ext_var = tag_union.ext;
-        var guard = types_mod.debug.IterationGuard.init("gatherTagUnionTags");
-        while (true) {
-            guard.tick();
-            switch (self.types_store.resolveVar(ext_var).desc.content) {
-                .flex, .rigid => {
-                    return .{ .ext = ext_var, .range = range };
-                },
-                .alias => |alias| {
-                    ext_var = self.types_store.getAliasBackingVar(alias);
-                },
-                .structure => |flat_type| {
-                    switch (flat_type) {
-                        .tag_union => |ext_tag_union| {
-                            const next_tags = self.types_store.tags.sliceRange(ext_tag_union.tags);
-
-                            // Merge extension tags while maintaining sorted order
-                            try self.scratch.mergeSortedExtensionTags(
-                                &range,
-                                next_tags.items(.name),
-                                next_tags.items(.args),
-                                self.ident_store,
-                            );
-
-                            ext_var = ext_tag_union.ext;
-                        },
-                        .record,
-                        .tuple,
-                        .nominal_type,
-                        .fn_pure,
-                        .fn_effectful,
-                        .fn_unbound,
-                        .empty_record,
-                        .empty_tag_union,
-                        => return .{ .ext = ext_var, .range = range },
-                    }
-                },
-                // A presence variable can never be a tag-union extension tail.
-                .field_presence => return .{ .ext = ext_var, .range = range },
-                .err => return .{ .ext = ext_var, .range = range },
-            }
-        }
-    }
-
-    const PartitionedTags = struct {
-        only_in_a: TagSafeList.Range,
-        only_in_b: TagSafeList.Range,
-        in_both: TwoTagsSafeList.Range,
-    };
-
-    /// Given two ranges of tag_union tags stored in `scratch.gathered_tags`, this function:
-    /// * sorts both slices in-place by tag name
-    /// * partitions them into three disjoint groups:
-    ///     - tags only in `a`
-    ///     - tags only in `b`
-    ///     - tags present in both (by name)
-    ///
-    /// These groups are stored into dedicated scratch buffers:
-    /// * `only_in_a_tags`
-    /// * `only_in_b_tags`
-    /// * `in_both_tags`
-    ///
-    /// The result is a set of ranges that can be used to slice those buffers.
-    ///
-    /// The caller must not mutate the field ranges between `gatherTagUnionTags` and `partitionTags`.
-    fn partitionTags(
-        self: *const Self,
-        scratch: *Scratch,
-        a_tags_range: TagSafeList.Range,
-        b_tags_range: TagSafeList.Range,
-    ) std.mem.Allocator.Error!PartitionedTags {
-        // Sort the tags (gathering maintains partial order, but unification may create unsorted unions)
-        const a_tags = scratch.gathered_tags.sliceRange(a_tags_range);
-        self.sortTagsByName(a_tags);
-        const b_tags = scratch.gathered_tags.sliceRange(b_tags_range);
-        self.sortTagsByName(b_tags);
-
-        // Get the start of index of the new range
-        const a_tags_start: u32 = @intCast(scratch.only_in_a_tags.len());
-        const b_tags_start: u32 = @intCast(scratch.only_in_b_tags.len());
-        const both_tags_start: u32 = @intCast(scratch.in_both_tags.len());
-
-        // Iterate over the tags in order, grouping them
-        var a_i: usize = 0;
-        var b_i: usize = 0;
-        while (a_i < a_tags.len and b_i < b_tags.len) {
-            const a_next = a_tags[a_i];
-            const b_next = b_tags[b_i];
-            const ord = Tag.orderByName(self.ident_store, a_next, b_next);
-            switch (ord) {
-                .eq => {
-                    _ = try scratch.in_both_tags.append(scratch.gpa, TwoTags{ .a = a_next, .b = b_next });
-                    a_i = a_i + 1;
-                    b_i = b_i + 1;
-                },
-                .lt => {
-                    _ = try scratch.only_in_a_tags.append(scratch.gpa, a_next);
-                    a_i = a_i + 1;
-                },
-                .gt => {
-                    _ = try scratch.only_in_b_tags.append(scratch.gpa, b_next);
-                    b_i = b_i + 1;
-                },
-            }
-        }
-
-        // If b was shorter, add the extra a elems
-        while (a_i < a_tags.len) {
-            const a_next = a_tags[a_i];
-            _ = try scratch.only_in_a_tags.append(scratch.gpa, a_next);
-            a_i = a_i + 1;
-        }
-
-        // If a was shorter, add the extra b elems
-        while (b_i < b_tags.len) {
-            const b_next = b_tags[b_i];
-            _ = try scratch.only_in_b_tags.append(scratch.gpa, b_next);
-            b_i = b_i + 1;
-        }
-
-        // Return the ranges
-        return .{
-            .only_in_a = scratch.only_in_a_tags.rangeToEnd(a_tags_start),
-            .only_in_b = scratch.only_in_b_tags.rangeToEnd(b_tags_start),
-            .in_both = scratch.in_both_tags.rangeToEnd(both_tags_start),
-        };
-    }
-
-    /// Order tags by name text. A row gathered from a union built by an
-    /// earlier merge is already ordered, and a merge of two ordered rows is
-    /// linear, so the ordered case is confirmed in one pass before sorting.
-    fn sortTagsByName(self: *const Self, tags: []Tag) void {
-        var ordered = true;
-        var index: usize = 1;
-        while (index < tags.len) : (index += 1) {
-            if (Tag.orderByName(self.ident_store, tags[index - 1], tags[index]) == .gt) {
-                ordered = false;
-                break;
-            }
-        }
-        if (ordered) return;
-        std.mem.sort(Tag, tags, self.ident_store, comptime Tag.sortByNameAsc);
     }
 
     /// Given a list of shared tags & a list of extended tags, unify the shared tags.
@@ -4317,32 +3935,19 @@ const WorkFrame = union(enum) {
     pub const SafeList = MkSafeList(@This());
 };
 
-/// Public helper functions for tests
-pub fn partitionFields(
+/// Public helper function for tests
+pub fn partitionRow(
+    comptime kind: RowKind,
     ident_store: *const Ident.Store,
     self_module_identity: base.ModuleIdentity.Idx,
     types_store: *types_mod.Store,
     scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
-    a_fields_range: RecordFieldSafeList.Range,
-    b_fields_range: RecordFieldSafeList.Range,
-) std.mem.Allocator.Error!Unifier.PartitionedRecordFields {
+    a_range: kind.Entry().SafeList.Range,
+    b_range: kind.Entry().SafeList.Range,
+) std.mem.Allocator.Error!Unifier.PartitionedRow(kind) {
     var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction, .ordinary, .none, null, null);
-    return try unifier.partitionFields(scratch, a_fields_range, b_fields_range);
-}
-
-/// Partitions tags from two tag ranges for unification.
-pub fn partitionTags(
-    ident_store: *const Ident.Store,
-    self_module_identity: base.ModuleIdentity.Idx,
-    types_store: *types_mod.Store,
-    scratch: *Scratch,
-    occurs_scratch: *occurs.Scratch,
-    a_tags_range: TagSafeList.Range,
-    b_tags_range: TagSafeList.Range,
-) std.mem.Allocator.Error!Unifier.PartitionedTags {
-    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction, .ordinary, .none, null, null);
-    return try unifier.partitionTags(scratch, a_tags_range, b_tags_range);
+    return try unifier.partitionRow(kind, scratch, a_range, b_range);
 }
 
 const TwoRecordFields = struct {
@@ -4352,17 +3957,128 @@ const TwoRecordFields = struct {
 };
 const TwoRecordFieldsSafeList = MkSafeList(TwoRecordFields);
 
-/// A record field that reappears further along its row's extension chain.
-pub const ChainDuplicateField = struct {
-    first: RecordField.Presence,
-    repeated: RecordField.Presence,
+/// The two row families the unifier gathers, partitions, and merges with the
+/// same helpers: record fields and tag-union tags. A helper generic over the
+/// family takes the kind at comptime and reaches the family's types, type
+/// store list, and scratch lists through these accessors.
+const RowKind = enum {
+    record,
+    tag_union,
+
+    /// The row content: a range of entries in the type store plus an extension.
+    fn Row(comptime kind: RowKind) type {
+        return switch (kind) {
+            .record => types_mod.Record,
+            .tag_union => TagUnion,
+        };
+    }
+
+    /// One named entry of a row.
+    fn Entry(comptime kind: RowKind) type {
+        return switch (kind) {
+            .record => RecordField,
+            .tag_union => Tag,
+        };
+    }
+
+    /// What an entry carries besides its name.
+    fn Payload(comptime kind: RowKind) type {
+        return switch (kind) {
+            .record => RecordField.Presence,
+            .tag_union => Var.SafeList.Range,
+        };
+    }
+
+    /// Same-named entries from the two operand rows.
+    fn Two(comptime kind: RowKind) type {
+        return switch (kind) {
+            .record => TwoRecordFields,
+            .tag_union => TwoTags,
+        };
+    }
+
+    /// The entry field holding the payload.
+    fn payloadField(comptime kind: RowKind) std.meta.FieldEnum(kind.Entry()) {
+        return switch (kind) {
+            .record => .presence,
+            .tag_union => .args,
+        };
+    }
+
+    /// The name of the row field holding its entries, which also suffixes the
+    /// family's scratch lists (`gathered_fields` / `gathered_tags`, ...).
+    fn suffix(comptime kind: RowKind) []const u8 {
+        return switch (kind) {
+            .record => "fields",
+            .tag_union => "tags",
+        };
+    }
+
+    fn entry(comptime kind: RowKind, name: Ident.Idx, payload: kind.Payload()) kind.Entry() {
+        return switch (kind) {
+            .record => .{ .name = name, .presence = payload },
+            .tag_union => .{ .name = name, .args = payload },
+        };
+    }
+
+    fn payloadOf(comptime kind: RowKind, e: kind.Entry()) kind.Payload() {
+        return @field(e, @tagName(kind.payloadField()));
+    }
+
+    fn row(comptime kind: RowKind, entries: kind.Entry().SafeMultiList.Range, ext: Var) kind.Row() {
+        return switch (kind) {
+            .record => .{ .fields = entries, .ext = ext },
+            .tag_union => .{ .tags = entries, .ext = ext },
+        };
+    }
+
+    fn entriesOf(comptime kind: RowKind, r: kind.Row()) kind.Entry().SafeMultiList.Range {
+        return @field(r, kind.suffix());
+    }
+
+    /// The row of this kind that `flat_type` carries, if it is one.
+    fn rowOf(comptime kind: RowKind, flat_type: FlatType) ?kind.Row() {
+        return switch (flat_type) {
+            .record => |record| if (kind == .record) record else null,
+            .tag_union => |tag_union| if (kind == .tag_union) tag_union else null,
+            .tuple,
+            .nominal_type,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            .empty_tag_union,
+            => null,
+        };
+    }
+
+    fn content(comptime kind: RowKind, r: kind.Row()) Content {
+        return Content{ .structure = @unionInit(FlatType, @tagName(kind), r) };
+    }
+
+    /// The type store's list of this family's entries.
+    fn storeEntries(comptime kind: RowKind, store: *types_mod.Store) *kind.Entry().SafeMultiList {
+        return switch (kind) {
+            .record => &store.record_fields,
+            .tag_union => &store.tags,
+        };
+    }
+
+    fn appendToStore(comptime kind: RowKind, store: *types_mod.Store, entries: []const kind.Entry()) std.mem.Allocator.Error!kind.Entry().SafeMultiList.Range {
+        return switch (kind) {
+            .record => store.appendRecordFields(entries),
+            .tag_union => store.appendTags(entries),
+        };
+    }
 };
 
-/// A tag that reappears further along its row's extension chain.
-pub const ChainDuplicateTag = struct {
-    first: Var.SafeList.Range,
-    repeated: Var.SafeList.Range,
-};
+/// An entry that reappears further along its row's extension chain.
+fn ChainDuplicate(comptime kind: RowKind) type {
+    return struct {
+        first: kind.Payload(),
+        repeated: kind.Payload(),
+    };
+}
 
 /// A tag a unification refused to add to a bounded annotation extension.
 pub const BoundedRowViolation = struct {
@@ -4380,11 +4096,11 @@ const VisitedPairKey = struct { low: u32, high: u32 };
 /// * `fresh_vars`: type variables created during a unification pass
 /// * For records
 ///   * `gathered_fields`: accumulated record fields from recursive extensions
-///   * `only_in_a_fields`, `only_in_b_fields`: disjoint fields after `partitionFields`
+///   * `only_in_a_fields`, `only_in_b_fields`: disjoint fields after `partitionRow`
 ///   * `in_both_fields`: shared fields with matching names
 /// * For tag unions
 ///   * `gathered_tags`: accumulated tags from recursive extensions
-///   * `only_in_a_tags`, `only_in_b_tags`: disjoint tags after `partitionTags`
+///   * `only_in_a_tags`, `only_in_b_tags`: disjoint tags after `partitionRow`
 ///   * `in_both_tags`: shared tags with matching names
 /// * For occurs:
 ///   * `occurs_scratch`: Scratch data need by occurs
@@ -4403,10 +4119,10 @@ const VisitedPairKey = struct { low: u32, high: u32 };
 ///    high
 ///
 /// NOTE: Record fields and tags are merged in sorted order during gathering
-/// (via mergeSortedExtensionFields/mergeSortedExtensionTags). However, unification
-/// itself creates new tag unions that may not be sorted, so partitionFields/partitionTags
-/// still perform a final sort. To fully eliminate these sorts, we would need to ensure
-/// unifySharedTags also produces sorted output.
+/// (via mergeSortedExtension). However, unification itself creates new tag
+/// unions that may not be sorted, so partitionRow still performs a final sort.
+/// To fully eliminate these sorts, we would need to ensure unifySharedTags also
+/// produces sorted output.
 pub const Scratch = struct {
     const Self = @This();
 
@@ -4437,8 +4153,8 @@ pub const Scratch = struct {
     /// A label repeated along one row's extension chain names one field or
     /// tag (design.md "Row Union Normalization"). Gathering keeps the first
     /// occurrence; these pairs relate each repeated occurrence to it.
-    chain_duplicate_fields: std.ArrayListUnmanaged(ChainDuplicateField),
-    chain_duplicate_tags: std.ArrayListUnmanaged(ChainDuplicateTag),
+    chain_duplicate_fields: std.ArrayListUnmanaged(ChainDuplicate(.record)),
+    chain_duplicate_tags: std.ArrayListUnmanaged(ChainDuplicate(.tag_union)),
 
     // records - used internal by unification
     gathered_tags: TagSafeList,
@@ -4717,75 +4433,83 @@ pub const Scratch = struct {
 
     // helpers //
 
-    /// Given a multi list of record fields and a range, copy from the multi list
-    /// into scratch's gathered fields array
-    fn copyGatherFieldsFromMultiList(
-        self: *Self,
-        multi_list: *const RecordFieldSafeMultiList,
-        range: RecordFieldSafeMultiList.Range,
-    ) std.mem.Allocator.Error!RecordFieldSafeList.Range {
-        const start_int = self.gathered_fields.len();
-        const record_fields_slice = multi_list.sliceRange(range);
-        for (record_fields_slice.items(.name), record_fields_slice.items(.presence)) |name, presence| {
-            _ = try self.gathered_fields.append(
-                self.gpa,
-                RecordField{ .name = name, .presence = presence },
-            );
-        }
-        return self.gathered_fields.rangeToEnd(@intCast(start_int));
+    /// One of the kind's scratch lists, named by prefix: `gathered_`,
+    /// `only_in_a_`, `only_in_b_`, `in_both_`, or `chain_duplicate_`.
+    fn rowList(self: *Self, comptime kind: RowKind, comptime prefix: []const u8) *@FieldType(Self, prefix ++ kind.suffix()) {
+        return &@field(self, prefix ++ kind.suffix());
     }
 
-    /// Merge sorted extension fields into an already-sorted gathered range.
-    /// Maintains sorted order; a field already gathered keeps its first
-    /// occurrence, and the repeat is recorded in `chain_duplicate_fields`.
-    /// The range is updated in-place to reflect the new count.
-    /// Returns whether any new fields were added.
-    fn mergeSortedExtensionFields(
+    /// Given a multi list of row entries and a range, copy from the multi list
+    /// into the kind's gathered scratch list
+    fn copyGatherFromMultiList(
         self: *Self,
-        range: *RecordFieldSafeList.Range,
+        comptime kind: RowKind,
+        multi_list: *const kind.Entry().SafeMultiList,
+        range: kind.Entry().SafeMultiList.Range,
+    ) std.mem.Allocator.Error!kind.Entry().SafeList.Range {
+        const gathered = self.rowList(kind, "gathered_");
+        const start_int = gathered.len();
+        const slice = multi_list.sliceRange(range);
+        for (slice.items(.name), slice.items(kind.payloadField())) |name, payload| {
+            _ = try gathered.append(self.gpa, kind.entry(name, payload));
+        }
+        return gathered.rangeToEnd(@intCast(start_int));
+    }
+
+    /// Merge sorted extension entries into an already-sorted gathered range.
+    /// Maintains sorted order; an entry already gathered keeps its first
+    /// occurrence, and the repeat is recorded in the kind's chain-duplicate list.
+    /// The range is updated in-place to reflect the new count.
+    fn mergeSortedExtension(
+        self: *Self,
+        comptime kind: RowKind,
+        range: *kind.Entry().SafeList.Range,
         ext_names: []const Ident.Idx,
-        ext_presences: []const RecordField.Presence,
+        ext_payloads: []const kind.Payload(),
         ident_store: *const Ident.Store,
     ) std.mem.Allocator.Error!void {
-        std.debug.assert(ext_names.len == ext_presences.len);
+        std.debug.assert(ext_names.len == ext_payloads.len);
         if (ext_names.len == 0) return;
 
-        // Get current gathered fields
-        const current_fields = self.gathered_fields.sliceRange(range.*);
-        const current_len = current_fields.len;
+        const gathered = self.rowList(kind, "gathered_");
+        const chain_duplicates = self.rowList(kind, "chain_duplicate_");
 
-        // Count the extension fields that are not already gathered, recording
+        // Get current gathered entries
+        const current = gathered.sliceRange(range.*);
+        const current_len = current.len;
+
+        // Count the extension entries that are not already gathered, recording
         // each repeated one against its first occurrence.
         var new_count: usize = 0;
-        for (ext_names, ext_presences) |ext_name, ext_presence| {
-            const first = for (current_fields) |existing| {
+        for (ext_names, ext_payloads) |ext_name, ext_payload| {
+            const first = for (current) |existing| {
                 if (existing.name.eql(ext_name)) break existing;
             } else null;
             if (first) |existing| {
-                try self.chain_duplicate_fields.append(self.gpa, .{ .first = existing.presence, .repeated = ext_presence });
+                try chain_duplicates.append(self.gpa, .{ .first = kind.payloadOf(existing), .repeated = ext_payload });
             } else new_count += 1;
         }
 
         if (new_count == 0) return;
 
         // Allocate space for merged result
-        try self.gathered_fields.items.ensureUnusedCapacity(self.gpa, new_count);
+        try gathered.items.ensureUnusedCapacity(self.gpa, new_count);
 
-        // IMPORTANT: re-slice after the reserve—growing `gathered_fields`
-        // can reallocate its backing array, invalidating `current_fields`.
-        const current_fields_after = self.gathered_fields.sliceRange(.{ .start = range.start, .count = @intCast(current_len) });
+        // IMPORTANT: re-slice after the reserve—growing the gathered list can
+        // reallocate its backing array, invalidating `current`.
+        const current_after = gathered.sliceRange(.{ .start = range.start, .count = @intCast(current_len) });
 
         // We need to merge in-place. Strategy:
-        // 1. Append all new (non-duplicate) extension fields to the end
+        // 1. Append all new (non-duplicate) extension entries to the end
         // 2. Then do an in-place merge of the two sorted regions
 
-        // Append non-duplicate extension fields
-        for (ext_names, ext_presences) |name, presence| {
-            const is_dup = for (current_fields_after) |existing| {
+        // Append non-duplicate extension entries
+        for (ext_names, ext_payloads) |name, payload| {
+            const is_dup = for (current_after) |existing| {
                 if (existing.name.eql(name)) break true;
             } else false;
             if (!is_dup) {
-                self.gathered_fields.items.appendAssumeCapacity(RecordField{ .name = name, .presence = presence });
+                gathered.items.appendAssumeCapacity(kind.entry(name, payload));
             }
         }
 
@@ -4794,101 +4518,18 @@ pub const Scratch = struct {
         // Get the slice starting from range.start with the new total length
         const start_idx: usize = @backingInt(range.start);
         const total_len = current_len + new_count;
-        const items = self.gathered_fields.items.items[start_idx..][0..total_len];
+        const items = gathered.items.items[start_idx..][0..total_len];
 
         // In-place merge: we have [sorted_left | sorted_right]
-        // Use rotation-based merge which is O(n) for this case
-        inPlaceMergeFields(items, current_len, ident_store);
+        inPlaceMergeRow(kind.Entry(), items, current_len, ident_store);
 
         // Update range count
         range.count = @intCast(total_len);
     }
 
-    /// Merge sorted extension tags into an already-sorted gathered range.
-    /// Maintains sorted order; a tag already gathered keeps its first
-    /// occurrence, and the repeat is recorded in `chain_duplicate_tags`.
-    fn mergeSortedExtensionTags(
-        self: *Self,
-        range: *TagSafeList.Range,
-        ext_names: []const Ident.Idx,
-        ext_args: []const Var.SafeList.Range,
-        ident_store: *const Ident.Store,
-    ) std.mem.Allocator.Error!void {
-        std.debug.assert(ext_names.len == ext_args.len);
-        if (ext_names.len == 0) return;
-
-        // Get current gathered tags
-        const current_tags = self.gathered_tags.sliceRange(range.*);
-        const current_len = current_tags.len;
-
-        // Count the extension tags that are not already gathered, recording
-        // each repeated one against its first occurrence.
-        var new_count: usize = 0;
-        for (ext_names, ext_args) |ext_name, args| {
-            const first = for (current_tags) |existing| {
-                if (existing.name.eql(ext_name)) break existing;
-            } else null;
-            if (first) |existing| {
-                try self.chain_duplicate_tags.append(self.gpa, .{ .first = existing.args, .repeated = args });
-            } else new_count += 1;
-        }
-
-        if (new_count == 0) return;
-
-        // Allocate space for merged result
-        try self.gathered_tags.items.ensureUnusedCapacity(self.gpa, new_count);
-
-        // IMPORTANT: re-slice after the reserve—growing `gathered_tags` can
-        // reallocate its backing array, invalidating `current_tags`.
-        const current_tags_after = self.gathered_tags.sliceRange(.{ .start = range.start, .count = @intCast(current_len) });
-
-        // Append non-duplicate extension tags
-        for (ext_names, ext_args) |name, args| {
-            const is_dup = for (current_tags_after) |existing| {
-                if (existing.name.eql(name)) break true;
-            } else false;
-            if (!is_dup) {
-                self.gathered_tags.items.appendAssumeCapacity(Tag{ .name = name, .args = args });
-            }
-        }
-
-        // In-place merge
-        const start_idx: usize = @backingInt(range.start);
-        const total_len = current_len + new_count;
-        const items = self.gathered_tags.items.items[start_idx..][0..total_len];
-
-        inPlaceMergeTags(items, current_len, ident_store);
-
-        // Update range count
-        range.count = @intCast(total_len);
-    }
-
-    /// Given a multi list of tag and a range, copy from the multi list
-    /// into scratch's gathered fields array
-    fn copyGatherTagsFromMultiList(
-        self: *Self,
-        multi_list: *const TagSafeMultiList,
-        range: TagSafeMultiList.Range,
-    ) std.mem.Allocator.Error!TagSafeList.Range {
-        const start_int = self.gathered_tags.len();
-        const tag_slice = multi_list.sliceRange(range);
-        for (tag_slice.items(.name), tag_slice.items(.args)) |ident, args| {
-            _ = try self.gathered_tags.append(
-                self.gpa,
-                Tag{ .name = ident, .args = args },
-            );
-        }
-        return self.gathered_tags.rangeToEnd(@intCast(start_int));
-    }
-
     /// Exposed for tests
-    pub fn appendSliceGatheredFields(self: *Self, fields: []const RecordField) std.mem.Allocator.Error!RecordFieldSafeList.Range {
-        return try self.gathered_fields.appendSlice(self.gpa, fields);
-    }
-
-    /// Exposed for tests
-    pub fn appendSliceGatheredTags(self: *Self, fields: []const Tag) std.mem.Allocator.Error!TagSafeList.Range {
-        return try self.gathered_tags.appendSlice(self.gpa, fields);
+    pub fn appendSliceGathered(self: *Self, comptime kind: RowKind, entries: []const kind.Entry()) std.mem.Allocator.Error!kind.Entry().SafeList.Range {
+        return try self.rowList(kind, "gathered_").appendSlice(self.gpa, entries);
     }
 };
 
@@ -4921,36 +4562,20 @@ fn sameNominalIdentity(a: NominalType, b: NominalType) bool {
     return a.ident.ident_idx.eql(b.ident.ident_idx);
 }
 
-/// In-place merge of two sorted regions of record fields.
+/// In-place merge of two sorted regions of row entries.
 /// Given an array [left_sorted | right_sorted], produces [merged_sorted].
 /// Uses insertion sort approach which is O(n*m) but efficient for small arrays.
-fn inPlaceMergeFields(items: []RecordField, left_len: usize, ident_store: *const Ident.Store) void {
+fn inPlaceMergeRow(comptime Entry: type, items: []Entry, left_len: usize, ident_store: *const Ident.Store) void {
     if (left_len == 0 or left_len == items.len) return;
 
     // Simple approach: insertion sort the right portion into the left
-    // This is O(n*m) but records typically have few fields
+    // This is O(n*m) but rows typically have few entries
     var i = left_len;
     while (i < items.len) : (i += 1) {
         const key = items[i];
         var j = i;
         // Shift elements right until we find the correct position
-        while (j > 0 and RecordField.orderByName(ident_store, items[j - 1], key) == .gt) {
-            items[j] = items[j - 1];
-            j -= 1;
-        }
-        items[j] = key;
-    }
-}
-
-/// In-place merge of two sorted regions of tags.
-fn inPlaceMergeTags(items: []Tag, left_len: usize, ident_store: *const Ident.Store) void {
-    if (left_len == 0 or left_len == items.len) return;
-
-    var i = left_len;
-    while (i < items.len) : (i += 1) {
-        const key = items[i];
-        var j = i;
-        while (j > 0 and Tag.orderByName(ident_store, items[j - 1], key) == .gt) {
+        while (j > 0 and Entry.orderByName(ident_store, items[j - 1], key) == .gt) {
             items[j] = items[j - 1];
             j -= 1;
         }
