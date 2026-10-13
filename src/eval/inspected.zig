@@ -1325,6 +1325,131 @@ fn publishProgramForComptimeProblemsImpl(
     return .no_problems;
 }
 
+/// Result of running the top-level `expect` statements of a program.
+pub const TopLevelExpectOutcome = union(enum) {
+    passed: usize,
+    failed: struct { failed: usize, total: usize },
+    no_expects,
+    checked_errors,
+};
+
+/// Lower the top-level `expect` statements of a module as test roots and run
+/// each root in the LIR interpreter.
+pub fn runTopLevelExpects(
+    allocator: Allocator,
+    io: std.Io,
+    source: []const u8,
+    imports: []const ModuleSource,
+) Error!TopLevelExpectOutcome {
+    return runTopLevelExpectsImpl(allocator, io, source, imports, null);
+}
+
+/// Same as `runTopLevelExpects` but reuses a Builtin artifact the caller has
+/// already published.
+pub fn runTopLevelExpectsWithBuiltin(
+    allocator: Allocator,
+    io: std.Io,
+    source: []const u8,
+    imports: []const ModuleSource,
+    pre_published_builtin: PrePublishedBuiltin,
+) Error!TopLevelExpectOutcome {
+    return runTopLevelExpectsImpl(allocator, io, source, imports, pre_published_builtin);
+}
+
+fn runTopLevelExpectsImpl(
+    allocator: Allocator,
+    io: std.Io,
+    source: []const u8,
+    imports: []const ModuleSource,
+    pre_published_builtin: ?PrePublishedBuiltin,
+) Error!TopLevelExpectOutcome {
+    var resources = try parseAndCanonicalizeProgramWithRootMode(allocator, .module, source, imports, false, .published_roots_only, pre_published_builtin, null);
+    defer cleanupParseAndCanonical(allocator, resources);
+
+    if (try parsedResourcesHaveErrorDiagnostics(allocator, &resources)) return .checked_errors;
+
+    var selected = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
+    defer selected.deinit(allocator);
+    for (resources.checked_artifact.root_requests.requests) |root| {
+        if (root.kind != .test_expect) continue;
+        try selected.append(allocator, root);
+    }
+    if (selected.items.len == 0) return .no_expects;
+
+    var lowered = try lowerParsedProgramToLirWithOptions(allocator, io, &resources, .native, .{ .root_requests = selected.items });
+    defer lowered.deinit(allocator);
+
+    var runtime_env = RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+
+    var static_data = try @import("interpreter_static_data.zig").InterpreterStaticData.init(allocator, lowered.view.static_data, lowered.view.static_data_value_count);
+    defer static_data.deinit();
+    var static_strings = try Interpreter.buildStaticStrings(allocator, &lowered.view.store);
+    defer static_strings.deinit();
+
+    var interp = try Interpreter.initWithBoxyTables(
+        allocator,
+        &lowered.view.store,
+        &lowered.view.layouts,
+        boxy_runtime.BoxyTables.fromImageView(&lowered.view),
+        static_strings.view(),
+        runtime_env.get_ops(),
+    );
+    defer interp.deinit();
+    static_data.install(&interp);
+    static_data.ownByInterpreter(&interp);
+
+    // Every root proc is a `test_expect` root: lowering received only the
+    // selected requests.
+    const total = lowered.view.root_procs.len;
+    var failed: usize = 0;
+    for (lowered.view.root_procs) |root_proc| {
+        const proc = lowered.view.store.getProcSpec(root_proc);
+        const arg_locals = lowered.view.store.getLocalSpan(proc.args);
+        const arg_layouts = try allocator.alloc(LayoutIdx, arg_locals.len);
+        defer allocator.free(arg_layouts);
+        for (0..arg_locals.len) |i| {
+            arg_layouts[i] = lowered.view.store.getLocal(GuardedList.at(arg_locals, i)).layout_idx;
+        }
+
+        const expect_failures_before = countExpectFailedEvents(&runtime_env);
+        const passed = if (interp.eval(.{
+            .proc_id = root_proc,
+            .arg_layouts = arg_layouts,
+            .ret_layout = proc.ret_layout,
+        })) |result| switch (result) {
+            .value => |value| blk: {
+                const ok = value.read(u8) != 0;
+                interp.dropValue(value, proc.ret_layout);
+                break :blk ok;
+            },
+        } else |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.ComptimeExhaustiveness,
+            error.Crash,
+            error.DivisionByZero,
+            error.ExpectErr,
+            error.InvalidHostedFunctionSignature,
+            error.RuntimeError,
+            error.UnsupportedHostedFunction,
+            => false,
+        };
+        if (!passed or countExpectFailedEvents(&runtime_env) != expect_failures_before) failed += 1;
+    }
+
+    if (failed == 0) return .{ .passed = total };
+    return .{ .failed = .{ .failed = failed, .total = total } };
+}
+
+fn countExpectFailedEvents(runtime_env: *const RuntimeHostEnv) usize {
+    var count: usize = 0;
+    for (runtime_env.events.items) |event| switch (event) {
+        .expect_failed => count += 1,
+        .dbg, .crashed, .effect => {},
+    };
+    return count;
+}
+
 /// Publish a program for an interactive compile-time evaluation while retaining
 /// the exact checked resources that own both its diagnostics and finalized
 /// `ConstStore` values. Unlike the runtime inspected-program helpers, this does
@@ -1861,6 +1986,8 @@ const LowerToLirOptions = struct {
     /// Debug-only capture slot for the verifier's materialized Lambda Mono
     /// program.
     debug_materialized_out: ?*?lir.CheckedPipeline.LambdaMonoProgram = null,
+    /// Root requests to lower instead of the artifact's runtime requests.
+    root_requests: ?[]const check.CheckedArtifact.RootRequest = null,
 };
 
 fn lowerParsedProgramToLirWithOptions(
@@ -1933,7 +2060,7 @@ fn lowerCheckedRootWithViews(
             .root = check.CheckedArtifact.loweringView(root_module),
             .imports = import_views,
         },
-        .{ .requests = root_module.root_requests.runtime_requests },
+        .{ .requests = options.root_requests orelse root_module.root_requests.runtime_requests },
         .{
             .target_usize = target_usize,
             .specialization_strategy = options.specialization_strategy,

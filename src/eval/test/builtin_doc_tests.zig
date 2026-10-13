@@ -2,8 +2,8 @@
 //!
 //! For each block:
 //!   * It must pass `roc check` (driven by `parseAndCheckProgramForProblems`).
-//!   * If the block contains only top-level `expect` statements, those expects
-//!     are executed through checked-artifact compile-time evaluation.
+//!   * If the block contains only top-level `expect` statements, the block's
+//!     `test_expect` roots run in the LIR interpreter.
 //!   * Otherwise, the block is evaluated through `compileInspectedProgram`.
 //!
 //! When a block fails, the source is written to a debug file under
@@ -573,20 +573,50 @@ fn runCheck(
     return null;
 }
 
-/// Run an expect-only block through checked-artifact compile-time evaluation.
+/// Run the `test_expect` roots of an expect-only block in the LIR interpreter.
 /// This matches the path used by `roc test` for top-level expects.
 fn runExpects(allocator: Allocator, source: []const u8) BuiltinDocTestError!?[]u8 {
     const outcome = (if (prePublishedBuiltin()) |ppb|
-        test_helpers.publishProgramForComptimeProblemsWithBuiltin(allocator, .module, source, &.{}, ppb)
+        test_helpers.runTopLevelExpectsWithBuiltin(allocator, std.testing.io, source, &.{}, ppb)
     else
-        test_helpers.publishProgramForComptimeProblems(allocator, .module, source, &.{})) catch |err| {
-        return try dupeErr(allocator, "publishProgramForComptimeProblems: {s}", .{@errorName(err)});
+        test_helpers.runTopLevelExpects(allocator, std.testing.io, source, &.{})) catch |err| {
+        return try dupeErr(allocator, "runTopLevelExpects: {s}", .{@errorName(err)});
     };
 
     return switch (outcome) {
-        .no_problems => null,
-        .comptime_problems => try dupeErr(allocator, "at least one expect failed", .{}),
+        .passed => null,
+        .failed => |counts| try dupeErr(allocator, "{d} of {d} expects failed", .{ counts.failed, counts.total }),
+        .no_expects => try dupeErr(allocator, "expect block lowered no test roots", .{}),
+        .checked_errors => try dupeErr(allocator, "check produced diagnostics or problems", .{}),
     };
+}
+
+test "runExpects passes a true expect" {
+    const allocator = base.defaultGpa();
+    const message = try runExpects(allocator, "expect 1.I64 == 1\n");
+    defer if (message) |m| allocator.free(m);
+    try testing.expectEqual(@as(?[]u8, null), message);
+}
+
+test "runExpects fails a false expect" {
+    const allocator = base.defaultGpa();
+    const message = try runExpects(allocator, "expect 1.I64 == 2\n");
+    defer if (message) |m| allocator.free(m);
+    try testing.expectEqualStrings("1 of 1 expects failed", message orelse return error.TestUnexpectedResult);
+}
+
+test "runExpects counts each failed expect" {
+    const allocator = base.defaultGpa();
+    const message = try runExpects(allocator, "expect 1.I64 == 1\nexpect 1.I64 == 2\n");
+    defer if (message) |m| allocator.free(m);
+    try testing.expectEqualStrings("1 of 2 expects failed", message orelse return error.TestUnexpectedResult);
+}
+
+test "runExpects fails a false expect that calls a Builtin function" {
+    const allocator = base.defaultGpa();
+    const message = try runExpects(allocator, "expect List.first([3.I64]) == Ok(4)\n");
+    defer if (message) |m| allocator.free(m);
+    try testing.expect(message != null);
 }
 
 fn runEval(
