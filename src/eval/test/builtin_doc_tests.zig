@@ -593,36 +593,70 @@ fn runExpects(allocator: Allocator, source: []const u8) BuiltinDocTestError!?[]u
     };
 }
 
-test "runExpects passes a true expect" {
+fn expectRunExpectsMessage(source: []const u8, expected: ?[]const u8) BuiltinDocTestError!void {
     if (comptime !backend.host_lir_codegen_available) return error.SkipZigTest;
     const allocator = base.defaultGpa();
-    const message = try runExpects(allocator, "expect 1.I64 == 1\n");
+    const message = try runExpects(allocator, source);
     defer if (message) |m| allocator.free(m);
-    try testing.expectEqual(@as(?[]u8, null), message);
+    if (expected) |text| {
+        try testing.expectEqualStrings(text, message orelse return error.TestUnexpectedResult);
+    } else {
+        try testing.expectEqual(@as(?[]u8, null), message);
+    }
+}
+
+test "runExpects passes a true expect" {
+    try expectRunExpectsMessage("expect 1.I64 == 1\n", null);
 }
 
 test "runExpects fails a false expect" {
-    if (comptime !backend.host_lir_codegen_available) return error.SkipZigTest;
-    const allocator = base.defaultGpa();
-    const message = try runExpects(allocator, "expect 1.I64 == 2\n");
-    defer if (message) |m| allocator.free(m);
-    try testing.expectEqualStrings("1 of 1 expects failed", message orelse return error.TestUnexpectedResult);
+    try expectRunExpectsMessage("expect 1.I64 == 2\n", "1 of 1 expects failed");
 }
 
 test "runExpects counts each failed expect" {
-    if (comptime !backend.host_lir_codegen_available) return error.SkipZigTest;
-    const allocator = base.defaultGpa();
-    const message = try runExpects(allocator, "expect 1.I64 == 1\nexpect 1.I64 == 2\n");
-    defer if (message) |m| allocator.free(m);
-    try testing.expectEqualStrings("1 of 2 expects failed", message orelse return error.TestUnexpectedResult);
+    try expectRunExpectsMessage("expect 1.I64 == 1\nexpect 1.I64 == 2\n", "1 of 2 expects failed");
+}
+
+test "runExpects passes a true expect that calls a Builtin function" {
+    try expectRunExpectsMessage("expect List.first([3.I64]) == Ok(3)\n", null);
 }
 
 test "runExpects fails a false expect that calls a Builtin function" {
-    if (comptime !backend.host_lir_codegen_available) return error.SkipZigTest;
-    const allocator = base.defaultGpa();
-    const message = try runExpects(allocator, "expect List.first([3.I64]) == Ok(4)\n");
-    defer if (message) |m| allocator.free(m);
-    try testing.expect(message != null);
+    try expectRunExpectsMessage("expect List.first([3.I64]) == Ok(4)\n", "1 of 1 expects failed");
+}
+
+test "runExpects fails a true expect whose callee fails an inline expect" {
+    try expectRunExpectsMessage(
+        \\check = |n| {
+        \\    expect n == 2
+        \\    n
+        \\}
+        \\
+        \\expect check(1.I64) == 1
+        \\
+    , "1 of 1 expects failed");
+}
+
+test "runExpects fails an expect that crashes" {
+    try expectRunExpectsMessage(
+        \\boom : I64 -> Bool
+        \\boom = |_| crash "boom"
+        \\
+        \\expect boom(1)
+        \\
+    , "1 of 1 expects failed");
+}
+
+test "runExpects runs only expects in a block with a definition" {
+    try expectRunExpectsMessage("x = 1.I64\n\nexpect x == 2\n", "1 of 1 expects failed");
+}
+
+test "runExpects reports a block without expects" {
+    try expectRunExpectsMessage("x = 1.I64\n", "expect block lowered no test roots");
+}
+
+test "runExpects reports a block that fails checking" {
+    try expectRunExpectsMessage("expect 1.I64 == \"a\"\n", "check produced diagnostics or problems");
 }
 
 fn runEval(

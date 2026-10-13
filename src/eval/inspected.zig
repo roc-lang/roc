@@ -1400,7 +1400,7 @@ fn runTopLevelExpectsImpl(
         for (0..arg_locals.len) |arg_index| {
             arg_layouts[arg_index] = lowered.view.store.getLocal(GuardedList.at(arg_locals, arg_index)).layout_idx;
         }
-        const symbol_name = try std.fmt.allocPrintSentinel(allocator, "roc_test_expect_{d}", .{i}, 0);
+        const symbol_name = try std.fmt.allocPrintSentinel(allocator, "roc__test_expect_{d}", .{i}, 0);
         roots[i] = .{
             .symbol_name = symbol_name,
             .proc = root_proc,
