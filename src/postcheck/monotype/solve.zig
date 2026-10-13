@@ -7606,6 +7606,15 @@ pub const InstGraph = struct {
         return try sealer.sealNode(node);
     }
 
+    /// `sealNode` where each of `finished` is already a finished type of this
+    /// graph's store, so a component denoting one of them seals to it.
+    pub fn sealNodeOverFinished(self: *InstGraph, node: NodeId, finished: []const Type.TypeId) Allocator.Error!Type.TypeId {
+        var sealer = GraphTypeFinals.init(self);
+        defer sealer.deinit();
+        for (finished) |ty| try sealer.sealed_types.put(ty, ty);
+        return try sealer.sealNode(node);
+    }
+
     pub fn assertTypeHasNoActiveSnapshots(self: *InstGraph, ty: Type.TypeId) Allocator.Error!void {
         if (try self.typeHasActiveSnapshots(ty)) {
             Common.invariant("Monotype body draft retained an active type snapshot after sealing");
@@ -8094,8 +8103,8 @@ pub const GraphTypeFinals = struct {
     }
 
     fn typeEntry(self: *GraphTypeFinals, ty: Type.TypeId) Allocator.Error!SealEntry {
+        if (self.sealed_types.get(ty)) |existing| return .{ .done = existing };
         if (self.mode == .retained_type_view) {
-            if (self.sealed_types.get(ty)) |existing| return .{ .done = existing };
             if (try self.graph.types.isInterned(self.graph.name_store, ty)) return .{ .done = ty };
             return self.storeTypeEntry(ty);
         }
