@@ -1391,7 +1391,7 @@ fn computeOutcomeRestitution(
                 var next_state = walk;
                 // Only `assign_tag` witnesses a result discriminant; every
                 // other write to the returned local kills the witness first.
-                if (body_clone.writtenLocal(stmt)) |target| {
+                if (body_clone.writtenLocal(stmt.*)) |target| {
                     if (target == ret_local) next_state.discriminant = no_local;
                 }
 

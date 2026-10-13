@@ -18654,11 +18654,9 @@ const ProcBodyBuilder = struct {
     /// meaningless against the swapped module's stores, and a closed
     /// expression has no lambda context.
     ///
-    /// Binder state is swapped to fresh empty arrays for the duration
-    /// (`ensureBinderLocals` re-sizes them lazily against the swapped
-    /// module). This is
-    /// required even when `expr_module` is the current module: the caller's
-    /// binder arrays index the caller's pattern binders, and boxy binder
+    /// Binder state is swapped to a fresh empty binder map for the duration.
+    /// This is required even when `expr_module` is the current module: the
+    /// caller's binder map holds the caller's pattern binders, and boxy binder
     /// slots are write-once, so a second materialization of the same closed
     /// expression in one procedure body must not see the first's bindings.
     /// The replaced state lives on this frame, so nested materializations (a
@@ -41908,7 +41906,6 @@ const ProcBodyBuilder = struct {
         var pending: std.ArrayList(checked.CheckedPatternId) = .empty;
         defer pending.deinit(allocator);
         try pending.append(allocator, root);
-        if (walk != .match_descriptors) try self.ensureBinderLocals();
         while (pending.pop()) |pattern_id| {
             const pattern = self.module.checked_bodies.pattern(pattern_id);
             const children_start = pending.items.len;

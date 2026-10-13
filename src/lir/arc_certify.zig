@@ -646,9 +646,9 @@ fn writeFailureContext(
     for (0..store.cfStmtCount()) |index| {
         if (!reachable.contains(@fromBackingInt(@intCast(@as(u32, @intCast(index)))))) continue;
         const stmt = store.getCFStmtImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
-        var mentions = if (local) |l| body_clone.stmtMentionsLocal(store, stmt, l) else false;
+        var mentions = if (local) |l| body_clone.stmtMentionsLocal(store, stmt.*, l) else false;
         for (extra_locals) |extra| {
-            mentions = mentions or body_clone.stmtMentionsLocal(store, stmt, extra);
+            mentions = mentions or body_clone.stmtMentionsLocal(store, stmt.*, extra);
         }
         const structural = false;
         const nearby = if (stmt_id) |focus_stmt| if (index > @backingInt(focus_stmt))

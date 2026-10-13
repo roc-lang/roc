@@ -11,6 +11,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
+const collections = @import("collections");
 const layout_mod = @import("layout");
 const lir = @import("lir");
 const LIR = lir.LIR;
