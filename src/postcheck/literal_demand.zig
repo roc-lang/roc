@@ -589,6 +589,9 @@ const Builder = struct {
                 if (traceEnabled()) std.debug.print("ctfe-demand unbounded unrequested-root {s} byte={d}\n", .{ view.canonical_names.moduleNameText(view.module_identity.module_name), expr.source_region.start.offset });
                 break :unrequested .{ .strict = true };
             },
+            // A root an earlier compilation left unevaluated is requested by
+            // no evaluation here, like an undeclared pending root.
+            .unevaluated => .{ .strict = true },
             .const_node, .fn_value, .discarded, .expect, .runtime => .{},
         };
     }

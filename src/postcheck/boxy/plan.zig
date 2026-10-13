@@ -6478,6 +6478,7 @@ const Builder = struct {
                 try self.recordLiteralSite(view, expr_id, plan_id);
                 try actions.append(self.allocator, dispatch_action);
             },
+            .unevaluated,
             .fn_value,
             .discarded,
             .expect,
@@ -6533,6 +6534,7 @@ const Builder = struct {
                     boxyPlanInvariant("pending custom numeral omitted its conversion plan"));
                 try actions.append(self.allocator, .{ .dispatch_call_target = .{ .view = view, .call_expr = expr_id, .plan = maybe_plan } });
             },
+            .unevaluated,
             .fn_value,
             .discarded,
             .expect,
@@ -15097,13 +15099,65 @@ const Builder = struct {
         return substitution;
     }
 
+    /// An iterator protocol call takes its worker's dictionaries from the
+    /// checked evidence its dispatch selected, exactly as a direct dispatch
+    /// call does: a requirement checking rejected is a `checked_error` slot.
     fn materializeIteratorCallHiddenDictionaryArgs(self: *Builder) Allocator.Error!void {
         for (self.plan.iterator_calls.items, 0..) |call, call_index| {
+            if (self.plan.workers.items[@backingInt(call.worker)].hidden_dicts.len == 0) {
+                self.plan.iterator_calls.items[call_index].hidden_dict_args = .{};
+                continue;
+            }
             const arg_types = try self.callSubstitutionTypes(call.arg_substitutions, .operand);
             defer self.allocator.free(arg_types);
-            self.plan.iterator_calls.items[call_index].hidden_dict_args =
-                try self.materializeWorkerCallHiddenDictionaryArgs(call.worker, call.caller, arg_types, call.ret_type);
+            const view = self.moduleForId(call.module);
+            const node_id = iteratorCallEvidenceNode(view, call);
+            const node = view.static_dispatch_plans.evidenceNode(node_id);
+            // A target reached through a procedure alias derives its evidence
+            // from its callable, related to the call's function type.
+            const relation: ?Span = if (node.nested == .from_callable and node.subst.len == 0) blk: {
+                const call_rep = self.plan.repForSourceType(call.source_fn_type) orelse
+                    boxyPlanInvariant("boxy iterator call function type was not analyzed");
+                break :blk try self.storedUseSchemeRepSubstitutions(self.plan.workers.items[@backingInt(call.worker)].rep, call_rep);
+            } else null;
+            var machine = DictionaryArgsMachine{};
+            defer machine.deinit(self.allocator);
+            self.plan.iterator_calls.items[call_index].hidden_dict_args = if (try self.beginDictionaryCallArgs(&machine, .{
+                .worker_id = call.worker,
+                .caller_id = call.caller,
+                .arg_types = arg_types,
+                .ret_type = call.ret_type,
+                .evidence_view = view,
+                .evidence = switch (node.nested) {
+                    .resolved => view.static_dispatch_plans.nestedEvidence(node),
+                    .from_callable => null,
+                },
+                .scheme_substitution = self.evidenceEdgeSchemeSubstitution(call.worker, .{ .module = call.module, .node = node_id }),
+                .relation = relation,
+                .env = 0,
+            })) |span| span else blk: {
+                try self.runDictionaryArgs(&machine);
+                break :blk machine.span_result;
+            };
         }
+    }
+
+    /// The evidence node an iterator protocol call's dispatch selected.
+    fn iteratorCallEvidenceNode(view: ModuleView, call: IteratorCallPlan) static_dispatch.EvidenceNodeId {
+        const for_plan = view.static_dispatch_plans.iterator_for_plans[@backingInt(call.for_plan)];
+        const dispatch = switch (call.kind) {
+            .iter => for_plan.iter,
+            .next => for_plan.next,
+        };
+        return switch (dispatch.resolution) {
+            .direct_closed, .direct_parametric => |direct| direct.evidence,
+            .direct_pending => boxyPlanInvariant("unfinalized iterator call reached Boxy planning"),
+            .evidence_dependent,
+            .structural,
+            .checked_error,
+            .@"unreachable",
+            => boxyPlanInvariant("planned iterator call did not select a direct target"),
+        };
     }
 
     fn materializeGeneratedCodecCallHiddenDictionaryArgs(self: *Builder) Allocator.Error!void {
@@ -19739,7 +19793,7 @@ const Builder = struct {
         const root_id = self.callableEvalTemplate(view, template_id).root;
         switch (view.compile_time_roots.root(root_id).payload) {
             .pending => {},
-            .fn_value, .const_node, .discarded, .expect, .runtime => return null,
+            .unevaluated, .fn_value, .const_node, .discarded, .expect, .runtime => return null,
         }
         for (view.entry_wrappers.wrappers.items) |wrapper| {
             if (wrapper.root == root_id) return .{ .view = view, .wrapper = wrapper };
@@ -19865,7 +19919,7 @@ const Builder = struct {
         const root = view.compile_time_roots.root(template.root);
         return switch (root.payload) {
             .fn_value => |fn_id| self.constFnValueBody(view, fn_id),
-            .pending => boxyPlanInvariant("pending callable eval root reached runtime boxy body type planning before compile-time finalization"),
+            .pending, .unevaluated => boxyPlanInvariant("unevaluated callable eval root reached runtime boxy body type planning"),
             .const_node => |node| blk: {
                 const store = view.const_store orelse
                     boxyPlanInvariant("callable eval binding constant had no checked ConstStore");
@@ -20746,7 +20800,7 @@ const Builder = struct {
                             );
                         },
                         .pending => .{ .root_expr = .{ .view = view, .expr = root.expr } },
-                        .const_node, .discarded, .expect, .runtime => return self.procedureUseFallback(fallback),
+                        .unevaluated, .const_node, .discarded, .expect, .runtime => return self.procedureUseFallback(fallback),
                     };
                 },
             };
@@ -20855,7 +20909,7 @@ const Builder = struct {
         const root = view.compile_time_roots.root(template.root);
         return switch (root.payload) {
             .fn_value => |fn_id| .{ .module = view.key, .fn_id = fn_id },
-            .pending, .const_node, .discarded, .expect, .runtime => null,
+            .pending, .unevaluated, .const_node, .discarded, .expect, .runtime => null,
         };
     }
 
