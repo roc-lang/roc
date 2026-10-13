@@ -7560,7 +7560,7 @@ test "a replay shape records every flag relating can observe and no defaulting d
     const backing_shape = try Shape.of(checker, backing);
     defer std.testing.allocator.free(backing_shape);
     try std.testing.expectEqualSlices(u8, written_shape, defaulted_shape);
-    try std.testing.expect(!std.mem.eql(u8, written_shape, backing_shape));
+    try std.testing.expect(std.mem.order(u8, written_shape, backing_shape) != .eq);
 }
 
 /// Validate every tag and record row reachable from a checked value after
