@@ -27577,6 +27577,7 @@ pub const PlatformPairing = struct {
                 "serialized_backing",
                 "serialized_backing_is_static",
                 "pairing_arena",
+                "reopened_arena",
             },
             .serialized_only_fields = &.{
                 "relation", // `checking_context_identity.platform_app_relation`.
