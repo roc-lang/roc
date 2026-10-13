@@ -77,7 +77,7 @@ pub const ModuleVarKey = work_mod.ModuleVarKey;
 /// The position the next row of a table gets, as the field type `Position`
 /// that names it. A table that has already filled every position reports
 /// allocation failure rather than narrowing past the field.
-fn nextRowPosition(comptime Position: type, len: usize) std.mem.Allocator.Error!Position {
+fn nextRowPosition(comptime Position: type, len: u64) std.mem.Allocator.Error!Position {
     if (len > std.math.maxInt(Position)) return error.OutOfMemory;
     return @intCast(len);
 }

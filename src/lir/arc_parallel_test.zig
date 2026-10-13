@@ -835,8 +835,11 @@ const DismantleRangeFixture = struct {
 
 fn expectSameMap(expected: anytype, actual: anytype) error{TestExpectedEqual}!void {
     try testing.expectEqual(expected.count(), actual.count());
-    var expected_it = expected.iterator();
-    var actual_it = actual.iterator();
+    // Iteration takes a mutable map; these copies share the maps' storage.
+    var expected_map = expected;
+    var actual_map = actual;
+    var expected_it = expected_map.iterator();
+    var actual_it = actual_map.iterator();
     while (expected_it.next()) |entry| {
         const other = actual_it.next().?;
         try testing.expectEqualDeep(entry.key_ptr.*, other.key_ptr.*);
