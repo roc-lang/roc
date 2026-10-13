@@ -134,14 +134,7 @@ expect f([1].first())
 				(segments
 					(segment (name "x") (mode "required"))))))
 	(s-expect
-		(e-call (constraint-fn-var 264)
-			(e-runtime-error (tag "erroneous_value_expr"))
-			(e-dispatch-call (method "first") (constraint-fn-var 250)
-				(receiver
-					(e-list
-						(elems
-							(e-num (value "1")))))
-				(args)))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

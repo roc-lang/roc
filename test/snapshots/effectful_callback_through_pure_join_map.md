@@ -202,18 +202,7 @@ NO CHANGE
 		(e-call (constraint-fn-var 365)
 			(e-lookup-external
 				(builtin))
-			(e-call (constraint-fn-var 323)
-				(e-runtime-error (tag "erroneous_value_expr"))
-				(e-list
-					(elems
-						(e-string
-							(e-literal (string "a")))))
-				(e-list
-					(elems
-						(e-lookup-local
-							(p-assign (ident "pure_one")))
-						(e-lookup-local
-							(p-assign (ident "shout!"))))))
+			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-list
 				(elems
 					(e-string

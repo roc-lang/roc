@@ -822,8 +822,26 @@ binder_source_exprs: collections.DenseMap(CIR.Pattern.Idx, CIR.Expr.Idx),
 binder_source_path: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty,
 /// The relation being checked (`problem.RelationOwner`). Every problem
 /// recorded while it is current, and every dispatch obligation queued while
-/// it is current, belongs to it.
+/// it is current, belongs to it, except an expression's own dispatch and
+/// what derives from it (`dispatchSiteOf`).
 relation_owner: problem.RelationOwner = .none,
+/// The expression whose own checking step created each dispatch constraint
+/// (an operator, a unary operator, or a method call), keyed by the
+/// constraint's raw callable var. Such a constraint belongs to that
+/// expression's relation and fails at that expression wherever it is queued:
+/// a receiver still open when the expression is checked carries the
+/// constraint until a later unification grounds it, and that unification's
+/// relation does not own it. So do the obligations derived from it
+/// (`dispatchSiteOf`). Instantiation and import copy a constraint under a fresh
+/// callable var, so a copy is never a key; merging keeps the retained
+/// constraint's callable var.
+own_dispatch_exprs: collections.DenseMap(Var, CIR.Expr.Idx),
+/// The iterable of the `for` loop whose `iter` or `next` dispatch each raw
+/// callable var is. A loop's dispatch has no expression of its own to own a
+/// relation, but an obligation derived from it (a requirement its selected
+/// `iter` target's instantiation left behind) fails at the loop's iterable
+/// rather than wherever a later unification grounds it (`dispatchSiteOf`).
+loop_dispatch_iterables: collections.DenseMap(Var, CIR.Expr.Idx),
 /// The relation that owns each recorded problem, by problem index. The
 /// problems past its end belong to `relation_owner`.
 problem_owners: std.ArrayListUnmanaged(problem.RelationOwner) = .empty,
@@ -3903,6 +3921,8 @@ fn initAssumePrepared(
         .pending_tuple_accesses = .empty,
         .pinnable_vars = collections.DenseMap(Var, void).init(gpa),
         .use_instance_by_fn_var = collections.DenseMap(Var, u32).init(gpa),
+        .own_dispatch_exprs = collections.DenseMap(Var, CIR.Expr.Idx).init(gpa),
+        .loop_dispatch_iterables = collections.DenseMap(Var, CIR.Expr.Idx).init(gpa),
         .reach_free_schemes = collections.DenseMap(Var, void).init(gpa),
         .link_var_map = collections.DenseMap(Var, Var).init(gpa),
         .scratch_deferred_placeholders = collections.DenseMap(Var, Var).init(gpa),
@@ -4046,6 +4066,8 @@ pub fn deinit(self: *Self) void {
     self.binder_source_exprs.deinit();
     self.binder_source_path.deinit(self.gpa);
     self.problem_owners.deinit(self.gpa);
+    self.own_dispatch_exprs.deinit();
+    self.loop_dispatch_iterables.deinit();
     self.relation_operands.deinit(self.gpa);
     self.relation_operand_pool.deinit(self.gpa);
     self.erroneous_causes.deinit(self.gpa);
@@ -7070,10 +7092,13 @@ fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifi
     }
 
     // Copy any constraints created during unification into our own array. A
-    // where-clause obligation that becomes concrete while checking a scheme use
-    // belongs to that use; ordinary dispatch and literal constraints retain
-    // their own creation-time provenance. The group whose checking ran this
-    // unification owns each obligation's boundary-time resolution.
+    // scheme's requirement that becomes concrete while checking a scheme use
+    // belongs to that use, whether the scheme declared it in a where clause or
+    // inferred it from an operator or method call its body dispatches (a copy
+    // a value use owns, `use_instance_by_fn_var`); ordinary dispatch and
+    // literal constraints retain their own creation-time provenance. The
+    // group whose checking ran this unification owns each obligation's
+    // boundary-time resolution.
     const failure_expr = self.discarded_binding_rhs_expr orelse self.instantiation_source_expr;
     for (self.unify_scratch.deferred_constraints.items.items) |deferred_constraint| {
         const expr_idx = failure_expr orelse {
@@ -14047,6 +14072,74 @@ fn constraintIntroExpr(constraint: StaticDispatchConstraint) ?CIR.Expr.Idx {
     return @fromBackingInt(@intCast(raw));
 }
 
+/// Record that `constraint` is the dispatch its introducing expression's own
+/// checking step just created (`own_dispatch_exprs`).
+fn recordOwnDispatch(self: *Self, constraint: StaticDispatchConstraint) Allocator.Error!void {
+    const intro = constraintIntroExpr(constraint) orelse return;
+    // The creating step is the expression's own relation over its operands,
+    // which `ownDispatchRelation` names for the constraint from then on.
+    std.debug.assert(self.relation_owner.eql(ownDispatchRelation(intro)));
+    // The map is keyed by raw var, and a savepoint's rollback frees the vars
+    // created after it for reuse, so no expression is checked under one.
+    std.debug.assert(!self.types.savepointActive());
+    try self.own_dispatch_exprs.putNoClobber(constraint.fn_var, intro);
+}
+
+/// Record that `fn_var` is the callable of a `for` loop's own `iter` or `next`
+/// dispatch over `iterable` (`loop_dispatch_iterables`).
+fn recordLoopDispatch(self: *Self, fn_var: Var, iterable: CIR.Expr.Idx) Allocator.Error!void {
+    // Keyed by raw var, as `own_dispatch_exprs` is.
+    std.debug.assert(!self.types.savepointActive());
+    try self.loop_dispatch_iterables.putNoClobber(fn_var, iterable);
+}
+
+/// Where a constraint whose ownership a later unification does not decide
+/// fails (`dispatchSiteOf`).
+const DispatchSite = struct {
+    expr: CIR.Expr.Idx,
+    kind: Kind,
+
+    const Kind = enum {
+        /// An expression's own dispatch: it resolves under the expression's
+        /// relation, reports at its own provenance, and poisons `expr`.
+        own,
+        /// An obligation derived from an expression's own dispatch: it
+        /// resolves under that expression's relation and fails at `expr`.
+        own_derived,
+        /// An obligation derived from a `for` loop's own dispatch: it
+        /// reports at the loop's iterable `expr` and poisons nothing, since
+        /// the loop's checked iterator evidence carries the rejection.
+        loop_derived,
+    };
+};
+
+/// The site where `constraint` fails, or null for a constraint whose entry
+/// decides it (a copy that instantiation or import made, a literal
+/// conversion, a loop's own dispatch, or what derives from a copy). An
+/// obligation derived from a dispatch, which its selected target's
+/// instantiation left behind (`dispatch_derivation_by_child_fn_var`) or which
+/// a structural comparison derived for a component
+/// (`component_derivation_by_child_fn_var`), belongs to the dispatch it
+/// derives (design.md "Every Rejection Is Explicit Recovery").
+fn dispatchSiteOf(self: *const Self, constraint: StaticDispatchConstraint) ?DispatchSite {
+    if (self.own_dispatch_exprs.get(constraint.fn_var)) |expr| return .{ .expr = expr, .kind = .own };
+    var fn_var = constraint.fn_var;
+    var guard = types_mod.debug.IterationGuard.init("dispatchSiteOf");
+    while (true) {
+        guard.tick();
+        fn_var = self.dispatch_derivation_by_child_fn_var.get(fn_var) orelse
+            self.component_derivation_by_child_fn_var.get(fn_var) orelse return null;
+        if (self.own_dispatch_exprs.get(fn_var)) |expr| return .{ .expr = expr, .kind = .own_derived };
+        if (self.loop_dispatch_iterables.get(fn_var)) |iterable| return .{ .expr = iterable, .kind = .loop_derived };
+    }
+}
+
+/// The relation that owns the dispatch `expr`'s own checking step created:
+/// the expression's relation over its operands (`exprStepRelation`).
+fn ownDispatchRelation(expr: CIR.Expr.Idx) problem.RelationOwner {
+    return .of(.operands, expr, 0);
+}
+
 /// The source expression whose checked value becomes invalid when this
 /// dispatch constraint fails. A constraint copied out of a generalized scheme
 /// belongs to the use that instantiated it, whatever its origin: its
@@ -14432,9 +14525,95 @@ fn deferredConstraintFailureExpr(self: *Self, deferred: DeferredConstraintCheck)
     return null;
 }
 
+/// The failure expression `constraint` resolves under (`dispatchSiteOf`):
+/// none for an expression's own dispatch, which reports at its own provenance
+/// and poisons its expression exactly as when the expression queues it
+/// itself; the site's expression for an obligation derived from a dispatch;
+/// or else that of the queued entry carrying it.
+fn constraintFailureExpr(self: *const Self, deferred: DeferredConstraintCheck, constraint: StaticDispatchConstraint) ?CIR.Expr.Idx {
+    if (self.dispatchSiteOf(constraint)) |site| return siteFailureExpr(site);
+    return explicitDeferredConstraintFailureExpr(deferred);
+}
+
+fn siteFailureExpr(site: DispatchSite) ?CIR.Expr.Idx {
+    return switch (site.kind) {
+        .own => null,
+        .own_derived, .loop_derived => site.expr,
+    };
+}
+
 fn explicitDeferredConstraintFailureExpr(deferred: DeferredConstraintCheck) ?CIR.Expr.Idx {
     const raw = deferred.failure_expr.get() orelse return null;
     return @fromBackingInt(@intCast(raw));
+}
+
+/// Who owns what a deferred entry's resolution does: the entry's relation and
+/// failure expression, except while it resolves a constraint with a dispatch
+/// site (`dispatchSiteOf`). An expression's own dispatch and what derives
+/// from it resolve under that expression's relation; what derives from a
+/// loop's dispatch keeps the entry's relation and fails at the iterable. The
+/// obligations a constraint's resolution queues inherit its failure
+/// expression; an expression's own dispatch passes on none, exactly as when
+/// the expression queues it itself.
+const DeferredEntryOwnership = struct {
+    entry: DeferredConstraintCheck,
+    /// The queue position from which the obligations queued so far have not
+    /// yet inherited a failure expression.
+    children_start: usize,
+    /// The dispatch site of the constraint being resolved, if it has one.
+    site: ?DispatchSite = null,
+};
+
+/// Make `constraint` the one its entry is resolving, returning the failure
+/// expression it resolves under (`constraintFailureExpr`).
+fn enterDeferredEntryConstraint(
+    self: *Self,
+    env: *Env,
+    ownership: *DeferredEntryOwnership,
+    constraint: StaticDispatchConstraint,
+) Allocator.Error!?CIR.Expr.Idx {
+    const site = self.dispatchSiteOf(constraint);
+    if (site != null or ownership.site != null) {
+        self.passOnDeferredEntryFailureExpr(env, ownership);
+        try self.claimRecordedProblems();
+        ownership.site = site;
+        self.relation_owner = if (site) |current| switch (current.kind) {
+            .own, .own_derived => ownDispatchRelation(current.expr),
+            .loop_derived => ownership.entry.relation_owner,
+        } else ownership.entry.relation_owner;
+    }
+    if (site) |current| return siteFailureExpr(current);
+    return explicitDeferredConstraintFailureExpr(ownership.entry);
+}
+
+/// Return to the entry's own ownership once its constraints are resolved.
+fn leaveDeferredEntryConstraints(self: *Self, env: *Env, ownership: *DeferredEntryOwnership) Allocator.Error!void {
+    if (ownership.site == null) return;
+    self.passOnDeferredEntryFailureExpr(env, ownership);
+    try self.claimRecordedProblems();
+    ownership.site = null;
+    self.relation_owner = ownership.entry.relation_owner;
+}
+
+/// Give the obligations queued since `children_start` the failure expression
+/// of the constraint whose resolution queued them.
+fn passOnDeferredEntryFailureExpr(self: *Self, env: *Env, ownership: *DeferredEntryOwnership) void {
+    const queued = env.deferred_static_dispatch_constraints.items.items.len;
+    if (queued > ownership.children_start) {
+        const failure_expr: StaticDispatchConstraint.Provenance.OptExprIdx = if (ownership.site) |site|
+            if (siteFailureExpr(site)) |expr| .from(@backingInt(expr)) else .none
+        else
+            self.deferredEntryChildFailureExpr(ownership.entry);
+        inheritDeferredConstraintFailureExpr(env, ownership.children_start, failure_expr);
+    }
+    ownership.children_start = queued;
+}
+
+/// The failure expression the obligations an entry's own resolution queues
+/// inherit from it.
+fn deferredEntryChildFailureExpr(self: *Self, entry: DeferredConstraintCheck) StaticDispatchConstraint.Provenance.OptExprIdx {
+    const expr_idx = self.deferredConstraintFailureExpr(entry) orelse return .none;
+    return .from(@backingInt(expr_idx));
 }
 
 fn inheritDeferredConstraintFailureExpr(
@@ -14632,6 +14811,14 @@ fn poisonConstraintFailure(
     env: *Env,
     explicit_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
+    // An expression's own dispatch, and what derives from it, fails at that
+    // expression, whichever queued entry carries it. What derives from a
+    // loop's dispatch retires no expression: the loop's checked iterator
+    // evidence carries the rejection, and its iterable is a valid value.
+    if (self.dispatchSiteOf(constraint)) |site| switch (site.kind) {
+        .own, .own_derived => return self.poisonConstraintFailureSource(dispatcher_var, constraint, site.expr),
+        .loop_derived => return,
+    };
     if (explicit_expr) |expr_idx| {
         return self.poisonConstraintFailureSource(dispatcher_var, constraint, expr_idx);
     }
@@ -19303,31 +19490,42 @@ fn enqueueUseOwnedDeferredConstraint(
     owner: DeferredDispatchObligationOwner,
 ) Allocator.Error!void {
     const constraints = self.types.sliceStaticDispatchConstraints(deferred.constraints);
-    var where_clause_count: usize = 0;
+    var requirement_count: usize = 0;
     for (constraints) |constraint| {
-        if (constraint.origin == .where_clause) where_clause_count += 1;
+        if (self.isSchemeRequirement(constraint)) requirement_count += 1;
     }
-    if (where_clause_count == 0) return try self.enqueueDeferredDispatchConstraint(env, deferred, owner);
+    if (requirement_count == 0) return try self.enqueueDeferredDispatchConstraint(env, deferred, owner);
     var use_owned = deferred;
     use_owned.failure_expr = .from(@backingInt(use_expr));
-    if (where_clause_count == constraints.len) return try self.enqueueDeferredDispatchConstraint(env, use_owned, owner);
+    if (requirement_count == constraints.len) return try self.enqueueDeferredDispatchConstraint(env, use_owned, owner);
 
-    var where_clauses = try std.ArrayList(StaticDispatchConstraint).initCapacity(self.gpa, where_clause_count);
-    defer where_clauses.deinit(self.gpa);
-    var others = try std.ArrayList(StaticDispatchConstraint).initCapacity(self.gpa, constraints.len - where_clause_count);
+    var requirements = try std.ArrayList(StaticDispatchConstraint).initCapacity(self.gpa, requirement_count);
+    defer requirements.deinit(self.gpa);
+    var others = try std.ArrayList(StaticDispatchConstraint).initCapacity(self.gpa, constraints.len - requirement_count);
     defer others.deinit(self.gpa);
     for (constraints) |constraint| {
-        if (constraint.origin == .where_clause) {
-            where_clauses.appendAssumeCapacity(constraint);
+        if (self.isSchemeRequirement(constraint)) {
+            requirements.appendAssumeCapacity(constraint);
         } else {
             others.appendAssumeCapacity(constraint);
         }
     }
-    use_owned.constraints = try self.types.appendStaticDispatchConstraints(where_clauses.items);
+    use_owned.constraints = try self.types.appendStaticDispatchConstraints(requirements.items);
     var self_owned = deferred;
     self_owned.constraints = try self.types.appendStaticDispatchConstraints(others.items);
     try self.enqueueDeferredDispatchConstraint(env, self_owned, owner);
     try self.enqueueDeferredDispatchConstraint(env, use_owned, owner);
+}
+
+/// Whether a constraint is a requirement of the scheme being used: one its
+/// where clause declares, or one it inferred from an operator or method call
+/// its body dispatches, in the copy a value use owns (`use_instance_by_fn_var`).
+fn isSchemeRequirement(self: *const Self, constraint: StaticDispatchConstraint) bool {
+    return switch (constraint.origin) {
+        .where_clause => true,
+        .desugared_binop, .desugared_unaryop, .method_call => self.use_instance_by_fn_var.contains(constraint.fn_var),
+        .from_literal => false,
+    };
 }
 
 /// Re-defer a dispatch obligation whose method target is an unchecked,
@@ -28808,6 +29006,11 @@ fn resumeForLoop(self: *Self, state: *ForLoopCheck, env: *Env) std.mem.Allocator
             loop_region,
         );
 
+    if (!iterable_is_erroneous) {
+        try self.recordLoopDispatch(iter_fn_var, iterable);
+        try self.recordLoopDispatch(next_fn_var, iterable);
+    }
+
     try self.cir.recordForLoopDispatchPlan(
         state.loop_node,
         ModuleEnv.nodeIdxFrom(pattern),
@@ -32994,6 +33197,7 @@ fn mkBinopConstraint(
         .origin = .{ .desugared_binop = .{ .negated = negated } },
         .provenance = constraintProvenance(binop_expr_idx),
     };
+    try self.recordOwnDispatch(constraint);
     try self.recordCurrentExpectDispatchWatcher(constraint_fn_var);
     try self.noteHoistDispatchDependency(lhs_var, method_name, constraint_fn_var);
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
@@ -33093,6 +33297,7 @@ fn mkUnaryOp(
         .origin = .desugared_unaryop,
         .provenance = constraintProvenance(unary_expr_idx),
     };
+    try self.recordOwnDispatch(constraint);
     try self.recordCurrentExpectDispatchWatcher(constraint_fn_var);
     try self.noteHoistDispatchDependency(arg_var, method_name, constraint_fn_var);
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
@@ -33361,6 +33566,7 @@ fn mkReceiverDispatchConstraint(
         .origin = .method_call,
         .provenance = constraintProvenance(method_expr_idx),
     };
+    try self.recordOwnDispatch(constraint);
     try self.recordCurrentExpectDispatchWatcher(constraint_fn_var);
     try self.noteHoistDispatchDependency(receiver_var, method_name, constraint_fn_var);
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
@@ -33399,6 +33605,7 @@ fn mkTypeMethodCallConstraint(
         .origin = .method_call,
         .provenance = constraintProvenance(method_expr_idx),
     };
+    try self.recordOwnDispatch(constraint);
     try self.recordCurrentExpectDispatchWatcher(constraint_fn_var);
     try self.noteHoistDispatchDependency(dispatcher_var, method_name, constraint_fn_var);
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
@@ -39529,7 +39736,7 @@ fn reportDerivedCodecOpenRecord(
     constraint: StaticDispatchConstraint,
     env: *Env,
 ) Allocator.Error!void {
-    const failure_expr = explicitDeferredConstraintFailureExpr(deferred);
+    const failure_expr = self.constraintFailureExpr(deferred, constraint);
     // The codec call is where the program requested the derivation, and where
     // destructuring or annotating fixes it.
     const region = self.derivedCodecDiagnosticRegion(
@@ -45874,13 +46081,24 @@ fn deferredRelationsAlreadySettled(self: *Self, deferred: DeferredConstraintChec
     const concrete_receiver = self.types.resolveVar(deferred.var_).desc.content == .structure;
     for (constraints) |constraint| {
         const failure_expr = self.settled_static_dispatch_failure_exprs.get(constraint.fn_var) orelse return false;
-        if (failure_expr != deferred.failure_expr) return false;
+        if (failure_expr != self.settledRelationFailureExpr(deferred, constraint)) return false;
         const generated_codec = constraint.fn_name.eql(self.cir.idents.parser_for) or
             constraint.fn_name.eql(self.cir.idents.encoder_for);
         if (concrete_receiver and !generated_codec and
             !self.dispatch_target_instantiation_by_fn_var.contains(constraint.fn_var)) return false;
     }
     return true;
+}
+
+/// The failure expression a settled relation resolved under
+/// (`constraintFailureExpr`), which settling it records.
+fn settledRelationFailureExpr(
+    self: *const Self,
+    deferred: DeferredConstraintCheck,
+    constraint: StaticDispatchConstraint,
+) StaticDispatchConstraint.Provenance.OptExprIdx {
+    const expr_idx = self.constraintFailureExpr(deferred, constraint) orelse return .none;
+    return .from(@backingInt(expr_idx));
 }
 
 fn recordSettledDeferredDispatchRelation(
@@ -45902,7 +46120,7 @@ fn recordSettledDeferredDispatchRelation(
         try self.settled_static_dispatch_constraint_fns.put(self.gpa, constraint.fn_var, {});
         try self.waiting_trigger_log.append(self.gpa, WaitingTrigger.fnVar(constraint.fn_var));
         const failure_expr = try self.settled_static_dispatch_failure_exprs.getOrPut(self.gpa, constraint.fn_var);
-        if (!failure_expr.found_existing) failure_expr.value_ptr.* = deferred.failure_expr;
+        if (!failure_expr.found_existing) failure_expr.value_ptr.* = self.settledRelationFailureExpr(deferred, constraint);
     }
     // A later child can inspect this scheme before the queue finishes.
     // Retire only the exact relations this validation step just consumed.
@@ -46274,19 +46492,12 @@ inline fn processDeferredDispatchEntry(
     const retained_top = self.scratch_deferred_static_dispatch_constraints.top();
     const scheme_owned_codecs_top = self.scratch_scheme_owned_codec_fns.items.len;
     defer self.scratch_scheme_owned_codec_fns.shrinkRetainingCapacity(scheme_owned_codecs_top);
-    const failure_expr = explicitDeferredConstraintFailureExpr(deferred_constraint);
-    const deferred_children_start = env.deferred_static_dispatch_constraints.items.items.len;
     const implicit_parse_requests_before = self.implicit_parse_requests.items.len;
-    defer {
-        if (env.deferred_static_dispatch_constraints.items.items.len > deferred_children_start) {
-            const child_failure_expr = self.deferredConstraintFailureExpr(deferred_constraint);
-            inheritDeferredConstraintFailureExpr(
-                env,
-                deferred_children_start,
-                if (child_failure_expr) |expr_idx| .from(@backingInt(expr_idx)) else .none,
-            );
-        }
-    }
+    var ownership: DeferredEntryOwnership = .{
+        .entry = deferred_constraint,
+        .children_start = env.deferred_static_dispatch_constraints.items.items.len,
+    };
+    defer self.passOnDeferredEntryFailureExpr(env, &ownership);
 
     const dispatcher_resolved = self.types.resolveVar(deferred_constraint.var_);
     const dispatcher_content = dispatcher_resolved.desc.content;
@@ -46317,6 +46528,7 @@ inline fn processDeferredDispatchEntry(
             var constraints_iter = self.types.static_dispatch_constraints.iterRange(deferred_constraint.constraints);
             while (constraints_iter.next()) |constraint| {
                 self.active_scheme_root = self.dispatchRelationOwner(constraint.fn_var);
+                const failure_expr = try self.enterDeferredEntryConstraint(env, &ownership, constraint);
                 if (constraint.origin == .from_literal) {
                     if (self.cir.idents.numKindFromTypeIdent(rigid.name)) |num_kind| {
                         if (try self.reportInvalidBuiltinFromNumeralLiteral(
@@ -46466,6 +46678,7 @@ inline fn processDeferredDispatchEntry(
                 // constraints and reallocate the backing array.
                 const constraint = self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i];
                 self.active_scheme_root = self.dispatchRelationOwner(constraint.fn_var);
+                const failure_expr = try self.enterDeferredEntryConstraint(env, &ownership, constraint);
                 if (self.staticDispatchConstraintIsInactive(constraint)) continue;
                 const constraint_fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
                 if (constraint_fn_resolved == .err) {
@@ -46874,6 +47087,7 @@ inline fn processDeferredDispatchEntry(
             while (constraint_i < constraints_len) : (constraint_i += 1) {
                 const constraint = self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i];
                 self.active_scheme_root = self.dispatchRelationOwner(constraint.fn_var);
+                const failure_expr = try self.enterDeferredEntryConstraint(env, &ownership, constraint);
                 if (self.staticDispatchConstraintIsInactive(constraint)) continue;
                 const constraint_fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
                 if (constraint_fn_resolved == .err) {
@@ -47201,6 +47415,7 @@ inline fn processDeferredDispatchEntry(
             var constraints_iter = self.types.static_dispatch_constraints.iterRange(deferred_constraint.constraints);
             while (constraints_iter.next()) |constraint| {
                 self.active_scheme_root = self.dispatchRelationOwner(constraint.fn_var);
+                const failure_expr = try self.enterDeferredEntryConstraint(env, &ownership, constraint);
                 // Check if this is a call to is_eq (anonymous types have derived is_eq)
                 if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
                     // Check if all components of this anonymous type support is_eq
@@ -47415,6 +47630,7 @@ inline fn processDeferredDispatchEntry(
             if (constraints.len > 0) {
                 // Report errors for ALL failing constraints, not just the first one
                 for (constraints) |constraint| {
+                    const failure_expr = try self.enterDeferredEntryConstraint(env, &ownership, constraint);
                     // For is_eq constraints, use the specific equality error message
                     // Use ident index comparison instead of string comparison
                     if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
@@ -47442,6 +47658,7 @@ inline fn processDeferredDispatchEntry(
             break :dispatch_resolution;
         }
     }
+    try self.leaveDeferredEntryConstraints(env, &ownership);
 
     if (!self.deferredDispatchRelationWasRetained(deferred_constraint, retained_top)) {
         try self.recordSettledDeferredDispatchRelation(
@@ -47450,10 +47667,10 @@ inline fn processDeferredDispatchEntry(
         );
     }
     if (self.implicit_parse_requests.items.len != implicit_parse_requests_before) {
-        const child_failure_expr = self.deferredConstraintFailureExpr(deferred_constraint);
+        self.passOnDeferredEntryFailureExpr(env, &ownership);
         drain.stopped_children = .{
-            .start = deferred_children_start,
-            .failure_expr = if (child_failure_expr) |expr_idx| .from(@backingInt(expr_idx)) else .none,
+            .start = ownership.children_start,
+            .failure_expr = self.deferredEntryChildFailureExpr(ownership.entry),
         };
         return .stopped;
     }

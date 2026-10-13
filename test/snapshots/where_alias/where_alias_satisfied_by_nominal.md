@@ -94,17 +94,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-a.Stringable :  where [a.to_str : a -> Str]
-
-Name := [Name(Str)].{
-	to_str : Name -> Str
-	to_str = |Name.Name(str)| str
-}
-
-stringify : a -> Str where [a.Stringable]
-stringify = |value| value.to_str()
-
-main = stringify(Name.Name("hi"))
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

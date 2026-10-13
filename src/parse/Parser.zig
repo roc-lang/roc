@@ -1916,10 +1916,10 @@ fn parseTargetFileTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetFile.I
             return try self.pushMalformed(AST.TargetFile.Idx, .expected_target_file_string_end, start);
         }
         self.advance();
-        return try self.store.addTargetFile(.{ .string_literal = content_tok });
+        return try self.store.addTargetFile(.{ .string_literal = content_tok }, .{ .start = start, .end = self.pos });
     } else if (self.peek() == .LowerIdent or self.peek() == .KwApp) {
         self.advance();
-        return try self.store.addTargetFile(.{ .special_ident = start });
+        return try self.store.addTargetFile(.{ .special_ident = start }, .{ .start = start, .end = self.pos });
     } else {
         return try self.pushMalformed(AST.TargetFile.Idx, .expected_target_file, start);
     }
@@ -1973,7 +1973,7 @@ fn parseTargetConfigLeafOrOpen(self: *Parser, open: *std.ArrayList(OpenTargetCon
     const tag = self.peek();
     if (tag == .Int) {
         self.advance();
-        return try self.store.addTargetConfigValue(.{ .int_literal = start });
+        return try self.store.addTargetConfigValue(.{ .int_literal = start }, .{ .start = start, .end = self.pos });
     } else if (tag == .StringStart) {
         self.advance();
         var content_tok: ?Token.Idx = null;
@@ -1989,16 +1989,16 @@ fn parseTargetConfigLeafOrOpen(self: *Parser, open: *std.ArrayList(OpenTargetCon
             return try self.store.addTargetConfigValue(.{ .malformed = .{
                 .reason = .expected_target_file_string_end,
                 .region = .{ .start = start, .end = self.pos },
-            } });
+            } }, .{ .start = start, .end = self.pos });
         }
         self.advance();
-        return try self.store.addTargetConfigValue(.{ .string_literal = content_tok });
+        return try self.store.addTargetConfigValue(.{ .string_literal = content_tok }, .{ .start = start, .end = self.pos });
     } else if (tag == .UpperIdent) {
         self.advance();
-        return try self.store.addTargetConfigValue(.{ .tag_literal = start });
+        return try self.store.addTargetConfigValue(.{ .tag_literal = start }, .{ .start = start, .end = self.pos });
     } else if (tag == .LowerIdent) {
         self.advance();
-        return try self.store.addTargetConfigValue(.{ .ident = start });
+        return try self.store.addTargetConfigValue(.{ .ident = start }, .{ .start = start, .end = self.pos });
     } else if (tag == .OpenSquare) {
         self.advance();
         const list: OpenTargetConfigList = .{ .start = start, .values_top = self.store.scratchTargetConfigValueTop() };
@@ -2009,7 +2009,7 @@ fn parseTargetConfigLeafOrOpen(self: *Parser, open: *std.ArrayList(OpenTargetCon
         return try self.store.addTargetConfigValue(.{ .malformed = .{
             .reason = .expected_target_file,
             .region = .{ .start = start, .end = self.pos },
-        } });
+        } }, .{ .start = start, .end = self.pos });
     }
 }
 
@@ -2019,11 +2019,11 @@ fn closeTargetConfigList(self: *Parser, list: OpenTargetConfigList) std.mem.Allo
         return try self.store.addTargetConfigValue(.{ .malformed = .{
             .reason = .expected_target_files_close_square,
             .region = .{ .start = list.start, .end = self.pos },
-        } });
+        } }, .{ .start = list.start, .end = self.pos });
     }
     self.advance();
     const values_span = try self.store.targetConfigValueSpanFrom(list.values_top);
-    return try self.store.addTargetConfigValue(.{ .list = values_span });
+    return try self.store.addTargetConfigValue(.{ .list = values_span }, .{ .start = list.start, .end = self.pos });
 }
 
 fn parseTargetConfigEntryTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetConfigEntry.Idx {
@@ -2035,20 +2035,21 @@ fn parseTargetConfigEntryTokens(self: *Parser) std.mem.Allocator.Error!AST.Targe
     self.advance();
 
     const value = if (self.peek() == .Comma or self.peek() == .CloseCurly) blk: {
-        break :blk try self.store.addTargetConfigValue(.{ .ident = name });
+        break :blk try self.store.addTargetConfigValue(.{ .ident = name }, .{ .start = name, .end = name + 1 });
     } else blk: {
         self.expect(.OpColon) catch {
             return try self.pushMalformed(AST.TargetConfigEntry.Idx, .expected_targets_field_colon, start);
         };
 
         if (std.mem.eql(u8, self.tokenText(name), "inputs")) {
+            const files_start = self.pos;
             const files_span = self.parseTargetFileList() catch |err| switch (err) {
                 error.ExpectedNotFound => {
                     return try self.pushMalformed(AST.TargetConfigEntry.Idx, .expected_target_files_open_square, start);
                 },
                 error.OutOfMemory => return error.OutOfMemory,
             };
-            break :blk try self.store.addTargetConfigValue(.{ .files = files_span });
+            break :blk try self.store.addTargetConfigValue(.{ .files = files_span }, .{ .start = files_start, .end = self.pos });
         } else {
             break :blk try self.parseTargetConfigValueTokens();
         }
@@ -3121,7 +3122,6 @@ const TypeParenFnRetState = struct {
 
 const TypeZeroArgFnRetState = struct {
     start: Token.Idx,
-    after_round: Token.Idx,
     effectful: bool,
     args: AST.TypeAnno.Span,
     looking_for_args: TyFnArgs,
@@ -5225,7 +5225,7 @@ fn runExprStatementKernel(
                 if (tok == .Underscore) {
                     const start = self.pos;
                     last_type_anno = try self.store.addTypeAnno(.{ .underscore = .{
-                        .region = .{ .start = start, .end = self.pos },
+                        .region = .{ .start = start, .end = self.pos + 1 },
                     } });
                     self.advance();
                     type_after_primary_state = .{ .start = start, .looking_for_args = type_args };
@@ -5344,7 +5344,7 @@ fn runExprStatementKernel(
                             .args = state.args,
                             .ret = completed,
                             .effectful = state.effectful,
-                            .region = .{ .start = state.after_round, .end = self.pos },
+                            .region = .{ .start = state.start, .end = self.pos },
                         } });
                         type_after_primary_state = .{ .start = state.start, .looking_for_args = state.looking_for_args };
                         continue :expr_kernel .type_after_primary;
@@ -5606,7 +5606,6 @@ fn runExprStatementKernel(
                     self.advance();
                     try open_syntax.pushType(open_allocator, .type_zero_arg_fn_ret, TypeZeroArgFnRetState, .{
                         .start = type_paren_state.start,
-                        .after_round = type_paren_state.after_round,
                         .effectful = effectful,
                         .args = args,
                         .looking_for_args = type_paren_state.looking_for_args,
