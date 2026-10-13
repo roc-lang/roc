@@ -1142,8 +1142,8 @@ pub const LoadedPacks = struct {
     /// A rejected checking session can never serve or extend its objects again.
     revoked: bool = false,
     specs: std.AutoHashMap(OfferKey, Common.SpecCacheHit),
-    /// Specializations whose published discovery registered no literal root,
-    /// by the key and relation they serve.
+    /// Specializations with a settled discovery outcome, by the key and
+    /// relation they serve.
     discovery: std.AutoHashMapUnmanaged(OfferKey, void) = .empty,
     semantic_valid: std.AutoHashMap(OfferKey, bool),
     artifacts: std.AutoHashMap(lir.ProcIdentity, SelectedProcedure),

@@ -41,7 +41,7 @@ pub const SpecEntry = struct {
     rc_ret_conditions: []const u32,
 };
 
-/// A specialization whose discovery registered no literal root, under the
+/// A specialization whose discovery outcome is settled, under the
 /// specialization key it was reserved for (`lir.Program.DiscoverySummary`).
 /// It names no artifact.
 pub const DiscoveryEntry = struct {

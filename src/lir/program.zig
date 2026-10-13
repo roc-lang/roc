@@ -948,10 +948,12 @@ pub const SpecProc = struct {
     demand: ?CachedCtfeDemand = null,
 };
 
-/// A specialization lowered only for discovery whose body, and every body it
-/// reaches, registered no literal root, under the specialization key it was
-/// reserved for. A later compilation that reaches the same key parks it
-/// instead of lowering it again.
+/// A specialization lowered only for discovery whose discovery, through every
+/// body it reaches, registered only literal roots that converted without an
+/// error or a message, under the specialization key it was reserved for. A
+/// later check that reaches the same key parks it instead of lowering it
+/// again: discovery exists only to evaluate those literal roots, whose outcome
+/// the key fixes.
 pub const DiscoverySummary = struct {
     key: [32]u8,
     /// Checked template owner, as `SpecProc.owner`.

@@ -89,7 +89,9 @@ pub const CompileTimeObjectCache = struct {
     /// including pending modules absent from published lowering visibility.
     capture: ?struct {
         context: *anyopaque,
-        retain: *const fn (*anyopaque, lir.CheckedPipeline.CheckedModuleSet, *const lir.CheckedPipeline.LoweredProgram, *const NativeProcCompiler.Retained, []const backend.dev.LocatedArtifact) Allocator.Error!void,
+        /// `observed` is whether this evaluation printed a `dbg` message,
+        /// which a later compilation reusing its outcomes would not repeat.
+        retain: *const fn (*anyopaque, lir.CheckedPipeline.CheckedModuleSet, *const lir.CheckedPipeline.LoweredProgram, *const NativeProcCompiler.Retained, []const backend.dev.LocatedArtifact, bool) Allocator.Error!void,
     } = null,
 };
 /// Runtime options for compile-time finalization.
@@ -152,6 +154,8 @@ const DebugEvents = struct {
     const Event = struct { module: checked.ModuleId, root: checked.ComptimeRootId, sequence: usize, is_repl: bool, message: []const u8 };
     allocator: Allocator,
     events: std.ArrayList(Event) = .empty,
+    /// Messages this evaluation produced, not replayed from cached modules.
+    fresh: usize = 0,
 
     fn deinit(self: *DebugEvents) void {
         for (self.events.items) |event| self.allocator.free(event.message);
@@ -159,6 +163,7 @@ const DebugEvents = struct {
     }
 
     fn append(self: *DebugEvents, module: checked.ModuleId, root: checked.CompileTimeRoot, message: []const u8) Allocator.Error!void {
+        self.fresh += 1;
         const owned = try self.allocator.dupe(u8, message);
         errdefer self.allocator.free(owned);
         try self.events.append(self.allocator, .{ .module = module, .root = root.id, .sequence = self.events.items.len, .is_repl = root.kind == .repl_expr, .message = owned });
@@ -1560,7 +1565,8 @@ fn evaluateLoweredRootsWithObservations(
     host.frozen_static_data = try native.freezeCompleted();
     if (options.object_cache) |cache| {
         if (cache.capture) |capture| {
-            if (native.artifacts) |*artifacts| try capture.retain(capture.context, lowering_modules, host, artifacts, native.cached_roots);
+            const observed = if (options.debug_events) |events| events.fresh != 0 else true;
+            if (native.artifacts) |*artifacts| try capture.retain(capture.context, lowering_modules, host, artifacts, native.cached_roots, observed);
         }
     }
 }

@@ -3410,8 +3410,8 @@ pub const DemandCounters = struct {
     upgraded: u64 = 0,
     /// Parked specializations completed as never-run stubs.
     stubs: u64 = 0,
-    /// Discovery requests parked because an earlier compilation's discovery
-    /// of the same specialization registered no literal root.
+    /// Discovery requests parked because an earlier check settled the same
+    /// specialization's discovery outcome.
     summarized: u64 = 0,
 };
 
@@ -7101,15 +7101,15 @@ const Builder = struct {
                         self.traceDemand("park", reservation.fn_id);
                         return reservation.def;
                     }
-                    // An earlier compilation lowered this specialization for
-                    // discovery and found that nothing its body reaches
-                    // registers a literal root: the specialization's key fixes
-                    // its body and every type it lowers at, so it registers
-                    // none now either, and it is parked like a request the
-                    // analysis proves reaches no literal root.
+                    // An earlier check lowered this specialization for discovery
+                    // and every literal root its closure registered converted
+                    // without an error or a message. The specialization's key
+                    // fixes its body, every type it lowers at, and so those
+                    // literal roots and their outcomes: discovering them again
+                    // would report nothing, so the request is parked.
                     if (template.target != .hosted and fn_template.cached == null) if (fn_template.spec_key) |key| if (self.spec_cache) |cache| {
                         const relation = if (self.program.platform_requirement_filling) |filling| filling.relation else null;
-                        if (cache.registersNoLiteralRoot(key.bytes, relation)) {
+                        if (cache.discoverySettled(key.bytes, relation)) {
                             try self.parked_spec_jobs.put(self.allocator, reservation.fn_id, job);
                             self.demand_counters.summarized += 1;
                             self.traceDemand("summarized", reservation.fn_id);

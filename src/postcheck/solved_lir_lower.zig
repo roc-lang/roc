@@ -1522,12 +1522,12 @@ const Lowerer = struct {
         if (self.lowersLiteralRoots()) try self.summarizeDiscoveryFns();
     }
 
-    /// Each specialization lowered only for discovery whose discovery
-    /// registered no literal root publishes that fact. Its demand summary
-    /// reaches every body it requested: discovery bodies through their solved
-    /// edges, and object-cache bodies through their published demand. A
-    /// parked request registers no literal root, so its never-run stub reads
-    /// nothing.
+    /// Each specialization lowered only for discovery whose demand closure is
+    /// complete publishes its discovery outcome. The closure reaches every
+    /// body it requested: discovery bodies through their solved edges, and
+    /// object-cache bodies through their published demand. Its literal roots
+    /// are evaluated with this program; the outcome is published only when
+    /// every one of them converted without an error or a message.
     fn summarizeDiscoveryFns(self: *Lowerer) Common.LowerError!void {
         for (0..self.solved.lifted.fnCount()) |index| {
             const fn_id: Lifted.FnId = @fromBackingInt(@intCast(index));
@@ -1538,12 +1538,6 @@ const Lowerer = struct {
             var summary = try self.demandSummary(fn_id);
             defer summary.deinit(self.allocator);
             if (!summary.complete) continue;
-            var registers_literal = false;
-            for (summary.reads) |read_index| switch (self.solved.ctfe_demand.reads.items[read_index].root.root) {
-                .literal => registers_literal = true,
-                .checked => {},
-            };
-            if (registers_literal) continue;
             try self.result.discovery_summaries.append(self.allocator, .{
                 .key = key.bytes,
                 .owner = checkedSpecOwner(template),

@@ -372,14 +372,14 @@ const CompileTimeObjectCache = struct {
         return self.build_env.?.activeArtifactByIdentity(identity);
     }
 
-    fn capture(context: *anyopaque, modules: lir.CheckedPipeline.CheckedModuleSet, lowered: *const lir.CheckedPipeline.LoweredProgram, retained: *const backend.dev.NativeProcCompiler.Retained, cached_roots: []const backend.dev.LocatedArtifact) Allocator.Error!void {
+    fn capture(context: *anyopaque, modules: lir.CheckedPipeline.CheckedModuleSet, lowered: *const lir.CheckedPipeline.LoweredProgram, retained: *const backend.dev.NativeProcCompiler.Retained, cached_roots: []const backend.dev.LocatedArtifact, observed: bool) Allocator.Error!void {
         const self: *CompileTimeObjectCache = @ptrCast(@alignCast(context));
         std.debug.assert(self.packs.projection_modules == null);
         self.packs.projection_modules = modules;
         defer self.packs.projection_modules = null;
         const artifact = modules.root.module;
         const build_env = self.build_env.?;
-        try self.publishDiscoverySummaries(artifact, lowered);
+        if (!observed) try self.publishDiscoverySummaries(artifact, lowered);
         var sets = std.ArrayList(*const backend.dev.ProcArtifact.Set).empty;
         defer sets.deinit(self.allocator);
         const keyed = try self.allocator.alloc(bool, lowered.lir_result.store.getProcSpecs().len);
@@ -504,7 +504,10 @@ const CompileTimeObjectCache = struct {
     }
 
     /// Publish each discovery summary this program produced in a pack of
-    /// its checked owner, beside that owner's native offers.
+    /// its checked owner, beside that owner's native offers. Publication is
+    /// accepted only when checking reported no error, so every literal root
+    /// the summarized discovery registered converted successfully, and the
+    /// caller publishes only when evaluation printed nothing.
     fn publishDiscoverySummaries(self: *CompileTimeObjectCache, artifact: *const check.CheckedArtifact.CheckedModuleArtifact, lowered: *const lir.CheckedPipeline.LoweredProgram) Allocator.Error!void {
         const summaries = lowered.lir_result.discovery_summaries.items;
         if (summaries.len == 0) return;

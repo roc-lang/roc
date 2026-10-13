@@ -432,11 +432,11 @@ pub const SpecCacheHit = struct {
 pub const SpecCacheLookup = struct {
     context: *anyopaque,
     find: *const fn (context: *anyopaque, key: [32]u8, current_relation: ?[32]u8) ?SpecCacheHit,
-    /// Whether the provider holds a discovery summary showing that the
-    /// specialization's discovery registers no literal root.
+    /// Whether the provider holds a settled discovery outcome for the
+    /// specialization (`lir.Program.DiscoverySummary`).
     find_discovery: ?*const fn (context: *anyopaque, key: [32]u8, current_relation: ?[32]u8) bool = null,
 
-    pub fn registersNoLiteralRoot(self: SpecCacheLookup, key: [32]u8, current_relation: ?[32]u8) bool {
+    pub fn discoverySettled(self: SpecCacheLookup, key: [32]u8, current_relation: ?[32]u8) bool {
         const find = self.find_discovery orelse return false;
         return find(self.context, key, current_relation);
     }
