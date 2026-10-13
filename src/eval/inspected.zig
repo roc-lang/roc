@@ -852,8 +852,9 @@ pub fn compileProgramForTargetWithBuiltin(
     }, .lss);
 }
 
-/// Compile one explicit evaluation root for `target_usize`.
-fn compileForTarget(
+/// Compile one explicit evaluation root for `target_usize` under
+/// `specialization_strategy`.
+pub fn compileForTarget(
     allocator: Allocator,
     io: std.Io,
     source_kind: SourceKind,

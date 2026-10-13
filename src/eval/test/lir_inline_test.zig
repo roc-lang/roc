@@ -575,15 +575,14 @@ fn boxyStructuralJsonParserCounts(allocator: Allocator, field_count: usize, pars
     try source_buf.appendSlice(allocator, "\n");
     const source = source_buf.items;
 
-    var compiled = try helpers.compileProgramForTargetWithBuiltinAndContext(
+    var compiled = try helpers.compileForTarget(
         allocator,
         std.testing.io,
         .module,
         source,
         &.{},
         .native,
-        try sharedPrePublishedBuiltin(),
-        null,
+        .{ .pre_published_builtin = try sharedPrePublishedBuiltin() },
         .boxy,
     );
     defer compiled.deinit(allocator);
@@ -617,15 +616,14 @@ fn boxyStructuralJsonEncoderIncrefs(allocator: Allocator, field_count: usize) Te
         \\
     );
 
-    var compiled = try helpers.compileProgramForTargetWithBuiltinAndContext(
+    var compiled = try helpers.compileForTarget(
         allocator,
         std.testing.io,
         .module,
         source_buf.items,
         &.{},
         .native,
-        try sharedPrePublishedBuiltin(),
-        null,
+        .{ .pre_published_builtin = try sharedPrePublishedBuiltin() },
         .boxy,
     );
     defer compiled.deinit(allocator);
@@ -2119,7 +2117,7 @@ test "boxy root that parses JSON directly receives its codec evidence" {
     // `main`'s scheme captures the codec requirement of its `Json.parse`
     // call. A root has no caller, so its checked root evidence supplies it.
     const allocator = std.testing.allocator;
-    var compiled = try helpers.compileProgramForTargetWithBuiltinAndContext(
+    var compiled = try helpers.compileForTarget(
         allocator,
         std.testing.io,
         .module,
@@ -2133,8 +2131,7 @@ test "boxy root that parses JSON directly receives its codec evidence" {
     ,
         &.{},
         .native,
-        try sharedPrePublishedBuiltin(),
-        null,
+        .{ .pre_published_builtin = try sharedPrePublishedBuiltin() },
         .boxy,
     );
     defer compiled.deinit(allocator);
