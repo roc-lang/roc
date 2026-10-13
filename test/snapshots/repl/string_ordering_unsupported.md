@@ -12,7 +12,7 @@ type=repl
 ~~~
 # OUTPUT
 **Type Not Determined**
-Nothing in this program determines the type of this string:
+Nothing in this program determines the type of this string.
 ```roc
 "apple" > "banana"
 ```
@@ -27,7 +27,7 @@ Without knowing which type it is, there's no way to tell which `>` to use.
 **Hint:** None of the built-in string types support `>`.
 ---
 **Type Not Determined**
-Nothing in this program determines the type of this string:
+Nothing in this program determines the type of this string.
 ```roc
 "zoo" < "aardvark"
 ```
@@ -42,7 +42,7 @@ Without knowing which type it is, there's no way to tell which `<` to use.
 **Hint:** None of the built-in string types support `<`.
 ---
 **Type Not Determined**
-Nothing in this program determines the type of this string:
+Nothing in this program determines the type of this string.
 ```roc
 "equal" >= "equal"
 ```
@@ -57,7 +57,7 @@ Without knowing which type it is, there's no way to tell which `>=` to use.
 **Hint:** None of the built-in string types support `>=`.
 ---
 **Type Not Determined**
-Nothing in this program determines the type of this string:
+Nothing in this program determines the type of this string.
 ```roc
 "first" <= "second"
 ```
