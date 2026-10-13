@@ -1500,7 +1500,6 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .u64_var = .input,
     .builtin_types_copied = .input,
     .ident_to_var_map = .scratch,
-    .checked_interpolation_part_constraints = .keyed,
     .int_unbound_vars = .keyed,
     .reported_constraint_errors = .keyed,
     .expect_effect_slots = .settled,
