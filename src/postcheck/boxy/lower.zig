@@ -20546,6 +20546,7 @@ const ProcBodyBuilder = struct {
                 .next = next,
             } } },
             .pending => try self.beginRuntimeStringConversion(target, expr_id, checked_ty, quote.plan, "invalid string literal", next),
+            .unevaluated,
             .fn_value,
             .discarded,
             .expect,
@@ -20854,6 +20855,7 @@ const ProcBodyBuilder = struct {
                 .next = next,
             } } },
             .pending => try self.beginRuntimeStringConversion(target, expr_id, checked_ty, maybe_plan, "invalid numeric literal", next),
+            .unevaluated,
             .fn_value,
             .discarded,
             .expect,
@@ -44560,7 +44562,7 @@ fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind, stored: ConstLookupS
         },
     };
     const root_type = try checked_module.const_store.type_store.append(.{ .primitive = .u64 });
-    checked_module.const_templates.fillStoredConst(const_ref, .{ .node = const_node, .root_type = root_type });
+    checked_module.const_templates.fillStoredConst(const_ref, .{ .node = const_node, .root = @fromBackingInt(@intCast(fixtureTableIndex(0))), .root_type = root_type });
     var compile_time_roots = [_]checked.CompileTimeRoot{.{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .module_idx = 0,

@@ -2728,6 +2728,7 @@ fn storedI64(
     const node_from_root = switch (root.payload) {
         .const_node => |node| node,
         .pending,
+        .unevaluated,
         .fn_value,
         .discarded,
         .expect,
@@ -2754,6 +2755,7 @@ fn rootStoredI64(
     const node = switch (root.payload) {
         .const_node => |const_node| const_node,
         .pending,
+        .unevaluated,
         .fn_value,
         .discarded,
         .expect,

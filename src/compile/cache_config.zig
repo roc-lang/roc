@@ -308,11 +308,13 @@ pub const Constants = struct {
     ///      whose bodies closed an annotated open result row.
     /// 144: Annotation polarity flips through function argument positions, so a
     ///      callback's result row is generated closed and its argument row open.
-    /// 145: Canonical node payloads are encoded from their payload field types.
-    /// 146: Low-level op numbering covers only ops that lowering produces.
-    /// 147: A stored checked runtime error keeps its evaluated operands in a
+    /// 145: Checked modules publish compile-time roots no compilation
+    ///      demanded as unevaluated, with every evaluated root's reads.
+    /// 146: Canonical node payloads are encoded from their payload field types.
+    /// 147: Low-level op numbering covers only ops that lowering produces.
+    /// 148: A stored checked runtime error keeps its evaluated operands in a
     ///      field of their own.
-    pub const CACHE_VERSION = 147;
+    pub const CACHE_VERSION = 148;
 };
 
 /// Configuration for the Roc cache system.
